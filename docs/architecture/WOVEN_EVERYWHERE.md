@@ -1430,9 +1430,9 @@ no stdio relay.
 - **Background execution** governs scheduled tasks only. Sessions, their goals
   and timers run with it off.
 - **Pi Durable.** The host keeps and renews its own sign-ins in its own
-  encrypted vault (`GET`/`POST v1/sign-ins`); a Mac sends only chat settings
-  (`v1/default-agent/configuration`), and only to a host whose status reports
-  `deviceVault`.
+  private file outside the workspace (`<data root>/default-agent/sign-ins.json`,
+  0600; `GET`/`POST v1/sign-ins`); a Mac sends only chat settings
+  (`v1/default-agent/configuration`).
   Settings, sign-in and the model catalog use `POST v1/default-agent/control`
   and `v1/default-agent/control-sessions`, which run the control helper on the
   host.

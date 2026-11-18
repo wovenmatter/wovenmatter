@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { searchProviderNames } from './config.mjs';
 import { localServers, probeServer, serverURL } from './local-servers.mjs';
 
-// A host's own sign-ins, kept in its device vault (`CredentialVault.openDevice`):
+// A host's own sign-ins, kept in its sign-ins file (`SignInStore`):
 // subscriptions it signed in to itself (`owned`, renewed here), API and web
 // search keys (`accounts`, first = primary), and local model servers
 // (`servers`, keys in `owned`). Another device changes them only through this

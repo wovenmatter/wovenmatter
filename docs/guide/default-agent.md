@@ -107,9 +107,9 @@ in the conversation. See [Executor apps](executor.md).
 
 Each device keeps its own sign-ins. On a Mac, Pi Durable credentials, including
 OAuth refresh tokens, are stored in macOS Keychain. On a Linux host they are
-stored in that workspace's Pi Durable folder (`.wovenmatter/default-agent`): the
-store and its key are both files, readable only by that user (0600) but by
-anything running as that user, so the encryption is not protection at rest.
+one private file in the host's own folder outside the workspace
+(`~/.local/share/wovenmatter/default-agent/sign-ins.json`), readable only by
+that user, like the Claude Code and Codex CLIs' own logins.
 Sign in on a host from **Settings → Subscriptions & API Keys → Sign in on**;
 nothing is copied from another device. Updates do not restart active sessions.
 Claude’s native sign-in is separate; use its **Remove** button to disconnect

@@ -1,4 +1,4 @@
-import { CredentialVault } from './vault.mjs';
+import { SignInStore } from './sign-in-store.mjs';
 import { deviceConfig } from './device-sign-ins.mjs';
 import { join } from 'node:path';
 import { DefaultAgentError, canonicalHash, operationErrorMessage, providers as botProviders, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
@@ -16,10 +16,10 @@ function verifyRetry(stored, fingerprint) {
 // persistence; an accepted transport ID is never redispatched after restart.
 export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON, attachmentState }) {
   let enginePromise, inferenceAdapter;
-  const vault = new CredentialVault(directory), epoch = crypto.randomUUID();
-  // This host's own vault: always open.
+  const vault = new SignInStore(directory), epoch = crypto.randomUUID();
+  // This host's own sign-ins: its folder is always made private first.
   let deviceOpening;
-  const openDevice = () => deviceOpening ??= vault.openDevice().catch(error => { deviceOpening = undefined; throw error; });
+  const openDevice = () => deviceOpening ??= vault.open().catch(error => { deviceOpening = undefined; throw error; });
   let configurationQueue = Promise.resolve(), generation = 0;
   const operations = new Map(), admissions = new Map(), admissionQueues = new Map();
   const attachmentTokens = new Map(attachmentState?.tokens);
@@ -58,7 +58,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     return pending;
   }
   // After another device changed this host's sign-ins (`v1/sign-ins`): the
-  // vault is read on use; local model servers are registered again.
+  // sign-ins file is read on use; local model servers are registered again.
   function reloadSignIns() {
     const pending = configurationQueue.then(async () => {
       if (!enginePromise) return { reloaded: false };

@@ -114,7 +114,7 @@ class ExecTests(unittest.TestCase):
         self.assertNotIn('UNTRUSTED_SETTING',value['env']); self.assertNotIn('WOVENMATTER_UNEXPECTED',value['env'])
         self.assertNotIn(self.settings['WOVENMATTER_API_TOKEN'],' '.join(value['argv']))
         self.assertEqual(value['input'],'protocol\n'); self.assertEqual(value['cwd'],str(self.root/'workspace'))
-        self.assertEqual(value['env']['WOVEN_DEFAULT_AGENT_DIRECTORY'],str(self.root/'workspace/.wovenmatter/default-agent'))
+        self.assertEqual(value['env']['WOVEN_DEFAULT_AGENT_DIRECTORY'],str(self.root/'default-agent'))
     def test_sessions_get_noninteractive_credential_prompts(self):
         code='import os,json; print(json.dumps({k:os.environ.get(k) for k in ("PATH","GIT_TERMINAL_PROMPT","SSH_ASKPASS","SSH_ASKPASS_REQUIRE","SUDO_ASKPASS")}))'
         result=self.execute('exec',sys.executable,'-c',code)

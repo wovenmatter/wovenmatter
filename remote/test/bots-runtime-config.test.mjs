@@ -45,7 +45,7 @@ test('the runtime is pointed at this machine’s Pi Durable, whose SDK copy it l
   if (!runnable) return
   const directory = mkdtempSync(join(tmpdir(), 'woven-bots-sdk-')); t.after(() => rmSync(directory, { recursive: true, force: true }))
   const serviceRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')
-  const sdkDirectory = join(directory, 'workspace/.wovenmatter/default-agent')
+  const sdkDirectory = join(directory, 'default-agent')
   let restarts = 0, running = false
   const service = createBotsService({ configuration: { stateDirectory: directory, dataRoot: directory, serviceRoot, botsEnabled: true, workspaceEnabled: true, botsInstance: 'wmtest' },
     defaultAgentDirectory: sdkDirectory,

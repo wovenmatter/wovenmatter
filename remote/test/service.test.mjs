@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -256,10 +256,11 @@ async function temporaryFixture(context, prefix) {
 
 test('a Linux host keeps its own sign-ins: configuration carries no credentials and keys are saved only here', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
-  const home = resolve(root, 'home'); await mkdir(home);
+  const home = resolve(root, 'home'), workspace = resolve(root, 'workspace'); await mkdir(home); await mkdir(workspace);
   const token = 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-  const directory = resolve(root, '.wovenmatter/default-agent');
-  let service = await startService({ workspace: root, home, catalog: catalogPath, token });
+  // The host's own private folder, outside the workspace, like the CLIs' own logins.
+  const directory = resolve(home, '.local/share/wovenmatter/default-agent');
+  let service = await startService({ workspace, home, catalog: catalogPath, token });
   context.after(() => stopService(service.child));
   const request = (path, body, bearer = token) => fetch(service.url + path, {
     method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
@@ -267,7 +268,6 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   });
   assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
   assert.equal((await request('/v1/sign-ins', undefined, 'wrong')).status, 401);
-  // The host opens its own vault: nothing unlocks it.
   let status = await (await request('/v1/default-agent/status')).json();
   assert.ok(Array.isArray(status.providers));
   // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
@@ -286,11 +286,17 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   status = await (await request('/v1/default-agent/status')).json();
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'credentials_present');
   assert.ok(!JSON.stringify(status).includes('fixture-provider-secret'));
-  const disk = await readFile(resolve(directory, 'credentials.enc.json'), 'utf8');
-  assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes('relayed-provider-secret'));
+  // A plain private file (0600) in a private folder (0700); nothing relayed is in it.
+  const disk = await readFile(resolve(directory, 'sign-ins.json'), 'utf8');
+  assert.ok(disk.includes('fixture-provider-secret') && !disk.includes('relayed-provider-secret'));
+  assert.equal((await stat(resolve(directory, 'sign-ins.json'))).mode & 0o777, 0o600);
+  assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  // Nothing that holds a credential is created in the workspace.
+  const inWorkspace = await readdir(workspace, { recursive: true });
+  assert.ok(!inWorkspace.some(name => /default-agent|sign-ins|credentials|claude-runtime|claude-keychain/.test(name)), inWorkspace.join(', '));
   // It survives a restart.
   await stopService(service.child);
-  service = await startService({ workspace: root, home, catalog: catalogPath, token });
+  service = await startService({ workspace, home, catalog: catalogPath, token });
   const listed = await (await request('/v1/sign-ins')).json();
   assert.deepEqual(listed.accounts.openrouter.map(a => a.label), ['Router']);
   assert.equal((await (await request('/v1/default-agent/status')).json()).providers.find(p => p.id === 'openrouter').state, 'credentials_present');

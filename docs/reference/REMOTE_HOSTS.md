@@ -106,6 +106,8 @@ All paths below belong to the SSH account. Managed private directories use
   databases/                    managed SQLite dataset files
   library/                      this host's library copy (workspace.sqlite)
   secrets/member-signing.key    this host's member signing key (0600)
+  default-agent/                Pi Durable: sign-ins.json (0600) and the
+                                bundled Claude runtime's logins
   run/                          runtime maintenance lock, browser result,
                                 library socket and its local token
     library/                    member identity, library host and Serve state

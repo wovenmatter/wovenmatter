@@ -13,12 +13,14 @@ a private control pipe and return replacements. A failed early renewal does not
 interrupt access that is still valid, and explicitly revoked refresh credentials
 are excluded from borrowed exports.
 
-On a Linux host, the sign-in store (`credentials.enc.json`) and its key
-(`credentials.key`) are both files, 0600, in that workspace's Pi Durable folder
-(`.wovenmatter/default-agent`). Anything running as that user can read them: the
-AES-256-GCM encryption is not protection at rest. The host renews its own
-subscriptions. A Mac sends a host chat settings only, and changes the host's
-sign-ins through its signed `v1/sign-ins` route; the key never leaves the host.
+On a Linux host, sign-ins are one private file, like the Claude Code and Codex
+CLIs' own logins (`~/.claude/.credentials.json`, `~/.codex/auth.json`):
+`sign-ins.json` (0600) in the host's own Pi Durable folder
+(`~/.local/share/wovenmatter/default-agent`, 0700), outside the workspace,
+readable only by that user. The bundled Claude runtime keeps its logins in the
+same folder. The host renews its own subscriptions. A Mac sends a host chat
+settings only, and changes the host's sign-ins through its signed `v1/sign-ins`
+route.
 
 Configuration, operation journals and wire histories do not contain credential
 payloads. App-managed OAuth tokens are not launch arguments or tool environment
@@ -57,7 +59,7 @@ agents only through a signing agent's socket; see `GITHUB_IDENTITY.md`.
 
 Dictation uses Apple's on-device SpeechAnalyzer API and does not consume provider
 credentials. Grok subscription and API connections remain available to agents and
-Usage. Local model server keys use the same Keychain and encrypted remote vault,
+Usage. Local model server keys use the same Keychain and host sign-ins file,
 with a separate identity per server.
 
 ## Native Claude subscription exception

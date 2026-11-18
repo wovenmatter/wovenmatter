@@ -32,6 +32,8 @@ export function loadRuntimeConfiguration(environment = process.env) {
     workspaceRoot: environment.WOVENMATTER_WORKSPACE ?? resolve(home, '.woven-matter'),
     managedDataRoot,
     dataRoot: environment.WOVENMATTER_DATA_ROOT ?? resolve(managedDataRoot, '..'),
+    // Pi Durable: sign-ins and the bundled Claude runtime's logins stay out of the workspace.
+    defaultAgentDirectory: environment.WOVEN_DEFAULT_AGENT_DIRECTORY || resolve(environment.WOVENMATTER_DATA_ROOT ?? resolve(managedDataRoot, '..'), 'default-agent'),
     stateDirectory: environment.WOVENMATTER_STATE_DIRECTORY ?? resolve(home, '.wovenmatter'),
     browserProfilesRoot: environment.WOVENMATTER_BROWSER_PROFILES ?? resolve(home, '.local/share/wovenmatter/browser-profiles'),
     legacyBrowserProfile: resolve(home, '.local/share/wovenmatter/browser'),

@@ -4,7 +4,7 @@ const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', i
 const defaultAgentSource = existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)
 const { createManagedDefaultAgentService } = await import(defaultAgentSource.href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
-const { CredentialVault } = await import(new URL('./vault.mjs', defaultAgentSource).href)
+const { SignInStore } = await import(new URL('./sign-in-store.mjs', defaultAgentSource).href)
 const { changeSignIns, listSignIns } = await import(new URL('./device-sign-ins.mjs', defaultAgentSource).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createProject, deleteProject, ensureScratchDirectory, linkHostProject, listHostDirectories } from './projects.mjs'
@@ -69,13 +69,14 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
 // Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
-// This host stores and renews its own sign-ins in its device vault; no other
-// device holds its key or relays credentials to it.
+// This host stores and renews its own sign-ins (`sign-ins.json`), and the
+// bundled Claude runtime keeps its logins, in this host's own private folder,
+// outside the workspace; no other device relays credentials to it.
 // Pi Durable's SDK workspace too; this machine's bots load the SDK copy it selects.
-const defaultAgentDirectory = resolve(workspaceRoot, '.wovenmatter/default-agent')
+const defaultAgentDirectory = configuration.defaultAgentDirectory
 const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: defaultAgentDirectory, environment: { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' } })
-const deviceSignIns = new CredentialVault(defaultAgentDirectory)
-const openDeviceSignIns = () => deviceSignIns.openDevice()
+const deviceSignIns = new SignInStore(defaultAgentDirectory)
+const openDeviceSignIns = () => deviceSignIns.open()
 // Subscriptions renew here whether or not anything used them.
 const signInRenewal = setInterval(() => { defaultAgent.renewSignIns().catch(() => {}) }, 60_000)
 signInRenewal.unref()
@@ -228,7 +229,7 @@ const timers = library && clientExecution ? createLibraryTimers({ library,
 
 const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   directory:resolve(workspaceRoot,'.wovenmatter/retained-execution'),
-  defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,execution:clientExecution,
+  defaultDirectory:defaultAgentDirectory,taskGateway,execution:clientExecution,
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
@@ -264,7 +265,7 @@ const workspaceRoutes = ['/v1/execution/commands', '/v1/execution/attachments', 
   '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
 // Usage on this machine: its harnesses, its Pi Durable agent and its bots.
-const usageScanner = createUsageScanner({ workspaceRoot, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
+const usageScanner = createUsageScanner({ workspaceRoot, defaultAgentDirectory, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {

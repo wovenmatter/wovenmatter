@@ -348,8 +348,9 @@ async function readOpenCode(path) {
 }
 
 export function createUsageScanner({ env = process.env, home = homedir(), refreshMilliseconds = 15 * 60_000, now = () => Date.now(),
-  workspaceRoot = env.WOVENMATTER_WORKSPACE || join(home, '.woven-matter'), botsDatabase = null, pageSize = PAGE_SIZE } = {}) {
-  const agentDirectories = [...new Set([join(workspaceRoot, '.wovenmatter/default-agent'), join(home, '.wovenmatter/default-agent')])]
+  workspaceRoot = env.WOVENMATTER_WORKSPACE || join(home, '.woven-matter'), defaultAgentDirectory = env.WOVEN_DEFAULT_AGENT_DIRECTORY || null,
+  botsDatabase = null, pageSize = PAGE_SIZE } = {}) {
+  const agentDirectories = [...new Set([defaultAgentDirectory, join(home, '.wovenmatter/default-agent')].filter(Boolean))]
   const roots = {
     codex: join(env.CODEX_HOME || join(home, '.codex'), 'sessions'),
     codexArchived: join(env.CODEX_HOME || join(home, '.codex'), 'archived_sessions'),

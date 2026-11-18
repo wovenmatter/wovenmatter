@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DefaultAgentError, operationErrorMessage } from './config.mjs';
-import { CredentialVault, deviceVaultEnabled } from './vault.mjs';
+import { SignInStore, deviceSignInsEnabled } from './sign-in-store.mjs';
 import { deviceConfig } from './device-sign-ins.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
@@ -48,11 +48,11 @@ async function invoke(message) {
       catch (error) { return { url: '', models: [], error: error.message }; }
     }
     payload = message;
-    // A host's own vault: this helper signs in and saves here, and its result
+    // A host's own sign-ins: this helper signs in and saves here, and its result
     // never carries the credential back to the device that asked.
-    if (deviceVaultEnabled()) {
-      vault = new CredentialVault(directory);
-      await vault.openDevice();
+    if (deviceSignInsEnabled()) {
+      vault = new SignInStore(directory);
+      await vault.open();
       payload = { ...message, credentials: {}, credentialAccounts: undefined, config: deviceConfig(message.config, await vault.read()) };
     }
     const e = await engine();
@@ -79,10 +79,10 @@ async function invoke(message) {
       const prompt = createSignInPrompt({ provider: message.provider, signal: controller.signal, pending: pendingPrompts, send });
       try {
       if (message.provider === 'claude-subscription') {
-        const profile = message.profile ?? (deviceVaultEnabled() ? (await e.credentials.read('claude-subscription'))?.accountId ?? 'default' : undefined);
+        const profile = message.profile ?? (deviceSignInsEnabled() ? (await e.credentials.read('claude-subscription'))?.accountId ?? 'default' : undefined);
         const status = await inlineClaudeLogin(e.claude, profile, { signal: controller.signal, notify: notification => send({ notification }), prompt });
         // The device records which native profile it signed in; Claude keeps its own tokens.
-        if (deviceVaultEnabled() && status.connected) {
+        if (deviceSignInsEnabled() && status.connected) {
           await vault.modify(async stored => ({ ...stored, owned: { ...stored.owned, 'claude-subscription': { type: 'native', accountId: profile,
             ...(typeof status.account === 'string' && status.account ? { displayName: status.account.slice(0, 256) } : {}) } } }));
         }

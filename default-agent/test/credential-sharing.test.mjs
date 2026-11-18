@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CredentialVault } from '../src/vault.mjs';
+import { SignInStore } from '../src/sign-in-store.mjs';
 import { signInStatuses } from '../src/sign-in-status.mjs';
 
 async function temporary(t) {
@@ -10,19 +10,6 @@ async function temporary(t) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
-
-test('tampering reads as signed out and repeated writes never reuse the GCM nonce', async t => {
-  const directory = await temporary(t), vault = await new CredentialVault(directory).openDevice();
-  await vault.modify(async value => ({ ...value, owned: { exa: { type: 'api_key', key: 'first' } } }));
-  const initial = JSON.parse(await readFile(vault.path, 'utf8'));
-  await vault.modify(async value => ({ ...value, owned: { exa: { type: 'api_key', key: 'still-usable' } } }));
-  assert.equal((await vault.read()).owned.exa.key, 'still-usable');
-  const next = JSON.parse(await readFile(vault.path, 'utf8'));
-  assert.notEqual(next.nonce, initial.nonce);
-  next.tag = Buffer.alloc(16).toString('base64');
-  await writeFile(vault.path, JSON.stringify(next));
-  assert.deepEqual(await vault.read(), {});
-});
 
 test('status checks never start login and do not equate a timeout with sign-out', async () => {
   const calls = [];
@@ -55,7 +42,7 @@ for (const provider of ['openai-codex', 'claude-subscription', 'xai']) {
     const credential = id => provider === 'claude-subscription'
       ? { type: 'native', accountId: id } : { type: 'oauth', access: id, expires: 9000000000000 };
     const entries = ['preferred', 'backup'].map(id => ({ id, label: id, credential: credential(id) }));
-    const directory = await temporary(t), vault = await new CredentialVault(directory).openDevice();
+    const directory = await temporary(t), vault = await new SignInStore(directory).open();
     await vault.modify(async value => ({ ...value, accounts: { [provider]: entries } }));
     const credentials = await new Credentials({}, vault).initialize();
     assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['preferred']);
