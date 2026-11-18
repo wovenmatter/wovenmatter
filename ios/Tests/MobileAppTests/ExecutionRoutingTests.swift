@@ -2,6 +2,7 @@ import XCTest
 import LibraryClient
 import MobileInference
 import WovenMatterShared
+import PiDurableRuntime
 @testable import WovenMatterMobileApp
 
 private actor ExecutionTestLibrary: OfflineLibraryTransport {
@@ -234,6 +235,85 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNil(model.localRuntimes[record.id])
     let trashed = await model.performDeviceAction(.conversation(id: record.id, action: "trash", title: nil, folderID: nil))
     XCTAssertTrue(trashed, model.errorMessage ?? "")
+  }
+
+  /// The load-time SDK abort can fail; the run is still settled on this device, its
+  /// runtime closed, and the chat can take a device connection and go to Trash.
+  @MainActor func testHostedChatWhoseAbortFailsIsStillSettledAndUsable() async throws {
+    for failure in ["abort", "open"] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+      let directory = root.appendingPathComponent("execution")
+      model.executionDirectory = directory
+      model.executionCredentialStore = MigrationCredentials(["own": "own-key"])
+      await model.reload()
+      let pinned = InferenceModel(id: "m", name: "Model", provider: "opencode-go", api: "openai-completions", baseUrl: "https://opencode.ai/zen/go/v1")
+      let own = InferenceConnection(id: "own", name: "OpenCode Go", provider: "opencode-go", modelID: "m", selectedModel: pinned)
+      let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", route: .adapter, baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
+      var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted", connectionID: hosted.id, connection: hosted,
+        modelJSON: Self.offlineModelJSON, runID: "hosted-run", submissionID: 2, pendingInput: "Saved input", status: "interrupted", updatedAt: "")
+      record.quickChatVersion = 1
+      var ledger = WorkspaceGoalLedger(); ledger.runIDs = ["hosted-run"]; record.goalLedger = ledger
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try JSONEncoder().encode(DeviceExecutionPreferences(connections: [own, hosted], selectedConnectionID: own.id, conversations: [record.id: record]))
+        .write(to: directory.appendingPathComponent("preferences.json"))
+      var injected: PiDurableRuntime?
+      if failure == "abort" {
+        // A runtime whose abort throws: it is already closed.
+        let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("closed-runtime"),
+          configuration: .init(conversationID: record.id, modelJSON: Self.offlineModelJSON),
+          inference: { _, _ in XCTFail("No inference"); throw CancellationError() },
+          tool: { _ in XCTFail("No tools"); throw CancellationError() })
+        _ = try await runtime.open(); try await runtime.close()
+        model.localRuntimes[record.id] = runtime
+        injected = runtime
+      } else {
+        // The chat's SDK storage cannot be opened.
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: directory.appendingPathComponent("sessions/" + record.id))
+      }
+      model.localExecutionAttempts[record.id] = "attempt"
+      try await model.loadExecutionConfiguration()
+      let settled = try XCTUnwrap(model.executionRecords[record.id])
+      XCTAssertEqual(settled.status, "stopped", failure)
+      XCTAssertNil(settled.runID, failure); XCTAssertNil(settled.submissionID, failure); XCTAssertNil(settled.pendingInput, failure)
+      XCTAssertEqual(settled.goalLedger?.settledRunIDs, ["hosted-run"], failure)
+      XCTAssertNil(model.localExecutionAttempts[record.id], failure)
+      XCTAssertNil(model.localRuntimes[record.id], failure)
+      if let injected {
+        do { _ = try await injected.snapshot(); XCTFail("The failed runtime stays closed") } catch PiDurableRuntimeError.closed {}
+      }
+      let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: directory.appendingPathComponent("preferences.json")))
+      XCTAssertEqual(saved.conversations[record.id]?.status, "stopped", failure)
+      XCTAssertNil(saved.conversations[record.id]?.runID, failure)
+      model.selectedConversationID = record.id
+      XCTAssertTrue(model.canConfigureDeviceChat, failure)
+      try await model.configureDeviceChat(connection: own, conversationID: record.id)
+      XCTAssertEqual(model.executionRecords[record.id]?.connection?.id, "own", failure)
+      let trashed = await model.performDeviceAction(.conversation(id: record.id, action: "trash", title: nil, folderID: nil))
+      XCTAssertTrue(trashed, model.errorMessage ?? failure)
+    }
+  }
+
+  /// Several connections survive: the default prefers a provider sign-in over a model server.
+  @MainActor func testHostedDefaultPrefersAProviderSignInOverAModelServer() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    let directory = root.appendingPathComponent("execution")
+    model.executionDirectory = directory
+    model.executionCredentialStore = MigrationCredentials(["server": "server-key", "own": "own-key"])
+    let server = InferenceConnection(id: "server", name: "Tailscale model server", provider: "local-server-openai",
+      baseURL: "https://models.example.ts.net", modelID: "m")
+    let own = InferenceConnection(id: "own", name: "OpenCode Go", provider: "opencode-go", modelID: "m")
+    let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", route: .adapter, baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(DeviceExecutionPreferences(connections: [server, hosted, own], selectedConnectionID: hosted.id))
+      .write(to: directory.appendingPathComponent("preferences.json"))
+    try await model.loadExecutionConfiguration()
+    XCTAssertEqual(model.inferenceConnections.map(\.id), ["server", "own"])
+    XCTAssertEqual(model.inferenceConnectionID, "own")
   }
 
   private static let offlineModelJSON = """

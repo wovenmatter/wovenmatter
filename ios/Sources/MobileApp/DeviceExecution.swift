@@ -338,9 +338,11 @@ extension MobileModel {
       // and Quick Chat asks for a sign-in on this device.
       inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections.filter { $0.route == .direct },
         preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
-      // A default that named a dropped connection falls back to one this device kept.
+      // A default that named a dropped connection falls back to one this device kept,
+      // a provider sign-in before a model server.
+      let fallback = inferenceConnections.first { !$0.provider.hasPrefix("local-server-") } ?? inferenceConnections.first
       inferenceConnectionID = saved.selectedConnectionID.isEmpty || inferenceConnections.contains(where: { $0.id == saved.selectedConnectionID })
-        ? saved.selectedConnectionID : inferenceConnections.first?.id ?? ""
+        ? saved.selectedConnectionID : fallback?.id ?? ""
       // v0.4.2 saved the library host's route as "central"; it reads as "host" once.
       executionWorkspaceID = saved.workspaceID == "central" ? "host" : saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
@@ -379,7 +381,8 @@ extension MobileModel {
     try await store?.restoreExecutionProjection()
     for record in executionRecords.values where record.isTrashed != true { try await adoptDeviceConversation(record, transcript: nil) }
     await reload()
-    // Finish each such stop in the SDK now; if that fails, the next open or Trash does.
+    // Finish each such stop in the SDK now. If the SDK abort fails, the run is still
+    // settled on this device, so the chat stays stopped and can take a device connection or go to Trash.
     for id in orphaned where !fixture { await finishDeviceStopWithoutConnection(id) }
   }
   /// The connection a chat runs with, if this device can still use it.
@@ -388,11 +391,27 @@ extension MobileModel {
     return inferenceConnections.first { $0.id == record.connectionID }
   }
   /// Aborts a stopped run in the SDK without its connection, then closes that runtime.
+  /// When the abort fails, the run is settled here without the SDK.
   func finishDeviceStopWithoutConnection(_ id: String) async {
     guard executionRecords[id]?.runID != nil else { return }
     if localRuntimes[id] == nil { _ = try? await deviceRuntime(id, cancelling: true) }
     else if let runtime = localRuntimes[id] { try? await finishDeviceCancellation(id, runtime: runtime) }
     await closeDeviceRuntimeWithoutConnection(id)
+    if let runID = executionRecords[id]?.runID {
+      if let runtime = localRuntimes.removeValue(forKey: id) { try? await runtime.close() }
+      await settleDeviceStopLocally(id, runID: runID)
+    }
+  }
+  /// What `finishDeviceCancellation` records after the SDK abort, without the SDK.
+  func settleDeviceStopLocally(_ id: String, runID: String) async {
+    localRunTokens.removeValue(forKey: id)
+    localRunTasks.removeValue(forKey: id)?.cancel()
+    executionRecords[id]?.goalLedger?.settle(runID, tokens: nil, succeeded: false)
+    try? await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
+    finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)
+    executionRecords[id]?.status = "stopped"
+    executionRecords[id]?.runID = nil; executionRecords[id]?.submissionID = nil; executionRecords[id]?.pendingInput = nil
+    try? persistExecutionConfiguration()
   }
   /// A runtime opened only to cancel never serves another turn.
   func closeDeviceRuntimeWithoutConnection(_ id: String) async {
@@ -535,7 +554,11 @@ extension MobileModel {
       })
     localRuntimes[id] = runtime
     do { try await runtime.open(); try await finishDeviceCancellation(id, runtime: runtime) }
-    catch { localRuntimes.removeValue(forKey: id); throw error }
+    catch {
+      try? await runtime.close()
+      if localRuntimes[id] === runtime { localRuntimes.removeValue(forKey: id) }
+      throw error
+    }
     return runtime
   }
   func openDeviceConversation(_ id: String) async {

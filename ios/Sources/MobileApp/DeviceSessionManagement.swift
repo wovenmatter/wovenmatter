@@ -64,10 +64,6 @@ extension MobileModel {
           // A stop the SDK has not finished yet (its connection is gone) finishes first.
           if record.runID != nil, record.status == "stopped" {
             await finishDeviceStopWithoutConnection(id)
-            if let runID = executionRecords[id]?.runID {
-              try? await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
-              executionRecords[id]?.runID = nil; executionRecords[id]?.submissionID = nil; executionRecords[id]?.pendingInput = nil
-            }
             record = executionRecords[id] ?? record
           }
           record.isTrashed = true
