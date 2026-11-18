@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import WovenMatterClient
 import WovenMatterCore
 
 private final class PairingRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
@@ -60,7 +61,10 @@ public struct MacDiscovery: Sendable {
     self.probe = probe ?? { try await network.request($0, path: "v1/discovery") }
   }
   public static func candidates(status data: Data) throws -> [URL] {
-    guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["BackendState"] as? String == "Running",
+    guard let root = RemoteWorkspaceTailnet.statusObject(data) else {
+      throw LibraryAPIError(code: "tailscale_unavailable", message: RemoteWorkspaceTailnet.statusUnreadable)
+    }
+    guard root["BackendState"] as? String == "Running",
           let peers = root["Peer"] as? [String: Any] else {
       throw LibraryAPIError(code: "tailscale_unavailable", message: "Connect Tailscale to discover your Macs.")
     }

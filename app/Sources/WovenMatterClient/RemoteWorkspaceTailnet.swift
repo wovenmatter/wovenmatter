@@ -4,6 +4,24 @@ import Foundation
 /// attachments, lifecycle commands, and port forwarding. Never consult DNS or an
 /// SSH alias to choose a transport address: select a peer from tailscaled itself.
 public enum RemoteWorkspaceTailnet {
+    /// Tailscale's app-bundle binary is both its GUI and its CLI. It acts as the
+    /// CLI only when it finds a shell's environment (such as `TERM` or `SHLVL`)
+    /// or this variable, which Tailscale documents for scripts. An app opened
+    /// from Finder or launchd has none of them: the binary then prints "The
+    /// Tailscale GUI failed to start" and exits 0. Call once at process start,
+    /// before the app starts any thread or child, so every child inherits it.
+    public static func selectCommandLineInterface() {
+        setenv("TAILSCALE_BE_CLI", "1", 1)
+    }
+
+    /// The object `status --json` printed, or nil when Tailscale printed something else.
+    public static func statusObject(_ data: Data) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// Tailscale answered, but not with its status. Not the same as disconnected.
+    public static let statusUnreadable = "Tailscale did not report its status. Check that Tailscale is running and up to date, then try again."
+
     static func executable() throws -> String {
         guard let path = [
             "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -27,8 +45,8 @@ public enum RemoteWorkspaceTailnet {
     static func sshOptions(destination: String, executable: String, status: Data) throws -> [String] {
         let host = String(destination.split(separator: "@").last ?? "").lowercased()
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        guard let root = try JSONSerialization.jsonObject(with: status) as? [String: Any],
-              root["BackendState"] as? String == "Running",
+        guard let root = statusObject(status) else { throw RemoteWorkspaceClientError.commandFailed(statusUnreadable) }
+        guard root["BackendState"] as? String == "Running",
               let peers = root["Peer"] as? [String: Any] else {
             throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.")
         }

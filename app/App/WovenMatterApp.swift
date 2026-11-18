@@ -379,6 +379,9 @@ extension FocusedValues {
 @main
 enum WovenMatterEntryPoint {
     @MainActor static func main() {
+        // First: the window, the background server, and the Serve helper all
+        // start Tailscale, directly or through ssh and the agent runtimes.
+        RemoteWorkspaceTailnet.selectCommandLineInterface()
         // Service helpers must never initialize AppKit, SwiftUI, or a workspace.
         if let status = TailscaleServeSupervisor.dispatch(arguments: CommandLine.arguments) {
             Darwin.exit(status)

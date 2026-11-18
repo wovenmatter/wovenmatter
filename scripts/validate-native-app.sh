@@ -153,4 +153,22 @@ if nm -j "$main_executable" | grep -Eq \
   exit 1
 fi
 
+# Opened from Finder or launchd, the app has no shell environment, and
+# Tailscale's app binary then starts as its GUI instead of answering. The app
+# must hand every child the switch that selects Tailscale's CLI. Its Serve
+# helper mode runs one child without opening a window or a workspace, and
+# stops it when the heartbeat pipe on its standard input closes: the sleep
+# holds that pipe open and so also limits how long this check can take.
+tailscale_probe="$(mktemp -d)"
+tailscale_probe_status=0
+env -i "$main_executable" --tailscale-serve-supervisor /bin/sh -c 'printenv TAILSCALE_BE_CLI > "$0"' \
+  "$tailscale_probe/switch" < <(exec sleep 30 2>/dev/null) || tailscale_probe_status=$?
+tailscale_switch="$(cat "$tailscale_probe/switch" 2>/dev/null || true)"
+rm -rf "$tailscale_probe"
+if [ "$tailscale_switch" != 1 ]; then
+  printf 'The app starts child processes without TAILSCALE_BE_CLI=1 (its helper exited with status %s).\n' \
+    "$tailscale_probe_status" >&2
+  exit 1
+fi
+
 printf '%s\n' 'Native app validation passed.'

@@ -125,6 +125,11 @@ test('remote Executor SSH is pinned to one online Tailscale peer', () => {
   assert.ok(options.includes('ControlMaster=no'));
   assert.throws(() => tailnetSSHOptions('lan.invalid', '/usr/bin/tailscale', status), /online Tailscale machine/);
   assert.throws(() => tailnetSSHOptions('workstation', '/usr/bin/tailscale', { ...status, BackendState: 'Stopped' }), /Connect Tailscale/);
+  // What Tailscale's Mac app binary prints, with exit status 0, when it starts as its GUI.
+  for (const output of ['The Tailscale GUI failed to start: The operation couldn’t be completed.\n', '', 'null']) {
+    assert.throws(() => tailnetSSHOptions('workstation', '/usr/bin/tailscale', output), /^Error: Tailscale did not report its status\./);
+  }
+  assert.equal(tailnetSSHOptions('workstation', '/usr/bin/tailscale', JSON.stringify(status)).includes('Hostname=fd7a:115c:a1e0::2'), true);
   assert.throws(() => tailnetSSHOptions('workstation', '/usr/bin/tailscale', { ...status, Peer: { ...status.Peer, duplicate: status.Peer.first } }), /online Tailscale machine/);
 });
 

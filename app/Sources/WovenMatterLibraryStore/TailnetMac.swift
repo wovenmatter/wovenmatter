@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterClient
 import WovenMatterCore
 
 /// Tailscale inventory is independent of whether Woven Matter is installed or running.
@@ -11,8 +12,10 @@ public struct TailnetMac: Equatable, Identifiable, Sendable {
     public var sshName: String { dnsName.split(separator: ".").first.map(String.init) ?? address }
 
     public static func decode(_ data: Data) throws -> [Self] {
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              root["BackendState"] as? String == "Running" else {
+        guard let root = RemoteWorkspaceTailnet.statusObject(data) else {
+            throw LibraryAPIError(code: "tailscale_unavailable", message: RemoteWorkspaceTailnet.statusUnreadable)
+        }
+        guard root["BackendState"] as? String == "Running" else {
             throw LibraryAPIError(code: "tailscale_unavailable", message: "Connect Tailscale to find Macs on your network.")
         }
         let local = root["Self"] as? [String: Any] ?? [:]

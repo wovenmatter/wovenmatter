@@ -60,8 +60,11 @@ const tailnetAddress = value => {
 };
 export function tailnetSSHOptions(destination, executable, status) {
   const host = destination.split('@').at(-1).toLowerCase().replace(/\.$/, '');
-  const root = typeof status === 'string' ? JSON.parse(status) : status;
-  if (root?.BackendState !== 'Running' || !root.Peer) throw new Error('Connect Tailscale before deploying Executor.');
+  let root = status;
+  // Tailscale's Mac app binary can answer with a sentence instead of its status.
+  if (typeof status === 'string') try { root = JSON.parse(status); } catch { root = null; }
+  if (root === null || typeof root !== 'object') throw new Error('Tailscale did not report its status. Check that Tailscale is running and up to date, then try again.');
+  if (root.BackendState !== 'Running' || !root.Peer) throw new Error('Connect Tailscale before deploying Executor.');
   const matches = Object.values(root.Peer).filter(peer => {
     const names = [peer.HostName, peer.DNSName].filter(Boolean).map(name => name.toLowerCase().replace(/\.$/, ''));
     return names.includes(host) || (tailnetAddress(host) && (peer.TailscaleIPs ?? []).includes(host));

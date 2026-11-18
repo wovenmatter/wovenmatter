@@ -482,8 +482,10 @@ public enum RemoteMachineDiscovery {
     }
 
     public static func decodeTailnetMachines(from data: Data, includeMacs: Bool = false) throws -> [RemoteMachineCandidate] {
-        let document = try JSONSerialization.jsonObject(with: data)
-        guard let root = document as? [String: Any], root["BackendState"] as? String == "Running",
+        guard let root = RemoteWorkspaceTailnet.statusObject(data) else {
+            throw RemoteWorkspaceClientError.commandFailed(RemoteWorkspaceTailnet.statusUnreadable)
+        }
+        guard root["BackendState"] as? String == "Running",
               let peers = root["Peer"] as? [String: Any]
         else { throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.") }
         return peers.values.compactMap { value in

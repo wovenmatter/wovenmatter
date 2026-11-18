@@ -6,6 +6,7 @@ import Glibc
 import Musl
 #endif
 import Foundation
+import WovenMatterClient
 import WovenMatterCore
 
 @MainActor
@@ -97,8 +98,8 @@ public final class TailscaleServe {
     let executable = try executableOverride ?? Self.executableURL()
     let statusData = try await probe(executable, ["status", "--json"])
     guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-    guard let status = try JSONSerialization.jsonObject(with: statusData) as? [String: Any],
-          status["BackendState"] as? String == "Running",
+    guard let status = RemoteWorkspaceTailnet.statusObject(statusData) else { throw failure(RemoteWorkspaceTailnet.statusUnreadable) }
+    guard status["BackendState"] as? String == "Running",
           let node = status["Self"] as? [String: Any],
           let rawHost = node["DNSName"] as? String else {
       throw failure("Connect Tailscale on this Mac to make it available to paired devices.")
@@ -174,7 +175,7 @@ public final class TailscaleServe {
   }
 
   public static func occupiedPorts(in data: Data) throws -> Set<Int> {
-    let root = try JSONSerialization.jsonObject(with: data)
+    let root = try serveStatus(data)
     var ports = Set<Int>()
     func visit(_ value: Any) {
       if let dictionary = value as? [String: Any] {
@@ -186,8 +187,15 @@ public final class TailscaleServe {
     return ports
   }
 
+  private static func serveStatus(_ data: Data) throws -> Any {
+    guard let root = try? JSONSerialization.jsonObject(with: data) else {
+      throw LibraryAPIError(code: "tailscale_unavailable", message: RemoteWorkspaceTailnet.statusUnreadable)
+    }
+    return root
+  }
+
   private static func containsProxy(in data: Data, port: Int, target: String, path: String) throws -> Bool {
-    let root = try JSONSerialization.jsonObject(with: data)
+    let root = try serveStatus(data)
     func visit(_ value: Any) -> Bool {
       guard let dictionary = value as? [String: Any] else { return false }
       if let web = dictionary["Web"] as? [String: Any] {
