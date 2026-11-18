@@ -164,12 +164,13 @@ struct LinuxMemberPathTests {
         #expect(sends.count == 2 && sends[0].commandID != sends[1].commandID && sends.allSatisfy { $0.text == "Hello" })
         #expect(await fake.unlocks.count == 2)
 
-        // A refused key, or none, configures the host as the SSH relay did.
+        // A refused key, or none, sends nothing else: never this Mac's credentials.
         await fake.refuseKeys()
         await fake.lockPi()
-        _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
-        let configured = try #require(await fake.configurations.last)
-        #expect(try JSONDecoder().decode(DefaultAgentPayload.self, from: configured).workspace == workspace.id)
+        await #expect(throws: LibraryAPIError.self) {
+            _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
+        }
+        #expect(await fake.configurations.isEmpty)
     }
 
     @Test func optionsWithoutASessionCarryTheirDescriptions() async throws {
@@ -363,8 +364,7 @@ extension FacadeFixture {
             commandJournalURL: directory.appending(path: "member-commands-\(UUID()).json"),
             makeSignedTransport: { _ in fake })
         client.unlockDefaultAgentHandler = { workspace, routes in
-            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes, existingKey: { _ in "fixture-key" },
-                prepare: { scope in DefaultAgentPayload(config: .init(), credentials: [:], workspace: scope) })
+            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, name: workspace.name, routes: routes, existingKey: { _ in "fixture-key" })
         }
         model.federatedExecutionClient = client
         return (workspace, fake)

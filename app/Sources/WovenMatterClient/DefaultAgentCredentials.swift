@@ -317,45 +317,37 @@ public final class ProviderAccountCoordinator {
     }
     nonisolated public static func refreshStored(_ scopes: [String]) async throws -> [String: DefaultAgentPayload] {
         try DefaultAgentSupport.migrateLocalOAuth()
-        // This device's own subscriptions are renewed here, and, until it updates,
-        // those this Mac keeps for a Linux host from before per-device sign-ins.
+        // Only this device's own subscriptions are renewed here.
         let device = ProviderConnectionAccounts.deviceScope
-        let legacy = DefaultAgentSupport.legacyHostScopes.intersection(scopes)
-        var issues: [String: [String: String]] = [:]
-        for scope in [device] + legacy.sorted() {
-            for provider in ["openai-codex", "xai"] {
-                for account in try ProviderConnectionAccounts.list(provider: provider, scope: scope) {
-                    guard let original = try ProviderConnectionAccounts.credential(account.id, provider: provider, scope: scope),
-                        (original.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 else { continue }
-                    let result: RefreshResult
-                    do {
-                        let response = try await DefaultAgentControl.run(try JSONEncoder().encode(RefreshRequest(credentials: [provider: original])))
-                        result = try JSONDecoder().decode(RefreshResult.self, from: response)
-                    } catch is CancellationError { throw CancellationError() }
-                    catch { continue } // One unavailable account must not block its healthy backups.
-                    if let error = result.errors[provider] {
-                        issues[scope, default: [:]][provider + "." + account.id] = error
-                        if account.isSelected { issues[scope, default: [:]][provider] = error }
-                    }
-                    if let renewed = result.credentials[provider], renewed != original {
-                        try ProviderConnectionAccounts.saveRenewed(renewed, replacing: original, accountID: account.id, provider: provider, scope: scope)
-                    }
+        var issues: [String: String] = [:]
+        for provider in ["openai-codex", "xai"] {
+            for account in try ProviderConnectionAccounts.list(provider: provider, scope: device) {
+                guard let original = try ProviderConnectionAccounts.credential(account.id, provider: provider, scope: device),
+                    (original.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 else { continue }
+                let result: RefreshResult
+                do {
+                    let response = try await DefaultAgentControl.run(try JSONEncoder().encode(RefreshRequest(credentials: [provider: original])))
+                    result = try JSONDecoder().decode(RefreshResult.self, from: response)
+                } catch is CancellationError { throw CancellationError() }
+                catch { continue } // One unavailable account must not block its healthy backups.
+                if let error = result.errors[provider] {
+                    issues[provider + "." + account.id] = error
+                    if account.isSelected { issues[provider] = error }
+                }
+                if let renewed = result.credentials[provider], renewed != original {
+                    try ProviderConnectionAccounts.saveRenewed(renewed, replacing: original, accountID: account.id, provider: provider, scope: device)
                 }
             }
         }
         var result: [String: DefaultAgentPayload] = [:]
         for scope in scopes {
-            let isLegacy = legacy.contains(scope)
-            var value = isLegacy ? try DefaultAgentSupport.legacySnapshot(workspace: scope) : try DefaultAgentSupport.snapshot(workspace: scope)
+            var value = try DefaultAgentSupport.snapshot(workspace: scope)
             for id in ["openai-codex", "xai"] {
-                var owner = device
-                if isLegacy, try DefaultAgentSupport.oauth(id, scope: scope) != nil { owner = scope }
-                let ownerIssues = issues[owner] ?? [:]
-                if ownerIssues[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }
+                if issues[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }
                 // Keep the rejected slot in the hierarchy so fallback can explain
                 // the switch, but never export its rejected access/refresh tokens.
                 let sanitized = value.credentialAccounts?[id]?.map { account in
-                    guard ownerIssues[id + "." + account.id] == "sign_in_required" else { return account }
+                    guard issues[id + "." + account.id] == "sign_in_required" else { return account }
                     var unavailable = DefaultAgentCredential(type: "oauth")
                     unavailable.access = ""
                     unavailable.expires = 0
@@ -364,7 +356,6 @@ public final class ProviderAccountCoordinator {
                 }
                 value.credentialAccounts?[id] = sanitized
             }
-            if isLegacy { value.unlockKey = try DefaultAgentSupport.workspaceKey(scope) }
             result[scope] = value
         }
         return result

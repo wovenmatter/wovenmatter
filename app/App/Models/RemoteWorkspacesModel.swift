@@ -1324,12 +1324,7 @@ final class RemoteWorkspacesModel {
         let scope = configuration.id.uuidString.lowercased()
         let settingsOnly = try DefaultAgentSupport.configurationPayload(workspace: scope)
         try requireCurrent(identity)
-        // A host known to keep its own sign-ins gets chat settings alone; one that
-        // has not updated yet gets what it got before.
-        let expected = DefaultAgentSupport.legacyHostScopes.contains(scope)
-            ? try await ProviderAccountCoordinator.shared.prepare(scope).revision : settingsOnly.revision
-        try requireCurrent(identity)
-        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == expected, ack.identity == identity { return }
+        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == settingsOnly.revision, ack.identity == identity { return }
         if defaultAgentSyncTasks[configuration.id] != nil {
             try await waitForDefaultAgentSync(configuration.id)
             return try await ensureDefaultAgent(configuration)
@@ -1345,8 +1340,22 @@ final class RemoteWorkspacesModel {
             if let signed { vault = try await signed.request("v1/default-agent/status", timeout: 60) }
             else { vault = try await client!.defaultAgentVault() }
             try requireCurrent(identity)
-            let payload = try await DefaultAgentHostSync.payload(scope: scope, vault: vault, settingsOnly: settingsOnly)
+            // Never a credential: chat settings for a host that keeps its own sign-ins,
+            // or only its own vault key for one that has not updated yet.
+            let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: vault, settingsOnly: settingsOnly)
             try requireCurrent(identity)
+            guard let payload = plan.configuration else {
+                if let key = plan.unlockKey {
+                    if let signed {
+                        struct Reply: Decodable { var unlocked: Bool }
+                        let _: Reply = try await signed.request("v1/default-agent/unlock", method: "POST",
+                            body: JSONSerialization.data(withJSONObject: ["workspace": scope, "unlockKey": key], options: [.sortedKeys]))
+                    } else { try await client!.unlockDefaultAgent(workspace: scope, unlockKey: key) }
+                    try requireCurrent(identity)
+                }
+                defaultAgentAcknowledgments[configuration.id] = .init(revision: settingsOnly.revision ?? "", identity: identity)
+                return
+            }
             let receipt: DefaultAgentSyncReceipt
             if let signed {
                 receipt = try await signed.request("v1/default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)

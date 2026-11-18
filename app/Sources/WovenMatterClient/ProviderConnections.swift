@@ -259,6 +259,12 @@ public enum ProviderConnectionAccounts {
     private static func sameAccount(_ a: DefaultAgentCredential, _ b: DefaultAgentCredential) -> Bool {
         a == b || (a.accountId != nil && a.accountId == b.accountId && a.type == b.type)
     }
+    /// What can be told offline: a subscription with no refresh token whose access
+    /// has expired, or borrowed access, can no longer sign in.
+    private static func usable(_ credential: DefaultAgentCredential, now: Double = Date().timeIntervalSince1970 * 1000) -> Bool {
+        guard credential.type == "oauth" else { return true }
+        return !credential.borrowed && (!(credential.refresh ?? "").isEmpty || (credential.expires ?? 0) > now)
+    }
     private static func migrateProvider(_ provider: String, keychain: KeychainAccess) throws {
         let device = deviceScope
         let localStore = try load(provider, scope: "local", keychain: keychain)
@@ -266,14 +272,15 @@ public enum ProviderConnectionAccounts {
         guard !local.isEmpty else { return }
         let deviceStore = try load(provider, scope: device, keychain: keychain)
         let existing = deviceStore.entries.filter { $0.account.isSelected } + deviceStore.entries.filter { !$0.account.isSelected }
+        // The same account in both scopes keeps the one that can still sign in
+        // (the local one when both can, or when that cannot be told).
         var merged: [Entry] = []
-        for entry in local + existing where !merged.contains(where: { sameAccount($0.credential, entry.credential) }) {
-            merged.append(entry)
+        for entry in local + existing {
+            if let index = merged.firstIndex(where: { sameAccount($0.credential, entry.credential) }) {
+                if !usable(merged[index].credential), usable(entry.credential) { merged[index].credential = entry.credential }
+            } else { merged.append(entry) }
         }
         let kept = Array(merged.prefix(limit(for: provider)))
-        let displaced = existing.filter { entry in !kept.contains { sameAccount($0.credential, entry.credential) } }
-        // 1. Keep a verified copy of every device item before any device account is displaced.
-        if !displaced.isEmpty { try preserve(provider, from: device, keychain: keychain) }
         // 2. The device list: what this Mac used first.
         let target = kept.enumerated().map { index, entry -> Entry in
             var value = entry
@@ -282,6 +289,8 @@ public enum ProviderConnectionAccounts {
         }
         let unchanged = target.map(\.credential) == existing.map(\.credential)
             && target.first?.account.id == existing.first?.account.id
+        // 1. Before any device item is overwritten, keep a verified copy of all of them.
+        if !unchanged, !existing.isEmpty { try preserve(provider, from: device, keychain: keychain) }
         if !unchanged {
             try change(provider: provider, scope: device, keychain: keychain, notify: false) { store in store.entries = target }
         }
@@ -291,7 +300,9 @@ public enum ProviderConnectionAccounts {
               stored.first(where: { $0.account.isSelected })?.credential == target.first?.credential else {
             throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
         }
-        guard local.allSatisfy({ entry in stored.contains { sameAccount($0.credential, entry.credential) } }) else { return }
+        // A local credential that was not kept as is (the other copy of its account
+        // could still sign in) stays where it is.
+        guard local.allSatisfy({ entry in stored.contains { $0.credential == entry.credential } }) else { return }
         try deleteItems(provider: provider, scope: "local", keychain: keychain)
     }
     /// Copies a scope's raw items for one provider to `preservedScope`, unless a copy
@@ -309,13 +320,26 @@ public enum ProviderConnectionAccounts {
         }
         try DefaultAgentSupport.saveKey(scope, provider: marker, scope: preservedScope, notify: false, keychain: keychain)
     }
-    /// The copies this Mac held for a Linux host before per-device sign-ins (its
-    /// credential items and vault key), once that host keeps its own vault.
-    public static func forgetHostCopies(scope: String, keychain: KeychainAccess = .init()) throws {
-        guard !scope.isEmpty, scope != deviceScope, scope != "local", scope != preservedScope else { return }
+    /// Where what this Mac kept for a Linux workspace is moved once that host keeps
+    /// its own vault: `premigration.<workspace>`.
+    public static func preservedScope(forHost scope: String) -> String { preservedScope + "." + scope }
+    /// What this Mac kept for a Linux workspace before per-device sign-ins (its
+    /// accounts, subscriptions with their refresh tokens, and that host's vault key),
+    /// once the host keeps its own vault. Nothing is deleted: each item is copied to
+    /// `preservedScope(forHost:)`, read back, and only then removed from the
+    /// workspace scope; an item whose copy differs stays where it is.
+    public static func setAsideHostCopies(scope: String, keychain: KeychainAccess = .init()) throws {
+        guard UUID(uuidString: scope) != nil else { return }
+        let destination = preservedScope(forHost: scope)
         try DefaultAgentSupport.credentialLock.withLock {
-            for provider in ProviderConnectionID.allCases.map(\.rawValue) { try deleteItems(provider: provider, scope: scope, keychain: keychain) }
-            try DefaultAgentSupport.saveKey("", provider: "encryption-key", scope: scope, notify: false, keychain: keychain)
+            let items = ProviderConnectionID.allCases.flatMap { [$0.rawValue, "oauth." + $0.rawValue, "accounts." + $0.rawValue] } + ["encryption-key"]
+            for item in items {
+                guard let value = try DefaultAgentSupport.key(item, scope: scope, keychain: keychain) else { continue }
+                let existing = try DefaultAgentSupport.key(item, scope: destination, keychain: keychain)
+                if existing == nil { try DefaultAgentSupport.saveKey(value, provider: item, scope: destination, notify: false, keychain: keychain) }
+                guard try DefaultAgentSupport.key(item, scope: destination, keychain: keychain) == value else { continue }
+                try DefaultAgentSupport.saveKey("", provider: item, scope: scope, notify: false, keychain: keychain)
+            }
         }
     }
     private static func deleteItems(provider: String, scope: String, keychain: KeychainAccess) throws {

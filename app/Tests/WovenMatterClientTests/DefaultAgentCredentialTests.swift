@@ -386,31 +386,82 @@ extension DefaultAgentCredentialTests {
         let once = fixture.stored
         try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
         #expect(fixture.stored == once)
-        // The host's copies are removed once it keeps its own vault.
-        try ProviderConnectionAccounts.forgetHostCopies(scope: remote, keychain: keychain)
-        #expect(try DefaultAgentSupport.key("openai", scope: remote, keychain: keychain) == nil)
-        #expect(try DefaultAgentSupport.key("encryption-key", scope: remote, keychain: keychain) == nil)
         #expect(try DefaultAgentSupport.key("openai", keychain: keychain) == "local-key")
     }
 
-    /// Until a Linux host updates, it gets what it got before: its workspace's
-    /// accounts, falling back to this Mac's own, and its vault key.
-    @Test func anOutdatedHostGetsThePayloadItGotBefore() throws {
+    /// Once a host keeps its own vault, what this Mac kept for that workspace (its
+    /// subscriptions with their refresh tokens, its keys, the vault key) is moved
+    /// aside, read back first, and never deleted.
+    @Test func whatThisMacKeptForAnUpdatedHostIsMovedAsideNotDeleted() throws {
+        let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access
+        let remote = "0f0e0d0c-0b0a-4908-8706-050403020100"
+        _ = try ProviderConnectionAccounts.addKey("remote-key", provider: "openai", scope: remote, keychain: keychain)
+        _ = try ProviderConnectionAccounts.addOAuth(oauth("workspace-chatgpt"), provider: "openai-codex", scope: remote, keychain: keychain)
+        try DefaultAgentSupport.saveKey("vault-key", provider: "encryption-key", scope: remote, notify: false, keychain: keychain)
+        _ = try ProviderConnectionAccounts.addKey("device-key", provider: "openai", keychain: keychain)
+        let original = fixture.stored.filter { $0.key.hasPrefix(remote + ".") }
+        #expect(!original.isEmpty)
+
+        try ProviderConnectionAccounts.setAsideHostCopies(scope: remote, keychain: keychain)
+
+        let aside = ProviderConnectionAccounts.preservedScope(forHost: remote)
+        #expect(fixture.stored.keys.allSatisfy { !$0.hasPrefix(remote + ".") })
+        for (account, value) in original {
+            #expect(fixture.stored[aside + "." + account.dropFirst(remote.count + 1)] == value, "\(account)")
+        }
+        #expect(try DefaultAgentSupport.oauth("openai-codex", scope: aside, keychain: keychain)?.refresh == "workspace-chatgpt-refresh")
+        #expect(try keys("openai", aside, keychain) == ["remote-key"])
+        #expect(try DefaultAgentSupport.key("encryption-key", scope: aside, keychain: keychain) == "vault-key")
+        #expect(try DefaultAgentSupport.key("openai", keychain: keychain) == "device-key")
+        // Again: nothing changes.
+        let once = fixture.stored
+        try ProviderConnectionAccounts.setAsideHostCopies(scope: remote, keychain: keychain)
+        #expect(fixture.stored == once)
+        // An item whose copy cannot be written stays where it is.
+        let other = "1f0e0d0c-0b0a-4908-8706-050403020100"
+        try DefaultAgentSupport.saveKey("other-vault-key", provider: "encryption-key", scope: other, notify: false, keychain: keychain)
+        fixture.failing = ProviderConnectionAccounts.preservedScope(forHost: other) + ".encryption-key"
+        #expect(throws: (any Error).self) { try ProviderConnectionAccounts.setAsideHostCopies(scope: other, keychain: keychain) }
+        fixture.failing = nil
+        #expect(try DefaultAgentSupport.key("encryption-key", scope: other, keychain: keychain) == "other-vault-key")
+    }
+
+    /// The same subscription account in both scopes: the copy being replaced is
+    /// always kept, and a token that can no longer sign in never replaces one that can.
+    @Test func aSameAccountSubscriptionKeepsTheTokenThatStillWorks() throws {
+        for localDead in [true, false] {
+            let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access
+            var local = oauth("same-account"); local.access = "local-access"; local.refresh = localDead ? "" : "local-refresh"; local.expires = localDead ? 1 : 9000000000000
+            var device = oauth("same-account"); device.access = "device-access"; device.refresh = "device-refresh"
+            _ = try ProviderConnectionAccounts.addOAuth(device, provider: "openai-codex", keychain: keychain)
+            _ = try ProviderConnectionAccounts.addOAuth(local, provider: "openai-codex", scope: "local", keychain: keychain)
+
+            try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
+
+            let used = try DefaultAgentSupport.oauth("openai-codex", keychain: keychain)
+            #expect(used?.refresh == (localDead ? "device-refresh" : "local-refresh"), "local dead: \(localDead)")
+            #expect(try ProviderConnectionAccounts.list(provider: "openai-codex", keychain: keychain).count == 1)
+            // Whatever was in the device slot before is kept, refresh token included.
+            #expect(try DefaultAgentSupport.oauth("openai-codex", scope: ProviderConnectionAccounts.preservedScope, keychain: keychain)?.refresh == "device-refresh")
+            // And the local token is never lost: in the device list, or still where it was.
+            let localNow = try DefaultAgentSupport.oauth("openai-codex", scope: "local", keychain: keychain)
+            #expect(localDead ? localNow?.access == "local-access" : localNow == nil)
+            let once = fixture.stored
+            try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
+            #expect(fixture.stored == once)
+        }
+    }
+
+    /// No payload to any host carries this Mac's credentials, account lists or borrowed access.
+    @Test func noHostPayloadEverCarriesCredentials() throws {
         let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access
         let scope = "0f0e0d0c-0b0a-4908-8706-050403020100"
         _ = try ProviderConnectionAccounts.addKey("device-key", provider: "anthropic", keychain: keychain)
-        _ = try ProviderConnectionAccounts.addKey("device-openai", provider: "openai", keychain: keychain)
         _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: scope, keychain: keychain)
-        let payload = try DefaultAgentSupport.legacySnapshot(workspace: scope, settings: .init(), keychain: keychain, servers: [])
-        #expect(payload.credentials["openai"]?.key == "workspace-key")
-        #expect(payload.credentials["anthropic"]?.key == "device-key")
-        #expect(payload.credentialAccounts?["openai"]?.map(\.credential.key) == ["workspace-key"])
-        let key = try DefaultAgentSupport.workspaceKey(scope, keychain: keychain)
-        #expect(try DefaultAgentSupport.workspaceKey(scope, keychain: keychain) == key)
-        #expect(try DefaultAgentSupport.key("encryption-key", scope: scope, keychain: keychain) == key)
-        // An updated host gets this device's own sign-ins nowhere: only chat settings.
-        let settings = try DefaultAgentSupport.configurationPayload(workspace: scope, settings: .init())
-        #expect(settings.credentials.isEmpty && settings.unlockKey == nil)
+        let payload = try DefaultAgentSupport.configurationPayload(workspace: scope, settings: .init())
+        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil && payload.unlockKey == nil)
+        let body = String(decoding: try payload.data(), as: UTF8.self)
+        #expect(!body.contains("device-key") && !body.contains("workspace-key"))
     }
 
     @Test func migrationOverTheKeyCapKeepsEveryKey() throws {

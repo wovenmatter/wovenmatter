@@ -67,48 +67,44 @@ struct DefaultAgentControlSession: Decodable, Sendable {
 }
 
 /// A host's Pi Durable vault is its own and always open: only a host from before
-/// per-device sign-ins reports itself locked. It keeps working exactly as it
-/// did until it updates: it is unlocked with this Mac's key for that workspace
-/// (the Keychain's `encryption-key` for the workspace scope), or, without a key
-/// or when it refuses the key, configured with the copies this Mac keeps for it.
+/// per-device sign-ins reports itself locked. It is unlocked with that host's
+/// own vault key (the Keychain's `encryption-key` for the workspace scope), so
+/// it keeps what it already holds. No credential is ever sent to it.
 enum DefaultAgentHostUnlock {
-    typealias Prepare = @Sendable (String) async throws -> DefaultAgentPayload
-
-    static func unlock(scope: String, routes: any MemberExecutionRoutes,
-                       existingKey: @Sendable (String) throws -> String? = { try DefaultAgentSupport.key("encryption-key", scope: $0) },
-                       prepare: Prepare = { try await ProviderAccountCoordinator.shared.prepare($0) }) async throws {
-        DefaultAgentSupport.markLegacyHost(scope, true)
+    static func unlock(scope: String, name: String, routes: any MemberExecutionRoutes,
+                       existingKey: @Sendable (String) throws -> String? = { try DefaultAgentSupport.key("encryption-key", scope: $0) }) async throws {
         if let key = try existingKey(scope), !key.isEmpty, try await routes.unlockDefaultAgent(workspace: scope, unlockKey: key) { return }
-        let payload = try await prepare(scope)
-        let receipt = try await routes.configureDefaultAgent(payload.data())
-        guard receipt.saved else {
-            throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "The workspace did not accept this Mac's Pi Durable credentials.")
-        }
+        throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "Pi Durable is locked on \(name). Open Woven Matter on the Mac that set it up.")
     }
 }
 
-/// What this Mac sends a Linux host's Pi Durable (`v1/default-agent/configuration`).
+/// What this Mac sends a Linux host's Pi Durable. Never a provider credential,
+/// an account list or borrowed access, whatever the host reports.
 enum DefaultAgentHostSync {
-    /// A host that keeps its own sign-ins gets chat settings alone, with this Mac's
-    /// key for that workspace only while a vault sealed with it waits there. A host
-    /// from before per-device sign-ins keeps working exactly as it did until it
-    /// updates: the copies this Mac keeps for it and its vault key.
-    static func payload(scope: String, vault: DefaultAgentHostVault, settingsOnly: DefaultAgentPayload,
-                        legacy: @Sendable (String) async throws -> DefaultAgentPayload = { try await ProviderAccountCoordinator.shared.prepare($0) },
-                        vaultKey: @Sendable (String) async throws -> String? = { scope in
-                            try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) { try DefaultAgentSupport.key("encryption-key", scope: scope) }
-                        }) async throws -> DefaultAgentPayload {
-        DefaultAgentSupport.markLegacyHost(scope, vault.isLegacy)
-        if vault.isLegacy { return try await legacy(scope) }
-        var payload = settingsOnly
-        if vault.legacyVault == true, let key = try await vaultKey(scope), !key.isEmpty { payload.unlockKey = key }
-        return payload
+    struct Plan {
+        /// Chat settings (`v1/default-agent/configuration`), for a host that keeps its own sign-ins.
+        var configuration: DefaultAgentPayload?
+        /// That host's own vault key (`v1/default-agent/unlock`), for a host from
+        /// before per-device sign-ins: it stays unlocked with what it holds.
+        var unlockKey: String?
+    }
+    static func plan(scope: String, vault: DefaultAgentHostVault, settingsOnly: DefaultAgentPayload,
+                     vaultKey: @Sendable (String) async throws -> String? = { scope in
+                         try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) { try DefaultAgentSupport.key("encryption-key", scope: scope) }
+                     }) async throws -> Plan {
+        let key = try await vaultKey(scope).flatMap { $0.isEmpty ? nil : $0 }
+        if vault.isLegacy { return Plan(configuration: nil, unlockKey: key) }
+        var payload = DefaultAgentPayload(config: settingsOnly.config, credentials: [:], workspace: settingsOnly.workspace)
+        payload.revision = settingsOnly.revision
+        // Once, to open a vault sealed with this Mac's key that waits there.
+        if vault.legacyVault == true { payload.unlockKey = key }
+        return Plan(configuration: payload, unlockKey: nil)
     }
     /// Once the host keeps its own vault and nothing there waits for this Mac's key,
-    /// the copies this Mac held for it, and that key, are removed.
+    /// what this Mac kept for that workspace is moved aside (never deleted).
     static func acknowledged(_ receipt: DefaultAgentSyncReceipt, scope: String,
                              forget: @Sendable (String) async throws -> Void = { scope in
-                                 try await ProviderConnectionStore.shared.perform { try ProviderConnectionAccounts.forgetHostCopies(scope: scope) }
+                                 try await ProviderConnectionStore.shared.perform { try ProviderConnectionAccounts.setAsideHostCopies(scope: scope) }
                              }) async {
         guard receipt.deviceVault == true, receipt.legacyVault != true else { return }
         try? await forget(scope)

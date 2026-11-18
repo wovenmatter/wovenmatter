@@ -110,7 +110,7 @@ extension ApplicationModel {
         // A Linux host's Pi Durable vault opens with this Mac's key for that
         // workspace (its registry id is the Keychain scope).
         client.unlockDefaultAgentHandler = { workspace, routes in
-            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes)
+            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, name: workspace.name, routes: routes)
         }
         federatedExecutionClient = client
         return client
