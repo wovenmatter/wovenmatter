@@ -20,9 +20,9 @@ struct WorkspaceAssetTabsTests {
 
   @Test func snapshotIsBoundedMetadataAndSurvivesIPCAndAttachmentStaging() async throws {
     let context = WorkspaceVisibleContext(
-      notes: (0..<10).map { .init(id: "n\($0)", title: String(repeating: "a", count: 500), revision: "r1", active: $0 == 0) },
-      pages: (0..<12).compactMap { .init(title: "Page \($0)", url: "https://user:password@example.com/page#secret", active: false) })
-    #expect(context.notes.count == 4 && context.pages.count == 8)
+      notes: (0..<14).map { .init(id: "n\($0)", title: String(repeating: "a", count: 500), revision: "r1", active: $0 == 0) },
+      pages: (0..<14).compactMap { .init(title: "Page \($0)", url: "https://user:password@example.com/page#secret", active: false) })
+    #expect(context.notes.count == 10 && context.pages.count == 10)
     #expect(context.notes[0].title.count == 160)
     #expect(context.pages[0].url == "https://example.com/page")
     #expect(WorkspaceVisibleContext.Page(title: "Local", url: "file:///private/document", active: true) == nil)

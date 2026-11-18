@@ -61,9 +61,9 @@ and tables, nest sections, and embed original Notes, Sheets, Artifacts, or Pages
 The same Page can be a project workspace, checklist, or reference document.
 [Pages](../PAGES.md) describes component editing and agent collaboration.
 
-Assets, browser pages, and document previews share one tab strip beside the
-chat. Keep up to 4 assets, 8 browser tabs, and 8 document previews open at once.
-Tabs stay open when you switch conversations. Closing an asset tab keeps the saved
+Artifacts, browser pages, and document previews share one tab strip beside the
+chat. Keep up to 10 artifacts, 10 browser tabs, and 8 document previews open at once.
+Tabs stay open when you switch conversations. Closing an artifact tab keeps the saved
 asset; hiding the asset pane keeps its tabs. Open tabs are not restored after
 quitting the app.
 
