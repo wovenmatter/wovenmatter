@@ -76,9 +76,13 @@ struct SettingsAccountsView: View {
 
     private func selectScope(_ scope: String) {
         connectedProvider = nil
+        // A device ID (`SignInDevice.id`), as a bot's page opens this page with.
+        if SignInDevice.kind(of: scope) == .mac { agent.selectDevice(scope); agent.loadDevices(); return }
+        if let workspace = SignInDevice.linuxWorkspace(of: scope) { self.scope = workspace.uuidString.lowercased(); selectScope(self.scope); return }
         agent.changeScope(scope)
         agent.loadAccounts()
         agent.loadCatalog(remote: remote, includeAllModels: false)
+        agent.loadDevices()
     }
 
     private func manageSharedAccounts() {

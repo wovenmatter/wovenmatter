@@ -530,9 +530,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
       const payload = await readJSON(request)
-      const result = await defaultAgent.configure(payload)
-      clientExecution.rememberUnlockMaterial(payload)
-      return json(response, 200, result)
+      // Chat settings only: this host's vault is its own, so no unlock material is kept.
+      return json(response, 200, await defaultAgent.configure(payload))
     }
     if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
     // A Mac's key for this workspace's Pi Durable vault, without its

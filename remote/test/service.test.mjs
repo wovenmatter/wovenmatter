@@ -282,6 +282,10 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   let status = await (await request('/v1/default-agent/status')).json();
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'sign_in_required');
   assert.deepEqual((await (await request('/v1/default-agent/unlock', { workspace: 'fixture-workspace', unlockKey })).json()).unlocked, true);
+  // A current Mac sends its chat settings alone.
+  const settingsOnly = await request('/v1/default-agent/configuration', { workspace: 'fixture-workspace', revision: 'settings-only', config: { providers: ['openrouter'] }, credentials: {} });
+  assert.equal(settingsOnly.status, 200);
+  assert.equal((await settingsOnly.json()).revision, 'settings-only');
   // A key typed on another device arrives once and is saved here.
   const saved = await (await request('/v1/sign-ins', { action: 'saveKey', provider: 'openrouter', key: 'fixture-provider-secret', label: 'Router' })).json();
   assert.deepEqual(saved.accounts.openrouter.map(a => [a.label, a.isSelected]), [['Router', true]]);
