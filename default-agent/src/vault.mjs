@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
+import { link, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { readJSON, searchProviderNames, writePrivateJSON } from './config.mjs';
@@ -30,14 +30,15 @@ export class CredentialVault {
   get unlocked() { return Boolean(this.key) || this.device === true; }
   // Opens this device's own vault with the key beside it in the private
   // directory (0600, created on first use). A vault sealed with a Mac's key
-  // (before sign-ins were per device) is set aside, unread, until a Mac that
-  // holds its key brings its sign-ins over (`importLegacy`).
+  // (before sign-ins were per device) is set aside once as
+  // `credentials.mac-sealed-*.enc.json`: kept on disk, never decrypted, never
+  // moved again. The device starts with its own empty vault and signs in once.
   async openDevice() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const release = await lockfile.lock(this.path, lockOptions);
     try {
       const stored = await readJSON(this.path, null).catch(() => ({ damaged: true }));
-      if (stored && !stored.damaged && stored.workspace !== deviceVaultWorkspace) await setAside(this.path, 'legacy');
+      if (stored && !stored.damaged && stored.workspace !== deviceVaultWorkspace) await setAside(this.path, 'mac-sealed');
       let key = await readDeviceKey(this.keyPath);
       if (key === null && !(await exists(this.path))) key = await createDeviceKey(this.keyPath);
       this.device = true; this.workspace = deviceVaultWorkspace;
@@ -61,19 +62,10 @@ export class CredentialVault {
     if (!owned && !('credentials' in configuration)) return;
     const incoming = { owned: ownedSignIns(owned ?? {}), shared: sharedCredentials(configuration.credentials ?? {}) };
     if (Object.keys(incoming.owned).length || Object.keys(incoming.shared).length) {
-      await this.modifyLocked(async stored => mergeLegacy(stored, incoming, configuration.config));
+      await this.modifyLocked(async stored => mergePlaintext(stored, incoming, configuration.config));
     }
     if (owned) await unlink(oauthPath).catch(missing);
     if ('credentials' in configuration) await writePrivateJSON(configurationPath, { config: configuration.config });
-  }
-  // Whether a vault sealed with a Mac's key is waiting for that Mac: not once
-  // this device has signed in to anything itself, and not after a Mac's key
-  // failed to open it (the file stays on disk either way).
-  async legacyPending() {
-    if (!(await legacyFiles(this.directory)).length) return false;
-    const stored = await this.read().catch(() => ({}));
-    const own = Object.keys(stored.owned ?? {}).length || Object.values(stored.accounts ?? {}).some(list => list?.length) || (stored.servers ?? []).length;
-    return !own;
   }
   // A control session's `reset`: this device's sign-ins are cleared, and the
   // vault as it was is kept beside it.
@@ -84,38 +76,6 @@ export class CredentialVault {
       if (await exists(this.path)) await keepCopy(this.path, 'reset');
       return await this.modifyLocked(async () => ({}));
     } finally { await release(); }
-  }
-  // A Mac that held this workspace's key opens the set-aside vault once: its
-  // own and saved sign-ins join this device's vault (a Mac's borrowed
-  // subscription access does not: this device signs in itself), and the old
-  // file is removed only after the device vault holds them. A wrong key
-  // leaves it in place.
-  async importLegacy(workspace, encodedKey) {
-    if (typeof workspace !== 'string' || !/^[a-z0-9-]{1,64}$/i.test(workspace) || typeof encodedKey !== 'string') return { imported: false };
-    const key = Buffer.from(encodedKey, 'base64');
-    try {
-      if (key.length !== 32) return { imported: false };
-      let imported = false;
-      for (const file of await legacyFiles(this.directory)) {
-        const sealed = await readJSON(file, null).catch(() => null);
-        if (sealed?.workspace !== workspace) continue;
-        let value;
-        try { value = decrypt(sealed, key, workspace); }
-        catch {
-          // That Mac's key does not open it: it stops waiting, and stays on disk.
-          await rename(file, file.replace(/\.enc\.json$/, '') + '.unopened.enc.json').catch(missing);
-          continue;
-        }
-        const configuration = await readJSON(join(this.directory, 'configuration.json'), {}).catch(() => ({}));
-        const release = await lockfile.lock(this.path, lockOptions);
-        try {
-          await this.modifyLocked(async stored => mergeLegacy(stored, { owned: ownedSignIns(value.owned ?? {}), shared: sharedCredentials(value.shared ?? {}), accounts: sharedAccounts(value.accounts ?? {}) }, configuration.config));
-        } finally { await release(); }
-        await unlink(file).catch(missing);
-        imported = true;
-      }
-      return { imported };
-    } finally { key.fill(0); }
   }
   seal() { this.key?.fill(0); this.key = undefined; this.workspace = undefined; this.device = undefined; }
   async unlock(workspace, encodedKey) {
@@ -284,11 +244,6 @@ async function keepCopy(path, reason) {
   } finally { await source.close(); }
 }
 
-async function legacyFiles(directory) {
-  const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
-  return names.filter(name => /^credentials\.legacy-[0-9]+-[0-9a-f]{6}\.enc\.json$/.test(name)).sort().map(name => join(directory, name));
-}
-
 // A host's own subscriptions (with their refresh tokens) and local model server keys.
 function ownedSignIns(input = {}) {
   const result = {};
@@ -303,7 +258,7 @@ function ownedSignIns(input = {}) {
 }
 
 // Adds what the device vault does not hold yet; nothing it holds is replaced.
-function mergeLegacy(stored, { owned = {}, shared = {}, accounts = {} }, config = {}) {
+function mergePlaintext(stored, { owned = {}, shared = {}, accounts = {} }, config = {}) {
   const next = { ...stored, owned: { ...stored.owned }, accounts: { ...stored.accounts }, servers: [...(stored.servers ?? [])] };
   for (const [id, credential] of Object.entries(owned)) if (!localServerID.test(id) && !next.owned[id]) next.owned[id] = credential;
   const native = shared['claude-subscription'];

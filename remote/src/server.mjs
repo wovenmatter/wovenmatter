@@ -535,15 +535,13 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 200, await defaultAgent.configure(payload))
     }
     if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
-    // A Mac's key for this workspace's Pi Durable vault, without its
-    // credentials: the provider accounts already in the host's encrypted
-    // vault become usable again (after a restart, for every member). The key
-    // is held in memory only, as a configuration's is.
+    // An older Mac's key for this workspace's vault. This host's vault is its
+    // own and always open, so it answers unlocked and the key is not kept.
     if (url.pathname === '/v1/default-agent/unlock' && request.method === 'POST') {
       const body = await readJSON(request, 4096)
       if (typeof body.workspace !== 'string' || typeof body.unlockKey !== 'string' || Object.keys(body).some(key => !['workspace', 'unlockKey'].includes(key))) return json(response, 400, { error: 'invalid_unlock' })
       try { await defaultAgent.unlockForClient(body) } catch { return json(response, 403, { error: 'unlock_refused' }) }
-      clientExecution.rememberUnlockMaterial(body)
+      // This host keeps its own vault: a Mac's key is answered, never kept.
       const status = await defaultAgent.status()
       return json(response, 200, { unlocked: !status.locked, ...(status.epoch ? { epoch: status.epoch } : {}) })
     }

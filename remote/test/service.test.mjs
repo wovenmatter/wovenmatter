@@ -279,11 +279,13 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   const receipt = await (await request('/v1/default-agent/configuration', { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
     credentials: { openrouter: { type: 'api_key', key: 'relayed-provider-secret' } } })).json();
   assert.equal(receipt.revision, 'fixture-revision');
-  // A Mac tells this host keeps its own vault. A key that does not open the old
-  // one ends its wait; the file stays on disk.
+  // A Mac tells this host keeps its own vault. The old one is set aside once,
+  // unread, and a Mac's key changes nothing.
   assert.equal(receipt.deviceVault, true);
-  assert.equal(receipt.legacyVault, false);
-  assert.ok((await readdir(directory)).some(name => /^credentials\.legacy-.*\.unopened\.enc\.json$/.test(name)));
+  assert.equal('legacyVault' in receipt, false);
+  const aside = (await readdir(directory)).filter(name => /^credentials\.mac-sealed-.*\.enc\.json$/.test(name));
+  assert.equal(aside.length, 1);
+  assert.equal(JSON.parse(await readFile(resolve(directory, aside[0]), 'utf8')).workspace, 'fixture-workspace');
   let status = await (await request('/v1/default-agent/status')).json();
   assert.equal(status.deviceVault, true);
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'sign_in_required');

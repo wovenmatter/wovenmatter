@@ -16,48 +16,43 @@ async function temporary(t) {
   return directory;
 }
 
-test('a device vault opens with its own key and sets a vault sealed with a Mac key aside for that Mac', async t => {
+test('a device vault opens with its own key and sets a vault sealed with a Mac key aside once, unread', async t => {
   const directory = await temporary(t);
   const sealed = new CredentialVault(directory), macKey = randomBytes(32).toString('base64');
   await sealed.unlock('mac-workspace', macKey);
   await sealed.modify(async value => ({ ...value,
     owned: { xai: { type: 'oauth', access: 'host-access', refresh: 'host-refresh', expires: 1 } },
-    shared: { openai: { type: 'api_key', key: 'saved-secret' }, 'openai-codex': { type: 'oauth', access: 'mac-access', refresh: '', borrowed: true, expires: 1 } } }));
+    shared: { openai: { type: 'api_key', key: 'saved-secret' } } }));
+  const sealedBytes = await readFile(sealed.path, 'utf8');
   await writeFile(join(directory, 'configuration.json'), JSON.stringify({ config: { providers: [] } }));
   const vault = await new CredentialVault(directory).openDevice();
+  // The device starts with its own empty vault and signs in once.
   assert.deepEqual(await vault.read(), {});
   assert.equal((await stat(join(directory, 'credentials.key'))).mode & 0o777, 0o600);
-  // Kept, unread, until the Mac that holds its key brings its sign-ins over.
-  assert.equal(await vault.legacyPending(), true);
-  assert.deepEqual(await vault.importLegacy('mac-workspace', macKey), { imported: true });
-  assert.equal(await vault.legacyPending(), false);
-  const stored = await vault.read();
-  // The host's own subscription and saved keys join it, and a Mac's borrowed
-  // subscription access does not come over.
-  assert.equal(stored.owned.xai.refresh, 'host-refresh');
-  assert.equal(stored.owned['openai-codex'], undefined);
-  assert.deepEqual(stored.accounts.openai.map(entry => entry.credential.key), ['saved-secret']);
-  // Another process of the same host reads the same sign-ins with the same key.
-  const other = await new CredentialVault(directory).openDevice();
-  assert.equal((await other.read()).owned.xai.refresh, 'host-refresh');
-  assert.ok(!(await readFile(vault.path, 'utf8')).includes('host-refresh'));
-});
-
-test('a vault sealed with a Mac key stops waiting once this device signs in or a Mac key fails to open it, and stays on disk', async t => {
-  for (const ending of ['own sign-in', 'wrong key']) {
-    const directory = await temporary(t);
-    const sealed = new CredentialVault(directory), macKey = randomBytes(32).toString('base64');
-    await sealed.unlock('mac-workspace', macKey);
-    await sealed.modify(async value => ({ ...value, owned: { xai: { type: 'oauth', access: 'a', refresh: 'old-refresh', expires: 1 } } }));
-    const vault = await new CredentialVault(directory).openDevice();
-    assert.equal(await vault.legacyPending(), true);
-    if (ending === 'own sign-in') await changeSignIns(vault, { action: 'saveKey', provider: 'openai', key: 'own-key' });
-    else assert.deepEqual(await vault.importLegacy('mac-workspace', randomBytes(32).toString('base64')), { imported: false });
-    assert.equal(await vault.legacyPending(), false, ending);
-    const kept = (await files(directory)).filter(name => name.startsWith('credentials.legacy-'));
-    assert.equal(kept.length, 1, ending);
-    assert.equal(JSON.parse(await readFile(join(directory, kept[0]), 'utf8')).workspace, 'mac-workspace');
+  const aside = (await files(directory)).filter(name => /^credentials\.mac-sealed-.*\.enc\.json$/.test(name));
+  assert.equal(aside.length, 1);
+  assert.equal(await readFile(join(directory, aside[0]), 'utf8'), sealedBytes);
+  // Nothing opens it: there is no import, and the Mac's key changes nothing.
+  assert.equal(typeof vault.importLegacy, 'undefined');
+  assert.equal(typeof vault.legacyPending, 'undefined');
+  const service = createDefaultAgentService({ cwd: directory, directory, deviceVault: true,
+    engineFactory: async () => ({ apply: async () => {}, status: async () => ({ providers: [], models: [] }) }) });
+  for (const key of [macKey, randomBytes(32).toString('base64')]) {
+    assert.deepEqual(await service.unlockForClient({ workspace: 'mac-workspace', unlockKey: key }), { unlocked: true, deviceVault: true });
+    const receipt = await service.configure({ workspace: 'mac-workspace', unlockKey: key, revision: 'r', config: {} });
+    assert.equal(receipt.deviceVault, true);
+    assert.equal('legacyVault' in receipt, false);
   }
+  assert.deepEqual(await vault.read(), {});
+  assert.deepEqual(await files(directory), [...aside, 'credentials.key'].sort());
+  assert.equal(await readFile(join(directory, aside[0]), 'utf8'), sealedBytes);
+  // What this device signs in to is its own, and the set-aside vault is never moved again.
+  await vault.modify(async value => ({ ...value, owned: { xai: { type: 'oauth', access: 'a', refresh: 'device-refresh', expires: 1 } } }));
+  for (const key of [macKey, randomBytes(32).toString('base64')]) await service.configure({ workspace: 'mac-workspace', unlockKey: key, revision: 'r2', config: {} });
+  const other = await new CredentialVault(directory).openDevice();
+  assert.equal((await other.read()).owned.xai.refresh, 'device-refresh');
+  assert.equal((await files(directory)).filter(name => name.includes('mac-sealed')).join(), aside.join());
+  assert.ok(!(await readFile(vault.path, 'utf8')).includes('device-refresh'));
 });
 
 test('a reset clears this device\'s sign-ins and keeps the vault as it was beside it', async t => {
@@ -255,7 +250,7 @@ test('a device service ignores relayed credentials, needs no unlock and renews i
   };
   const vault = await new CredentialVault(directory).openDevice();
   const service = createDefaultAgentService({ cwd: directory, directory, deviceVault: true, engineFactory: async () => engine });
-  assert.deepEqual(await service.unlockForClient({ workspace: 'mac', unlockKey: randomBytes(32).toString('base64') }), { unlocked: true, deviceVault: true, legacyVault: false });
+  assert.deepEqual(await service.unlockForClient({ workspace: 'mac', unlockKey: randomBytes(32).toString('base64') }), { unlocked: true, deviceVault: true });
   await service.configure({ workspace: 'mac', revision: 'r1', config: {}, credentials: { openai: { type: 'api_key', key: 'relayed-secret' } },
     credentialAccounts: { openai: [{ id: 'a', label: 'a', credential: { type: 'api_key', key: 'relayed-secret' } }] } });
   const stored = await vault.read();
