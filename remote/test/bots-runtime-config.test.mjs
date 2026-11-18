@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { createBotsService } from '../src/bots-service.mjs'
 import { createBotConversationLibrary, createMemoryBotLibraryAdapter } from '../src/bots-library.mjs'
 
@@ -33,23 +34,34 @@ test('the supervised runtime config passes the bots runtime schema', { skip: !ru
   assert.equal(validated.host.url, 'http://127.0.0.1:7337/')
 })
 
-// Bots run the default agent's Claude binary instead of shipping their own
-// copy, so both packages must select the same Claude Agent SDK.
-test('the runtime is pointed at the default agent’s Claude binary, which matches the bots SDK', async t => {
-  const { defaultAgentClaude } = await import('../src/bots-service.mjs')
-  const present = new Set(['/release/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl/claude'])
-  assert.equal(defaultAgentClaude('/release', { platform: 'linux', arch: 'x64', exists: path => present.has(path) }), [...present][0])
-  assert.equal(defaultAgentClaude('/release', { platform: 'linux', arch: 'arm64', exists: path => present.has(path) }), null)
-  const sdk = path => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8')).packages['node_modules/@anthropic-ai/claude-agent-sdk'].version
-  assert.equal(sdk('../../bots/package-lock.json'), sdk('../../default-agent/package-lock.json'), 'refresh bots/ and default-agent/ to the same Claude Agent SDK')
+// Bots load the SDK copy this machine's Pi Durable runs: the server names Pi
+// Durable's bundle and SDK workspace, and the runtime resolves the copy from them.
+test('the runtime is pointed at this machine’s Pi Durable, whose SDK copy it loads', async t => {
+  const { defaultAgentBundle } = await import('../src/bots-service.mjs')
+  const present = new Set(['/release/default-agent/src/sdk-management.mjs'])
+  assert.equal(defaultAgentBundle('/release', { exists: path => present.has(path) }), '/release/default-agent')
+  assert.equal(defaultAgentBundle('/checkout/remote', { exists: path => path === '/checkout/default-agent/src/sdk-management.mjs' }), join('/checkout/remote', '..', 'default-agent'))
+  assert.equal(defaultAgentBundle('/elsewhere', { exists: () => false }), null)
   if (!runnable) return
-  const directory = mkdtempSync(join(tmpdir(), 'woven-bots-claude-')); t.after(() => rmSync(directory, { recursive: true, force: true }))
-  const service = createBotsService({ configuration: { stateDirectory: directory, dataRoot: directory, serviceRoot: join(directory, 'none'), botsEnabled: true, workspaceEnabled: true, botsInstance: 'wmtest',
-    claudeExecutable: '/release/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude' },
-    runtime: { start() {}, stop: async () => {}, endpoint: () => null, status: () => ({}) }, engine: { layout: { socket: '/run/wmtest/docker.sock' }, status: async () => ({ installed: false }) },
+  const directory = mkdtempSync(join(tmpdir(), 'woven-bots-sdk-')); t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const serviceRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '')
+  const sdkDirectory = join(directory, 'workspace/.wovenmatter/default-agent')
+  let restarts = 0, running = false
+  const service = createBotsService({ configuration: { stateDirectory: directory, dataRoot: directory, serviceRoot, botsEnabled: true, workspaceEnabled: true, botsInstance: 'wmtest' },
+    defaultAgentDirectory: sdkDirectory,
+    runtime: { start() {}, stop: async () => {}, restart: async () => { restarts++ }, endpoint: () => null, status: () => ({ running }) }, engine: { layout: { socket: '/run/wmtest/docker.sock' }, status: async () => ({ installed: false }) },
     previews: { recover: async () => {}, close: async () => {} }, library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: randomUUID(), name: 'box' },
     serverPort: () => 7337, authorizeClient: () => false, log: () => {} })
   const { validateRuntimeConfig } = await import(runtimeConfig.href)
   const configuration = { ...await service.runtimeConfiguration(), listen: { host: '127.0.0.1', port: 40001 }, runtimeToken: 'r'.repeat(43) }
-  assert.equal(validateRuntimeConfig(configuration).claude.executable, configuration.claude.executable)
+  const validated = validateRuntimeConfig(configuration)
+  assert.deepEqual(validated.piDurable, { bundle: join(serviceRoot, '..', 'default-agent'), directory: sdkDirectory })
+  // The runtime takes the Claude binary from that copy; the server names none.
+  assert.equal(validated.claude, undefined)
+  // After an SDK update a running runtime restarts onto the new copy; a stopped one waits.
+  await service.piDurableSDKUpdated()
+  assert.equal(restarts, 0)
+  running = true
+  await service.piDurableSDKUpdated()
+  assert.equal(restarts, 1)
 })
