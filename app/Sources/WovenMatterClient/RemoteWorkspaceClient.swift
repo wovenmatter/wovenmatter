@@ -1008,7 +1008,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
                                          deviceID: String, name: String, workspaceName: String, endpoint: URL,
-                                         scopes: [String] = ["execution", "inference"]) async throws -> ExecutionCredential {
+                                         scopes: [String] = ["execution"]) async throws -> ExecutionCredential {
         struct Payload: Encodable {
             let libraryID: String; let workspaceID: String; let ownerDeviceID: String
             let deviceID: String; let name: String; let workspaceName: String; let endpoint: URL; let scopes: [String]

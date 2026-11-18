@@ -552,7 +552,8 @@ final class LibraryHostController {
             let prior = existing.first { $0.id == id }
             return .init(id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                 kind: .linux, name: configuration.name, endpoint: prior?.endpoint,
-                capabilities: prior?.capabilities ?? ["execution.v1", "inference.v1"],
+                // Linux hosts no longer serve inference; a record from before v0.4.6 drops it.
+                capabilities: (prior?.capabilities ?? ["execution.v1"]).filter { $0 != "inference.v1" },
                 executionDeviceID: prior?.executionDeviceID)
         }
         for var workspace in desired {

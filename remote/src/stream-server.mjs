@@ -168,7 +168,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
 
   function createConnection(ws, member) {
     const subscriptions = new Map(), calls = new Map()
-    const device = { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind }
+    const device = { id: member.deviceID, name: member.name, scopes: ['execution'], memberKind: member.kind }
     let ended = false, closeTimer = null
 
     // Liveness: ping every 25 s; a socket from which nothing arrived for 60 s

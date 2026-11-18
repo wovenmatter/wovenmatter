@@ -313,10 +313,9 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       } finally {response.removeListener('close',disconnected)}
     }
     if (bots && await bots.handleHost(request, response, url, { readJSON, json })) return
-    const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
-    // Every member gets the execution and inference scopes a device grant had.
-    const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind, administrator: member.kind === 'mac' }
-      : clientExecution?.principal(request.headers.authorization, scope)
+    // Every member gets the execution scope a device grant has.
+    const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution'], memberKind: member.kind, administrator: member.kind === 'mac' }
+      : clientExecution?.principal(request.headers.authorization, 'execution')
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
     if (device && !member) {
       const material = clientExecution.unlockMaterial(request.headers.authorization)
@@ -425,22 +424,9 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response,200,await clientExecution.readLibraryFile(await readJSON(request,16384)))
     }
     if (url.pathname === '/v1/execution/interactions' && request.method === 'GET') return json(response,200,clientExecution.interactions())
-    if (url.pathname === '/v1/inference/catalog' && request.method === 'GET') return json(response,200,await defaultAgent.inferenceCatalog({principalID:device?.id ?? 'administrator',provider:url.searchParams.get('provider')}))
-    if (url.pathname === '/v1/inference/stream' && request.method === 'POST') {
-      const body = await readJSON(request,8*1024*1024), controller = new AbortController()
-      response.once('close',()=>controller.abort())
-      response.writeHead(200,{'Content-Type':'application/x-ndjson','Cache-Control':'no-store'})
-      try { await defaultAgent.inferenceStream(body,{signal:controller.signal,principalID:device?.id ?? 'administrator',onEvent:event=>response.write(JSON.stringify(event)+'\n')}) }
-      catch {
-        if (!response.destroyed) {
-          const field = name => typeof body.model?.[name] === 'string' ? body.model[name].slice(0,256) : ''
-          response.write(JSON.stringify({type:'error',reason:'error',error:{role:'assistant',api:field('api'),provider:field('provider'),model:field('id'),content:[],
-            timestamp:Date.now(),stopReason:'error',errorMessage:'The inference connection could not complete this request.',
-            usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}}})+'\n')
-        }
-      }
-      response.end(); return
-    }
+    // This host's sign-ins serve only this host. An older phone that saved a
+    // hosted connection is refused, never served.
+    if (url.pathname === '/v1/inference' || url.pathname.startsWith('/v1/inference/')) return json(response,403,{error:'inference_not_served'})
     // Device grants never convey workspace administration, credentials, SDK
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})

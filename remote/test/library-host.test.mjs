@@ -348,6 +348,11 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   // The workspace's execution device is this host's member device ID, so
   // members address it from the registry alone.
   assert.equal((await enrolled.json()).workspace.executionDeviceID, audience)
+  // This host never lends its sign-ins: an older phone's hosted connection is refused, never served.
+  for (const [who, method, path, body] of [[phone, 'GET', '/v1/inference/catalog'], [phone, 'POST', '/v1/inference/stream', '{"model":{}}'], [mac, 'GET', '/v1/inference/catalog']]) {
+    const refusal = await signed(who, method, path, body)
+    assert.equal(refusal.status, 403); assert.equal((await refusal.json()).error, 'inference_not_served')
+  }
   assert.equal((await signed(phone, 'GET', '/v1/execution')).status, 200)
 
   const stranger = { deviceID: phone.deviceID, key: privateKeyFromSeed(strangerSeed) }
