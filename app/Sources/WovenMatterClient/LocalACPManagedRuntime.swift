@@ -732,6 +732,11 @@ public struct LocalACPRuntimeInstaller: Sendable {
                 guard !RuntimeMaintenance.version(sdk, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
                 selection["protocolSDKVersion"] = sdk
             }
+            if definition.runtimeKind == .claudeCode, let minimum = definition.minimumEngineVersion {
+                let sdk = try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-agent-sdk", executableRequired: false, fetch: metadataFetcher)
+                guard !RuntimeMaintenance.version(sdk, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
+                selection["librarySDKVersion"] = sdk
+            }
             let data = try JSONSerialization.data(withJSONObject: selection)
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = node.deletingLastPathComponent().path + ":" + LocalACPRuntimeResolver.executableSearchPath

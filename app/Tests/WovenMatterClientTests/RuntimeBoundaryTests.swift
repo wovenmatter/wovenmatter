@@ -266,5 +266,44 @@ extension RuntimeBoundaryTests {
     #expect(selection["npm"] as? [String] == [npm.path])
     #expect(executable == prefix.appending(path: "bin/codex-acp"))
   }
+  @Test("Claude library selection is independent of the adapter and native CLI")
+  func claudeLibraryInstallUsesTheNativeCLI() async throws {
+    let fixture = try TemporaryDirectory(prefix: "woven-independent-engine")
+    defer { fixture.remove() }
+    let tools = fixture.url.appending(path: "tools")
+    let prefix = fixture.url.appending(path: "installed")
+    let argumentsFile = fixture.url.appending(path: "arguments")
+    try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+    let npm = tools.appending(path: "npm"), node = tools.appending(path: "node")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: npm)
+    try Data("""
+      #!/bin/sh
+      printf '%s\\n' "$@" > '\(argumentsFile.path)'
+      mkdir -p '\(prefix.path)/bin'
+      printf '#!/bin/sh\\necho 0.108.0\\n' > '\(prefix.path)/bin/claude-agent-acp'
+      chmod 700 '\(prefix.path)/bin/claude-agent-acp'
+      """.utf8).write(to: node)
+    for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
+    let nativeClaude = URL(fileURLWithPath: "/home/someone/.local/bin/claude")
+    let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
+      if url.absoluteString.contains("claude-agent-sdk") {
+        return Data(#"{"dist-tags":{"latest":"0.3.326"},"versions":{"0.3.326":{},"0.3.327":{},"0.3.328":{"deprecated":"withdrawn"},"0.4.0-beta.1":{}}}"#.utf8)
+      }
+      #expect(url.absoluteString.contains("@agentclientprotocol%2fsdk"))
+      return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.7.0":{},"2.8.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
+    }, executableResolver: { name in name == "claude" ? nativeClaude : nil })
+    let executable = try await installer.installPackage("@agentclientprotocol/claude-agent-acp", version: "0.108.0", executableName: "claude-agent-acp")
+    let arguments = try String(contentsOf: argumentsFile, encoding: .utf8).split(separator: "\n")
+    #expect(arguments.count == 2)
+    #expect(arguments[0].hasSuffix("harnesses/install-adapter.mjs"))
+    let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
+    #expect(selection["engineVersion"] == nil)
+    #expect(selection["librarySDKVersion"] as? String == "0.3.327")
+    #expect(selection["cli"] as? String == nativeClaude.path)
+    #expect(selection["protocolSDKVersion"] as? String == "2.7.0")
+    #expect(selection["adapterVersion"] as? String == "0.108.0")
+    #expect(selection["npm"] as? [String] == [npm.path])
+    #expect(executable == prefix.appending(path: "bin/claude-agent-acp"))
+  }
 }
 #endif

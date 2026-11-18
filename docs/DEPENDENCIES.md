@@ -86,7 +86,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Build provenance is retained in the image. Maintenance must remove each local
   rebuild when Debian stable ships an equal or newer fix, refresh exact sources
   and patch checksums together, and validate both amd64 and arm64 images.
-  npm 12.2.2 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
+  npm 12.2.3 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
   Its bundled graph still needs the IP parser and glob security repairs below.
   Linux host releases and the bots image use the same
   reviewed current HTTP dispatcher as Mac tooling, with tuple-header redirect
@@ -241,8 +241,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.57.0, Anthropic 1.9.0, Google GenAI 3.4.0,
-  Bedrock Runtime and token providers 3.1170.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.59.0, Anthropic 1.10.0, Google GenAI 3.4.0,
+  Bedrock Runtime and token providers 3.1171.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -309,7 +309,14 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   checks that the loaded copy is the locked one, and the provider-free
   stream and bots relay suites validate the selection.
 - **Pyodide and esbuild** produce the offline iOS resources and their
-  provenance. They refresh together with the generated files.
+  provenance. They refresh together with the generated files. Current Pyodide
+  314.0.8 supplies CPython 3.14.2 (ABI `2026_0`, Emscripten 5.0.3), behind
+  standalone CPython 3.15.2. Python, its WebAssembly binary, standard library
+  and wheels must come from one Pyodide distribution; a standalone CPython
+  archive cannot replace that engine. Maintenance checks the newest stable
+  Pyodide publication and its Python version independently, then validates the
+  actual generated offline runtime. This is an upstream distribution boundary,
+  not a claim that the embedded CPython is current.
 
 ## Minimum versions on installed apps
 
@@ -346,14 +353,21 @@ the documented v2 API boundary; maintenance must review a newer stable API major
 implement its migration.
 
 `harnesses/catalog.json` records tested connector and CLI minimums separately:
-Codex ACP 2.7.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.326
-(native Claude Code 2.1.326). The adapters drive the native Codex and Claude CLIs
+Codex ACP 2.7.0 with Codex 0.169.1, and Claude ACP 0.108.0 with Claude SDK 0.3.327
+(bundled native Claude Code 2.1.327). The adapters drive the native Codex and Claude CLIs
 (`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
 as needing its update. The CLI copy npm bundles inside each adapter package is never
 selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
-published, with no engine override. Claude ACP pins its Claude Agent SDK library, so
-that library moves only with an adapter update and is held to the catalog minimum
-rather than compared with npm. Transcript-write loss invalidates the native resume
+published, without a Codex engine override. Claude ACP 0.108.0 still pins SDK 0.3.326.
+A consumer-scoped override selects the newest nondeprecated stable Claude SDK
+at or above the catalog minimum (tested 0.3.327), preserving vendor manifests.
+Mac and Linux inventory check that actual library separately and allow a
+library-only update even when the connector is current. This core-function
+exception keeps provider APIs current; provider-free ACP initialization, SDK
+loopback and native routing fixtures validate it. Review and remove the override
+when the adapter itself selects the current library. The native Claude CLI
+remains selected through CLAUDE_CODE_EXECUTABLE, independently of the SDK binary.
+Transcript-write loss invalidates the native resume
 marker and refuses tool dispatch/continuation commits; config-only write loss leaves a
 valid response intact. Provider-free persistence fixtures verify canonical replay
 after recovery. The catalog's independent ACP SDK floor is 2.7.0: Mac and native
