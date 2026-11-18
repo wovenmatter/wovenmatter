@@ -3,7 +3,7 @@
 // `resolveSDKRuntime` in `default-agent/src/sdk-management.mjs`; bots call that same function
 // at launch, then resolve every SDK package from the copy it returns. One SDK update in
 // Settings → Updates covers both; the machine's Woven server restarts bots after it.
-import { realpathSync } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -58,10 +58,18 @@ export async function resolvePiDurableSDK(
   } catch (error) {
     throw new PiDurableSDKError(`Pi Durable's SDK could not be found in ${location.bundle}: ${(error as Error).message}`);
   }
-  const root = realpathSync(runtime.root);
+  return { ...piDurableSDKAt(runtime.root, { platform, arch }), generation: runtime.generation };
+}
+
+/** The SDK copy at `root`, if bots can run on it: every SDK package and the Claude binary. */
+export function piDurableSDKAt(
+  root: string,
+  { platform = process.platform, arch = process.arch }: { platform?: string; arch?: string } = {},
+): { root: string; claudeExecutable: string } {
+  const real = realpathSync(root);
   // Every package must be in this copy, or bots would not run what Pi Durable runs.
-  for (const name of PI_DURABLE_SDK_PACKAGES) present(root, name);
-  return { root, generation: runtime.generation, claudeExecutable: claudeExecutable(root, platform, arch) };
+  for (const name of PI_DURABLE_SDK_PACKAGES) present(real, name);
+  return { root: real, claudeExecutable: claudeExecutable(real, platform, arch) };
 }
 
 /**
@@ -71,7 +79,9 @@ export async function resolvePiDurableSDK(
 export function claudeExecutable(root: string, platform: string = process.platform, arch: string = process.arch): string {
   for (const name of [`claude-agent-sdk-${platform}-${arch}`, `claude-agent-sdk-${platform}-${arch}-musl`]) {
     try {
-      return join(present(root, `@anthropic-ai/${name}`), "claude");
+      const executable = join(present(root, `@anthropic-ai/${name}`), "claude");
+      accessSync(executable, constants.X_OK);
+      return executable;
     } catch {
       continue;
     }

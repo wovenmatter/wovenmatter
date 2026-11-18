@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { sdkNodeModules } from "../pi-durable-sdk.ts";
 import type { DockerEngineAPI } from "./engine-api.ts";
 import { createTar, directoryEntries, readTar as readTarEntries, type TarEntry } from "./tar.ts";
@@ -31,15 +34,7 @@ const TOOLCHAIN_DIR = "toolchain";
 export const helperDir = (hash: string) => `${SHARED_MOUNT}/helper/${hash}`;
 export const toolchainDir = (hash: string) => `${SHARED_MOUNT}/toolchain/${hash}`;
 
-/**
- * The packages the in-container env agent imports, copied from the Pi Durable SDK copy the
- * runtime loads (`pi-durable-sdk.ts`), or its own install without one (tests, a checkout).
- */
-const HELPER_PACKAGES = [
-  "@earendil-works/pi-durable",
-  "@earendil-works/chord",
-  "@earendil-works/pi-telemetry",
-] as const;
+const execFileAsync = promisify(execFile);
 
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex").slice(0, 16);
 
@@ -93,30 +88,139 @@ export async function toolchainContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT
   return createTar(entries);
 }
 
-/** The helper's files: its scripts and the runtime packages they import (no maps or typings). */
+/**
+ * The helper's own imports of packages, verbatim from its scripts (`import ... from "pkg"`):
+ * what the in-container env agent loads from the archive's node_modules.
+ */
+export async function helperImports(helperDir = HELPER_DIR): Promise<string[]> {
+  const statements: string[] = [];
+  for (const entry of await directoryEntries(helperDir, { include: (path) => !path.includes("/") && path.endsWith(".mjs") })) {
+    const source = entry.data?.toString("utf8") ?? "";
+    for (const match of source.matchAll(/^import\s+(?:[\w*{}\s,$]+?\s+from\s+)?(["'])([^"']+)\1;?/gm)) {
+      const specifier = match[2] ?? "";
+      if (!specifier.startsWith("node:") && !specifier.startsWith(".") && !specifier.startsWith("/")) statements.push(match[0]);
+    }
+  }
+  return [...new Set(statements)];
+}
+
+// Runs as its own process: imports `source` as if it were a helper script at `<root>/helper.mjs`
+// and prints every file Node resolved on the way (the module graph, through Node's resolution).
+const TRACE = `
+import { registerHooks } from "node:module";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+const { root, source } = JSON.parse(process.env.WOVEN_HELPER_TRACE);
+const parentURL = pathToFileURL(join(root, "helper.mjs")).href;
+const files = new Set();
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const resolved = nextResolve(specifier, context.parentURL?.startsWith("data:") ? { ...context, parentURL } : context);
+    if (resolved.url.startsWith("file:")) files.add(fileURLToPath(resolved.url));
+    return resolved;
+  },
+});
+await import("data:text/javascript," + encodeURIComponent(source));
+process.stdout.write(JSON.stringify([...files]));
+`;
+
+export class HelperPackagesError extends Error {}
+
+/**
+ * Every file the helper's imports load, resolved and linked by Node from a helper at `root`
+ * (beside `root/node_modules`), in a separate process. A missing package or export fails here.
+ */
+export async function traceHelper(root: string, helperDir = HELPER_DIR): Promise<string[]> {
+  const source = (await helperImports(helperDir)).join("\n");
+  const env: NodeJS.ProcessEnv = { ...process.env, WOVEN_HELPER_TRACE: JSON.stringify({ root, source }) };
+  delete env.NODE_OPTIONS;
+  try {
+    const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "--eval", TRACE], {
+      cwd: root,
+      env,
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 60_000,
+    });
+    return JSON.parse(stdout) as string[];
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
+    throw new HelperPackagesError(`The bot helper's packages do not load from ${root}: ${stderr.split("\n").slice(-3).join(" ") || (error as Error).message}`);
+  }
+}
+
+/**
+ * The packages (as `node_modules/...` paths under `root`, nested ones included) that hold the
+ * files the helper's imports load from `root`: its package closure, as Node resolves it there.
+ */
+export async function helperPackages(root: string, helperDir = HELPER_DIR): Promise<string[]> {
+  const modules = join(root, "node_modules") + sep;
+  const packages = new Set<string>();
+  for (const file of await traceHelper(root, helperDir)) {
+    if (!file.startsWith(modules)) throw new HelperPackagesError(`The bot helper's import of ${file} is outside ${modules}.`);
+    const rel = file.slice(root.length + 1).split(sep);
+    const at = rel.lastIndexOf("node_modules");
+    const name = rel[at + 1]?.startsWith("@") ? 2 : 1;
+    packages.add(rel.slice(0, at + 1 + name).join("/"));
+  }
+  return [...packages].sort();
+}
+
+const closures = new Map<string, Promise<string[]>>();
+
+/** What of a package the helper carries: no nested packages (each is its own), sources, maps, typings or docs. */
+function carried(path: string): boolean {
+  const parts = path.split("/");
+  if (parts.includes("node_modules") || parts[0] === "docs") return false;
+  // Node never strips types under node_modules, so TypeScript sources are never loaded there.
+  return !/\.(map|md|ts|mts|cts|tsx)$/i.test(path);
+}
+
+/** The helper's files: its scripts and the package closure they import (no maps or typings). */
 export async function helperArchive(
   helperDir = HELPER_DIR,
   nodeModules = sdkNodeModules() ?? NODE_MODULES_DIR,
 ): Promise<{ readonly tar: Buffer; readonly hash: string }> {
+  const root = realpathSync(dirname(nodeModules));
+  const key = `${helperDir}\0${root}`;
+  let closure = closures.get(key);
+  if (!closure) {
+    closure = helperPackages(root, helperDir);
+    closures.set(key, closure);
+    closure.catch(() => closures.delete(key));
+  }
   const entries: TarEntry[] = await directoryEntries(helperDir, {
     include: (path) => !path.includes("/") && path.endsWith(".mjs"),
   });
-  for (const name of HELPER_PACKAGES) {
-    entries.push(
-      ...(await directoryEntries(`${nodeModules}${name}`, {
-        into: `node_modules/${name}`,
-        include: (path) =>
-          path === "package.json" ||
-          path === "LICENSE" ||
-          (path.startsWith("dist") && !path.endsWith(".map") && !path.endsWith(".d.ts")),
-      })),
-    );
+  for (const pkg of await closure) {
+    entries.push(...(await directoryEntries(join(root, pkg), { into: pkg, include: carried })));
   }
   const body = createTar(entries);
   const hash = digest(body);
   // The marker goes last: a volume holding it holds everything before it.
   const tar = createTar([...entries, { path: COMPLETE, data: Buffer.from(hash) }]);
   return { tar, hash };
+}
+
+/**
+ * Builds the helper archive from the SDK copy at `nodeModules`, unpacks it as a bot's helper
+ * directory, and loads the helper's imports there: every one must resolve inside the archive.
+ */
+export async function verifyHelper(nodeModules: string, helperDir = HELPER_DIR): Promise<void> {
+  const { tar } = await helperArchive(helperDir, nodeModules);
+  const into = realpathSync(await mkdtemp(join(tmpdir(), "woven-bots-helper-")));
+  try {
+    for (const entry of readTarEntries(tar)) {
+      const path = join(into, ...entry.path.split("/"));
+      if (entry.directory) await mkdir(path, { recursive: true });
+      else if (entry.data) {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, entry.data, { mode: entry.mode ?? 0o644 });
+      }
+    }
+    await helperPackages(into, helperDir);
+  } finally {
+    await rm(into, { recursive: true, force: true });
+  }
 }
 
 /** What the bot image carries, read from its Dockerfile: the base and the pinned tools. */
