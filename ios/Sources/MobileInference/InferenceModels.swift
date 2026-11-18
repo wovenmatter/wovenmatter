@@ -1,6 +1,9 @@
 import Foundation
 import Darwin
 
+/// Every connection is `direct`: this device's own sign-in or key. `adapter`
+/// only decodes a connection saved for a Mac's inference host before v0.4.6;
+/// it never validates and is dropped when preferences load.
 public enum InferenceRoute: String, Codable, Sendable, CaseIterable { case direct, adapter }
 
 public struct InferenceProvider: Identifiable, Sendable {
@@ -14,45 +17,6 @@ public struct InferenceProvider: Identifiable, Sendable {
   }
 }
 
-public struct InferenceHostScope: Codable, Sendable, Equatable {
-  public var libraryID: String
-  public var workspaceID: String
-  public var deviceID: String
-  public var protocolVersion: Int
-  /// The host Mac's member device ID. When set and this device signs as a
-  /// member (`InferenceMemberSigning`), adapter requests are signed and carry
-  /// no bearer; otherwise the saved grant is presented.
-  public var hostDeviceID: String?
-  public init(libraryID: String, workspaceID: String, deviceID: String, protocolVersion: Int, hostDeviceID: String? = nil) {
-    self.libraryID = libraryID; self.workspaceID = workspaceID; self.deviceID = deviceID; self.protocolVersion = protocolVersion
-    self.hostDeviceID = hostDeviceID
-  }
-}
-
-/// Signs adapter requests to a Mac's inference host with this device's member
-/// key (docs/architecture/WOVEN_EVERYWHERE.md, "iPhone reach"). The app
-/// installs the signer once its member identity is loaded; this module never
-/// holds the key. `audience` is the host's member device ID.
-public enum InferenceMemberSigning {
-  public typealias Sign = @Sendable (_ request: inout URLRequest, _ audience: String) throws -> Void
-  private final class Box: @unchecked Sendable { let lock = NSLock(); var sign: Sign?; var hosts: [String: String] = [:] }
-  private static let box = Box()
-  public static func install(_ sign: Sign?) { box.lock.withLock { box.sign = sign } }
-  /// The serving member of each workspace, by workspace ID, for connections
-  /// saved without `hostDeviceID`.
-  public static func updateHosts(_ hosts: [String: String]) { box.lock.withLock { box.hosts = hosts } }
-  public static var current: Sign? { box.lock.withLock { box.sign } }
-  /// True when requests for `scope` can be signed.
-  public static func signs(_ scope: InferenceHostScope?) -> Bool { signer(for: scope) != nil }
-  /// The signer to use for `scope`, when both a signer and the host's identity are known.
-  static func signer(for scope: InferenceHostScope?) -> (Sign, String)? {
-    guard let scope else { return nil }
-    let (sign, known) = box.lock.withLock { (box.sign, box.hosts[scope.workspaceID]) }
-    guard let sign, let audience = scope.hostDeviceID.flatMap({ $0.isEmpty ? nil : $0 }) ?? known else { return nil }
-    return (sign, audience)
-  }
-}
-
 /// Connection metadata is safe to persist with local preferences. Credentials are deliberately absent.
 public struct InferenceConnection: Codable, Sendable, Identifiable, Equatable {
   public var id: String
@@ -62,20 +26,18 @@ public struct InferenceConnection: Codable, Sendable, Identifiable, Equatable {
   public var route: InferenceRoute
   public var baseURL: String?
   public var modelID: String
-  public var hostScope: InferenceHostScope?
   public var selectedModel: InferenceModel?
   public init(id: String = UUID().uuidString, name: String, provider: String, accountID: String = "default",
-              route: InferenceRoute, baseURL: String? = nil, modelID: String, hostScope: InferenceHostScope? = nil, selectedModel: InferenceModel? = nil) {
+              route: InferenceRoute = .direct, baseURL: String? = nil, modelID: String, selectedModel: InferenceModel? = nil) {
     self.id = id; self.name = name; self.provider = provider; self.accountID = accountID
-    self.route = route; self.baseURL = baseURL; self.modelID = modelID; self.hostScope = hostScope; self.selectedModel = selectedModel
+    self.route = route; self.baseURL = baseURL; self.modelID = modelID; self.selectedModel = selectedModel
   }
   public func validate() throws {
     guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           !accountID.isEmpty, !modelID.isEmpty, modelID.count <= 512 else { throw InferenceError.invalidConfiguration }
-    if route == .adapter {
-      guard let baseURL else { throw InferenceError.adapterRequired }
-      _ = try InferenceURLPolicy.tailnet(baseURL)
-    } else if provider.hasPrefix("local-server-") {
+    // This device holds no sign-in for a retired hosted connection.
+    guard route == .direct else { throw InferenceError.missingCredential }
+    if provider.hasPrefix("local-server-") {
       guard let baseURL else { throw InferenceError.invalidEndpoint }
       _ = try InferenceURLPolicy.tailnet(baseURL)
     } else {
@@ -103,7 +65,7 @@ public enum InferenceConnectionPolicy {
     }
   }
   public static func isAvailable(_ connection: InferenceConnection, in connections: [InferenceConnection]) -> Bool {
-    !isSingleSubscription(connection.provider) || connections.contains { $0.id == connection.id && $0.provider == connection.provider }
+    connection.route == .direct && (!isSingleSubscription(connection.provider) || connections.contains { $0.id == connection.id && $0.provider == connection.provider })
   }
   public static func validateSave(_ proposed: InferenceConnection, existing: [InferenceConnection]) throws {
     if isSingleSubscription(proposed.provider), existing.contains(where: { $0.provider == proposed.provider && $0.id != proposed.id }) {
@@ -235,17 +197,15 @@ public enum InferenceCatalog {
 public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
   case invalidConfiguration, invalidEndpoint, adapterRequired, missingCredential, modelUnavailable, accountUnavailable, singleSubscriptionAccount
   case malformedResponse, interrupted, responseTooLarge, http(Int), connectionFailed, unsupportedImageInput
-  /// A hosted connection whose host this device cannot sign for yet.
-  case hostNotReachable
   public var errorDescription: String? {
     switch self {
     case .invalidConfiguration: "Choose a connection, account, and model before starting this agent."
     case .invalidEndpoint: "Use the inference host's Tailscale address without embedded credentials, query parameters, or fragments."
-    case .adapterRequired: "Choose direct sign-in on this device for a supported subscription, or configure the authorized Tailscale host for this adapter connection."
-    case .missingCredential: "Add an API key, sign in to this subscription on this device, or configure the credential for the selected inference host in Settings."
+    case .adapterRequired: "Choose direct sign-in on this device for a supported subscription."
+    case .missingCredential: "Add an API key or sign in to this subscription on this device in Settings."
     case .modelUnavailable: "The selected model is unavailable on this connection. Choose a model explicitly; no fallback was attempted."
     case .singleSubscriptionAccount: "Only one subscription connection is supported for this provider. Edit the saved connection to change its sign-in."
-    case .accountUnavailable: "The selected account is unavailable on this inference host. No account fallback was attempted."
+    case .accountUnavailable: "The selected account is unavailable on this device. No account fallback was attempted."
     case .malformedResponse: "The inference endpoint returned an unsupported response."
     case .unsupportedImageInput: "The selected model does not accept images. Choose an image-capable model explicitly; no fallback was attempted."
     case .interrupted: "Inference was interrupted before a complete response was received. Saved agent work remains on this device."
@@ -254,7 +214,6 @@ public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
     case .http(let status) where status == 402 || status == 429: "The inference connection has reached a usage or rate limit. Retry later or choose another connection explicitly."
     case .http(let status): "The inference endpoint returned HTTP \(status)."
     case .connectionFailed: "The inference endpoint could not be reached. Check connectivity and, for a private host, Tailscale."
-    case .hostNotReachable: "This device can't reach the inference host yet. It can once it syncs with your devices; pair again if it doesn't."
     }
   }
 }

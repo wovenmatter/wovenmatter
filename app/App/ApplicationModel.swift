@@ -3436,9 +3436,6 @@ final class ApplicationModel {
                     if !update || adapterBehind {
                         // Resolve a concrete version before npm is allowed to mutate anything.
                         let version = try await RuntimeMaintenance.registryVersion(package)
-                        if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {
-                            throw RuntimeMaintenanceError.unavailable
-                        }
                         _ = try await installer.installPackage(package, version: version, executableName: definition.commandName)
                     }
                 }

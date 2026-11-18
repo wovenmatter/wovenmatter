@@ -63,7 +63,7 @@ export const operationFailureCodes = Object.freeze([
   'runtime_preferences_save_failed', 'system_install_update_forbidden',
   'opencode_v1_replacement_confirmation_required', 'opencode_service_restart_failed',
   'native_installer_unavailable', 'native_update_unavailable',
-  'adapter_version_below_minimum', 'latest_engine_version_unavailable', 'latest_protocol_sdk_version_unavailable',
+  'latest_engine_version_unavailable',
   'runtime_operation_failed',
 ])
 export function diagnosticCategory(error) {
@@ -234,7 +234,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       try { root = adapter.path ? await packageRoot(dirname(await realpath(adapter.path)), h.adapterPackage) : null } catch {}
       const packaged = root ? normalizedVersion((await packageAt(root))?.version) : null
       if (packaged) adapter.installedVersion = packaged
-      if (h.minimumAdapterVersion && precedes(adapter.installedVersion, h.minimumAdapterVersion)) adapter.installed = false
       components.push(adapter)
     } else if (h.transportCheckCommand && cli.installed) {
       const probe = await run(h.transportCheckCommand)
@@ -265,7 +264,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   }
   async function adapterInstallCommand(h) {
     const version = await latest(h.adapterPackage)
-    if (!version || precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
+    if (!version) throw failure('latest_engine_version_unavailable')
     // The adapter installs as published and is checked over ACP against the native CLI it
     // drives (CODEX_PATH / CLAUDE_CODE_EXECUTABLE, config.mjs); the CLI copy npm bundles
     // inside its package is never selected or used. A CLI installed in this same action
@@ -274,11 +273,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     const installedScript = resolve(configuration.serviceRoot, 'harnesses/install-adapter.mjs')
     const script = existsSync(installedScript) ? installedScript : fileURLToPath(new URL('../../harnesses/install-adapter.mjs', import.meta.url))
     const selection = { prefix: adapterPrefix, adapter: h.adapterPackage, adapterVersion: version, npm: runtimeNPMInvocation(configuration), ...(cli ? { cli } : {}) }
-    if (h.minimumProtocolSDKVersion) {
-      const sdk = await latest('@agentclientprotocol/sdk')
-      if (!sdk || precedes(sdk, h.minimumProtocolSDKVersion)) throw failure('latest_protocol_sdk_version_unavailable')
-      selection.protocolSDKVersion = sdk
-    }
     return `${quote(process.execPath)} ${quote(script)} ${quote(JSON.stringify(selection))}`
   }
   /** The steps an action runs, each a background shell command with its own time limit. */

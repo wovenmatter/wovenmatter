@@ -88,19 +88,12 @@ struct InferenceSetupCredential: InferenceCredentialReading {
     try saved.validate()
     try InferenceConnectionPolicy.validateSave(saved, existing: existing)
     try Task.checkCancellation()
-    // A hosted connection is member-signed: it has no credential to store.
-    if saved.route == .adapter {
-      saved.selectedModel = try await resolveModel(saved, "")
-      try Task.checkCancellation()
-      try persist(saved)
-      return saved
-    }
     let previous = existing.first { $0.id == proposed.id }
     let previousSecret = try await credentials.read(connectionID: proposed.id)
     let supplied = secret.trimmingCharacters(in: .whitespacesAndNewlines)
     let sameAuthority = previous.map {
       $0.provider == proposed.provider && $0.route == proposed.route && $0.baseURL == proposed.baseURL &&
-      $0.accountID == proposed.accountID && $0.hostScope == proposed.hostScope
+      $0.accountID == proposed.accountID
     } ?? false
     let credential: String
     if !supplied.isEmpty { credential = supplied }
@@ -336,12 +329,20 @@ extension MobileModel {
 
   func loadExecutionConfiguration() async throws {
     guard let executionDirectory else { return }
+    var orphaned: [String] = []
     try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
     let file = executionDirectory.appendingPathComponent("preferences.json")
     if FileManager.default.fileExists(atPath: file.path) {
       let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
-      inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections, preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
-      inferenceConnectionID = saved.selectedConnectionID
+      // A connection hosted by a Mac (before v0.4.6) used that Mac's sign-in; it is dropped,
+      // and Quick Chat asks for a sign-in on this device.
+      inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections.filter { $0.route == .direct },
+        preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
+      // A default that named a dropped connection falls back to one this device kept,
+      // a provider sign-in before a model server.
+      let fallback = inferenceConnections.first { !$0.provider.hasPrefix("local-server-") } ?? inferenceConnections.first
+      inferenceConnectionID = saved.selectedConnectionID.isEmpty || inferenceConnections.contains(where: { $0.id == saved.selectedConnectionID })
+        ? saved.selectedConnectionID : fallback?.id ?? ""
       // v0.4.2 saved the library host's route as "central"; it reads as "host" once.
       executionWorkspaceID = saved.workspaceID == "central" ? "host" : saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
@@ -361,6 +362,12 @@ extension MobileModel {
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
       }
+      // A run whose connection is gone (one a Mac hosted before v0.4.6) can never
+      // continue. It is stopped, so the chat can take a device connection or go to Trash.
+      orphaned = executionRecords.values.filter { record in
+        record.quickChatVersion == 1 && ["interrupted", "stopping"].contains(record.status) && usableDeviceConnection(record) == nil
+      }.map(\.id)
+      for id in orphaned { executionRecords[id]?.status = "stopped" }
       // Persist the retained connections before removing old device-only secrets.
       // Historical chats keep their binding instead of switching accounts.
       if let connection = draftDeviceSettings.connection,
@@ -374,6 +381,43 @@ extension MobileModel {
     try await store?.restoreExecutionProjection()
     for record in executionRecords.values where record.isTrashed != true { try await adoptDeviceConversation(record, transcript: nil) }
     await reload()
+    // Finish each such stop in the SDK now. If the SDK abort fails, the run is still
+    // settled on this device, so the chat stays stopped and can take a device connection or go to Trash.
+    for id in orphaned where !fixture { await finishDeviceStopWithoutConnection(id) }
+  }
+  /// The connection a chat runs with, if this device can still use it.
+  func usableDeviceConnection(_ record: DeviceConversationRecord) -> InferenceConnection? {
+    if let connection = record.connection { return InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) ? connection : nil }
+    return inferenceConnections.first { $0.id == record.connectionID }
+  }
+  /// Aborts a stopped run in the SDK without its connection, then closes that runtime.
+  /// When the abort fails, the run is settled here without the SDK.
+  func finishDeviceStopWithoutConnection(_ id: String) async {
+    guard executionRecords[id]?.runID != nil else { return }
+    if localRuntimes[id] == nil { _ = try? await deviceRuntime(id, cancelling: true) }
+    else if let runtime = localRuntimes[id] { try? await finishDeviceCancellation(id, runtime: runtime) }
+    await closeDeviceRuntimeWithoutConnection(id)
+    if let runID = executionRecords[id]?.runID {
+      if let runtime = localRuntimes.removeValue(forKey: id) { try? await runtime.close() }
+      await settleDeviceStopLocally(id, runID: runID)
+    }
+  }
+  /// What `finishDeviceCancellation` records after the SDK abort, without the SDK.
+  func settleDeviceStopLocally(_ id: String, runID: String) async {
+    localRunTokens.removeValue(forKey: id)
+    localRunTasks.removeValue(forKey: id)?.cancel()
+    executionRecords[id]?.goalLedger?.settle(runID, tokens: nil, succeeded: false)
+    try? await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
+    finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)
+    executionRecords[id]?.status = "stopped"
+    executionRecords[id]?.runID = nil; executionRecords[id]?.submissionID = nil; executionRecords[id]?.pendingInput = nil
+    try? persistExecutionConfiguration()
+  }
+  /// A runtime opened only to cancel never serves another turn.
+  func closeDeviceRuntimeWithoutConnection(_ id: String) async {
+    guard let record = executionRecords[id], usableDeviceConnection(record) == nil, let runtime = localRuntimes[id] else { return }
+    try? await runtime.close()
+    if localRuntimes[id] === runtime { localRuntimes.removeValue(forKey: id) }
   }
   func persistExecutionConfiguration() throws {
     guard let executionDirectory else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
@@ -482,20 +526,25 @@ extension MobileModel {
       await refreshDeviceTranscript(id)
     }
   }
-  func deviceRuntime(_ id: String) async throws -> PiDurableRuntime {
+  /// `cancelling` opens a chat whose connection is unavailable, only to stop its run.
+  func deviceRuntime(_ id: String, cancelling: Bool = false) async throws -> PiDurableRuntime {
     guard !localInterrupting.contains(id) else { throw DeviceExecutionError.unavailable("This agent is saving its progress. Try again when it finishes.") }
-    if let connection = executionRecords[id]?.connection,
+    if !cancelling, let connection = executionRecords[id]?.connection,
        !InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) { throw InferenceError.accountUnavailable }
     if let existing = localRuntimes[id] { try await finishDeviceCancellation(id, runtime: existing); return existing }
-    guard let record = executionRecords[id], let root = executionDirectory,
-          let connection = record.connection ?? inferenceConnections.first(where: { $0.id == record.connectionID }) else { throw InferenceError.missingCredential }
+    guard let record = executionRecords[id], let root = executionDirectory else { throw InferenceError.missingCredential }
+    let connection = usableDeviceConnection(record)
+    guard connection != nil || cancelling else { throw InferenceError.missingCredential }
     guard record.quickChatVersion == 1 else { throw DeviceExecutionError.unavailable("This earlier on-device agent chat is saved as history. Start a new Quick Chat to continue.") }
     let pinned = try JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8))
-    let service = MobileInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned)
+    let service = connection.map { MobileInferenceService(connection: $0, credentials: executionCredentialStore, model: pinned) }
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
       configuration: .init(conversationID: id, modelJSON: record.modelJSON, toolsJSON: try toolsJSON(for: record),
         instructions: Self.instructions(for: record), thinkingLevel: record.thinkingLevel ?? "off", executionPolicy: record.executionPolicy ?? deviceAgentDefaults.executionPolicy ?? .init(), quickChat: true),
-      inference: { request, emit in try await service.stream(requestJSON: request, emit: emit) },
+      inference: { request, emit in
+        guard let service else { throw InferenceError.accountUnavailable }
+        try await service.stream(requestJSON: request, emit: emit)
+      },
       tool: { [weak self] request in
         guard let self else { throw CancellationError() }
         return try await self.performDeviceTool(request)
@@ -505,7 +554,11 @@ extension MobileModel {
       })
     localRuntimes[id] = runtime
     do { try await runtime.open(); try await finishDeviceCancellation(id, runtime: runtime) }
-    catch { localRuntimes.removeValue(forKey: id); throw error }
+    catch {
+      try? await runtime.close()
+      if localRuntimes[id] === runtime { localRuntimes.removeValue(forKey: id) }
+      throw error
+    }
     return runtime
   }
   func openDeviceConversation(_ id: String) async {
@@ -613,9 +666,10 @@ extension MobileModel {
       executionRecords[id]?.goalLedger?.recover()
       executionRecords[id]?.status = "stopping"; try persistExecutionConfiguration()
       cancelDeviceApprovals(id)
-      let runtime = try await deviceRuntime(id)
+      let runtime = try await deviceRuntime(id, cancelling: true)
       try await finishDeviceCancellation(id, runtime: runtime)
       await refreshDeviceTranscript(id)
+      await closeDeviceRuntimeWithoutConnection(id)
     } catch {
       if let runID = executionRecords[id]?.runID {
         finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)

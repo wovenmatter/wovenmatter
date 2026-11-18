@@ -209,16 +209,14 @@ such a phone in another Mac's workspace, it asks that Mac directly, and that Mac
 records the requesting Mac as the grant's provenance; a Linux host issues the
 grant to any Mac's signed request. A replacement is staged: earlier provenance
 is retired only once the replacement is actually issued, so a failed or offline
-replacement never hides a grant from cleanup. Execution and inference requests
-served by a Mac are authorized live by their grant's provenance, before
-credentials are prepared and again before a model stream starts, so removing
-the requesting Mac ends grants derived through it immediately. A Linux host
-authorizes by token, so its grants end when the queued cleanup reaches it,
-which is eventual while it is offline. A phone whose grant is rejected clears
-that workspace's credential and requests a new one on its next workspace
-refresh. Every new or renewed workspace credential also replaces the token of
-each inference connection bound to that workspace's exact host scope and
-endpoint.
+replacement never hides a grant from cleanup. Execution requests served by a
+Mac are authorized live by their grant's provenance, so removing the requesting
+Mac ends grants derived through it immediately. A Linux host authorizes by
+token, so its grants end when the queued cleanup reaches it, which is eventual
+while it is offline. A phone whose grant is rejected clears that workspace's
+credential and requests a new one on its next workspace refresh. Grants cover
+execution only: no Mac or Linux host serves inference to a phone, which uses
+only its own sign-ins.
 
 ## Upgrade and recovery
 

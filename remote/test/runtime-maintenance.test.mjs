@@ -217,6 +217,36 @@ test('Claude Code installs the native CLI and its ACP connection in Woven’s fo
   assert.deepEqual(f.installers, [])
 })
 
+test('the real catalog has no version gates: any runnable connector is installed, a newer npm release is an update, and the update installs it as published', async t => {
+  const real = JSON.parse(await readFile(new URL('../../harnesses/catalog.json', import.meta.url), 'utf8')).harnesses
+  for (const h of real) assert.deepEqual(Object.keys(h).filter(key => /minimum/i.test(key)), [], h.id)
+  for (const h of real.filter(h => h.adapterPackage)) {
+    const selections = []
+    const f = await fixture(t, { catalog: [h], latest: '9.0.0', on: (command, { root, commands }) => {
+      if (command.includes('install-adapter.mjs')) {
+        selections.push(JSON.parse(command.slice(command.lastIndexOf(" '") + 2, -1)))
+        commands[h.command].version = '9.0.0'
+        return { code: 0, output: '' }
+      }
+      if (command.endsWith("'update'")) return { code: 0, output: '' }
+    } })
+    // A very old connector beside a CLI from any release still runs, so it is installed.
+    f.commands[h.cliCommand] = { path: resolve(f.root, '.local/bin', h.cliCommand), version: '9.0.0' }
+    f.commands[h.command] = { path: resolve(f.root, '.local/share/wovenmatter/acp-adapters/bin', h.command), version: '0.0.1' }
+    const before = await f.service.inventory(h, true)
+    assert.equal(before.installed, true, h.id)
+    assert.deepEqual(before.components.map(c => c.id), ['cli', 'runtime'], 'only the CLI and its connector are tracked')
+    assert.equal(before.components.find(c => c.id === 'runtime').updateAvailable, true)
+    assert.equal(before.components.find(c => c.id === 'cli').updateAvailable, false)
+    await f.service.start(h, 'update', { confirmed: true })
+    assert.equal((await finished(f.service)).operation.status, 'succeeded', h.id)
+    assert.equal(selections.length, 1)
+    assert.deepEqual(Object.keys(selections[0]).sort(), ['adapter', 'adapterVersion', 'cli', 'npm', 'prefix'])
+    assert.equal(selections[0].adapterVersion, '9.0.0')
+    assert.equal(selections[0].cli, resolve(f.root, '.local/bin', h.cliCommand))
+  }
+})
+
 test('active work blocks changes; two failures give an allowlisted diagnostic', async t => {
   const f = await fixture(t, { hasActiveRuntime: async () => true })
   await f.service.start(opencode, 'install', { confirmed: true }); await finished(f.service)

@@ -153,7 +153,6 @@
 		A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */; };
 		A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */; };
 		1865697E240F2F2763E855ED /* LibraryClient in Frameworks */ = {isa = PBXBuildFile; productRef = C3AE1E4D864C6AAF1D9CDFAC /* LibraryClient */; };
-		97AD203F32768DAAE8E74B8A /* InferenceHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */; };
 		6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */; };
 		3920C098CAD3AD073343D629 /* SavedArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */; };
 		D9F61698E2250BF9BFAF5A2F /* MemberExecutionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C92277CA35CAFDF60ADE671 /* MemberExecutionClient.swift */; };
@@ -359,7 +358,6 @@
 		848A38FA567146749E61538D /* ApplicationModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Goals.swift"; sourceTree = "<group>"; };
 		26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Goals.swift"; sourceTree = "<group>"; };
 		988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConversationGoalControls.swift"; sourceTree = "<group>"; };
-		DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceHost.swift; sourceTree = "<group>"; };
 		8AB39465A1E975E9B17949AD /* SavedArtifactsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsModel.swift; sourceTree = "<group>"; };
 		CF0706BAE96F6819E10625D5 /* SavedArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedArtifactsView.swift; sourceTree = "<group>"; };
 		4C92277CA35CAFDF60ADE671 /* MemberExecutionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemberExecutionClient.swift; sourceTree = "<group>"; };
@@ -673,7 +671,6 @@
 				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
 				4C92277CA35CAFDF60ADE671 /* MemberExecutionClient.swift */,
 				B8E2F3A4C5D6E7F8091A2B3C /* BackendWindowStreamSource.swift */,
-				DDAE8827A1011FA6113C72B1 /* InferenceHost.swift */,
 				0083907CDB98FA31255BD2C1 /* LibraryHostController.swift */,
 				D20900000000000000000002 /* PairedMacSyncController.swift */,
 				0643377195E7D10D99BB22ED /* LibraryHostController+Publishing.swift */,
@@ -865,7 +862,6 @@
 				A7D1E2F3B4C5D6E7F8091A2B /* BackendWindowStreamSource.swift in Sources */,
 				3920C098CAD3AD073343D629 /* SavedArtifactsView.swift in Sources */,
 				6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */,
-				97AD203F32768DAAE8E74B8A /* InferenceHost.swift in Sources */,
 				E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */,
 				6E4EACF922D8D98161786EAE /* ApplicationModel+Automation.swift in Sources */,
 				A6F6CE2A68949F541CAEF101 /* RemoteBrowserCanvas.swift in Sources */,

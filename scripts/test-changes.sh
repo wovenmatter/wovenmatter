@@ -111,10 +111,26 @@ run_app_build() {
     build
   scripts/validate-native-app.sh \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
-  env WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
-    CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
-    swift test --build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --force-resolved-versions --package-path app --scratch-path "$swift_scratch" \
-      --skip-build --filter packagedHTMLToolsWorkAcrossHarnesses
+  # The packaged-app acceptance test lives in one test target. Build only that
+  # target (a no-op when the package tests were just built) and run only that
+  # test from its bundle: `swift test --skip-build` needs every test bundle.
+  local swift_env=(env "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache" "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache")
+  local swift_package=(--build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
+  "${swift_env[@]}" swift build "${swift_package[@]}" --target WovenMatterAgentToolsTests
+  local tools_tests
+  tools_tests="$("${swift_env[@]}" swift build "${swift_package[@]}" --show-bin-path)/WovenMatterAgentToolsTests.xctest"
+  local html_log="${cache_root}/packaged-html-tools.log"
+  if [ -d "$tools_tests" ]; then
+    WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
+      xcrun xctest -XCTest 'WovenMatterAgentToolsTests.WorkspaceAgentToolsServiceTests/packagedHTMLToolsWorkAcrossHarnesses(runtime:)' \
+      "$tools_tests" 2>&1 | tee "$html_log"
+    # A selection that matches nothing passes silently; require the test itself.
+    grep -Eq 'Test packagedHTMLToolsWorkAcrossHarnesses\(runtime:\) with [0-9]+ test cases passed' "$html_log"
+  else
+    # A build system that combines every test target into one bundle.
+    "${swift_env[@]}" WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
+      swift test "${swift_package[@]}" --filter packagedHTMLToolsWorkAcrossHarnesses
+  fi
   # The fixture substitutes CEF entry points; it does not launch Chromium.
   local browser_build="${derived_data}/Build/Intermediates.noindex/WovenMatter.build/Debug/WovenMatter.build/DerivedSources/cef-${host_arch}"
   make -C "$browser_build" WovenBrowserLifecycleTests >/dev/null
@@ -217,6 +233,8 @@ elif printf '%s\n' "$changed" | grep -Eq '^bots/' \
   run_bots_tests
 else
   run_static_checks
+  # The packaged-app acceptance fixture loads the default agent's MCP client.
+  npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
   run_app_build
 fi
 if [ -z "${bots_tested:-}" ] && printf '%s\n' "$changed" | grep -Eq '^bots/'; then

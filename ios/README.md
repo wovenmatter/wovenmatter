@@ -9,7 +9,7 @@ is a signed member with its own offline replica and syncs with whichever Mac or
 Linux host answers; no single Mac is required. On the device, Quick Chat runs Pi
 Durable for notes, web search, simple questions, timers, reminders and calendar
 events; Mac and Linux workspace agents handle everything else. Inference uses provider
-connections signed in on that device or an explicitly selected Tailscale host.
+connections signed in on that device, or a model server it adds on Tailscale.
 See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
 
 The app is complete without a Mac. A fresh install signs in to a model provider

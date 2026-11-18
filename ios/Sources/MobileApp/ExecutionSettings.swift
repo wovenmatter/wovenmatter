@@ -6,7 +6,7 @@ import PiDurableRuntime
 
 struct ExecutionSettingsPane: View {
   @Bindable var model: MobileModel
-  private var connections: [InferenceConnection] { model.inferenceConnections.filter { $0.route == .direct && !$0.provider.hasPrefix("local-server-") } }
+  private var connections: [InferenceConnection] { model.inferenceConnections.filter { !$0.provider.hasPrefix("local-server-") } }
   var body: some View {
     List {
       if !connections.isEmpty {
@@ -36,11 +36,10 @@ struct HostedInferenceSettingsPane: View {
   @Bindable var model: MobileModel
   var body: some View {
     List {
-      ForEach(model.inferenceConnections.filter { $0.route == .adapter || $0.provider.hasPrefix("local-server-") }) { connection in
+      ForEach(model.inferenceConnections.filter { $0.provider.hasPrefix("local-server-") }) { connection in
         NavigationLink(connection.name) { InferenceConnectionEditor(model: model, connection: connection) }
       }
       NavigationLink("Add model server") { InferenceConnectionEditor(model: model, connection: nil, provider: "local-server-openai") }
-      NavigationLink("Use a workspace account") { InferenceConnectionEditor(model: model, connection: nil, hosted: true) }
     }.listStyle(.insetGrouped).scrollContentBackground(.hidden).mobileNavigationPage("Tailscale inference")
   }
 }
@@ -170,13 +169,8 @@ struct DeviceAgentSettingsPane: View {
   }
 }
 
-enum InferenceSetupMode: String, CaseIterable {
-  case device = "On this device", hosted = "Use an inference host"
-}
-
 @MainActor @Observable final class InferenceConnectionSetupState {
   let original: InferenceConnection?
-  var mode: InferenceSetupMode
   var provider: String
   var name: String
   var modelID: String
@@ -186,8 +180,6 @@ enum InferenceSetupMode: String, CaseIterable {
   var storedCredentialAvailable = false
   var authenticatedAccountID: String?
   var models: [InferenceModel]
-  var accounts: [InferenceHostAccount] = []
-  var hostID = ""
   var loadingModels = false
   var saving = false
   var signingIn = false
@@ -200,7 +192,6 @@ enum InferenceSetupMode: String, CaseIterable {
     original = connection
     let selectedProvider = connection?.provider ?? provider
     self.provider = selectedProvider
-    mode = connection?.route == .adapter ? .hosted : .device
     name = connection?.name ?? Self.providerName(selectedProvider)
     modelID = connection?.modelID ?? ""
     accountID = connection?.accountID ?? "default"
@@ -209,23 +200,17 @@ enum InferenceSetupMode: String, CaseIterable {
   }
   static func providerName(_ id: String) -> String { InferenceCatalog.providers.first { $0.id == id }?.name ?? id }
   var definition: InferenceProvider? { InferenceCatalog.providers.first { $0.id == provider } }
-  var isOAuth: Bool { mode == .device && definition?.supportsOAuth == true }
+  var isOAuth: Bool { definition?.supportsOAuth == true }
   var isCustomServer: Bool { provider.hasPrefix("local-server-") }
   var trimmedSecret: String { secret.trimmingCharacters(in: .whitespacesAndNewlines) }
-  var hasSavedHost: Bool { original?.route == .adapter && original?.hostScope != nil && !(original?.baseURL ?? "").isEmpty }
   var saveProblem: String? {
     if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give this connection a name." }
     if loadingModels { return "Loading the provider’s models…" }
     if signingIn { return "Complete sign-in before saving this connection." }
-    if mode == .device && definition?.supportsDirect != true { return "This provider does not offer sign-in for this app. Choose its API-key connection instead." }
+    if definition?.supportsDirect != true { return "This provider does not offer sign-in for this app. Choose its API-key connection instead." }
     if modelID.isEmpty { return "Choose a model to use with this connection." }
-    if mode == .hosted {
-      if hostID.isEmpty && !hasSavedHost { return "Choose an authorized host for this optional hosted connection." }
-      if accountID.isEmpty { return "Choose an account from this host." }
-    } else {
-      if isCustomServer && endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Enter the model server’s Tailscale address." }
-      if trimmedSecret.isEmpty && !storedCredentialAvailable { return isOAuth ? "Sign in on this device before saving." : "Enter an API key before saving." }
-    }
+    if isCustomServer && endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Enter the model server’s Tailscale address." }
+    if trimmedSecret.isEmpty && !storedCredentialAvailable { return isOAuth ? "Sign in on this device before saving." : "Enter an API key before saving." }
     return nil
   }
   func chooseProvider(_ id: String) {
@@ -233,13 +218,7 @@ enum InferenceSetupMode: String, CaseIterable {
     provider = id
     if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == oldName { name = Self.providerName(id) }
     resetCredentials()
-    endpoint = ""; hostID = ""; models = []; accounts = []; modelID = ""
-    accountID = mode == .device ? "default" : ""
-  }
-  func chooseMode(_ value: InferenceSetupMode) {
-    guard mode != value else { return }
-    mode = value; resetCredentials(); models = []; accounts = []; modelID = ""
-    endpoint = ""; hostID = ""; accountID = value == .device ? "default" : ""
+    endpoint = ""; models = []; modelID = ""; accountID = "default"
   }
   func resetCredentials() {
     secret = ""; storedCredentialAvailable = false; authenticatedAccountID = nil
@@ -274,12 +253,10 @@ enum InferenceSetupMode: String, CaseIterable {
   }
   func configuredConnection() throws -> InferenceConnection {
     if let saveProblem { throw DeviceExecutionError.unavailable(saveProblem) }
-    let route: InferenceRoute = mode == .hosted ? .adapter : .direct
     return .init(id: original?.id ?? UUID().uuidString.lowercased(), name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-      provider: provider, accountID: mode == .device && !isOAuth ? "default" : accountID, route: route,
-      baseURL: route == .adapter || isCustomServer ? endpoint.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
-      modelID: modelID, hostScope: route == .adapter ? original?.hostScope : nil,
-      selectedModel: models.first { $0.id == modelID && $0.provider == provider })
+      provider: provider, accountID: isOAuth ? accountID : "default",
+      baseURL: isCustomServer ? endpoint.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+      modelID: modelID, selectedModel: models.first { $0.id == modelID && $0.provider == provider })
   }
 }
 
@@ -295,11 +272,9 @@ private struct InferenceConnectionEditor: View {
   @State private var authorizationCode = ""
   @State private var completingSignIn = false
   @State private var loaded = false
-  init(model: MobileModel, connection: InferenceConnection?, provider: String = "openai-codex", hosted: Bool = false) {
+  init(model: MobileModel, connection: InferenceConnection?, provider: String = "openai-codex") {
     self.model = model
-    let state = InferenceConnectionSetupState(connection: connection, provider: provider)
-    if hosted { state.chooseMode(.hosted) }
-    _state = State(initialValue: state)
+    _state = State(initialValue: InferenceConnectionSetupState(connection: connection, provider: provider))
   }
   private var setupAllowed: Bool { !model.fixture && !model.isolatedTestHost }
   private var signInName: String {
@@ -308,16 +283,7 @@ private struct InferenceConnectionEditor: View {
   var body: some View {
     Form {
       if !setupAllowed { Section { Text("Account setup is disabled in this test build.") } }
-      else if state.mode == .hosted {
-        Section {
-          Picker("Provider", selection: Binding(get: { state.provider }, set: { chooseProvider($0) })) {
-            ForEach(InferenceCatalog.providers.filter { provider in !provider.id.hasPrefix("local-server-") &&
-              (!InferenceConnectionPolicy.isSingleSubscription(provider.id) || !model.inferenceConnections.contains(where: { $0.provider == provider.id && $0.id != state.original?.id })) }) { Text($0.name).tag($0.id) }
-          }.disabled(state.original != nil)
-        }
-        hostedFields
-        modelFields
-      } else if state.isCustomServer {
+      else if state.isCustomServer {
         Section {
           TextField("Tailscale HTTPS address", text: $state.endpoint).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
           TextField("Model ID", text: $state.modelID).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -335,7 +301,7 @@ private struct InferenceConnectionEditor: View {
           }
         }
       }
-    }.scrollIndicators(.never).mobileNavigationPage(state.mode == .hosted ? "Workspace account" : InferenceConnectionSetupState.providerName(state.provider))
+    }.scrollIndicators(.never).mobileNavigationPage(InferenceConnectionSetupState.providerName(state.provider))
       .toolbar {
         if !state.isOAuth {
           ToolbarItem(placement: .confirmationAction) {
@@ -369,38 +335,6 @@ private struct InferenceConnectionEditor: View {
       }
     }
   }
-  private var hostedFields: some View {
-    Section("Workspace") {
-      Picker("Host", selection: Binding(get: { state.hostID }, set: { chooseHost($0) })) {
-        Text(state.hasSavedHost ? "Saved host" : "Choose an authorized workspace").tag("")
-        ForEach(model.executionWorkspaces.filter { $0.endpoint != nil }) { Text($0.name).tag($0.id) }
-      }
-      if state.hostID.isEmpty && state.hasSavedHost { Text(state.endpoint).font(.caption).textSelection(.enabled) }
-      Picker("Account", selection: $state.accountID) {
-        Text("Choose an account").tag("")
-        if !state.accountID.isEmpty && !state.accounts.contains(where: { $0.id == state.accountID && $0.provider == state.provider && $0.connected }) { Text(state.accountID).tag(state.accountID) }
-        ForEach(state.accounts.filter { $0.provider == state.provider && $0.connected }) { Text($0.label).tag($0.id) }
-      }
-      Button("Refresh host connections") { loadHost() }.disabled(state.hostID.isEmpty || state.loadingModels)
-    }.disabled(state.saving)
-  }
-  private var modelFields: some View {
-    Section("Model") {
-      if state.loadingModels { ProgressView(state.mode == .hosted ? "Loading host models and accounts…" : "Loading provider models…") }
-      if !state.models.isEmpty {
-        Picker("Model", selection: $state.modelID) {
-          Text("Choose a model").tag("")
-          ForEach(state.models) { Text($0.name).tag($0.id) }
-        }
-      } else if state.isCustomServer {
-        TextField("Model ID", text: $state.modelID).textInputAutocapitalization(.never).autocorrectionDisabled()
-      } else if !state.loadingModels { Text("No models are loaded. Refresh the catalog to choose one.") }
-      if state.mode == .device && !state.isCustomServer {
-        Button("Refresh models") { loadModels(force: true) }.disabled(state.loadingModels)
-      }
-      if !state.modelID.isEmpty { Text(state.modelID).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
-    }.disabled(!setupAllowed || state.saving)
-  }
   private func initialize() async {
     guard !loaded else { return }; loaded = true
     guard setupAllowed else { return }
@@ -411,25 +345,12 @@ private struct InferenceConnectionEditor: View {
         guard !Task.isCancelled, state.authenticationGeneration == generation else { return }
         state.storedCredentialAvailable = present
       } catch { state.problem = "This device’s saved credential could not be opened. Enter it again to replace it." }
-      if let scope = original.hostScope, model.executionWorkspaces.contains(where: { $0.id == scope.workspaceID }) { state.hostID = scope.workspaceID }
     }
-    if state.mode == .device { loadModels() }
-    else if !state.hostID.isEmpty && model.workspaceReachable[state.hostID] == true { loadHost() }
-  }
-  private func chooseProvider(_ id: String) {
-    guard !state.saving else { return }
-    cancelSignIn(); catalogTask?.cancel(); state.chooseProvider(id)
     loadModels()
-  }
-  private func chooseHost(_ id: String) {
-    guard !state.saving else { return }
-    catalogTask?.cancel(); state.hostID = id; state.models = []; state.accounts = []; state.modelID = ""; state.accountID = ""; state.endpoint = ""
-    loadHost()
   }
   private func loadModels(force: Bool = false) {
     catalogTask?.cancel()
     guard setupAllowed else { return }
-    if state.mode == .hosted { if !state.hostID.isEmpty { loadHost() }; return }
     guard state.definition?.supportsDirect == true, !state.isCustomServer else { state.loadingModels = false; return }
     let provider = state.provider, generation = state.beginCatalog()
     catalogTask = Task {
@@ -446,31 +367,6 @@ private struct InferenceConnectionEditor: View {
       }
       state.loadingModels = false
       saveSignedInAccountWhenReady()
-    }
-  }
-  private func loadHost() {
-    catalogTask?.cancel()
-    guard setupAllowed, state.mode == .hosted, !state.hostID.isEmpty else { state.loadingModels = false; return }
-    let selectedHost = state.hostID, provider = state.provider, generation = state.beginCatalog()
-    catalogTask = Task {
-      do {
-        let credential = try await model.authorizedWorkspaceCredential(selectedHost)
-        let catalog = InferenceConnection(name: "Host catalog", provider: provider, accountID: "catalog", route: .adapter,
-          baseURL: credential.endpoint.absoluteString, modelID: "catalog",
-          hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: LibraryProtocol.version,
-                           hostDeviceID: model.inferenceHostDeviceID(credential.workspaceID)))
-        let result = try await MobileInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
-        guard !Task.isCancelled, state.catalogGeneration == generation else { return }
-        state.endpoint = credential.endpoint.absoluteString
-        state.accounts = result.accounts
-        state.receiveModels(result.models, generation: generation)
-        let accounts = state.accounts.filter { $0.provider == provider && $0.connected }
-        if !accounts.contains(where: { $0.id == state.accountID }) { state.accountID = accounts.count == 1 ? accounts[0].id : "" }
-      } catch {
-        guard !Task.isCancelled, state.catalogGeneration == generation else { return }
-        state.problem = error.localizedDescription
-      }
-      state.loadingModels = false
     }
   }
   private func signIn() {
@@ -538,20 +434,11 @@ private struct InferenceConnectionEditor: View {
     let configured: InferenceConnection
     do { configured = try state.configuredConnection() }
     catch { state.problem = error.localizedDescription; return }
-    let hostID = state.hostID, suppliedSecret = state.trimmedSecret
+    let secret = state.trimmedSecret
     state.saving = true; state.problem = nil
     saveTask = Task {
       do {
-        var value = configured, secret = suppliedSecret
-        if value.route == .adapter, !hostID.isEmpty {
-          let credential = try await model.authorizedWorkspaceCredential(hostID)
-          value.baseURL = credential.endpoint.absoluteString
-          value.hostScope = .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: LibraryProtocol.version,
-                                  hostDeviceID: model.inferenceHostDeviceID(credential.workspaceID))
-          secret = credential.token
-        }
-        try Task.checkCancellation()
-        try await model.saveInferenceConnection(value, secret: secret)
+        try await model.saveInferenceConnection(configured, secret: secret)
         guard !Task.isCancelled else { return }
         state.secret = ""; dismiss()
       } catch {

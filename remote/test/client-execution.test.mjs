@@ -54,6 +54,35 @@ test('per-device bearer grants never expose administration or another device rec
   assert.equal(f.service.principal('Bearer '+f.grant.token,'execution'),null)
 })
 
+test('grants and workspaces enrolled with the old inference scope keep working for execution only',async t=>{
+  const f=fixture(t),material={workspace:'private-workspace-scope',unlockKey:'test-only-very-private-unlock-material'}
+  f.service.rememberUnlockMaterial(material)
+  // An older Mac still asks for `inference`; it is dropped and execution is granted.
+  const legacy={...f.enrollment,deviceID:randomUUID(),scopes:['execution','inference']},grant=f.service.provision(legacy)
+  assert.deepEqual(f.service.principal('Bearer '+grant.token,'execution').scopes,['execution'])
+  assert.equal(f.service.principal('Bearer '+grant.token,'inference'),null)
+  assert.deepEqual(f.service.unlockMaterial('Bearer '+grant.token),material)
+  assert.equal(grant.workspace.capabilities.includes('inference'),false)
+  assert.throws(()=>f.service.provision({...f.enrollment,deviceID:randomUUID(),scopes:['inference']}),{statusCode:400})
+  // A grant and workspace stored before the upgrade, with both scopes.
+  const {DatabaseSync}=await import('node:sqlite'),{createCipheriv,createHash,randomBytes}=await import('node:crypto')
+  const db=new DatabaseSync(join(f.directory,'execution.sqlite'))
+  const token=randomBytes(32).toString('base64url'),id=randomUUID(),scopes=['execution','inference'],iv=randomBytes(12)
+  const cipher=createCipheriv('aes-256-gcm',createHash('sha256').update('wovenmatter-client-unlock-v1\0'+token).digest(),iv)
+  cipher.setAAD(Buffer.from(JSON.stringify([f.enrollment.libraryID,f.enrollment.workspaceID,id,[...scopes].sort()])))
+  const ciphertext=Buffer.concat([cipher.update(JSON.stringify(material),'utf8'),cipher.final()])
+  db.prepare('INSERT INTO devices VALUES (?,?,?)').run(id,createHash('sha256').update(token).digest('hex'),JSON.stringify({id,name:'Older Mac',scopes,createdAt:new Date().toISOString(),
+    unlockEnvelope:{iv:iv.toString('base64'),ciphertext:ciphertext.toString('base64'),tag:cipher.getAuthTag().toString('base64')}}))
+  const identity=JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get().body)
+  db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify({...identity,capabilities:[...identity.capabilities,'inference']}))
+  db.close()
+  await f.restart()
+  assert.equal(f.service.principal('Bearer '+token,'execution').id,id)
+  assert.deepEqual(f.service.unlockMaterial('Bearer '+token),material)
+  assert.equal(f.service.descriptor().capabilities.includes('inference'),false)
+  assert.ok(f.service.descriptor().capabilities.includes('execution'))
+})
+
 test('concurrent retransmission has one execution and changed-payload retries fail',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
   const input=f.command('send',{conversationID:opened.conversationID,text:'hello'})

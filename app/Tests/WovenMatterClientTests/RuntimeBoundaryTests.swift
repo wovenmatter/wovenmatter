@@ -49,7 +49,6 @@ struct RuntimeBoundaryTests {
       cliInstallerSource: nil,
       cliInstallerInterpreter: nil,
       adapterPackage: "@example/fake-acp",
-      minimumAdapterVersion: "1.2.3",
       adapterDescription: "Fake adapter"
     )
 
@@ -231,7 +230,7 @@ private final class SSHRecorder: @unchecked Sendable {
 }
 
 extension RuntimeBoundaryTests {
-  @Test("an adapter installs alone, pointed at the native CLI, with its protocol SDK selected before staging")
+  @Test("an adapter installs alone and exactly as published, pointed at the native CLI")
   func adapterInstallUsesTheNativeCLI() async throws {
     let fixture = try TemporaryDirectory(prefix: "woven-independent-engine")
     defer { fixture.remove() }
@@ -251,8 +250,8 @@ extension RuntimeBoundaryTests {
     for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
     let nativeCodex = URL(fileURLWithPath: "/home/someone/.local/bin/codex")
     let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
-      #expect(url.absoluteString.contains("@agentclientprotocol%2fsdk"), "no engine is looked up: \(url)")
-      return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.7.0":{},"2.8.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
+      Issue.record("no engine or SDK is looked up: \(url)")
+      return Data()
     }, executableResolver: { name in name == "codex" ? nativeCodex : nil })
     let executable = try await installer.installPackage("@agentclientprotocol/codex-acp", version: "2.6.0", executableName: "codex-acp")
     let arguments = try String(contentsOf: argumentsFile, encoding: .utf8).split(separator: "\n")
@@ -261,7 +260,7 @@ extension RuntimeBoundaryTests {
     let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
     #expect(selection["engineVersion"] == nil)
     #expect(selection["cli"] as? String == nativeCodex.path)
-    #expect(selection["protocolSDKVersion"] as? String == "2.7.0")
+    #expect(Set(selection.keys) == ["prefix", "adapter", "adapterVersion", "npm", "cli"])
     #expect(selection["adapterVersion"] as? String == "2.6.0")
     #expect(selection["npm"] as? [String] == [npm.path])
     #expect(executable == prefix.appending(path: "bin/codex-acp"))

@@ -130,7 +130,7 @@ async function deployedSmoke() {
     assert.equal(descriptor.id, enrolled.workspace.id)
     for (const path of ['/v1/browser/selftest', '/v1/browser/tabs', '/v1/default-agent/status', '/v1/runtime/inspection']) await request(path, { bearer: enrolled.token, status: 403 })
     await request('/v1/execution/events?after=0', { bearer: enrolled.token })
-    await request('/v1/inference/catalog', { bearer: enrolled.token, status: 401 })
+    await request('/v1/inference/catalog', { bearer: enrolled.token, status: 403 })
   } finally {
     await request('/v1/execution/devices/' + deviceID, { method: 'DELETE' })
   }

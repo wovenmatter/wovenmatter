@@ -89,7 +89,7 @@ test('a Linux host creates a session on another Linux host with every Mac offlin
     const raw = await body(request), path = request.url.replace(/^\/wovenmatter-execution\/m/, '')
     const member = await verifier.verify({ method: request.method, target: path, alternateTargets: ['/wovenmatter-execution/m' + path], headers: request.headers, body: raw })
     seen.push({ path, device: member.deviceID })
-    const device = { id: member.deviceID, scopes: ['execution', 'inference'] }
+    const device = { id: member.deviceID, scopes: ['execution'] }
     if (path === '/v1/execution/providers') return send(response, 200, await m.service.providers())
     if (path === '/v1/execution/commands' && request.method === 'POST') return send(response, 200, await m.service.command(JSON.parse(raw), device))
     send(response, 404, { error: 'not_found' })

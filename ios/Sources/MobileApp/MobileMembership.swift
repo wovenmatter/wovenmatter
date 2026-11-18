@@ -60,17 +60,7 @@ extension MobileModel {
       try? MobileLibraryHosts.save(saved, to: file)
     }
     memberIdentity = identity
-    // Inference connections whose host scope names the host Mac sign with this key.
-    let signer = identity.signer
-    InferenceMemberSigning.install { request, audience in try MobileRequestSigning.sign(&request, with: signer, audience: audience) }
     return identity
-  }
-
-  /// The host Mac's member device ID for an inference connection to
-  /// `workspaceID`; nil while it cannot be signed for.
-  func inferenceHostDeviceID(_ workspaceID: String) -> String? {
-    guard let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }) else { return nil }
-    return membership?.audience(for: workspace)
   }
 
   /// Connects as a member when this phone paired with its key and the Mac

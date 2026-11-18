@@ -20,7 +20,7 @@ extension MobileModel {
     let airHost = "e775f2b2-1e79-4bc2-b723-39b3fab2d9c5", miniHost = "7c072eba-eb7c-490b-9434-fb710c7f828f"
     let oldAir = "9e51815e-6d2d-4d20-9885-ddab9621b460"
     let airEndpoint = URL(string: "https://jamess-macbook-air.example.ts.net:10000/wovenmatter")!
-    let capabilities = ["execution.v1", "history.library.v1", "inference.v1"]
+    let capabilities = ["execution.v1", "history.library.v1"]
     let air = ExecutionWorkspace(id: Self.memberMacsAir, libraryID: "fixture", ownerDeviceID: airHost, kind: .mac,
       name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02", endpoint: airEndpoint, capabilities: capabilities,
       executionDeviceID: airHost, developmentInstance: "worktrees-b8e80bfb02")
@@ -35,7 +35,7 @@ extension MobileModel {
       .init(id: copiedDeleted, libraryID: "fixture", ownerDeviceID: oldAir, kind: .mac, name: "James’s MacBook Air",
             capabilities: capabilities, executionDeviceID: oldAir, deleted: true, retainedHistory: true),
       .init(id: Self.memberMacsLinux, libraryID: "fixture", ownerDeviceID: airHost, kind: .linux, name: "Workstation (Dev)",
-            capabilities: ["execution.v1", "inference.v1"]),
+            capabilities: ["execution.v1"]),
     ].filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     func agent(_ kind: String, _ name: String, ready: Bool, resume: Bool = true) -> HarnessCapabilities {
       .init(id: "local:" + kind, runtimeKind: kind, displayName: name, available: ready, canStart: ready, canResume: resume,
