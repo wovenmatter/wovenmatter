@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { startRuntime } from "./app.ts";
 import { ConfigError, loadRuntimeConfig } from "./config.ts";
+import { usePiDurableSDK } from "./pi-durable-sdk.ts";
 import { VERSION } from "./version.ts";
 
 const USAGE = `wovenmatter-bots ${VERSION}
@@ -28,7 +28,9 @@ async function main(argv: string[]): Promise<void> {
   if (values.help || !command) return void console.log(USAGE);
   if (command !== "serve") throw new Error(`unknown command ${command}\n\n${USAGE}`);
   if (!values.config) throw new Error("serve needs --config <file>");
-  const config = await loadRuntimeConfig(values.config);
+  const config = await usePiDurableSDK(await loadRuntimeConfig(values.config));
+  // Imported only now, so every SDK import resolves from Pi Durable's copy.
+  const { startRuntime } = await import("./app.ts");
   const runtime = await startRuntime(config);
   let stopping = false;
   const stop = () => {
