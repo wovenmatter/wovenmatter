@@ -236,22 +236,25 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   function descriptor() {
     assertIdentity()
     const value = copy(identity)
-    value.capabilities = [...new Set([...(value.capabilities ?? []), ...extraCapabilities()])]
+    // A workspace provisioned before v0.4.6 recorded `inference`, which it no longer serves.
+    value.capabilities = [...new Set([...(value.capabilities ?? []), ...extraCapabilities()])].filter(capability => capability !== 'inference')
     return value
   }
   // A new workspace's execution device is this host's member device ID (its
   // library host's identity), so other members address it from the registry
   // alone; without a library host it gets its own random ID.
   function provision(body, { executionDeviceID = null } = {}) {
+    // An older Mac also asks for `inference`, which this host no longer serves; it is dropped.
+    const scopes = Array.isArray(body.scopes) ? [...new Set(body.scopes.filter(scope => scope !== 'inference'))] : []
     if (!identifier(body.libraryID) || !identifier(body.workspaceID) || !identifier(body.deviceID) || !identifier(body.ownerDeviceID)
-      || !Array.isArray(body.scopes) || !body.scopes.length || body.scopes.some(scope => !['execution','inference'].includes(scope))) throw fail(400, 'Invalid device enrollment.')
+      || !scopes.length || scopes.some(scope => scope !== 'execution')) throw fail(400, 'Invalid device enrollment.')
     if (identity && (identity.id !== body.workspaceID || identity.libraryID !== body.libraryID)) throw fail(409, 'This workspace already belongs to a different library.')
     const token = randomBytes(32).toString('base64url')
     let unlockEnvelope
     if (unlockMaterial) {
       const iv = randomBytes(12), key = createHash('sha256').update('wovenmatter-client-unlock-v1\0'+token).digest()
       const cipher = createCipheriv('aes-256-gcm',key,iv)
-      cipher.setAAD(Buffer.from(JSON.stringify([body.libraryID,body.workspaceID,body.deviceID,[...new Set(body.scopes)].sort()])))
+      cipher.setAAD(Buffer.from(JSON.stringify([body.libraryID,body.workspaceID,body.deviceID,[...scopes].sort()])))
       const ciphertext = Buffer.concat([cipher.update(JSON.stringify(unlockMaterial),'utf8'),cipher.final()])
       unlockEnvelope = {iv:iv.toString('base64'),ciphertext:ciphertext.toString('base64'),tag:cipher.getAuthTag().toString('base64')}
     }
@@ -259,13 +262,13 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     transaction(() => {
       nextIdentity = identity ? copy(identity) : { id: body.workspaceID, libraryID: body.libraryID, ownerDeviceID: body.ownerDeviceID, executionDeviceID: identifier(executionDeviceID) ? executionDeviceID : randomUUID(),
         kind, name: typeof body.workspaceName === 'string' ? body.workspaceName.slice(0,256) : name,
-        capabilities: ['execution','historyReplay','idempotentCommands','inference'], journalDeviceIDs: [], revision: 1, deleted: false }
+        capabilities: ['execution','historyReplay','idempotentCommands'], journalDeviceIDs: [], revision: 1, deleted: false }
       if (body.endpoint) {
         const endpoint = new URL(body.endpoint)
         if (endpoint.protocol !== 'https:' || !endpoint.hostname.endsWith('.ts.net') || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw fail(400, 'Use a private Tailscale HTTPS endpoint.')
         nextIdentity.endpoint = endpoint.href.replace(/\/$/, '')
       }
-      const device = { id: body.deviceID, name: String(body.name ?? 'Client').slice(0,256), scopes: [...new Set(body.scopes)], createdAt: date(), ...(unlockEnvelope ? {unlockEnvelope} : {}) }
+      const device = { id: body.deviceID, name: String(body.name ?? 'Client').slice(0,256), scopes, createdAt: date(), ...(unlockEnvelope ? {unlockEnvelope} : {}) }
       db.prepare('INSERT OR REPLACE INTO devices VALUES (?,?,?)').run(device.id, digest(token), JSON.stringify(device))
       // Observing devices may control/read this workspace but never publish its origin history.
       nextIdentity.journalDeviceIDs = []
@@ -289,7 +292,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     unlockMaterial = {workspace:value.workspace,unlockKey:value.unlockKey}
   }
   function clientUnlockMaterial(authorization) {
-    const device = principal(authorization,'inference') ?? principal(authorization,'execution')
+    const device = principal(authorization,'execution')
     if (!device?.unlockEnvelope) return null
     try {
       const {iv,tag,ciphertext} = device.unlockEnvelope

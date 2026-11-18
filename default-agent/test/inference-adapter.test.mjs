@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { createInferenceAdapter } from '../src/inference-adapter.mjs';
 
 const model = { provider: 'openai-codex', id: 'fixture-model', name: 'Fixture', api: 'openai-codex-responses', reasoning: true, baseUrl: 'https://fixture.invalid', contextWindow: 16000, maxTokens: 4096 };
@@ -103,25 +102,6 @@ test('client vault unlock after restart preserves accounts and rejects an incorr
   const vault = new CredentialVault(directory); await vault.unlock('fixture', key);
   assert.equal((await vault.read()).shared.openai.key, 'fixture-only-key');
 });
-
-test('generation-aware inference helper returns catalog without agent execution or persistent credentials', async t => {
-  const { spawn } = await import('node:child_process');
-  const { readdir, readFile } = await import('node:fs/promises');
-  const directory = await mkdtemp(join(tmpdir(), 'woven-inference-helper-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--inference'], {
-    cwd: directory, env: { ...process.env, WOVEN_DEFAULT_AGENT_DIRECTORY: directory, WOVEN_INFERENCE_DIRECTORY: directory },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
-  let output = ''; child.stdout.on('data', value => { output += value; });
-  child.stdin.end(JSON.stringify({ action: 'catalog', payload: { config: { providers: [] }, credentials: { openai: { type: 'api_key', key: 'fixture-transient-secret' } } }, principalID: 'fixture' }) + '\n');
-  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
-  assert.equal(code, 0); assert.deepEqual(JSON.parse(output), { models: [], accounts: [] });
-  assert.equal(output.includes('fixture-transient-secret'), false);
-  for (const name of await readdir(directory)) if (name.endsWith('.json')) assert.equal((await readFile(join(directory, name), 'utf8')).includes('fixture-transient-secret'), false);
-});
-
 
 test('owner inference proxy requests visible summaries for reasoning-enabled device turns',async t=>{
   const fixture=await setup(t);

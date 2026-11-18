@@ -84,7 +84,7 @@ final class MemberMacsTests: XCTestCase {
   @MainActor func testEachMacOnceUnderItsNameAndLinuxOnceReachable() {
     let model = MobileModel()
     let linux = ExecutionWorkspace(id: "0fa3b77c-1819-411f-804f-b183d86e2dcd", libraryID: "library-a", ownerDeviceID: airHost,
-      kind: .linux, name: "Workstation (Dev)", capabilities: ["execution.v1", "inference.v1"])
+      kind: .linux, name: "Workstation (Dev)", capabilities: ["execution.v1"])
     model.executionWorkspaces = [mini, air, linux]
     var membership = MobileMembershipState(deviceID: model.state.deviceID, pairedEndpoint: air.endpoint!, pairedHostDeviceID: airHost)
     membership.currentHost = .init(deviceID: airHost, kind: "mac", name: air.name, endpoint: air.endpoint!)

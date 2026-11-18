@@ -61,6 +61,11 @@ extension MobileModel {
         case "unpin": record.isPinned = false
         case "trash":
           guard !sending, localRunTokens[id] == nil, record.status != "running", record.status != "stopping", record.status != "interrupted" else { throw DeviceExecutionError.unavailable("Stop this run before moving its conversation to Trash.") }
+          // A stop the SDK has not finished yet (its connection is gone) finishes first.
+          if record.runID != nil, record.status == "stopped" {
+            await finishDeviceStopWithoutConnection(id)
+            record = executionRecords[id] ?? record
+          }
           record.isTrashed = true
           executionRecords[id] = record; try persistExecutionConfiguration()
           try await store?.journal.deleteConversation(workspaceID: deviceWorkspaceID, conversationID: id)

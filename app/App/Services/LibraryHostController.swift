@@ -76,7 +76,6 @@ final class LibraryHostController {
     private(set) var executionStream: ExecutionStreamServer?
     /// Open stream sockets and bots relays by member, closed when a member is removed.
     private var memberSockets: MemberSocketRegistry?
-    private var inferenceHost: InferenceHost?
     /// Who may use this Mac's bots from another device (`/v1/bots/*`).
     private var authorizeBots: (@MainActor (LibraryHTTPRequest) async throws -> Void)?
     private var enrollingWorkspaceIDs: Set<String> = []
@@ -225,7 +224,7 @@ final class LibraryHostController {
             guard let local = descriptors.first(where: { $0.id == localExecutionWorkspaceID(libraryID: identity.libraryID) }) else {
                 throw LibraryAPIError(code: "unavailable", message: "The local execution workspace could not be registered.")
             }
-            // Every member signs its execution and inference requests.
+            // Every member signs its execution requests.
             executionAPI = MacExecutionAPI(database: database, commands: model.libraryCommands, descriptor: local,
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
                 members: try? await peerSync.members())
@@ -253,10 +252,6 @@ final class LibraryHostController {
                 guard let self else { throw LibraryAPIError(code: "unavailable", message: "This sharing session has stopped.") }
                 _ = try await self.authenticateMember(request, allowing: [.mac, .ios])
             }
-            inferenceHost = InferenceHost(descriptor: local,
-                directory: try supportDirectory ?? ApplicationModel.librarySupportDirectory(),
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
-                members: try? await peerSync.members())
             isStarting = false; status = "Available to your paired devices"
             // Paired-Mac credential storage is independent of phone and library
             // availability. A failure is reported and retried, never fatal.
@@ -313,10 +308,6 @@ final class LibraryHostController {
         if path == "/v1/execution" || path.hasPrefix("/v1/execution/") || path == "/wovenmatter/v1/execution" || path.hasPrefix("/wovenmatter/v1/execution/") {
             guard let executionAPI else { return .error("unavailable", "This execution workspace is starting.", status: 503) }
             return await executionAPI.handle(request)
-        }
-        if path.hasPrefix("/v1/inference/") || path.hasPrefix("/wovenmatter/v1/inference/") {
-            guard let inferenceHost else { return .error("unavailable", "This inference host is starting.", status: 503) }
-            return await inferenceHost.handle(request)
         }
         let botsPath = path.hasPrefix("/wovenmatter/") ? String(path.dropFirst("/wovenmatter".count)) : path
         // Another Mac's Settings → Updates: this Mac's harnesses and Pi Durable SDKs.
@@ -378,7 +369,7 @@ final class LibraryHostController {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
         let peerSync = peerSync
         Task { await peerSync.stopMembers() }
-        server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
+        server?.stop(); server = nil; executionAPI = nil; authorizeBots = nil
         executionStream?.stop(); executionStream = nil; memberSockets = nil
         model?.executionStreamChanged = nil
         for setup in linuxHostSetups.values { setup.task.cancel() }
@@ -412,7 +403,7 @@ final class LibraryHostController {
         catch { errorMessage = error.localizedDescription }
     }
 
-    /// Completes only after local library, execution and inference access are
+    /// Completes only after local library and execution access are
     /// revoked and any unreachable workspace revocation is durably queued.
     /// Test seam: throws before local access is revoked, to prove a failed
     /// revocation is retried rather than recorded as applied.
@@ -551,7 +542,7 @@ final class LibraryHostController {
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.library.v1", "inference.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
@@ -561,7 +552,8 @@ final class LibraryHostController {
             let prior = existing.first { $0.id == id }
             return .init(id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                 kind: .linux, name: configuration.name, endpoint: prior?.endpoint,
-                capabilities: prior?.capabilities ?? ["execution.v1", "inference.v1"],
+                // Linux hosts no longer serve inference; a record from before v0.4.6 drops it.
+                capabilities: (prior?.capabilities ?? ["execution.v1"]).filter { $0 != "inference.v1" },
                 executionDeviceID: prior?.executionDeviceID)
         }
         for var workspace in desired {

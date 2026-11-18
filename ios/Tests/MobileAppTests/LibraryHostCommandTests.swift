@@ -131,7 +131,7 @@ final class LibraryHostCommandTests: XCTestCase {
   private let productionDevice = "c0000000-0000-4000-8000-00000000000c"
   private let olderDevice = "d0000000-0000-4000-8000-00000000000d"
   private let miniDevice = "b0000000-0000-4000-8000-00000000000b"
-  private let streamed = ["execution.v1", "history.library.v1", "inference.v1", StreamProtocol.capability]
+  private let streamed = ["execution.v1", "history.library.v1", StreamProtocol.capability]
 
   private struct Fixture {
     let model: MobileModel
