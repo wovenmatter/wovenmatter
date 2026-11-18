@@ -2984,6 +2984,13 @@ final class ApplicationModel {
 
     func canStartCanonicalLocalSession(_ runtimeKind: AgentRuntimeKind) -> Bool {
         if runtimeKind == .opencode { return openCode?.isReady == true && openCode?.isEnabled == true }
+        // The window process has no launch configurations; the background
+        // process that owns execution reports which harnesses it can start.
+        if isBackendFrontend {
+            return backendLaunchableRuntimeKinds.contains(runtimeKind)
+                && localACPWorkspaceAvailability.isReady
+                && isLocalACPAgentReady(runtimeKind)
+        }
         return localACPLaunchConfigurations[runtimeKind] != nil
             && localACPWorkspaceLaunchConfiguration != nil
             && isLocalACPAgentReady(runtimeKind)

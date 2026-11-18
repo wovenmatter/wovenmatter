@@ -216,15 +216,11 @@ struct PageAssignMenu: View {
                     }
                 }
             }
-            let groups = groupTitles
-            ForEach(groups, id: \.self) { group in
+            // Me needs no heading of its own.
+            ForEach(targets.filter { $0.group == .me }) { target in targetButton(target) }
+            ForEach(groupTitles, id: \.self) { group in
                 Section(group) {
-                    ForEach(targets.filter { $0.group.title == group }) { target in
-                        Button(target.detail.map { "\(name(target.assignee)) — \($0)" } ?? name(target.assignee)) {
-                            onAssign(target.assignee)
-                        }
-                        .disabled(!target.ready || assignees.contains { $0.isActive && $0.isSameTarget(as: target.assignee) })
-                    }
+                    ForEach(targets.filter { $0.group != .me && $0.group.title == group }) { target in targetButton(target) }
                 }
             }
             if targets.count <= 1 {
@@ -235,7 +231,7 @@ struct PageAssignMenu: View {
         .padding(.horizontal, 7).padding(.vertical, 3)
         .background(Capsule().fill(WovenPalette.muted))
         .help(listed.isEmpty ? "Assign this task" : "Assigned to \(listed.map(\.name).joined(separator: ", "))")
-        .task(id: model.workspaceListRevision) {
+        .task(id: refreshKey) {
             targets = await model.pageAssignTargets(pageFolderID: pageFolderID)
         }
     }
@@ -254,10 +250,26 @@ struct PageAssignMenu: View {
         .frame(maxWidth: 180)
     }
 
+    /// Reloads the list when chats, harness readiness or bot connections change.
+    private var refreshKey: String {
+        let ready = model.orderedLocalACPRuntimeDefinitions.filter { model.canStartCanonicalLocalSession($0.runtimeKind) }
+            .map(\.runtimeKind.rawValue)
+        let bots = model.bots.orderedSessions.map { "\($0.machineID):\($0.bots.count):\($0.connectedClient != nil)" }
+        return ([String(model.workspaceListRevision)] + ready + bots + [String(model.remoteWorkspaces.readyChatTargets.count)])
+            .joined(separator: "|")
+    }
+
     private var groupTitles: [String] {
         var seen: [String] = []
-        for target in targets where !seen.contains(target.group.title) { seen.append(target.group.title) }
+        for target in targets where target.group != .me && !seen.contains(target.group.title) { seen.append(target.group.title) }
         return seen
+    }
+
+    private func targetButton(_ target: PageAssignTarget) -> some View {
+        Button(target.detail.map { "\(name(target.assignee)) — \($0)" } ?? name(target.assignee)) {
+            onAssign(target.assignee)
+        }
+        .disabled(!target.ready || assignees.contains { $0.isActive && $0.isSameTarget(as: target.assignee) })
     }
 
     private func name(_ assignee: BoardTaskAssignee) -> String { assignee.kind == .user ? "Me" : assignee.name }
