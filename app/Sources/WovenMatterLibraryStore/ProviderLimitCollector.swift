@@ -82,7 +82,7 @@ enum ProviderLimitCollector {
     case .grok: id = "xai"
     case .openCodeGo: id = "opencode-go"
     case .openRouter: id = "openrouter"
-    default: return unavailable(provider, detail: "This provider has no shared connection.", now: now)
+    default: return unavailable(provider, detail: "Usage is unavailable.", now: now)
     }
     guard let credential = credentials[id], let token = credential.access ?? credential.key else {
       return UsageLimitAccount(provider: provider, accountScopeID: choice.map { "wovenmatter.shared." + $0.id },
@@ -109,7 +109,7 @@ enum ProviderLimitCollector {
       return UsageLimitAccount(provider: account.provider, accountScopeID: "wovenmatter.shared.\(choice?.id ?? id)",
         accountLabel: choice?.label ?? credential.accountLabel ?? account.accountLabel, status: account.status,
         quotaWindows: account.quotaWindows, balance: account.balance, providerBudget: account.providerBudget,
-        details: account.details, history: account.history, source: "Woven Matter shared connection · \(account.source)",
+        details: account.details, history: account.history, source: "Woven Matter connection · \(account.source)",
         detail: account.detail, observedAt: account.observedAt, dashboardURL: account.dashboardURL)
     } catch {
       let rejected = (error as? SharedAccountHTTPError)?.status == 401

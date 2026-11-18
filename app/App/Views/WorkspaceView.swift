@@ -837,12 +837,17 @@ struct WorkspaceView: View {
         openUtility(.settings)
     }
 
+    /// Subscriptions & API Keys for the device a bot runs on: its bots use that device's sign-ins.
+    private func botSignInDevice(_ machineID: String) -> String {
+        SignInDevicePicker.device(forBotMachine: machineID, machines: model.bots.machines, devices: model.connections.devices)
+    }
+
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
     private func openBotLink(_ url: URL, from panelID: ChatPanelID) {
         if let page = WovenAppLink(url) {
             switch page {
             case .accounts:
-                model.pendingConnectionsScope = "global"
+                model.pendingConnectionsScope = chatPanels.panel(id: panelID)?.botTarget.map { botSignInDevice($0.machineID) } ?? SignInDevice.localID
             case .botProfiles:
                 model.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
                 openBotSettings()
@@ -1558,7 +1563,10 @@ struct WorkspaceSurface: View {
                 onRoute: { onBotRoute($0, panelID) },
                 onOpenLink: { onOpenBotLink($0, panelID) },
                 onOpenSettings: onOpenBotSettings,
-                onOpenConnections: { model.pendingConnectionsScope = "global" },
+                onOpenConnections: {
+                    model.pendingConnectionsScope = SignInDevicePicker.device(forBotMachine: target.machineID,
+                        machines: model.bots.machines, devices: model.connections.devices)
+                },
                 onOpenProfiles: {
                     model.pendingBotProfilesMachine = target.machineID
                     onOpenBotSettings()
