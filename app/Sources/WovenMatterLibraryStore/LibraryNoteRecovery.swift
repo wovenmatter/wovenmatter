@@ -43,7 +43,9 @@ extension WorkspaceDatabaseConnection {
             try toolsExecuteUnlocked("""
                 INSERT INTO notes(id, folder_id, title, content, snippet, position, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-                """, [id, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp])
+                """, [id, destination, recoveredTitle,
+                    try syncedNoteContentUnlocked(id: id, content: content, title: recoveredTitle, folderID: .some(destination)),
+                    Self.noteSnippet(content), timestamp, timestamp])
             try checkpointNoteUnlocked(id: id, source: "recovered", force: true)
             return id
         }

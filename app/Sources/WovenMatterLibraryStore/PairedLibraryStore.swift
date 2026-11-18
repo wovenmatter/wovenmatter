@@ -599,11 +599,16 @@ extension WorkspaceDatabaseConnection {
   private func settleFrontierUnlocked(from previous: [PairedLibraryRecord], to members: [PairedLibraryRecord], adding record: PairedLibraryRecord,
                                       table: PeerTable, scope: inout ProjectionScope) throws {
     guard let next = PairedLibraryRecord.winner(members) else { return }
-    for loser in members where loser.vector != next.vector && (loser.row != next.row || loser.deleted != next.deleted) {
-      try retainPeerConflict(loser)
+    // Concurrent versions of a Page or an Artifact merge into one, the same on every
+    // replica, so none of their writing needs a recovered copy.
+    let merged = mergedNoteVersion(members, table: table)
+    if merged == nil {
+      for loser in members where loser.vector != next.vector && (loser.row != next.row || loser.deleted != next.deleted) {
+        try retainPeerConflict(loser)
+      }
     }
-    let row = completedWinner(next, among: members, table: table)
-    let before = PairedLibraryRecord.winner(previous).map { completedWinner($0, among: previous, table: table) }
+    let row = merged ?? completedWinner(next, among: members, table: table)
+    let before = mergedNoteVersion(previous, table: table) ?? PairedLibraryRecord.winner(previous).map { completedWinner($0, among: previous, table: table) }
     if next.vector != before?.vector || row.row != before?.row {
       try materializePeerRecord(row, table: table)
       for name in ["conversations", "conversation_owners", "execution_conversations"] where next.table == name {
@@ -627,6 +632,32 @@ extension WorkspaceDatabaseConnection {
             members.contains(where: { $0.vector == version.vector || $0.dominates(version) }) else { continue }
       try toolsExecuteUnlocked("DELETE FROM peer_sync_versions WHERE cursor=?", [String(cursor)])
     }
+  }
+
+  /// The row every replica materializes for concurrent live versions of one Page or
+  /// Artifact: the winner's completed row with the merged document, title and folder. The
+  /// versions stay as they are; the next local write supersedes them with this content.
+  /// Nil keeps whole-document versions, as for Notes and Sheets.
+  private func mergedNoteVersion(_ members: [PairedLibraryRecord], table: PeerTable) -> PairedLibraryRecord? {
+    guard members.count > 1, members.allSatisfy({ $0.table == "notes" && !$0.deleted }) else { return nil }
+    var ordered: [PairedLibraryRecord] = [], remaining = members
+    while let next = PairedLibraryRecord.winner(remaining) {
+      ordered.append(next)
+      remaining.removeAll { $0.vector == next.vector }
+    }
+    let versions = ordered.compactMap { record -> NoteSync.Version? in
+      guard let content = record.row["content"]?.value, let title = record.row["title"]?.value else { return nil }
+      return .init(content: content, title: title, folderID: record.row["folder_id"]?.value,
+                   origin: record.origin, clock: record.clock, vector: record.vector)
+    }
+    guard versions.count == ordered.count, let merged = NoteSync.merge(versions), let winner = ordered.first else { return nil }
+    var row = completedWinner(winner, among: members, table: table).row
+    row["content"] = .init(type: "text", value: merged.content)
+    row["title"] = .init(type: "text", value: merged.title)
+    row["folder_id"] = merged.folderID.map { .init(type: "text", value: $0) } ?? .init(type: "null")
+    if table.columns.contains("snippet") { row["snippet"] = .init(type: "text", value: Self.noteSnippet(merged.content)) }
+    if let latest = ordered.compactMap({ $0.row["updated_at"]?.value }).max() { row["updated_at"] = .init(type: "text", value: latest) }
+    return winner.with(row: row, deleted: false)
   }
 
   /// Whether applying `record` removes its row outright.

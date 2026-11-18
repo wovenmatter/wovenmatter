@@ -2,7 +2,7 @@
 
 On macOS, files open as read-only tabs in the existing notes/browser asset pane.
 This includes composer uploads, sent attachments, file handbacks from agents,
-Library files/photos, and Saved Artifacts. Client Library downloads use the same
+Library files/photos, and Saved Assets. Client Library downloads use the same
 pane. Web links keep their existing behavior.
 
 The preview uses the macOS Quick Look renderer. Common documents, spreadsheets,

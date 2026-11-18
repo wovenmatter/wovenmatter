@@ -14,8 +14,8 @@ public struct WorkspaceAssetTabs: Equatable, Sendable {
       }
     }
   }
-  public static let maximumNotes = 4
-  public static let maximumBrowsers = 8
+  public static let maximumNotes = 10
+  public static let maximumBrowsers = 10
   public static let maximumDocuments = 8
   public private(set) var tabs: [Tab] = []
   public private(set) var selected: Tab?
@@ -52,9 +52,9 @@ public struct WorkspaceAssetTabs: Equatable, Sendable {
     case notes, browsers, documents
     public var errorDescription: String? {
       switch self {
-      case .notes: "You have 4 note tabs open. Close a note tab before opening another."
-      case .documents: "You have 8 document tabs open. Close a document tab before opening another."
-      case .browsers: "You have 8 browser tabs open. Close a browser tab before opening another."
+      case .notes: "You have \(WorkspaceAssetTabs.maximumNotes) artifacts open. Close one before opening another."
+      case .documents: "You have \(WorkspaceAssetTabs.maximumDocuments) document tabs open. Close a document tab before opening another."
+      case .browsers: "You have \(WorkspaceAssetTabs.maximumBrowsers) browser tabs open. Close a browser tab before opening another."
       }
     }
   }

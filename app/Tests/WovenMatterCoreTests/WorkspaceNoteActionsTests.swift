@@ -6,6 +6,25 @@ import WovenMatterCore
 @Suite("Note menu revisions, retention and export")
 struct WorkspaceNoteActionsTests {
 
+  @Test func canvasPersistsLayoutAndExportsWithoutFlatteningReferences() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let target = try await f.db.createNote(folderID: nil, title: "Research")
+    let block = NoteRichTextBlock(text: "Research")
+    let document = NoteDocument(kind: .canvas, blocks: [.richText(block)],
+      canvas: [block.id: .init(x: 800, y: 240, width: 720, height: 500, assetID: target)])
+    let id = try await f.db.createNote(folderID: nil, title: "Planning board", content: document.encoded(), kind: .canvas)
+    let stored = try await f.db.readNoteForEditing(id: id)
+    #expect(stored.document == document)
+    for format in [WorkspaceNoteExportFormat.standard, .document] {
+      let exported = try document.exported(title: "Planning board", format: format)
+      #expect(exported.fileExtension == "json")
+      #expect(try JSONDecoder().decode(NoteDocument.self, from: exported.data) == document)
+    }
+    let revision = try await f.db.noteActionRevision(id: id)
+    _ = try await f.db.mutateNote(id: id, mutation: .moveToTrash, expectedRevision: revision)
+    #expect(try await f.db.readNoteForEditing(id: target).title == "Research")
+  }
+
   @Test func nestedListsPersistAndStaleMenuActionsCannotOverwriteTheirNewRevision() async throws {
     let f = try await Fixture(); defer { f.close() }
     let parent = NoteTextList(id: "parent-list", markerFormat: "{decimal}.", startingItemNumber: 5)

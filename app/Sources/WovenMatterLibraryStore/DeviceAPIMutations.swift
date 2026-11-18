@@ -96,12 +96,14 @@ extension WorkspaceDatabaseConnection {
       do {
         let document = try NoteDocument.editableDocument(from: content)
         guard libraryEditableArtifact(document) else { return result(.invalid, "Linked database content is read-only on clients.") }
+        guard clientPageFits(document, content: content) else { return result(.invalid, Self.clientPageTooLarge) }
       } catch { return result(.invalid, error.localizedDescription) }
       if let folderID = request.folderID, try libraryFolderUnlocked(id: folderID) == nil {
         return result(.notFound, "The destination folder does not exist. Sync its creation first or choose another folder.")
       }
       try toolsExecuteUnlocked("INSERT INTO notes(id, folder_id, title, content, snippet, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-        [request.resourceID, request.folderID, title, content, Self.noteSnippet(content), now, now])
+        [request.resourceID, request.folderID, title,
+         try syncedNoteContentUnlocked(id: request.resourceID, content: content, title: title, folderID: .some(request.folderID)), Self.noteSnippet(content), now, now])
       try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     case .updateNote, .deleteNote:
@@ -122,6 +124,7 @@ extension WorkspaceDatabaseConnection {
           guard previous.kind == replacement.kind, libraryEditableArtifact(previous), libraryEditableArtifact(replacement) else {
             return result(.invalid, "Preserve the document kind; linked database content is read-only on clients.")
           }
+          guard clientPageFits(replacement, content: content, previous: note.content) else { return result(.invalid, Self.clientPageTooLarge, note: note) }
         } catch { return result(.invalid, error.localizedDescription, note: note) }
       }
       if let folderID = request.folderID, try libraryFolderUnlocked(id: folderID) == nil {
@@ -129,11 +132,21 @@ extension WorkspaceDatabaseConnection {
       }
       try checkpointNoteUnlocked(id: request.resourceID, source: "before-device-edit", force: true)
       let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
-      try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID])
+      try toolsExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [title, try syncedNoteContentUnlocked(id: request.resourceID, content: content, title: title, folderID: .some(request.folderID)),
+        Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID])
       try checkpointNoteUnlocked(id: request.resourceID, source: "device", force: true)
       return try result(.accepted, note: libraryNoteUnlocked(id: request.resourceID))
     }
   }
+
+  /// A Page edited on a phone must stay within the size every other writer,
+  /// including agents, can still change. One already over it (after a merge)
+  /// may still shrink.
+  private func clientPageFits(_ document: NoteDocument, content: String, previous: String? = nil) -> Bool {
+    let size = content.utf8.count
+    return document.kind != .canvas || size <= NoteDocument.maximumBoardBytes || size < (previous?.utf8.count ?? 0)
+  }
+  private static let clientPageTooLarge = "This Page is too large to save. Move some content into a linked note."
 
   private func libraryEditableArtifact(_ document: NoteDocument) -> Bool {
     document.databaseLink == nil && document.blocks.allSatisfy { block in

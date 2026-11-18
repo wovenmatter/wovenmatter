@@ -71,7 +71,7 @@ public enum DevicePublisherAPI {
       let value = try JSONDecoder().decode(LibraryArtifactCommit.self, from: request.body)
       guard let id = try await database.libraryArtifactTransfer(id: value.id)?.manifest.workspaceID else { return .error("not_found", "Register this artifact first.", status: 404) }
       return try .json(try await database.commitLibraryArtifact(value, deviceID: try await workspace(id).executionDeviceID ?? ""))
-    default: return .error("not_found", "This publisher can submit workspace history and saved artifacts only.", status: 404)
+    default: return .error("not_found", "This publisher can submit workspace history and saved assets only.", status: 404)
     }
   }
 }

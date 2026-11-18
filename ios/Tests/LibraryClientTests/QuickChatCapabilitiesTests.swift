@@ -16,6 +16,17 @@ final class QuickChatCapabilitiesTests: XCTestCase {
     XCTAssertFalse(QuickChatCapabilities.enabled("web_search", selection: []))
   }
 
+  func testQuickChatCanReadAndEditPagesWithTheNotesGrant() {
+    let pages = ["woven_pages_list", "woven_pages_read", "woven_pages_create", "woven_pages_update", "woven_pages_add_component",
+                 "woven_pages_update_component", "woven_pages_move_component", "woven_pages_remove_component",
+                 "woven_pages_link_session", "woven_pages_unlink_session"]
+    for name in pages {
+      XCTAssertTrue(QuickChatCapabilities.toolNames.contains(name), name)
+      XCTAssertTrue(QuickChatCapabilities.enabled(name, selection: ["woven_notes"]), name)
+      XCTAssertFalse(QuickChatCapabilities.enabled(name, selection: ["woven_timers"]), name)
+    }
+  }
+
   func testTimersCalendarAndClockStayInsideTheBoundary() {
     for name in ["woven_timers_create", "woven_timers_list", "woven_timers_remove", "woven_calendar_create", "woven_calendar_list", "clock", "ask_user"] {
       XCTAssertTrue(QuickChatCapabilities.toolNames.contains(name), name)

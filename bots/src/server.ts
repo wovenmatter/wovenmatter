@@ -512,10 +512,15 @@ class Connection {
       case "message.send": {
         const target = await manager.get(request.botId);
         this.#server.onActivity?.(request.botId);
+        if (request.newThread && request.conversationId !== undefined) {
+          throw new Error("invalid request: newThread cannot name a conversation");
+        }
         const submit = async () => {
+          const started = request.newThread ? await target.startThread() : undefined;
+          if (started) this.#server.threadsChanged(request.botId);
           const { conversation, submission } = await target.send(
             request.text,
-            request.conversationId,
+            started?.conversationId ?? request.conversationId,
             0,
             request.context,
           );

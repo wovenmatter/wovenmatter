@@ -145,10 +145,12 @@ extension WorkspaceDatabaseConnection {
     let code = sqlite3_step(statement)
     if code == SQLITE_DONE { return nil }
     guard code == SQLITE_ROW else { throw stepError() }
+    // Devices see the document; synchronization clocks stay in this store.
+    let content = NoteSync.strip(try text(statement, column: 3))
     return try LibraryNote(id: text(statement, column: 0), folderID: optionalText(statement, column: 1),
-                             title: text(statement, column: 2), content: text(statement, column: 3),
+                             title: text(statement, column: 2), content: content,
                              revision: libraryVersionUnlocked(kind: "note", id: id)?.revision ?? 1,
-                             updatedAt: text(statement, column: 4), kind: libraryNoteKind(content: text(statement, column: 3)), isPinned: sqlite3_column_int(statement, 5) != 0)
+                             updatedAt: text(statement, column: 4), kind: libraryNoteKind(content: content), isPinned: sqlite3_column_int(statement, 5) != 0)
   }
 
   func libraryBudgetedNote(_ note: LibraryNote, remainingBytes: inout Int) -> LibraryNote {

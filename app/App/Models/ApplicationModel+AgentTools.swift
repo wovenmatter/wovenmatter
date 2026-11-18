@@ -78,6 +78,7 @@ extension ApplicationModel {
     }
 
     func startAgentToolRuntime() {
+        startPageTaskDispatch()
         toolRuntimeTask?.cancel()
         toolRuntimeTask = Task { [weak self] in
             while !Task.isCancelled {

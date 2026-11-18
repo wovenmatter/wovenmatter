@@ -159,7 +159,7 @@ The composer has a Tools menu with independent groups:
 
 | Group | MCP tools and contract |
 | --- | --- |
-| Notes and managed data | `woven_notes_*`, `woven_databases_*`: discover, read, create and edit notes, spreadsheets, HTML and workspace-owned SQLite datasets; retained note versions |
+| Notes and managed data | `woven_notes_*`, `woven_pages_*`, `woven_databases_*`: discover, read, create and edit Notes, Sheets, Artifacts, Pages and workspace-owned SQLite datasets; retained asset versions |
 | Conversation history | `woven_history_*`: search and selectively read conversations and full observed traces |
 | Session management | `woven_sessions_*`: discover metadata, create sessions, send messages and manage coordination |
 | Goals | `woven_goals_*`: inspect and maintain the calling conversation's explicitly requested objective |
@@ -176,6 +176,39 @@ and Executor initially default to disabled; the other selectable groups default
 to enabled. Settings → Woven MCP defines defaults for new conversations. Session
 controls change only that conversation. Calendar defaults to Full access, with
 Read only configurable in General. Usage is always read-only.
+
+## Pages and Artifacts
+
+Pages are flowing documents with nested sections, tasks, tables and links to
+original assets. `woven_pages_*` covers `list`, `create`, `read`, `update`,
+`add_component`, `update_component`, `move_component`, `remove_component`,
+`link_session` and `unlink_session`. The same tools run on a Mac, a Linux library
+host, and in Quick Chat on iPhone and iPad. Component revisions protect focused
+patches on one host or device, and a section's `subtreeRevision` guards removing
+everything in it. Moving keeps content and revisions, and removing a link never
+deletes the original. Changes made at the same time on other Macs, Linux hosts,
+iPhones or iPads merge component by component when they sync; a component two
+writers changed keeps the other version beside it as a `conflict-` component
+marked for review. Page text never grants authorization. An older spatial Board
+migrates to a Page on its first write; its sections become nested sections, and its
+connections stay readable through `includeLayout`. Agent tools cannot edit layout,
+and `woven_notes_apply` refuses Page component operations; use `woven_pages_*`.
+See [Pages workflows, tools, and sharing limits](PAGES.md).
+
+Artifacts keep what people enter. A saved Artifact's scripts use
+`window.wovenArtifact` (`get`, `getAll`, `set`, `remove`, `flush`, `retry`,
+`subscribe`, `ready`) for JSON app state under `app:` keys. Form controls save
+automatically under `form:` keys by `data-woven-key`, then `id`, then `name`.
+`data-woven-persist="false"` opts a control out, and password, file and hidden
+inputs are never saved. State lives in the Artifact's own document, so history and
+replication cover it. Each key has its own version: `woven_notes_artifact_state`
+reads `{values, versions}`, and `woven_notes_artifact_state_edit` applies keyed
+compare-and-swap edits under the Notes permission without a document revision.
+These edits never touch the HTML, and `woven_notes_set_html` never touches state.
+Limits are 256 live keys, 64 KiB per value and 256 KiB in total. Agents changing an
+Artifact's code keep control identifiers and state keys stable. On a device without
+the host connection, a state edit saves locally and merges key by key with
+concurrent changes when it syncs.
 
 ## Visual replies
 
@@ -415,7 +448,7 @@ history remains readable without reintroducing its execution integration. Exclud
 coverage for older data; never invent unobserved historical frames.
 
 Use the existing workspace database with transactional migrations and bounded
-reads. Note versions cover notes, spreadsheets and HTML, with before/after agent
+reads. Note versions cover Notes, Sheets, Artifacts and Pages, with before/after agent
 edits, coalesced editor checkpoints, conflict-safe restore and count/byte budgets.
 Do not version externally linked data files. Reference retention remains separate
 from event journal retention and should be described honestly.

@@ -12,6 +12,9 @@ private extension NSAttributedString.Key {
     static let noteCellID = Self("wovenmatter.note.cell-id")
     static let noteDatabaseLink = Self("wovenmatter.note.database-link")
     static let noteDatabaseValueID = Self("wovenmatter.note.database-value-id")
+    static let notePageItem = Self("wovenmatter.note.page-item")
+    static let notePageItemID = Self("wovenmatter.note.page-item-id")
+    static let noteTableDefinition = Self("wovenmatter.note.table-definition")
 }
 
 struct NoteTextStatistics: Equatable {
@@ -34,6 +37,7 @@ struct NoteTextStatistics: Equatable {
 @Observable
 final class NoteEditorController {
     @ObservationIgnored weak var textView: NSTextView?
+    @ObservationIgnored weak var boundDictationEditor: DictationEditor?
     @ObservationIgnored private var document = NoteDocument()
     @ObservationIgnored private var onChange: ((NoteDocument) -> Void)?
     @ObservationIgnored private var documentText: NSAttributedString?
@@ -81,7 +85,17 @@ final class NoteEditorController {
     func unbind(_ textView: NSTextView) {
         guard self.textView === textView else { return }
         removeUndoObservers()
-        textView.undoManager?.removeAllActions()
+        if let manager = textView.undoManager {
+            if (textView as? NoteTextView)?.sharedUndoManager === manager {
+                // Page flows share one history. Closing one flow, such as by
+                // collapsing its section, keeps the other flows' undo.
+                manager.removeAllActions(withTarget: textView)
+                textView.textStorage.map { manager.removeAllActions(withTarget: $0) }
+                manager.removeAllActions(withTarget: self)
+            } else {
+                manager.removeAllActions()
+            }
+        }
         self.textView = nil
         documentText = nil
         onChange = nil
@@ -143,6 +157,32 @@ final class NoteEditorController {
     func toggleItalic() { toggleFontTrait(.italicFontMask) }
     func toggleUnderline() { textView?.underline(nil) }
 
+    var selectedBlockID: String? {
+        guard let textView, let storage = textView.textStorage, storage.length > 0 else { return nil }
+        let attributes = storage.attributes(at: min(textView.selectedRange().location, storage.length - 1), effectiveRange: nil)
+        return attributes[.noteBlockID] as? String ?? attributes[.noteTableID] as? String
+    }
+
+    func focus(blockID: String? = nil, atEnd: Bool = false) {
+        guard let textView else { return }
+        textView.window?.makeFirstResponder(textView)
+        if let blockID, let storage = textView.textStorage {
+            var target: NSRange?
+            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { attributes, range, stop in
+                if (attributes[.noteBlockID] as? String ?? attributes[.noteTableID] as? String) == blockID {
+                    if let previous = target { target = NSUnionRange(previous, range) } else { target = range }
+                } else if target != nil { stop.pointee = true }
+            }
+            if let target {
+                let location = atEnd ? max(target.location, NSMaxRange(target) - 1) : target.location
+                textView.setSelectedRange(NSRange(location: location, length: 0))
+                textView.scrollRangeToVisible(textView.selectedRange())
+                return
+            }
+        }
+        if atEnd { textView.setSelectedRange(NSRange(location: max(0, textView.string.utf16.count - 1), length: 0)) }
+    }
+
     func setFontFamily(_ family: String) {
         applyFont { font in
             NSFontManager.shared.convert(font, toFamily: family)
@@ -167,7 +207,7 @@ final class NoteEditorController {
             // including when the caret is past the document's final newline.
             if range.length == 0 {
                 var attributes = textView.typingAttributes
-                for key in [NSAttributedString.Key.noteTableID, .noteRowID, .noteColumnID, .noteCellID] {
+                for key in [NSAttributedString.Key.noteTableID, .noteRowID, .noteColumnID, .noteCellID, .noteTableDefinition] {
                     attributes.removeValue(forKey: key)
                 }
                 attributes[.noteBlockID] = UUID().uuidString.lowercased()
@@ -459,11 +499,23 @@ struct NoteEditor: NSViewRepresentable {
     let controller: NoteEditorController
     var dictationEditor: DictationEditor? = nil
     var dictationIdentity = ""
+    /// Layout only: grow to the text's height and pass scrolling to the parent.
+    var sizesToContent = false
+    /// Page flow editing: task metadata and checkboxes, one component per
+    /// paragraph on Enter, and undo fenced at incoming changes. Only Page text
+    /// flows set this; an embedded original Note keeps ordinary Notes editing.
+    var editsPageFlow = false
+    var onFocus: ((NoteEditorController) -> Void)?
+    var onSynchronize: (() -> Void)?
+    var sharedUndoManager: UndoManager?
+    /// Items placed first in the text view's right-click menu.
+    var contextMenuItems: (() -> [NSMenuItem])?
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = NoteDocumentScrollView()
+        scrollView.passesScrollingToParent = sizesToContent
         scrollView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = false
@@ -471,6 +523,9 @@ struct NoteEditor: NSViewRepresentable {
         scrollView.borderType = .noBorder
 
         let textView = NoteTextView(usingTextLayoutManager: true)
+        textView.sharedUndoManager = sharedUndoManager
+        textView.contextMenuItems = contextMenuItems
+        textView.tableActions = isEnabled ? NoteTableActions(controller: controller) : nil
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = true
@@ -484,7 +539,9 @@ struct NoteEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainerInset = NSSize(width: 0, height: 8)
+        textView.textContainerInset = NSSize(width: editsPageFlow ? 24 : 0, height: 8)
+        textView.showsPageTasks = editsPageFlow
+        textView.onToggleTask = { [weak coordinator = context.coordinator] id in coordinator?.toggleTask(id) }
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(
             width: 0,
@@ -494,10 +551,24 @@ struct NoteEditor: NSViewRepresentable {
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
         scrollView.documentView = textView
         context.coordinator.bind(textView)
+        controller.boundDictationEditor = dictationEditor
         textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
                            types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
         dictationEditor?.bind(textView, identity: dictationIdentity)
         return scrollView
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        // Measure with TextKit 2. Reading `layoutManager` would permanently
+        // switch the view to TextKit 1 and stop the highlight drawing.
+        guard sizesToContent, let textView = nsView.documentView as? NSTextView,
+              let container = textView.textContainer, let manager = textView.textLayoutManager else { return nil }
+        let width = max(80, proposal.width ?? max(80, nsView.frame.width))
+        textView.setFrameSize(NSSize(width: width, height: max(40, textView.frame.height)))
+        container.containerSize = NSSize(width: max(20, width - textView.textContainerInset.width * 2),
+                                         height: .greatestFiniteMagnitude)
+        manager.ensureLayout(for: manager.documentRange)
+        return CGSize(width: width, height: max(40, ceil(manager.usageBoundsForTextContainer.maxY + textView.textContainerInset.height * 2)))
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -509,10 +580,13 @@ struct NoteEditor: NSViewRepresentable {
         }
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.isEditable = isEnabled
+        (textView as? NoteTextView)?.contextMenuItems = contextMenuItems
+        (textView as? NoteTextView)?.tableActions = isEnabled ? NoteTableActions(controller: controller) : nil
         dictationEditor?.bind(textView, identity: dictationIdentity)
         controller.bind(textView: textView, document: document) { updated in
             context.coordinator.emit(updated)
         }
+        controller.boundDictationEditor = dictationEditor
         guard document != context.coordinator.lastDocument else { return }
         context.coordinator.apply(document, to: textView)
     }
@@ -529,6 +603,7 @@ struct NoteEditor: NSViewRepresentable {
         var parent: NoteEditor
         var lastDocument: NoteDocument
         private var applying = false
+        private var synchronizedText: NSAttributedString?
 
         init(parent: NoteEditor) {
             self.parent = parent
@@ -540,15 +615,34 @@ struct NoteEditor: NSViewRepresentable {
                 self?.emit($0)
             }
             restoreTypingAttributes(in: textView)
+            synchronizedText = NSAttributedString(attributedString: textView.attributedString())
+            parent.onSynchronize?()
         }
 
         func apply(_ document: NoteDocument, to textView: NSTextView) {
+            if parent.editsPageFlow, document != lastDocument, Self.flowText(lastDocument) == Self.flowText(document) {
+                // Only task fields changed. The text is unchanged, so keep
+                // its undo history and refresh the stored task metadata in place.
+                applying = true
+                synchronizePageAttributes(document, in: textView)
+                lastDocument = document
+                parent.controller.adopt(document)
+                synchronizedText = NSAttributedString(attributedString: textView.attributedString())
+                applying = false
+                return
+            }
             applying = true
             let previous = lastDocument
-            textView.undoManager?.registerUndo(withTarget: parent.controller) { controller in
-                controller.replaceDocument(previous, action: "Agent Edit")
+            if parent.editsPageFlow {
+                // A focused Page flow must never undo a snapshot over incoming
+                // agent/component work. Native typing keeps its ordinary undo.
+                textView.undoManager?.removeAllActions()
+            } else {
+                textView.undoManager?.registerUndo(withTarget: parent.controller) { controller in
+                    controller.replaceDocument(previous, action: "Agent Edit")
+                }
+                textView.undoManager?.setActionName("Agent Edit")
             }
-            textView.undoManager?.setActionName("Agent Edit")
             let rendered = NoteAttributedDocument.render(document)
             let selection = NoteAttributedDocument.selectionAfterRefreshingValues(
                 textView.selectedRange(), from: textView.attributedString(), to: rendered
@@ -559,20 +653,119 @@ struct NoteEditor: NSViewRepresentable {
             restoreTypingAttributes(in: textView)
             lastDocument = document
             parent.controller.adopt(document)
+            synchronizedText = NSAttributedString(attributedString: textView.attributedString())
             textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
                                types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
             applying = false
+            parent.onSynchronize?()
         }
 
-        func emit(_ document: NoteDocument) {
+        /// What a Page flow shows: its blocks and each task's checkbox. Other
+        /// fields belong to the task and never change the text.
+        private static func flowText(_ document: NoteDocument) -> NoteDocument {
+            var value = document
+            let items = (document.boardItems ?? [:])
+                .mapValues { BoardItem(task: $0.task.map { BoardTask(status: $0.status) }) }
+                .filter { $0.value != BoardItem() }
+            value.boardItems = items.isEmpty ? nil : items
+            return value
+        }
+
+        func emit(_ proposed: NoteDocument) {
+            var document = proposed
+            if parent.editsPageFlow, let before = synchronizedText, let view = parent.controller.textView {
+                let after = view.attributedString()
+                let originals = Dictionary(lastDocument.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                for index in document.blocks.indices {
+                    let block = document.blocks[index]
+                    guard let original = originals[block.id],
+                          let oldRange = range(of: original, in: before), let newRange = range(of: block, in: after) else { continue }
+                    let oldText = NSMutableAttributedString(attributedString: before.attributedSubstring(from: oldRange))
+                    let newText = NSMutableAttributedString(attributedString: after.attributedSubstring(from: newRange))
+                    oldText.removeAttribute(.notePageItem, range: NSRange(location: 0, length: oldText.length))
+                    newText.removeAttribute(.notePageItem, range: NSRange(location: 0, length: newText.length))
+                    // Parsing adds explicit native defaults. An untouched block
+                    // must keep its exact original runs, or an unrelated agent
+                    // edit can look like a conflicting local formatting change.
+                    if oldText.isEqual(to: newText) { document.blocks[index] = original }
+                }
+                synchronizePageAttributes(document, in: view)
+                synchronizedText = NSAttributedString(attributedString: view.attributedString())
+            }
             lastDocument = document
             parent.controller.adopt(document)
             parent.document = document
         }
 
+        private func range(of block: NoteBlock, in text: NSAttributedString) -> NSRange? {
+            let key: NSAttributedString.Key
+            if case .table = block { key = .noteTableID } else { key = .noteBlockID }
+            var found: NSRange?
+            text.enumerateAttribute(key, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                guard value as? String == block.id else { return }
+                if let previous = found { found = NSUnionRange(previous, range) } else { found = range }
+            }
+            return found
+        }
+
+        private func synchronizePageAttributes(_ document: NoteDocument, in view: NSTextView) {
+            guard let storage = view.textStorage, storage.length > 0 else { return }
+            let string = storage.string as NSString
+            var offset = 0, index = 0
+            var tables = Set<String>()
+            storage.beginEditing()
+            while offset < storage.length {
+                let range = string.paragraphRange(for: NSRange(location: offset, length: 0))
+                let attributes = storage.attributes(at: offset, effectiveRange: nil)
+                let block: NoteBlock
+                if let tableID = attributes[.noteTableID] as? String {
+                    guard let table = document.blocks.first(where: { $0.id == tableID }) else { break }
+                    block = table
+                    if tables.insert(tableID).inserted { index += 1 }
+                } else {
+                    guard index < document.blocks.count else { break }
+                    block = document.blocks[index]
+                    index += 1
+                    storage.addAttribute(.noteBlockID, value: block.id, range: range)
+                }
+                if let item = document.boardItems?[block.id], let encoded = try? JSONEncoder().encode(item) {
+                    storage.addAttributes([.notePageItem: encoded, .notePageItemID: block.id], range: range)
+                } else {
+                    storage.removeAttribute(.notePageItem, range: range)
+                    storage.removeAttribute(.notePageItemID, range: range)
+                }
+                if case .table(let table) = block, let encoded = try? JSONEncoder().encode(table) {
+                    storage.addAttribute(.noteTableDefinition, value: encoded, range: range)
+                }
+                guard range.length > 0 else { break }
+                offset = NSMaxRange(range)
+            }
+            storage.endEditing()
+            restoreTypingAttributes(in: view)
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !applying, let textView = notification.object as? NSTextView else { return }
             emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
+        }
+
+        func toggleTask(_ id: String) {
+            guard parent.editsPageFlow, let textView = parent.controller.textView, textView.isEditable,
+                  let storage = textView.textStorage else { return }
+            parent.controller.performEdit(action: "Toggle Task") {
+                var changes: [(NSRange, Data)] = []
+                storage.enumerateAttribute(.notePageItem, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                    let attributes = storage.attributes(at: range.location, effectiveRange: nil)
+                    guard (attributes[.noteBlockID] as? String ?? attributes[.noteTableID] as? String) == id,
+                          let data = value as? Data, var item = try? JSONDecoder().decode(BoardItem.self, from: data),
+                          item.task != nil else { return }
+                    let nextStatus: BoardTaskStatus = item.task?.status == .done ? .todo : .done
+                    item.task?.status = nextStatus
+                    if let encoded = try? JSONEncoder().encode(item) { changes.append((range, encoded)) }
+                }
+                for (range, data) in changes { storage.addAttribute(.notePageItem, value: data, range: range) }
+                textView.didChangeText()
+            }
         }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
@@ -642,10 +835,56 @@ struct NoteEditor: NSViewRepresentable {
             let attributes = range.length > 0
                 ? textView.textStorage?.attributes(at: range.location, effectiveRange: nil) ?? [:]
                 : textView.typingAttributes
+            let isEmpty = string.substring(with: range).trimmingCharacters(in: .newlines).isEmpty
+            if parent.editsPageFlow, isEmpty,
+               commandSelector == #selector(NSTextView.insertNewline(_:)) || commandSelector == #selector(NSTextView.deleteBackward(_:)),
+               let data = attributes[.notePageItem] as? Data,
+               var item = try? JSONDecoder().decode(BoardItem.self, from: data), item.task != nil {
+                parent.controller.performEdit(action: "End Task List") {
+                    item.task = nil
+                    if let updated = try? JSONEncoder().encode(item) {
+                        textView.textStorage?.addAttribute(.notePageItem, value: updated, range: range)
+                        textView.typingAttributes[.notePageItem] = updated
+                        textView.didChangeText()
+                    }
+                }
+                return true
+            }
+            if parent.editsPageFlow, attributes[.noteTableID] == nil {
+                let pageStyle = (attributes[.noteBlockStyle] as? String).flatMap(NoteParagraphStyle.init(rawValue:)) ?? .paragraph
+                if isEmpty, pageStyle.isList,
+                   commandSelector == #selector(NSTextView.insertNewline(_:)) || commandSelector == #selector(NSTextView.deleteBackward(_:)) {
+                    parent.controller.setParagraphStyle(.paragraph)
+                    return true
+                }
+                if commandSelector == #selector(NSTextView.insertNewline(_:)) {
+                    parent.controller.performEdit(action: "New Paragraph") {
+                        applying = true
+                        let newID = UUID().uuidString.lowercased()
+                        if selection.location == range.location {
+                            var inserted = textView.typingAttributes
+                            inserted[.noteBlockID] = newID
+                            if let data = attributes[.notePageItem] as? Data,
+                               let item = try? JSONDecoder().decode(BoardItem.self, from: data), item.task != nil,
+                               let fresh = try? JSONEncoder().encode(BoardItem(task: BoardTask())) {
+                                inserted[.notePageItem] = fresh; inserted[.notePageItemID] = newID
+                            } else {
+                                inserted.removeValue(forKey: .notePageItem); inserted.removeValue(forKey: .notePageItemID)
+                            }
+                            textView.insertText(NSAttributedString(string: "\n", attributes: inserted), replacementRange: selection)
+                        } else {
+                            textView.insertText("\n", replacementRange: selection)
+                            parent.controller.setParagraphStyle(pageStyle, blockID: newID)
+                        }
+                        applying = false
+                        emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
+                    }
+                    return true
+                }
+            }
             guard attributes[.noteTableID] == nil,
                   let rawStyle = attributes[.noteBlockStyle] as? String,
                   let style = NoteParagraphStyle(rawValue: rawStyle), style.isList else { return false }
-            let isEmpty = string.substring(with: range).trimmingCharacters(in: .newlines).isEmpty
             if isEmpty && (commandSelector == #selector(NSTextView.insertNewline(_:))
                 || (commandSelector == #selector(NSTextView.deleteBackward(_:)) && selection.location == range.location)) {
                 parent.controller.setParagraphStyle(.paragraph)
@@ -665,6 +904,7 @@ struct NoteEditor: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !applying, let textView = notification.object as? NSTextView else { return }
             restoreTypingAttributes(in: textView)
+            if textView.window?.firstResponder === textView { parent.onFocus?(parent.controller) }
         }
 
         private func restoreTypingAttributes(in textView: NSTextView) {
@@ -680,18 +920,50 @@ struct NoteEditor: NSViewRepresentable {
         }
 
         func textDidBeginEditing(_ notification: Notification) {
+            parent.onFocus?(parent.controller)
             if let editor = parent.dictationEditor { DictationModel.shared.activeEditor = editor }
         }
     }
 }
 
+private final class NoteDocumentScrollView: NSScrollView {
+    var passesScrollingToParent = false
+    override func scrollWheel(with event: NSEvent) {
+        if passesScrollingToParent { nextResponder?.scrollWheel(with: event) }
+        else { super.scrollWheel(with: event) }
+    }
+}
+
+/// Table changes a note's text view offers in its menu and at a table's edges.
+struct NoteTableActions {
+    var addRow: () -> Void
+    var addColumn: () -> Void
+    var removeRow: () -> Void
+    var removeColumn: () -> Void
+    var deleteTable: () -> Void
+
+    @MainActor init(controller: NoteEditorController) {
+        addRow = { [weak controller] in controller?.addTableRow() }
+        addColumn = { [weak controller] in controller?.addTableColumn() }
+        removeRow = { [weak controller] in controller?.removeTableRow() }
+        removeColumn = { [weak controller] in controller?.removeTableColumn() }
+        deleteTable = { [weak controller] in controller?.deleteTable() }
+    }
+}
+
 private final class NoteTextView: NSTextView {
+    var sharedUndoManager: UndoManager?
+    var showsPageTasks = false
+    var onToggleTask: ((String) -> Void)?
+    var contextMenuItems: (() -> [NSMenuItem])?
+    private var taskRegions: [(String, NSRect)] = []
+    private var taskElements: [PageTaskAccessibilityElement] = []
     // Each note owns its editing history; the window's title fields and other
     // editors must not become targets of these toolbar actions.
     private let noteUndoManager = UndoManager()
     private var standardLinkTextAttributes: [NSAttributedString.Key: Any]?
     private var didCaptureStandardLinkTextAttributes = false
-    override var undoManager: UndoManager? { noteUndoManager }
+    override var undoManager: UndoManager? { sharedUndoManager ?? noteUndoManager }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard let attributed = insertString as? NSAttributedString else {
@@ -710,22 +982,130 @@ private final class NoteTextView: NSTextView {
         super.insertText(copy, replacementRange: replacementRange)
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        guard isEditable, contextMenuItems != nil || tableActions != nil else { return menu }
+        // Additions land at the clicked place unless it is inside the selection.
+        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        if !NSLocationInRange(index, selectedRange()) || selectedRange().length == 0 {
+            setSelectedRange(NSRange(location: index, length: 0))
+        }
+        var items = contextMenuItems?() ?? []
+        if let tableActions, let storage = textStorage, storage.length > 0,
+           storage.attribute(.noteTableID, at: min(selectedRange().location, storage.length - 1), effectiveRange: nil) != nil {
+            items = [ClosureMenuItem("Insert Row Below", handler: tableActions.addRow),
+                     ClosureMenuItem("Insert Column Right", handler: tableActions.addColumn),
+                     ClosureMenuItem("Delete Row", handler: tableActions.removeRow),
+                     ClosureMenuItem("Delete Column", handler: tableActions.removeColumn),
+                     ClosureMenuItem("Delete Table", handler: tableActions.deleteTable),
+                     .separator()] + items
+        }
+        guard !items.isEmpty else { return menu }
+        let result = menu ?? NSMenu()
+        result.insertItem(.separator(), at: 0)
+        for item in items.reversed() { result.insertItem(item, at: 0) }
+        return result
+    }
+
+    // MARK: Growing a table from its edges
+
+    /// The editor's table changes, which act on the table holding the selection.
+    var tableActions: NoteTableActions?
+    private lazy var addColumnButton = tableEdgeButton("Add column", action: #selector(addColumnAtEdge))
+    private lazy var addRowButton = tableEdgeButton("Add row", action: #selector(addRowAtEdge))
+    private var hoveredTableEnd: Int?
+
+    private func tableEdgeButton(_ label: String, action: Selector) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: "plus.circle.fill", accessibilityDescription: label) ?? NSImage(),
+                              target: self, action: action)
+        button.isBordered = false
+        button.contentTintColor = .secondaryLabelColor
+        button.toolTip = label
+        button.setAccessibilityLabel(label)
+        button.frame = NSRect(x: 0, y: 0, width: 18, height: 18)
+        button.isHidden = true
+        addSubview(button)
+        return button
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard !trackingAreas.contains(where: { $0.userInfo?["noteTables"] != nil }) else { return }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: ["noteTables": true]))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        showTableEdges(near: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        showTableEdges(near: nil)
+    }
+
+    /// Shows the edge buttons of the table under the pointer: one beside its
+    /// right edge for a column, one under its bottom edge for a row.
+    private func showTableEdges(near point: NSPoint?) {
+        guard isEditable, tableActions != nil, let point, let storage = textStorage, let window, storage.length > 0 else {
+            addColumnButton.isHidden = true; addRowButton.isHidden = true; hoveredTableEnd = nil
+            return
+        }
+        var tables: [NSRange] = []
+        storage.enumerateAttribute(.noteTableID, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            if value != nil, range.length > 0 { tables.append(range) }
+        }
+        func line(_ location: Int) -> NSRect {
+            convert(window.convertFromScreen(firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)), from: nil)
+        }
+        let left = textContainerOrigin.x
+        let right = left + (textContainer?.size.width ?? bounds.width)
+        var found: (rect: NSRect, end: Int)?
+        for range in tables {
+            let first = line(range.location), last = line(NSMaxRange(range) - 1)
+            let rect = NSRect(x: left, y: min(first.minY, last.minY) - 8, width: right - left,
+                              height: max(first.maxY, last.maxY) - min(first.minY, last.minY) + 16)
+            if rect.insetBy(dx: -28, dy: -24).contains(point) { found = (rect, NSMaxRange(range) - 1); break }
+        }
+        guard let found else {
+            addColumnButton.isHidden = true; addRowButton.isHidden = true; hoveredTableEnd = nil
+            return
+        }
+        hoveredTableEnd = found.end
+        addColumnButton.setFrameOrigin(NSPoint(x: min(found.rect.maxX + 3, bounds.width - 19), y: found.rect.midY - 9))
+        addRowButton.setFrameOrigin(NSPoint(x: found.rect.minX, y: found.rect.maxY - 9))
+        addColumnButton.isHidden = false; addRowButton.isHidden = false
+    }
+
+    /// Edge buttons add after the last row or column.
+    private func selectTableEnd() -> Bool {
+        guard let end = hoveredTableEnd, let storage = textStorage, end < storage.length else { return false }
+        window?.makeFirstResponder(self)
+        setSelectedRange(NSRange(location: end, length: 0))
+        return true
+    }
+
+    @objc private func addColumnAtEdge() { if selectTableEnd() { tableActions?.addColumn() } }
+    @objc private func addRowAtEdge() { if selectTableEnd() { tableActions?.addRow() } }
+
     @objc func undo(_ sender: Any?) {
-        guard isEditable, noteUndoManager.canUndo else { return }
+        guard isEditable, let manager = undoManager, manager.canUndo else { return }
         breakUndoCoalescing()
-        noteUndoManager.undo()
+        manager.undo()
     }
 
     @objc func redo(_ sender: Any?) {
-        guard isEditable, noteUndoManager.canRedo else { return }
+        guard isEditable, let manager = undoManager, manager.canRedo else { return }
         breakUndoCoalescing()
-        noteUndoManager.redo()
+        manager.redo()
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
-        case #selector(undo(_:)): return isEditable && noteUndoManager.canUndo
-        case #selector(redo(_:)): return isEditable && noteUndoManager.canRedo
+        case #selector(undo(_:)): return isEditable && undoManager?.canUndo == true
+        case #selector(redo(_:)): return isEditable && undoManager?.canRedo == true
         default: return super.validateUserInterfaceItem(item)
         }
     }
@@ -755,6 +1135,93 @@ private final class NoteTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         drawHighlights(in: rect)
         super.drawBackground(in: rect)
+        drawPageTasks()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let (id, _) = taskRegions.first(where: { $0.1.insetBy(dx: -4, dy: -4).contains(point) }), isEditable {
+            toggleTask(id)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    @discardableResult fileprivate func toggleTask(_ id: String) -> Bool {
+        guard isEditable, let onToggleTask else { return false }
+        window?.makeFirstResponder(self)
+        if let storage = textStorage {
+            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { values, range, stop in
+                guard (values[.noteBlockID] as? String ?? values[.noteTableID] as? String) == id else { return }
+                setSelectedRange(NSRange(location: range.location, length: 0))
+                stop.pointee = true
+            }
+        }
+        onToggleTask(id)
+        return true
+    }
+
+    /// The checkboxes are drawn, so expose each one to VoiceOver as a checkbox
+    /// that names its task and can be pressed.
+    override func accessibilityChildren() -> [Any]? {
+        let children = super.accessibilityChildren() ?? []
+        return taskElements.isEmpty ? children : children + taskElements
+    }
+
+    private func drawPageTasks() {
+        taskRegions.removeAll()
+        var tasks: [(id: String, label: String, done: Bool, frame: NSRect)] = []
+        defer { updateTaskElements(tasks) }
+        guard showsPageTasks, let storage = textStorage, let window else { return }
+        var drawn = Set<String>()
+        storage.enumerateAttribute(.notePageItem, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            let attributes = storage.attributes(at: range.location, effectiveRange: nil)
+            guard let id = attributes[.noteBlockID] as? String ?? attributes[.noteTableID] as? String,
+                  drawn.insert(id).inserted, let data = value as? Data,
+                  let item = try? JSONDecoder().decode(BoardItem.self, from: data), let task = item.task else { return }
+            let screen = firstRect(forCharacterRange: NSRange(location: range.location, length: 0), actualRange: nil)
+            let line = convert(window.convertFromScreen(screen), from: nil)
+            let frame = NSRect(x: 3, y: line.midY - 6, width: 12, height: 12)
+            taskRegions.append((id, frame))
+            let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
+            let text = (storage.string as NSString).substring(with: paragraph)
+                .replacingOccurrences(of: "\u{2028}", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            tasks.append((id, text.isEmpty ? "Task" : String(text.prefix(120)), task.status == .done, frame))
+            let outline = NSBezierPath(roundedRect: frame, xRadius: 3, yRadius: 3)
+            WovenColors.noteForeground().withAlphaComponent(0.6).setStroke()
+            outline.lineWidth = 1
+            outline.stroke()
+            if task.status == .done {
+                WovenColors.success.setStroke()
+                let check = NSBezierPath()
+                check.move(to: NSPoint(x: frame.minX + 2, y: frame.midY))
+                check.line(to: NSPoint(x: frame.minX + 5, y: frame.maxY - 3))
+                check.line(to: NSPoint(x: frame.maxX - 2, y: frame.minY + 3))
+                check.lineWidth = 1.5
+                check.stroke()
+            }
+        }
+    }
+
+    private func updateTaskElements(_ tasks: [(id: String, label: String, done: Bool, frame: NSRect)]) {
+        let changed = tasks.count != taskElements.count
+            || zip(tasks, taskElements).contains { task, element in
+                task.id != element.taskID || task.label != element.accessibilityLabel()
+                    || task.done != element.isChecked
+            }
+        if changed {
+            taskElements = tasks.map { task in
+                let element = PageTaskAccessibilityElement(taskID: task.id, owner: self)
+                element.setAccessibilityLabel(task.label)
+                element.isChecked = task.done
+                return element
+            }
+        }
+        for (task, element) in zip(tasks, taskElements) {
+            element.setAccessibilityFrameInParentSpace(task.frame.insetBy(dx: -4, dy: -4))
+            element.setAccessibilityEnabled(isEditable)
+        }
+        if changed { NSAccessibility.post(element: self, notification: .layoutChanged) }
     }
 
     private func drawHighlights(in rect: NSRect) {
@@ -789,6 +1256,31 @@ private final class NoteTextView: NSTextView {
     }
 }
 
+/// A drawn Page task checkbox, as VoiceOver sees it.
+private final class PageTaskAccessibilityElement: NSAccessibilityElement {
+    let taskID: String
+    weak var owner: NoteTextView?
+    var isChecked = false {
+        didSet { setAccessibilityValue(NSNumber(value: isChecked ? 1 : 0)) }
+    }
+
+    init(taskID: String, owner: NoteTextView) {
+        self.taskID = taskID
+        self.owner = owner
+        super.init()
+        setAccessibilityRole(.checkBox)
+        setAccessibilityParent(owner)
+        setAccessibilityValue(NSNumber(value: 0))
+        setAccessibilityHelp("Completes or reopens this task.")
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        // Accessibility actions arrive on the main thread.
+        let owner = owner, id = taskID
+        return MainActor.assumeIsolated { owner?.toggleTask(id) ?? false }
+    }
+}
+
 @MainActor
 private enum NoteAttributedDocument {
     static let defaultAttributes: [NSAttributedString.Key: Any] = [
@@ -802,19 +1294,34 @@ private enum NoteAttributedDocument {
         var list: NSTextList?
         var nativeLists: [NoteTextList: NSTextList] = [:]
         for block in document.normalized().blocks {
+            let start = result.length
             switch block {
             case .richText(let richText):
                 var paragraph = paragraphStyle(for: richText.style, list: previousStyle == richText.style ? list : nil)
                 if let formatting = richText.list {
                     paragraph = restoreList(formatting, to: paragraph, lists: &nativeLists)
                 }
-                append(richText, paragraph: paragraph, to: result)
+                var display = richText
+                if document.kind == .canvas {
+                    for index in display.runs.indices {
+                        display.runs[index].text = display.runs[index].text.replacingOccurrences(of: "\n", with: "\u{2028}")
+                    }
+                }
+                append(display, paragraph: paragraph, to: result)
                 previousStyle = richText.style
                 list = paragraph.textLists.first
             case .table(let table):
                 append(table, to: result)
+                if let definition = try? JSONEncoder().encode(table), result.length > start {
+                    result.addAttribute(.noteTableDefinition, value: definition, range: NSRange(location: start, length: result.length - start))
+                }
                 previousStyle = nil
                 list = nil
+            }
+            if document.kind == .canvas, let item = document.boardItems?[block.id],
+               let data = try? JSONEncoder().encode(item), result.length > start {
+                result.addAttribute(.notePageItem, value: data, range: NSRange(location: start, length: result.length - start))
+                result.addAttribute(.notePageItemID, value: block.id, range: NSRange(location: start, length: result.length - start))
             }
         }
         return result
@@ -835,9 +1342,26 @@ private enum NoteAttributedDocument {
         var tables = sourceTables
         var emittedTables: Set<String> = []
         var seenBlockIDs: Set<String> = []
+        var parsedItems: [String: BoardItem] = [:]
         var blocks: [NoteBlock] = []
         let string = attributed.string as NSString
         var location = 0
+        // Enter at the beginning of a task must leave its identity, assignment
+        // and outcome on its existing text, rather than on the new blank line.
+        var preferredLocations: [String: Int] = [:]
+        if source.kind == .canvas {
+            var offset = 0
+            while offset < attributed.length {
+                let range = string.paragraphRange(for: NSRange(location: offset, length: 0))
+                if let id = attributed.attribute(.noteBlockID, at: offset, effectiveRange: nil) as? String,
+                   preferredLocations[id] == nil,
+                   !string.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    preferredLocations[id] = range.location
+                }
+                guard range.length > 0 else { break }
+                offset = NSMaxRange(range)
+            }
+        }
 
         while location < max(1, attributed.length) {
             let probe = min(location, max(0, attributed.length - 1))
@@ -851,7 +1375,8 @@ private enum NoteAttributedDocument {
                 : defaultAttributes
 
             if let tableID = attributes[.noteTableID] as? String,
-               var table = tables[tableID] {
+               var table = tables[tableID] ?? (attributes[.noteTableDefinition] as? Data).flatMap({ try? JSONDecoder().decode(NoteTableBlock.self, from: $0) }),
+               table.id == tableID {
                 if let rowID = attributes[.noteRowID] as? String,
                    let columnID = attributes[.noteColumnID] as? String,
                    let row = table.rows.firstIndex(where: { $0.id == rowID }),
@@ -862,9 +1387,14 @@ private enum NoteAttributedDocument {
                     tables[tableID] = table
                 }
                 if emittedTables.insert(tableID).inserted { blocks.append(.table(table)) }
+                if let data = attributes[.notePageItem] as? Data,
+                   let item = try? JSONDecoder().decode(BoardItem.self, from: data) { parsedItems[tableID] = item }
             } else {
                 let proposedID = attributes[.noteBlockID] as? String
-                let blockID = proposedID.flatMap { seenBlockIDs.insert($0).inserted ? $0 : nil }
+                let blockID = proposedID.flatMap {
+                    guard source.kind != .canvas || preferredLocations[$0] == nil || preferredLocations[$0] == paragraphRange.location else { return nil }
+                    return seenBlockIDs.insert($0).inserted ? $0 : nil
+                }
                     ?? UUID().uuidString.lowercased()
                 let rawStyle = attributes[.noteBlockStyle] as? String
                 let style = rawStyle.flatMap(NoteParagraphStyle.init(rawValue:)) ?? .paragraph
@@ -876,17 +1406,30 @@ private enum NoteAttributedDocument {
                                       previous: proposedID.flatMap { sourceLists[$0] },
                                       lists: &nativeLists, usedIDs: &usedListIDs)
                 )))
+                if let data = attributes[.notePageItem] as? Data,
+                   let item = try? JSONDecoder().decode(BoardItem.self, from: data) {
+                    if blockID == proposedID && attributes[.notePageItemID] as? String == blockID { parsedItems[blockID] = item }
+                    else if item.task != nil { parsedItems[blockID] = BoardItem(task: BoardTask()) }
+                }
             }
             guard paragraphRange.length > 0 else { break }
             location = NSMaxRange(paragraphRange)
         }
 
         blocks = blocks.map { block in
+            if source.kind == .canvas, case .richText(var text) = block {
+                for index in text.runs.indices { text.runs[index].text = text.runs[index].text.replacingOccurrences(of: "\u{2028}", with: "\n") }
+                return .richText(text)
+            }
             guard case .table(let table) = block, let updated = tables[table.id] else { return block }
             return .table(updated)
         }
         var document = source
         document.blocks = blocks
+        if source.kind == .canvas {
+            parsedItems = parsedItems.filter { $0.value != BoardItem() }
+            document.boardItems = parsedItems.isEmpty ? nil : parsedItems
+        }
         return document.normalized()
     }
 

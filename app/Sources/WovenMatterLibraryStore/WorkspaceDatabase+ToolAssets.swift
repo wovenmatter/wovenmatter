@@ -26,6 +26,52 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  public func listAgentPages(callerID: String, search: String? = nil, folderID: String? = nil,
+                             after: Int64 = Int64.max, limit: Int = 50) throws -> JSONValue {
+    try withLock {
+      try requireToolUnlocked(.notes, sessionID: callerID)
+      guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
+      var values: [String?] = [String(after)]
+      var sql = """
+        SELECT rowid AS sequence,id,title,folder_id AS folderID,json_extract(content,'$.boardPurpose') AS purpose,
+          CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision,
+          json_array_length(content,'$.blocks') AS components,
+          (SELECT count(*) FROM json_each(content,'$.boardItems') WHERE json_extract(value,'$.task.status') IN ('todo','doing','blocked')) AS openTasks,
+          (SELECT count(*) FROM json_each(content,'$.boardItems') WHERE json_extract(value,'$.review')='needed') AS needsReview,
+          updated_at AS updatedAt
+        FROM notes WHERE rowid < ? AND deleted_at IS NULL
+          AND CASE WHEN json_valid(content) THEN json_extract(content,'$.kind') END='canvas'
+        """
+      if let folderID { sql += " AND folder_id=?"; values.append(folderID) }
+      if let search { sql += " AND (instr(lower(title),lower(?))>0 OR instr(lower(content),lower(?))>0)"; values += [search, search] }
+      sql += " ORDER BY rowid DESC LIMIT ?"; values.append(String(limit + 1))
+      var rows = try historyRowsUnlocked(sql, values: values)
+      let more = rows.count > limit
+      if more { rows.removeLast() }
+      return .object(["rows": .array(rows), "hasMore": .bool(more), "nextCursor": rows.last?.objectValue?["sequence"] ?? .number(Double(after))])
+    }
+  }
+
+  /// Resolves linked originals for a Page read. An ID with no row is simply absent.
+  public func boardAssetSummaries(callerID: String, ids: [String]) throws -> [String: BoardAssetSummary] {
+    guard !ids.isEmpty else { return [:] }
+    return try withLock {
+      try requireToolUnlocked(.notes, sessionID: callerID)
+      let rows = try historyRowsUnlocked("""
+        SELECT id,title,CASE WHEN json_valid(content) THEN coalesce(json_extract(content,'$.kind'),'note') ELSE 'note' END AS kind,
+          CAST(COALESCE((SELECT revision FROM device_sync_revisions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision
+        FROM notes WHERE deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))
+        """, values: [String(decoding: try JSONEncoder().encode(ids), as: UTF8.self)])
+      var result: [String: BoardAssetSummary] = [:]
+      for row in rows.compactMap(\.objectValue) {
+        guard let id = row["id"]?.stringValue else { continue }
+        result[id] = BoardAssetSummary(id: id, available: true, title: row["title"]?.stringValue,
+          kind: row["kind"]?.stringValue, revision: row["revision"]?.stringValue)
+      }
+      return result
+    }
+  }
+
   public func listAgentFolders(callerID: String, requiredTool: WorkspaceToolGroup = .sessions,
                                after: Int64 = 0, limit: Int = 100) throws -> JSONValue {
     try withLock {
@@ -76,6 +122,15 @@ extension WorkspaceDatabase {
                               after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
                               newestFirst: Bool = true) async throws -> JSONValue {
     try await read { try $0.listAgentNotes(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit, newestFirst: newestFirst) }
+  }
+
+  public func listAgentPages(callerID: String, search: String? = nil, folderID: String? = nil,
+                             after: Int64 = Int64.max, limit: Int = 50) async throws -> JSONValue {
+    try await read { try $0.listAgentPages(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit) }
+  }
+
+  public func boardAssetSummaries(callerID: String, ids: [String]) async throws -> [String: BoardAssetSummary] {
+    try await read { try $0.boardAssetSummaries(callerID: callerID, ids: ids) }
   }
 
   public func listAgentFolders(callerID: String, requiredTool: WorkspaceToolGroup = .sessions,

@@ -61,6 +61,28 @@ struct LibraryWorkspaceTests {
     }
   }
 
+  @Test("a Page edited on a phone syncs within the size every writer can still change")
+  func phonePagesAreBounded() async throws {
+    let fixture = try PersistenceFixture(); defer { fixture.remove() }
+    let db = try await fixture.openDatabase()
+    let pageID = UUID().uuidString.lowercased()
+    func page(_ text: String) throws -> String {
+      try NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "a", text: text))], pageNodes: [:]).encoded()
+    }
+    let create = LibraryMutation(deviceID: device, kind: .createNote, resourceID: pageID, title: "Phone Page", content: try page("From the phone"))
+    #expect(try await db.applyLibraryMutation(create).status == .accepted)
+    let edit = LibraryMutation(deviceID: device, kind: .updateNote, resourceID: pageID, expectedRevision: 1, title: "Phone Page", content: try page("Edited"))
+    #expect(try await db.applyLibraryMutation(edit).status == .accepted)
+    let large = try page(String(repeating: "x", count: NoteDocument.maximumBoardBytes))
+    #expect(large.utf8.count <= LibraryProtocol.maximumNoteBytes)
+    let tooLarge = LibraryMutation(deviceID: device, kind: .updateNote, resourceID: pageID, expectedRevision: 2, title: "Phone Page", content: large)
+    let refused = try await db.applyLibraryMutation(tooLarge)
+    #expect(refused.status == .invalid && refused.message?.contains("too large") == true)
+    let createLarge = LibraryMutation(deviceID: device, kind: .createNote, resourceID: UUID().uuidString.lowercased(), title: "Big", content: large)
+    #expect(try await db.applyLibraryMutation(createLarge).status == .invalid)
+    #expect(try await db.libraryNote(id: pageID)?.revision == 2)
+  }
+
   @Test("libraries holding the same note versions in different arrival orders agree on the newest and the pruned")
   func noteVersionOrderIsTheSameOnEveryMac() async throws {
     let noteID = UUID().uuidString.lowercased()

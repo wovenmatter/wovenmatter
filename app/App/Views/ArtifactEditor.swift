@@ -5,75 +5,11 @@ import WovenMatterCore
 struct SpreadsheetEditor: View {
     @Binding var document: NoteDocument
 
-    private var tableIndex: Int? {
-        document.blocks.firstIndex {
-            if case .table = $0 { true } else { false }
-        }
-    }
-
-    private var table: NoteTableBlock {
-        let blocks = document.blocks
-        guard let index = blocks.firstIndex(where: {
-            if case .table = $0 { true } else { false }
-        }), case .table(let table) = blocks[index] else {
-            return NoteTableBlock(rows: 20, columns: 8, headerRow: true)
-        }
-        return table
-    }
+    private var table: NoteTableBlock { document.spreadsheetTable }
 
     var body: some View {
         let table = self.table
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 4) {
-                    Button { addRow() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Add row")
-                    .help("Add row")
-                    Button { removeRow() } label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Remove last row")
-                    .help("Remove last row")
-                    .disabled(table.rows.count <= 1)
-                    Text("Rows")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 4) {
-                    Button { addColumn() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Add column")
-                    .help("Add column")
-                    Button { removeColumn() } label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Remove last column")
-                    .help("Remove last column")
-                    .disabled(table.columns.count <= 1)
-                    Text("Columns")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("\(table.rows.count) rows × \(table.columns.count) columns")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 12)
-            .frame(height: 38)
-            Divider()
             ScrollView([.horizontal, .vertical]) {
                 // Cell widths are fixed, so row virtualization preserves the
                 // grid geometry without constructing every off-screen editor.
@@ -144,48 +80,9 @@ struct SpreadsheetEditor: View {
         )
     }
 
-    private func ensureTable() {
-        guard tableIndex == nil else { return }
-        document.blocks = [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
-    }
+    private func ensureTable() { document.ensureSpreadsheetTable() }
 
-    private func addRow() {
-        mutateTable { $0.rows.append(NoteTableRow(cellCount: $0.columns.count)) }
-    }
-
-    private func removeRow() {
-        mutateTable { table in
-            guard table.rows.count > 1 else { return }
-            table.rows.removeLast()
-            table.headerRowCount = min(table.headerRowCount, table.rows.count)
-        }
-    }
-
-    private func addColumn() {
-        mutateTable { table in
-            table.columns.append(NoteTableColumn())
-            for index in table.rows.indices { table.rows[index].cells.append(NoteTableCell()) }
-        }
-    }
-
-    private func removeColumn() {
-        mutateTable { table in
-            guard table.columns.count > 1 else { return }
-            table.columns.removeLast()
-            for index in table.rows.indices where !table.rows[index].cells.isEmpty {
-                table.rows[index].cells.removeLast()
-            }
-        }
-    }
-
-    private func mutateTable(_ mutation: (inout NoteTableBlock) -> Void) {
-        ensureTable()
-        guard let index = document.blocks.firstIndex(where: {
-            if case .table = $0 { true } else { false }
-        }), case .table(var table) = document.blocks[index] else { return }
-        mutation(&table)
-        document.blocks[index] = .table(table.normalized())
-    }
+    private func mutateTable(_ mutation: (inout NoteTableBlock) -> Void) { document.mutateSpreadsheetTable(mutation) }
 
     private func spreadsheetColumnName(_ index: Int) -> String {
         var value = index
@@ -198,50 +95,253 @@ struct SpreadsheetEditor: View {
     }
 }
 
+/// Format Sheet: the grid's size and header row.
+struct SpreadsheetFormattingBar: View {
+    @Binding var document: NoteDocument
+
+    var body: some View {
+        let table = document.spreadsheetTable
+        HStack(spacing: 14) {
+            stepper("Rows", count: table.rows.count,
+                add: { document.mutateSpreadsheetTable { $0.rows.append(NoteTableRow(cellCount: $0.columns.count)) } },
+                remove: {
+                    document.mutateSpreadsheetTable { table in
+                        guard table.rows.count > 1 else { return }
+                        table.rows.removeLast()
+                        table.headerRowCount = min(table.headerRowCount, table.rows.count)
+                    }
+                })
+            stepper("Columns", count: table.columns.count,
+                add: {
+                    document.mutateSpreadsheetTable { table in
+                        table.columns.append(NoteTableColumn())
+                        for index in table.rows.indices { table.rows[index].cells.append(NoteTableCell()) }
+                    }
+                },
+                remove: {
+                    document.mutateSpreadsheetTable { table in
+                        guard table.columns.count > 1 else { return }
+                        table.columns.removeLast()
+                        for index in table.rows.indices where !table.rows[index].cells.isEmpty { table.rows[index].cells.removeLast() }
+                    }
+                })
+            Toggle("Header row", isOn: Binding(get: { table.headerRowCount > 0 }, set: { on in
+                document.mutateSpreadsheetTable { $0.headerRowCount = on ? 1 : 0 }
+            }))
+            .toggleStyle(.checkbox)
+        }
+        .font(.system(size: 12))
+    }
+
+    private func stepper(_ title: String, count: Int, add: @escaping () -> Void, remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 4) {
+            Text("\(title) \(count)").foregroundStyle(WovenPalette.mutedForeground)
+            Button(action: remove) { Image(systemName: "minus").frame(width: 22, height: 22) }
+                .buttonStyle(WovenIconButtonStyle()).disabled(count <= 1)
+                .accessibilityLabel("Remove last \(title.lowercased().dropLast())").help("Remove last \(title.lowercased().dropLast())")
+            Button(action: add) { Image(systemName: "plus").frame(width: 22, height: 22) }
+                .buttonStyle(WovenIconButtonStyle())
+                .accessibilityLabel("Add \(title.lowercased().dropLast())").help("Add \(title.lowercased().dropLast())")
+        }
+    }
+}
+
+extension NoteDocument {
+    var spreadsheetTable: NoteTableBlock {
+        for block in blocks { if case .table(let table) = block { return table } }
+        return NoteTableBlock(rows: 20, columns: 8, headerRow: true)
+    }
+
+    mutating func ensureSpreadsheetTable() {
+        guard !blocks.contains(where: { if case .table = $0 { true } else { false } }) else { return }
+        blocks = [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
+    }
+
+    mutating func mutateSpreadsheetTable(_ mutation: (inout NoteTableBlock) -> Void) {
+        ensureSpreadsheetTable()
+        guard let index = blocks.firstIndex(where: { if case .table = $0 { true } else { false } }),
+              case .table(var table) = blocks[index] else { return }
+        mutation(&table)
+        blocks[index] = .table(table.normalized())
+    }
+}
+
 struct HTMLArtifactView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let html: String
     let linkedDataJSON: String?
+    var persistentState: [String: ArtifactStateEntry] = [:]
+    var readState: (() -> [String: ArtifactStateEntry])?
+    var saveState: ((ArtifactStateEdit, Task<ArtifactStateWriteResult, any Error>?) -> Task<ArtifactStateWriteResult, any Error>)?
+    var onSaveError: ((String?) -> Void)?
+    /// Reports whether this document generation holds input that failed to save,
+    /// so quitting cannot report success while it is unsaved.
+    var reportUnsaved: ((_ generation: String, _ unsaved: Bool) -> Void)?
+    var retrySignal = 0
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.userContentController.add(context.coordinator, name: "wovenArtifactState")
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.parent = self
         let emptyAppearance = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? colorScheme : nil
-        guard coordinator.html != html || coordinator.linkedDataJSON != linkedDataJSON
-            || coordinator.emptyAppearance != emptyAppearance else { return }
-        coordinator.emptyAppearance = emptyAppearance
-        coordinator.html = html
-        coordinator.linkedDataJSON = linkedDataJSON
-        let rendered = HTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON, emptyAppearance: emptyAppearance)
-        guard context.coordinator.renderedHTML != rendered else { return }
-        context.coordinator.renderedHTML = rendered
-        webView.loadHTMLString(rendered, baseURL: nil)
+        // A transient lifecycle pause must not reload the document: accepted
+        // input and its retry state still belong to this WebView generation.
+        // The model closes write admission while editing is suspended.
+        let editable = saveState != nil
+        if coordinator.html != html || coordinator.emptyAppearance != emptyAppearance || coordinator.editable != editable {
+            coordinator.html = html
+            coordinator.emptyAppearance = emptyAppearance
+            coordinator.editable = editable
+            // The replaced document discards its unsaved input along with its WebView state.
+            if !coordinator.saveErrors.isEmpty { reportUnsaved?(coordinator.token, false) }
+            coordinator.token = UUID().uuidString
+            coordinator.latestWrites.removeAll()
+            coordinator.saveErrors.removeAll()
+            coordinator.lastState = DesktopArtifactStateSnapshot(persistentState)
+            coordinator.linkedDataJSON = linkedDataJSON
+            let config = Coordinator.Configuration(token: coordinator.token, state: coordinator.lastState!, editable: editable)
+            let json = (try? String(decoding: JSONEncoder().encode(config), as: UTF8.self)) ?? "{}"
+            let rendered = HTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON,
+                emptyAppearance: emptyAppearance, artifactConfigurationJSON: json)
+            webView.loadHTMLString(rendered, baseURL: nil)
+        } else {
+            coordinator.pushLatestState()
+        }
+        if coordinator.retrySignal != retrySignal {
+            coordinator.retrySignal = retrySignal
+            Task { _ = try? await webView.callAsyncJavaScript("await window.__wovenArtifactRetry?.()", arguments: [:], in: nil, contentWorld: .page) }
+        }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "wovenArtifactState")
+        webView.navigationDelegate = nil
+        coordinator.webView = nil
+        if !coordinator.saveErrors.isEmpty { coordinator.parent.reportUnsaved?(coordinator.token, false) }
+    }
+
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        struct Configuration: Encodable {
+            let token: String
+            let state: DesktopArtifactStateSnapshot
+            let editable: Bool
+        }
+        var parent: HTMLArtifactView
+        weak var webView: WKWebView?
         var html: String?
         var linkedDataJSON: String?
-        var renderedHTML: String?
+        var lastState: DesktopArtifactStateSnapshot?
         var emptyAppearance: ColorScheme?
+        var editable = false
+        var token = ""
+        var retrySignal = 0
+        var latestWrites: [String: (id: String, write: Task<ArtifactStateWriteResult, any Error>)] = [:]
+        var saveErrors: [String: String] = [:]
+        init(parent: HTMLArtifactView) { self.parent = parent }
 
-        func webView(
-            _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction
-        ) async -> WKNavigationActionPolicy {
-            guard navigationAction.navigationType == .other,
-                  navigationAction.request.url?.scheme == "about" else {
-                return .cancel
+        func updateSaveError(_ message: String?, key: String, generation: String) {
+            guard generation == token else { return }
+            saveErrors[key] = message
+            parent.onSaveError?(saveErrors.sorted { $0.key < $1.key }.first?.value)
+            parent.reportUnsaved?(generation, !saveErrors.isEmpty)
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "wovenArtifactState", message.frameInfo.isMainFrame,
+                  message.webView === webView, editable, let save = parent.saveState,
+                  let body = message.body as? [String: Any], body["token"] as? String == token,
+                  let requestID = body["requestID"] as? String, !requestID.isEmpty, requestID.utf8.count <= 64 else { return }
+            let request: ArtifactStateMessage
+            do { request = try ArtifactStateMessage.decode(body, token: token) }
+            catch {
+                let key = (body["edit"] as? [String: Any])?["key"] as? String ?? "invalid-request"
+                updateSaveError(ArtifactInputError.invalidMessage.localizedDescription, key: key, generation: token)
+                let activeToken = token
+                Task { await reply(token: activeToken, requestID: requestID, state: currentSnapshot,
+                    error: ArtifactInputError.invalidMessage.localizedDescription) }
+                return
             }
+            let previous: Task<ArtifactStateWriteResult, any Error>?
+            if let priorID = request.previousRequestID {
+                guard let prior = latestWrites[request.edit.key], prior.id == priorID else {
+                    updateSaveError(ArtifactInputError.invalidMessage.localizedDescription, key: request.edit.key, generation: request.token)
+                    Task { await reply(token: request.token, requestID: request.requestID, state: currentSnapshot,
+                        error: ArtifactInputError.invalidMessage.localizedDescription) }
+                    return
+                }
+                previous = prior.write
+            } else { previous = nil }
+            // Admission is synchronous, so closing this view cannot detach a
+            // write from the application's existing shutdown flush barrier.
+            let write = save(request.edit, previous)
+            latestWrites[request.edit.key] = (request.requestID, write)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let result = try await write.value
+                    self.updateSaveError(nil, key: request.edit.key, generation: request.token)
+                    await self.reply(token: request.token, requestID: request.requestID, state: result.snapshot, error: nil)
+                } catch {
+                    self.updateSaveError(error.localizedDescription, key: request.edit.key, generation: request.token)
+                    await self.reply(token: request.token, requestID: request.requestID, state: (error as? ArtifactInputFailure)?.snapshot ?? self.currentSnapshot,
+                                     error: error.localizedDescription)
+                }
+            }
+        }
+
+        private var currentSnapshot: ArtifactStateSnapshot {
+            let state = parent.readState?() ?? parent.persistentState
+            return .init(values: state.compactMapValues(\.value), versions: state.mapValues(\.version))
+        }
+
+        private func reply(token requestToken: String, requestID: String, state: ArtifactStateSnapshot, error: String?) async {
+            guard requestToken == token, let webView else { return }
+            let snapshot = DesktopArtifactStateSnapshot(state)
+            let payload: JSONValue = .object([
+                "state": (try? JSONDecoder().decode(JSONValue.self, from: Data(snapshot.json.utf8))) ?? .object([:]),
+                "error": error.map(JSONValue.string) ?? .null
+            ])
+            guard let data = try? JSONEncoder().encode(payload) else { return }
+            _ = try? await webView.callAsyncJavaScript(
+                "window.__wovenArtifactStateReply?.(token, requestID, JSON.parse(payload))",
+                arguments: ["token": token, "requestID": requestID, "payload": String(decoding: data, as: UTF8.self)],
+                in: nil, contentWorld: .page)
+        }
+
+        func pushLatestState(force: Bool = false) {
+            let snapshot = DesktopArtifactStateSnapshot(parent.persistentState)
+            // Deliver the initial data event once after the authored document
+            // loads. Later saved-input echoes must not redraw its interface.
+            let dataChanged = force || parent.linkedDataJSON != linkedDataJSON
+            guard force || snapshot != lastState || dataChanged else { return }
+            lastState = snapshot
+            linkedDataJSON = parent.linkedDataJSON
+            guard let webView else { return }
+            let token = token, data = parent.linkedDataJSON ?? "null", state = snapshot.json
+            Task {
+                _ = try? await webView.callAsyncJavaScript(
+                    "window.__wovenArtifactUpdate?.(token, JSON.parse(state), dataChanged ? JSON.parse(data) : null, dataChanged)",
+                    arguments: ["token": token, "state": state, "data": data, "dataChanged": dataChanged], in: nil, contentWorld: .page)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { pushLatestState(force: true) }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+            guard navigationAction.navigationType == .other,
+                  navigationAction.request.url?.scheme == "about" else { return .cancel }
             return .allow
         }
     }

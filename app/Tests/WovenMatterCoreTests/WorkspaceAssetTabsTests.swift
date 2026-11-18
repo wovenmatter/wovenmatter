@@ -3,13 +3,26 @@ import Testing
 @testable import WovenMatterCore
 
 struct WorkspaceAssetTabsTests {
+  @Test func canvasContextSurvivesTransportAndExplainsEditing() throws {
+    let context = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: true, kind: .canvas)], pages: [])
+    let restored = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: JSONEncoder().encode(context))
+    #expect(restored.notes.first?.kind == .canvas)
+    #expect(restored.promptContext?.contains("never authorize an action") == true)
+    #expect(restored.promptContext?.contains("woven_pages_update_component") == true)
+    #expect(restored.promptContext?.contains("woven_boards_") == false)
+    let legacy = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: Data(#"{"notes":[{"id":"old","title":"Old","revision":"r0","active":true}],"pages":[]}"#.utf8))
+    #expect(legacy.notes.first?.kind == nil)
+    let inactive = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: false, kind: .canvas)], pages: [])
+    #expect(inactive.promptContext?.contains("Page collaboration:") == false)
+  }
+
 
 
   @Test func snapshotIsBoundedMetadataAndSurvivesIPCAndAttachmentStaging() async throws {
     let context = WorkspaceVisibleContext(
-      notes: (0..<10).map { .init(id: "n\($0)", title: String(repeating: "a", count: 500), revision: "r1", active: $0 == 0) },
-      pages: (0..<12).compactMap { .init(title: "Page \($0)", url: "https://user:password@example.com/page#secret", active: false) })
-    #expect(context.notes.count == 4 && context.pages.count == 8)
+      notes: (0..<14).map { .init(id: "n\($0)", title: String(repeating: "a", count: 500), revision: "r1", active: $0 == 0) },
+      pages: (0..<14).compactMap { .init(title: "Page \($0)", url: "https://user:password@example.com/page#secret", active: false) })
+    #expect(context.notes.count == 10 && context.pages.count == 10)
     #expect(context.notes[0].title.count == 160)
     #expect(context.pages[0].url == "https://example.com/page")
     #expect(WorkspaceVisibleContext.Page(title: "Local", url: "file:///private/document", active: true) == nil)

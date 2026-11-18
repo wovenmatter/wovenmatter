@@ -1585,26 +1585,16 @@ struct NewNoteDrawer: View {
 
     var body: some View {
         DrawerChrome(onClose: onClose) {
-            Text("New Note")
+            Text("New Artifact")
                 .font(.system(size: 18, weight: .semibold))
         } content: {
             VStack(alignment: .leading, spacing: 10) {
-                artifactButton(
-                    "Note",
-                    icon: .fileText,
-                    kind: .note
-                )
-                artifactButton(
-                    "Spreadsheet",
-                    icon: .panelsTopLeft,
-                    kind: .spreadsheet
-                )
-                artifactButton(
-                    "HTML",
-                    detail: "View HTML",
-                    icon: .panelTop,
-                    kind: .html
-                )
+                // Each kind uses the same icon as its asset rows.
+                artifactButton("Note", detail: "A rich text note with lists, tables and links", icon: .fileText, kind: .note)
+                artifactButton("Page", detail: "A fluid document for your work with agents", icon: .panelsTopLeft, kind: .canvas)
+                artifactButton("Sheet", detail: "Rows and columns for data and calculations", systemImage: "tablecells", kind: .spreadsheet)
+                artifactButton("App", detail: "Interactive apps your agent builds on live data",
+                    systemImage: "chevron.left.forwardslash.chevron.right", kind: .html)
             }
             .padding(20)
         }
@@ -1613,7 +1603,8 @@ struct NewNoteDrawer: View {
     private func artifactButton(
         _ title: String,
         detail: String? = nil,
-        icon: LucideGlyph,
+        icon: LucideGlyph = .fileText,
+        systemImage: String? = nil,
         kind: NoteArtifactKind
     ) -> some View {
         Button {
@@ -1622,6 +1613,7 @@ struct NewNoteDrawer: View {
         } label: {
             NewChatOptionCard(
                 icon: icon,
+                systemImage: systemImage,
                 title: title,
                 detail: detail
             )
@@ -1676,6 +1668,8 @@ struct NewChatSection<Content: View>: View {
 
 struct NewChatOptionCard: View {
     let icon: LucideGlyph
+    /// A system symbol in place of `icon`, matching assets whose rows use one.
+    var systemImage: String? = nil
     var harnessLogo: HarnessLogo? = nil
     let title: String
     var detail: String? = nil
@@ -1685,6 +1679,10 @@ struct NewChatOptionCard: View {
             Group {
                 if let harnessLogo {
                     HarnessLogoIcon(logo: harnessLogo, size: 20)
+                } else if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(WovenPalette.primary)
                 } else {
                     LucideIcon(glyph: icon, size: 16)
                         .foregroundStyle(WovenPalette.primary)
@@ -1778,6 +1776,7 @@ struct SidebarWorkspacePage: View {
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = ScrollHoverCoordinator()
     @State private var content = RightRailContent.empty
+    @State private var assetKind: NoteArtifactKind?
     @State private var conversationDetailCardState = ConversationDetailCardState()
 
     private var mode: WorkspaceListMode {
@@ -1802,6 +1801,20 @@ struct SidebarWorkspacePage: View {
                 modePicker
                 HStack(spacing: 8) {
                     searchField
+                    if mode == .notes {
+                        Menu {
+                            Button("All artifacts") { assetKind = nil }
+                            ForEach(NoteArtifactKind.allCases, id: \.self) { kind in
+                                Button(kind.displayName + "s") { assetKind = kind }
+                            }
+                        } label: {
+                            Image(systemName: assetKind == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+                                .frame(width: 28, height: 28)
+                        }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .accessibilityLabel("Artifact type: \(assetKind.map { $0.displayName + "s" } ?? "All artifacts")")
+                        .help("Filter by Notes, Pages, Sheets, or Apps")
+                    }
                     if onBack != nil {
                         filterMenu(inSearchRow: true)
                     }
@@ -1838,27 +1851,27 @@ struct SidebarWorkspacePage: View {
                             }
                         }
                     } else {
-                        ListSectionHeader(title: "Pinned notes", expanded: pinnedOpen) {
+                        ListSectionHeader(title: "Pinned artifacts", expanded: pinnedOpen) {
                             pinnedOpen.toggle()
                         }
                         if pinnedOpen {
-                            if content.pinnedNotes.isEmpty {
-                                EmptyListRow(text: "No pinned notes.")
+                            if content.pinnedNotes.filter({ assetKind == nil || $0.kind == assetKind }).isEmpty {
+                                EmptyListRow(text: "No pinned artifacts.")
                             } else {
-                                ForEach(content.pinnedNotes) { presentation in
+                                ForEach(content.pinnedNotes.filter { assetKind == nil || $0.kind == assetKind }) { presentation in
                                     noteRow(presentation)
                                 }
                             }
                         }
 
-                        ListSectionHeader(title: "Notes", expanded: recentsOpen) {
+                        ListSectionHeader(title: "Artifacts", expanded: recentsOpen) {
                             recentsOpen.toggle()
                         }
                         if recentsOpen {
-                            if content.notes.isEmpty {
-                                EmptyListRow(text: "No notes.")
+                            if content.notes.filter({ assetKind == nil || $0.kind == assetKind }).isEmpty {
+                                EmptyListRow(text: "No artifacts.")
                             } else {
-                                ForEach(content.notes) { presentation in
+                                ForEach(content.notes.filter { assetKind == nil || $0.kind == assetKind }) { presentation in
                                     noteRow(presentation)
                                 }
                             }
@@ -1935,7 +1948,7 @@ struct SidebarWorkspacePage: View {
                 Text(selectedFolderName ?? "All Workspaces")
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
-                Text("\(conversations.count) chats · \(notes.count) notes")
+                Text("\(conversations.count) chats · \(notes.count) artifacts")
                     .font(.system(size: 11))
                     .foregroundStyle(WovenPalette.foreground)
             }
@@ -2073,14 +2086,14 @@ struct SidebarWorkspacePage: View {
             options: WorkspaceListMode.allCases,
             selection: modeBinding
         ) { value in
-            value == .chats ? "Chats" : "Notes"
+            value == .chats ? "Chats" : "Artifacts"
         }
     }
 
     private var searchField: some View {
         WovenSearchField(
             text: $query,
-            prompt: mode == .chats ? "Search chats" : "Search notes"
+            prompt: mode == .chats ? "Search chats" : "Search artifacts"
         )
     }
 
@@ -2370,10 +2383,12 @@ final class ListPresentationCache: @unchecked Sendable {
         case .spreadsheet:
             document.blocks.compactMap { block -> String? in
                 guard case .table(let table) = block else { return nil }
-                return "Spreadsheet · \(table.rows.count) rows × \(table.columns.count) columns"
-            }.first ?? "Spreadsheet"
+                return "Sheet · \(table.rows.count) rows × \(table.columns.count) columns"
+            }.first ?? "Sheet"
         case .html:
-            "Agent-rendered HTML artifact"
+            document.databaseLink == nil ? "Interactive App" : "Live App"
+        case .canvas:
+            "Page · \(document.materializedPage().blocks.count) components"
         }
         let presentation = NoteRowPresentation(
             note: note,

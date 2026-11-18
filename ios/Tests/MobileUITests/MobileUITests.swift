@@ -89,7 +89,7 @@ final class MobileUITests: XCTestCase {
     XCTAssertFalse(localFolder.exists)
     remote.tap()
     XCTAssertFalse(app.buttons["folder-workspace-cccccccc-3333-4333-8333-333333333333"].exists)
-    let rows = [app.buttons["action-new-chat"], app.buttons["action-new-note"], app.buttons["folder-all"],
+    let rows = [app.buttons["action-new-chat"], app.buttons["action-new-asset"], app.buttons["folder-all"],
       local, remote, app.buttons["folders-trash"], app.buttons["folders-recents"]]
     for (above, below) in zip(rows, rows.dropFirst()) {
       XCTAssertTrue(above.exists); XCTAssertTrue(below.exists)
@@ -399,7 +399,7 @@ final class MobileUITests: XCTestCase {
       return
     }
     let originalEditorID = bodyEditors.firstMatch.identifier
-    app.buttons["action-new-note"].tap()
+    newAsset("Note", in: app)
     let title = app.descendants(matching: .any)["note-title"].firstMatch
     let body = bodyEditors.firstMatch
     let created = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -456,7 +456,7 @@ final class MobileUITests: XCTestCase {
     let editors = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
     XCTAssertTrue(editors.firstMatch.waitForExistence(timeout: 5))
     let originalEditorID = editors.firstMatch.identifier
-    app.buttons["action-new-note"].tap()
+    newAsset("Note", in: app)
     let first = editors.firstMatch
     let created = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       first.exists && first.identifier != originalEditorID && (first.value as? String ?? "").isEmpty

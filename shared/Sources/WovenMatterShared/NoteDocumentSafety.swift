@@ -15,6 +15,8 @@ extension NoteDocument {
   /// Decodes an editable document only if every original JSON field survives
   /// typed decoding. Unknown versions, blocks and attributes remain read-only.
   public static func editableDocument(from content: String) throws -> NoteDocument {
+    // Synchronization clocks belong to the library store, not to the document.
+    let content = NoteSync.strip(content)
     guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw NoteDocumentSafetyError.tooLarge }
     guard let bytes = content.data(using: .utf8) else { throw NoteDocumentSafetyError.unsupportedFormat }
     guard let object = try? JSONSerialization.jsonObject(with: bytes) else {
@@ -42,6 +44,16 @@ extension NoteDocument {
   /// reject ragged structures instead of trimming writing or manufacturing IDs.
   public func validateEditableShape() throws {
     guard blocks.count <= 10_000 else { throw NoteDocumentSafetyError.tooLarge }
+    if let canvas {
+      guard kind == .canvas,
+            canvas.values.allSatisfy(\.isValid),
+            Set(canvas.keys).isSubset(of: Set(blocks.map(\.id))) else {
+        throw NoteDocumentSafetyError.unsupportedFormat
+      }
+    }
+    try validateCanvasStructure()
+    try validatePageStructure()
+    try validateArtifactState()
     var totalCells = 0
     var ids = Set<String>()
     for block in blocks {

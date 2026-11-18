@@ -13,6 +13,11 @@ SUITES = ('ios_runner', 'verify_ios_app', 'dev_build', 'executor_deployment',
 
 
 class CIRunnerTests(unittest.TestCase):
+    def test_artifact_bridge_change_runs_its_portable_regressions(self):
+        result, calls = self.run_fixture(['shared/Sources/WovenMatterShared/ArtifactStateJavaScript.swift'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [['node', '--test', 'scripts/test-support/artifact-state.test.mjs']])
+
     def run_fixture(self, paths, fail=False, fail_host=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
