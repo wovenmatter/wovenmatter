@@ -4,7 +4,8 @@ import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
 
@@ -72,11 +73,17 @@ function mockInstaller(latest, install) {
     },
   };
 }
+// The Claude SDK's binary package for this machine, which npm installs with it.
+const claudeBinary = root => join(root, 'node_modules/@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}`, 'claude');
 async function materializeManifest(_args, { cwd }) {
   const manifest = JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8'));
   for (const [name, version] of Object.entries(manifest.dependencies)) {
     await mkdir(join(cwd, 'node_modules', name), { recursive: true });
     await writeFile(join(cwd, 'node_modules', name, 'package.json'), JSON.stringify({ version }));
+  }
+  if (manifest.dependencies['@anthropic-ai/claude-agent-sdk']) {
+    await mkdir(dirname(claudeBinary(cwd)), { recursive: true });
+    await writeFile(claudeBinary(cwd), '#!/bin/sh\n', { mode: 0o755 });
   }
   return '';
 }
@@ -171,4 +178,68 @@ test('an update with nothing to install activates nothing', async t => {
   const result = await updateSDK({ directory: f.directory, id: 'pi' }, mockInstaller(piFloor, materializeManifest));
   assert.equal(result.activated, undefined);
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
+});
+
+// Bots on this machine (here the checkout's bots/) run on the copy Pi Durable activates.
+const bots = resolve(fileURLToPath(new URL('../../bots', import.meta.url)));
+
+test('a candidate the bots runtime cannot load is discarded and the working copy stays active', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const before = await readFile(f.active, 'utf8'), options = mockInstaller(bump(piFloor, 0), materializeManifest);
+  const run = options.run, verified = [];
+  options.run = async (executable, args, runOptions) => {
+    if (args.includes('verify-sdk')) {
+      verified.push({ executable, args, cwd: runOptions.cwd, active: await readFile(f.active, 'utf8'),
+        staged: await readdir(join(args.at(-1), 'node_modules/@earendil-works')) });
+      throw Error('fixture: bots import an export the new major dropped');
+    }
+    return run(executable, args, runOptions);
+  };
+  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor, 0) }, options), /previous SDKs were kept/);
+  // Bots' real entry graph ran against the staged copy, before anything was activated.
+  assert.equal(verified.length, 1);
+  assert.equal(verified[0].executable, process.execPath);
+  assert.deepEqual(verified[0].args.slice(0, 2), [join(bots, 'src/cli.ts'), 'verify-sdk']);
+  assert.match(verified[0].args[2], /\/sdk-runtime\/generations\/\.staging-[0-9a-f-]{36}$/);
+  assert.equal(verified[0].cwd, bots);
+  assert.equal(verified[0].active, before);
+  assert.deepEqual(verified[0].staged.sort(), piPackages.map(name => name.split('/')[1]).sort());
+  assert.equal(await readFile(f.active, 'utf8'), before);
+  assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
+  assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, installed.root);
+});
+
+test('a copy without its Claude binary needs the update, which reinstalls the same version', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const options = mockInstaller(piFloor, materializeManifest);
+  await checkSDKUpdates({ directory: f.directory, fetchImplementation: options.registryFetch });
+  let claude = (await sdkStatus({ directory: f.directory })).sdks.find(sdk => sdk.id === 'claude');
+  assert.equal(claude.consistent, true);
+  assert.equal(claude.updateAvailable, false);
+  await rm(claudeBinary(installed.root));
+  // Pi Durable still selects this copy; bots cannot run on it.
+  assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, installed.root);
+  claude = (await sdkStatus({ directory: f.directory })).sdks.find(sdk => sdk.id === 'claude');
+  assert.equal(claude.consistent, false);
+  assert.equal(claude.updateAvailable, true);
+  assert.equal(claude.latestVersion, claude.installedVersion);
+  const repaired = await updateSDK({ directory: f.directory }, options);
+  assert.equal(repaired.activated, true);
+  const active = await resolveSDKRuntime({ directory: f.directory });
+  assert.notEqual(active.root, installed.root);
+  claude = (await sdkStatus({ directory: f.directory })).sdks.find(sdk => sdk.id === 'claude');
+  assert.equal(claude.consistent, true);
+  assert.equal(claude.installedVersion, claudeFloor);
+  assert.equal(claude.updateAvailable, false);
+});
+
+test('a copy missing an SDK package needs the update even with no version to compare', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const options = mockInstaller(piFloor, materializeManifest);
+  await checkSDKUpdates({ directory: f.directory, fetchImplementation: options.registryFetch });
+  await rm(join(installed.root, 'node_modules/@earendil-works/pi-durable'), { recursive: true });
+  const pi = (await sdkStatus({ directory: f.directory })).sdks.find(sdk => sdk.id === 'pi');
+  assert.equal(pi.installedVersion, null);
+  assert.equal(pi.consistent, false);
+  assert.equal(pi.updateAvailable, true);
 });
