@@ -194,10 +194,8 @@ struct MobilePageComponentMenu: View {
           update(task.status == .done ? "Reopen task" : "Complete task", .init(status: task.status == .done ? .todo : .done))
         }
       }
-      if kind != .section {
-        Button(item?.task == nil ? "Turn into task" : "Remove task state") {
-          update("Task", item?.task == nil ? .init(status: .todo) : .init(clearTask: true))
-        }
+      if kind != .section && item?.task == nil {
+        Button("Turn into task") { update("Task", .init(status: .todo)) }
       }
       if kind == .table, case .table(let table)? = page.blocks.first(where: { $0.id == componentID }) {
         Divider()

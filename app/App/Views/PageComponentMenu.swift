@@ -71,10 +71,9 @@ struct PageComponentMenu: View {
             result.append(.button("Dismiss review") { setReview(.dismissed) })
         }
         let isSection = page.pageComponentKind(for: id) == .section
-        if !isSection {
-            result.append(.button(item?.task == nil ? "Turn into task" : "Remove task state") {
-                apply(.init(action: .update, id: id, expectedRevision: page.boardItemRevision(for: id),
-                    patch: item?.task == nil ? .init(status: .todo) : .init(clearTask: true)))
+        if !isSection && item?.task == nil {
+            result.append(.button("Turn into task") {
+                apply(.init(action: .update, id: id, expectedRevision: page.boardItemRevision(for: id), patch: .init(status: .todo)))
             })
         }
         let siblings = page.pageChildren(of: page.pageParentID(for: id))
