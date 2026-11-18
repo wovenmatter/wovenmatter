@@ -6,7 +6,7 @@ const options={workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
 function openCodeFixture() {
   const calls=[],session={id:'ses_fixture',location:{directory:'/workspace/project'},model:{providerID:'lab',id:'model'},permissions:[]}
   let busy=false
-  const control=createNativeClientSessions({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest:async(url,request)=>{
+  const control=createNativeClientSessions({...options,instances:{action:async()=>{},registrationPath:()=>'fixture'},read:async(path)=>{if(path!=='fixture')throw new TypeError('registration path');return JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42})},fetchRequest:async(url,request)=>{
     assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
     assert.equal(request.redirect,'error')
     const body=request.body&&JSON.parse(request.body);calls.push({path:url.pathname,method:request.method,body})

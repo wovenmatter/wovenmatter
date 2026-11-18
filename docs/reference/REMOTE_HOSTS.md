@@ -147,8 +147,12 @@ folders (`~/.local/bin`, `~/.grok/bin`, `~/.opencode/bin`), mise/asdf shims, nvm
 installations and system locations without sourcing login shells. Woven uses the
 CLIs already there: a harness CLI in the user's home is their native install, which
 Woven updates with the vendor's own command, so a terminal on the host and Woven
-share one CLI with the same sign-ins, skills and sessions. CLIs outside the home are
-reported as system installs and are not updated.
+share one CLI with the same sign-ins, skills and sessions. A CLI that an older Woven
+installed with npm (inside a `node_modules` tree) is reported as an npm copy; Install
+or Update replaces it with the official installer rather than updating it through
+npm. CLIs outside the home are reported as system installs and are not updated. A
+harness is never updated while its own sign-in runs, and sign-in waits for that
+harness's install or update; other harnesses are unaffected.
 
 An existing CLI plus a missing ACP adapter needs only the adapter; Woven does not
 rerun the CLI installer. Missing tools are installed with the vendor's official

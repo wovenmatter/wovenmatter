@@ -288,6 +288,8 @@ final class HarnessSignInModel {
 
     nonisolated static func executable(_ kind: AgentRuntimeKind) async -> URL? {
         await Task.detached(priority: .utility) {
+            // OpenCode signs in with the same OpenCode 2 the shared service runs.
+            if kind == .opencode { return OpenCodeServiceLauncher.resolveExecutable() }
             guard let definition = LocalACPRuntimeCatalog.definition(for: kind) else { return nil }
             return LocalACPRuntimeResolver.resolveExecutable(named: definition.underlyingCLIName ?? definition.commandName)
         }.value

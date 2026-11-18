@@ -595,25 +595,6 @@ public struct LocalACPRuntimeInstaller: Sendable {
         fetch: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata
     ) async throws -> LocalACPInstallerPreview {
         guard AgentRuntimeKind.allCases.contains(definition.runtimeKind) else { throw LocalACPRuntimeInstallError.notInstallable }
-        if let selector = definition.cliNpmPackageSpec {
-            guard let separator = selector.lastIndex(of: "@"), separator != selector.startIndex else {
-                throw LocalACPRuntimeInstallError.unpinnedPackage
-            }
-            let package = String(selector[..<separator])
-            let version = try await RuntimeMaintenance.registryVersion(package, fetch: fetch)
-            let packageSpec = package + "@" + version
-            guard let source = definition.cliInstallerSource,
-                  LocalACPBoundedHTTPSDownloader.isSafeHTTPS(source)
-            else { throw LocalACPRuntimeInstallError.unsafeSource }
-            return LocalACPInstallerPreview(
-                runtimeKind: definition.runtimeKind,
-                source: source,
-                sha256: nil,
-                bytes: nil,
-                packageSpec: packageSpec,
-                verification: "npm-registry-integrity"
-            )
-        }
         let source = try cliInstallerSource(for: definition)
         let file = temporaryInstallerURL(for: definition)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -654,21 +635,6 @@ public struct LocalACPRuntimeInstaller: Sendable {
         expectedSourceSHA256: String?,
         expectedPackageSpec: String?
     ) async throws -> URL {
-        if let selector = definition.cliNpmPackageSpec {
-            guard let separator = selector.lastIndex(of: "@"), separator != selector.startIndex,
-                  let packageSpec = expectedPackageSpec, Self.isExactPackageSpec(packageSpec),
-                  packageSpec.hasPrefix(String(selector[..<separator]) + "@") else {
-                throw LocalACPRuntimeInstallError.confirmationRequired
-            }
-            let version = String(packageSpec[packageSpec.index(after: packageSpec.lastIndex(of: "@")!)...])
-            if definition.runtimeKind == .opencode, !OpenCodeConnection.supportsVersion(version) {
-                throw OpenCodeError.incompatible(version)
-            }
-            return try await installNpmPackage(
-                packageSpec,
-                executableName: definition.commandName
-            )
-        }
         // The vendor's official installer, from the address in Woven Matter's catalog, runs as
         // published. A caller that showed someone a particular download (another Mac asking
         // this one) passes its digest, and a changed download is refused.
@@ -689,15 +655,12 @@ public struct LocalACPRuntimeInstaller: Sendable {
                 throw LocalACPRuntimeInstallError.sourceDigestChanged
             }
         }
-        // The native channel pointer can lag a stable npm publication. Pass the
-        // independently resolved release to the unchanged official installer.
-        let arguments = definition.runtimeKind == .claudeCode
-            ? [try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-code", fetch: metadataFetcher)]
-            : definition.cliInstallerArguments
-        let result = try LocalACPProcessRunner.run(
+        // The installer installs what its own channel names, as it would from Terminal.
+        let result = try await LocalACPProcessRunner.runDetached(
             executableURL: URL(fileURLWithPath: "/bin/\(interpreter)"),
-            arguments: [file.path] + arguments,
-            currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
+            arguments: [file.path] + definition.cliInstallerArguments,
+            currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser,
+            timeout: 600
         )
         guard result.succeeded else {
             throw LocalACPRuntimeInstallError.installFailed(
@@ -747,11 +710,10 @@ public struct LocalACPRuntimeInstaller: Sendable {
         guard Self.isExactPackageSpec(packageSpec) else {
             throw LocalACPRuntimeInstallError.unpinnedPackage
         }
-        if let definition = LocalACPRuntimeCatalog.definitions.first(where: { $0.adapterPackage == String(packageSpec.prefix(upTo: packageSpec.lastIndex(of: "@")!)) }),
-           let minimum = definition.minimumEngineVersion {
-            let engine = definition.runtimeKind == .codex ? "@openai/codex" : "@anthropic-ai/claude-agent-sdk"
-            let version = try await RuntimeMaintenance.registryVersion(engine, executableRequired: false, fetch: metadataFetcher)
-            guard !RuntimeMaintenance.version(version, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
+        // An ACP adapter installs alone and is checked over ACP against the person's own CLI,
+        // which it drives (CODEX_PATH / CLAUDE_CODE_EXECUTABLE); the CLI copy npm bundles
+        // inside its package is never selected or used.
+        if let definition = LocalACPRuntimeCatalog.definitions.first(where: { $0.adapterPackage == String(packageSpec.prefix(upTo: packageSpec.lastIndex(of: "@")!)) }) {
             let npm: URL
             if let npmExecutableURL { npm = npmExecutableURL } else { npm = try await managedNodeRuntime.ensureInstalled() }
             let candidates = [Bundle.main.resourceURL?.appending(path: "harnesses/install-adapter.mjs"),
@@ -760,7 +722,11 @@ public struct LocalACPRuntimeInstaller: Sendable {
             guard let script = candidates.first(where: { FileManager.default.isReadableFile(atPath: $0.path) }) else { throw RuntimeMaintenanceError.verification }
             let node = npm.deletingLastPathComponent().appending(path: "node")
             var selection: [String: Any] = ["prefix": installPrefix.path, "adapter": definition.adapterPackage!,
-                "adapterVersion": String(packageSpec.split(separator: "@").last!), "engineVersion": version, "npm": [npm.path]]
+                "adapterVersion": String(packageSpec.split(separator: "@").last!), "npm": [npm.path]]
+            if let cliName = definition.underlyingCLIName,
+               let cli = executableResolver?(cliName) ?? LocalACPRuntimeResolver.resolveExecutable(named: cliName) {
+                selection["cli"] = cli.path
+            }
             if let minimum = definition.minimumProtocolSDKVersion {
                 let sdk = try await RuntimeMaintenance.registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: metadataFetcher)
                 guard !RuntimeMaintenance.version(sdk, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
@@ -770,7 +736,7 @@ public struct LocalACPRuntimeInstaller: Sendable {
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = node.deletingLastPathComponent().path + ":" + LocalACPRuntimeResolver.executableSearchPath
             try FileManager.default.createDirectory(at: installPrefix, withIntermediateDirectories: true)
-            let result = try LocalACPProcessRunner.run(executableURL: node, arguments: [script.path, String(decoding: data, as: UTF8.self)],
+            let result = try await LocalACPProcessRunner.runDetached(executableURL: node, arguments: [script.path, String(decoding: data, as: UTF8.self)],
                 environment: environment, currentDirectoryURL: installPrefix.deletingLastPathComponent(), timeout: 300)
             guard result.succeeded else { throw LocalACPRuntimeInstallError.installFailed(result.combinedOutput) }
             let installed = installPrefix.appending(path: "bin/" + executableName)
@@ -802,7 +768,7 @@ public struct LocalACPRuntimeInstaller: Sendable {
         environment["PATH"] = searchDirectories.joined(separator: ":")
         environment["NO_UPDATE_NOTIFIER"] = "1"
         environment["npm_config_update_notifier"] = "false"
-        let result = try LocalACPProcessRunner.run(
+        let result = try await LocalACPProcessRunner.runDetached(
             executableURL: npm,
             arguments: [
                 "install",
@@ -827,22 +793,11 @@ public struct LocalACPRuntimeInstaller: Sendable {
                 executableName
             )
         }
-        let probe = try LocalACPProcessRunner.run(executableURL: executable, arguments: ["--version"], environment: environment, timeout: 15)
+        let probe = try await LocalACPProcessRunner.runDetached(executableURL: executable, arguments: ["--version"], environment: environment, timeout: 15)
         guard probe.succeeded,
               let installed = RuntimeMaintenance.normalizeVersion(probe.stdout),
               installed == packageSpec.split(separator: "@").last.map(String.init) else {
             throw RuntimeMaintenanceError.verification
-        }
-        let packageName = String(packageSpec.prefix(upTo: packageSpec.lastIndex(of: "@")!))
-        if ["@agentclientprotocol/codex-acp", "@agentclientprotocol/claude-agent-acp"].contains(packageName) {
-            let dependency = packageName.hasSuffix("/codex-acp") ? "@openai/codex" : "@anthropic-ai/claude-agent-sdk"
-            guard let root = RuntimeMaintenance.packageRoot(executable: executable, name: packageName),
-                  let bundled = RuntimeMaintenance.dependencyRoot(from: root, name: dependency),
-                  RuntimeMaintenance.packageVersion(at: bundled) != nil,
-                  let engine = RuntimeMaintenance.bundledEngine(in: bundled, kind: packageName.hasSuffix("/codex-acp") ? .codex : .claudeCode),
-                  FileManager.default.isExecutableFile(atPath: engine.path),
-                  RuntimeMaintenance.probeVersion(engine).flatMap(RuntimeMaintenance.normalizeVersion) != nil
-            else { throw RuntimeMaintenanceError.verification }
         }
         // Each npm install has an immutable prefix. Existing adapter processes
         // continue using their old dependency tree after the bin link changes.
@@ -1017,6 +972,29 @@ public struct LocalACPProcessResult: Sendable {
 }
 
 enum LocalACPProcessRunner {
+    /// Runs blocking work on a GCD thread so a long install or update never holds one of
+    /// Swift concurrency's few cooperative threads while other harnesses update alongside it.
+    static func offCooperativePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(with: Result { try body() })
+            }
+        }
+    }
+
+    static func runDetached(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]? = nil,
+        currentDirectoryURL: URL? = nil,
+        timeout: TimeInterval = 600
+    ) async throws -> LocalACPProcessResult {
+        try await offCooperativePool {
+            try run(executableURL: executableURL, arguments: arguments, environment: environment,
+                    currentDirectoryURL: currentDirectoryURL, timeout: timeout)
+        }
+    }
+
     static func run(
         executableURL: URL,
         arguments: [String],

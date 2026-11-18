@@ -626,7 +626,7 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         let checkUnavailable = unavailable
             || model.runtimeCheckErrors[configuration.id]?[harness.id] != nil
             || runtime?.versionCheckAvailable == false
-        let busy = model.busyWorkspaceIDs.contains(configuration.id) || model.isMaintaining(harness.id, in: configuration.id)
+        let busy = model.harnessMaintenanceBlocker(harness.id, in: configuration.id) != nil || model.isMaintaining(harness.id, in: configuration.id)
             || running || checking
         let label = updateButtonTitle(checking: checking, running: running, checkUnavailable: checkUnavailable)
         Button(label) {

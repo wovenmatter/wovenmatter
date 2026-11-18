@@ -51,7 +51,11 @@ struct RuntimeMaintenanceTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
         let resolver = LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path])
         let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true, resolver: resolver,
-            fetch: { _ in Data(#"{"version":"99.0.0","bin":{"cli":"bin.js"}}"#.utf8) })
+            fetch: { url in
+                url == RuntimeMaintenance.codexNativeChannel
+                    ? Data(#"{"tag_name":"rust-v99.0.0"}"#.utf8)
+                    : Data(#"{"version":"99.0.0","bin":{"cli":"bin.js"}}"#.utf8)
+            })
         #expect(inventory.components.map(\.name) == ["codex-acp", "Bundled ACP SDK", "codex CLI"])
         #expect(inventory.isInstalled == !cliTooOld)
         #expect(inventory.components[0].installed == adapterVersion)

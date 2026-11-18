@@ -33,7 +33,9 @@ command output, account data, paths, or credentials.
 Each harness on this Mac is the person's own native CLI, in the place its vendor's
 official installer puts it, so the terminal and Woven Matter run the same CLI with
 the same sign-ins, skills and sessions. Woven Matter finds that install before any
-other copy on the search path.
+other copy on the search path, and never uses a CLI left in its own `Node Tools/bin`
+by an older Woven Matter (that folder holds only the ACP adapters). Each CLI is
+compared with the release channel its vendor's installer and update command read.
 
 | Harness | Native CLI (official installer) | Woven Matter connects through | Update |
 | --- | --- | --- | --- |
@@ -46,7 +48,8 @@ other copy on the search path.
 
 **Install** runs the vendor's official installer for a CLI that isn't on this Mac,
 downloaded from the fixed HTTPS address in `harnesses/catalog.json`, with no review
-step and never through npm. An existing CLI is kept. Codex and Claude Code then get
+step and never through npm. An existing CLI is kept unless it can't run the harness
+(for example a Codex below the catalog minimum). Codex and Claude Code then get
 their ACP adapter, which is Woven Matter's own: it installs with Woven Matter's npm
 into `Node Tools/Installations/<UUID>`, is verified, and replaces the launcher
 symlink in `Node Tools/bin` atomically. Old generations are retained so running
@@ -61,7 +64,8 @@ and it keeps running when Woven Matter quits.
 
 **Update** runs each vendor's own update command (above) in the person's login shell
 with no window, so it updates the install their terminal uses however it was
-installed. Each command has a two-minute limit. Afterwards Woven Matter reads the
+installed. Each command has a ten-minute limit. A CLI is never updated while its own
+sign-in is running; other harnesses go ahead. Afterwards Woven Matter reads the
 versions again: the CLI must have moved to a newer version (a vendor's native channel
 can trail the newest registry publication, so it needn't reach it), and the adapter
 and its libraries must reach their targets. An update that changed nothing reports

@@ -11,7 +11,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     public let cliInstallerSource: URL?
     public let cliInstallerInterpreter: String?
     public let cliInstallerArguments: [String]
-    public let cliNpmPackageSpec: String?
     /// Arguments to the CLI's own update command (`claude update`, `opencode upgrade`).
     public let updateArguments: [String]
     public let adapterPackage: String?
@@ -35,7 +34,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         cliInstallerSource: URL?,
         cliInstallerInterpreter: String?,
         cliInstallerArguments: [String] = [],
-        cliNpmPackageSpec: String? = nil,
         updateArguments: [String] = [],
         adapterPackage: String?,
         minimumAdapterVersion: String? = nil,
@@ -52,7 +50,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.cliInstallerSource = cliInstallerSource
         self.cliInstallerInterpreter = cliInstallerInterpreter
         self.cliInstallerArguments = cliInstallerArguments
-        self.cliNpmPackageSpec = cliNpmPackageSpec
         self.updateArguments = updateArguments
         self.adapterPackage = adapterPackage
         self.minimumAdapterVersion = minimumAdapterVersion
@@ -80,9 +77,6 @@ public enum LocalACPRuntimeCatalog {
                 cliInstallerSource: harness.install.source,
                 cliInstallerInterpreter: harness.install.interpreter,
                 cliInstallerArguments: harness.install.arguments,
-                cliNpmPackageSpec: harness.install.kind == "npm-global"
-                    ? harness.install.package
-                    : nil,
                 updateArguments: harness.update?.arguments ?? [],
                 adapterPackage: harness.adapterPackage,
                 minimumAdapterVersion: harness.minimumAdapterVersion,
@@ -287,6 +281,11 @@ public struct LocalACPRuntimeResolver: Sendable {
         }
     }
 
+    static var privateToolDirectories: Set<String> {
+        [LocalACPManagedRuntimePaths.nodeToolsBinDirectory.path,
+         LocalACPManagedRuntimePaths.applicationSupportDirectory.appending(path: "ACP Adapters/bin").path]
+    }
+
     static func nativeExecutable(named name: String) -> URL? {
         nativeLocation(named: name).flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
     }
@@ -480,7 +479,10 @@ public struct LocalACPRuntimeResolver: Sendable {
         named name: String,
         searchDirectories: [String]
     ) -> URL? {
-        for directory in searchDirectories {
+        // Woven Matter's own folder holds only the ACP adapters. A vendor CLI found there is
+        // a private copy left by an older Woven Matter and is never used.
+        let privateFolders = nativeLocation(named: name) == nil ? [] : privateToolDirectories
+        for directory in searchDirectories where !privateFolders.contains(directory) {
             let candidate = URL(fileURLWithPath: directory, isDirectory: true).appending(path: name)
             if FileManager.default.isExecutableFile(atPath: candidate.path) {
                 return candidate

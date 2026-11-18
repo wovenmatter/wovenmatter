@@ -16,12 +16,12 @@ struct NativeHarnessTests {
         #expect(RuntimeMaintenance.vendorUpdateArguments(.defaultAgent) == nil)
 
         let calls = Calls()
-        let grok = URL(fileURLWithPath: "/Users/someone/.grok/bin/grok")
+        let grok = URL(fileURLWithPath: "/home/someone/.grok/bin/grok")
         try await RuntimeMaintenance.runVendorUpdate(.grokBuild, executable: grok) { executable, arguments, timeout in
             calls.record(executable.path + " " + arguments.joined(separator: " ") + " \(Int(timeout))")
             return LocalACPProcessResult(terminationStatus: 0, stdout: "")
         }
-        #expect(calls.values == ["/Users/someone/.grok/bin/grok update 120"])
+        #expect(calls.values == ["/home/someone/.grok/bin/grok update 600"])
         await #expect(throws: LocalACPRuntimeInstallError.self) {
             try await RuntimeMaintenance.runVendorUpdate(.claudeCode, executable: grok) { _, _, _ in
                 LocalACPProcessResult(terminationStatus: 1, stdout: "network down")
@@ -43,11 +43,11 @@ struct NativeHarnessTests {
     }
 
     @Test func nativeCLIsAreFoundWhereTheirOfficialInstallersPutThem() {
-        let home = URL(fileURLWithPath: "/Users/someone")
-        #expect(LocalACPRuntimeResolver.nativeLocation(named: "claude", home: home)?.path == "/Users/someone/.local/bin/claude")
-        #expect(LocalACPRuntimeResolver.nativeLocation(named: "codex", home: home)?.path == "/Users/someone/.local/bin/codex")
-        #expect(LocalACPRuntimeResolver.nativeLocation(named: "grok", home: home)?.path == "/Users/someone/.grok/bin/grok")
-        #expect(LocalACPRuntimeResolver.nativeLocation(named: "opencode", home: home)?.path == "/Users/someone/.opencode/bin/opencode")
+        let home = URL(fileURLWithPath: "/home/someone")
+        #expect(LocalACPRuntimeResolver.nativeLocation(named: "claude", home: home)?.path == "/home/someone/.local/bin/claude")
+        #expect(LocalACPRuntimeResolver.nativeLocation(named: "codex", home: home)?.path == "/home/someone/.local/bin/codex")
+        #expect(LocalACPRuntimeResolver.nativeLocation(named: "grok", home: home)?.path == "/home/someone/.grok/bin/grok")
+        #expect(LocalACPRuntimeResolver.nativeLocation(named: "opencode", home: home)?.path == "/home/someone/.opencode/bin/opencode")
         #expect(LocalACPRuntimeResolver.nativeLocation(named: "codex-acp", home: home) == nil)
     }
 
@@ -101,7 +101,6 @@ struct NativeHarnessTests {
         let definition = OpenCodeServiceLauncher.installDefinition
         #expect(definition.cliInstallerSource == URL(string: "https://opencode.ai/v2/install"))
         #expect(definition.cliInstallerInterpreter == "bash")
-        #expect(definition.cliNpmPackageSpec == nil)
         #expect(definition.updateArguments == ["upgrade"])
     }
 

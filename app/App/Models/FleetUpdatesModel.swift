@@ -1113,15 +1113,23 @@ final class FleetUpdatesModel {
         guard let harness = remote.currentHarnesses(for: target.configuration).first(where: { $0.id == target.kind }) else {
             return "It isn't connected right now."
         }
-        remote.runHarnessMaintenance("update", harness: harness, configuration: target.configuration)
-        _ = await wait(timeout: .seconds(15)) { remote.isMaintaining(target.kind, in: id) }
+        // A short change there (a refresh, a check) finishes first; a sign-in to this
+        // harness doesn't, so it is reported straight away.
+        _ = await wait(timeout: .seconds(60)) {
+            remote.harnessMaintenanceBlocker(target.kind, in: id) == nil || remote.signingInHarnesses[id] == target.kind
+        }
+        if let refused = await remote.startHarnessMaintenance("update", harness: harness, configuration: target.configuration) {
+            return refused
+        }
         guard await wait(timeout: .seconds(1_000), until: {
             !remote.isMaintaining(target.kind, in: id)
                 && remote.runtimeMaintenance[id]?.first(where: { $0.id == target.kind })?.operation?.status != "running"
         }) else { return "It did not finish in time." }
+        // This run's own error comes first: a failure before the host started anything
+        // leaves the previous run's operation in place.
+        if let error = remote.actionErrors[id]?[target.kind] { return error }
         let runtime = remote.runtimeMaintenance[id]?.first { $0.id == target.kind }
         if runtime?.operation?.status == "failed" { return runtime?.operation?.error.map(RemoteRuntimeFailure.describe) ?? "The update failed." }
-        if let error = remote.actionErrors[id]?[target.kind] { return error }
         return runtime?.updateAvailable == true ? "It is still out of date." : nil
     }
 

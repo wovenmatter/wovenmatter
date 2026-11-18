@@ -504,10 +504,13 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
     if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
       const agent = await defaultAgent.status();
+      // The check runs the CLI at the path found with the harness PATH, not the
+      // service's own PATH, which predates CLIs installed after the service.
+      const environment = harnessEnvironment()
       const entries = await Promise.all([...catalog.values()].map(async h => ({
-        id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
+        id: h.id, name: h.displayName, executable: await commandLocation(h.cliCommand),
       })));
-      const statuses = await signInStatuses(entries);
+      const statuses = await signInStatuses(entries, undefined, environment);
       statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Pi Durable', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
         : agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name }))));
       return json(response, 200, { statuses });
@@ -646,6 +649,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const signInMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-in$/)
     if (request.method === 'POST' && signInMatch) {
       const harness = requireHarness(signInMatch[1])
+      // An install or update replaces the CLI a sign-in would run.
+      if (maintenance.isBusy(harness.id)) return json(response, 409, { error: 'runtime_maintenance_in_progress' })
       const body = await readJSON(request)
       const method = requireAuthenticationMethod(harness, body.methodID)
       const session = startAuthenticationSession(harness, method)
@@ -655,6 +660,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const signOutMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-out$/)
     if (request.method === 'POST' && signOutMatch) {
       const harness = requireHarness(signOutMatch[1])
+      if (maintenance.isBusy(harness.id)) return json(response, 409, { error: 'runtime_maintenance_in_progress' })
       const command = harness.authentication?.signOutCommand
       if (!command) return json(response, 409, { error: 'sign_out_not_supported' })
       if ([...authenticationSessions.values()].some(s => s.harness.id === harness.id && s.state === 'waiting_for_user')) {
@@ -1195,11 +1201,21 @@ function sanitizedAuthenticationOutput(output) {
 }
 
 async function commandExists(command) {
-  if (!command) return false
+  return Boolean(await commandLocation(command))
+}
+
+/** The absolute path `command` resolves to on the harness PATH, or null. */
+async function commandLocation(command) {
+  if (!command) return null
   return new Promise((resolvePromise) => {
-    const child = spawn('/bin/bash', ['-c', `command -v ${shellQuote(command)}`], { env: harnessEnvironment(), stdio: 'ignore' })
-    child.on('error', () => resolvePromise(false))
-    child.on('close', (code) => resolvePromise(code === 0))
+    let output = ''
+    const child = spawn('/bin/bash', ['-c', `command -v ${shellQuote(command)}`], { env: harnessEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })
+    child.stdout.on('data', (data) => { output = (output + data).slice(0, 4096) })
+    child.on('error', () => resolvePromise(null))
+    child.on('close', (code) => {
+      const path = output.trim().split('\n')[0]
+      resolvePromise(code === 0 && path.startsWith('/') ? path : null)
+    })
   })
 }
 

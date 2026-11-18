@@ -131,7 +131,7 @@ struct SettingsRemoteHarnessSoftware: View {
                 let checking = model.checkingRuntimeIDs[workspace.id]?.contains(runtimeKind) == true
                 let running = runtime?.operation?.status == "running"
                 let unavailable = model.isRuntimeInventoryUnavailable(runtimeKind, configuration: workspace)
-                let busy = model.busyWorkspaceIDs.contains(workspace.id) || model.isMaintaining(runtimeKind, in: workspace.id)
+                let busy = model.harnessMaintenanceBlocker(runtimeKind, in: workspace.id) != nil || model.isMaintaining(runtimeKind, in: workspace.id)
                     || running || checking
                 SettingsRuntimeSummaryRow(
                     summary: runtime?.components.map(componentVersion).joined(separator: " · ") ?? "Checking installed components…",

@@ -46,7 +46,8 @@ struct SettingsRemoteHarnessAccountView: View {
                     }
                     Spacer()
                     harnessButtons(harness, workspace: workspace)
-                        .disabled(model.busyWorkspaceIDs.contains(workspace.id))
+                        .disabled(model.busyWorkspaceIDs.contains(workspace.id)
+                                  || model.isMaintaining(runtimeKind, in: workspace.id))
                 }
             } else {
                 SettingsEmpty("Connect this workspace to check sign-in.")
@@ -55,6 +56,9 @@ struct SettingsRemoteHarnessAccountView: View {
             }
             if let session = model.authenticationSessions[workspace.id], session.harnessID == runtimeKind {
                 signInCard(session, workspace: workspace)
+            }
+            if model.isMaintaining(runtimeKind, in: workspace.id) {
+                SettingsNote("Account changes wait until \(runtimeKind.displayName) finishes installing or updating.")
             }
             if let error = model.actionErrors[workspace.id]?[runtimeKind] { SettingsError(error) }
         }

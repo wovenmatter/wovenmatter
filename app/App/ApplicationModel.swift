@@ -3223,17 +3223,29 @@ final class ApplicationModel {
             defer { checkingRuntimeInventory = false }
             await openCode?.resolveExecutable()
             let selectedOpenCode = openCode?.runtimeExecutable
+            var generations: [AgentRuntimeKind: UInt64] = [:]
             for definition in LocalACPRuntimeCatalog.definitions {
                 let kind = definition.runtimeKind
                 guard !runtimeMaintenanceBusy(kind), checkingRuntimeKinds.insert(kind).inserted else { continue }
-                let generation = runtimeInventoryGeneration[kind, default: 0]
-                let inventory = await Task.detached(priority: .utility) {
-                    await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
-                }.value
-                checkingRuntimeKinds.remove(kind)
-                guard !runtimeMaintenanceBusy(kind), generation == runtimeInventoryGeneration[kind, default: 0] else { continue }
-                runtimeInventories[kind] = inventory
-                checkedRuntimeKinds.insert(kind)
+                generations[kind] = runtimeInventoryGeneration[kind, default: 0]
+            }
+            // One search-path lookup (a login shell) for the whole check; every harness is
+            // inspected at once.
+            let resolver = await Task.detached(priority: .utility) {
+                LocalACPRuntimeResolver().snapshottingExecutableSearchDirectories()
+            }.value
+            await withTaskGroup(of: (AgentRuntimeKind, RuntimeInventory).self) { group in
+                for kind in generations.keys {
+                    group.addTask(priority: .utility) {
+                        (kind, await RuntimeMaintenance.inspect(kind, checkLatest: true, resolver: resolver, selectedOpenCode: selectedOpenCode))
+                    }
+                }
+                for await (kind, inventory) in group {
+                    checkingRuntimeKinds.remove(kind)
+                    guard !runtimeMaintenanceBusy(kind), generations[kind] == runtimeInventoryGeneration[kind, default: 0] else { continue }
+                    runtimeInventories[kind] = inventory
+                    checkedRuntimeKinds.insert(kind)
+                }
             }
         }
     }
@@ -3339,6 +3351,11 @@ final class ApplicationModel {
         let kind = definition.runtimeKind
         guard !runtimeMaintenanceBusy(kind), !checkingRuntimeKinds.contains(kind),
               !localRuntimeMaintenanceHasActiveConversation else { return }
+        // Never replace a CLI while its own sign-in is running; other harnesses go ahead.
+        if harnessSignIn.sessions[kind]?.isActive == true {
+            recordRuntimeFailure(kind, error: RuntimeMaintenanceError.signingIn, update: update)
+            return
+        }
         runtimeInventoryGeneration[kind, default: 0] &+= 1
         installingLocalACPRuntimeKinds.insert(kind)
         if update { updatingRuntimeKinds.insert(kind) }
@@ -3368,10 +3385,13 @@ final class ApplicationModel {
                         try await RuntimeMaintenance.runVendorUpdate(kind, executable: executable)
                     }
                 } else {
-                    // Only a CLI that isn't on this Mac is installed; an existing one is kept.
+                    // A CLI already on this Mac is used as it is. The official installer runs
+                    // when there is none, or when the one found can't run this harness.
                     let name = definition.underlyingCLIName ?? definition.commandName
                     let existing = await Task.detached(priority: .utility) { LocalACPRuntimeResolver().executable(named: name) }.value
-                    if existing == nil { _ = try await installer.install(definition, component: .cli) }
+                    if existing == nil || (cli?.present == true && cli?.verified == false) {
+                        _ = try await installer.install(definition, component: .cli)
+                    }
                 }
                 if let package = definition.adapterPackage {
                     let adapterBehind = before?.components.contains { $0.name != cli?.name && ($0.outdated || !$0.verified || !$0.present) } ?? true
@@ -3420,7 +3440,11 @@ final class ApplicationModel {
                 }
                 continue
             }
-            guard let installed = current?.installed, let target = component.latest,
+            guard let target = component.latest else {
+                guard current?.verified == true else { throw RuntimeMaintenanceError.verification }
+                continue
+            }
+            guard let installed = current?.installed,
                   installed == target || RuntimeMaintenance.version(target, precedes: installed)
             else { throw RuntimeMaintenanceError.verification }
         }

@@ -303,7 +303,13 @@ final class OpenCodeModel {
             try await OpenCodeServiceLauncher.upgrade(executable: executable, registration: registration)
             installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: true, selectedOpenCode: executable)
             isInstalling = false
-        } catch { isInstalling = false; throw error }
+        } catch {
+            // The shared service keeps running on its old version when an upgrade fails, so
+            // reconnect to it before reporting the failure.
+            isInstalling = false
+            if reconnect { try? await connectLocal() }
+            throw error
+        }
         if reconnect { try await connectLocal() }
     }
 

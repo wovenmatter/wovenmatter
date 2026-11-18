@@ -335,47 +335,43 @@ Agent CLIs and ACP connectors are checked independently. The CLIs are the person
 own native installs: Woven Matter installs a missing one with its vendor's official
 installer and updates it with the vendor's own command, so it records no CLI
 selection. An up-to-date connector does not establish that the CLI is current.
-Settings selects the newest nondeprecated stable publication for each component;
-a stale npm dist-tag cannot hide a newer stable version. Claude's native installer
-and updater receive the newest nondeprecated stable CLI version explicitly,
-resolved from publication metadata. Native `latest` and `stable` pointers can lag
-that publication; unavailable metadata refuses installation rather than retaining
-an older configured channel. OpenCode and Executor retain the documented v2 API boundary;
-maintenance must review a newer stable API major and implement its migration.
+Each CLI is compared with the channel its vendor's own installer and update command
+read, which can trail npm: `releases.openai.com/codex/channels/latest` for Codex,
+`downloads.claude.ai/claude-code-releases/latest` for Claude Code, `x.ai/cli/stable`
+for Grok Build and `opencode.ai/update/api/latest/cli/npm` for OpenCode 2. Official
+installers run with the catalog's arguments and install what their channel names.
+For connectors, Settings selects the newest nondeprecated stable npm publication; a
+stale npm dist-tag cannot hide a newer stable version. OpenCode and Executor retain
+the documented v2 API boundary; maintenance must review a newer stable API major and
+implement its migration.
 
-`harnesses/catalog.json` records tested connector and engine minimums separately:
+`harnesses/catalog.json` records tested connector and CLI minimums separately:
 Codex ACP 2.7.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.326
 (native Claude Code 2.1.326). The adapters drive the native Codex and Claude CLIs
-(`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`), which follow their vendors' stable channels;
-a native Codex older than the engine minimum reads as needing its update. Codex ACP's `^0.166.0` engine range
-otherwise keeps its chat engine behind; its `~2.6.0` ACP TypeScript SDK range
-also excludes the current 2.7.0. Claude ACP 0.107.3 pins SDK 0.3.325;
-the consumer-scoped override remains so engine-only updates stay eligible when
-a later stable engine publication moves ahead of that pin. Transcript-write loss
-invalidates the native resume marker and refuses tool dispatch/continuation commits;
-config-only write loss leaves a valid response intact. Provider-free persistence
-fixtures verify canonical replay after recovery. Claude's connector now selects protocol SDK
-2.7.0 directly; its consumer-scoped override retains independent SDK updates. The
-catalog's independent ACP SDK floor is 2.7.0. Mac and native Linux/container
-explicit updates resolve its newest nondeprecated stable
-publication independently, retain the vendor manifests, and verify the exact
-consumer graph and ACP v1 handshake before activation. SDK-only updates appear
-in inventory even when connector and engine are current. Failed candidates
-leave the active generation intact. The 2.7 SDK retains stable v1;
-its v2 changes remain experimental and do not change Woven Matter's wire API.
-The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
-the independently selected engine and scopes an npm override to that connector.
-This core-function exception keeps the engine used for chat current; it does not
-modify upstream manifests, copy credentials, or substitute a standalone CLI.
+(`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
+as needing its update. The CLI copy npm bundles inside each adapter package is never
+selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
+published, with no engine override. Claude ACP pins its Claude Agent SDK library, so
+that library moves only with an adapter update and is held to the catalog minimum
+rather than compared with npm. Transcript-write loss invalidates the native resume
+marker and refuses tool dispatch/continuation commits; config-only write loss leaves a
+valid response intact. Provider-free persistence fixtures verify canonical replay
+after recovery. The catalog's independent ACP SDK floor is 2.7.0: Mac and native
+Linux/container updates resolve its newest nondeprecated stable publication and scope
+an npm override for it to the connector. This core-function exception keeps the
+protocol library current; it does not modify upstream manifests or copy credentials.
+SDK-only updates appear in inventory even when connector and CLI are current. The 2.7
+SDK retains stable v1; its v2 changes remain experimental and do not change Woven
+Matter's wire API.
 
 Each explicit installation/update builds an immutable generation, retains its
-npm lockfile and integrity records, verifies package/executable versions and native
-Claude signatures, and requires an actual provider-free ACP v1 initialize response
-before atomically promoting the executable link. Verification uses an empty,
-private configuration with no inherited credentials or executable overrides.
-Failed candidates are removed; existing generations stay intact for running
-sessions. The Mac and remote installers use the same implementation. System-owned
-remote installations remain outside Woven's update ownership.
+npm lockfile and integrity records, verifies the connector and ACP SDK versions, and
+requires an actual provider-free ACP v1 initialize response, with the adapter pointed
+at the native CLI, before atomically promoting the executable link. Verification uses
+an empty, private configuration with no inherited credentials. Failed candidates are
+removed; existing generations stay intact for running sessions. The Mac and remote
+installers use the same implementation. System-owned remote installations remain
+outside Woven's update ownership.
 
 Maintenance reviews both upstream connector requirements and current engine/CLI
 releases, updates catalog minimums, and validates the actual selected pairs plus

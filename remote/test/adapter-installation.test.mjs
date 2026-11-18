@@ -12,7 +12,7 @@ import { installAdapter } from '../../harnesses/install-adapter.mjs';
 const exec = promisify(execFile);
 const adapter = '@agentclientprotocol/codex-acp', engine = '@openai/codex';
 
-test('real npm installs a newer engine outside the adapter range; failed verification preserves the previous generation', { timeout: 60000 }, async t => {
+test('real npm installs the adapter as published, pointed at the native CLI; failed verification preserves the previous generation', { timeout: 60000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-adapter-graph-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const archives = new Map();
@@ -35,16 +35,16 @@ test('real npm installs a newer engine outside the adapter range; failed verific
     metadata.set(name, versions);
   }
   await pack('@agentclientprotocol/sdk', '2.2.0', { 'index.js': 'exports.version = \"2.2.0\";' }, { bin: undefined });
-  await pack(engine, '0.166.0', {
-    'index.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.166.0");',
-    'bin/codex.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.166.0");',
+  await pack(engine, '0.165.4', {
+    'index.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.165.4");',
+    'bin/codex.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.165.4");',
   });
+  const nativeCLI = join(root, 'home/.local/bin/codex');
   const fixture = (version, protocol) => `#!/usr/bin/env node
     const fs = require('node:fs');
     const readline = require('node:readline');
-    if (process.env.WOVEN_TEST_SECRET || process.env.CODEX_PATH) process.exit(4);
-    const dependency = require('@openai/codex/package.json');
-    if (dependency.version !== '0.166.0') process.exit(5);
+    if (process.env.WOVEN_TEST_SECRET) process.exit(4);
+    if (process.env.CODEX_PATH !== ${JSON.stringify(nativeCLI)}) process.exit(5);
     if (require('@agentclientprotocol/sdk').version !== '2.2.0') process.exit(8);
     if (!fs.existsSync(process.env.CODEX_HOME)) process.exit(6);
     readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -66,7 +66,7 @@ test('real npm installs a newer engine outside the adapter range; failed verific
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const prefix = join(root, 'installed');
-  const options = { prefix, adapter, adapterVersion: '2.5.0', engineVersion: '0.166.0', protocolSDKVersion: '2.2.0',
+  const options = { prefix, adapter, adapterVersion: '2.5.0', protocolSDKVersion: '2.2.0', cli: nativeCLI,
     npm: [...npm, '--registry', `http://127.0.0.1:${server.address().port}`] };
   const previousSecret = process.env.WOVEN_TEST_SECRET, previousOverride = process.env.CODEX_PATH;
   process.env.WOVEN_TEST_SECRET = 'must-not-reach-probe'; process.env.CODEX_PATH = '/must-not-be-used';
@@ -78,11 +78,12 @@ test('real npm installs a newer engine outside the adapter range; failed verific
   const target = await readlink(executable);
   const generation = join(target, '../../..');
   const lock = JSON.parse(await readFile(join(generation, 'package-lock.json'), 'utf8'));
-  assert.equal(lock.packages['node_modules/@openai/codex'].version, '0.166.0');
+  assert.equal(lock.packages['node_modules/@openai/codex'].version, '0.165.4', 'no engine is selected: the adapter keeps its own dependency');
   assert.equal(lock.packages['node_modules/@agentclientprotocol/codex-acp'].dependencies[engine], '^0.165.0', 'upstream manifest remains intact');
   for (const name of [adapter, engine]) assert.match(lock.packages['node_modules/' + name].integrity, /^sha512-/);
   const verification = JSON.parse(await readFile(join(generation, 'verification.json'), 'utf8'));
-  assert.equal(verification.engineVersion, '0.166.0');
+  assert.equal(verification.engineVersion, undefined);
+  assert.equal(verification.cli, nativeCLI);
   assert.equal(verification.protocolVersion, 1);
   assert.equal(verification.protocolSDKVersion, '2.2.0');
   assert.equal(lock.packages['node_modules/@agentclientprotocol/sdk'].version, '2.2.0');

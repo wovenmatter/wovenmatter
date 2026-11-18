@@ -9,7 +9,9 @@ const checks = {
 };
 // No login, model prompt, transport startup, or credential writes. Nonzero
 // status alone cannot distinguish a network failure from a signed-out account.
-export async function signInStatuses(harnesses, execute = exec) {
+// `environment` is the one the harness itself runs with (its PATH finds the CLIs
+// installed after this process started).
+export async function signInStatuses(harnesses, execute = exec, environment = process.env) {
   return Promise.all(harnesses.map(async harness => {
     const base = { id: harness.id, name: harness.name ?? harness.displayName };
     if (harness.enabled === false) return { ...base, state: 'not_checked', detail: 'Enable credential access for this harness to check its sign-in.' };
@@ -20,7 +22,7 @@ export async function signInStatuses(harnesses, execute = exec) {
     const outcomes = await Promise.all(commands.map(async args => {
       let output, success = false;
       try {
-        const result = await execute(harness.executable, args, { timeout: 10000, killSignal: 'SIGKILL', maxBuffer: 65536, env: { ...process.env, NO_OPEN_BROWSER: '1', BROWSER: '/usr/bin/false' } });
+        const result = await execute(harness.executable, args, { timeout: 10000, killSignal: 'SIGKILL', maxBuffer: 65536, env: { ...environment, NO_OPEN_BROWSER: '1', BROWSER: '/usr/bin/false' } });
         output = String(result.stdout ?? '') + String(result.stderr ?? ''); success = true;
       } catch (error) {
         if (error.code === 'ENOENT') return 'not_installed';
@@ -48,7 +50,7 @@ export async function signInStatuses(harnesses, execute = exec) {
       sign_in_required: 'The harness reports that sign-in is required.', not_installed: 'This harness is not installed.',
       check_failed: 'Could not confirm sign-in. A failed check does not mean the account is signed out.' };
     if (state === 'verified' && harness.id === 'codex') {
-      const account = await readCodexAccount(harness.executable);
+      const account = await readCodexAccount(harness.executable, environment);
       if (account.length) accounts.splice(0, accounts.length, ...account);
     }
     return { ...base, state, detail: details[state], accounts:
@@ -92,10 +94,10 @@ function openCodeStoredAccounts(text) {
 
 // Codex exposes the selected account's public metadata via account/read. Do not
 // inspect token files, refresh credentials, or retain an app-server after reading.
-export function readCodexAccount(executable) {
+export function readCodexAccount(executable, environment = process.env) {
   return new Promise(resolve => {
     const child = spawn(executable, ['app-server'], { detached: true, stdio: ['pipe', 'pipe', 'ignore'],
-      env: { ...process.env, NO_OPEN_BROWSER: '1', BROWSER: '/usr/bin/false' } });
+      env: { ...environment, NO_OPEN_BROWSER: '1', BROWSER: '/usr/bin/false' } });
     let buffer = '', bytes = 0, answer = [], finished = false, killTimer;
     const signal = value => { try { process.kill(-child.pid, value); } catch {} };
     const finish = () => {

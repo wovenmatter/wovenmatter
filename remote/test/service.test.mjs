@@ -196,6 +196,58 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   assert.equal((await fetch(`${service.url}/v1/harnesses/opencode/sign-out`, { method: 'POST', headers, body: '{}' })).status, 404)
 })
 
+test('sign-in status finds a CLI installed after the service started, outside its PATH', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-sign-in-status-')
+  const home = resolve(fixture, 'home'), workspace = resolve(fixture, 'workspace')
+  // The service PATH (fixtureEnvironment) has ~/.local/bin only, as a systemd unit
+  // written before Grok's official installer created ~/.grok/bin.
+  await mkdir(resolve(home, '.grok/bin'), { recursive: true }); await mkdir(workspace, { recursive: true })
+  await writeFile(resolve(home, '.grok/bin/grok'), '#!/bin/sh\n[ "$1" = models ] && echo "You are logged in"\nexit 0\n')
+  await chmod(resolve(home, '.grok/bin/grok'), 0o700)
+  const token = 'sign-in-status-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace, home, catalog: catalogPath, token })
+  context.after(() => stopService(service.child))
+  const response = await fetch(`${service.url}/v1/sign-in-status`, { headers: { authorization: 'Bearer ' + token } })
+  assert.equal(response.status, 200)
+  const { statuses } = await response.json()
+  assert.equal(statuses.find(s => s.id === 'grok_build').state, 'verified')
+  assert.equal(statuses.find(s => s.id === 'opencode').state, 'not_installed')
+})
+
+test('sign-in and sign-out wait while that harness installs or updates; others are not blocked', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-sign-in-busy-')
+  const home = resolve(fixture, 'home'), workspace = resolve(fixture, 'workspace'), release = resolve(fixture, 'release')
+  await mkdir(resolve(home, '.grok/bin'), { recursive: true }); await mkdir(workspace, { recursive: true })
+  // `grok update` holds until the test releases it, so the update stays running.
+  await writeFile(resolve(home, '.grok/bin/grok'), `#!/bin/sh\ncase "$1" in\n--version) echo "grok 1.0.77" ;;\nupdate) while [ ! -f '${release}' ]; do /bin/sleep 0.05; done ;;\nesac\nexit 0\n`)
+  await chmod(resolve(home, '.grok/bin/grok'), 0o700)
+  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
+  const codex = catalog.harnesses.find(value => value.id === 'codex')
+  const testCatalog = resolve(fixture, 'catalog.json')
+  await writeFile(testCatalog, JSON.stringify({ schemaVersion: 4, harnesses: [
+    catalog.harnesses.find(value => value.id === 'grok_build'),
+    { ...codex, authentication: { ...codex.authentication, statusCommands: ['false'], signOutCommand: ':' } },
+  ] }))
+  const token = 'sign-in-busy-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace, home, catalog: testCatalog, token })
+  context.after(() => stopService(service.child))
+  const headers = { authorization: 'Bearer ' + token, 'content-type': 'application/json' }
+  const post = (path, body = {}) => fetch(service.url + path, { method: 'POST', headers, body: JSON.stringify(body) })
+  const started = await post('/v1/harnesses/grok_build/update', { confirmed: true })
+  assert.equal(started.status, 202)
+  const operation = await started.json()
+  for (const path of ['/v1/harnesses/grok_build/sign-in', '/v1/harnesses/grok_build/sign-out']) {
+    const refused = await post(path, { methodID: 'grok-account' })
+    assert.equal(refused.status, 409)
+    assert.deepEqual(await refused.json(), { error: 'runtime_maintenance_in_progress' })
+  }
+  assert.equal((await post('/v1/harnesses/codex/sign-out')).status, 200)
+  await writeFile(release, '')
+  const done = await waitFor(`${service.url}/v1/operations/${operation.id}`, headers, value => value.status !== 'running')
+  assert.equal(done.status, 'succeeded', done.error)
+  assert.equal((await post('/v1/harnesses/grok_build/sign-out')).status, 200)
+})
+
 async function temporaryFixture(context, prefix) {
   const directory = await mkdtemp(resolve(tmpdir(), prefix))
   context.after(() => rm(directory, { recursive: true, force: true }))

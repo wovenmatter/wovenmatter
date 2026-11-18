@@ -40,7 +40,7 @@ function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_
     else assert.fail('unexpected OpenCode operation '+request.method+' '+url.pathname)
     return {ok:true,status:200,json:async()=>structuredClone(response)}
   }
-  const execute=createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest})
+  const execute=createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:()=>'fixture'},read:async(path)=>{if(path!=='fixture')throw new TypeError('registration path');return JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42})},fetchRequest})
   const context=base('opencode');context.nativeSessionID='ses_fixture'
   return {execute,context,calls,session}
 }

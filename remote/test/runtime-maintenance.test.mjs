@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { createRuntimeMaintenance, sanitize, nativeInstaller, nativeUpdateArguments } from '../src/runtime-maintenance.mjs'
+import { createRuntimeMaintenance, sanitize, nativeInstaller, nativeUpdateArguments, runHost, claudeCodeNativeChannel, operationFailureCodes } from '../src/runtime-maintenance.mjs'
 import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
@@ -67,7 +67,7 @@ test('a missing OpenCode installs with its official v2 installer, never npm or a
   assert.deepEqual(f.installers, [['opencode', 'https://opencode.ai/v2/install']])
   const install = f.calls.find(([command]) => command.startsWith("'bash' "))
   assert.equal(install[0], `'bash' '${resolve(f.root, '.wovenmatter/installers/opencode.sh')}'`)
-  assert.equal(install[1], 300000)
+  assert.equal(install[1], 600000)
   assert.equal(f.calls.some(([command]) => /npm/.test(command)), false)
   const calls = f.calls.length
   assert.equal(await f.service.isInstalled('opencode'), true)
@@ -122,7 +122,7 @@ test('updates run the vendor command where its installer put the CLI, then prove
   const updated = await finished(service)
   assert.equal(updated.operation.status, 'succeeded')
   const update = f.calls.find(([command]) => command.endsWith("'update'"))
-  assert.equal(update[1], 180000, 'the vendor update has a short background time limit')
+  assert.equal(update[1], 600000, 'the vendor update has a ten-minute background time limit')
   assert.deepEqual(f.installers, [], 'an update never reinstalls')
 })
 
@@ -135,7 +135,7 @@ test('an updater that exits 0 without changing the version fails the update', as
   await f.service.start(grok, 'update', { confirmed: true })
   const result = await finished(f.service)
   assert.equal(result.operation.status, 'failed')
-  assert.equal(result.operation.error, 'Update finished but a required component is still behind the checked version.')
+  assert.equal(result.operation.error, 'update_verification_failed')
 })
 
 test('a stalled updater is stopped at its time limit and reported', async t => {
@@ -228,6 +228,7 @@ test('active work blocks changes; two failures give an allowlisted diagnostic', 
   const secret = '/home/private-account/project confidential-provider-response'
   await f.service.recordFailure(opencode, 'install', new Error('Installer exited 1. ' + secret))
   const result = (await f.service.list()).runtimes[0]
+  assert.equal(result.operation.error, 'installer_failed')
   assert.match(result.diagnosticPrompt, /Failure: installer_failed/)
   assert.doesNotMatch(result.diagnosticPrompt, /private-account|confidential/)
 })
@@ -267,4 +268,103 @@ test('the native installer and update command come from the catalog when it name
   assert.deepEqual(nativeUpdateArguments(opencode), ['upgrade'])
   assert.deepEqual(nativeUpdateArguments({ ...grok, update: { arguments: ['update', '--stable'] } }), ['update', '--stable'])
   assert.deepEqual(nativeUpdateArguments(claude), ['update'])
+})
+
+test('a host command settles when it exits even if a child it left behind holds its output open', async () => {
+  const started = Date.now()
+  const result = await runHost('sleep 20 & echo started', process.env, tmpdir(), 10_000)
+  assert.equal(result.code, 0)
+  assert.equal(result.timedOut, false)
+  assert.match(result.output, /started/)
+  assert.ok(Date.now() - started < 5000)
+})
+
+test('a host command that runs past its limit is killed and reported as timed out', async () => {
+  const started = Date.now()
+  const result = await runHost('sleep 20', process.env, tmpdir(), 300)
+  assert.equal(result.timedOut, true)
+  assert.equal(result.code, -1)
+  assert.ok(Date.now() - started < 5000)
+})
+
+test('Claude Code compares with its native release channel, which can trail npm', async t => {
+  const fetched = []
+  const f = await fixture(t, { catalog: [claude], fetchImplementation: async url => {
+    fetched.push(String(url))
+    return url === claudeCodeNativeChannel
+      ? { ok: true, text: async () => '2.1.326\n' }
+      : { ok: true, json: async () => registryMetadata(String(url).includes('claude-code') ? '2.1.327' : '0.200.0'), text: async () => '' }
+  } })
+  f.commands.claude = { path: resolve(f.root, '.local/bin/claude'), version: '2.1.326 (Claude Code)' }
+  f.commands['claude-agent-acp'] = { path: resolve(f.root, '.local/share/wovenmatter/acp-adapters/bin/claude-agent-acp'), version: '0.200.0' }
+  const checked = await f.service.inventory(claude, true)
+  const cli = checked.components.find(c => c.id === 'cli')
+  assert.equal(cli.latestVersion, '2.1.326')
+  assert.equal(checked.updateAvailable, false)
+  assert.ok(fetched.includes(claudeCodeNativeChannel))
+  assert.equal(fetched.some(url => url.includes('%40anthropic-ai%2Fclaude-code') || url.includes('@anthropic-ai/claude-code')), false)
+})
+
+test('a failed command reports a fixed id; what it printed stays in the sanitized output', async t => {
+  const f = await fixture(t, { catalog: [grok], latest: '1.0.88', on: command => {
+    if (command.endsWith("'update'")) return { code: 3, output: 'network down very-secret-token https://x.ai/cli' }
+  } })
+  f.commands.grok = { path: resolve(f.root, '.grok/bin/grok'), version: 'grok 1.0.77' }
+  await f.service.inventory(grok, true)
+  await f.service.start(grok, 'update', { confirmed: true })
+  const { operation } = await finished(f.service)
+  assert.equal(operation.error, 'update_failed')
+  assert.ok(operationFailureCodes.includes(operation.error))
+  assert.match(operation.output, /network down \[redacted\] \[URL redacted\]/)
+  // A thrown message outside the allowlist never reaches the apps.
+  const odd = await fixture(t, { officialInstaller: async () => { throw new Error('ENOSPC /home/private-account/x') } })
+  await odd.service.start(opencode, 'install', { confirmed: true })
+  assert.equal((await finished(odd.service)).operation.error, 'runtime_operation_failed')
+})
+
+test('an npm-installed OpenCode is replaced by the official installer, never upgraded through npm', async t => {
+  let restarts = 0
+  const f = await fixture(t, { latest: '2.3.0', restartOpenCodeService: async () => { restarts++ }, on: async (command, { root, commands }) => {
+    if (command.startsWith("'bash' ")) {
+      const official = resolve(root, '.opencode/bin/opencode')
+      await mkdir(resolve(root, '.opencode/bin'), { recursive: true })
+      await writeFile(official, '#!/bin/sh\n'); await chmod(official, 0o700)
+      // The npm copy stays first on this PATH; the official location still wins.
+      commands['opencode-official'] = { path: official, version: 'opencode v2.3.0' }
+      return { code: 0, output: '' }
+    }
+    if (command.endsWith("'upgrade'")) throw Error('npm-installed OpenCode was upgraded through npm')
+  } })
+  // `npm --prefix ~/.local install -g @opencode/cli@2`, as older Woven hosts did.
+  const packaged = resolve(f.root, '.local/lib/node_modules/@opencode/cli/bin/opencode')
+  await mkdir(resolve(packaged, '..'), { recursive: true }); await writeFile(packaged, '#!/bin/sh\n')
+  await mkdir(resolve(f.root, '.local/bin'), { recursive: true })
+  await symlink(packaged, resolve(f.root, '.local/bin/opencode'))
+  f.commands.opencode = { path: resolve(f.root, '.local/bin/opencode'), version: 'opencode v2.2.7' }
+  const before = await f.service.inventory(opencode, true)
+  assert.equal(before.source, 'npm')
+  assert.equal(before.installed, true)
+  assert.equal(before.updateAvailable, true)
+  assert.match(before.notice, /installed with npm/)
+  await f.service.start(opencode, 'update', { confirmed: true })
+  const after = await finished(f.service)
+  assert.equal(after.operation.status, 'succeeded', after.operation.error)
+  assert.deepEqual(f.installers, [['opencode', 'https://opencode.ai/v2/install']])
+  assert.equal(after.path, resolve(f.root, '.opencode/bin/opencode'))
+  assert.equal(after.source, 'native')
+  assert.equal(after.updateAvailable, false)
+  assert.equal(restarts, 1, 'the shared service moves to the official CLI')
+  assert.equal(f.calls.some(([command]) => /npm|'upgrade'/.test(command)), false)
+})
+
+test('an npm-installed CLI that the official installer does not replace fails verification', async t => {
+  const f = await fixture(t, { catalog: [grok], on: command => { if (command.startsWith("'bash' ")) return { code: 0, output: '' } } })
+  const packaged = resolve(f.root, '.npm-global/lib/node_modules/@xai/grok/bin/grok')
+  await mkdir(resolve(packaged, '..'), { recursive: true }); await writeFile(packaged, '#!/bin/sh\n')
+  f.commands.grok = { path: packaged, version: 'grok 1.0.77' }
+  assert.equal((await f.service.inventory(grok)).source, 'npm')
+  await f.service.start(grok, 'install', { confirmed: true })
+  const result = await finished(f.service)
+  assert.deepEqual(f.installers, [['grok_build', 'https://x.ai/cli/install.sh']])
+  assert.equal(result.operation.error, 'installation_verification_failed')
 })

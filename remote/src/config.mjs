@@ -78,10 +78,19 @@ export function acpAdapterPrefix(configuration = runtimeConfiguration) {
   return resolve(configuration.home, '.local/share/wovenmatter/acp-adapters')
 }
 
-// Where each vendor's official installer puts its CLI: Claude and Codex in
-// ~/.local/bin, Grok in ~/.grok/bin, OpenCode v2 in ~/.opencode/bin.
+// Where each vendor's official installer puts its CLI: OpenCode v2 in
+// ~/.opencode/bin, Grok in ~/.grok/bin, Claude and Codex in ~/.local/bin. The
+// dedicated folders come first, so an older npm copy in ~/.local/bin (as older
+// Woven hosts installed OpenCode) never shadows the official one.
+const nativeCLIFolders = Object.freeze({ opencode: '.opencode/bin', grok: '.grok/bin', claude: '.local/bin', codex: '.local/bin' })
 export function nativeCLIDirectories(configuration = runtimeConfiguration) {
-  return ['.local/bin', '.grok/bin', '.opencode/bin'].map(path => resolve(configuration.home, path))
+  return ['.opencode/bin', '.grok/bin', '.local/bin'].map(path => resolve(configuration.home, path))
+}
+
+/** The official installer's location for one CLI command, or null for other commands. */
+export function nativeCLILocation(command, configuration = runtimeConfiguration) {
+  const folder = Object.hasOwn(nativeCLIFolders, command) ? nativeCLIFolders[command] : null
+  return folder ? resolve(configuration.home, folder, command) : null
 }
 
 function executableOnPath(name, paths) {
