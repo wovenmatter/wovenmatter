@@ -54,10 +54,9 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   in CI, and the bots install, egress and uninstall checks on a Linux host
   before release. Installed hosts pick up a new selection on update; the
   engine restarts only when its binaries or configuration changed.
-  The static Linux host selection is Docker 29.10.0. The Mac VM keeps
-  Docker 29.9.3 because Docker's signed Resolute APT indexes do not yet publish
-  29.10.0 for either architecture. Maintenance checks that publication boundary
-  independently; a static archive cannot replace the VM's managed APT packages.
+  The static Linux host and the Mac VM both select Docker 29.10.0. Maintenance
+  checks the VM's signed Resolute APT publication independently; a static
+  archive cannot replace the VM's managed APT packages.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
@@ -86,7 +85,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Build provenance is retained in the image. Maintenance must remove each local
   rebuild when Debian stable ships an equal or newer fix, refresh exact sources
   and patch checksums together, and validate both amd64 and arm64 images.
-  npm 12.2.2 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
+  npm 12.2.3 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
   Its bundled graph still needs the IP parser and glob security repairs below.
   Linux host releases and the bots image use the same
   reviewed current HTTP dispatcher as Mac tooling, with tuple-header redirect
@@ -241,8 +240,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.57.0, Anthropic 1.9.0, Google GenAI 3.4.0,
-  Bedrock Runtime and token providers 3.1170.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.60.0, Anthropic 1.10.0, Google GenAI 3.6.0,
+  Bedrock Runtime and token providers 3.1171.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21

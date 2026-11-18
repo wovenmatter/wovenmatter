@@ -30,7 +30,7 @@ class HostFixtures(unittest.TestCase):
         self.m.HOME=self.home; self.m.ROOT=self.home/'.local/share/wovenmatter'
         self.m.CONFIG=self.home/'.config/wovenmatter'; self.m.ENV_FILE=self.m.CONFIG/'service.env'
         self.m.UNIT=self.home/'.config/systemd/user/wovenmatter.service'; self.m.RECORD=self.m.ROOT/'installation.json'
-        self.calls=[]; self.active=True; self.enabled=True; self.fail_selftest=False; self.bad_npm_vendor=False; self.npm_version='12.2.2'; self.tail_operator=self.m.pwd.getpwuid(self.actual_uid).pw_name
+        self.calls=[]; self.active=True; self.enabled=True; self.fail_selftest=False; self.bad_npm_vendor=False; self.npm_version='12.2.3'; self.tail_operator=self.m.pwd.getpwuid(self.actual_uid).pw_name
         self.patchers=[mock.patch.object(self.m,'run',side_effect=self.command),
             mock.patch.object(self.m.platform,'system',return_value='Linux'),mock.patch.object(self.m.platform,'machine',return_value='x86_64'),
             mock.patch.object(self.m.os,'getuid',return_value=self.actual_uid),mock.patch.object(self.m,'inventory',return_value=[])]
@@ -82,7 +82,7 @@ class HostFixtures(unittest.TestCase):
             elif args[1:3]==['serve','status']: output=b'{}'
             elif args[1:3]==['debug','prefs']: output=json.dumps({'OperatorUser':self.tail_operator}).encode()
         elif args[0]=='journalctl': output=('one '+TOKEN+' line').encode()
-        elif 'install' in args and '--global' in args and 'npm@>=12.2.2' in args:
+        elif 'install' in args and '--global' in args and 'npm@>=12.2.3' in args:
             prefix=Path(args[args.index('--prefix')+1]); npm=prefix/'lib/node_modules/npm'
             (npm/'bin').mkdir(parents=True); (npm/'node_modules/undici').mkdir(parents=True)
             (npm/'package.json').write_text(json.dumps({'version':self.npm_version})); (npm/'bin/npm-cli.js').write_text('fixture')
@@ -301,7 +301,7 @@ class HostFixtures(unittest.TestCase):
             node_file=self.m.ROOT/'node/26.12.1/bin/node'; before_node=node_file.read_bytes()
             before_tooling=(self.m.ROOT/'current/tooling/security.json').read_bytes()
             for call in self.calls:
-                if 'npm@>=12.2.2' in call: self.assertNotIn(str(self.m.ROOT/'node/26.12.1'),call[call.index('--prefix')+1])
+                if 'npm@>=12.2.3' in call: self.assertNotIn(str(self.m.ROOT/'node/26.12.1'),call[call.index('--prefix')+1])
             # Update may reuse the existing credential with an empty first line.
             stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''; self.fail_selftest=True
             with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
