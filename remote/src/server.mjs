@@ -4,6 +4,8 @@ const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', i
 const defaultAgentSource = existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)
 const { createManagedDefaultAgentService } = await import(defaultAgentSource.href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
+const { CredentialVault } = await import(new URL('./vault.mjs', defaultAgentSource).href)
+const { changeSignIns, listSignIns } = await import(new URL('./device-sign-ins.mjs', defaultAgentSource).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createProject, deleteProject, ensureScratchDirectory, linkHostProject, listHostDirectories } from './projects.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
@@ -67,7 +69,15 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
 // Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
-const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent'), environment: nonInteractiveSessionEnvironment(process.env, configuration) })
+// This host stores and renews its own sign-ins in its device vault; no other
+// device holds its key or relays credentials to it.
+const defaultAgentDirectory = resolve(workspaceRoot, '.wovenmatter/default-agent')
+const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: defaultAgentDirectory, environment: { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' } })
+const deviceSignIns = new CredentialVault(defaultAgentDirectory)
+const openDeviceSignIns = () => deviceSignIns.openDevice()
+// Subscriptions renew here whether or not anything used them.
+const signInRenewal = setInterval(() => { defaultAgent.renewSignIns().catch(() => {}) }, 60_000)
+signInRenewal.unref()
 const authenticationSessions = new Map()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
@@ -168,7 +178,7 @@ const defaultAgentControl = createDefaultAgentControl({
   command: () => ({ command: process.execPath, arguments: [fileURLToPath(new URL('./main.mjs', defaultAgentSource)), '--control'] }),
   cwd: () => workspaceRoot,
   environment: () => {
-    const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: resolve(workspaceRoot, '.wovenmatter/default-agent') }
+    const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: defaultAgentDirectory, WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' }
     delete environment.WOVENMATTER_API_TOKEN
     return environment
   },
@@ -536,6 +546,18 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       clientExecution.rememberUnlockMaterial(body)
       const status = await defaultAgent.status()
       return json(response, 200, { unlocked: !status.locked, ...(status.epoch ? { epoch: status.epoch } : {}) })
+    }
+    // This host's own sign-ins, for a signed Mac's Settings → Subscriptions &
+    // API Keys. A key arrives once in the request and is stored only here.
+    if (url.pathname === '/v1/sign-ins' && request.method === 'GET') {
+      await openDeviceSignIns()
+      return json(response, 200, listSignIns(await deviceSignIns.read()))
+    }
+    if (url.pathname === '/v1/sign-ins' && request.method === 'POST') {
+      await openDeviceSignIns()
+      const result = await changeSignIns(deviceSignIns, await readJSON(request, 65_536))
+      await defaultAgent.reloadSignIns().catch(() => {})
+      return json(response, 200, result)
     }
     // Pi Durable settings: sign-in status, the model catalog, sign-in and
     // sign-out, as `wm-exec default-agent --control` answered them over SSH.

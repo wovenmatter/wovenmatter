@@ -254,30 +254,51 @@ async function temporaryFixture(context, prefix) {
   return directory
 }
 
-test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
+test('a Linux host keeps its own sign-ins: configuration carries no credentials and keys are saved only here', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
   const home = resolve(root, 'home'); await mkdir(home);
-  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+  const token = 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  // A vault sealed with a Mac's key, as hosts before per-device sign-ins kept it.
+  const directory = resolve(root, '.wovenmatter/default-agent');
+  await mkdir(directory, { recursive: true });
+  await writeFile(resolve(directory, 'credentials.enc.json'), JSON.stringify({ version: 1, workspace: 'fixture-workspace', nonce: '', tag: '', data: '' }));
+  let service = await startService({ workspace: root, home, catalog: catalogPath, token });
   context.after(() => stopService(service.child));
-  const request = (path, body, token = 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url + path, {
-    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+  const request = (path, body, bearer = token) => fetch(service.url + path, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
-  assert.equal((await (await request('/v1/default-agent/status')).json()).locked, true);
+  assert.equal((await request('/v1/sign-ins', undefined, 'wrong')).status, 401);
+  // No Mac unlocks it: the host opens its own vault.
+  assert.equal((await (await request('/v1/default-agent/status')).json()).locked, false);
   // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
   assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 404);
+  // An older Mac's relayed credentials are not stored.
   const unlockKey = randomBytes(32).toString('base64');
-  const body = { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
-    credentials: { openrouter: { type: 'api_key', key: 'fixture-provider-secret' } } };
-  const receipt = await (await request('/v1/default-agent/configuration', body)).json();
+  const receipt = await (await request('/v1/default-agent/configuration', { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
+    credentials: { openrouter: { type: 'api_key', key: 'relayed-provider-secret' } } })).json();
   assert.equal(receipt.revision, 'fixture-revision');
-  const status = await (await request('/v1/default-agent/status')).json();
-  assert.equal(status.locked, false);
+  let status = await (await request('/v1/default-agent/status')).json();
+  assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'sign_in_required');
+  assert.deepEqual((await (await request('/v1/default-agent/unlock', { workspace: 'fixture-workspace', unlockKey })).json()).unlocked, true);
+  // A key typed on another device arrives once and is saved here.
+  const saved = await (await request('/v1/sign-ins', { action: 'saveKey', provider: 'openrouter', key: 'fixture-provider-secret', label: 'Router' })).json();
+  assert.deepEqual(saved.accounts.openrouter.map(a => [a.label, a.isSelected]), [['Router', true]]);
+  assert.ok(!JSON.stringify(saved).includes('fixture-provider-secret'));
+  assert.equal((await request('/v1/sign-ins', { action: 'saveKey', provider: 'shell', key: 'x' })).status, 400);
+  status = await (await request('/v1/default-agent/status')).json();
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'credentials_present');
   assert.ok(!JSON.stringify(status).includes('fixture-provider-secret'));
-  const disk = await readFile(resolve(root, '.wovenmatter/default-agent/credentials.enc.json'), 'utf8');
-  assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
+  const disk = await readFile(resolve(directory, 'credentials.enc.json'), 'utf8');
+  assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes('relayed-provider-secret') && !disk.includes(unlockKey));
+  assert.equal(JSON.parse(disk).workspace, 'device');
+  // It survives a restart with no device to unlock it.
+  await stopService(service.child);
+  service = await startService({ workspace: root, home, catalog: catalogPath, token });
+  const listed = await (await request('/v1/sign-ins')).json();
+  assert.deepEqual(listed.accounts.openrouter.map(a => a.label), ['Router']);
+  assert.equal((await (await request('/v1/default-agent/status')).json()).providers.find(p => p.id === 'openrouter').state, 'credentials_present');
 });
 
 async function stopService(child) {

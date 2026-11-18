@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
-import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
+import { CredentialVault, deviceVaultEnabled, sharedCredentials, sharedAccounts } from './vault.mjs';
+import { deviceConfig } from './device-sign-ins.mjs';
 import { join } from 'node:path';
 import { DefaultAgentError, canonicalHash, operationErrorMessage, providers as botProviders, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { openNativeJournal } from './native-journal.mjs';
@@ -14,9 +15,12 @@ function verifyRetry(stored, fingerprint) {
 
 // Readers poll current process-owned operations. Durable owns native execution
 // persistence; an accepted transport ID is never redispatched after restart.
-export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON, attachmentState }) {
+export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON, attachmentState, deviceVault = deviceVaultEnabled() }) {
   let enginePromise, inferenceAdapter;
   const vault = new CredentialVault(directory), epoch = crypto.randomUUID();
+  // A device vault is this host's own: always open, never unlocked by a Mac.
+  let deviceOpening;
+  const openDevice = () => deviceVault ? (deviceOpening ??= vault.openDevice().catch(error => { deviceOpening = undefined; throw error; })) : Promise.resolve();
   let configurationQueue = Promise.resolve(), generation = 0;
   const operations = new Map(), admissions = new Map(), admissionQueues = new Map();
   const attachmentTokens = new Map(attachmentState?.tokens);
@@ -33,20 +37,29 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   async function engine() {
     if (!enginePromise) enginePromise = (async () => {
       if (engineFactory) return engineFactory();
-      await vault.read();
+      await openDevice();
+      const stored = await vault.read();
       const { DefaultAgentEngine } = await import('./engine.mjs');
       const value = await readJSON(join(directory, 'configuration.json'));
-      return new DefaultAgentEngine({ cwd, directory, config: value.config, vault }).initialize();
+      return new DefaultAgentEngine({ cwd, directory, config: deviceVault ? deviceConfig(value.config, stored) : value.config, vault }).initialize();
     })().catch(error => { enginePromise = undefined; throw error; });
     return enginePromise;
   }
   function configure(value) {
     const pending = configurationQueue.then(async () => {
-      await vault.unlock(value.workspace, value.unlockKey);
-      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), accounts: sharedAccounts(value.credentialAccounts), revision: value.revision }));
-      const config = validateConfig(value.config);
+      let config;
+      if (deviceVault) {
+        // Only chat settings arrive from another device. Credentials in an
+        // older Mac's payload are ignored: this host keeps its own sign-ins.
+        await openDevice();
+        config = validateConfig(value.config);
+      } else {
+        await vault.unlock(value.workspace, value.unlockKey);
+        await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), accounts: sharedAccounts(value.credentialAccounts), revision: value.revision }));
+        config = validateConfig(value.config);
+      }
       await writePrivateJSON(join(directory, 'configuration.json'), { config });
-      if (enginePromise) await (await enginePromise).apply({ config });
+      if (enginePromise) await (await enginePromise).apply({ config: deviceVault ? deviceConfig(config, await vault.read()) : config });
       generation++;
       return { saved: true, revision: value.revision, epoch, generation };
     });
@@ -54,6 +67,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     return pending;
   }
   function unlockForClient({ workspace, unlockKey }) {
+    if (deviceVault) return openDevice().then(() => ({ unlocked: true }));
     const pending = configurationQueue.then(async () => {
       const candidate = typeof unlockKey === 'string' ? Buffer.from(unlockKey, 'base64') : Buffer.alloc(0);
       try {
@@ -65,12 +79,42 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     configurationQueue = pending.catch(() => {});
     return pending;
   }
+  // After another device changed this host's sign-ins (`v1/sign-ins`): the
+  // vault is read on use; local model servers are registered again.
+  function reloadSignIns() {
+    const pending = configurationQueue.then(async () => {
+      if (!deviceVault || !enginePromise) return { reloaded: false };
+      const value = await readJSON(join(directory, 'configuration.json'));
+      const current = await enginePromise;
+      await current.apply({ config: deviceConfig(value.config ?? current.config, await vault.read()) });
+      generation++;
+      return { reloaded: true };
+    });
+    configurationQueue = pending.catch(() => {});
+    return pending;
+  }
+  // This host renews its own subscriptions, used or not, before they expire.
+  async function renewSignIns({ window = 5 * 60_000 } = {}) {
+    if (!deviceVault) return { renewed: [] };
+    await openDevice();
+    const owned = (await vault.read()).owned ?? {};
+    const due = ['openai-codex', 'xai'].filter(id => owned[id]?.type === 'oauth' && !owned[id].borrowed && !(owned[id].expires > Date.now() + window));
+    if (!due.length) return { renewed: [] };
+    const current = await engine(), renewed = [];
+    for (const provider of due) {
+      try { await current.runtime.getAuth(provider, { signal: AbortSignal.timeout(30_000), allowWait: false }); renewed.push(provider); }
+      catch { /* Renewal retries on the next check; an expired sign-in is reported as such. */ }
+    }
+    return { renewed };
+  }
   async function inferenceCatalog(options) {
+    await openDevice();
     if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
     inferenceAdapter ??= createInferenceAdapter(await engine());
     return inferenceAdapter.catalog(options);
   }
   async function inferenceStream(request, options) {
+    await openDevice();
     if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
     inferenceAdapter ??= createInferenceAdapter(await engine());
     return inferenceAdapter.stream(request, options);
@@ -80,6 +124,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   // tokens stay in this store. A Claude subscription is the machine's native
   // Claude runtime directories, never token material. `null`: not connected.
   async function botCredentials({ provider } = {}) {
+    await openDevice();
     if (!vault.unlocked && !engineFactory) throw Object.assign(new DefaultAgentError('Unlock this workspace before bots use its provider connections.'), { statusCode: 423 });
     const search = ['exa', 'brave', 'firecrawl'];
     if (typeof provider !== 'string' || ![...botProviders, ...search, 'web-search'].includes(provider)) throw Object.assign(new DefaultAgentError('Choose a Woven provider connection.'), { statusCode: 400 });
@@ -95,7 +140,12 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       const environment = await current.claude.environment(undefined, profile);
       return { credential: { type: 'native', configDir: environment.CLAUDE_CONFIG_DIR, secureStorageDir: environment.CLAUDE_SECURESTORAGE_CONFIG_DIR } };
     }
-    const credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    let credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    // A device's own subscription is renewed here before bots are refused it.
+    if (deviceVault && credential?.type === 'oauth' && !credential.borrowed && !(credential.expires > Date.now() + 60_000)) {
+      try { await current.runtime.getAuth(provider, { signal: AbortSignal.timeout(30_000), allowWait: false }); } catch { /* Answer with what is stored. */ }
+      credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    }
     if (credential?.type === 'api_key' && typeof credential.key === 'string') return { credential: { type: 'api_key', key: credential.key } };
     if (credential?.type === 'oauth' && typeof credential.access === 'string' && credential.expires > Date.now()) {
       return { credential: { type: 'oauth', access: credential.access, expires: credential.expires, ...(typeof credential.accountId === 'string' ? { accountId: credential.accountId } : {}) } };
@@ -103,6 +153,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     return { credential: null };
   }
   async function status() {
+    await openDevice();
     if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
     return { ...(await (await engine()).status()), locked: false, epoch };
   }
@@ -225,5 +276,5 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     }
     return items.slice(0,1000);
   }
-  return { engine, inspection, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), botCredentials: tracked(botCredentials), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
+  return { engine, inspection, reloadSignIns: tracked(reloadSignIns), renewSignIns: tracked(renewSignIns), unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), botCredentials: tracked(botCredentials), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
 }

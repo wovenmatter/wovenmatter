@@ -1,13 +1,46 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { mkdir, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { readJSON, searchProviderNames, writePrivateJSON } from './config.mjs';
 
-// Only the Mac persists the key. Every new helper starts sealed.
+// The workspace that names a device-owned vault (`openDevice`).
+export const deviceVaultWorkspace = 'device';
+// A host stores and renews its own sign-ins: the Linux server and its
+// helpers open the vault with this device's own key (`openDevice`). The
+// older `unlock` (a key held by a Mac) remains for tests and older callers.
+export const deviceVaultEnabled = (environment = process.env) => environment.WOVEN_DEFAULT_AGENT_DEVICE_VAULT === '1';
+
 export class CredentialVault {
-  constructor(directory) { this.directory = directory; this.path = join(directory, 'credentials.enc.json'); }
+  constructor(directory) { this.directory = directory; this.path = join(directory, 'credentials.enc.json'); this.keyPath = join(directory, 'credentials.key'); }
   get unlocked() { return Boolean(this.key); }
+  // Opens this device's own vault. The key lives beside it in the private
+  // directory (0600), created on first use. A vault sealed with a Mac's key
+  // (before sign-ins were per device) cannot be read without that Mac, so it
+  // is removed with the legacy stores: the device signs in once again.
+  async openDevice() {
+    if (this.unlocked && this.workspace === deviceVaultWorkspace) return this;
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const release = await lockfile.lock(this.path, { realpath: false, retries: { retries: 60, minTimeout: 50, maxTimeout: 500 }, stale: 60000 });
+    try {
+      let key = await readDeviceKey(this.keyPath);
+      const stored = await readJSON(this.path, null);
+      if (!key || (stored && stored.workspace !== deviceVaultWorkspace)) {
+        await unlink(this.path).catch(e => { if (e.code !== 'ENOENT') throw e; });
+        await unlink(join(this.directory, 'oauth.json')).catch(e => { if (e.code !== 'ENOENT') throw e; });
+        const config = await readJSON(join(this.directory, 'configuration.json'));
+        if ('credentials' in config) await writePrivateJSON(join(this.directory, 'configuration.json'), { config: config.config });
+      }
+      if (!key) {
+        key = randomBytes(32);
+        const file = await open(this.keyPath, 'w', 0o600);
+        try { await file.writeFile(key.toString('base64')); await file.sync(); } finally { await file.close(); }
+      }
+      this.key?.fill(0);
+      this.key = key; this.workspace = deviceVaultWorkspace;
+      return this;
+    } finally { await release(); }
+  }
   seal() { this.key?.fill(0); this.key = undefined; this.workspace = undefined; }
   async unlock(workspace, encodedKey) {
     if (typeof workspace !== 'string' || !/^[a-z0-9-]{1,64}$/i.test(workspace) || typeof encodedKey !== 'string') throw new Error('Invalid credential unlock request.');
@@ -46,6 +79,7 @@ export class CredentialVault {
     } catch { throw new Error('Pi Durable credential store could not be decrypted. Check the workspace key or reset its credentials.'); }
   }
   async modify(fn) {
+    if (!this.key) throw Object.assign(new Error('Pi Durable credentials are locked on this device.'), { statusCode: 423 });
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const release = await lockfile.lock(this.path, { realpath: false, retries: { retries: 60, minTimeout: 50, maxTimeout: 500 }, stale: 60000 });
     try {
@@ -58,6 +92,13 @@ export class CredentialVault {
       return next;
     } finally { await release(); }
   }
+}
+
+async function readDeviceKey(path) {
+  try {
+    const key = Buffer.from((await readFile(path, 'utf8')).trim(), 'base64');
+    return key.length === 32 ? key : null;
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
 export function sharedCredentials(input = {}) {
