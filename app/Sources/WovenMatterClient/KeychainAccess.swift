@@ -142,7 +142,17 @@ public struct KeychainAccess: Sendable {
     return status
   }
 
+  /// The same access, without posting `accessNeedsAttention` again: for a retry
+  /// of work whose failure was already reported.
+  public func withoutAccessReports() -> KeychainAccess {
+    var copy = self
+    copy.reportsAccessFailures = false
+    return copy
+  }
+  private var reportsAccessFailures = true
+
   private func reportAccessFailure(_ status: OSStatus) {
+    guard reportsAccessFailures else { return }
     if [errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled, errSecNotAvailable].contains(status) {
       NotificationCenter.default.post(name: Self.accessNeedsAttention, object: nil)
     }

@@ -87,6 +87,9 @@ public enum ProviderConnectionAccounts {
     private struct Store: Codable {
         var entries: [Entry] = []
         var pendingPreviousEntries: [Entry]?
+        /// Set in the same write as the first device list the move to per-device
+        /// sign-ins wrote (`migrateToDeviceSignIns`); from then on it only adds.
+        var migrated: Bool?
     }
     private static func canonical(_ provider: String, scope: String, keychain: KeychainAccess) throws -> DefaultAgentCredential? {
         if ProviderConnectionID(rawValue: provider)?.isSubscription == true { return try DefaultAgentSupport.oauth(provider, scope: scope, keychain: keychain) }
@@ -238,20 +241,23 @@ public enum ProviderConnectionAccounts {
     public static let preservedScope = "premigration"
     /// One-time move to per-device sign-ins. Before it, this Mac used its `local`
     /// accounts for each provider first and its `global` ones only where it had no
-    /// local account. Now its accounts are one list (`deviceScope`): for each
-    /// provider, the account it used stays primary, its other local accounts follow,
-    /// then the former `global` ones, up to the provider's limit.
+    /// local account. Now its accounts are one list (`deviceScope`).
     ///
-    /// Nothing is lost: a `global` account that no longer fits (a second
-    /// subscription, keys over the cap) is first copied to `preservedScope` and
-    /// verified there; `local` items are deleted only after every one of their
-    /// accounts reads back from the device list, and are otherwise left untouched.
-    /// Re-running yields the same lists. Copies this Mac held for Linux hosts are
-    /// not touched here: they are removed once that host reports its own vault.
-    public static func migrateToDeviceSignIns(keychain: KeychainAccess = .init()) throws {
+    /// The first time it writes a provider's device list, the account this Mac used
+    /// stays primary, its other local accounts follow, then the former `global`
+    /// ones, up to the provider's limit; the device items as found are first copied
+    /// to `preservedScope` (the baseline) and read back. Once that list has been
+    /// written, or changed since (a sign-in or renewal on this device: it differs
+    /// from the baseline, or an account was added after `since`, the first
+    /// attempt), a later run never replaces or reorders it: it only adds local
+    /// accounts still missing where there is room. Local items are removed only
+    /// after a verified copy of them is kept (`preservedScope + ".local"`) and every
+    /// local account is in the device list; otherwise they stay. Re-running changes
+    /// nothing. Copies this Mac held for Linux hosts are not touched here.
+    public static func migrateToDeviceSignIns(since: Date? = nil, keychain: KeychainAccess = .init()) throws {
         try DefaultAgentSupport.credentialLock.withLock {
             for provider in ProviderConnectionID.allCases.map(\.rawValue) {
-                try migrateProvider(provider, keychain: keychain)
+                try migrateProvider(provider, since: since, keychain: keychain)
             }
         }
         DefaultAgentSupport.changed()
@@ -265,71 +271,110 @@ public enum ProviderConnectionAccounts {
         guard credential.type == "oauth" else { return true }
         return !credential.borrowed && (!(credential.refresh ?? "").isEmpty || (credential.expires ?? 0) > now)
     }
-    private static func migrateProvider(_ provider: String, keychain: KeychainAccess) throws {
+    private static func items(_ provider: String) -> [String] { [provider, "oauth." + provider, "accounts." + provider] }
+    private static func raw(_ provider: String, scope: String, keychain: KeychainAccess) throws -> [String?] {
+        try items(provider).map { try DefaultAgentSupport.key($0, scope: scope, keychain: keychain) }
+    }
+    private static func migrateProvider(_ provider: String, since: Date?, keychain: KeychainAccess) throws {
         let device = deviceScope
         let localStore = try load(provider, scope: "local", keychain: keychain)
         let local = localStore.entries.filter { $0.account.isSelected } + localStore.entries.filter { !$0.account.isSelected }
         guard !local.isEmpty else { return }
         let deviceStore = try load(provider, scope: device, keychain: keychain)
         let existing = deviceStore.entries.filter { $0.account.isSelected } + deviceStore.entries.filter { !$0.account.isSelected }
-        // The same account in both scopes keeps the one that can still sign in
-        // (the local one when both can, or when that cannot be told).
-        var merged: [Entry] = []
-        for entry in local + existing {
-            if let index = merged.firstIndex(where: { sameAccount($0.credential, entry.credential) }) {
-                if !usable(merged[index].credential), usable(entry.credential) { merged[index].credential = entry.credential }
-            } else { merged.append(entry) }
-        }
-        let kept = Array(merged.prefix(limit(for: provider)))
-        // 2. The device list: what this Mac used first.
-        let target = kept.enumerated().map { index, entry -> Entry in
-            var value = entry
-            value.account.isSelected = index == 0
-            return value
+        // The device items as the first attempt found them, kept once and never replaced.
+        let baseline = try keepBaseline(provider, keychain: keychain)
+        let current = try raw(provider, scope: device, keychain: keychain)
+        let changedSince = baseline.map { $0 != current } ?? false
+        let addedSince = since.map { since in existing.contains { ($0.account.createdAt ?? .distantPast) > since } } ?? false
+        let firstWrite = deviceStore.migrated != true && !changedSince && !addedSince
+        var target: [Entry]
+        if firstWrite {
+            // The same account in both scopes keeps the one that can still sign in
+            // (the local one when both can, or when that cannot be told).
+            var merged: [Entry] = []
+            for entry in local + existing {
+                if let index = merged.firstIndex(where: { sameAccount($0.credential, entry.credential) }) {
+                    if !usable(merged[index].credential), usable(entry.credential) { merged[index].credential = entry.credential }
+                } else { merged.append(entry) }
+            }
+            target = Array(merged.prefix(limit(for: provider))).enumerated().map { index, entry in
+                var value = entry
+                value.account.isSelected = index == 0
+                return value
+            }
+        } else {
+            // Only what is still missing, where there is room; nothing there moves.
+            target = existing
+            for entry in local where target.count < limit(for: provider) && !target.contains(where: { sameAccount($0.credential, entry.credential) }) {
+                var value = entry
+                value.account.isSelected = target.isEmpty
+                target.append(value)
+            }
         }
         let unchanged = target.map(\.credential) == existing.map(\.credential)
             && target.first?.account.id == existing.first?.account.id
-        // 1. Before any device item is overwritten, keep a verified copy of all of them.
-        if !unchanged, !existing.isEmpty { try preserve(provider, from: device, keychain: keychain) }
-        if !unchanged {
-            try change(provider: provider, scope: device, keychain: keychain, notify: false) { store in store.entries = target }
+        if !unchanged || deviceStore.migrated != true {
+            try change(provider: provider, scope: device, keychain: keychain, notify: false) { store in
+                store.entries = target
+                store.migrated = true
+            }
         }
-        // 3. Verify, then delete the local items only when all of them are in the device list.
         let stored = try load(provider, scope: device, keychain: keychain).entries
         guard stored.count == target.count, target.allSatisfy({ entry in stored.contains { $0.credential == entry.credential } }),
               stored.first(where: { $0.account.isSelected })?.credential == target.first?.credential else {
             throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
         }
-        // A local credential that was not kept as is (the other copy of its account
-        // could still sign in) stays where it is.
-        guard local.allSatisfy({ entry in stored.contains { $0.credential == entry.credential } }) else { return }
-        try deleteItems(provider: provider, scope: "local", keychain: keychain)
+        // Local items go once every local account is in the device list, and only
+        // after a verified copy of them is kept. Otherwise they stay where they are.
+        guard local.allSatisfy({ entry in stored.contains { sameAccount($0.credential, entry.credential) } }) else { return }
+        if !local.allSatisfy({ entry in stored.contains { $0.credential == entry.credential } }) {
+            guard try keepCopy(provider, from: "local", in: preservedScope + ".local", keychain: keychain) else { return }
+        }
+        for item in items(provider) {
+            try DefaultAgentSupport.saveKey("", provider: item, scope: "local", notify: false, keychain: keychain)
+        }
     }
-    /// Copies a scope's raw items for one provider to `preservedScope` and reads them
-    /// back. A copy already there is never replaced: when the items differ from it
-    /// (a sign-in made after an earlier, interrupted run) another copy is kept
-    /// beside it (`premigration.2`, `.3`, …).
-    private static func preserve(_ provider: String, from scope: String, keychain: KeychainAccess) throws {
-        let items = [provider, "oauth." + provider, "accounts." + provider]
+    /// Copies the device items for one provider to `preservedScope` the first time,
+    /// reading them back, and returns that first copy (`nil` before one exists).
+    private static func keepBaseline(_ provider: String, keychain: KeychainAccess) throws -> [String?]? {
         let marker = "migrated." + provider
-        let current = try items.map { try DefaultAgentSupport.key($0, scope: scope, keychain: keychain) }
-        for index in 1...32 {
-            let destination = index == 1 ? preservedScope : preservedScope + ".\(index)"
+        if try DefaultAgentSupport.key(marker, scope: preservedScope, keychain: keychain) != nil {
+            return try raw(provider, scope: preservedScope, keychain: keychain)
+        }
+        let current = try raw(provider, scope: deviceScope, keychain: keychain)
+        try write(current, provider: provider, scope: preservedScope, keychain: keychain)
+        try DefaultAgentSupport.saveKey(deviceScope, provider: marker, scope: preservedScope, notify: false, keychain: keychain)
+        return current
+    }
+    /// Keeps a verified copy of a scope's items for one provider in `slot`, or in
+    /// one of at most `extraCopies` further slots when the first holds other
+    /// content. False when every slot is taken by other content: nothing is
+    /// deleted then, and nothing blocks the migration.
+    static let extraCopies = 3
+    private static func keepCopy(_ provider: String, from scope: String, in slot: String, keychain: KeychainAccess) throws -> Bool {
+        let current = try raw(provider, scope: scope, keychain: keychain)
+        let marker = "migrated." + provider
+        for index in 1...(1 + extraCopies) {
+            let destination = index == 1 ? slot : slot + ".\(index)"
             if try DefaultAgentSupport.key(marker, scope: destination, keychain: keychain) != nil {
-                if try items.map({ try DefaultAgentSupport.key($0, scope: destination, keychain: keychain) }) == current { return }
+                if try raw(provider, scope: destination, keychain: keychain) == current { return true }
                 continue
             }
-            for (item, value) in zip(items, current) {
-                guard let value else { continue }
-                try DefaultAgentSupport.saveKey(value, provider: item, scope: destination, notify: false, keychain: keychain)
-                guard try DefaultAgentSupport.key(item, scope: destination, keychain: keychain) == value else {
-                    throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
-                }
-            }
+            try write(current, provider: provider, scope: destination, keychain: keychain)
             try DefaultAgentSupport.saveKey(scope, provider: marker, scope: destination, notify: false, keychain: keychain)
-            return
+            return true
         }
-        throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
+        return false
+    }
+    private static func write(_ values: [String?], provider: String, scope: String, keychain: KeychainAccess) throws {
+        for (item, value) in zip(items(provider), values) {
+            guard let value else { continue }
+            try DefaultAgentSupport.saveKey(value, provider: item, scope: scope, notify: false, keychain: keychain)
+            guard try DefaultAgentSupport.key(item, scope: scope, keychain: keychain) == value else {
+                throw DefaultAgentError.message("Sign-ins could not be verified after moving them.")
+            }
+        }
     }
     /// Where what this Mac kept for a Linux workspace is moved once that host keeps
     /// its own vault: `premigration.<workspace>`.

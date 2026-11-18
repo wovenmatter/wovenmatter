@@ -159,19 +159,52 @@ public enum DefaultAgentSupport {
         }
     }
     public static let deviceSignInMigrationKey = "wovenmatter.sign-ins.device-scope.v1"
-    /// Once per installation, at background-server start: see
-    /// `ProviderConnectionAccounts.migrateToDeviceSignIns`.
-    /// Also called on every credential refresh (`refreshStored`): after a locked or
-    /// denied Keychain it is retried as soon as the Keychain is available, at the
-    /// cost of one preference read once it has succeeded. Re-running is harmless.
+    /// When the move to per-device sign-ins is tried again after a failure (a locked
+    /// or denied Keychain): at start, then after `retrySoon()` (the Keychain became
+    /// accessible, the Mac woke or unlocked), else with a backoff from ten minutes
+    /// to six hours. A retry never reports the Keychain's state again.
+    public final class DeviceSignInMigrationSchedule: @unchecked Sendable {
+        public static let shared = DeviceSignInMigrationSchedule()
+        private let lock = NSLock()
+        private var next = Date.distantPast
+        private var backoff: TimeInterval = 0
+        private(set) var failed = false
+        public init() {}
+        /// The next refresh tries again.
+        public func retrySoon() { lock.withLock { next = .distantPast } }
+        func due(_ now: Date) -> Bool { lock.withLock { now >= next } }
+        var hasFailed: Bool { lock.withLock { failed } }
+        func record(success: Bool, now: Date) {
+            lock.withLock {
+                if success { failed = false; backoff = 0; next = .distantPast; return }
+                failed = true
+                backoff = min(max(backoff * 2, 600), 6 * 3600)
+                next = now.addingTimeInterval(backoff)
+            }
+        }
+    }
+    static let deviceSignInMigrationStartKey = deviceSignInMigrationKey + ".first-attempt"
+    /// At background-server start, and from every credential refresh
+    /// (`refreshStored`) as `DeviceSignInMigrationSchedule` allows: see
+    /// `ProviderConnectionAccounts.migrateToDeviceSignIns`. Once it has succeeded
+    /// this is one preference read. Re-running is harmless.
     @discardableResult
-    public static func migrateToDeviceSignInsOnce(defaults: UserDefaults = .standard, keychain: KeychainAccess = .init()) -> Bool {
+    public static func migrateToDeviceSignInsOnce(defaults: UserDefaults = .standard, keychain: KeychainAccess = .init(),
+                                                  schedule: DeviceSignInMigrationSchedule = .shared, now: Date = Date()) -> Bool {
         guard !defaults.bool(forKey: deviceSignInMigrationKey) else { return true }
+        guard schedule.due(now) else { return false }
+        // The first attempt's time: accounts added after it were signed in on this device since.
+        if defaults.object(forKey: deviceSignInMigrationStartKey) == nil { defaults.set(now, forKey: deviceSignInMigrationStartKey) }
+        let since = defaults.object(forKey: deviceSignInMigrationStartKey) as? Date
         do {
-            try ProviderConnectionAccounts.migrateToDeviceSignIns(keychain: keychain)
+            try ProviderConnectionAccounts.migrateToDeviceSignIns(since: since, keychain: schedule.hasFailed ? keychain.withoutAccessReports() : keychain)
             defaults.set(true, forKey: deviceSignInMigrationKey)
+            schedule.record(success: true, now: now)
             return true
-        } catch { return false /* Retried on the next refresh, with nothing lost. */ }
+        } catch {
+            schedule.record(success: false, now: now)
+            return false
+        }
     }
     public static func migrateLocalOAuth() throws {
         let path = FileManager.default.homeDirectoryForCurrentUser.appending(

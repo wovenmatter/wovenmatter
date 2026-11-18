@@ -126,6 +126,12 @@ final class DefaultAgentSettingsModel {
             }
         }
     }
+    /// Stops following credential and settings changes (a released member's model).
+    func stopObserving() {
+        connectionChangesTask?.cancel(); connectionChangesTask = nil
+        configurationChangesTask?.cancel(); configurationChangesTask = nil
+    }
+    var isObserving: Bool { connectionChangesTask != nil || configurationChangesTask != nil }
     func reloadStoredConnectionState() {
         guard transport == nil, LocalExecutionRole.current != .frontend else { return }
         settings = DefaultAgentSupport.settings
@@ -222,7 +228,6 @@ final class DefaultAgentSettingsModel {
         backendPollTask = Task { [weak self] in
             var failingSince: ContinuousClock.Instant?
             var failures = 0
-            defer { Task { @MainActor [weak self] in if self?.busy == false { self?.holdPollingActivity(false) } } }
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .milliseconds(250))
@@ -272,7 +277,6 @@ final class DefaultAgentSettingsModel {
         signInProvider = value.signInProvider
         signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
-        if !busy { holdPollingActivity(false) }
         signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
         promptOptions = value.promptOptions.map { ($0.id, $0.label) }
         // Another Mac's snapshot carries neither; this process keeps its own selection.
@@ -477,7 +481,8 @@ final class DefaultAgentSettingsModel {
     var effectiveAccounts: [String: [ProviderConnectionAccounts.Account]] {
         sharedAccounts.merging(accounts.filter { !$0.value.isEmpty }) { _, owned in owned }
     }
-    var busy = false
+    /// Whenever nothing runs any more, a window's polling activity is released (one place).
+    var busy = false { didSet { if !busy { holdPollingActivity(false) } } }
     var error: String?
     var notice: String?
     var signInURL: URL?

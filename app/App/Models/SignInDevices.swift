@@ -268,6 +268,8 @@ extension ApplicationModel {
                 }
                 if idle >= self.releaseAfter {
                     self.watchdog = nil
+                    self.model.cancel()
+                    self.model.stopObserving()
                     self.onRelease?()
                     return
                 }

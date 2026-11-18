@@ -2194,6 +2194,7 @@ final class ApplicationModel {
                 try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
                     try DefaultAgentSupport.checkKeychainAccess()
                 }
+                DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
             }
             keychainAccessReady = true
             credentialAccessStatus = "Saved credentials are accessible. Background checks stay silent."

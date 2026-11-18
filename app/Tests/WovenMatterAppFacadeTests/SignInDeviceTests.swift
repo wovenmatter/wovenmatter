@@ -135,7 +135,11 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         return try defaultAgentControl(id: id)
     }
     func cancelDefaultAgentControl(id: String) {}
-    func defaultAgentVault() -> DefaultAgentHostVault { .init(deviceVault: true) }
+    /// An updated host by default; `reportOld()` makes it report itself old again.
+    private(set) var reportsOld = false
+    func reportOld() { reportsOld = true }
+    func defaultAgentVault() -> DefaultAgentHostVault { .init(deviceVault: reportsOld ? nil : true) }
+    private(set) var unlockKeys: [String] = []
     /// A host that has not updated has no `v1/sign-ins`.
     private(set) var outdated = false
     func makeOutdated() { outdated = true }
@@ -143,7 +147,7 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) throws -> SessionSettings { throw LibraryAPIError(code: "unavailable", message: "") }
     func libraryFile(conversationID: String?, path: String) throws -> MemberLibraryFile { throw LibraryAPIError(code: "unavailable", message: "") }
     func adopt(_ body: Data) throws {}
-    func unlockDefaultAgent(workspace: String, unlockKey: String) -> Bool { false }
+    func unlockDefaultAgent(workspace: String, unlockKey: String) -> Bool { unlockKeys.append(unlockKey); return true }
     func configureDefaultAgent(_ payload: Data) throws -> DefaultAgentSyncReceipt { throw LibraryAPIError(code: "unavailable", message: "") }
 }
 
@@ -408,6 +412,53 @@ struct SignInDeviceTests {
         #expect(!backend.holdsPollingActivity)
     }
 
+    /// A failed command releases a window's polling activity: it is held only while busy.
+    @Test func aFailedCommandReleasesTheWindowsActivity() async throws {
+        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
+        let backend = deviceModel(keychain, helper: helper)
+        let window = DefaultAgentSettingsModel()
+        let failing = FailureBudget()
+        window.backendRequest = { method, payload in
+            if method == "connections.command", await failing.take() { throw DefaultAgentError.message("The background service is not connected.") }
+            return try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+                try await BackendConnectionsService.handle(method: method, payload: payload, model: backend)
+            }
+        }
+        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+            window.signIn("openai-codex")
+            try await waitUntil(window) { window.prompt != nil && window.holdsPollingActivity }
+            await failing.arm(1)
+            window.respond("pasted-code")
+            try await waitUntil(window) { !window.busy }
+            #expect(window.error != nil && !window.holdsPollingActivity)
+            backend.cancel()
+        }
+    }
+
+    /// A host this Mac set its copies aside for that reports itself old again
+    /// (rolled back, restored, redeployed) is still unlocked with its own key,
+    /// read from where it was set aside and not moved back.
+    @Test func anOldAgainHostIsUnlockedWithItsKeptKey() async throws {
+        let keychain = SignInKeychainFixture()
+        let scope = UUID().uuidString.lowercased()
+        let host = FakeLinuxSignInHost()
+        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
+            try DefaultAgentSupport.saveKey("host-vault-key", provider: "encryption-key", scope: scope, notify: false)
+            try ProviderConnectionAccounts.setAsideHostCopies(scope: scope)
+            #expect(try DefaultAgentSupport.key("encryption-key", scope: scope) == nil)
+            #expect(try DefaultAgentHostUnlock.hostKey(scope) == "host-vault-key")
+            let settings = try DefaultAgentSupport.configurationPayload(workspace: scope)
+            let plan = try await DefaultAgentHostSync.plan(scope: scope, vault: .init(), settingsOnly: settings)
+            #expect(plan.configuration == nil && plan.unlockKey == "host-vault-key")
+            // An updated host still gets none.
+            #expect(try await DefaultAgentHostSync.plan(scope: scope, vault: .init(deviceVault: true), settingsOnly: settings).configuration?.unlockKey == nil)
+            await host.reportOld()
+            try await DefaultAgentHostUnlock.unlock(scope: scope, name: "workstation", routes: host)
+            #expect(try DefaultAgentSupport.key("encryption-key", scope: scope) == nil)
+        }
+        #expect(await host.unlockKeys == ["host-vault-key"])
+    }
+
     /// The device chosen on Subscriptions & API Keys has its own model, window and
     /// background server alike: the setup window, Pi Durable pages, chats and task
     /// defaults read and write this Mac's own model, never see that Mac's values,
@@ -527,6 +578,8 @@ struct SignInDeviceTests {
         let deadline = ContinuousClock.now + .seconds(5)
         while !released, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
         #expect(released && !session.isWatching)
+        // Its notification loops end with it.
+        #expect(!session.model.isObserving)
         #expect(MemberSignInSession.defaultReleaseAfter > MemberSignInSession.defaultIdleLimit)
     }
 

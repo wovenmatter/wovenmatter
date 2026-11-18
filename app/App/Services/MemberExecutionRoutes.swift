@@ -75,8 +75,16 @@ struct DefaultAgentControlSession: Decodable, Sendable {
 /// what it already holds. No credential is ever sent, and no key to a host
 /// that keeps its own vault.
 enum DefaultAgentHostUnlock {
+    /// That host's own vault key: in its workspace scope, or, once this Mac set its
+    /// copies aside, read (not moved back) from `premigration.<workspace>` for a
+    /// host that reports itself old again (rolled back, restored, redeployed).
+    static func hostKey(_ scope: String, keychain: KeychainAccess = .init()) throws -> String? {
+        let key = try DefaultAgentSupport.key("encryption-key", scope: scope, keychain: keychain)
+            ?? DefaultAgentSupport.key("encryption-key", scope: ProviderConnectionAccounts.preservedScope(forHost: scope), keychain: keychain)
+        return key?.isEmpty == false ? key : nil
+    }
     static func unlock(scope: String, name: String, routes: any MemberExecutionRoutes,
-                       existingKey: @Sendable (String) throws -> String? = { try DefaultAgentSupport.key("encryption-key", scope: $0) }) async throws {
+                       existingKey: @Sendable (String) throws -> String? = { try hostKey($0) }) async throws {
         guard try await routes.defaultAgentVault().isLegacy else { return }
         if let key = try existingKey(scope), !key.isEmpty, try await routes.unlockDefaultAgent(workspace: scope, unlockKey: key) { return }
         throw LibraryAPIError(code: MemberExecutionClient.defaultAgentLocked, message: "Pi Durable is locked on \(name). Open Woven Matter on the Mac that set it up.")
@@ -95,7 +103,7 @@ enum DefaultAgentHostSync {
     }
     static func plan(scope: String, vault: DefaultAgentHostVault, settingsOnly: DefaultAgentPayload,
                      vaultKey: @Sendable (String) async throws -> String? = { scope in
-                         try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) { try DefaultAgentSupport.key("encryption-key", scope: scope) }
+                         try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) { try DefaultAgentHostUnlock.hostKey(scope) }
                      }) async throws -> Plan {
         if vault.isLegacy { return Plan(configuration: nil, unlockKey: try await vaultKey(scope).flatMap { $0.isEmpty ? nil : $0 }) }
         // A host that keeps its own vault never gets a key.

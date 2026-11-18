@@ -147,10 +147,15 @@ final class RemoteWorkspacesModel {
         }
         defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
+                DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
                 ProviderAccountCoordinator.shared.invalidate()
                 self?.defaultAgentAcknowledgments.removeAll()
                 await self?.synchronizeDefaultAgentSettings()
             }
+        })
+        // Unlocking the Mac can make the Keychain readable again.
+        defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) { _ in
+            DefaultAgentSupport.DeviceSignInMigrationSchedule.shared.retrySoon()
         })
         defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in await self?.synchronizeDefaultAgentSettings() }
