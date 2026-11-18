@@ -51,7 +51,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
         let (_, linux) = try await fixture.enrollLinuxHost()
         let scope = ApplicationModel.remoteDatabaseSourceID(host.id)
-        fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "read-only"), harness: "codex", workspace: scope)
+        fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "agent"), harness: "codex", workspace: scope)
         let target = RemoteHarnessChatTarget(configuration: host, harness: try #require(harnesses.first { $0.id == .codex }))
         // The host creates the session with its workspace permission.
         let folderless = try #require(await fixture.model.createRemoteACPSession(target: target), "\(fixture.model.localRunError ?? "")")
@@ -64,7 +64,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         // A previously captured restrictive selection also yields to the
         // workspace policy when it is applied to an existing chat.
         fixture.model.sessionSelectionPreferences.stageCalendarSelections(id: folderless, harness: "codex", workspace: scope,
-            selections: .init(permission: "read-only"), usesProductPermissionDefault: true)
+            selections: .init(permission: "agent"), usesProductPermissionDefault: true)
         try await fixture.model.applyStagedSessionSelections(conversationID: folderless)
         #expect(await linux.commands.last { $0.kind == .workspace }?.workspaceAction
             == .configureSession(id: folderless, model: nil, thinking: nil, permission: "agent-full-access"))
@@ -79,7 +79,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
 
         host.accessMode = .user
         fixture.model.remoteWorkspaces.configureFacadeFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
-        #expect(fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id).configuration.permission == "read-only")
+        #expect(fixture.model.calendarTaskDefaults(runtime: .codex, workspaceID: host.id).configuration.permission == "agent")
     }
 
     private func makeModel(_ fixture: HostInspectionFixture) -> RemoteWorkspacesModel {

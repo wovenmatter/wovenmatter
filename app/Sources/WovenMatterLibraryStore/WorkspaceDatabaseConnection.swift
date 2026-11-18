@@ -31,6 +31,8 @@ final class WorkspaceDatabaseConnection {
   private var connection: OpaquePointer?
   public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
+  /// Publishes how far an upgrade of an earlier release's library is, while one runs.
+  var upgradeReporter: LibraryUpgradeReporter?
 
   init(url: URL, readOnlyProjection: Bool = false, workerQueue: DispatchQueue) throws {
     self.workerQueue = workerQueue
@@ -78,7 +80,10 @@ final class WorkspaceDatabaseConnection {
       try migrateLibraryMembers()
       try migrateMemberToolSessions()
       try migrateBotConversations()
+      try migrateGitHubIdentity()
+      upgradeReporter?.reach(.converting, 0.35, next: 0.95, after: "current tables")
       try migratePeerSync()
+      upgradeReporter?.reach(.converting, 0.95, after: "peer sync records")
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
       // A fresh library is stamped once everything above exists.
@@ -88,13 +93,21 @@ final class WorkspaceDatabaseConnection {
       // the tables it rebuilt free inside the file; give it back once. Nothing
       // else has the library open yet, and a failure only keeps the space.
       // VACUUM writes the whole file through the WAL; truncate it after.
-      if converted, (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
-      else { try? withLock { try reclaimFreeSpaceUnlocked() } }
+      if converted {
+        // An empty WAL first, so its growth measures how far VACUUM is.
+        try? execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        upgradeReporter?.compacting(output: URL(fileURLWithPath: url.path + "-wal"), expectedBytes: try withLock { try usedBytesUnlocked() })
+        if (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
+      } else { try? withLock { try reclaimFreeSpaceUnlocked() } }
+      upgradeReporter?.finish()
+      upgradeReporter = nil
       // Planner statistics for the tables that have grown, within SQLite's
       // own bound for a connection that stays open. SQLite before 3.46 has
       // no such bound, so there statistics come only from the close below.
       if sqlite3_libversion_number() >= 3_046_000 { try? execute("PRAGMA optimize = 0x10002") }
     } catch {
+      upgradeReporter?.finish()
+      upgradeReporter = nil
       sqlite3_close(database)
       connection = nil
       throw error

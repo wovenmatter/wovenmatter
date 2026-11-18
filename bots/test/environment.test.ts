@@ -9,7 +9,7 @@ import { FileError } from "@earendil-works/pi-durable/env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runningWork } from "../src/environment/container.ts";
 import { EngineError, StreamDemuxer } from "../src/environment/engine-api.ts";
-import { BUILD_OUTPUT_TAIL_BYTES, ensureImage, helperArchive, imageContext, imageTag } from "../src/environment/images.ts";
+import { BUILD_OUTPUT_TAIL_BYTES, ensureImage, helperArchive, imageContext, imageTag, tagHash, toolchainContext, toolchainImageName } from "../src/environment/images.ts";
 import { PreviewManager } from "../src/environment/previews.ts";
 import { AgentConnection, RemoteExecutionEnv } from "../src/environment/remote.ts";
 import { createTar } from "../src/environment/tar.ts";
@@ -310,12 +310,13 @@ describe("engine streams and archives", () => {
     expect(imageTag("registry:5000/woven-bots:pinned", Buffer.from("a"))).toBe("registry:5000/woven-bots:pinned");
   });
 
-  it("packs identical verified npm inputs from app and native host layouts and rebuilds on repair changes", async () => {
+  it("packs identical verified npm inputs into the toolchain from app and native host layouts and rebuilds it on repair changes", async () => {
     const dir = await tempDir();
     try {
       const image = join(dir.path, "image");
-      await mkdir(image);
+      await mkdir(join(image, "toolchain"), { recursive: true });
       await writeFile(join(image, "Dockerfile"), "FROM fixture\n");
+      await writeFile(join(image, "toolchain/Dockerfile"), "FROM fixture\nARG NODE_VERSION=1\n");
       const inputs = ["harnesses/prepare-npm.mjs", "harnesses/install-adapter.mjs", "harnesses/npm-version.json",
         "npm-runtime/package.json", "npm-runtime/package-lock.json"];
       for (const layout of ["app", "host"]) {
@@ -325,21 +326,35 @@ describe("engine streams and archives", () => {
           await writeFile(path, input);
         }
       }
-      const app = await imageContext(image, join(dir.path, "app"));
-      const host = await imageContext(image, join(dir.path, "host"));
+      const app = await toolchainContext(image, join(dir.path, "app"));
+      const host = await toolchainContext(image, join(dir.path, "host"));
       expect(app.equals(host)).toBe(true);
       await writeFile(join(dir.path, "context.tar"), app);
       await mkdir(join(dir.path, "out"));
       await run("tar", ["-xf", join(dir.path, "context.tar"), "-C", join(dir.path, "out")]);
       for (const input of inputs) expect(await readFile(join(dir.path, "out/tooling", input), "utf8")).toBe(input);
-      const before = imageTag("woven-bots", host);
+      expect(await readFile(join(dir.path, "out/Dockerfile"), "utf8")).toContain("NODE_VERSION");
+      const before = imageTag("woven-bots-toolchain", host);
       await writeFile(join(dir.path, "host/npm-runtime/package-lock.json"), "new security graph");
-      expect(imageTag("woven-bots", await imageContext(image, join(dir.path, "host")))).not.toBe(before);
+      expect(imageTag("woven-bots-toolchain", await toolchainContext(image, join(dir.path, "host")))).not.toBe(before);
+      // The base image's tag ignores the toolchain: a Node or Playwright bump never moves bots.
+      const base = imageTag("woven-bots", await imageContext(image));
+      await writeFile(join(image, "toolchain/Dockerfile"), "FROM fixture\nARG NODE_VERSION=2\n");
+      expect(imageTag("woven-bots", await imageContext(image))).toBe(base);
+      await writeFile(join(image, "Dockerfile"), "FROM fixture2\n");
+      expect(imageTag("woven-bots", await imageContext(image))).not.toBe(base);
       await rm(join(dir.path, "host/harnesses/npm-version.json"));
-      await expect(imageContext(image, join(dir.path, "host"))).rejects.toThrow(/ENOENT/);
+      await expect(toolchainContext(image, join(dir.path, "host"))).rejects.toThrow(/ENOENT/);
     } finally {
       await dir.cleanup();
     }
+  });
+
+  it("names the toolchain image beside the base image and its shared directory by hash", () => {
+    expect(toolchainImageName("woven-bots")).toBe("woven-bots-toolchain");
+    expect(toolchainImageName("registry:5000/woven-bots:pinned")).toBe("registry:5000/woven-bots-toolchain:pinned");
+    expect(tagHash("woven-bots-toolchain:0123456789abcdef")).toBe("0123456789abcdef");
+    expect(tagHash("registry:5000/woven-bots-toolchain:pinned")).toBe("pinned");
   });
 
   it("packs the helper with the env agent's packages and a completion marker last", async () => {

@@ -108,7 +108,7 @@ public extension UsageSample {
   /// The same sample stored under another source.
   func moved(toSource sourceID: String) -> UsageSample {
     UsageSample(
-      id: id, provider: provider, timestamp: timestamp, sessionID: sessionID, accountLabel: accountLabel,
+      id: id, provider: provider, timestamp: timestamp, sessionID: sessionID,
       model: model, billingProvider: billingProvider, billingRoute: billingRoute, reasoningLevel: reasoningLevel,
       harness: harness, application: application, agent: agent, workspace: workspace, tokens: tokens,
       requestCount: requestCount, costUSD: costUSD, attributionConfidence: attributionConfidence,
@@ -149,7 +149,9 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
   public let timestamp: Double
   public let provider: String
   public let sessionID: String
-  public let accountLabel: String
+  /// Always "Unknown", and never read: releases before account labels were
+  /// removed require the key, and devices run different versions for days.
+  private var accountLabel: String? = "Unknown"
   public let model: String
   public let billingProvider: String
   public let billingRoute: String
@@ -182,7 +184,6 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
     timestamp = sample.timestamp.timeIntervalSince1970
     provider = sample.provider.rawValue
     sessionID = sample.sessionID
-    accountLabel = sample.accountLabel
     model = sample.model
     billingProvider = sample.billingProvider
     billingRoute = sample.billingRoute
@@ -205,7 +206,7 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
 
   /// Another device's data is untrusted, so anything out of bounds is dropped.
   public func sample(deviceID: String) -> UsageSample? {
-    let labels = [id, sessionID, accountLabel, model, billingProvider, billingRoute, harness, application]
+    let labels = [id, sessionID, model, billingProvider, billingRoute, harness, application]
       + [reasoningLevel, agent, workspace, dedupeKey].compactMap { $0 }
     guard timestamp.isFinite, timestamp >= 0,
           labels.allSatisfy({ $0.utf8.count <= UsageIngestionLimits.labelBytes }),
@@ -220,7 +221,6 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
       provider: ProviderKind(rawValue: provider) ?? .unknown,
       timestamp: Date(timeIntervalSince1970: timestamp),
       sessionID: sessionID,
-      accountLabel: accountLabel,
       model: model,
       billingProvider: billingProvider,
       billingRoute: billingRoute,

@@ -20,7 +20,7 @@ struct WovenSessionEnvironmentTests {
             #expect(FileManager.default.isExecutableFile(atPath: installed.appending(path: name).path))
         }
         var environment = ["PATH": installed.path + ":/usr/bin:/bin", "HOME": "/Users/fixture"]
-        WovenSessionEnvironment.apply(to: &environment, toolsDirectory: installed, deviceName: "Mac Mini")
+        WovenSessionEnvironment.apply(to: &environment, toolsDirectory: installed, gitDirectory: nil, deviceName: "Mac Mini")
         let paths = try #require(environment["PATH"]).split(separator: ":").map(String.init)
         #expect(paths.first == installed.path && paths.filter { $0 == installed.path }.count == 1)
         #expect(environment["GIT_TERMINAL_PROMPT"] == "0")

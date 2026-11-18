@@ -31,6 +31,7 @@ in your installed version.
 - [Apple devices](guide/apple-devices.md): pair Macs, keep the library in sync, and the iPhone app (beta).
 - [Remote workspaces](guide/remote-workspaces.md): add a Linux host and run agents there.
 - [Bots](guide/bots.md): long-running agents, each in its own container.
+- [Updates](guide/updates.md): versions and updates for every device and harness in one place.
 - [Troubleshooting](guide/troubleshooting.md): setup, connection, sync, and data problems.
 
 ## Architecture
@@ -45,6 +46,7 @@ in your installed version.
 - [Active-run steering](architecture/active-run-steering.md): sending to a session while it is working.
 - [Pi Durable execution storage](architecture/PI_DURABLE_STORAGE.md)
 - [Default agent credentials](architecture/DEFAULT_AGENT_CREDENTIALS.md)
+- [GitHub key and git identity](architecture/GITHUB_IDENTITY.md): Settings → GitHub on every machine, session and bot.
 - [Internal database concurrency](architecture/ASYNC_DATABASE.md)
 - [Chat HTML rendering](architecture/CHAT_HTML_RENDERING.md)
 - [Shared workspace browser](design/embedded-browser.md)

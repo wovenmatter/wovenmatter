@@ -293,6 +293,14 @@ final class LibraryHostController {
         }
     }
 
+    /// Paths another Mac's Settings → Updates calls here (signed, Mac members only): the
+    /// harness inventory, checks and updates, the Pi Durable SDKs, and the operations an update
+    /// answers with, which the caller follows until they finish.
+    nonisolated static func servesMemberMaintenance(_ path: String) -> Bool {
+        path == "/v1/runtime-maintenance" || path.hasPrefix("/v1/runtime-maintenance/")
+            || path == "/v1/default-agent/sdks" || path.hasPrefix("/v1/operations/")
+    }
+
     private func handle(_ request: LibraryHTTPRequest, generation expected: UUID, libraryAPI: DeviceAPI) async -> LibraryHTTPResponse {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
@@ -311,6 +319,17 @@ final class LibraryHostController {
             return await inferenceHost.handle(request)
         }
         let botsPath = path.hasPrefix("/wovenmatter/") ? String(path.dropFirst("/wovenmatter".count)) : path
+        // Another Mac's Settings → Updates: this Mac's harnesses and Pi Durable SDKs.
+        if Self.servesMemberMaintenance(botsPath) {
+            guard let model else { return .error("unavailable", "This Mac is starting.", status: 503) }
+            do {
+                guard MemberRequestVerifier.isSigned(request.headers) else {
+                    throw LibraryAPIError(code: "unauthorized", message: "Sign this request with a member device key.")
+                }
+                _ = try await authenticateMember(request, allowing: [.mac])
+            } catch { return .error("unauthorized", error.localizedDescription, status: 401) }
+            return await model.memberMaintenance(request, path: botsPath)
+        }
         if botsPath.hasPrefix("/v1/bots/") {
             guard let authorizeBots, let host = model?.botsHost else { return .error("unavailable", "Bots on this Mac are starting.", status: 503) }
             do { try await authorizeBots(request) }

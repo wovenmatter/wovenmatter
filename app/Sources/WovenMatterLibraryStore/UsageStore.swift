@@ -180,7 +180,7 @@ final class UsageStore {
       let insertion = try prepare("""
         INSERT INTO usage_events (
           event_id, source_id, source_event_id, dedupe_key,
-          provider, billing_provider, billing_route, account_label,
+          provider, billing_provider, billing_route,
           model_raw, model_canonical, model_family, model_publisher,
           model_identity_confidence, timestamp, session_id,
           reasoning_level, harness, application, agent, workspace,
@@ -189,14 +189,13 @@ final class UsageStore {
           cost_usd, attribution_confidence, granularity, imported_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         ON CONFLICT(event_id) DO UPDATE SET
           dedupe_key = excluded.dedupe_key,
           provider = excluded.provider,
           billing_provider = excluded.billing_provider,
           billing_route = excluded.billing_route,
-          account_label = excluded.account_label,
           model_raw = excluded.model_raw,
           model_canonical = excluded.model_canonical,
           model_family = excluded.model_family,
@@ -305,7 +304,7 @@ final class UsageStore {
       let insertion = try prepare("""
         INSERT INTO usage_events (
           event_id, source_id, source_event_id, dedupe_key,
-          provider, billing_provider, billing_route, account_label,
+          provider, billing_provider, billing_route,
           model_raw, model_canonical, model_family, model_publisher,
           model_identity_confidence, timestamp, session_id,
           reasoning_level, harness, application, agent, workspace,
@@ -314,7 +313,7 @@ final class UsageStore {
           cost_usd, attribution_confidence, granularity, imported_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """)
       defer { sqlite3_finalize(insertion) }
@@ -354,38 +353,37 @@ final class UsageStore {
     bind(sample.provider.rawValue, to: 5, in: insertion)
     bind(sample.billingProvider, to: 6, in: insertion)
     bind(sample.billingRoute, to: 7, in: insertion)
-    bind(sample.accountLabel, to: 8, in: insertion)
-    bind(sample.model, to: 9, in: insertion)
-    bind(sample.canonicalModel, to: 10, in: insertion)
-    bind(sample.modelFamily, to: 11, in: insertion)
-    bind(sample.modelPublisher, to: 12, in: insertion)
-    bind(sample.modelIdentityConfidence.rawValue, to: 13, in: insertion)
-    sqlite3_bind_double(insertion, 14, sample.timestamp.timeIntervalSince1970)
-    bind(sample.sessionID, to: 15, in: insertion)
-    bind(sample.reasoningLevel, to: 16, in: insertion)
-    bind(sample.harness, to: 17, in: insertion)
-    bind(sample.application, to: 18, in: insertion)
-    bind(sample.agent, to: 19, in: insertion)
-    bind(sample.workspace, to: 20, in: insertion)
-    sqlite3_bind_int64(insertion, 21, Int64(sample.requestCount))
-    sqlite3_bind_int64(insertion, 22, sample.tokens.inputTokens)
-    sqlite3_bind_int64(insertion, 23, sample.tokens.cachedInputTokens)
-    sqlite3_bind_int64(insertion, 24, sample.tokens.cacheCreationTokens)
-    sqlite3_bind_int64(insertion, 25, sample.tokens.outputTokens)
-    sqlite3_bind_int64(insertion, 26, sample.tokens.reasoningTokens)
+    bind(sample.model, to: 8, in: insertion)
+    bind(sample.canonicalModel, to: 9, in: insertion)
+    bind(sample.modelFamily, to: 10, in: insertion)
+    bind(sample.modelPublisher, to: 11, in: insertion)
+    bind(sample.modelIdentityConfidence.rawValue, to: 12, in: insertion)
+    sqlite3_bind_double(insertion, 13, sample.timestamp.timeIntervalSince1970)
+    bind(sample.sessionID, to: 14, in: insertion)
+    bind(sample.reasoningLevel, to: 15, in: insertion)
+    bind(sample.harness, to: 16, in: insertion)
+    bind(sample.application, to: 17, in: insertion)
+    bind(sample.agent, to: 18, in: insertion)
+    bind(sample.workspace, to: 19, in: insertion)
+    sqlite3_bind_int64(insertion, 20, Int64(sample.requestCount))
+    sqlite3_bind_int64(insertion, 21, sample.tokens.inputTokens)
+    sqlite3_bind_int64(insertion, 22, sample.tokens.cachedInputTokens)
+    sqlite3_bind_int64(insertion, 23, sample.tokens.cacheCreationTokens)
+    sqlite3_bind_int64(insertion, 24, sample.tokens.outputTokens)
+    sqlite3_bind_int64(insertion, 25, sample.tokens.reasoningTokens)
     if let total = sample.tokens.reportedTotalTokens {
-      sqlite3_bind_int64(insertion, 27, total)
+      sqlite3_bind_int64(insertion, 26, total)
+    } else {
+      sqlite3_bind_null(insertion, 26)
+    }
+    if let cost = sample.costUSD {
+      sqlite3_bind_double(insertion, 27, cost)
     } else {
       sqlite3_bind_null(insertion, 27)
     }
-    if let cost = sample.costUSD {
-      sqlite3_bind_double(insertion, 28, cost)
-    } else {
-      sqlite3_bind_null(insertion, 28)
-    }
-    bind(sample.attributionConfidence.rawValue, to: 29, in: insertion)
-    bind(sample.granularity.rawValue, to: 30, in: insertion)
-    sqlite3_bind_double(insertion, 31, importedAt.timeIntervalSince1970)
+    bind(sample.attributionConfidence.rawValue, to: 28, in: insertion)
+    bind(sample.granularity.rawValue, to: 29, in: insertion)
+    sqlite3_bind_double(insertion, 30, importedAt.timeIntervalSince1970)
     try stepDone(insertion)
   }
 
@@ -445,7 +443,7 @@ final class UsageStore {
       let columns = """
         INTO usage_events (
           event_id, source_id, source_event_id, dedupe_key,
-          provider, billing_provider, billing_route, account_label,
+          provider, billing_provider, billing_route,
           model_raw, model_canonical, model_family, model_publisher,
           model_identity_confidence, timestamp, session_id,
           reasoning_level, harness, application, agent, workspace,
@@ -454,7 +452,7 @@ final class UsageStore {
           cost_usd, attribution_confidence, granularity, imported_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """
       let insertion = try prepare("INSERT OR REPLACE " + columns)
@@ -518,7 +516,7 @@ final class UsageStore {
     let statement = try prepare("""
       SELECT
         event_id, source_id, source_event_id, dedupe_key,
-        provider, billing_provider, billing_route, account_label,
+        provider, billing_provider, billing_route,
         model_raw, timestamp, session_id, reasoning_level,
         harness, application, agent, workspace,
         request_count, input_tokens, cached_input_tokens, cache_creation_tokens,
@@ -545,34 +543,33 @@ final class UsageStore {
       case SQLITE_ROW:
         let provider = ProviderKind(rawValue: text(statement, 4)) ?? .unknown
         let tokens = UsageTokenCounts(
-          inputTokens: sqlite3_column_int64(statement, 17),
-          cachedInputTokens: sqlite3_column_int64(statement, 18),
-          cacheCreationTokens: sqlite3_column_int64(statement, 19),
-          outputTokens: sqlite3_column_int64(statement, 20),
-          reasoningTokens: sqlite3_column_int64(statement, 21),
-          reportedTotalTokens: optionalInt64(statement, 22)
+          inputTokens: sqlite3_column_int64(statement, 16),
+          cachedInputTokens: sqlite3_column_int64(statement, 17),
+          cacheCreationTokens: sqlite3_column_int64(statement, 18),
+          outputTokens: sqlite3_column_int64(statement, 19),
+          reasoningTokens: sqlite3_column_int64(statement, 20),
+          reportedTotalTokens: optionalInt64(statement, 21)
         )
         result.append(UsageSample(
           id: text(statement, 0),
           provider: provider,
-          timestamp: Date(timeIntervalSince1970: sqlite3_column_double(statement, 9)),
-          sessionID: text(statement, 10),
-          accountLabel: text(statement, 7),
-          model: text(statement, 8),
+          timestamp: Date(timeIntervalSince1970: sqlite3_column_double(statement, 8)),
+          sessionID: text(statement, 9),
+          model: text(statement, 7),
           billingProvider: text(statement, 5),
           billingRoute: text(statement, 6),
-          reasoningLevel: optionalText(statement, 11),
-          harness: UsageSample.currentHarnessName(text(statement, 12)),
-          application: text(statement, 13),
-          agent: optionalText(statement, 14),
-          workspace: optionalText(statement, 15),
+          reasoningLevel: optionalText(statement, 10),
+          harness: UsageSample.currentHarnessName(text(statement, 11)),
+          application: text(statement, 12),
+          agent: optionalText(statement, 13),
+          workspace: optionalText(statement, 14),
           tokens: tokens,
-          requestCount: Int(sqlite3_column_int64(statement, 16)),
-          costUSD: optionalDouble(statement, 23),
+          requestCount: Int(sqlite3_column_int64(statement, 15)),
+          costUSD: optionalDouble(statement, 22),
           attributionConfidence: UsageAttributionConfidence(
-            rawValue: text(statement, 24)
+            rawValue: text(statement, 23)
           ) ?? .unknown,
-          granularity: UsageGranularity(rawValue: text(statement, 25))
+          granularity: UsageGranularity(rawValue: text(statement, 24))
             ?? .modelCall,
           sourceID: text(statement, 1),
           sourceEventID: text(statement, 2),
@@ -708,7 +705,6 @@ final class UsageStore {
         provider TEXT NOT NULL,
         billing_provider TEXT NOT NULL,
         billing_route TEXT NOT NULL,
-        account_label TEXT NOT NULL,
         model_raw TEXT NOT NULL,
         model_canonical TEXT NOT NULL,
         model_family TEXT NOT NULL,
@@ -751,6 +747,18 @@ final class UsageStore {
         detail TEXT NOT NULL
       );
       """)
+    // Usage rows no longer carry an account label (library schema step 3). The
+    // usage index often opens the file before the library does, so it drops the
+    // column itself before writing rows without it.
+    if try usageEventsHaveAccountLabel() {
+      try execute("ALTER TABLE usage_events DROP COLUMN account_label")
+    }
+  }
+
+  private func usageEventsHaveAccountLabel() throws -> Bool {
+    let statement = try prepare("SELECT 1 FROM pragma_table_info('usage_events') WHERE name = 'account_label'")
+    defer { sqlite3_finalize(statement) }
+    return sqlite3_step(statement) == SQLITE_ROW
   }
 
   private func execute(_ sql: String) throws {

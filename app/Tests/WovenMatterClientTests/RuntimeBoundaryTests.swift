@@ -63,36 +63,6 @@ struct RuntimeBoundaryTests {
     #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("latest"))
     #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("^1.2.3"))
 
-    let cliDefinition = LocalACPRuntimeDefinition(
-      runtimeKind: .codex,
-      displayName: "Fake CLI",
-      commandName: "fake-cli",
-      arguments: [],
-      underlyingCLIName: nil,
-      cliInstallerSource: URL(string: "https://www.npmjs.com/package/@example/fake-cli"),
-      cliInstallerInterpreter: nil,
-      cliNpmPackageSpec: "@example/fake-cli@1",
-      adapterPackage: nil,
-      adapterDescription: "Fake CLI"
-    )
-    let preview = try await installer.prepareCLIInstall(cliDefinition, fetch: { _ in Data(#"{"version":"1.5.6","bin":{"cli":"bin.js"}}"#.utf8) })
-    #expect(preview.packageSpec == "@example/fake-cli@1.5.6")
-    #expect(preview.verification == "npm-registry-integrity")
-    do {
-      _ = try await installer.install(cliDefinition, component: .cli)
-      Issue.record("An npm CLI install must require package confirmation")
-    } catch let error as LocalACPRuntimeInstallError {
-      #expect(error == .confirmationRequired)
-    }
-    _ = try await installer.install(
-      cliDefinition,
-      component: .cli,
-      expectedPackageSpec: preview.packageSpec
-    )
-    let cliArguments = try String(contentsOf: argumentsFile, encoding: .utf8)
-      .split(whereSeparator: \.isNewline)
-      .map(String.init)
-    #expect(cliArguments.last == "@example/fake-cli@1.5.6")
     #expect(LocalACPRuntimeInstaller.isExactPackageSpec(
       "@example/fake-cli@1.5.6"
     ))
@@ -132,11 +102,11 @@ struct RuntimeBoundaryTests {
     }
   }
 
-  @Test("local CLI install requires a reviewed digest and a matching redownload")
+  @Test("local CLI install runs the official installer as published; a digest someone saw must still match")
   func localCLIInstallerDigestBoundary() async throws {
-    let reviewed = Data("#!/bin/sh\nexit 0\n".utf8)
+    let published = Data("#!/bin/sh\nexit 0\n".utf8)
     let changed = Data("#!/bin/sh\nexit 1\n".utf8)
-    let downloads = InstallerDownloads([reviewed, changed])
+    let downloads = InstallerDownloads([published, published, changed])
     let installer = LocalACPRuntimeInstaller(
       installerFetcher: { source, destination, maximumBytes in
         try await downloads.fetch(
@@ -149,19 +119,15 @@ struct RuntimeBoundaryTests {
     )
     let definition = cliDefinition()
 
-    do {
-      _ = try await installer.install(definition, component: .cli)
-      Issue.record("A CLI installer must require explicit digest confirmation")
-    } catch let error as LocalACPRuntimeInstallError {
-      #expect(error == .confirmationRequired)
-    }
-    #expect(await downloads.fetchCount() == 0)
+    // A missing CLI installs with nothing to review.
+    _ = try await installer.install(definition, component: .cli)
+    #expect(await downloads.fetchCount() == 1)
 
+    // Another Mac that showed a download passes its digest; a changed download never runs.
     let preview = try await installer.prepareCLIInstall(definition)
     #expect(preview.source == URL(string: "https://example.com/install.sh"))
-    #expect(preview.bytes == reviewed.count)
+    #expect(preview.bytes == published.count)
     #expect(preview.sha256 == "306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb")
-
     do {
       _ = try await installer.install(
         definition,
@@ -172,26 +138,26 @@ struct RuntimeBoundaryTests {
     } catch let error as LocalACPRuntimeInstallError {
       #expect(error == .sourceDigestChanged)
     }
-    #expect(await downloads.fetchCount() == 2)
+    #expect(await downloads.fetchCount() == 3)
   }
 
-  @Test("Claude installer receives the newest stable publication despite a stale channel tag")
-  func claudeInstallerPublicationSelection() async throws {
+  @Test("Claude's official installer runs with the catalog's arguments and installs what its channel names")
+  func claudeInstallerUsesItsOwnChannel() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
-    let script = Data("#!/bin/sh\n[ \"$1\" = 2.1.316 ]\n".utf8)
+    let script = Data("#!/bin/sh\n[ \"$1\" = latest ] && [ $# -eq 1 ]\n".utf8)
     let installer = LocalACPRuntimeInstaller(
       installPrefix: root,
       installerFetcher: { _, destination, _ in try script.write(to: destination); return script.count },
       metadataFetcher: { url in
-        #expect(url.absoluteString == "https://registry.npmjs.org/@anthropic-ai%2fclaude-code")
-        return Data(#"{"dist-tags":{"latest":"2.1.314"},"versions":{"2.1.314":{"bin":{"claude":"cli.js"}},"2.1.316":{"bin":{"claude":"cli.js"}},"2.1.317":{"bin":{"claude":"cli.js"},"deprecated":"withdrawn"},"2.2.0-beta.1":{"bin":{"claude":"cli.js"}}}}"#.utf8)
+        Issue.record("A CLI install never asks npm which version to install: \(url)")
+        throw RuntimeMaintenanceError.unavailable
       },
       executableResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
     )
     let definition = try #require(LocalACPRuntimeCatalog.definition(for: .claudeCode))
-    let preview = try await installer.prepareCLIInstall(definition)
-    let executable = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
+    #expect(definition.cliInstallerArguments == ["latest"])
+    let executable = try await installer.install(definition, component: .cli)
     #expect(executable.path == "/bin/sh")
   }
   private func cliDefinition() -> LocalACPRuntimeDefinition {
@@ -265,8 +231,8 @@ private final class SSHRecorder: @unchecked Sendable {
 }
 
 extension RuntimeBoundaryTests {
-  @Test("adapter installation selects engine and protocol SDK independently before staging")
-  func independentEngineInstall() async throws {
+  @Test("an adapter installs alone, pointed at the native CLI, with its protocol SDK selected before staging")
+  func adapterInstallUsesTheNativeCLI() async throws {
     let fixture = try TemporaryDirectory(prefix: "woven-independent-engine")
     defer { fixture.remove() }
     let tools = fixture.url.appending(path: "tools")
@@ -283,19 +249,18 @@ extension RuntimeBoundaryTests {
       chmod 700 '\(prefix.path)/bin/codex-acp'
       """.utf8).write(to: node)
     for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
+    let nativeCodex = URL(fileURLWithPath: "/home/someone/.local/bin/codex")
     let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
-      if url.absoluteString.contains("@agentclientprotocol%2fsdk") {
-        return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.7.0":{},"2.8.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
-      }
-      #expect(url.absoluteString.contains("@openai%2fcodex"))
-      return Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{},"0.166.0":{},"0.169.0":{}}}"#.utf8)
-    })
+      #expect(url.absoluteString.contains("@agentclientprotocol%2fsdk"), "no engine is looked up: \(url)")
+      return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.7.0":{},"2.8.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
+    }, executableResolver: { name in name == "codex" ? nativeCodex : nil })
     let executable = try await installer.installPackage("@agentclientprotocol/codex-acp", version: "2.6.0", executableName: "codex-acp")
     let arguments = try String(contentsOf: argumentsFile, encoding: .utf8).split(separator: "\n")
     #expect(arguments.count == 2)
     #expect(arguments[0].hasSuffix("harnesses/install-adapter.mjs"))
     let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
-    #expect(selection["engineVersion"] as? String == "0.169.0")
+    #expect(selection["engineVersion"] == nil)
+    #expect(selection["cli"] as? String == nativeCodex.path)
     #expect(selection["protocolSDKVersion"] as? String == "2.7.0")
     #expect(selection["adapterVersion"] as? String == "2.6.0")
     #expect(selection["npm"] as? [String] == [npm.path])

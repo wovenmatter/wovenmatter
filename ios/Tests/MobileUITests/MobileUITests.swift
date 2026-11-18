@@ -261,8 +261,8 @@ final class MobileUITests: XCTestCase {
     XCTAssertLessThanOrEqual(controls.last!.frame.maxX, app.frame.maxX)
     permissions.tap()
     XCTAssertTrue(app.staticTexts["Permissions"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Ask for Approval"].exists)
     XCTAssertTrue(app.buttons["Full Access"].exists)
+    XCTAssertFalse(app.buttons["Ask for Approval"].exists, "Quick Chat has no Ask for Approval mode")
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Composer permissions"
     capture.lifetime = .keepAlways

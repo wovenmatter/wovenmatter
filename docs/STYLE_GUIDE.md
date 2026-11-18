@@ -29,10 +29,10 @@ when an intentional design change is accepted.
   without all-caps styling or expanded letter spacing. Keep saved-default actions
   out of the conversation selector popouts. Composer model buttons show only the
   model name and version; connection attribution belongs in the model popout.
-  Permission menus use each harness's own mode names, except that every
-  harness's full mode is shown as Full access. List Full access first (the
-  default everywhere), then the harness's auto-approve modes, then its other
-  modes, with ask-for-approval last.
+  Permission menus offer only Full access and, where the harness has one, its
+  auto mode under the harness's own name (Codex Approve for me, Claude Code and
+  Grok Build Auto). List Full access first; it is the default everywhere. Never
+  offer an ask-for-approval mode.
   Permission buttons use the fullest label that fits, then explicit shorter
   labels, then an icon. Never ellipsize these labels or collapse distinct modes
   such as Auto and Auto Accept into the same text. Popouts retain full labels
@@ -86,11 +86,38 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Agent pages return to Agents unless
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Permissions & Access,
-  Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
-  Background Server, then Dictation. Subscriptions & API Keys, Permissions &
-  Access, Woven MCP, and Bots return to the page whose link opened them.
-- **General:** Appearance, Conversation titles, Software, and Privacy only. Other
+  the app. Order the main Settings page as General, Updates, Permissions & Access,
+  Subscriptions & API Keys, GitHub, Agents, Bots, Woven MCP, Workspaces, Apple
+  Devices, Background Server, then Dictation. Subscriptions & API Keys, Permissions &
+  Access, Woven MCP, Bots, and Updates return to the page whose link opened them.
+- **Updates:** the one home for versions and updates.
+  - **The top row:** "This Mac · Woven Matter X" ("Woven Matter development
+    build" in development), always subtitled "This updates the Woven Matter
+    desktop app on this Mac.", with **Check for updates** and, when a newer
+    release is out, **Update this Mac**, the page's one primary button.
+  - **Three rows with a compact Update each:** "Update everything", "Update
+    just Woven Matter", and "Update just the harnesses", each subtitled with
+    what it covers across your devices. No full-width buttons, and never
+    "fleet".
+  - **Your devices:** no subtitle. One expandable row per device, named as on
+    the tailnet, this Mac first, then other Macs, then remote workspaces. The
+    closed row shows only its name, its Woven Matter or Woven server version,
+    **Bots** on the one device that runs bots, and a status; it has no Update
+    button. Opened, it lists "Update everything on this device", "Update just
+    Woven Matter", "Update just the bots" where they run, then each harness,
+    each with its own **Update**. Bots never show a version of their own.
+  - **Updates run side by side:** starting one never disables the others. Only
+    the rows an update covers show "Updating…"; a button whose parts are all
+    already updating waits.
+  - **Plain copy:** subtitles are full sentences saying what the row updates.
+    No "How it works" section; the rows explain themselves.
+  - **No update counts:** each row says "Update available" itself.
+  Work an update would stop is named in one alert before anything starts; Linux
+  harness downloads are reviewed in one confirmation per update. Other pages
+  show only a "Versions don't match" link here.
+- **General:** the Woven Matter version first (no heading), as one whole-row link
+  that highlights on hover and opens Updates, with one line saying updates live
+  there. Then Appearance, Conversation titles, and Privacy. Other
   settings live on the page for what they affect. Summary rows whose value would be
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.
@@ -103,14 +130,14 @@ when an intentional design change is accepted.
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
   at 760 points and wider. Message actions appear on hover. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
-  Linux machine), the chosen machine's row, Install on another device, and version
-  notices with "Update everything". Choosing a machine asks first, then turns bots off
+  Linux machine), the chosen machine's row, Install on another device, and a
+  "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off
   everywhere else; bots and their files stay where they were made. The machine opens
   its own page: a status row with a Manage menu, then summary links to Profiles, Bots
   and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
   are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
   Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
-  shows only a version status link to Bots. Bots use Subscriptions & API Keys on the
+  shows only a version status link to Updates. Bots use Subscriptions & API Keys on the
   machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
@@ -125,6 +152,19 @@ when an intentional design change is accepted.
   connecting one in the shared scope turns on its limit checks. Keep the "Accounts
   for" selector visible, since saved workspace accounts take priority and must stay
   reachable. Native harnesses sign in on their own agent pages.
+- **GitHub:** one SSH key and git identity for agents and bots on every
+  machine; there is no per-bot, per-workspace or per-harness GitHub key. The SSH
+  key section shows the key's name and fingerprint with a Ready status, the
+  public key in monospace, then Copy public key, Add key on GitHub, and Remove
+  key; Generate a key (Replace with a new key, after asking) and Paste an
+  existing private key follow. The private key is never shown after saving. Git
+  identity is a Name and Email form with Save identity; blank fields keep each
+  machine's own git settings. With a key, Where the key goes lists New places get
+  the key, then each machine (This Mac first, other Macs, Linux workspaces) with
+  its bots indented beneath it, each with a switch on the right; a machine turned
+  off turns off its bots. One note says a place turned off stops at its next git
+  command, and an offline one when it's next online. There is no How it works
+  section. The landing row shows Key added or No key.
 - **Agent setup:** Pi Durable links to Subscriptions & API Keys with a one-line
   description and how many are connected, then shows Models, Defaults for new
   chats, and More. Models holds the default model, In the composer, and Fallbacks. Add
@@ -188,7 +228,8 @@ when an intentional design change is accepted.
   signed-in account shows its name or email with **Remove account**; **Sign in**
   shows only when nothing is signed in. There is no "Change sign-in".
   New remote workspaces offer skippable, reopenable setup with only Pi Durable
-  selected by default; additional installations retain installer source review.
+  selected by default. Installs run each vendor's official installer with no review
+  step; the only question is **Replace OpenCode 1?** when OpenCode 2 would replace it.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
 - **Agent pages:** one page with no area switcher: the harness's account ("Codex

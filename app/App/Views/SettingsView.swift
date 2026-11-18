@@ -18,14 +18,16 @@ private enum HarnessSettingsOrigin: Equatable {
 
 /// Pages other pages link to. Each returns to the page that opened it.
 private enum CrossLinkedPage: Hashable {
-    case accounts, permissions, wovenMCP, bots
+    case accounts, permissions, wovenMCP, bots, updates
 }
 
 private enum SettingsRoute: Equatable {
     case landing
     case general
+    case updates
     case permissions
     case accounts(String)
+    case github
     case agents
     case piDurable(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
@@ -48,6 +50,7 @@ struct SettingsView: View {
     /// Where each cross-linked page was opened from; Back returns there.
     @State private var origins: [CrossLinkedPage: SettingsRoute] = [:]
     @State private var macAccess = MacAccessSetupModel.shared
+    @State private var updates = FleetUpdatesModel.shared
 
     private var theme: WovenTheme {
         WovenTheme(rawValue: storedTheme) ?? .green
@@ -66,7 +69,15 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .landing },
-                    onOpenCodex: { route = harnessRoute(.codex, workspaceID: nil, origin: .general) }
+                    onOpenCodex: { route = harnessRoute(.codex, workspaceID: nil, origin: .general) },
+                    onOpenUpdates: { open(.updates, .updates, from: .general) }
+                )
+            case .updates:
+                SettingsUpdatesView(
+                    model: model,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    backTitle: backTitle(.updates),
+                    onBack: { back(from: .updates) }
                 )
             case .permissions:
                 SettingsPermissionsView(
@@ -83,6 +94,9 @@ struct SettingsView: View {
                     backTitle: backTitle(.accounts),
                     onBack: { back(from: .accounts) }
                 )
+            case .github:
+                SettingsGitHubView(model: model.github, bots: model.bots, reservesRailControlSpace: reservesRailControlSpace,
+                                   onBack: { route = .landing })
             case .agents:
                 SettingsAgentsView(
                     model: model,
@@ -134,7 +148,7 @@ struct SettingsView: View {
                 SettingsAppleDevicesView(model: model, host: model.libraryHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .landing },
-                    onOpenBots: { open(.bots, .bots, from: .appleDevices) })
+                    onOpenUpdates: { open(.updates, .updates, from: .appleDevices) })
             case .backgroundServer:
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .dictation:
@@ -148,7 +162,8 @@ struct SettingsView: View {
                     backTitle: backTitle(.bots),
                     onBack: { back(from: .bots) },
                     onOpenMachine: { route = .botsMachine($0) },
-                    onOpenWovenMCP: { open(.wovenMCP, .wovenMCP, from: .bots) }
+                    onOpenWovenMCP: { open(.wovenMCP, .wovenMCP, from: .bots) },
+                    onOpenUpdates: { open(.updates, .updates, from: .bots) }
                 )
             case .botsMachine(let machineID):
                 SettingsBotsMachineView(
@@ -253,8 +268,10 @@ struct SettingsView: View {
         switch route {
         case .landing: "Settings"
         case .general: "General"
+        case .updates: "Updates"
         case .permissions: "Permissions & Access"
         case .accounts: "Subscriptions & API Keys"
+        case .github: "GitHub"
         case .agents: "Agents"
         case .piDurable: "Pi Durable"
         case .harness(let kind, _, _): kind.displayName
@@ -299,9 +316,17 @@ struct SettingsView: View {
             VStack(spacing: 2) {
                 SettingsDestinationRow(
                     title: "General",
-                    detail: "Appearance, software updates, and privacy.",
+                    detail: "Version, appearance, conversation titles, and privacy.",
                     icon: { LucideIcon(glyph: .settings, size: 15) },
                     action: { route = .general }
+                )
+                SettingsDestinationRow(
+                    title: "Updates",
+                    detail: "Woven Matter and harnesses on every device.",
+                    status: updates.availableCount > 0 || updates.running ? updates.summary : nil,
+                    statusTone: updates.availableCount > 0 ? .warning : .neutral,
+                    icon: { LucideIcon(glyph: .rocket, size: 15) },
+                    action: { open(.updates, .updates, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Permissions & Access",
@@ -316,6 +341,14 @@ struct SettingsView: View {
                     detail: "ChatGPT, Claude, Grok, and other providers, plus web search.",
                     icon: { LucideIcon(glyph: .keyRound, size: 15) },
                     action: { open(.accounts, .accounts("global"), from: .landing) }
+                )
+                SettingsDestinationRow(
+                    title: "GitHub",
+                    detail: "Your SSH key and commit identity for agents and bots everywhere.",
+                    status: model.github.snapshot.map { $0.key == nil ? "No key" : "Key added" },
+                    statusTone: model.github.snapshot?.key == nil ? .neutral : .good,
+                    icon: { LucideIcon(glyph: .gitBranch, size: 15) },
+                    action: { route = .github }
                 )
                 SettingsDestinationRow(
                     title: "Agents",
@@ -361,7 +394,11 @@ struct SettingsView: View {
                 )
             }
         }
-        .task { macAccess.refresh(keychainReady: model.keychainAccessReady) }
+        .task {
+            macAccess.refresh(keychainReady: model.keychainAccessReady)
+            updates.loadIfNeeded()
+            await model.github.load()
+        }
     }
 }
 

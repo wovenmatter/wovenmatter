@@ -34,6 +34,15 @@ enum BotsCommand: Codable, Sendable {
     /// live stream (`…/v1/stream?protocol=1`; `audience`: its member device ID).
     /// The window process holds no member key.
     case signSocket(url: URL, audience: String)
+    /// Another machine's harnesses and Pi Durable SDKs, for Settings → Updates.
+    case memberInventory(machineID: String, checkLatest: Bool)
+    /// The installer a Linux host would download for a harness update; none for a Mac.
+    case memberInstallerPreview(machineID: String, kind: AgentRuntimeKind)
+    /// Starts updating a harness on another machine, as a job. `force` stops the chats
+    /// using it on a Mac first.
+    case updateMemberHarness(machineID: String, kind: AgentRuntimeKind, sourceSHA256: String?, packageSpec: String?, force: Bool)
+    /// Starts updating another machine's Pi Durable SDKs, as a job.
+    case updateMemberSDKs(machineID: String)
 }
 
 struct BotsCommandResult: Codable, Sendable {
@@ -46,6 +55,10 @@ struct BotsCommandResult: Codable, Sendable {
     var botMCP: WorkspaceExternalMCPSettings?
     /// The reply to `signSocket`.
     var socketHeaders: [String: String]?
+    /// The reply to `memberInventory`.
+    var memberInventory: FleetMemberInventory?
+    /// The reply to `memberInstallerPreview`.
+    var installerPreview: RemoteInstallerPreview?
     /// Long bots commands running in the process that owns execution, and how the last
     /// one for each target ended.
     var jobs: [BotsJob] = []
@@ -56,9 +69,10 @@ struct BotsCommandResult: Codable, Sendable {
 /// fifteen. It runs where execution lives; its progress, and the error when it fails,
 /// travel in every snapshot until the next run for the same target.
 struct BotsJob: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case installBots, updateLinuxHost }
+    enum Kind: String, Codable, Sendable { case installBots, updateLinuxHost, updateHarness }
     var kind: Kind
-    /// The Tailscale host name for an install, the machine ID for an update.
+    /// The Tailscale host name for an install, the machine ID for an update, and
+    /// `machineID/harness` for a harness update (`pi-durable-sdk` for the SDKs).
     var target: String
     var running: Bool
     /// The current step while running.
@@ -83,6 +97,9 @@ struct BotsHostDependencies {
     var recordConversation: @MainActor (_ machineID: String, _ batch: BotConversationMirror) async throws -> Void
     var deleteConversations: @MainActor (_ machineID: String, _ botID: String) async throws -> Void
     var inferenceCredential: @MainActor (_ provider: String) async throws -> BotsHostAPI.CredentialReply
+    /// Settings → GitHub for one bot's container: its files, and its signing requests.
+    var gitConfiguration: @MainActor (_ botID: String) async throws -> GitHubBotSetup = { _ in GitHubBotSetup() }
+    var sshAgent: @MainActor (_ botID: String, _ message: Data) async -> Data = { _, _ in Data([5]) }
     var remoteMachines: @MainActor (_ thisMacVersion: String?) async -> [BotMachine] = { _ in [] }
     var setRemoteResources: @MainActor (_ machineID: String, _ resources: BotResourceSettings) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
@@ -105,6 +122,17 @@ struct BotsHostDependencies {
         throw BotsError.unavailable("This Mac cannot sign bots connections yet.")
     }
     var capacity: @MainActor (_ directory: URL) async -> BotMachineCapacity = BotsHostController.localCapacity
+    var memberInventory: @MainActor (_ machineID: String, _ checkLatest: Bool) async throws -> FleetMemberInventory = { _, _ in
+        throw BotsError.unavailable("That machine is unavailable.")
+    }
+    var memberInstallerPreview: @MainActor (_ machineID: String, _ kind: AgentRuntimeKind) async throws -> RemoteInstallerPreview? = { _, _ in nil }
+    var updateMemberHarness: @MainActor (_ machineID: String, _ kind: AgentRuntimeKind, _ sourceSHA256: String?, _ packageSpec: String?,
+                                         _ force: Bool, _ progress: @escaping @MainActor (String) -> Void) async throws -> Void = { _, _, _, _, _, _ in
+        throw BotsError.unavailable("That machine is unavailable.")
+    }
+    var updateMemberSDKs: @MainActor (_ machineID: String) async throws -> Void = { _ in
+        throw BotsError.unavailable("That machine is unavailable.")
+    }
 }
 
 /// Owns bots on this Mac inside the process that owns execution: the VM, the runtime
@@ -198,6 +226,13 @@ final class BotsHostController {
         if case let .signSocket(url, audience) = command {
             return BotsCommandResult(socketHeaders: try await dependencies.signSocket(url, audience))
         }
+        // Reads of another machine's harnesses: their reply, no snapshot.
+        if case let .memberInventory(machineID, checkLatest) = command {
+            return BotsCommandResult(memberInventory: try await dependencies.memberInventory(machineID, checkLatest))
+        }
+        if case let .memberInstallerPreview(machineID, kind) = command {
+            return BotsCommandResult(installerPreview: try await dependencies.memberInstallerPreview(machineID, kind))
+        }
         var devices: [BotDiscoveredDevice]?
         if case .status = command {} else { remoteCache = nil }
         switch command {
@@ -252,7 +287,17 @@ final class BotsHostController {
             else { try await dependencies.updateRemoteEngine(machineID) }
         case .restartRuntime:
             if persisted.enabled { await supervisor?.stop(); bringUp() }
-        case .signSocket: break
+        case let .updateMemberHarness(machineID, kind, sourceSHA256, packageSpec, force):
+            let update = dependencies.updateMemberHarness
+            try startJob(.updateHarness, target: machineID.lowercased() + "/" + kind.rawValue, progress: "Starting the update…") { progress in
+                try await update(machineID, kind, sourceSHA256, packageSpec, force, progress)
+            }
+        case .updateMemberSDKs(let machineID):
+            let update = dependencies.updateMemberSDKs
+            try startJob(.updateHarness, target: machineID.lowercased() + "/pi-durable-sdk", progress: "Updating Pi Durable SDK…") { _ in
+                try await update(machineID)
+            }
+        case .signSocket, .memberInventory, .memberInstallerPreview: break
         }
         return await snapshot(devices: devices ?? lastDevices)
     }
@@ -468,7 +513,9 @@ final class BotsHostController {
             publishPreview: { botID, port, containerPort in try await previews.publish(botID: botID, port: port, containerPort: containerPort) },
             removePreview: { botID, port in await previews.remove(botID: botID, port: port) },
             inferenceCredential: { provider in try await dependencies.inferenceCredential(provider) },
-            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) })
+            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) },
+            gitConfiguration: { botID in try await dependencies.gitConfiguration(botID) },
+            sshAgent: { botID, message in await dependencies.sshAgent(botID, message) })
     }
 
     // MARK: Delivery to bots

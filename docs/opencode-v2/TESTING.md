@@ -16,8 +16,9 @@ base). The instance isolates only Woven Matter's database/settings; it connects 
 ## Manual acceptance
 
 1. In **Settings → Agents → OpenCode**, a missing v2 CLI shows **Install** under
-   **Software**. It resolves the current `@opencode/cli` release and adds OpenCode
-   to the sidebar without starting its service automatically. Check the
+   **Software**. It runs OpenCode's official v2 installer (asking first when OpenCode 1
+   is installed) and adds OpenCode to the sidebar without starting its service
+   automatically. Check the
    **Software** row's **Check for updates** and **Update** controls.
 2. Confirm installed OpenCode appears in the sidebar without an Enable step. In
    **Settings → Agents → OpenCode**, expand **Local workspace** under **OpenCode

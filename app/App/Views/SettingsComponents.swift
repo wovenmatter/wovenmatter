@@ -413,6 +413,67 @@ struct SettingsSummaryRow<Content: View>: View {
     }
 }
 
+/// A `SettingsSummaryRow` with its own controls on the right (an Update for the whole
+/// thing): the title side opens and closes the details, the controls act directly.
+struct SettingsDisclosureRow<Accessory: View, Content: View>: View {
+    let title: String
+    var detail: String? = nil
+    @State private var isExpanded = false
+    @ViewBuilder var accessory: Accessory
+    @ViewBuilder var content: Content
+
+    init(_ title: String, detail: String? = nil, @ViewBuilder accessory: () -> Accessory, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.detail = detail
+        self.accessory = accessory()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 16) {
+                Button { isExpanded.toggle() } label: {
+                    HStack(spacing: 8) {
+                        LucideIcon(glyph: .chevronDown, size: 12)
+                            .foregroundStyle(WovenPalette.mutedForeground)
+                            .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.settingsRow)
+                                .foregroundStyle(WovenPalette.foreground)
+                                .lineLimit(1)
+                            if let detail {
+                                Text(detail)
+                                    .font(.settingsSecondary)
+                                    .foregroundStyle(WovenPalette.mutedForeground)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, detail == nil ? 0 : 6)
+                    .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: SettingsMetrics.rowHeight, idleFill: false))
+                .padding(.leading, -8)
+                .accessibilityLabel(title)
+                .accessibilityValue(isExpanded ? "expanded" : "collapsed")
+                HStack(spacing: 8) { accessory }.layoutPriority(1)
+            }
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) { content }
+                    .padding(.leading, 20)
+                    .padding(.top, 2)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 /// The same row as `SettingsSummaryRow`, opening another page instead of expanding.
 struct SettingsSummaryLink: View {
     let title: String
@@ -514,7 +575,7 @@ struct SettingsLocalRuntimeInstallButton: View {
         .buttonStyle(SettingsQuietButtonStyle())
         .disabled(inventory == nil || model.runtimeMaintenanceBusy(runtimeKind) || model.checkingRuntimeInventory
             || !model.installingLocalACPRuntimeKinds.isEmpty
-            || model.preparedLocalACPRuntimeInstall != nil
+            || model.pendingRuntimeInstall != nil
             || model.localRuntimeMaintenanceHasActiveConversation)
         .accessibilityLabel("Install " + runtimeKind.displayName)
     }
@@ -558,12 +619,6 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         model.runtimeMaintenance[configuration.id]?.first { $0.id == harness.id }
     }
 
-    private var preparedUpdateMatches: Bool {
-        guard let prepared = model.preparedHarnessAction else { return false }
-        return prepared.configuration.id == configuration.id
-            && prepared.harness.id == harness.id && prepared.action == "update"
-    }
-
     var body: some View {
         let checking = model.checkingRuntimeIDs[configuration.id]?.contains(harness.id) == true
         let running = runtime?.operation?.status == "running"
@@ -571,13 +626,14 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         let checkUnavailable = unavailable
             || model.runtimeCheckErrors[configuration.id]?[harness.id] != nil
             || runtime?.versionCheckAvailable == false
-        let busy = model.busyWorkspaceIDs.contains(configuration.id) || running || checking
+        let busy = model.harnessMaintenanceBlocker(harness.id, in: configuration.id) != nil || model.isMaintaining(harness.id, in: configuration.id)
+            || running || checking
         let label = updateButtonTitle(checking: checking, running: running, checkUnavailable: checkUnavailable)
         Button(label) {
             if let runtime, runtime.installed,
                runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update"),
                !checkUnavailable {
-                model.prepareHarnessAction("update", harness: harness, configuration: configuration)
+                model.runHarnessMaintenance("update", harness: harness, configuration: configuration)
             } else {
                 model.checkRuntimeUpdates(harness.id, configuration: configuration)
             }
@@ -585,29 +641,6 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         .buttonStyle(SettingsQuietButtonStyle())
         .disabled(busy)
         .accessibilityLabel(label + " for " + harness.displayName)
-        .confirmationDialog(
-            "Confirm harness update?",
-            isPresented: Binding(
-                get: { preparedUpdateMatches },
-                set: { if !$0 { cancelMatchingUpdate() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Confirm Update") {
-                model.confirmPreparedHarnessAction(
-                    workspaceID: configuration.id, harnessID: harness.id, action: "update"
-                )
-            }
-            Button("Cancel", role: .cancel) { cancelMatchingUpdate() }
-        } message: {
-            if preparedUpdateMatches, let prepared = model.preparedHarnessAction {
-                if let sha256 = prepared.preview.sha256 {
-                    Text("Source: \(prepared.preview.source)\nSHA-256: \(sha256)\nThe service will download the source again and refuse to run it if this digest changes.")
-                } else {
-                    Text("Source: \(prepared.preview.source)\nPackage-manager integrity verification applies.\nCommand: \(prepared.preview.command)")
-                }
-            }
-        }
     }
 
     private func updateButtonTitle(checking: Bool, running: Bool, checkUnavailable: Bool) -> String {
@@ -621,11 +654,6 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         return "Check for updates"
     }
 
-    private func cancelMatchingUpdate() {
-        model.cancelPreparedHarnessAction(
-            workspaceID: configuration.id, harnessID: harness.id, action: "update"
-        )
-    }
 }
 
 struct SettingsRuntimeMaintenanceErrorView: View {

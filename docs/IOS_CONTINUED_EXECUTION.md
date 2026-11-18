@@ -5,8 +5,8 @@ powered by Pi Durable running in the app process. It edits notes, searches and
 reads the public web, answers simple questions, and sets timers, reminders and
 calendar events. Model connections and search keys are signed in on the device.
 It has no shell, file tools, Python/WASM, code mode, MCP code executor, subagents,
-goals, browser automation or computer control. New chats start in Full Access;
-Ask for Approval remains a per-chat choice.
+goals, browser automation or computer control. Quick Chat always runs in Full
+Access; it has no Ask for Approval mode.
 
 ## Web search
 

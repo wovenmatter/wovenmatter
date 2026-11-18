@@ -40,7 +40,9 @@ public struct LibraryUsageSample: Codable, Equatable, Identifiable, Sendable {
   public var timestamp: Date
   public var provider: String
   public var model: String
-  public var account: String
+  /// Always empty, and never read: releases before account labels were removed
+  /// require the key, and devices run different versions for days.
+  private var account: String? = ""
   public var workspace: String?
   public var sessionID: String
   public var inputTokens: Int64
@@ -49,9 +51,9 @@ public struct LibraryUsageSample: Codable, Equatable, Identifiable, Sendable {
   public var totalTokens: Int64
   public var requests: Int
   public var costUSD: Double?
-  public init(id: String, timestamp: Date, provider: String, model: String, account: String, workspace: String?, sessionID: String,
+  public init(id: String, timestamp: Date, provider: String, model: String, workspace: String?, sessionID: String,
               inputTokens: Int64, outputTokens: Int64, cacheTokens: Int64, totalTokens: Int64, requests: Int, costUSD: Double?) {
-    self.id = id; self.timestamp = timestamp; self.provider = provider; self.model = model; self.account = account
+    self.id = id; self.timestamp = timestamp; self.provider = provider; self.model = model
     self.workspace = workspace; self.sessionID = sessionID; self.inputTokens = inputTokens; self.outputTokens = outputTokens
     self.cacheTokens = cacheTokens; self.totalTokens = totalTokens; self.requests = requests; self.costUSD = costUSD
   }

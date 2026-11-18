@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITES = ('update_refresh', 'ios_runner', 'verify_ios_app', 'dev_build', 'executor_deployment',
+SUITES = ('ios_runner', 'verify_ios_app', 'dev_build', 'executor_deployment',
           'cua_runtime')
 
 

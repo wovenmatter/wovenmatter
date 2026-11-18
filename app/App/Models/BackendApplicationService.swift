@@ -96,8 +96,38 @@ struct BackendApplicationReadiness: Codable, Sendable {
     let capabilities: [String]
     var startupError: String? = nil
     var startupMessage: String? = nil
+    /// What the server is doing while it is not ready, when that is work a
+    /// window should keep waiting for (`BackendStartupProgress`).
+    var startupProgress: BackendStartupProgress? = nil
     /// The server serves its windows' persistent stream on its socket.
     static let windowStreamCapability = "window.stream"
+}
+
+/// Long startup work the background service reports while it is not ready.
+/// The first open after an update can upgrade the library, which takes
+/// minutes for a library of a few gigabytes; a window keeps waiting while
+/// the service reports it, and shows it.
+struct BackendStartupProgress: Codable, Sendable, Equatable {
+    let title: String
+    let detail: String
+    /// From 0 to 1, when the work is measurable.
+    let fraction: Double?
+
+    init(title: String, detail: String, fraction: Double?) {
+        self.title = title
+        self.detail = detail
+        self.fraction = fraction
+    }
+
+    init(libraryUpgrade upgrade: LibraryUpgradeProgress) {
+        let size = ByteCountFormatter.string(fromByteCount: upgrade.libraryBytes, countStyle: .file)
+        let detail = switch upgrade.stage {
+        case .backingUp: "Saving a copy of your library before the upgrade changes it."
+        case .converting: "This update stores your \(size) library in a new format. It happens once and can take a few minutes."
+        case .compacting: "Writing the upgraded library out compactly. This is the last step."
+        }
+        self.init(title: "Upgrading your library", detail: detail, fraction: min(max(upgrade.fraction, 0), 1))
+    }
 }
 
 /// Dispatches frontend commands to the backend-owned application model.
@@ -168,7 +198,8 @@ final class BackendApplicationService {
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
                                    "calendar.metadata", "session.dispatch-epochs",
                                    BackendApplicationReadiness.windowStreamCapability], startupError: startupError,
-                    startupMessage: model.backendStartupMessage))
+                    startupMessage: model.backendStartupMessage,
+                    startupProgress: model.backendStartupProgress))
             case "remoteWorkspaces.command":
                 guard model.readyForBackendClients else { throw BackendRPCError.remote("The background service is still starting.") }
                 let command = try JSONDecoder().decode(BackendRemoteWorkspaceCommand.self, from: request.payload)

@@ -31,6 +31,21 @@ extension ApplicationModel {
         return client
     }
 
+    /// The Executor runtime's version and the newest supported release, for Settings →
+    /// Updates; nil when Executor isn't set up.
+    func executorVersions() async throws -> ExecutorVersions? {
+        if isBackendFrontend {
+            return try JSONDecoder().decode(ExecutorVersionsReply.self, from: await callBackend(method: "executor.versions")).versions
+        }
+        guard try await libraryStore?.database.toolSettings().executor != nil, !executorRuntime.isSettingUp else { return nil }
+        // Read without `configure`: looking at versions must not start Executor.
+        if executorRuntime.client == nil {
+            executorRuntime.client = ExecutorBrokerClient(directory: try Self.librarySupportDirectory().appending(path: "executor"))
+        }
+        let value = try await executorRuntime.client!.call(.object(["operation": .string("versions")]))
+        return try JSONDecoder().decode(ExecutorVersions.self, from: JSONEncoder().encode(value))
+    }
+
     func recoverExecutorSetup() async throws {
         guard let database = libraryStore?.database, let setup = try await database.toolSettings().executorSetup, setup.running else { return }
         try await database.updateExecutor(setup: .init(configuration: setup.configuration, running: false, error: "Executor setup was interrupted. Retry install or deploy; existing data and keys are retained."))
@@ -302,3 +317,14 @@ extension ApplicationModel {
         return .object(["action": .string("accept"), "content": .object(content)])
     }
 }
+
+struct ExecutorVersions: Codable, Equatable, Sendable {
+    var installed: String?
+    var latest: String?
+    var updateAvailable: Bool {
+        guard let installed, let latest else { return false }
+        return RuntimeMaintenance.version(installed, precedes: latest)
+    }
+}
+
+struct ExecutorVersionsReply: Codable { var versions: ExecutorVersions? }

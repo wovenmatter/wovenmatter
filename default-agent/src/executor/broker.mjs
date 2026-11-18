@@ -23,6 +23,32 @@ const supportsExecutorVersion = version => releaseVersion(version) && Number(ver
 export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {
   major: EXECUTOR_API_MAJOR, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Executor lifts media out of structuredContent and leaves contentIndex
+// references. Our JSON job boundary must retain those bytes before discarding
+// the MCP envelope. Older inline results and ordinary text resources stay intact.
+function inlineExecutorContent(structured, content) {
+  const encoded = JSON.stringify(structured);
+  let bytes = Buffer.byteLength(encoded);
+  return JSON.parse(encoded, (_, value) => {
+    if (!value || typeof value !== 'object' || !Object.hasOwn(value, 'contentIndex')) return value;
+    const media = ['image', 'audio'].includes(value.type) && !Object.hasOwn(value, 'data');
+    const resource = value.type === 'resource' && value.resource && typeof value.resource === 'object'
+      && !Object.hasOwn(value.resource, 'blob') && !Object.hasOwn(value.resource, 'text');
+    if (!media && !resource) return value;
+    const index = value.contentIndex;
+    const block = Number.isSafeInteger(index) && index >= 0 ? content?.[index] : null;
+    if (!block || block.type !== value.type
+      || (media && (typeof block.data !== 'string' || block.mimeType !== value.mimeType))
+      || (resource && (typeof block.resource?.blob !== 'string'
+        || block.resource.uri !== value.resource.uri || block.resource.mimeType !== value.resource.mimeType))) {
+      throw new Error('Executor returned an invalid MCP content reference.');
+    }
+    const restored = { ...value, ...block };
+    bytes += Buffer.byteLength(JSON.stringify(restored)) - Buffer.byteLength(JSON.stringify(value));
+    if (bytes > 900000) throw new Error('Executor output exceeds the response limit.');
+    return restored;
+  });
+}
 const execFileAsync = promisify(execFile);
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const tailnetAddress = value => {
@@ -426,7 +452,7 @@ export class ExecutorBroker {
         if (job.status === 'cancelled') return;
         const structured = result.structuredContent;
         if (['approval-required', 'input-required'].includes(structured?.status)) { job.pending = structured; job.status = structured.status; }
-        else { job.pending = null; job.result = structured ?? result; job.status = 'completed'; }
+        else { job.pending = null; job.result = structured == null ? result : inlineExecutorContent(structured, result.content); job.status = 'completed'; }
       } catch { if (job.status !== 'cancelled') { job.status = 'interrupted'; job.error = 'Executor did not return a confirmed result. Check external effects before starting a new program.'; } }
       finally { job.busy = false; await this.receipt(job); }
     })().catch(() => {});
@@ -457,10 +483,24 @@ export class ExecutorBroker {
     for (const client of clients) await client.close().catch(() => {});
   }
   async stop() { await this.shutdownClients(); this.child?.kill('SIGTERM'); }
+  /** Settings → Updates: the runtime this connection runs, and the newest supported release. */
+  async versions() {
+    let installed = this.runtimeVersion ?? null;
+    // Answered without `configure`, so nothing starts: a stopped local runtime is read from disk.
+    const server = this.server ?? Object.values(this.state.servers).find(value => value.location === 'local');
+    const generation = server?.runtimeGeneration;
+    if (!installed && (this.config?.location ?? server?.location) === 'local') {
+      const root = generation && uuid(generation) ? join(this.directory, 'runtime/generations', generation) : join(this.directory, 'runtime');
+      installed = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => '{}')).version ?? null;
+    }
+    const latest = await latestExecutorVersion(this.fetch).catch(() => null);
+    return { installed, latest };
+  }
   async handle(message) {
     switch (message.operation) {
       case 'configure': return this.configure(message.config, message.install);
       case 'inventory': return this.inventory();
+      case 'versions': return this.versions();
       case 'dashboard': return { url: await this.pair() };
       case 'scope': await this.scope(message.session, message.profiles, message.enabled); return {};
       case 'start': return this.start({ ...message, scope: await this.scope(message.session, message.profiles, true) });

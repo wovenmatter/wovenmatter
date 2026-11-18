@@ -58,7 +58,6 @@ public struct UsageIngestionEvent: Codable, Equatable, Identifiable, Sendable {
   public let sequence: Int64
   public let timestamp: Date
   public let provider: ProviderKind
-  public let accountLabel: String
   public let billingProvider: String?
   public let billingRoute: String?
   public let model: String
@@ -81,7 +80,6 @@ public struct UsageIngestionEvent: Codable, Equatable, Identifiable, Sendable {
     sequence: Int64,
     timestamp: Date,
     provider: ProviderKind,
-    accountLabel: String,
     billingProvider: String? = nil,
     billingRoute: String? = nil,
     model: String,
@@ -103,7 +101,6 @@ public struct UsageIngestionEvent: Codable, Equatable, Identifiable, Sendable {
     self.sequence = max(1, sequence)
     self.timestamp = timestamp
     self.provider = provider
-    self.accountLabel = accountLabel
     self.billingProvider = billingProvider
     self.billingRoute = billingRoute
     self.model = model
@@ -128,7 +125,6 @@ public struct UsageIngestionEvent: Codable, Equatable, Identifiable, Sendable {
       provider: provider,
       timestamp: timestamp,
       sessionID: sessionID,
-      accountLabel: accountLabel,
       model: model,
       billingProvider: billingProvider,
       billingRoute: billingRoute,
@@ -150,7 +146,6 @@ public struct UsageIngestionEvent: Codable, Equatable, Identifiable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case id, sequence, timestamp, provider, model, harness, application, agent, workspace, tokens
-    case accountLabel = "account_label"
     case billingProvider = "billing_provider"
     case billingRoute = "billing_route"
     case reasoningLevel = "reasoning_level"
@@ -217,7 +212,6 @@ public struct UsageIngestionPage: Codable, Equatable, Sendable {
         event.tokens.reasoningTokens,
       ] + (event.tokens.reportedTotalTokens.map { [$0] } ?? [])
       guard Self.valid(event.id, maximumBytes: UsageIngestionLimits.identifierBytes),
-            Self.valid(event.accountLabel, maximumBytes: UsageIngestionLimits.labelBytes),
             Self.valid(event.model, maximumBytes: UsageIngestionLimits.labelBytes),
             Self.valid(event.harness, maximumBytes: UsageIngestionLimits.labelBytes),
             Self.valid(event.application, maximumBytes: UsageIngestionLimits.labelBytes),

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks the packed Linux library binaries a host release ships
 # (scripts/build-linux-library.sh): for each architecture, the gzip is intact and
-# unpacks to exactly the SHA-256 recorded beside it. The release workflow runs this
-# on the binaries the Linux job built before the macOS build bundles them.
+# unpacks to exactly the SHA-256 recorded beside it. scripts/cut-release.sh runs
+# this on the binaries it built before the Release app bundles them.
 # Usage: scripts/verify-linux-library.sh [DIR]   (default remote/host/library)
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"

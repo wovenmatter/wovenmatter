@@ -119,6 +119,149 @@ struct HarnessMaintenanceTests {
         #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
     }
 
+    /// Settings → Updates: starting one harness's update leaves every other one startable,
+    /// both run at once, and a button covering only parts already updating waits.
+    @Test func updatesStartedFromSettingsRunSideBySide() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let operations = HeldHarnessUpdates()
+        fixture.model.runtimeMaintenanceFixture = { try await operations.run($0) }
+        for kind in [AgentRuntimeKind.codex, .claudeCode] {
+            fixture.model.setRuntimeInventoryForTesting(try JSONDecoder().decode(RuntimeInventory.self, from: Data("""
+                {"kind":"\(kind.rawValue)","components":[{"name":"CLI","installed":"1.0.0","latest":"2.0.0","required":true,"present":true,"verified":true}]}
+                """.utf8)))
+        }
+        let updates = FleetUpdatesModel()
+        updates.attach(fixture.model)
+        let codex = FleetHarness.Location.thisMac, ids = updates.harnesses(on: codex).map(\.id)
+        let codexID = try #require(ids.first { $0.hasSuffix("/" + AgentRuntimeKind.codex.rawValue) })
+        let claudeID = try #require(ids.first { $0.hasSuffix("/" + AgentRuntimeKind.claudeCode.rawValue) })
+        #expect(updates.canStart(.scope(.harnesses)))
+
+        updates.start(.harness(id: codexID))
+        try await eventually { await operations.started == [.codex] }
+        #expect(!updates.canStart(.harness(id: codexID)))
+        #expect(updates.canStart(.harness(id: claudeID)))
+        #expect(updates.canStart(.scope(.harnesses)) && !updates.isUpdating(.scope(.harnesses)))
+
+        updates.start(.harness(id: claudeID))
+        try await eventually { await operations.started == [.codex, .claudeCode] }
+        #expect(updates.runs.count == 2)
+        #expect(!updates.canStart(.scope(.harnesses)) && updates.isUpdating(.scope(.harnesses)))
+
+        try await operations.finish(.claudeCode)
+        try await eventually { updates.runs.count == 1 }
+        try await operations.finish(.codex)
+        try await eventually { !updates.running }
+        #expect(updates.failures.isEmpty)
+        #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
+    }
+
+    /// A vendor's update command counts only when the CLI moved to a newer version; its native
+    /// channel may trail the registry's newest, so it doesn't have to reach it.
+    @Test func aVendorUpdateMustMoveTheCLI() throws {
+        func inventory(cli: String, adapter: String = "2.0.0") -> RuntimeInventory {
+            try! JSONDecoder().decode(RuntimeInventory.self, from: Data("""
+                {"kind":"codex","components":[
+                 {"name":"codex-acp","installed":"\(adapter)","latest":"2.0.0","required":true,"present":true,"verified":true},
+                 {"name":"codex CLI","installed":"\(cli)","latest":"1.9.0","required":true,"present":true,"verified":true}]}
+                """.utf8))
+        }
+        let before = inventory(cli: "1.0.0")
+        #expect(throws: RuntimeMaintenanceError.self) {
+            try ApplicationModel.verifyUpdate(before: before, after: inventory(cli: "1.0.0"), cliName: "codex CLI")
+        }
+        try ApplicationModel.verifyUpdate(before: before, after: inventory(cli: "1.8.2"), cliName: "codex CLI")
+        try ApplicationModel.verifyUpdate(before: before, after: inventory(cli: "1.9.0"), cliName: "codex CLI")
+        // The adapter is Woven Matter's own and must reach its target.
+        #expect(throws: RuntimeMaintenanceError.self) {
+            try ApplicationModel.verifyUpdate(before: inventory(cli: "1.9.0", adapter: "1.0.0"),
+                                              after: inventory(cli: "1.9.0", adapter: "1.5.0"), cliName: "codex CLI")
+        }
+        let unchanged = RuntimeMaintenanceError.unchanged(name: "codex CLI", version: "1.0.0")
+        #expect(unchanged.errorDescription == "codex CLI is still 1.0.0: its update command finished without updating it.")
+    }
+
+    /// A harness on disk but below the version Woven Matter needs is listed in Settings →
+    /// Updates with an update, not hidden as if it weren't installed.
+    @Test func aHarnessBelowTheNeededVersionShowsAsAnUpdate() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        fixture.model.setRuntimeInventoryForTesting(try JSONDecoder().decode(RuntimeInventory.self, from: Data("""
+            {"kind":"codex","components":[{"name":"codex-acp","installed":"2.6.0","latest":"2.6.0","required":true,"present":true,"verified":false}]}
+            """.utf8)))
+        let updates = FleetUpdatesModel()
+        updates.attach(fixture.model)
+        let codex = try #require(updates.harnesses(on: .thisMac).first { $0.kind == .runtime(.codex) })
+        #expect(codex.updateAvailable)
+        #expect(updates.canStart(.harness(id: codex.id)))
+    }
+
+    /// One Update button covering several harnesses starts them all at once, each with
+    /// its own progress line, and a slow one doesn't hold up the others.
+    @Test func oneButtonUpdatesEveryHarnessAtOnce() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let operations = HeldHarnessUpdates()
+        fixture.model.runtimeMaintenanceFixture = { try await operations.run($0) }
+        for kind in [AgentRuntimeKind.codex, .claudeCode] {
+            fixture.model.setRuntimeInventoryForTesting(try JSONDecoder().decode(RuntimeInventory.self, from: Data("""
+                {"kind":"\(kind.rawValue)","components":[{"name":"CLI","installed":"1.0.0","latest":"2.0.0","required":true,"present":true,"verified":true}]}
+                """.utf8)))
+        }
+        let updates = FleetUpdatesModel()
+        updates.attach(fixture.model)
+
+        updates.start(.scope(.harnesses))
+        // Both start before either finishes.
+        try await eventually { await operations.started == [.codex, .claudeCode] }
+        #expect(updates.runs.count == 1)
+        try await eventually { updates.progress.count == 2 }
+
+        // The second finishes while the first is still running.
+        try await operations.finish(.claudeCode)
+        try await eventually { updates.progress.count == 1 }
+        #expect(updates.running)
+        try await operations.finish(.codex)
+        try await eventually { !updates.running }
+        #expect(updates.failures.isEmpty)
+        #expect(await operations.calls == [.codex: 1, .claudeCode: 1])
+    }
+
+    /// The Mac server hands every path another Mac's Settings → Updates calls, the
+    /// operation it follows included, to the signed member-maintenance handler.
+    @Test func theMacServerRoutesEveryPathAnotherMacsUpdatesCall() {
+        for path in ["/v1/runtime-maintenance", "/v1/runtime-maintenance/check", "/v1/runtime-maintenance/codex/update",
+                     "/v1/default-agent/sdks", "/v1/operations/" + UUID().uuidString.lowercased()] {
+            #expect(LibraryHostController.servesMemberMaintenance(path), "\(path)")
+        }
+        #expect(!LibraryHostController.servesMemberMaintenance("/v1/bots/ws"))
+        #expect(!LibraryHostController.servesMemberMaintenance("/v1/library"))
+    }
+
+    /// Another Mac's Settings → Updates: the update answers at once with an operation,
+    /// which it follows here until the harness finishes.
+    @Test func anotherMacFollowsAHarnessUpdateHereAsAnOperation() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let operations = HeldHarnessUpdates()
+        fixture.model.runtimeMaintenanceFixture = { try await operations.run($0) }
+        func call(_ method: String, _ path: String) async -> LibraryHTTPResponse {
+            await fixture.model.memberMaintenance(.init(method: method, target: path, headers: [:], body: Data("{}".utf8)), path: path)
+        }
+        let started = await call("POST", "/v1/runtime-maintenance/codex/update")
+        #expect(started.status == 202)
+        let operation = try JSONDecoder().decode(RemoteHarnessOperation.self, from: started.body)
+        #expect(operation.status == "running" && operation.harnessID == .codex)
+        try await eventually { await operations.started == [.codex] }
+        let path = "/v1/operations/" + operation.id.uuidString.lowercased()
+        #expect(try JSONDecoder().decode(RemoteHarnessOperation.self, from: await call("GET", path).body).status == "running")
+        try await operations.finish(.codex)
+        try await eventually {
+            (try? JSONDecoder().decode(RemoteHarnessOperation.self, from: await call("GET", path).body))?.status == "succeeded"
+        }
+        #expect(await call("GET", "/v1/operations/" + UUID().uuidString).status == 404)
+        // Pi Durable only updates (its SDKs); there is no harness to check.
+        #expect(await call("POST", "/v1/runtime-maintenance/default_agent/check").status == 404)
+        #expect(await call("POST", "/v1/runtime-maintenance/unknown/update").status == 404)
+    }
+
     private func eventually(_ condition: () async -> Bool) async throws {
         if try await pollUntil(attempts: 500, interval: .milliseconds(10), { await condition() }) { return }
         Issue.record("Maintenance did not reach the expected state")

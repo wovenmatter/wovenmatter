@@ -37,7 +37,11 @@ quit leaves that owner running; logout and service termination use launchd's
 Startup and recovery share a bounded readiness barrier and one launch per
 attempt. A live owner that is still starting is awaited without replacing it or
 waiting for its lease to disappear. Missing services may be launched; invalid or
-foreign endpoints and reported startup errors remain errors. Frontend activation
+foreign endpoints and reported startup errors remain errors. An owner that
+reports long startup work in its readiness reply (`startupProgress`, such as
+the one-time library upgrade after an update) is awaited for as long as it
+reports it, and the window shows that progress; the timeout counts only time
+without such a report. Frontend activation
 never counts as evidence of backend ownership, and a background application is
 never an acceptable foreground activation target.
 

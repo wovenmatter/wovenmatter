@@ -40,7 +40,7 @@ function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_
     else assert.fail('unexpected OpenCode operation '+request.method+' '+url.pathname)
     return {ok:true,status:200,json:async()=>structuredClone(response)}
   }
-  const execute=createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest})
+  const execute=createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:()=>'fixture'},read:async(path)=>{if(path!=='fixture')throw new TypeError('registration path');return JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42})},fetchRequest})
   const context=base('opencode');context.nativeSessionID='ses_fixture'
   return {execute,context,calls,session}
 }
@@ -162,11 +162,12 @@ test('OpenCode rejects missing, malformed and legacy RPC connection envelopes be
 })
 
 test('OpenCode confirms native rules without removing custom rules and projects the completed response',async()=>{
-  for(const permission of ['ask','allow','deny']){
-    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:'ask'}]})
+  // An explicit Full access choice, and an older Ask or Deny session given none, both run in Full access.
+  for(const [permission,earlier] of [['allow','ask'],[undefined,'ask'],[undefined,'deny']]){
+    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:earlier}]})
     const updates=[];fixture.context.run.task.configuration={runtimeKind:'opencode',permission,model:'lab/new',thinking:'high'};fixture.context.publish=x=>updates.push(x)
     await fixture.execute(fixture.context)
-    assert.deepEqual(fixture.session.permissions,[custom,{action:'*',resource:'*',effect:permission}])
+    assert.deepEqual(fixture.session.permissions,[custom,{action:'*',resource:'*',effect:'allow'}])
     assert.deepEqual(fixture.session.model,{providerID:'lab',id:'new',variant:'high'})
     assert.equal(text(updates),'result');assert.equal(fixture.calls.filter(x=>x.path.endsWith('/prompt')).length,1)
     const patch=fixture.calls.findIndex(x=>x.method==='PATCH');assert.equal(fixture.calls[patch+1].method,'GET')

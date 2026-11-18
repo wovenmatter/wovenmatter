@@ -27,7 +27,8 @@ for every package update. Three separate mechanisms do that:
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
 | `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
-| `bots/image/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot image's copy of the same Node and Playwright selections; Ubuntu 26.04 packages float and are upgraded at build and by the bots Update | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
+| `bots/image/toolchain/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot toolchain's copy of the same Node and Playwright selections. Bots get it through the runtime's shared volume, so a change updates them in place and never moves them to a new container | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
+| `bots/image/Dockerfile` and `bots/image/chromium-packages.txt` | The bot base image: the Ubuntu release, its packages (they float and are upgraded at build and by every bots Update), and Chromium's system libraries from Playwright's Ubuntu list. A change moves bots to a new container, carrying what they installed | Refresh `chromium-packages.txt` from `playwright-core`'s native dependency table when Ubuntu or Chromium's libraries change; an update whose Chromium needs more installs them in the container (`playwright install-deps`) |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
@@ -53,6 +54,10 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   in CI, and the bots install, egress and uninstall checks on a Linux host
   before release. Installed hosts pick up a new selection on update; the
   engine restarts only when its binaries or configuration changed.
+  The static Linux host selection is Docker 29.10.0. The Mac VM keeps
+  Docker 29.9.3 because Docker's signed Resolute APT indexes do not yet publish
+  29.10.0 for either architecture. Maintenance checks that publication boundary
+  independently; a static archive cannot replace the VM's managed APT packages.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
@@ -87,7 +92,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   reviewed current HTTP dispatcher as Mac tooling, with tuple-header redirect
   credential stripping covered by provider-free fixtures. They apply the
   independently locked security selection in `remote/npm-runtime` (tested undici
-  8.12.4, ip-address 10.7.6 and minimatch 11.0.8), addressing CVE-2026-111997,
+  8.12.4, ip-address 10.7.6 and minimatch 11.0.9), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the related denial-of-service advisories. npm ignores
   overrides for its bundled dependencies, so this replacement is explicit in the
   install recipe.
@@ -119,8 +124,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
+  Current V2 releases lift binary resources, images and audio into separate MCP
+  content blocks. The broker restores their references before crossing its JSON
+  job boundary, retaining the existing response-size limit. Invalid references
+  interrupt the job without replaying it. Broker regressions and the real
+  provider-free Executor fixture cover inline and lifted results.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.8 and its locked dependency closure.
+  same graph replaces minimatch with 11.0.9 and its locked dependency closure.
   Mac, native Linux and all container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
@@ -231,8 +241,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.57.0, Anthropic 1.8.0, Google GenAI 3.3.0,
-  Bedrock Runtime and token providers 3.1169.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.57.0, Anthropic 1.9.0, Google GenAI 3.4.0,
+  Bedrock Runtime and token providers 3.1170.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -258,8 +268,10 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
   Pi Coding Agent 1.5.2 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.8` patch, which bounds compiled pattern cache weight and rejects
-  excessive extglob recursion. Provider-free model-scope matching and
+  `>=11.0.9` patch, which bounds compiled pattern cache weight and rejects
+  excessive extglob recursion. The 11.0.9 patch also preserves expanded-range
+  semantics inside repeating and negated extglobs; provider-free fixtures cover
+  those model/skill selection patterns. Provider-free model-scope matching and
   bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
@@ -278,9 +290,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
   ranges. Its in-container helper ships the runtime's own locked Pi Durable,
   Chord and Pi telemetry packages (copied from `bots/node_modules` into the
-  helper volume), so they never drift from the runtime. The bot image builds
-  through the Engine API from `bots/image` under a content-hash tag, so a
-  changed recipe gives a new image; existing bots move to it with Rebuild.
+  shared volume), so they never drift from the runtime. The bot base image and
+  toolchain image build through the Engine API from `bots/image` and
+  `bots/image/toolchain` under content-hash tags. A changed toolchain reaches
+  bots in place on their next Update; a changed base image moves them to a new
+  container on their next Update or Rebuild, carrying what they installed.
   `npm test --prefix bots` (type check plus faux-provider suites) validates
   it; `npm run test:engine --prefix bots` with `WOVEN_BOTS_ENGINE_SOCKET` set
   exercises a real engine on request.
@@ -310,55 +324,54 @@ These checks catch missing APIs, but cannot guarantee that every future upstream
 behavior remains compatible; integration fixes and release validation remain
 part of maintenance.
 
-Every app release carries the refreshed SDK snapshot. When the bundled source
+Every app release carries the SDK snapshot committed on its release commit. When the bundled source
 or dependency graph changes, its fingerprint supersedes SDK generations from
 the previous app, so new launches use the release's bundled SDKs without
 requiring a separate Settings update.
 The fingerprint includes JavaScript helpers in nested source directories, so
 broker-only fixes also supersede stale generations without deleting them.
 
-Agent CLIs, ACP connectors, and connector-owned engines are checked independently.
-An up-to-date connector does not establish that its engine or sign-in CLI is current.
-Settings selects the newest nondeprecated stable publication for each component;
-a stale npm dist-tag cannot hide a newer stable version. Claude's native installer
-and updater receive the newest nondeprecated stable CLI version explicitly,
-resolved from publication metadata. Native `latest` and `stable` pointers can lag
-that publication; unavailable metadata refuses installation rather than retaining
-an older configured channel. OpenCode and Executor retain the documented v2 API boundary;
-maintenance must review a newer stable API major and implement its migration.
+Agent CLIs and ACP connectors are checked independently. The CLIs are the person's
+own native installs: Woven Matter installs a missing one with its vendor's official
+installer and updates it with the vendor's own command, so it records no CLI
+selection. An up-to-date connector does not establish that the CLI is current.
+Each CLI is compared with the channel its vendor's own installer and update command
+read, which can trail npm: `releases.openai.com/codex/channels/latest` for Codex,
+`downloads.claude.ai/claude-code-releases/latest` for Claude Code, `x.ai/cli/stable`
+for Grok Build and `opencode.ai/update/api/latest/cli/npm` for OpenCode 2. Official
+installers run with the catalog's arguments and install what their channel names.
+For connectors, Settings selects the newest nondeprecated stable npm publication; a
+stale npm dist-tag cannot hide a newer stable version. OpenCode and Executor retain
+the documented v2 API boundary; maintenance must review a newer stable API major and
+implement its migration.
 
-`harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.169.0, and Claude ACP 0.107.0 with Claude SDK 0.3.325
-(native Claude Code 2.1.325). The standalone Codex and Claude sign-in CLIs use their
-official current stable release channels. Codex ACP's `^0.166.0` engine range
-otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.7.0. Claude ACP 0.107.0 pins SDK 0.3.323;
-the consumer-scoped override still selects SDK 0.3.325 independently so engine-only
-updates remain eligible while the connector pin lags. Transcript-write loss
-invalidates the native resume marker and refuses tool dispatch/continuation commits;
-config-only write loss leaves a valid response intact. Provider-free persistence
-fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
-2.6.0 directly; its consumer-scoped override selects 2.7.0 independently. The
-catalog's independent ACP SDK floor is 2.7.0. Mac and native Linux/container
-explicit updates resolve its newest nondeprecated stable
-publication independently, retain the vendor manifests, and verify the exact
-consumer graph and ACP v1 handshake before activation. SDK-only updates appear
-in inventory even when connector and engine are current. Failed candidates
-leave the active generation intact. The 2.7 SDK retains stable v1;
-its v2 changes remain experimental and do not change Woven Matter's wire API.
-The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
-the independently selected engine and scopes an npm override to that connector.
-This core-function exception keeps the engine used for chat current; it does not
-modify upstream manifests, copy credentials, or substitute a standalone CLI.
+`harnesses/catalog.json` records tested connector and CLI minimums separately:
+Codex ACP 2.7.0 with Codex 0.169.0, and Claude ACP 0.107.3 with Claude SDK 0.3.326
+(native Claude Code 2.1.326). The adapters drive the native Codex and Claude CLIs
+(`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
+as needing its update. The CLI copy npm bundles inside each adapter package is never
+selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
+published, with no engine override. Claude ACP pins its Claude Agent SDK library, so
+that library moves only with an adapter update and is held to the catalog minimum
+rather than compared with npm. Transcript-write loss invalidates the native resume
+marker and refuses tool dispatch/continuation commits; config-only write loss leaves a
+valid response intact. Provider-free persistence fixtures verify canonical replay
+after recovery. The catalog's independent ACP SDK floor is 2.7.0: Mac and native
+Linux/container updates resolve its newest nondeprecated stable publication and scope
+an npm override for it to the connector. This core-function exception keeps the
+protocol library current; it does not modify upstream manifests or copy credentials.
+SDK-only updates appear in inventory even when connector and CLI are current. The 2.7
+SDK retains stable v1; its v2 changes remain experimental and do not change Woven
+Matter's wire API.
 
 Each explicit installation/update builds an immutable generation, retains its
-npm lockfile and integrity records, verifies package/executable versions and native
-Claude signatures, and requires an actual provider-free ACP v1 initialize response
-before atomically promoting the executable link. Verification uses an empty,
-private configuration with no inherited credentials or executable overrides.
-Failed candidates are removed; existing generations stay intact for running
-sessions. The Mac and remote installers use the same implementation. System-owned
-remote installations remain outside Woven's update ownership.
+npm lockfile and integrity records, verifies the connector and ACP SDK versions, and
+requires an actual provider-free ACP v1 initialize response, with the adapter pointed
+at the native CLI, before atomically promoting the executable link. Verification uses
+an empty, private configuration with no inherited credentials. Failed candidates are
+removed; existing generations stay intact for running sessions. The Mac and remote
+installers use the same implementation. System-owned remote installations remain
+outside Woven's update ownership.
 
 Maintenance reviews both upstream connector requirements and current engine/CLI
 releases, updates catalog minimums, and validates the actual selected pairs plus
@@ -422,38 +435,36 @@ updates affected integration code before acceptance.
 
 Read-only CI and analytics helpers follow their upstream default branch
 (`@main`). Workflows holding write tokens or signing material pin the exact
-current release commit, with a comment naming the reason: `release.yml`,
-`refresh-release.yml`, and `pr-author.yml`. The maintenance agent reviews those
+current release commit, with a comment naming the reason: `release.yml` and
+`pr-author.yml`. The maintenance agent reviews those
 SHAs against current released versions. There is no blanket SHA requirement.
-Linux jobs use `ubuntu-latest`. Desktop builds (release, release caches,
-desktop validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
+Linux jobs use `ubuntu-latest`. Desktop jobs (release signing, desktop
+validation) use the `xcode-27` image with `DEVELOPER_DIR` set to
 Xcode 27.2, the toolchain the app is developed with; `macos-26` stops at Xcode
-26.6, which crashes compiling the app. The `xcode-27` image is a GitHub preview:
-move to its GA label, and to newer Xcode releases, during maintenance. iOS
+26.6, which crashes compiling the app. The `xcode-27` label is [generally available](https://github.blog/changelog/2026-10-15-xcode-27-runner-image-generally-available/)
+on Apple Silicon; the preview and GA labels are the same. Review newer stable
+Xcode releases and runner labels during maintenance. iOS
 validation stays on `macos-26`.
 
-## Before every new release
+## Releases
 
-Refresh dependencies in development before selecting the release commit, even
-when separately scheduled maintenance normally keeps them current. Compare
-upstream stable releases with the declared packages and Node/native runtime
-records; update stale selections, lockfiles, checksums, notices, and generated
-resources together. Validate the changes in development CI and merge them before
-tagging. Document any concrete upstream blocker instead of silently retaining
-an older selection.
+Scheduled maintenance keeps dependencies current. Cutting a release starts with
+`scripts/release-check.py` on a maintainer Mac, never on GitHub: anything still
+behind is updated in one development PR, and known vulnerabilities in shipped
+code are reported for a decision before the build. The release ships the
+selections committed on its release commit.
 
-The lockfile is the exact snapshot selected for that release. For example,
+The lockfile is the exact snapshot that release ships. For example,
 `>=1.3.0` permits 2.0.0; after maintenance selects and validates 2.0.0, the updated
 lockfile makes both CI and the release build install 2.0.0. `npm ci` does not
 contact the registry to select newer versions during packaging. This keeps the
-shipped graph identical to the tested graph. Reusing an old lockfile without
-refreshing it before releases would fail the currency policy.
+shipped graph identical to the tested graph.
 
 ## Delivery
 
 Merging source changes updates nothing that is already installed. Node, CEF,
 Sparkle, Cua Driver, and the bundled SDK snapshot reach installed Mac apps only
-in a signed app or refresh build (`.github/release-refresh.json`). iOS bundled
+in a signed app release. iOS bundled
 JavaScript, Python, and their provenance require an App Store build. Remote
 workspaces and Executor pick up a new image definition when the user explicitly
 updates or reinstalls them. Release, publication, and deployment keep their

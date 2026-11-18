@@ -6,7 +6,7 @@ const options={workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
 function openCodeFixture() {
   const calls=[],session={id:'ses_fixture',location:{directory:'/workspace/project'},model:{providerID:'lab',id:'model'},permissions:[]}
   let busy=false
-  const control=createNativeClientSessions({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest:async(url,request)=>{
+  const control=createNativeClientSessions({...options,instances:{action:async()=>{},registrationPath:()=>'fixture'},read:async(path)=>{if(path!=='fixture')throw new TypeError('registration path');return JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42})},fetchRequest:async(url,request)=>{
     assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
     assert.equal(request.redirect,'error')
     const body=request.body&&JSON.parse(request.body);calls.push({path:url.pathname,method:request.method,body})
@@ -31,9 +31,12 @@ test('OpenCode adoption verifies idle identity and settings retain the native po
   const initial=await f.control.perform('opencode',adopted,'settings')
   assert.deepEqual(initial.models,[{id:'lab/model',label:'Fixture model'}])
   assert.equal(initial.canConfigure,true)
-  const settings=await f.control.perform('opencode',adopted,'configure',{model:'lab/model',thinking:'high',permission:'deny'})
-  assert.equal(settings.thinking,'high');assert.equal(settings.permission,'deny')
-  assert.deepEqual(f.session.permissions,[{action:'*',resource:'*',effect:'deny'}])
+  assert.deepEqual(initial.permissions.map(item=>[item.id,item.label]),[['allow','Full access']])
+  await assert.rejects(f.control.perform('opencode',adopted,'configure',{permission:'deny'}),/Full access/)
+  await assert.rejects(f.control.perform('opencode',adopted,'configure',{permission:'ask'}),/Full access/)
+  const settings=await f.control.perform('opencode',adopted,'configure',{model:'lab/model',thinking:'high',permission:'allow'})
+  assert.equal(settings.thinking,'high');assert.equal(settings.permission,'allow')
+  assert.deepEqual(f.session.permissions,[{action:'*',resource:'*',effect:'allow'}])
   await assert.rejects(f.control.perform('opencode',adopted,'configure',{model:'missing/model'}),/available OpenCode model/)
   assert.ok(!f.calls.some(call=>call.path.endsWith('/prompt')))
 })

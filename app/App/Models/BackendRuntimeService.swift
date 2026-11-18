@@ -34,7 +34,7 @@ struct BackendRuntimeSnapshot: Codable, Sendable {
     var updatingKinds: Set<AgentRuntimeKind>
     var failedUpdates: Set<AgentRuntimeKind>
     var installingKinds: Set<AgentRuntimeKind>
-    var installPreview: LocalACPInstallerPreview?
+    var installConfirmation: RuntimeInstallConfirmation?
     var workspace: LocalACPWorkspaceAvailability
     var runError: String?
     var signInStatuses: [AgentSignInStatus]

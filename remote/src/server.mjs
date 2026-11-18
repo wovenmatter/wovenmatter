@@ -33,6 +33,7 @@ import { createInstallerBearer } from './installer-bearer.mjs'
 import { createExecutionAttachments } from './execution-attachments.mjs'
 import { createTitleGenerator } from './title-generation.mjs'
 import { createDefaultAgentControl } from './default-agent-control.mjs'
+import { createGitHubService, ensureGitHubStaticFiles, githubDirectory } from './github-identity.mjs'
 import { createServer } from 'node:http'
 import { randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
@@ -47,6 +48,8 @@ const modulePath = fileURLToPath(import.meta.url)
 const entrypointPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null
 const runningAsService = entrypointPath === await realpath(modulePath)
 const { catalogPath, workspaceRoot, managedDataRoot, listenHost, listenPort } = configuration
+// Settings → GitHub: every session environment points at these files, key or not.
+if (runningAsService) ensureGitHubStaticFiles(githubDirectory(configuration))
 const apiToken = runningAsService
   ? validatedAPIToken(configuration.apiToken)
   : configuration.apiToken
@@ -77,7 +80,8 @@ const instances = createWorkspaceInstances({
   isEnabled: async id => await maintenance.isInstalled(id),
 })
 const maintenance = createRuntimeMaintenance({
-  catalog, workspaceRoot, configuration, environment: harnessEnvironment, verifiedInstaller,
+  catalog, workspaceRoot, configuration, environment: harnessEnvironment, officialInstaller,
+  restartOpenCodeService: () => instances.restartIfRunning(),
   hasActiveRuntime: async id => await instances.hasActiveRuntime(id)
     || taskGateway?.hasActiveRuntime(id) || clientExecution?.hasActiveRuntime(id) || durableACP.hasActiveRuntime(id)
     || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
@@ -226,9 +230,14 @@ function hostRelease() {
   return { version: configuration.releaseVersion, fingerprint: configuration.serviceFingerprint, librarySchema: ready?.schema ?? null }
 }
 
+// Settings → GitHub (github-identity.mjs): this host's copy of the key, from its library, served
+// to its sessions and bots through the signing agent. Without a library there is no copy.
+const github = library ? createGitHubService({ directory: githubDirectory(configuration),
+  fetchCopy: () => library.client.json('GET', '/v1/github', { timeout: 10_000 }),
+  log: message => process.stderr.write(message + '\n') }) : null
 const bots = nativeLinuxHost ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
-  libraryHost: library, memberIdentity, registry: memberSockets, installerBearer,
+  libraryHost: library, memberIdentity, registry: memberSockets, installerBearer, github,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
@@ -495,10 +504,13 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
     if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
       const agent = await defaultAgent.status();
+      // The check runs the CLI at the path found with the harness PATH, not the
+      // service's own PATH, which predates CLIs installed after the service.
+      const environment = harnessEnvironment()
       const entries = await Promise.all([...catalog.values()].map(async h => ({
-        id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
+        id: h.id, name: h.displayName, executable: await commandLocation(h.cliCommand),
       })));
-      const statuses = await signInStatuses(entries);
+      const statuses = await signInStatuses(entries, undefined, environment);
       statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Pi Durable', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
         : agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name }))));
       return json(response, 200, { statuses });
@@ -637,6 +649,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const signInMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-in$/)
     if (request.method === 'POST' && signInMatch) {
       const harness = requireHarness(signInMatch[1])
+      // An install or update replaces the CLI a sign-in would run.
+      if (maintenance.isBusy(harness.id)) return json(response, 409, { error: 'runtime_maintenance_in_progress' })
       const body = await readJSON(request)
       const method = requireAuthenticationMethod(harness, body.methodID)
       const session = startAuthenticationSession(harness, method)
@@ -646,6 +660,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const signOutMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-out$/)
     if (request.method === 'POST' && signOutMatch) {
       const harness = requireHarness(signOutMatch[1])
+      if (maintenance.isBusy(harness.id)) return json(response, 409, { error: 'runtime_maintenance_in_progress' })
       const command = harness.authentication?.signOutCommand
       if (!command) return json(response, 409, { error: 'sign_out_not_supported' })
       if ([...authenticationSessions.values()].some(s => s.harness.id === harness.id && s.state === 'waiting_for_user')) {
@@ -746,6 +761,7 @@ async function libraryReady(ready) {
   clientExecution?.kickPublisher()
   timers?.kick()
   await bots?.drainLibrary().catch(() => {})
+  await github?.start().catch(error => process.stderr.write('The GitHub signing agent could not start: ' + error.message + '\n'))
 }
 
 // The machine's member identity is the library host's (`GET /v1/identity`);
@@ -1185,11 +1201,21 @@ function sanitizedAuthenticationOutput(output) {
 }
 
 async function commandExists(command) {
-  if (!command) return false
+  return Boolean(await commandLocation(command))
+}
+
+/** The absolute path `command` resolves to on the harness PATH, or null. */
+async function commandLocation(command) {
+  if (!command) return null
   return new Promise((resolvePromise) => {
-    const child = spawn('/bin/bash', ['-c', `command -v ${shellQuote(command)}`], { env: harnessEnvironment(), stdio: 'ignore' })
-    child.on('error', () => resolvePromise(false))
-    child.on('close', (code) => resolvePromise(code === 0))
+    let output = ''
+    const child = spawn('/bin/bash', ['-c', `command -v ${shellQuote(command)}`], { env: harnessEnvironment(), stdio: ['ignore', 'pipe', 'ignore'] })
+    child.stdout.on('data', (data) => { output = (output + data).slice(0, 4096) })
+    child.on('error', () => resolvePromise(null))
+    child.on('close', (code) => {
+      const path = output.trim().split('\n')[0]
+      resolvePromise(code === 0 && path.startsWith('/') ? path : null)
+    })
   })
 }
 
@@ -1225,35 +1251,21 @@ function commandSucceeded(command, timeoutMilliseconds) {
   })
 }
 
+// Older desktop apps still ask for a preview before installing. Installs now run
+// the vendor's official installer without a review step, so this only describes it.
 async function installerPreview(harness) {
-  const adapter = await maintenance.hostAdapterPreview(harness)
-  if (adapter) return adapter
-  if (harness.install.kind === 'npm-global') return maintenance.npmPreview(harness)
-  const installer = await downloadInstaller(harness)
-  return {
-    harnessID: harness.id,
-    source: harness.install.source,
-    sha256: installer.sha256,
-    bytes: installer.data.length,
-    command: harness.install.command,
-    verification: 'sha256-redownload',
-  }
+  return maintenance.installPreview(harness)
 }
 
-async function verifiedInstaller(harness, expectedSHA256) {
-  const installer = await downloadInstaller(harness)
-  if (installer.sha256 !== expectedSHA256.toLowerCase()) {
-    throw httpError(409, 'installer_digest_changed')
-  }
+// Downloads the vendor's official installer for one run, from the vendor's own
+// HTTPS address (fixed in the catalog or runtime-maintenance.mjs).
+async function officialInstaller(harness, source) {
+  const installer = await downloadInstallerSource(source)
   const directory = resolve(workspaceRoot, '.wovenmatter/installers')
-  await mkdir(directory, { recursive: true })
+  await mkdir(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, `${harness.id}-${installer.sha256}.sh`)
   await writeFile(path, installer.data, { mode: 0o700 })
-  return { ...installer, path }
-}
-
-async function downloadInstaller(harness) {
-  return downloadInstallerSource(harness.install.source)
+  return path
 }
 
 export async function downloadInstallerSource(source, options = {}) {

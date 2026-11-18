@@ -236,7 +236,7 @@ struct WorkspaceCalendarTests {
   }
   private func task(mode: WorkspaceCalendarTask.SessionMode = .same) -> WorkspaceCalendarTask {
     .init(prompt: "Review the project", configuration: .init(runtimeKind: .codex, title: "Review",
-      model: "fixture-model", thinking: "high", permission: "read-only", nativeWorkingDirectory: "/tmp/project",
+      model: "fixture-model", thinking: "high", permission: "agent", nativeWorkingDirectory: "/tmp/project",
       tools: .init(enabled: [.notes, .calendar])), sessionMode: mode)
   }
   private func insert(_ db: WorkspaceDatabase, start: Date, repeatRule: WorkspaceCalendarRecurrence? = nil,

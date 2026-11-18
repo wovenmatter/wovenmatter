@@ -28,11 +28,13 @@ struct RecoveredNoteDraft: Equatable, Identifiable {
     let error: String
 }
 
-struct PreparedLocalACPRuntimeInstall: Equatable, Identifiable {
-    let definition: LocalACPRuntimeDefinition
-    let preview: LocalACPInstallerPreview
+/// An install that changes something the person already has, shown before it starts.
+struct RuntimeInstallConfirmation: Codable, Equatable, Identifiable, Sendable {
+    let runtimeKind: AgentRuntimeKind
+    /// The OpenCode 1 version whose `opencode` command OpenCode 2 replaces.
+    let replacingVersion: String
 
-    var id: AgentRuntimeKind { definition.runtimeKind }
+    var id: AgentRuntimeKind { runtimeKind }
 }
 
 struct ConversationTitleGenerationSettings: Equatable {
@@ -78,6 +80,9 @@ final class ApplicationModel {
     }
 
     private(set) var state: State = .starting
+    /// Long work the background service reports while this window waits for
+    /// it to start, such as the one-time library upgrade after an update.
+    private(set) var startupProgress: BackendStartupProgress?
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let executorRuntime = ExecutorRuntime()
@@ -304,9 +309,8 @@ final class ApplicationModel {
     private(set) var failedRuntimeUpdateKinds: Set<AgentRuntimeKind> = []
     private var runtimeInventoryGeneration: [AgentRuntimeKind: UInt64] = [:]
     private(set) var installingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
-    private var preparingLocalACPRuntimeKind: AgentRuntimeKind?
-    private(set) var preparedLocalACPRuntimeInstall:
-        PreparedLocalACPRuntimeInstall?
+    /// An install waiting for the person to agree, such as OpenCode 2 replacing OpenCode 1.
+    private(set) var pendingRuntimeInstall: RuntimeInstallConfirmation?
     private(set) var pendingLocalACPPermissions: [PendingLocalACPPermission] = []
     private(set) var pendingLocalACPInteractions: [PendingLocalACPInteraction] = []
     let closedLidProtection: ClosedLidWorkProtection
@@ -544,6 +548,8 @@ final class ApplicationModel {
 
     #if APP_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
+    /// Facade fixtures stand in for a version check.
+    func setRuntimeInventoryForTesting(_ inventory: RuntimeInventory) { runtimeInventories[inventory.kind] = inventory }
     /// Facade fixtures launch remote harnesses without tailnet SSH options or MCP bridges.
     var isFacadeFixture = false
 
@@ -3232,7 +3238,7 @@ final class ApplicationModel {
     func runtimeMaintenanceBusy(_ kind: AgentRuntimeKind) -> Bool {
         installingLocalACPRuntimeKinds.contains(kind)
             || (kind == .opencode && openCode?.isInstalling == true)
-            || preparedLocalACPRuntimeInstall?.definition.runtimeKind == kind
+            || pendingRuntimeInstall?.runtimeKind == kind
     }
 
     func refreshRuntimeInventory() {
@@ -3243,17 +3249,29 @@ final class ApplicationModel {
             defer { checkingRuntimeInventory = false }
             await openCode?.resolveExecutable()
             let selectedOpenCode = openCode?.runtimeExecutable
+            var generations: [AgentRuntimeKind: UInt64] = [:]
             for definition in LocalACPRuntimeCatalog.definitions {
                 let kind = definition.runtimeKind
                 guard !runtimeMaintenanceBusy(kind), checkingRuntimeKinds.insert(kind).inserted else { continue }
-                let generation = runtimeInventoryGeneration[kind, default: 0]
-                let inventory = await Task.detached(priority: .utility) {
-                    await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
-                }.value
-                checkingRuntimeKinds.remove(kind)
-                guard !runtimeMaintenanceBusy(kind), generation == runtimeInventoryGeneration[kind, default: 0] else { continue }
-                runtimeInventories[kind] = inventory
-                checkedRuntimeKinds.insert(kind)
+                generations[kind] = runtimeInventoryGeneration[kind, default: 0]
+            }
+            // One search-path lookup (a login shell) for the whole check; every harness is
+            // inspected at once.
+            let resolver = await Task.detached(priority: .utility) {
+                LocalACPRuntimeResolver().snapshottingExecutableSearchDirectories()
+            }.value
+            await withTaskGroup(of: (AgentRuntimeKind, RuntimeInventory).self) { group in
+                for kind in generations.keys {
+                    group.addTask(priority: .utility) {
+                        (kind, await RuntimeMaintenance.inspect(kind, checkLatest: true, resolver: resolver, selectedOpenCode: selectedOpenCode))
+                    }
+                }
+                for await (kind, inventory) in group {
+                    checkingRuntimeKinds.remove(kind)
+                    guard !runtimeMaintenanceBusy(kind), generations[kind] == runtimeInventoryGeneration[kind, default: 0] else { continue }
+                    runtimeInventories[kind] = inventory
+                    checkedRuntimeKinds.insert(kind)
+                }
             }
         }
     }
@@ -3310,62 +3328,60 @@ final class ApplicationModel {
         }
     }
 
+    /// Installs a harness that isn't on this Mac with its vendor's official installer, plus
+    /// the ACP adapter Codex and Claude Code connect through. OpenCode 2 replaces OpenCode 1's
+    /// `opencode` command, so that one asks first.
     func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
         if isBackendFrontend { sendBackendRuntimeCommand(.install(runtimeKind)); return }
         guard !checkingRuntimeKinds.contains(runtimeKind), !runtimeMaintenanceBusy(runtimeKind),
               !localRuntimeMaintenanceHasActiveConversation,
               let definition = LocalACPRuntimeCatalog.definition(for: runtimeKind) else { return }
-        if runtimeKind == .opencode {
-            performRuntimeMaintenance(definition, update: false)
-            return
-        }
-        let inventory = runtimeInventories[runtimeKind]
-        let cliMissing = definition.underlyingCLIName.map { name in
-            inventory?.components.contains { $0.name == name + " (sign-in CLI)" && !$0.present } == true
-        } ?? false
-        let needsCLI = cliMissing || (definition.adapterPackage == nil && inventory?.isInstalled != true)
-        if needsCLI {
-            guard preparedLocalACPRuntimeInstall == nil, preparingLocalACPRuntimeKind == nil else { return }
-            preparingLocalACPRuntimeKind = runtimeKind
-            runtimeInventoryGeneration[runtimeKind, default: 0] &+= 1
-            installingLocalACPRuntimeKinds.insert(runtimeKind)
-            localRunError = nil
-            Task {
-                defer {
-                    installingLocalACPRuntimeKinds.remove(runtimeKind)
-                    preparingLocalACPRuntimeKind = nil
-                }
-                do {
-                    let preview = try await localACPRuntimeInstaller.prepareCLIInstall(definition)
-                    preparedLocalACPRuntimeInstall = PreparedLocalACPRuntimeInstall(definition: definition, preview: preview)
-                } catch { recordRuntimeFailure(runtimeKind, error: error) }
+        guard runtimeKind == .opencode else { performRuntimeMaintenance(definition, update: false); return }
+        installingLocalACPRuntimeKinds.insert(runtimeKind)
+        Task {
+            let replacing = await Task.detached(priority: .utility) { OpenCodeServiceLauncher.versionOneToReplace() }.value
+            installingLocalACPRuntimeKinds.remove(runtimeKind)
+            if let replacing {
+                pendingRuntimeInstall = RuntimeInstallConfirmation(runtimeKind: runtimeKind, replacingVersion: replacing)
+            } else {
+                performRuntimeMaintenance(definition, update: false)
             }
-        } else { performRuntimeMaintenance(definition, update: false) }
+        }
     }
 
+    /// Updates a harness with its vendor's own update command, run out of sight.
     func updateRuntime(_ kind: AgentRuntimeKind) {
         if isBackendFrontend { sendBackendRuntimeCommand(.update(kind)); return }
         guard let definition = LocalACPRuntimeCatalog.definition(for: kind) else { return }
         performRuntimeMaintenance(definition, update: true)
     }
 
-    func confirmPreparedLocalACPRuntimeInstall() {
+    /// "Install OpenCode 2" after being told it replaces OpenCode 1's command.
+    func confirmPendingRuntimeInstall() {
         if isBackendFrontend { sendBackendRuntimeCommand(.confirmInstall); return }
-        guard let prepared = preparedLocalACPRuntimeInstall else { return }
-        preparedLocalACPRuntimeInstall = nil
-        performRuntimeMaintenance(prepared.definition, update: false, preview: prepared.preview)
+        guard let pending = pendingRuntimeInstall,
+              let definition = LocalACPRuntimeCatalog.definition(for: pending.runtimeKind) else { return }
+        pendingRuntimeInstall = nil
+        performRuntimeMaintenance(definition, update: false)
     }
 
-    func cancelPreparedLocalACPRuntimeInstall() {
+    func cancelPendingRuntimeInstall() {
         if isBackendFrontend { sendBackendRuntimeCommand(.cancelInstall); return }
-        preparedLocalACPRuntimeInstall = nil
+        pendingRuntimeInstall = nil
     }
 
-    private func performRuntimeMaintenance(_ definition: LocalACPRuntimeDefinition, update: Bool,
-                                          preview: LocalACPInstallerPreview? = nil) {
+    /// Install: the CLI with its official installer when it's missing, then the adapter.
+    /// Update: the CLI's own update command when it's behind, then the adapter when it or
+    /// its libraries are. Either way the result is read back and must hold.
+    private func performRuntimeMaintenance(_ definition: LocalACPRuntimeDefinition, update: Bool) {
         let kind = definition.runtimeKind
         guard !runtimeMaintenanceBusy(kind), !checkingRuntimeKinds.contains(kind),
               !localRuntimeMaintenanceHasActiveConversation else { return }
+        // Never replace a CLI while its own sign-in is running; other harnesses go ahead.
+        if harnessSignIn.sessions[kind]?.isActive == true {
+            recordRuntimeFailure(kind, error: RuntimeMaintenanceError.signingIn, update: update)
+            return
+        }
         runtimeInventoryGeneration[kind, default: 0] &+= 1
         installingLocalACPRuntimeKinds.insert(kind)
         if update { updatingRuntimeKinds.insert(kind) }
@@ -3385,26 +3401,34 @@ final class ApplicationModel {
                     return
                 }
                 #endif
+                let cli = Self.cliComponent(in: before, definition: definition)
                 if kind == .opencode {
                     guard let openCode else { throw RuntimeMaintenanceError.unavailable }
-                    try await openCode.download()
-                } else if let preview {
-                    _ = try await installer.install(definition, component: .cli,
-                        expectedSourceSHA256: preview.sha256, expectedPackageSpec: preview.packageSpec)
+                    if update { try await openCode.upgrade() }
+                    else { try await openCode.download() }
+                } else if update {
+                    if let cli, cli.outdated || !cli.verified, let executable = cli.executable {
+                        try await RuntimeMaintenance.runVendorUpdate(kind, executable: executable)
+                    }
+                } else {
+                    // A CLI already on this Mac is used as it is. The official installer runs
+                    // when there is none, or when the one found can't run this harness.
+                    let name = definition.underlyingCLIName ?? definition.commandName
+                    let existing = await Task.detached(priority: .utility) { LocalACPRuntimeResolver().executable(named: name) }.value
+                    if existing == nil || (cli?.present == true && cli?.verified == false) {
+                        _ = try await installer.install(definition, component: .cli)
+                    }
                 }
                 if let package = definition.adapterPackage {
-                    // Resolve a concrete version before npm is allowed to mutate anything.
-                    let version = try await RuntimeMaintenance.registryVersion(package)
-                    if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {
-                        throw RuntimeMaintenanceError.unavailable
+                    let adapterBehind = before?.components.contains { $0.name != cli?.name && ($0.outdated || !$0.verified || !$0.present) } ?? true
+                    if !update || adapterBehind {
+                        // Resolve a concrete version before npm is allowed to mutate anything.
+                        let version = try await RuntimeMaintenance.registryVersion(package)
+                        if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {
+                            throw RuntimeMaintenanceError.unavailable
+                        }
+                        _ = try await installer.installPackage(package, version: version, executableName: definition.commandName)
                     }
-                    _ = try await installer.installPackage(package, version: version, executableName: definition.commandName)
-                } else if update, kind != .opencode {
-                    try await RuntimeMaintenance.updateNative(kind, executable: before?.components.first?.executable)
-                }
-                if update, definition.adapterPackage != nil,
-                   let cli = before?.components.first(where: { $0.name.hasSuffix("(sign-in CLI)") && $0.outdated }) {
-                    try await RuntimeMaintenance.updateNative(kind, executable: cli.executable)
                 }
                 let selectedOpenCode = openCode?.runtimeExecutable
                 let inventory = await Task.detached(priority: .utility) {
@@ -3412,22 +3436,43 @@ final class ApplicationModel {
                 }.value
                 runtimeInventories[kind] = inventory
                 checkedRuntimeKinds.insert(kind)
+                if update { try Self.verifyUpdate(before: before, after: inventory, cliName: cli?.name) }
                 guard inventory.isInstalled else { throw RuntimeMaintenanceError.verification }
-                if update {
-                    // Success requires the outdated components to reach the observed
-                    // target, not merely an exit-zero updater or a changed PATH.
-                    for component in before?.components.filter(\.outdated) ?? [] {
-                        guard let after = inventory.components.first(where: { $0.name == component.name }),
-                              let installed = after.installed, let target = component.latest,
-                              installed == target || RuntimeMaintenance.version(target, precedes: installed)
-                        else { throw RuntimeMaintenanceError.verification }
-                    }
-                }
                 runtimeFailures[kind] = 0; runtimeFailureDetails[kind] = nil
                 failedRuntimeUpdateKinds.remove(kind)
                 invalidateRepairedRuntimeReadiness(kind)
                 await refreshLocalACPRuntimes()
             } catch { recordRuntimeFailure(kind, error: error, update: update) }
+        }
+    }
+
+    /// The row for the CLI itself: the adapter's CLI for Codex and Claude Code, or the
+    /// harness's own command for Grok and OpenCode.
+    static func cliComponent(in inventory: RuntimeInventory?, definition: LocalACPRuntimeDefinition) -> RuntimeComponent? {
+        let name = definition.underlyingCLIName.map(RuntimeMaintenance.cliComponentName) ?? definition.commandName
+        return inventory?.components.first { $0.name == name }
+    }
+
+    /// Success means each component that was behind moved: the CLI to a newer version (a
+    /// vendor's native channel can trail the registry), the adapter's parts to their target.
+    static func verifyUpdate(before: RuntimeInventory?, after: RuntimeInventory, cliName: String?) throws {
+        for component in before?.components.filter({ $0.outdated || !$0.verified }) ?? [] {
+            let current = after.components.first { $0.name == component.name }
+            if component.name == cliName {
+                guard let installed = current?.installed else { throw RuntimeMaintenanceError.verification }
+                if current?.verified == false || installed == component.installed
+                    || component.installed.map({ !RuntimeMaintenance.version($0, precedes: installed) }) == true {
+                    throw RuntimeMaintenanceError.unchanged(name: component.name, version: installed)
+                }
+                continue
+            }
+            guard let target = component.latest else {
+                guard current?.verified == true else { throw RuntimeMaintenanceError.verification }
+                continue
+            }
+            guard let installed = current?.installed,
+                  installed == target || RuntimeMaintenance.version(target, precedes: installed)
+            else { throw RuntimeMaintenanceError.verification }
         }
     }
 
@@ -3444,6 +3489,8 @@ final class ApplicationModel {
     var pendingDefaultAgentModelProvider: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
+    /// Settings → GitHub: the user's GitHub SSH key and commit identity everywhere.
+    let github = GitHubSettingsModel()
 
     func refreshLocalACPRuntimesNow(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) {
         if isBackendFrontend { sendBackendRuntimeCommand(.refreshRuntimes(runtimeKinds)); return }
@@ -4230,6 +4277,18 @@ extension ApplicationModel {
         return nil
     }
 
+    /// The library upgrade this service's open is running, while it starts.
+    var backendStartupProgress: BackendStartupProgress? {
+        guard state == .starting, let support = try? Self.librarySupportDirectory(),
+              let upgrade = LibraryUpgradeMonitor.progress(for: support.appending(path: "workspace.sqlite")) else { return nil }
+        return BackendStartupProgress(libraryUpgrade: upgrade)
+    }
+
+    /// Shows what the background service reports while this window waits.
+    func showStartupProgress(_ progress: BackendStartupProgress?) {
+        if startupProgress != progress { startupProgress = progress }
+    }
+
     var readyForBackendClients: Bool {
         !backendStopping && state == .ready
     }
@@ -4287,6 +4346,9 @@ extension ApplicationModel {
             if request.method == "surfaceProfile.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(macSurfaceProfile))
             }
+            if request.method.hasPrefix("github.") {
+                return .init(id: request.id, result: try await github.handle(method: request.method, payload: request.payload))
+            }
             if request.method.hasPrefix("connections.") {
                 return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections, remoteWorkspaces: remoteWorkspaces))
             }
@@ -4325,6 +4387,9 @@ extension ApplicationModel {
             if request.method == "runtime.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendRuntimeSnapshot()))
             }
+            if request.method == "executor.versions" {
+                return .init(id: request.id, result: try JSONEncoder().encode(ExecutorVersionsReply(versions: try await executorVersions())))
+            }
             if request.method == "remoteWorkspaces.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(remoteWorkspaces.backendSnapshot()))
             }
@@ -4351,7 +4416,8 @@ extension ApplicationModel {
                         BackgroundServerStopResult(confirmationRequired: true, activeWorkCount: activeCount)))
                 }
                 guard backendCommandsInFlight == 0, !connections.busy, !connections.sdks.isBusy,
-                      remoteWorkspaces.busyWorkspaceIDs.isEmpty, !remoteWorkspaces.isCreating,
+                      remoteWorkspaces.busyWorkspaceIDs.isEmpty, remoteWorkspaces.maintainingHarnesses.isEmpty,
+                      !remoteWorkspaces.isCreating,
                       installingLocalACPRuntimeKinds.isEmpty, updatingRuntimeKinds.isEmpty,
                       !executorRuntime.isSettingUp else {
                     throw BackendRPCError.remote("Wait for setup and maintenance operations before stopping the background server.")
@@ -4482,19 +4548,27 @@ extension ApplicationModel {
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
             }
+            github.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: method, payload: payload)
+            }
             remoteWorkspaces.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
             }
             var ready = false
-            let readyDeadline = Date().addingTimeInterval(60)
+            // As in `ensureReady`: reported startup work keeps the window waiting.
+            var readyDeadline = Date().addingTimeInterval(60)
             var startupMessage: String?
+            defer { showStartupProgress(nil) }
             while Date() < readyDeadline {
                 try Task.checkCancellation()
                 if let data = try? await client.call(method: "application.readiness", timeout: 0.5),
                    let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data) {
                     if let error = status.startupError { throw BackendRPCError.remote(error) }
                     startupMessage = status.startupMessage
+                    showStartupProgress(status.ready ? nil : status.startupProgress)
+                    if !status.ready, status.startupProgress != nil { readyDeadline = Date().addingTimeInterval(60) }
                     if status.ready {
                         guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                         guard status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
@@ -4690,19 +4764,22 @@ extension ApplicationModel {
             if self.backendStopRequestedForLifecycle {
                 try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(leaseURL: lease)
             }
+            defer { self.showStartupProgress(nil) }
             try await WovenMatterBackendProcess.ensureReady(check: {
                 let data: Data
                 do { data = try await client.call(method: "application.readiness", timeout: 0.5) }
-                catch BackendRPCError.unavailable { return false }
-                catch BackendRPCError.timedOut { return false }
+                catch BackendRPCError.unavailable { return .notReady }
+                catch BackendRPCError.timedOut { return .notReady }
                 let status = try JSONDecoder().decode(BackendApplicationReadiness.self, from: data)
+                self.showStartupProgress(status.ready ? nil : status.startupProgress)
                 if let error = status.startupError { throw BackendRPCError.remote(error) }
                 guard status.protocolVersion == 1, status.completeClientRouting,
                       status.capabilities.contains("session.dispatch-epochs"),
                       status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
                     throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
                 }
-                return status.ready
+                if status.ready { return .ready }
+                return status.startupProgress == nil ? .notReady : .working
             }, ownerIsPresent: {
                 try WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: lease)
             }, launch: {
@@ -4731,7 +4808,7 @@ extension ApplicationModel {
             checkingInventory: checkingRuntimeInventory, checkingUpdates: checkingRuntimeKinds,
             checkedUpdates: checkedRuntimeKinds, updatingKinds: updatingRuntimeKinds,
             failedUpdates: failedRuntimeUpdateKinds, installingKinds: installingLocalACPRuntimeKinds,
-            installPreview: preparedLocalACPRuntimeInstall?.preview,
+            installConfirmation: pendingRuntimeInstall,
             workspace: localACPWorkspaceAvailability, runError: localRunError,
             signInStatuses: localSignInStatuses, checkingSignIn: checkingLocalSignIn, signInError: localSignInError,
             titleEnabled: titleGenerationSettings.isEnabled, titleModel: titleGenerationSettings.model,
@@ -4755,11 +4832,7 @@ extension ApplicationModel {
         updatingRuntimeKinds = value.updatingKinds
         failedRuntimeUpdateKinds = value.failedUpdates
         installingLocalACPRuntimeKinds = value.installingKinds
-        preparedLocalACPRuntimeInstall = value.installPreview.flatMap { preview in
-            LocalACPRuntimeCatalog.definition(for: preview.runtimeKind).map {
-                PreparedLocalACPRuntimeInstall(definition: $0, preview: preview)
-            }
-        }
+        pendingRuntimeInstall = value.installConfirmation
         localACPWorkspaceAvailability = value.workspace
         // Public paths support UI path pickers. Never project executable launch
         // environments or saved provider credentials into the frontend.
@@ -4799,8 +4872,8 @@ extension ApplicationModel {
         case .checkUpdate(let kind): checkRuntimeUpdate(kind)
         case .install(let kind): installLocalACPRuntimeComponent(kind)
         case .update(let kind): updateRuntime(kind)
-        case .confirmInstall: confirmPreparedLocalACPRuntimeInstall()
-        case .cancelInstall: cancelPreparedLocalACPRuntimeInstall()
+        case .confirmInstall: confirmPendingRuntimeInstall()
+        case .cancelInstall: cancelPendingRuntimeInstall()
         case .refreshRuntimes(let kinds): refreshLocalACPRuntimesNow(checkCredentialsFor: kinds)
         case .refreshSignIn: await refreshLocalSignInStatus()
         case .titleEnabled(let enabled): setTitleGenerationEnabled(enabled)

@@ -39,6 +39,8 @@ using that service.
 Use **Check for updates** or **Update** in the harness’s **Software** row. A check reports
 available updates without installing them. Finish active work before updating;
 a busy runtime may block maintenance. Remote updates apply to the selected workspace.
+Settings → Updates lists every harness on every workspace and updates them all
+at once; see [Updates](updates.md).
 
 **Settings → General → Sidebar sections** controls which workspace groups the sidebar
 shows. For OpenCode, use **Stop server** under its service on the agent page to stop

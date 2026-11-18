@@ -11,11 +11,11 @@ struct SettingsAppleDevicesView: View {
     @State private var recoveryError: String?
     var reservesRailControlSpace = false
     var onBack: () -> Void
-    var onOpenBots: () -> Void = {}
+    var onOpenUpdates: () -> Void = {}
 
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            BotsVersionStatusLink(bots: model.bots, onOpen: onOpenBots)
+            UpdatesStatusLink(bots: model.bots, onOpen: onOpenUpdates)
             SettingsSection {
                 deviceRow(icon: .mac, title: DevelopmentLaunch.deviceName(), detail: "This Mac")
             }

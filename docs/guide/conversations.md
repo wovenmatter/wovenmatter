@@ -22,45 +22,34 @@ workspace and harness defaults are retained. New conversations use this order:
 4. Woven Matter's starting default: **Full access** for permissions on supported
    harnesses; the harness's own default for other selections.
 
-New conversations start with Full access unless you choose a different policy
-or have a previously saved default. Existing and imported conversations keep
-their current policy.
+New conversations start with Full access unless you choose the harness's auto
+mode or saved it as a default.
 
 Existing conversations keep their selections when defaults change. Defaults are
 independent for each control, so a saved workspace default can override the model
 while inheriting the harness's permission choice.
 
-Permission choices follow the selected harness. Similar names have consistent
-meanings:
+Woven Matter offers two permission choices, and only those the harness
+supports appear:
 
-- **Ask for approval** keeps the harness's approval prompts.
-- **Auto-accept edits** allows file edits while leaving other actions subject to
-  approval.
-- **Auto**, **Auto-review**, or **Smart approvals** uses the harness's own review
-  system to evaluate actions and decide what it can approve. This is not blanket
-  acceptance of requests.
 - **Full access** allows commands and edits without ordinary approval prompts,
-  within the harness's enforced policy.
+  within the harness's enforced policy. It is the default everywhere.
+- The harness's auto mode uses the harness's own review system to evaluate
+  actions and decide what it can approve. This is not blanket acceptance of
+  requests. Codex calls it **Approve for me**; Claude Code and Grok Build call
+  it **Auto**, and show it only when their adapter supports it.
 
-Only supported choices appear. A harness may also offer more specific policies:
+Pi Durable and OpenCode have no auto mode, so they always run in Full access.
+Questions and sign-in steps still need your response in every mode. Changing
+Grok Build's policy reconnects the same conversation before the next message.
 
-- Codex offers **Ask for approval**, **Approve for me**, and **Full access** when
-  its adapter advertises those native modes. Approve for me uses native automatic
-  review; older adapters without that capability do not advertise it as smart
-  approval.
-- Claude Code offers its available native **Ask for approval**, **Auto-accept
-  edits**, **Auto**, and **Full access** modes. Auto appears only when supported.
-  It can also offer **Plan**, which plans without running commands or editing
-  files, and **Don't ask**, which declines actions that would need approval.
-- Grok Build offers its native approval policies. Changing the policy reconnects
-  the same conversation before the next message.
-- OpenCode offers **Ask for approval**, **Full access**, and **Deny**, using
-  OpenCode's own permission rules for that conversation. They do not run a smart
-  reviewer or save permissions for other conversations. Questions and sign-in
-  steps still need your response.
+There is no Ask for approval mode. A conversation or default saved in Ask for
+approval, or in another mode Woven Matter no longer offers (such as Read only,
+Plan, Auto-accept edits, Don't ask, or OpenCode's Deny), moves to Full access
+the next time it runs. If the harness withholds Full access, it moves to the
+harness's auto mode instead.
 
-Wait for a settings change to finish before sending. If a saved choice is no
-longer available, choose a supported value before continuing the conversation.
+Wait for a settings change to finish before sending.
 
 ## App tools and session access
 

@@ -21,6 +21,15 @@ test('OpenCode v2 stored account rows report credentials without verifying acces
 });
 
 
+test('the sign-in check runs with the harness environment it is given, not this process’s', async () => {
+  const seen = [];
+  const [status] = await signInStatuses([{ id: 'grok_build', executable: '/home/fixture/.grok/bin/grok' }],
+    async (file, args, options) => { seen.push([file, options.env.PATH, options.env.BROWSER]); return { stdout: 'You are logged in' }; },
+    { PATH: '/home/fixture/.grok/bin:/usr/bin' });
+  assert.equal(status.state, 'verified');
+  assert.deepEqual(seen, [['/home/fixture/.grok/bin/grok', '/home/fixture/.grok/bin:/usr/bin', '/usr/bin/false']]);
+});
+
 test('Codex account read never refreshes tokens and stops its process', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-account-fixture-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

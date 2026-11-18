@@ -8,6 +8,8 @@ struct SettingsGeneralView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onOpenCodex: () -> Void = {}
+    var onOpenUpdates: () -> Void = {}
+    @State private var updates = FleetUpdatesModel.shared
 
     @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
     @AppStorage(SidebarStyle.storageKey) private var storedSidebarStyle = SidebarStyle.defaultStyle.rawValue
@@ -41,9 +43,9 @@ struct SettingsGeneralView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            versionSection
             appearanceSection
             SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
-            softwareSection
             ProductAnalyticsSettingsSection(analytics: model.analytics)
         }
         .onChange(of: storedTheme) { _, _ in
@@ -94,20 +96,20 @@ struct SettingsGeneralView: View {
         CodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
-    private var softwareSection: some View {
-        let updater = DesktopUpdater.shared
-        return SettingsSection(title: "Software") {
-            SettingsRow(title: "Woven Matter v\(currentVersion)", detail: updater.errorMessage) {
-                Button("Check for updates") { updater.checkForUpdates() }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(!updater.canCheckForUpdates)
-            }
+    /// The first row: this Mac's Woven Matter version. The whole row opens Settings → Updates,
+    /// where this Mac and every other device are updated.
+    private var versionSection: some View {
+        SettingsSection {
+            SettingsDestinationRow(
+                title: updates.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(updates.thisMacVersion ?? "")",
+                detail: "Open Updates to update this Mac, your other devices, and their harnesses.",
+                status: updates.running ? "Updating…" : updates.availableCount > 0 ? "Update available" : nil,
+                statusTone: updates.running ? .neutral : .warning,
+                icon: { LucideIcon(glyph: .rocket, size: 15) },
+                action: onOpenUpdates
+            )
         }
-    }
-
-    private var currentVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "0.0.0"
+        .task { updates.loadIfNeeded() }
     }
 }
 

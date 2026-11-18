@@ -9,13 +9,19 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
-      "minimumAdapterVersion": "2.6.0",
+      "minimumAdapterVersion": "2.7.0",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
         "command": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
         "interpreter": "sh",
         "arguments": []
+      },
+      "update": {
+        "command": "codex update",
+        "arguments": [
+          "update"
+        ]
       },
       "authentication": {
         "statusCommands": [
@@ -64,7 +70,7 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
-      "minimumAdapterVersion": "0.107.0",
+      "minimumAdapterVersion": "0.107.3",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
@@ -72,6 +78,12 @@
         "interpreter": "bash",
         "arguments": [
           "latest"
+        ]
+      },
+      "update": {
+        "command": "claude update",
+        "arguments": [
+          "update"
         ]
       },
       "authentication": {
@@ -110,7 +122,7 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.3.325",
+      "minimumEngineVersion": "0.3.326",
       "minimumProtocolSDKVersion": "2.7.0"
     },
     {
@@ -132,6 +144,12 @@
         "command": "curl -fsSL https://x.ai/cli/install.sh | bash",
         "interpreter": "bash",
         "arguments": []
+      },
+      "update": {
+        "command": "grok update",
+        "arguments": [
+          "update"
+        ]
       },
       "authentication": {
         "statusCommands": [
@@ -168,11 +186,17 @@
       "arguments": [],
       "cliCommand": "opencode",
       "install": {
-        "kind": "npm-global",
-        "package": "@opencode/cli@2",
-        "source": "https://registry.npmjs.org/@opencode/cli",
-        "arguments": [],
-        "command": "npm install -g @opencode/cli@2"
+        "kind": "official-script",
+        "source": "https://opencode.ai/v2/install",
+        "command": "curl -fsSL https://opencode.ai/v2/install | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "update": {
+        "command": "opencode upgrade",
+        "arguments": [
+          "upgrade"
+        ]
       },
       "authentication": {
         "statusCommands": [],

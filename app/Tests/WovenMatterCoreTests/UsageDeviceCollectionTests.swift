@@ -48,7 +48,6 @@ struct UsageDeviceCollectionTests {
       provider: .codex,
       timestamp: Self.now.addingTimeInterval(-daysAgo * 86_400),
       sessionID: "session-\(id)",
-      accountLabel: "Account",
       model: "gpt-5.5",
       harness: harness,
       application: "Codex",
@@ -152,7 +151,7 @@ struct UsageDeviceCollectionTests {
         endpoint(device) { _ in
           let sample = UsageSample(
             id: "same", provider: .claude, timestamp: Self.now.addingTimeInterval(-3_600), sessionID: "s",
-            accountLabel: "A", model: "m", harness: "Claude Code", application: "a",
+            model: "m", harness: "Claude Code", application: "a",
             tokens: UsageTokenCounts(inputTokens: 5), sourceID: "claude:file:x", sourceEventID: "same", dedupeKey: "shared"
           )
           return .paged([UsageDeviceRecord(sample: sample)], request: .init(since: 0, offset: 0))
@@ -169,7 +168,7 @@ struct UsageDeviceCollectionTests {
   func coveredLiveRuns() {
     func sample(_ id: String, source: String, harness: String, hoursAgo: Double = 0, tokens: Int64 = 1) -> UsageSample {
       UsageSample(id: id, provider: .codex, timestamp: Self.now.addingTimeInterval(-hoursAgo * 3_600), sessionID: id,
-        accountLabel: "A", model: "m", harness: harness, application: "a", tokens: UsageTokenCounts(inputTokens: tokens), sourceID: source)
+        model: "m", harness: harness, application: "a", tokens: UsageTokenCounts(inputTokens: tokens), sourceID: source)
     }
     let live = UsageDeviceSource.liveRunsSourceID(deviceID: "host-1")
     let kept = LocalUsageService.suppressWovenMatterEchoes([
@@ -188,7 +187,7 @@ struct UsageDeviceCollectionTests {
   @Test("a remote turn stored as this Mac's before this version gives way to the host's history")
   func olderRemoteLiveRuns() {
     func sample(_ id: String, session: String, source: String) -> UsageSample {
-      UsageSample(id: id, provider: .claude, timestamp: Self.now, sessionID: session, accountLabel: "A", model: "m",
+      UsageSample(id: id, provider: .claude, timestamp: Self.now, sessionID: session, model: "m",
         harness: "Claude Code", application: "a", tokens: UsageTokenCounts(inputTokens: 1), sourceID: source)
     }
     let kept = LocalUsageService.droppingLiveRunsReportedElsewhere([
@@ -401,6 +400,19 @@ struct UsageDeviceCollectionTests {
     #expect(sample.tokens.totalTokens == 17)
     #expect(sample.requestCount == 2)
     #expect(sample.usageDeviceID == "host-1")
+  }
+
+  @Test("records without an account label decode, and older releases still find the key")
+  func accountLabelIsOnlyAPlaceholder() throws {
+    let json = #"""
+      {"id":"a","timestamp":1790000000,"provider":"codex","sessionID":"s","model":"m","billingProvider":"p",
+       "billingRoute":"r","harness":"h","application":"a","inputTokens":1,"cachedInputTokens":0,
+       "cacheCreationTokens":0,"outputTokens":0,"reasoningTokens":0,"totalTokens":1,"requestCount":1}
+      """#
+    let decoded = try JSONDecoder().decode(UsageDeviceRecord.self, from: Data(json.utf8))
+    #expect(decoded.sample(deviceID: "x")?.tokens.totalTokens == 1)
+    let wire = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(record("b"))) as? [String: Any])
+    #expect(wire["accountLabel"] as? String == "Unknown")
   }
 
   @Test("iPhone and iPad records become usage, keeping the newest revision of a message")

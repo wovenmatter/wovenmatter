@@ -269,6 +269,33 @@ struct BotsHostTests {
         #expect(fixture.recorded.first?.0 == "d3vice-0001" && fixture.recorded.first?.1.entries.count == 1)
     }
 
+    /// Settings → GitHub for one bot's container: the public key while the bot is on, and its
+    /// signing requests answered by this Mac's agent, which checks the bot at every request.
+    @Test func theHostAPIServesTheGitHubSettingAndSigns() async throws {
+        var setup = GitHubBotSetup()
+        var asked: [(String, Data)] = []
+        let fixture = try HostFixture {
+            $0.gitConfiguration = { _ in setup }
+            $0.sshAgent = { botID, message in asked.append((botID, message)); return Data([12, 0, 0, 0, 0]) }
+        }; defer { fixture.remove() }
+        let api = fixture.host.makeHostAPI(machineID: "d3vice-0001")
+        let token = fixture.host.persisted.hostToken
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: nil, body: ["botID": "b1"])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: [:])).status == 400)
+        let empty = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: ["botID": "b1"]))
+        #expect(String(decoding: empty.body, as: UTF8.self).contains("\"publicKey\":null"))
+        setup = .init(publicKey: "ssh-ed25519 AAAA woven-matter", identity: .init(name: "Ada"))
+        let reply = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: ["botID": "b1"]))
+        #expect(try JSONDecoder().decode(GitHubBotSetup.self, from: reply.body) == setup)
+
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: nil, body: ["botID": "b1", "message": "Cw=="])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": ""])).status == 400)
+        let signed = await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": "Cw=="]))
+        struct Reply: Decodable { let message: String }
+        #expect(try JSONDecoder().decode(Reply.self, from: signed.body).message == Data([12, 0, 0, 0, 0]).base64EncodedString())
+        #expect(asked.map(\.0) == ["b1"] && asked.first?.1 == Data([11]))
+    }
+
     @Test func otherMembersReachTheRuntimeOnlyThroughItsOwnBearer() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
         let upgrade = LibraryHTTPRequest(method: "GET", target: "/v1/bots/ws", headers: [
@@ -384,6 +411,41 @@ struct BotsHostTests {
         #expect(try await fixture.host.perform(.status).jobs.first?.error == "The host update failed and was rolled back.")
     }
 
+    @Test func anotherMachinesHarnessesAreReadDirectlyAndUpdatedAsAJob() async throws {
+        let gate = Gate()
+        var updates: [(String, AgentRuntimeKind, String?, Bool)] = []
+        let inventory = FleetMemberInventory(runtimes: [RemoteRuntimeMaintenance(
+            id: .codex, displayName: "Codex", installed: true,
+            components: [RemoteRuntimeComponent(id: "runtime", displayName: "codex-acp", path: nil, installedVersion: "1.0.0",
+                                                latestVersion: "1.1.0", required: true, installed: true)],
+            updateAvailable: true)])
+        let fixture = try HostFixture { dependencies in
+            dependencies.memberInventory = { machine, check in
+                #expect(machine == "MAC-2" && check)
+                return inventory
+            }
+            dependencies.memberInstallerPreview = { _, _ in nil }
+            dependencies.updateMemberHarness = { machine, kind, sha, _, force, progress in
+                updates.append((machine, kind, sha, force))
+                progress("Updating Codex…")
+                try await gate.wait()
+            }
+        }
+        defer { fixture.remove() }
+        // A read answers with the inventory alone, without a machine list to apply.
+        let read = try await fixture.host.perform(.memberInventory(machineID: "MAC-2", checkLatest: true))
+        #expect(read.memberInventory == inventory && read.machines.isEmpty)
+        #expect(try await fixture.host.perform(.memberInstallerPreview(machineID: "MAC-2", kind: .codex)).installerPreview == nil)
+        let started = try await fixture.host.perform(.updateMemberHarness(machineID: "MAC-2", kind: .codex, sourceSHA256: "abc",
+                                                                         packageSpec: nil, force: true))
+        #expect(started.jobs.first?.kind == .updateHarness && started.jobs.first?.target == "mac-2/codex")
+        try await waitFor("harness update") { updates.count == 1 && gate.waiting }
+        #expect(updates.first?.0 == "MAC-2" && updates.first?.2 == "abc" && updates.first?.3 == true)
+        gate.open(throwing: FleetBusyError())
+        try await waitFor("harness update end") { fixture.host.jobTasks.isEmpty }
+        #expect(try await fixture.host.perform(.status).jobs.first?.error == FleetBusyError.message)
+    }
+
     @Test func installJobsReplaceTheirDevicesStateAndAppearBeforeDiscoveryFindsThem() {
         let devices = [BotDiscoveredDevice(hostName: "Box", displayName: "Box", dnsName: nil, system: .linux, state: .installBots),
                        BotDiscoveredDevice(hostName: "mini", displayName: "Mini", dnsName: nil, system: .macOS, state: .installApp)]
@@ -446,5 +508,43 @@ struct BotsHostTests {
         }
         try await database.deleteBotConversations(machineID: "M1", botID: "B1")
         #expect(try await database.botConversations().isEmpty)
+    }
+}
+
+@MainActor
+struct UpdatesVersionTests {
+    @Test func versionsReadAsPeopleSeeThem() {
+        #expect(ExecutorVersions(installed: "2.3.0", latest: "2.4.1").updateAvailable)
+        #expect(!ExecutorVersions(installed: "2.4.1", latest: "2.4.1").updateAvailable)
+        #expect(!ExecutorVersions(installed: nil, latest: "2.4.1").updateAvailable)
+    }
+
+    @Test func onlyADeviceRestartingBlocksOtherUpdatesOnIt() {
+        typealias Part = FleetUpdatesModel.Part
+        let server = Part(kind: .app, key: "app:box", device: "box")
+        let bots = Part(kind: .bots, key: "bots:box", device: "box")
+        let codex = Part(kind: .harness, key: "member-box/codex", device: "box")
+        let claude = Part(kind: .harness, key: "member-box/claude", device: "box")
+        let elsewhere = Part(kind: .harness, key: "member-mini/codex", device: "mini")
+        let here = Part(kind: .harness, key: "this-mac/codex", device: nil)
+        #expect(server.conflicts(with: codex) && codex.conflicts(with: server))
+        #expect(server.conflicts(with: bots))
+        #expect(!codex.conflicts(with: claude))
+        #expect(!bots.conflicts(with: codex))
+        let vm = Part(kind: .engine, key: "engine:box", device: "box")
+        #expect(vm.conflicts(with: bots) && bots.conflicts(with: vm))
+        #expect(!vm.conflicts(with: codex) && vm.conflicts(with: server))
+        #expect(!server.conflicts(with: elsewhere))
+        #expect(!here.conflicts(with: Part(kind: .harness, key: "this-mac/claude", device: nil)))
+    }
+
+    @Test func imageToolsReadAsOneLine() {
+        let image = PiBotImageStatus(tag: "wovenmatter-bots:abc", base: "ubuntu:26.04", node: "26.13.1", playwright: "1.65.1", staleBots: 2)
+        #expect(image.tools == "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium")
+        let decoded = try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(
+            #"{"version":"0.1.0","environment":"mac-vm","bots":3,"image":{"tag":"t","node":"26.13.1","playwright":"1.65.1","staleBots":1}}"#.utf8))
+        #expect(decoded?.image?.staleBots == 1 && decoded?.image?.base == nil)
+        // A runtime from before image reporting still decodes.
+        #expect((try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"version":"0.1.0"}"#.utf8)))?.image == nil)
     }
 }

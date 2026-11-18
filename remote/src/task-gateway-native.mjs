@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
 import { createTaskNativeArchive, publishNativePresentation } from './task-native-archive.mjs'
 import { OpenCodeTaskStream } from './opencode-task-stream.mjs'
+import { fullAccessPermissions, supportedPermissions } from './config.mjs'
 
 const before = text => Object.assign(new Error(text), { beforePrompt: true })
 const approval = () => Object.assign(new Error('This task needs approval. Open its session to continue.'), { needsApproval: true })
@@ -24,13 +25,13 @@ export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest
 }
 
 async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,mcpConnection}) {
-  const permission=config.permission
-  if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
+  const requested=config.permission
+  if(requested && !supportedPermissions('opencode').includes(requested))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
   const presentation=new OpenCodeTaskStream(update=>publishNativePresentation(update,publish))
   try {
     await instances.action('opencode','start')
-    const registration=parseRegistration(await read(instances.registrationPath,'utf8')),origin=new URL(registration.url)
+    const registration=parseRegistration(await read(instances.registrationPath(),'utf8')),origin=new URL(registration.url)
     if(origin.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(origin.hostname)||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash||typeof registration.password!=='string'||!registration.password)throw before('OpenCode service registration is unavailable.')
     const headers={authorization:`Basic ${Buffer.from('opencode:'+registration.password).toString('base64')}`,'content-type':'application/json'}
     call=async(method,path,body,ignoreAbort=false)=>{const result=await fetchRequest(new URL(path,origin),{method,headers,body:body==null?undefined:JSON.stringify(body),redirect:'error',signal:ignoreAbort?AbortSignal.timeout(5000):AbortSignal.any([signal,AbortSignal.timeout(30000)])});if(!result.ok)throw new Error('OpenCode could not complete the task operation.');if(result.status===204)return {};return result.json()}
@@ -50,6 +51,11 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
       await call('PUT','/api/experimental/mcp/'+name+'?'+query,{config:{type:'remote',url:proxy.endpointURL,headers:{Authorization:'Bearer '+proxy.bearerToken},oauth:false,codemode:false}})
     }
     if(config.model||config.thinking){const model=config.model??[session.model?.providerID,session.model?.id].filter(Boolean).join('/'),split=model.indexOf('/');if(split<1)throw before('The saved OpenCode model is invalid.');const selection={providerID:model.slice(0,split),id:model.slice(split+1),...(config.thinking&&config.thinking!=='default'?{variant:config.thinking}:{})};await call('POST',path+'/model',{model:selection});session=(await call('GET',path)).data;if(session.model?.id!==selection.id||session.model?.providerID!==selection.providerID||(session.model?.variant??'default')!==(selection.variant??'default'))throw before('OpenCode did not confirm the saved model and thinking level.')}
+    // Ask and Deny are no longer offered; an older session's wildcard policy
+    // moves to Full access before it runs again.
+    const current = session.permissions?.at(-1)
+    const migrating = current?.action === '*' && current?.resource === '*' && ['ask','deny'].includes(current.effect)
+    const permission = requested ?? (migrating ? fullAccessPermissions.opencode : undefined)
     if (permission) {
       const rules = [...(session.permissions ?? [])]
       const last = rules.at(-1)

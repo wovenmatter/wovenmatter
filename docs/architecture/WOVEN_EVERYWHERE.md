@@ -19,8 +19,9 @@ change, change this document in the same commit.
   before it can host bots.
 - **Full access by default** for every harness everywhere, including sessions
   agents start. Agent-started sessions use the destination workspace's own
-  saved defaults and are never capped by the caller. The UI shows each
-  harness's own mode names, with every full mode shown as "Full access".
+  saved defaults and are never capped by the caller. The only other choice is
+  the harness's auto mode, under its own name; there is no ask-for-approval
+  mode. Every full mode is shown as "Full access".
 - **Nothing waits on a prompt.** Macs grant Keychain and macOS privacy
   permissions once from Settings. Each Mac's permission status reaches every
   device. Password prompts in sessions fail at once with a clear message.
@@ -503,7 +504,7 @@ among Macs that still stand; they never decide who wins a dispute.
   - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts and scheduled MCP callers. Saved files are `saved_artifacts`, with uploads in progress in `artifact_uploads` and `artifact_chunks` (each chunk's bytes are a file in `library-chunks/` that the row names by SHA-256); `message_provenance` is the session that sent an agent's message.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The conversion is step 1 of the library's ordered schema steps (`librarySchemaSteps`): it runs only for a library whose `PRAGMA user_version` is 0 and records version 1 in the same transaction; a new library is stamped with the current version (`librarySchemaVersion`) once it has been created. Each later schema change is one more numbered step, run once and recorded the same way, so a library upgraded from any earlier release ends with exactly the schema of a new one. A step that rewrites data copies the library first (`Library Backups/before-library-version-N.sqlite` beside it; a clone on a Mac, removed after 30 days). A library whose version is higher than the build's is refused, untouched, by the writer, the read-only projection and the usage index: an older build never runs its statements over a newer schema. New and converted libraries use incremental auto-vacuum. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
+  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The conversion is step 1 of the library's ordered schema steps (`librarySchemaSteps`): it runs only for a library whose `PRAGMA user_version` is 0 and records version 1 in the same transaction; a new library is stamped with the current version (`librarySchemaVersion`) once it has been created. Each later schema change is one more numbered step, run once and recorded the same way (step 2 adds Settings → GitHub's two shared tables, `GITHUB_IDENTITY.md`; step 3 drops the usage rows' account label, which was never collected reliably), so a library upgraded from any earlier release ends with exactly the schema of a new one. A step that rewrites data copies the library first (`Library Backups/before-library-version-N.sqlite` beside it; a clone on a Mac, removed after 30 days). While an upgrade runs, the opening process publishes its stage and fraction (`LibraryUpgradeMonitor`); the background service puts them in its readiness reply, so a window shows the upgrade and keeps waiting instead of timing out. A library whose version is higher than the build's is refused, untouched, by the writer, the read-only projection and the usage index: an older build never runs its statements over a newer schema. New and converted libraries use incremental auto-vacuum. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
 
 ### Library host (`wovenmatter-library`)
 
@@ -1490,13 +1491,44 @@ no stdio relay.
   member, which then proxies to the loopback socket.
 - Each bot's agent loop runs in the runtime on the host, and its tools run
   inside its container through the in-container helper (`bots/helper/`: Pi
-  Bot's env agent plus a supervisor, browser and preview forwarder). The
-  helper is mounted read-only at `/opt/woven-bot` from a content-versioned
-  volume (`woven-bots-helper-<hash>`) that the runtime fills from its own
-  install through the Engine API, so a Mac VM needs no file sharing and
-  runtime updates need no image change. A bot picks up a new helper on
-  Update or Rebuild. Provider keys and
-  sign-ins never enter a container. The runtime gets provider credentials the
+  Bot's env agent plus a supervisor, browser and preview forwarder).
+- A bot container has three parts:
+  - **Base image** (`bots/image`): Ubuntu, its packages and Chromium's system
+    libraries. It changes rarely.
+  - **Shared volume** (`woven-bots-shared`, read-only at `/opt/woven`): the
+    runtime fills it through the Engine API with content-named directories,
+    `helper/<hash>` from its own install and `toolchain/<hash>` (Node, the
+    private npm, Playwright, Chromium) from the toolchain image
+    (`bots/image/toolchain`). A Mac VM needs no file sharing.
+  - **Storage** (`/workspace`): the bot's files, home folder
+    (`/home/bot` links to `/workspace/.woven/home`), browser profile and
+    restart list.
+- Each container selects its helper and toolchain through links in its own
+  filesystem (`/opt/woven-bot`, `/opt/woven-toolchain`). An Update repoints
+  them while the bot is stopped, upgrades Ubuntu packages, and checks that
+  Chromium starts. The container stays, with everything the bot installed.
+- A new base image, a container from before this layout, or a Rebuild moves the
+  bot to a new container:
+  - The runtime records what the bot changed from its snapshot, compared with
+    the old base image: apt packages, apt sources and keys, files and
+    directories under `/etc`, `/usr/local` and `/opt` that no package owns as
+    installed, crontabs, and global npm and pip packages by name. A container
+    from before the base image was recorded on it (`woven.bots.image`), which
+    is every bot's first move, is compared with the new base image instead;
+    the old in-image toolchain and generated files are left out by name, and
+    package files only count when they differ from what dpkg installed.
+  - A move that stops partway leaves its captured changes pending in storage;
+    the bot's next start or update applies them.
+  - It applies them in the new container, runs the bot's optional
+    `/workspace/.woven/setup.sh`, and writes
+    `/workspace/.woven/system/update-report.md`.
+  - Every update is behind a snapshot (a commit and a storage copy) that is
+    only a rollback point, never the next container's base.
+- Shared directories that neither the runtime nor any container links to are
+  pruned after updates. Provider keys and
+  sign-ins never enter a container. Settings → GitHub's key does not either:
+  git in the container signs through a relay to the machine's signing agent
+  (`docs/architecture/GITHUB_IDENTITY.md`). The runtime gets provider credentials the
   same way the machine's default agent does
   (`docs/architecture/DEFAULT_AGENT_CREDENTIALS.md`), and bots use the
   provider connections in Woven settings. Pi Bot's own credential store and
@@ -1568,6 +1600,8 @@ reply body. Replies are at most 1 MiB.
 | `POST /v1/bots-host/previews` | `{botID, port, containerPort}` | `{url}`. `port` is the runtime's loopback activity proxy; the host publishes `http://127.0.0.1:<port>` with Tailscale Serve (its own HTTPS port, inbound only, never Funnel). Idempotent for the same `(botID, port)`; sent again after a runtime restart. |
 | `DELETE /v1/bots-host/previews/{botID}/{port}` | none | 2xx. |
 | `POST /v1/bots-host/inference-credentials` | `{provider}` | `{credential}`, where `credential` is `null` (not connected), `{type: "api_key", key}`, `{type: "oauth", access, expires, accountId?}` (access only; `expires` epoch ms; the host renews, the runtime asks again a minute before expiry), or `{type: "native", configDir, secureStorageDir?}` (Claude subscription: the machine's native Claude runtime directories, which the default agent uses, passed to the Claude Agent SDK as `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`; no token material). `provider` is a Woven connection id: `openai-codex`, `openai`, `openrouter`, `opencode-go`, `xai`, `xai-api`, `claude-subscription`, `anthropic`, `exa`, `brave`, `firecrawl`, or `web-search`, which also returns `searchProvider` (`exa`, `brave` or `firecrawl`, the selected web search provider) with that provider's key. |
+| `POST /v1/bots-host/git` | `{botID}` | `{publicKey \| null, identity: {name, email} \| null}`: Settings → GitHub for that bot, the public key only while the machine and the bot are on (`docs/architecture/GITHUB_IDENTITY.md`). The runtime asks at most once a minute per bot and writes the files into the bot's container. |
+| `POST /v1/bots-host/ssh-agent` | `{botID, message}` | `{message}`: one SSH agent request from the bot's relay and the machine's signing agent's reply (base64, without the length prefix). The agent signs only while the machine and the bot are on; the key never enters the container. |
 | `POST /v1/bots-host/conversations/{botID}/entries` | `{bot: {id, name}, conversations: [{conversationId, kind: "main"\|"thread", parentConversationId?, forkedAt?, title?, pinned?, createdAt?}], entries: [{id, conversationId, role: "user"\|"assistant", text, error?, stopped?, createdAt}]}` | 2xx. The host writes them into its library copy, upserting entries by `(botID, id)` and conversations by `(botID, conversationId)`. Entry ids are unique per bot and never reused. `id`, `conversationId`, `parentConversationId` and `forkedAt` are non-negative integers (the runtime's own ids; the library host decodes them as integers), and the server refuses a batch with any other type. `conversations` always lists the bot's main channel and every thread; a batch may have no entries when only metadata (a title, a pin, a rename) changed. Batches hold at most 200 entries, in id order; the runtime resends after a failure. |
 
 The runtime caches credentials in memory only (keys 60 s, "not connected"
@@ -1624,7 +1658,9 @@ Dropped: `credentials.set`, `credentials.remove`, `login.start`,
 `config.save`, `config.update`, `github.get`, `github.setSshKey`,
 `github.generateSshKey`, `github.removeSshKey`, `github.setIdentity`,
 `server.restart`, and the `login` push. Sign-ins and keys are Woven
-connections; bots set up their own git and SSH inside their containers.
+connections. Pi Bot's GitHub key and identity are Settings → GitHub, which
+covers every machine and session, not only bots
+(`docs/architecture/GITHUB_IDENTITY.md`).
 
 Added requests:
 
@@ -2102,9 +2138,26 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 
 ### Updates
 
-- The UI offers "Update everything" across all devices. Each part can also be
-  updated on its own: this Mac's app, a Linux host, or bots from the Bots
-  page.
+- Settings → Updates leads with "Update this Mac" (this Mac's app only), then
+  rows that update everything, just the Woven Matter apps, or just the
+  harnesses across all devices, then one expandable row per device whose
+  Update updates everything on it. Each part can also be
+  updated on its own there: this Mac's app, another device, its bots, or one
+  harness. Bots have no version of their own; they follow the machine's
+  Woven Matter version. A development build never updates itself.
+- Harnesses on other machines are read and updated with the member signature.
+  Every Mac serves `GET /v1/runtime-maintenance`, `POST
+  /v1/runtime-maintenance/check`, `POST /v1/runtime-maintenance/:id/check|update`
+  `GET|POST /v1/default-agent/sdks` and `GET /v1/operations/:id` to signed Mac
+  members, in the shapes a Linux host serves. An update answers at once (202)
+  with a running operation, which the caller polls at `/v1/operations/:id`
+  until it finishes, so nothing waits past the Mac server's 60-second response
+  limit; a check answers with what it has after 15 seconds. `force: true` stops
+  the chats using its harnesses first, and without it a busy harness's
+  operation fails with `runtime_active_stop_conversations_or_server_first`.
+  The window asks through bots commands (`memberInventory`,
+  `memberInstallerPreview`, `updateMemberHarness`, `updateMemberSDKs`); updates
+  run as `updateHarness` jobs in the process that owns execution.
 - Clicking Update stops running work immediately. Woven snapshots each bot
   (container filesystem and storage), updates it in place, runs a health
   check, and rolls back to the snapshot on failure. Only the snapshot from the

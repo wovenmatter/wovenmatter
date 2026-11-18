@@ -48,7 +48,7 @@ async function writePrivateJSON(path, value) {
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
-  authorizeClient, registry = null, installerBearer = null, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
+  authorizeClient, registry = null, installerBearer = null, machine, memberIdentity, release, github = null, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
@@ -156,6 +156,17 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     if (path === '/v1/bots-host/inference-credentials' && method === 'POST') {
       const body = await readJSON(request, 16384)
       json(response, 200, await defaultAgent.botCredentials({ provider: body.provider })); return true
+    }
+    // Settings → GitHub (github-identity.mjs): a bot's files hold only the public key, and its
+    // git signs through this host's agent, which checks the bot is on at every request.
+    if ((path === '/v1/bots-host/git' || path === '/v1/bots-host/ssh-agent') && method === 'POST') {
+      const body = await readJSON(request, 1024 * 1024)
+      const botID = typeof body?.botID === 'string' && /^[0-9a-fA-F-]{36}$/.test(body.botID) ? body.botID : null
+      if (!botID) { json(response, 400, { error: 'invalid_bot' }); return true }
+      if (path === '/v1/bots-host/git') { json(response, 200, github?.botSetup(botID) ?? { publicKey: null, identity: null }); return true }
+      const message = typeof body.message === 'string' ? Buffer.from(body.message, 'base64') : Buffer.alloc(0)
+      if (!message.length || message.length > 256 * 1024) { json(response, 400, { error: 'invalid_agent_request' }); return true }
+      json(response, 200, { message: (github ? github.botAgent(botID, message) : Buffer.from([5])).toString('base64') }); return true
     }
     const entries = path.match(/^\/v1\/bots-host\/conversations\/([0-9a-fA-F-]{36})\/entries$/)
     if (entries && method === 'POST') {

@@ -30,7 +30,10 @@ final class BotsModel {
     /// Machines that can show bots, this Mac first.
     var botMachines: [BotMachine] { machines.filter { $0.socket != nil } }
     var orderedSessions: [BotMachineSession] { botMachines.compactMap { sessions[$0.id] } }
-    var versionReport: BotVersionReport { .init(thisMacVersion: thisMacVersion, machines: machines, syncErrors: syncErrors) }
+    /// A development build's version is a placeholder, so it compares no devices with its own.
+    var versionReport: BotVersionReport {
+        .init(thisMacVersion: DevelopmentLaunch.mode == nil ? thisMacVersion : nil, machines: machines, syncErrors: syncErrors)
+    }
 
     func session(for machineID: String) -> BotMachineSession? { sessions[machineID] }
 
@@ -40,6 +43,13 @@ final class BotsModel {
 
     func name(for target: BotTarget) -> String? {
         sessions[target.machineID]?.bots.first { $0.id == target.botID }?.name
+    }
+
+    /// A read that changes nothing here, such as another machine's harnesses: its reply
+    /// carries no machines, so it is not applied.
+    func query(_ command: BotsCommand) async throws -> BotsCommandResult {
+        guard let perform else { throw BotsError.unavailable("Bots are still starting.") }
+        return try await perform(command)
     }
 
     @discardableResult
@@ -140,6 +150,8 @@ final class BotMachineSession: Identifiable {
     private(set) var onboarding: PiBotOnboardingStatus?
     private(set) var runtimeStatus: PiBotRuntimeStatus?
     private(set) var progress: PiBotRuntimeProgress?
+    /// Bots the last update rolled back, and why; cleared when the next one starts.
+    private(set) var updateFailures: [String] = []
     /// A `runtime.update` run is in progress.
     private(set) var updating = false
     /// The last container state each bot's runtime announced.
@@ -286,6 +298,10 @@ final class BotMachineSession: Identifiable {
         case .runtimeProgress(let progress):
             // The run's last word stays on screen; a later run replaces it.
             self.progress = progress
+            if progress.phase == "rolledBack" || (progress.isFinished && progress.error != nil) {
+                let name = progress.botId.flatMap { id in bots.first { $0.id == id }?.name } ?? progress.botId
+                updateFailures.append([name, progress.error ?? "It was rolled back."].compactMap { $0 }.joined(separator: ": "))
+            }
             if progress.isFinished { updating = false; Task { await refreshRuntimeStatus(); await reload() } }
         case .environmentChanged(let botID, let state):
             environmentRevision += 1
@@ -395,6 +411,7 @@ final class BotMachineSession: Identifiable {
     func updateBots() async {
         guard !updating else { return }
         updating = true
+        updateFailures = []
         progress = .init(phase: "stopping")
         await attempt { try await $0.updateBots() }
         if connectedClient == nil { updating = false }

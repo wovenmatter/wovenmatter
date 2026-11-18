@@ -32,6 +32,8 @@ extension ApplicationModel {
     /// Called once agent tools exist, since bot keys and deliveries live there.
     func configureBotsRuntime() {
         guard LocalExecutionRole.current.ownsExecution else { return }
+        github.localDeviceID = { [weak self] in try? await self?.libraryStore?.database.libraryIdentity().hostDeviceID }
+        github.startAgent()
         if let botsHost { attachBotDeliveries(botsHost); return }
         guard let support = try? Self.librarySupportDirectory() else { return }
         let directory = support.appending(path: "Bots")
@@ -90,6 +92,10 @@ extension ApplicationModel {
                 try await self?.libraryStore?.database.deleteBotConversations(machineID: machineID, botID: botID)
             },
             inferenceCredential: { provider in try await BotsHostAPI.storedCredential(provider: provider) },
+            // Settings → GitHub: the public key and identity for the bot's files; its git signs
+            // through this Mac's agent, which checks the bot is on at every request.
+            gitConfiguration: { [weak self] botID in self?.github.agentState.botSetup(botID) ?? GitHubBotSetup() },
+            sshAgent: { [weak self] botID, message in self?.github.agentState.botReply(message, botID: botID) ?? Data([5]) },
             remoteMachines: { [weak self] version in await self?.remoteBotMachines(thisMacVersion: version, directory: directory) ?? [] },
             setRemoteResources: { [weak self] machineID, resources in
                 guard let self else { throw CancellationError() }
@@ -120,6 +126,23 @@ extension ApplicationModel {
             signSocket: { [weak self] url, audience in
                 guard let self else { throw CancellationError() }
                 return try await self.signMemberSocket(url: url, audience: audience)
+            },
+            memberInventory: { [weak self] machineID, checkLatest in
+                guard let self else { throw CancellationError() }
+                return try await self.memberInventory(machineID: machineID, checkLatest: checkLatest)
+            },
+            memberInstallerPreview: { [weak self] machineID, kind in
+                guard let self else { throw CancellationError() }
+                return try await self.memberInstallerPreview(machineID: machineID, kind: kind)
+            },
+            updateMemberHarness: { [weak self] machineID, kind, sourceSHA256, packageSpec, force, progress in
+                guard let self else { throw CancellationError() }
+                try await self.updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: sourceSHA256,
+                                                   packageSpec: packageSpec, force: force, progress: progress)
+            },
+            updateMemberSDKs: { [weak self] machineID in
+                guard let self else { throw CancellationError() }
+                try await self.updateMemberSDKs(machineID: machineID)
             })
     }
 
@@ -130,16 +153,17 @@ extension ApplicationModel {
     /// whichever Mac added it. A Linux host this Mac added that is not in the registry
     /// (a bots-only server) is still reached through its SSH tunnel.
     func remoteBotMachines(thisMacVersion: String?, directory: BotsRemoteDirectory) async -> [BotMachine] {
-        let members = await memberBotWorkspaces()
-        // A machine whose library schema differs cannot sync with this Mac: it needs Update everything.
+        let targets = await memberBotTargets()
+        let members = targets.map(\.workspace)
+        // A machine whose library schema differs cannot sync with this Mac: it needs updating in Settings → Updates.
         let schema = try? await libraryStore?.database.pairedLibrarySchema()
         let signedIDs = Set(members.map(\.id))
         let tunnelled = remoteWorkspaces.workspaces.filter { !signedIDs.contains($0.id.uuidString.lowercased()) }
         let linux = tunnelled.map { configuration in
             Task { await self.linuxBotMachine(configuration, thisMacVersion: thisMacVersion, schema: schema, directory: directory) }
         }
-        let signed = members.map { workspace in
-            Task { await self.memberBotMachine(workspace, thisMacVersion: thisMacVersion, schema: schema, directory: directory) }
+        let signed = targets.map { target in
+            Task { await self.memberBotMachine(target.workspace, audience: target.audience, thisMacVersion: thisMacVersion, schema: schema, directory: directory) }
         }
         var machines: [BotMachine] = []
         for task in linux + signed { machines.append(await task.value) }
@@ -153,17 +177,23 @@ extension ApplicationModel {
             let client = try await remoteWorkspaces.botsService(for: configuration)
             let status = try await botsTimeout { try await client.botsStatus() }
             directory.linux[status.machine.deviceID.lowercased()] = configuration.id
-            return status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion,
-                                  expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint(),
-                                  thisMacLibrarySchema: schema)
+            var machine = status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion,
+                                         expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint(),
+                                         thisMacLibrarySchema: schema)
+            machine.workspaceID = configuration.id.uuidString.lowercased()
+            return machine
         } catch {
-            return BotMachine(id: "linux:" + configuration.id.uuidString.lowercased(), name: configuration.name, kind: .linux,
-                              state: .unreachable, message: Self.botsUnavailableText(error))
+            // Its device ID once known, which Settings → GitHub lists it by, even while it is offline.
+            let known = directory.linux.first { $0.value == configuration.id }?.key
+            var machine = BotMachine(id: known ?? "linux:" + configuration.id.uuidString.lowercased(), name: configuration.name, kind: .linux,
+                                     state: .unreachable, message: Self.botsUnavailableText(error))
+            machine.workspaceID = configuration.id.uuidString.lowercased()
+            return machine
         }
     }
 
     /// Another Mac or a Linux host from the registry, with signed requests and a signed socket.
-    private func memberBotMachine(_ workspace: ExecutionWorkspace, thisMacVersion: String?, schema: String?,
+    private func memberBotMachine(_ workspace: ExecutionWorkspace, audience: String, thisMacVersion: String?, schema: String?,
                                   directory: BotsRemoteDirectory) async -> BotMachine {
         let kind: BotMachine.Kind = workspace.kind == .linux ? .linux : .mac
         do {
@@ -173,12 +203,17 @@ extension ApplicationModel {
             guard status.machine.deviceID.lowercased() == client.audience else { throw BotsError.unavailable("It answered as another device.") }
             directory.members[client.audience] = workspace.id
             let socket = BotSocketEndpoint.signed(client.endpoint.appending(path: "v1/bots/ws"), audience: client.audience)
-            return status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
-                                  expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil,
-                                  thisMacLibrarySchema: schema)
+            var machine = status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
+                                         expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil,
+                                         thisMacLibrarySchema: schema)
+            machine.workspaceID = workspace.id.lowercased()
+            return machine
         } catch {
-            return BotMachine(id: "member:" + workspace.id, name: workspace.name, kind: kind,
-                              state: .unreachable, message: Self.botsUnavailableText(error))
+            // Its member device ID, which Settings → GitHub lists it by, even while it is offline.
+            var machine = BotMachine(id: audience, name: workspace.name, kind: kind,
+                                     state: .unreachable, message: Self.botsUnavailableText(error))
+            machine.workspaceID = workspace.id.lowercased()
+            return machine
         }
     }
 

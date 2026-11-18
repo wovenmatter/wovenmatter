@@ -158,6 +158,11 @@ final class PairedMacSyncController {
             })
             let sync = LibraryPeerSync(directory: directory, transport: peerTransport, configuration: .init(version: version), attachments: attachments)
             librarySync = sync
+            // Settings → GitHub travels with the library, sealed to each Mac.
+            if let model = host.model, let database = model.libraryStore?.database {
+                model.github.attach(GitHubIdentitySync(database: database, directory: directory))
+                await model.github.reconcile()
+            }
             await sync.start { [weak self] in await self?.peersChanged() }
             // After sleep every peer may have changed; catch up at once
             // instead of waiting out the offline backoff.
@@ -189,6 +194,7 @@ final class PairedMacSyncController {
     private func peersChanged() async {
         guard let host, let directory = memberDirectory else { return }
         await directory.invalidate()
+        await host.model?.github.reconcile()
         if let list = try? await directory.list() {
             let own = directory.identity.deviceID
             for member in list.members where member.revoked && member.deviceID != own && !appliedMemberRemovals.contains(member.deviceID) {
