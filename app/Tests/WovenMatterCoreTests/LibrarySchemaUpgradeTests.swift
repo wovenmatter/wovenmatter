@@ -456,7 +456,13 @@ import WovenMatterCore
     defer { upgraded.remove(); fresh.remove() }
     let note = "a5286605-4106-4343-9a90-8b93e8b268f2", probe = "e5e5e5e5-1111-4222-8333-444455556666"
     let schedule = "f5f5f5f5-1111-4222-8333-444455556666"
+    // Reshaping tables under the v0.4.2 triggers that name them, as older
+    // releases left them, needs references left as written: Apple's SQLite
+    // defaults to that, while stock SQLite (a Linux host's) checks every
+    // trigger against a table dropped and renamed back. The conversion
+    // itself sets the mode it needs on every SQLite.
     try PersistenceSQL(url: upgraded.databaseURL).execute("""
+      PRAGMA legacy_alter_table=ON;
       CREATE TABLE desktop_openclaw_cron_jobs(id TEXT PRIMARY KEY, state TEXT);
       CREATE INDEX desktop_openclaw_cron_jobs_state ON desktop_openclaw_cron_jobs(state);
       CREATE TABLE desktop_openclaw_cron_runs(id TEXT PRIMARY KEY);

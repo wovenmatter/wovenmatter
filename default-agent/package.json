@@ -32,9 +32,9 @@
       "brace-expansion": ">=5.0.13"
     },
     "@earendil-works/pi-ai": {
-      "openai": ">=7.59.0",
+      "openai": ">=7.60.0",
       "@anthropic-ai/sdk": ">=1.10.0",
-      "@google/genai": ">=3.4.0",
+      "@google/genai": ">=3.6.0",
       "@aws-sdk/client-bedrock-runtime": ">=3.1171.0",
       "@smithy/node-http-handler": ">=4.14.2",
       "@aws-sdk/token-providers": ">=3.1171.0"

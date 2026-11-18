@@ -52,44 +52,5 @@ struct VendorChannelTests {
         let cli = try #require(inventory.components.first { $0.name == RuntimeMaintenance.cliComponentName("codex") })
         #expect(cli.installed == "0.169.0" && cli.latest == "0.169.0" && !cli.outdated)
     }
-
-    /// Claude's adapter pins its SDK library; npm publishing a newer SDK is not an update the
-    /// person can apply, so it is held to the catalog's minimum instead.
-    @Test func claudesPinnedSDKIsHeldToTheMinimumNotNpm() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let adapter = root.appending(path: "node_modules/@agentclientprotocol/claude-agent-acp")
-        let sdk = root.appending(path: "node_modules/@anthropic-ai/claude-agent-sdk")
-        let protocolSDK = root.appending(path: "node_modules/@agentclientprotocol/sdk")
-        for directory in [adapter, sdk, protocolSDK, root.appending(path: "bin")] {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        let definition = try #require(LocalACPRuntimeCatalog.definition(for: .claudeCode))
-        let minimum = try #require(definition.minimumEngineVersion)
-        for (directory, name, version) in [(adapter, "@agentclientprotocol/claude-agent-acp", "0.108.0"),
-            (sdk, "@anthropic-ai/claude-agent-sdk", minimum), (protocolSDK, "@agentclientprotocol/sdk", "2.7.0")] {
-            try JSONSerialization.data(withJSONObject: ["name": name, "version": version]).write(to: directory.appending(path: "package.json"))
-        }
-        let script = adapter.appending(path: "index.js")
-        try Data("fixture".utf8).write(to: script)
-        try FileManager.default.createSymbolicLink(at: root.appending(path: "bin/claude-agent-acp"), withDestinationURL: script)
-        try Data("fixture".utf8).write(to: root.appending(path: "bin/claude"))
-        for executable in [script, root.appending(path: "bin/claude")] {
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        }
-        let inventory = await RuntimeMaintenance.inspect(.claudeCode, checkLatest: true,
-            resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
-            fetch: { url in
-                if url == RuntimeMaintenance.claudeCodeNativeChannel { return Data("2.1.326\n".utf8) }
-                let newest = url.absoluteString.contains("claude-agent-acp") ? "0.108.0"
-                    : url.absoluteString.contains("%2fsdk") ? "2.7.0" : "0.9.999"
-                return try JSONSerialization.data(withJSONObject: ["versions": [newest: ["bin": ["x": "x.js"]]]])
-            }, probe: { url in url.lastPathComponent == "claude" ? "2.1.326 (Claude Code)" : "0.108.0" })
-        let row = try #require(inventory.components.first { $0.name == "Bundled @anthropic-ai/claude-agent-sdk" })
-        #expect(row.installed == minimum && row.latest == nil && row.verified && !row.outdated)
-        #expect(!inventory.updateAvailable)
-        #expect(!inventory.latestUnavailable)
-        #expect(inventory.isInstalled)
-    }
 }
 #endif

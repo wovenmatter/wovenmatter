@@ -39,8 +39,8 @@ compared with the release channel its vendor's installer and update command read
 
 | Harness | Native CLI (official installer) | Woven Matter connects through | Update |
 | --- | --- | --- | --- |
-| Codex | `~/.local/bin/codex` ([installer](https://chatgpt.com/codex/install.sh)) | `codex-acp`, with `CODEX_PATH` set to the native CLI. The CLI must be at least the catalog's engine minimum. | `codex update` |
-| Claude Code | `~/.local/bin/claude` ([installer](https://claude.ai/install.sh)) | `claude-agent-acp` and its Claude Agent SDK library, with `CLAUDE_CODE_EXECUTABLE` set to the native CLI | `claude update` |
+| Codex | `~/.local/bin/codex` ([installer](https://chatgpt.com/codex/install.sh)) | `codex-acp`, with `CODEX_PATH` set to the native CLI | `codex update` |
+| Claude Code | `~/.local/bin/claude` ([installer](https://claude.ai/install.sh)) | `claude-agent-acp`, with `CLAUDE_CODE_EXECUTABLE` set to the native CLI | `claude update` |
 | Grok Build | `~/.grok/bin/grok` ([installer](https://x.ai/cli/install.sh)) | Grok's own ACP (`grok … agent stdio`) | `grok update` |
 | OpenCode | v2 only, `~/.opencode/bin/opencode` ([installer](https://opencode.ai/v2/install)) | OpenCode's shared background service | `opencode upgrade`, then `opencode service restart` |
 
@@ -48,12 +48,13 @@ compared with the release channel its vendor's installer and update command read
 
 **Install** runs the vendor's official installer for a CLI that isn't on this Mac,
 downloaded from the fixed HTTPS address in `harnesses/catalog.json`, with no review
-step and never through npm. An existing CLI is kept unless it can't run the harness
-(for example a Codex below the catalog minimum). Codex and Claude Code then get
-their ACP adapter, which is Woven Matter's own: it installs with Woven Matter's npm
-into `Node Tools/Installations/<UUID>`, is verified, and replaces the launcher
-symlink in `Node Tools/bin` atomically. Old generations are retained so running
-adapters keep their dependency trees.
+step and never through npm. An existing CLI that runs is kept as it is. Codex and
+Claude Code then get their ACP adapter, which is Woven Matter's own: the latest
+release installs exactly as published with Woven Matter's npm into
+`Node Tools/Installations/<generation>`, is verified, and replaces the launcher
+symlink in `Node Tools/bin` atomically. The generation it replaced is then deleted,
+even if a running chat still uses it; a failed install leaves the working one in
+place.
 
 OpenCode 2's installer writes the same `opencode` command OpenCode 1 uses. When
 OpenCode 1 is installed and OpenCode 2 isn't, Woven Matter asks before installing
@@ -68,7 +69,7 @@ installed. Each command has a ten-minute limit. A CLI is never updated while its
 sign-in is running; other harnesses go ahead. Afterwards Woven Matter reads the
 versions again: the CLI must have moved to a newer version (a vendor's native channel
 can trail the newest registry publication, so it needn't reach it), and the adapter
-and its libraries must reach their targets. An update that changed nothing reports
+must reach its target. An update that changed nothing reports
 that it finished without updating. Nothing updates automatically.
 
 Subprocesses have a bounded duration and their own process group, so a timed-out
@@ -105,7 +106,7 @@ for anyone; Woven's harness PATH already includes those folders. When the CLI is
 present and only its ACP adapter is missing, only the adapter is installed. The
 adapters are Woven's own: they install with the host's npm into
 `~/.local/share/wovenmatter/acp-adapters` and are updated there when a newer one is
-published. A CLI in the user's home is reported with `source: "native"` and is
+published; as on a Mac, the replaced copy is deleted once the new one is verified. A CLI in the user's home is reported with `source: "native"` and is
 updated with its vendor's command; one outside it (a distribution package) is
 `system` and is left alone; Woven's adapters are `managed`.
 

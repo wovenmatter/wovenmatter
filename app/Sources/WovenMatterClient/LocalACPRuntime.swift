@@ -14,9 +14,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     /// Arguments to the CLI's own update command (`claude update`, `opencode upgrade`).
     public let updateArguments: [String]
     public let adapterPackage: String?
-    public let minimumAdapterVersion: String?
-    public let minimumEngineVersion: String?
-    public let minimumProtocolSDKVersion: String?
     public let adapterDescription: String
 
     public var id: AgentRuntimeKind { runtimeKind }
@@ -36,9 +33,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         cliInstallerArguments: [String] = [],
         updateArguments: [String] = [],
         adapterPackage: String?,
-        minimumAdapterVersion: String? = nil,
-        minimumEngineVersion: String? = nil,
-        minimumProtocolSDKVersion: String? = nil,
         adapterDescription: String
     ) {
         self.runtimeKind = runtimeKind
@@ -52,9 +46,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.cliInstallerArguments = cliInstallerArguments
         self.updateArguments = updateArguments
         self.adapterPackage = adapterPackage
-        self.minimumAdapterVersion = minimumAdapterVersion
-        self.minimumEngineVersion = minimumEngineVersion
-        self.minimumProtocolSDKVersion = minimumProtocolSDKVersion
         self.adapterDescription = adapterDescription
     }
 }
@@ -79,9 +70,6 @@ public enum LocalACPRuntimeCatalog {
                 cliInstallerArguments: harness.install.arguments,
                 updateArguments: harness.update?.arguments ?? [],
                 adapterPackage: harness.adapterPackage,
-                minimumAdapterVersion: harness.minimumAdapterVersion,
-                minimumEngineVersion: harness.minimumEngineVersion,
-                minimumProtocolSDKVersion: harness.minimumProtocolSDKVersion,
                 adapterDescription: "Woven Matter uses \(harness.transport) transport for \(harness.displayName)."
             )
         }
@@ -111,6 +99,7 @@ public struct LocalACPRuntimeAvailability: Codable, Equatable, Identifiable, Sen
         case ready
         case cliMissing = "cli_missing"
         case adapterMissing = "adapter_missing"
+        /// Reported only by background servers from before connector minimums were removed.
         case adapterOutdated = "adapter_outdated"
         case authenticationRequired = "authentication_required"
         case executableUnavailable = "executable_unavailable"
@@ -316,16 +305,6 @@ public struct LocalACPRuntimeResolver: Sendable {
                     underlyingCLIName: underlyingCLIName
                 )
             }
-            if adapterIsOutdated(
-                definition: definition,
-                executable: executable,
-                underlyingCLI: underlyingCLI
-            ) {
-                return outdatedAdapterResolution(
-                    definition: definition,
-                    executable: executable
-                )
-            }
             return LocalACPRuntimeResolution(
                 availability: LocalACPRuntimeAvailability(
                     runtimeKind: runtimeKind,
@@ -384,22 +363,6 @@ public struct LocalACPRuntimeResolver: Sendable {
         )
     }
 
-    private func outdatedAdapterResolution(
-        definition: LocalACPRuntimeDefinition,
-        executable: URL
-    ) -> LocalACPRuntimeResolution {
-        LocalACPRuntimeResolution(
-            availability: LocalACPRuntimeAvailability(
-                runtimeKind: definition.runtimeKind,
-                displayName: definition.displayName,
-                state: .adapterOutdated,
-                detail: "\(definition.commandName) is outdated. Install the current Woven Matter-managed adapter.",
-                executablePath: executable.path
-            ),
-            launchConfiguration: nil
-        )
-    }
-
     private func readyDetail(
         definition: LocalACPRuntimeDefinition,
         executable: URL
@@ -408,46 +371,6 @@ public struct LocalACPRuntimeResolver: Sendable {
             return "\(definition.displayName) is installed with native ACP."
         }
         return "\(definition.displayName) CLI and \(executable.lastPathComponent) are installed."
-    }
-
-    private func adapterIsOutdated(
-        definition: LocalACPRuntimeDefinition,
-        executable: URL,
-        underlyingCLI: URL?
-    ) -> Bool {
-        guard let minimum = definition.minimumAdapterVersion else {
-            return false
-        }
-        let environment = launchEnvironment(
-            definition: definition,
-            executable: executable,
-            underlyingCLI: underlyingCLI
-        )
-        guard let result = try? LocalACPProcessRunner.run(
-            executableURL: executable,
-            arguments: ["--version"],
-            environment: ProcessInfo.processInfo.environment.merging(environment) {
-                _, new in new
-            },
-            timeout: 15
-        ), result.succeeded,
-              let installed = Self.semanticVersion(in: result.stdout),
-              let required = Self.semanticVersion(in: minimum)
-        else {
-            return true
-        }
-        return installed.lexicographicallyPrecedes(required)
-    }
-
-    private static func semanticVersion(in text: String) -> [Int]? {
-        text.split { !$0.isNumber && $0 != "." }
-            .compactMap { token -> [Int]? in
-                let components = token.split(separator: ".")
-                guard components.count == 3 else { return nil }
-                let values = components.compactMap { Int($0) }
-                return values.count == 3 ? values : nil
-            }
-            .first
     }
 
     public static func resolveExecutable(named name: String) -> URL? {

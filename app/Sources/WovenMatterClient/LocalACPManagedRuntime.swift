@@ -693,9 +693,6 @@ public struct LocalACPRuntimeInstaller: Sendable {
     ) async throws -> URL {
         guard let package = definition.adapterPackage else { throw LocalACPRuntimeInstallError.notInstallable }
         let version = try await RuntimeMaintenance.registryVersion(package, fetch: metadataFetcher)
-        if let minimum = definition.minimumAdapterVersion, RuntimeMaintenance.version(version, precedes: minimum) {
-            throw RuntimeMaintenanceError.unavailable
-        }
         let packageSpec = "\(package)@\(version)"
         return try await installNpmPackage(
             packageSpec,
@@ -726,11 +723,6 @@ public struct LocalACPRuntimeInstaller: Sendable {
             if let cliName = definition.underlyingCLIName,
                let cli = executableResolver?(cliName) ?? LocalACPRuntimeResolver.resolveExecutable(named: cliName) {
                 selection["cli"] = cli.path
-            }
-            if let minimum = definition.minimumProtocolSDKVersion {
-                let sdk = try await RuntimeMaintenance.registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: metadataFetcher)
-                guard !RuntimeMaintenance.version(sdk, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
-                selection["protocolSDKVersion"] = sdk
             }
             let data = try JSONSerialization.data(withJSONObject: selection)
             var environment = ProcessInfo.processInfo.environment

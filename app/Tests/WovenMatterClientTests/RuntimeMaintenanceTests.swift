@@ -25,13 +25,10 @@ struct RuntimeMaintenanceTests {
     }
 
     /// Codex chats run the person's own `codex` through codex-acp, so the inventory lists the
-    /// adapter, its ACP library and the native CLI, never a Codex bundled in the adapter, and
-    /// the CLI has to be at least the engine version the adapter speaks to.
-    @Test(arguments: [false, true])
-    func codexInventoryUsesTheNativeCLI(cliTooOld: Bool) async throws {
-        let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
-        let adapterVersion = try #require(definition.minimumAdapterVersion)
-        let cliVersion = cliTooOld ? "0.154.0" : try #require(definition.minimumEngineVersion)
+    /// connector and the native CLI, never a Codex bundled in the connector or the connector's
+    /// own libraries. Any runnable CLI counts as installed; a newer one is only an update.
+    @Test func codexInventoryUsesTheNativeCLI() async throws {
+        let adapterVersion = "2.7.0", cliVersion = "0.100.0"
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let adapter = root.appending(path: "lib/node_modules/@agentclientprotocol/codex-acp")
@@ -56,17 +53,15 @@ struct RuntimeMaintenanceTests {
                     ? Data(#"{"tag_name":"rust-v99.0.0"}"#.utf8)
                     : Data(#"{"version":"99.0.0","bin":{"cli":"bin.js"}}"#.utf8)
             })
-        #expect(inventory.components.map(\.name) == ["codex-acp", "Bundled ACP SDK", "codex CLI"])
-        #expect(inventory.isInstalled == !cliTooOld)
-        #expect(inventory.components[0].installed == adapterVersion)
+        #expect(inventory.components.map(\.name) == ["codex-acp", "codex CLI"])
+        #expect(inventory.isInstalled)
+        #expect(inventory.components[0].installed == adapterVersion && inventory.components[0].latest == "99.0.0")
         let native = try #require(inventory.components.first { $0.name == RuntimeMaintenance.cliComponentName("codex") })
-        #expect(native.installed == cliVersion && native.latest == "99.0.0" && native.outdated)
+        #expect(native.installed == cliVersion && native.latest == "99.0.0" && native.outdated && native.verified)
         #expect(native.executable?.lastPathComponent == "codex")
-        #expect(inventory.components.first { $0.package == "@agentclientprotocol/sdk" }?.outdated == true)
-        // Offline, a CLI too old for the adapter still reads as needing its update.
+        // Offline, nothing reads as behind: there is no version to compare with.
         let offline = await RuntimeMaintenance.inspect(.codex, checkLatest: false, resolver: resolver)
-        let offlineCLI = try #require(offline.components.last)
-        #expect(offlineCLI.outdated == cliTooOld)
+        #expect(offline.isInstalled && !offline.updateAvailable)
         let diagnostic = RuntimeMaintenance.diagnostic(inventory: offline, kind: .codex, attempts: 2, failure: "Verification failed")
         #expect(diagnostic.contains(cliVersion))
         #expect(!diagnostic.contains(root.path))
@@ -93,38 +88,54 @@ struct RuntimeMaintenanceTests {
         #expect(cli.installed == "2.1.326" && cli.latest == "2.1.326" && !cli.outdated)
     }
 
-    @Test func sdkOnlyUpdateIsVisibleWhenConnectorAndEngineAreCurrent() async throws {
+    /// A newer ACP SDK or Claude Agent SDK on npm is the connector's business: with the
+    /// connector and the CLI current, nothing is offered.
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
+    func connectorLibrariesAreNotTrackedSeparately(kind: AgentRuntimeKind) async throws {
+        let definition = try #require(LocalACPRuntimeCatalog.definition(for: kind))
+        let cliName = try #require(definition.underlyingCLIName)
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let adapter = root.appending(path: "node_modules/@agentclientprotocol/codex-acp")
-        let engine = root.appending(path: "node_modules/@openai/codex")
-        let sdk = root.appending(path: "node_modules/@agentclientprotocol/sdk")
-        for directory in [adapter, engine.appending(path: "bin"), sdk, root.appending(path: "bin")] {
+        let adapter = root.appending(path: "node_modules/" + (definition.adapterPackage ?? ""))
+        try FileManager.default.createDirectory(at: root.appending(path: "bin"), withIntermediateDirectories: true)
+        for (name, version) in [("@agentclientprotocol/sdk", "2.6.0"), ("@anthropic-ai/claude-agent-sdk", "0.3.1")] {
+            let directory = adapter.appending(path: "node_modules/" + name)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        for (directory, name, version) in [(adapter, "@agentclientprotocol/codex-acp", "2.7.0"),
-            (engine, "@openai/codex", "0.169.1"), (sdk, "@agentclientprotocol/sdk", "2.6.0")] {
             try JSONSerialization.data(withJSONObject: ["name": name, "version": version]).write(to: directory.appending(path: "package.json"))
         }
+        try JSONSerialization.data(withJSONObject: ["name": definition.adapterPackage ?? "", "version": "1.0.0"])
+            .write(to: adapter.appending(path: "package.json"))
         let script = adapter.appending(path: "index.js")
         try Data("fixture".utf8).write(to: script)
-        try FileManager.default.createSymbolicLink(at: root.appending(path: "bin/codex-acp"), withDestinationURL: script)
-        try Data("fixture".utf8).write(to: root.appending(path: "bin/codex"))
-        for executable in [script, root.appending(path: "bin/codex")] {
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "bin/" + definition.commandName), withDestinationURL: script)
+        try Data("fixture".utf8).write(to: root.appending(path: "bin/" + cliName))
+        for executable in [script, root.appending(path: "bin/" + cliName)] {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         }
-        let binary = engine.appending(path: "bin/codex.js")
-        try Data("fixture".utf8).write(to: binary)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
-        let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true,
+        let inventory = await RuntimeMaintenance.inspect(kind, checkLatest: true,
             resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
             fetch: { url in
-                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.7.0" : url.absoluteString.contains("codex-acp") ? "2.7.0" : "0.169.1"
+                if url == RuntimeMaintenance.codexNativeChannel { return Data(#"{"tag_name":"rust-v2.0.0"}"#.utf8) }
+                if url == RuntimeMaintenance.claudeCodeNativeChannel { return Data("2.0.0\n".utf8) }
+                let version = url.absoluteString.contains("acp") ? "1.0.0" : "9.0.0"
                 return try JSONSerialization.data(withJSONObject: ["versions": [version: ["bin": ["cli": "index.js"]]]])
-            }, probe: { url in url.path.contains("codex-acp") ? "2.7.0" : "0.169.1" })
+            }, probe: { url in url.lastPathComponent == definition.commandName ? "1.0.0" : "2.0.0" })
+        #expect(inventory.components.map(\.name) == [definition.commandName, RuntimeMaintenance.cliComponentName(cliName)])
         #expect(inventory.isInstalled)
-        #expect(inventory.components.filter(\.outdated).map(\.name) == ["Bundled ACP SDK"])
-        #expect(inventory.updateAvailable)
+        #expect(!inventory.updateAvailable)
+    }
+
+    /// The catalog names no connector, CLI or SDK minimums, and nothing needs them.
+    @Test func theCatalogCarriesNoVersionGates() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../../harnesses/catalog.json").standardizedFileURL
+        let document = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let harnesses = try #require(document["harnesses"] as? [[String: Any]])
+        for harness in harnesses {
+            #expect(harness.keys.filter { $0.lowercased().contains("minimum") }.isEmpty, "\(harness["id"] ?? "")")
+        }
+        let catalog = try HarnessCatalog.load(from: url)
+        #expect(catalog.harnesses.filter { $0.adapterPackage != nil }.map(\.id) == [.codex, .claudeCode])
     }
 
     @Test func releaseSelectionDoesNotHideNewerStableCLIOrSDKBehindAnOldTag() async throws {
@@ -134,12 +145,6 @@ struct RuntimeMaintenanceTests {
         let sdk = try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-agent-sdk", executableRequired: false,
             fetch: { _ in Data(#"{"versions":{"0.3.312":{},"0.3.314":{}}}"#.utf8) })
         #expect(sdk == "0.3.314")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion == "2.7.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.169.1")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumAdapterVersion == "0.108.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.326")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.7.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.7.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])
     }
 

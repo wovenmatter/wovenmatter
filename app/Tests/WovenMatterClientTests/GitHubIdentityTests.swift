@@ -55,20 +55,43 @@ struct GitHubIdentityTests {
         #expect(pasted.publicKey == key.publicKey && pasted.fingerprint == key.fingerprint && pasted.comment == key.comment)
     }
 
+    /// RSA keys sign only where Apple's Security framework exists; Linux signs Ed25519 and ECDSA.
+    static let pemKinds: [[String]] = {
+        #if canImport(Security)
+        [["rsa", "2048", "RSA"], ["ecdsa", "256", "EC"]]
+        #else
+        [["ecdsa", "256", "EC"]]
+        #endif
+    }()
+
     /// Every machine's agent reads OpenSSH's format, so a PEM key is saved in it, unchanged.
-    @Test func pastedPEMKeysAreSavedInOpenSSHFormat() throws {
+    @Test(arguments: pemKinds)
+    func pastedPEMKeysAreSavedInOpenSSHFormat(_ kind: [String]) throws {
         let directory = try Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appending(path: "rsa")
-        try Self.run("/usr/bin/ssh-keygen", ["-q", "-t", "rsa", "-b", "2048", "-m", "PEM", "-N", "", "-C", "pem", "-f", file.path])
+        let file = directory.appending(path: "pem")
+        try Self.run("/usr/bin/ssh-keygen", ["-q", "-t", kind[0], "-b", kind[1], "-m", "PEM", "-N", "", "-C", "pem", "-f", file.path])
         let pem = try String(contentsOf: file, encoding: .utf8)
         // Split so the public-tree secret scan matches only real keys.
-        #expect(pem.hasPrefix("-----BEGIN RSA " + "PRIVATE KEY-----"))
+        #expect(pem.hasPrefix("-----BEGIN \(kind[2]) " + "PRIVATE KEY-----"))
         let key = try GitHubSSHKeys.inspect(privateKey: pem)
         #expect(key.privateKey.hasPrefix(GitHubSSHKeys.openSSHHeader))
-        let expected = try String(contentsOf: directory.appending(path: "rsa.pub"), encoding: .utf8).split(separator: " ").prefix(2).joined(separator: " ")
+        let expected = try String(contentsOf: directory.appending(path: "pem.pub"), encoding: .utf8).split(separator: " ").prefix(2).joined(separator: " ")
         #expect(key.publicKey == expected)
     }
+
+    #if !canImport(Security)
+    /// Without Apple's Security framework an RSA key is refused when it is read, never at signing time.
+    @Test func rsaKeysAreRefusedWhereTheyCannotSign() throws {
+        let directory = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "key")
+        try Self.run("/usr/bin/ssh-keygen", ["-q", "-t", "rsa", "-b", "2048", "-N", "", "-C", "woven-matter", "-f", file.path])
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(throws: GitHubIdentityError.message("RSA keys are signed on a Mac.")) { try SSHSigningAgent.parse(privateKey: text) }
+        #expect(throws: GitHubIdentityError.self) { try GitHubSSHKeys.inspect(privateKey: text) }
+    }
+    #endif
 
     @Test func pastedKeysThatCannotBeUsedAreRefusedWithAReason() throws {
         let directory = try Self.scratch()
@@ -96,7 +119,16 @@ struct GitHubIdentityTests {
 
     /// The agent signs with every kind of key it accepts, through its socket, as ssh asks it,
     /// and refuses the moment the place is turned off. The key file itself is never on disk.
-    @Test(arguments: [["ed25519"], ["ecdsa", "256"], ["ecdsa", "384"], ["ecdsa", "521"], ["rsa", "2048"]])
+    static let signingKinds: [[String]] = {
+        let portable: [[String]] = [["ed25519"], ["ecdsa", "256"], ["ecdsa", "384"], ["ecdsa", "521"]]
+        #if canImport(Security)
+        return portable + [["rsa", "2048"]]
+        #else
+        return portable
+        #endif
+    }()
+
+    @Test(arguments: signingKinds)
     func sshSignsThroughTheAgentWithAKeyItNeverSees(_ kind: [String]) throws {
         let directory = try Self.scratch()
         defer { try? FileManager.default.removeItem(at: directory) }

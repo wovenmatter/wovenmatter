@@ -54,10 +54,9 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   in CI, and the bots install, egress and uninstall checks on a Linux host
   before release. Installed hosts pick up a new selection on update; the
   engine restarts only when its binaries or configuration changed.
-  The static Linux host selection is Docker 29.10.0. The Mac VM keeps
-  Docker 29.9.3 because Docker's signed Resolute APT indexes do not yet publish
-  29.10.0 for either architecture. Maintenance checks that publication boundary
-  independently; a static archive cannot replace the VM's managed APT packages.
+  The static Linux host and the Mac VM both select Docker 29.10.0. Maintenance
+  checks the VM's signed Resolute APT publication independently; a static
+  archive cannot replace the VM's managed APT packages.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
@@ -241,7 +240,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.59.0, Anthropic 1.10.0, Google GenAI 3.4.0,
+  overrides select the tested OpenAI 7.60.0, Anthropic 1.10.0, Google GenAI 3.6.0,
   Bedrock Runtime and token providers 3.1171.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
@@ -309,14 +308,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   checks that the loaded copy is the locked one, and the provider-free
   stream and bots relay suites validate the selection.
 - **Pyodide and esbuild** produce the offline iOS resources and their
-  provenance. They refresh together with the generated files. Current Pyodide
-  314.0.8 supplies CPython 3.14.2 (ABI `2026_0`, Emscripten 5.0.3), behind
-  standalone CPython 3.15.2. Python, its WebAssembly binary, standard library
-  and wheels must come from one Pyodide distribution; a standalone CPython
-  archive cannot replace that engine. Maintenance checks the newest stable
-  Pyodide publication and its Python version independently, then validates the
-  actual generated offline runtime. This is an upstream distribution boundary,
-  not a claim that the embedded CPython is current.
+  provenance. They refresh together with the generated files.
 
 ## Minimum versions on installed apps
 
@@ -352,46 +344,42 @@ stale npm dist-tag cannot hide a newer stable version. OpenCode and Executor ret
 the documented v2 API boundary; maintenance must review a newer stable API major and
 implement its migration.
 
-`harnesses/catalog.json` records tested connector and CLI minimums separately:
-Codex ACP 2.7.0 with Codex 0.169.1, and Claude ACP 0.108.0 with the Claude Agent SDK
-0.3.326 it pins (native Claude Code 2.1.327). The adapters drive the native Codex and Claude CLIs
-(`CODEX_PATH`, `CLAUDE_CODE_EXECUTABLE`); a native Codex older than the minimum reads
-as needing its update. The CLI copy npm bundles inside each adapter package is never
-selected, checked or used, so `harnesses/install-adapter.mjs` installs the adapter as
-published, with no engine override and without npm optional packages: those carry only
-the adapters' bundled platform CLI builds (`@openai/codex-<platform>`,
-`@anthropic-ai/claude-agent-sdk-<platform>`), and an install requires the native CLI's
-path. The native Claude CLI has no ACP mode: Claude ACP is
-an ACP server built on the Claude Agent SDK, whose `query()` starts the native CLI and
-talks to it over stdio. That SDK is the adapter's own transport, pinned by its release,
-so it moves only with an adapter update and is held to the catalog minimum rather than
-compared with npm or overridden. The Claude Agent SDK is otherwise a direct dependency
-only of the Built-in agent and bots. Transcript-write loss invalidates the native resume
-marker and refuses tool dispatch/continuation commits; config-only write loss leaves a
-valid response intact. Provider-free persistence fixtures verify canonical replay
-after recovery. The catalog's independent ACP SDK floor is 2.7.0: Mac and native
-Linux/container updates resolve its newest nondeprecated stable publication and scope
-an npm override for it to the connector. This core-function exception keeps the
-protocol library current; it does not modify upstream manifests or copy credentials.
-SDK-only updates appear in inventory even when connector and CLI are current. The 2.7
-SDK retains stable v1; its v2 changes remain experimental and do not change Woven
-Matter's wire API.
+`harnesses/catalog.json` sets no minimum versions for connectors, CLIs or SDKs.
+A connector or CLI that is present and runs counts as installed, and an update is
+available when npm (for a connector) or the vendor's channel (for a CLI) has a newer
+version than the installed one. Install and update always take the latest. The
+adapters drive the native Codex and Claude CLIs (`CODEX_PATH`,
+`CLAUDE_CODE_EXECUTABLE`). The CLI copy npm bundles inside each adapter package is
+never selected, checked or used, so `harnesses/install-adapter.mjs` installs the
+adapter exactly as published, with no version overrides and without npm optional
+packages: those carry only the adapters' bundled platform CLI builds
+(`@openai/codex-<platform>`, `@anthropic-ai/claude-agent-sdk-<platform>`), and an
+install requires the native CLI's path. The native Claude CLI has no ACP mode:
+Claude ACP is an ACP server built on the Claude Agent SDK, whose `query()` starts the
+native CLI and talks to it over stdio. The libraries inside a connector, including
+its ACP SDK and Claude ACP's Claude Agent SDK, are the connector's own: they move
+only with a connector update and are not listed or tracked separately. The Claude
+Agent SDK is otherwise a direct dependency only of the Built-in agent and bots.
+Transcript-write loss invalidates the native resume marker and refuses tool
+dispatch/continuation commits; config-only write loss leaves a valid response
+intact. Provider-free persistence fixtures verify canonical replay after recovery.
 
-Each explicit installation/update builds an immutable generation, retains its
-npm lockfile and integrity records, verifies the connector and ACP SDK versions, and
-requires an actual provider-free ACP v1 initialize response, with the adapter pointed
-at the native CLI, before atomically promoting the executable link. Verification uses
-an empty, private configuration with no inherited credentials. Failed candidates are
-removed; existing generations stay intact for running sessions. The Mac and remote
-installers use the same implementation. System-owned remote installations remain
-outside Woven's update ownership.
+Each connector installation or update builds a new generation in
+`Installations/<generation>`, retains its npm lockfile and integrity records,
+verifies the installed connector version, and requires an actual provider-free ACP
+v1 initialize response, with the adapter pointed at the native CLI, before
+atomically repointing the executable link. Verification uses an empty, private
+configuration with no inherited credentials. Once the link moves, the generation it
+pointed to before is deleted at once, even if a running chat still uses it. A failed
+candidate is removed and leaves the working generation and link untouched. The Mac
+and remote installers use the same implementation. System-owned remote
+installations remain outside Woven's update ownership.
 
-Maintenance reviews both upstream connector requirements and current engine/CLI
-releases, updates catalog minimums, and validates the actual selected pairs plus
-host-side session/permission/cancellation interfaces with provider-free fixtures.
-This does not establish authenticated provider acceptance on every platform.
-Both current connectors still offer experimental ACP v2; Woven negotiates stable
-v1 until the stable protocol and implemented session APIs migrate together.
+Maintenance validates the current connector and CLI releases against host-side
+session/permission/cancellation interfaces with provider-free fixtures. This does
+not establish authenticated provider acceptance on every platform. Both current
+connectors still offer experimental ACP v2; Woven negotiates stable v1 until the
+stable protocol and implemented session APIs migrate together.
 
 Updates start only from Settings or explicit workspace actions; there is no
 background updater.

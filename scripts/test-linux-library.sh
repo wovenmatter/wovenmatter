@@ -31,6 +31,9 @@ cp -R "$root/app" "$root/shared" "$root/ios" "$root/harnesses" "$work/"
 mkdir -p "$work/remote/host" && cp -R "$root/remote/host/session-tools" "$work/remote/host/"
 # The shared tests check that the Node server's bundled Woven MCP catalog matches Swift's.
 mkdir -p "$work/remote/src" && cp "$root/remote/src/woven-mcp-tools.json" "$work/remote/src/"
+# GitHub identity tests check that Linux hosts and bot containers write the Mac's files.
+cp "$root/remote/src/github-identity.mjs" "$work/remote/src/"
+mkdir -p "$work/bots/src/host" && cp "$root/bots/src/host/git.ts" "$work/bots/src/host/"
 rm -rf "$work/app/.build" "$work/shared/.build" "$work/ios/.build"
 
 # Darwin pipes never raise SIGPIPE; Linux hosts ignore it process-wide

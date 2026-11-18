@@ -59,7 +59,7 @@ struct NativeHarnessTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        for (name, version) in [(definition.commandName, definition.minimumAdapterVersion ?? "1.0.0"), (cliName, "9.9.9")] {
+        for (name, version) in [(definition.commandName, "0.0.1"), (cliName, "9.9.9")] {
             let file = root.appending(path: name)
             try Data("#!/bin/sh\necho \(version)\n".utf8).write(to: file)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
@@ -69,6 +69,8 @@ struct NativeHarnessTests {
         let resolution = resolver.resolve(runtimeKind: kind)
         let key = try #require(LocalACPRuntimeResolver.adapterCLIEnvironmentKey(kind))
         #expect(key == (kind == .codex ? "CODEX_PATH" : "CLAUDE_CODE_EXECUTABLE"))
+        // Any runnable connector is ready; there is no minimum release.
+        #expect(resolution.availability.state == .ready)
         #expect(resolution.launchConfiguration?.environment[key] == native.path)
         #expect(LocalACPRuntimeResolver.adapterCLIEnvironmentKey(.grokBuild) == nil)
     }
