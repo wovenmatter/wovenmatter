@@ -54,7 +54,8 @@ async function invoke(message) {
     if (deviceVaultEnabled()) {
       vault = new CredentialVault(directory);
       await vault.openDevice();
-      if (message.action === 'reset') await vault.modify(async () => ({}));
+      // A reset keeps the vault as it was beside it.
+      if (message.action === 'reset') await vault.reset();
       payload = { ...message, credentials: {}, credentialAccounts: undefined, config: deviceConfig(message.config, await vault.read()) };
     } else if (payload.unlockKey) {
       vault = new CredentialVault(directory);

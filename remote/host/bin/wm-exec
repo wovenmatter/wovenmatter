@@ -69,6 +69,8 @@ if (github/'ssh_config').is_file():
     if not any(env.get(f'GIT_CONFIG_KEY_{i}')=='include.path' and env.get(f'GIT_CONFIG_VALUE_{i}')==include for i in range(count)):
         env.update({f'GIT_CONFIG_KEY_{count}':'include.path',f'GIT_CONFIG_VALUE_{count}':include,'GIT_CONFIG_COUNT':str(count+1)})
 env['WOVEN_DEFAULT_AGENT_DIRECTORY']=str(Path(settings['WOVENMATTER_WORKSPACE'])/'.wovenmatter/default-agent')
+# This host keeps its own sign-ins: every helper, the SSH one older Macs start included, opens its device vault.
+env['WOVEN_DEFAULT_AGENT_DEVICE_VAULT']='1'
 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 os.umask(0o077)
 command=args.pop(0)

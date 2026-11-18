@@ -4,9 +4,11 @@ import { chmod, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CredentialVault } from '../src/vault.mjs';
+import { CredentialVault, vaultFiles } from '../src/vault.mjs';
 import { changeSignIns, deviceConfig, listSignIns } from '../src/device-sign-ins.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
+
+const files = async directory => (await readdir(directory)).filter(name => name.startsWith('credentials.')).sort();
 
 async function temporary(t) {
   const directory = await mkdtemp('/tmp/woven-device-sign-ins-');
@@ -27,22 +29,75 @@ test('a device vault opens with its own key and sets a vault sealed with a Mac k
   assert.equal((await stat(join(directory, 'credentials.key'))).mode & 0o777, 0o600);
   // Kept, unread, until the Mac that holds its key brings its sign-ins over.
   assert.equal(await vault.legacyPending(), true);
-  await vault.modify(async value => ({ ...value, owned: { 'openai-codex': { type: 'oauth', access: 'a', refresh: 'r', expires: 1 } } }));
-  // A wrong key leaves it in place.
-  assert.deepEqual(await vault.importLegacy('mac-workspace', randomBytes(32).toString('base64')), { imported: false });
-  assert.equal(await vault.legacyPending(), true);
   assert.deepEqual(await vault.importLegacy('mac-workspace', macKey), { imported: true });
   assert.equal(await vault.legacyPending(), false);
   const stored = await vault.read();
-  // The host's own subscription and saved keys join it; nothing it holds is replaced,
-  // and a Mac's borrowed subscription access does not come over.
+  // The host's own subscription and saved keys join it, and a Mac's borrowed
+  // subscription access does not come over.
   assert.equal(stored.owned.xai.refresh, 'host-refresh');
-  assert.equal(stored.owned['openai-codex'].refresh, 'r');
+  assert.equal(stored.owned['openai-codex'], undefined);
   assert.deepEqual(stored.accounts.openai.map(entry => entry.credential.key), ['saved-secret']);
   // Another process of the same host reads the same sign-ins with the same key.
   const other = await new CredentialVault(directory).openDevice();
   assert.equal((await other.read()).owned.xai.refresh, 'host-refresh');
   assert.ok(!(await readFile(vault.path, 'utf8')).includes('host-refresh'));
+});
+
+test('a vault sealed with a Mac key stops waiting once this device signs in or a Mac key fails to open it, and stays on disk', async t => {
+  for (const ending of ['own sign-in', 'wrong key']) {
+    const directory = await temporary(t);
+    const sealed = new CredentialVault(directory), macKey = randomBytes(32).toString('base64');
+    await sealed.unlock('mac-workspace', macKey);
+    await sealed.modify(async value => ({ ...value, owned: { xai: { type: 'oauth', access: 'a', refresh: 'old-refresh', expires: 1 } } }));
+    const vault = await new CredentialVault(directory).openDevice();
+    assert.equal(await vault.legacyPending(), true);
+    if (ending === 'own sign-in') await changeSignIns(vault, { action: 'saveKey', provider: 'openai', key: 'own-key' });
+    else assert.deepEqual(await vault.importLegacy('mac-workspace', randomBytes(32).toString('base64')), { imported: false });
+    assert.equal(await vault.legacyPending(), false, ending);
+    const kept = (await files(directory)).filter(name => name.startsWith('credentials.legacy-'));
+    assert.equal(kept.length, 1, ending);
+    assert.equal(JSON.parse(await readFile(join(directory, kept[0]), 'utf8')).workspace, 'mac-workspace');
+  }
+});
+
+test('a reset clears this device\'s sign-ins and keeps the vault as it was beside it', async t => {
+  const directory = await temporary(t);
+  const vault = await new CredentialVault(directory).openDevice();
+  await vault.modify(async value => ({ ...value, owned: { xai: { type: 'oauth', access: 'a', refresh: 'before-reset', expires: 1 } } }));
+  const before = await readFile(vault.path, 'utf8');
+  await vault.reset();
+  assert.deepEqual(await vault.read(), {});
+  const kept = (await files(directory)).find(name => /^credentials\.reset-.*\.enc\.json$/.test(name));
+  assert.ok(kept, (await files(directory)).join());
+  assert.equal(await readFile(join(directory, kept), 'utf8'), before);
+});
+
+test('without hard links the key is still created whole and unreadable vaults are still kept', async t => {
+  const original = vaultFiles.link;
+  t.after(() => { vaultFiles.link = original; });
+  vaultFiles.link = async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); };
+  const directory = await temporary(t);
+  const vault = await new CredentialVault(directory).openDevice();
+  await vault.modify(async value => ({ ...value, owned: { xai: { type: 'oauth', access: 'a', refresh: 'no-links', expires: 1 } } }));
+  assert.match(await readFile(vault.keyPath, 'utf8'), /^[A-Za-z0-9+/]{43}=$/);
+  assert.equal((await stat(vault.keyPath)).mode & 0o777, 0o600);
+  assert.equal((await new CredentialVault(directory).openDevice().then(other => other.read())).owned.xai.refresh, 'no-links');
+  // Concurrent openers of a new vault agree on one key.
+  const fresh = await temporary(t);
+  const opened = await Promise.all(Array.from({ length: 4 }, () => new CredentialVault(fresh).openDevice()));
+  await opened[0].modify(async () => ({ owned: { xai: { type: 'oauth', access: 'a', refresh: 'shared', expires: 1 } } }));
+  for (const other of opened) assert.equal((await other.read()).owned.xai.refresh, 'shared');
+  // A damaged key is replaced on the next sign-in, with copies of both kept.
+  const vaultBefore = await readFile(vault.path, 'utf8');
+  await writeFile(vault.keyPath, 'damaged', { mode: 0o600 });
+  await changeSignIns(await new CredentialVault(directory).openDevice(), { action: 'saveKey', provider: 'openai', key: 'k' });
+  const names = await files(directory);
+  const keptVault = names.find(name => /^credentials\.unreadable-.*\.enc\.json$/.test(name));
+  assert.equal(await readFile(join(directory, keptVault), 'utf8'), vaultBefore);
+  assert.equal(await readFile(join(directory, names.find(name => /^credentials\.unreadable-.*\.key$/.test(name))), 'utf8'), 'damaged');
+  // A reset keeps its copy too.
+  await (await new CredentialVault(directory).openDevice()).reset();
+  assert.ok((await files(directory)).some(name => /^credentials\.reset-/.test(name)));
 });
 
 test('plain sign-in files from before the vault join it and are removed only once it holds them', async t => {
@@ -56,8 +111,6 @@ test('plain sign-in files from before the vault join it and are removed only onc
   await assert.rejects(stat(join(directory, 'oauth.json')));
   assert.ok(!(await readFile(join(directory, 'configuration.json'), 'utf8')).includes('credentials'));
 });
-
-const files = async directory => (await readdir(directory)).filter(name => name.startsWith('credentials.')).sort();
 
 for (const damage of ['mismatched key', 'missing key', 'truncated key', 'corrupt vault']) {
   test(`a device vault with a ${damage} reads as signed out, is never deleted, and a new sign-in replaces it`, async t => {
@@ -239,4 +292,24 @@ test('the control helper on a device signs out there and never returns credentia
   const stored = await vault.read();
   assert.equal(stored.owned['openai-codex'], undefined);
   assert.ok(!JSON.stringify(stored).includes('relayed-secret'));
+});
+
+test('a control session reset on a device keeps the vault as it was beside it', async t => {
+  const { spawn } = await import('node:child_process');
+  const directory = await temporary(t);
+  const vault = await new CredentialVault(directory).openDevice();
+  await vault.modify(async value => ({ ...value, owned: { 'openai-codex': { type: 'oauth', access: 'a', refresh: 'kept-refresh', expires: Date.now() + 3600_000 } } }));
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--control'], {
+    cwd: directory, env: { ...process.env, WOVEN_DEFAULT_AGENT_DIRECTORY: directory, WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' }, stdio: ['pipe', 'pipe', 'ignore'] });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stdin.write(JSON.stringify({ action: 'reset', workspace: 'device', config: {} }) + '\n');
+  await new Promise(resolve => child.once('close', resolve));
+  assert.deepEqual(JSON.parse(output.trim().split('\n').at(-1)), { result: { reset: true } });
+  assert.deepEqual(await vault.read(), {});
+  const kept = (await files(directory)).find(name => /^credentials\.reset-.*\.enc\.json$/.test(name));
+  assert.ok(kept);
+  const copy = new CredentialVault(directory);
+  copy.device = true; copy.workspace = 'device'; copy.path = join(directory, kept);
+  assert.equal((await copy.read()).owned['openai-codex'].refresh, 'kept-refresh');
 });

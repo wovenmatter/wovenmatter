@@ -173,6 +173,25 @@ test('a verified update becomes active and deletes the generation it replaced, e
   assert.deepEqual((await readdir(join(f.directory, 'sdk-runtime/generations'))).sort(), [next.generation, fresh.generation].sort());
 });
 
+test('an update verifies the musl Claude package where only that one is installed', async t => {
+  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const musl = root => join(root, 'node_modules/@anthropic-ai', `claude-agent-sdk-${process.platform}-${process.arch}-musl`, 'claude');
+  const ran = [];
+  const options = mockInstaller(bump(piFloor), async (args, context) => {
+    await materializeManifest(args, context);
+    await rm(dirname(claudeBinary(context.cwd)), { recursive: true, force: true });
+    await mkdir(dirname(musl(context.cwd)), { recursive: true });
+    await writeFile(musl(context.cwd), '#!/bin/sh\n', { mode: 0o755 });
+    return '';
+  });
+  const run = options.run;
+  options.run = async (executable, args, context) => { ran.push(executable); return run(executable, args, context); };
+  const result = await updateSDK({ directory: f.directory, id: 'pi', version: bump(piFloor) }, options);
+  assert.equal(result.activated, true);
+  assert.ok(ran.some(path => path.endsWith(`claude-agent-sdk-${process.platform}-${process.arch}-musl/claude`)), ran.join('\n'));
+  assert.ok(!ran.some(path => path.endsWith(`claude-agent-sdk-${process.platform}-${process.arch}/claude`)));
+});
+
 test('an update with nothing to install activates nothing', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const result = await updateSDK({ directory: f.directory, id: 'pi' }, mockInstaller(piFloor, materializeManifest));

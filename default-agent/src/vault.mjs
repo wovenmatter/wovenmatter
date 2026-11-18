@@ -12,6 +12,10 @@ export const deviceVaultWorkspace = 'device';
 // older `unlock` (a key held by a Mac) remains for tests and older callers.
 export const deviceVaultEnabled = (environment = process.env) => environment.WOVEN_DEFAULT_AGENT_DEVICE_VAULT === '1';
 
+// Hard links are missing on some file systems (FUSE, SMB, NFS); there the
+// fallbacks below are used, and none of them follows a link. Replaceable in tests.
+export const vaultFiles = { link };
+const linksUnsupported = error => ['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK', 'EACCES'].includes(error?.code);
 const lockOptions = { realpath: false, retries: { retries: 60, minTimeout: 50, maxTimeout: 500 }, stale: 60000 };
 const missing = error => { if (error.code !== 'ENOENT') throw error; };
 const apiKeyProviders = ['openai', 'anthropic', 'xai-api', 'openrouter', 'opencode-go', ...Object.keys(searchProviderNames)];
@@ -62,8 +66,25 @@ export class CredentialVault {
     if (owned) await unlink(oauthPath).catch(missing);
     if ('credentials' in configuration) await writePrivateJSON(configurationPath, { config: configuration.config });
   }
-  // Whether a vault sealed with a Mac's key is waiting for that Mac.
-  async legacyPending() { return (await legacyFiles(this.directory)).length > 0; }
+  // Whether a vault sealed with a Mac's key is waiting for that Mac: not once
+  // this device has signed in to anything itself, and not after a Mac's key
+  // failed to open it (the file stays on disk either way).
+  async legacyPending() {
+    if (!(await legacyFiles(this.directory)).length) return false;
+    const stored = await this.read().catch(() => ({}));
+    const own = Object.keys(stored.owned ?? {}).length || Object.values(stored.accounts ?? {}).some(list => list?.length) || (stored.servers ?? []).length;
+    return !own;
+  }
+  // A control session's `reset`: this device's sign-ins are cleared, and the
+  // vault as it was is kept beside it.
+  async reset() {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const release = await lockfile.lock(this.path, lockOptions);
+    try {
+      if (await exists(this.path)) await keepCopy(this.path, 'reset');
+      return await this.modifyLocked(async () => ({}));
+    } finally { await release(); }
+  }
   // A Mac that held this workspace's key opens the set-aside vault once: its
   // own and saved sign-ins join this device's vault (a Mac's borrowed
   // subscription access does not: this device signs in itself), and the old
@@ -79,7 +100,12 @@ export class CredentialVault {
         const sealed = await readJSON(file, null).catch(() => null);
         if (sealed?.workspace !== workspace) continue;
         let value;
-        try { value = decrypt(sealed, key, workspace); } catch { continue; }
+        try { value = decrypt(sealed, key, workspace); }
+        catch {
+          // That Mac's key does not open it: it stops waiting, and stays on disk.
+          await rename(file, file.replace(/\.enc\.json$/, '') + '.unopened.enc.json').catch(missing);
+          continue;
+        }
         const configuration = await readJSON(join(this.directory, 'configuration.json'), {}).catch(() => ({}));
         const release = await lockfile.lock(this.path, lockOptions);
         try {
@@ -215,7 +241,20 @@ async function createDeviceKey(path, { replacing = false } = {}) {
   try {
     const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try { await file.writeFile(key.toString('base64')); await file.sync(); } finally { await file.close(); }
-    try { await (replacing ? rename(temporary, path) : link(temporary, path)); }
+    try {
+      if (replacing) await rename(temporary, path);
+      else {
+        try { await vaultFiles.link(temporary, path); }
+        catch (error) {
+          if (!linksUnsupported(error)) throw error;
+          // No hard links here: create the key file itself, exclusively, never
+          // through a link, with the whole key written and synced. Every
+          // creator holds the vault lock, so no writer sees it half written.
+          const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+          try { await file.writeFile(key.toString('base64')); await file.sync(); } finally { await file.close(); }
+        }
+      }
+    }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       key.fill(0);
@@ -231,8 +270,19 @@ async function createDeviceKey(path, { replacing = false } = {}) {
 
 const asideName = (path, reason) => `${path.replace(/\.enc\.json$|\.key$/, '')}.${reason}-${Date.now()}-${randomBytes(3).toString('hex')}${path.endsWith('.key') ? '.key' : '.enc.json'}`;
 async function setAside(path, reason) { await rename(path, asideName(path, reason)); }
-// A second name for the file, so replacing it in place keeps the old content.
-async function keepCopy(path, reason) { await link(path, asideName(path, reason)); }
+// A second name for the file, so replacing it in place keeps the old content;
+// a whole copy where the file system has no hard links. Neither follows a link.
+async function keepCopy(path, reason) {
+  const aside = asideName(path, reason);
+  try { await vaultFiles.link(path, aside); return; }
+  catch (error) { if (!linksUnsupported(error)) throw error; }
+  const source = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const data = await source.readFile();
+    const copy = await open(aside, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { await copy.writeFile(data); await copy.sync(); } finally { await copy.close(); }
+  } finally { await source.close(); }
+}
 
 async function legacyFiles(directory) {
   const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
