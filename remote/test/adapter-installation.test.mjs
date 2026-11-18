@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, readFile, readlink, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { installAdapter } from '../../harnesses/install-adapter.mjs';
+import { installAdapter, linkedGeneration } from '../../harnesses/install-adapter.mjs';
 
 const exec = promisify(execFile);
 const adapter = '@agentclientprotocol/codex-acp', engine = '@openai/codex';
@@ -128,4 +128,34 @@ test('harness scripts run their entry point when started through a symlinked pat
     assert.ok(failure, `${script} must run and reject missing input instead of exiting silently`);
     assert.match(failure.stderr, message);
   }
+});
+
+test('only the generation a link points into is ever chosen for deletion', async t => {
+  const { symlink, realpath } = await import('node:fs/promises');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'woven-adapter-links-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const prefix = join(root, 'prefix'), installations = join(prefix, 'Installations'), bin = join(prefix, 'bin');
+  const file = async path => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, ''); return path; };
+  await mkdir(bin, { recursive: true });
+  // The layout this installer writes.
+  await symlink(await file(join(installations, 'adapter-abc123/node_modules/.bin/codex-acp')), join(bin, 'current'));
+  assert.equal(await linkedGeneration(prefix, join(bin, 'current')), join(installations, 'adapter-abc123'));
+  // The layout v0.4.5 and earlier wrote: bin -> Installations/<UUID>/bin -> ../lib/node_modules/...
+  const legacy = join(installations, '348945E6-11D7-42AD-A243-BCDD2BCB2A4C');
+  await file(join(legacy, 'lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js'));
+  await mkdir(join(legacy, 'bin'), { recursive: true });
+  await symlink('../lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js', join(legacy, 'bin/claude-agent-acp'));
+  await symlink(join(legacy, 'bin/claude-agent-acp'), join(bin, 'legacy'));
+  assert.equal(await linkedGeneration(prefix, join(bin, 'legacy')), legacy);
+  // Nothing outside Installations is ever chosen: an npm-global connector, a generation that is
+  // itself a link to somewhere else, a missing link, and a plain file.
+  await symlink(await file(join(prefix, 'lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js')), join(bin, 'global'));
+  assert.equal(await linkedGeneration(prefix, join(bin, 'global')), null);
+  const outside = join(root, 'elsewhere');
+  await file(join(outside, 'node_modules/.bin/codex-acp'));
+  await symlink(outside, join(installations, 'adapter-linked'));
+  await symlink(join(installations, 'adapter-linked/node_modules/.bin/codex-acp'), join(bin, 'escaped'));
+  assert.equal(await linkedGeneration(prefix, join(bin, 'escaped')), null);
+  assert.equal(await linkedGeneration(prefix, join(bin, 'missing')), null);
+  assert.equal(await linkedGeneration(prefix, await file(join(bin, 'plain'))), null);
 });

@@ -371,8 +371,11 @@ public enum RemoteRuntimeFailure {
         switch code {
         case "runtime_active_stop_conversations_or_server_first": "Chats are using it. Stop them or the server there, then try again."
         case "runtime_maintenance_in_progress": "It's being installed or updated. Try again when that finishes."
+        // The next code and latest_protocol_sdk_version_unavailable come only from hosts not yet updated.
+        case "adapter_version_below_minimum": "Its adapter release is older than Woven Matter needs. Try again later."
         case "latest_engine_version_unavailable": "Its latest version couldn't be checked. Try again later."
         case "confirmation_required": "This app and the host don't match. Update both, then try again."
+        case "latest_protocol_sdk_version_unavailable": "The latest version of its connection library couldn't be checked. Try again later."
         case "invalid_installer_size": "The official installer download wasn't the expected size."
         case "installer_https_required": "The official installer has to come from a secure address."
         case "runtime_operation_failed": "It didn't finish. Try again."

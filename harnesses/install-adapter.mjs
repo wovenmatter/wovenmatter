@@ -68,7 +68,7 @@ export async function verifyAdapter(executable, adapterVersion, environment) {
 }
 
 /** The `Installations/<generation>` folder `link` resolves into, if it resolves into one. */
-async function linkedGeneration(prefix, link) {
+export async function linkedGeneration(prefix, link) {
   const installations = await realpath(join(prefix, 'Installations'));
   let target;
   try { target = await realpath(link); } catch { return null; }
