@@ -864,7 +864,9 @@ public actor LocalACPSessionCoordinator {
         let descriptor = selecting(
             stored,
             model: model ?? stored.model,
-            thinking: thinking ?? (model != nil && model != stored.model ? nil : stored.thinking),
+            // A speed variant keeps its model's thinking choice.
+            thinking: thinking ?? (model != nil && model.map({ SessionModelSpeed.split($0).model })
+                != stored.model.map({ SessionModelSpeed.split($0).model }) ? nil : stored.thinking),
             permission: permission ?? stored.permission
         )
         guard descriptor.runtimeKind == launch.runtimeKind else {
@@ -1702,7 +1704,10 @@ public actor LocalACPSessionCoordinator {
             }
             if let model,
                model != configuration.model {
-                guard configuration.modelOptions.contains(model) else {
+                // A saved speed variant is restored through its model; the
+                // harness offers the variant only once that model is selected.
+                let base = SessionModelSpeed.split(model).model
+                guard configuration.modelOptions.contains(model) || configuration.modelOptions.contains(base) else {
                     publishChange(conversationID: descriptor.conversationID, runID: runID ?? "",
                         phase: .configuration(configuration))
                     throw LocalACPClientError.invalidConfigurationValue(field: "model", value: model)
@@ -1713,7 +1718,8 @@ public actor LocalACPSessionCoordinator {
                 )
                 try Task.checkCancellation()
                 guard !isShutDown else { throw LifecycleError.shutDown }
-                guard configuration.model == model else {
+                // A speed the restored model no longer offers falls back to standard.
+                guard configuration.model.map({ SessionModelSpeed.split($0).model }) == base else {
                     throw LocalACPClientError.configurationNotConfirmed("model")
                 }
             }

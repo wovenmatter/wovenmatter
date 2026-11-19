@@ -543,6 +543,11 @@ public actor LocalACPClient {
     private var modelConfigurationID: String?
     private var modelUsesSessionModelMethod = false
     private var thinkingConfigurationID: String?
+    /// Codex and Claude Code advertise Fast mode as their own on/off option for
+    /// the current model. It is presented as that model's `#fast` variant.
+    private var fastConfigurationID: String?
+    private var fastConfigurationIsBoolean = false
+    private var fastEnabled = false
     private var permissionConfigurationID: String?
     private var permissionUsesSessionModeMethod = false
     private var permissionStateRevision: UInt64 = 0
@@ -951,6 +956,17 @@ public actor LocalACPClient {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
+        var model = model
+        var requestedFast: Bool?
+        if runtimeKind == .codex || runtimeKind == .claudeCode, let selected = model {
+            let parts = SessionModelSpeed.split(selected)
+            guard parts.speed == nil || parts.speed == "fast" else {
+                throw LocalACPClientError.invalidConfigurationValue(field: "model", value: selected)
+            }
+            requestedFast = parts.speed == "fast"
+            // Only a different model goes to the harness's model option.
+            model = parts.model == configuration.model.map({ SessionModelSpeed.split($0).model }) ? nil : parts.model
+        }
         if let model {
             if let modelConfigurationID {
                 try validateConfigurationValue(
@@ -1004,6 +1020,9 @@ public actor LocalACPClient {
                 ])
             )
             captureSessionConfiguration(from: response)
+        }
+        if let requestedFast {
+            try await setHarnessFastMode(requestedFast, sessionID: sessionID)
         }
         return configuration
     }
@@ -1896,6 +1915,12 @@ public actor LocalACPClient {
             modelConfigurationID = parsed.model?.id
             thinkingConfigurationID = parsed.thinking?.id
             permissionConfigurationID = parsed.permission?.id
+            if runtimeKind == .codex || runtimeKind == .claudeCode {
+                let fast = configOptions.first { ["fast", "fast-mode"].contains($0["id"]?.stringValue ?? "") }
+                fastConfigurationID = fast?["id"]?.stringValue
+                fastConfigurationIsBoolean = fast?["type"]?.stringValue == "boolean"
+                fastEnabled = fast?["currentValue"]?.boolValue ?? (fast?["currentValue"]?.stringValue == "on")
+            }
             if parsed.permission != nil || hadPermissionOption {
                 permissionStateRevision &+= 1
             }
@@ -1986,6 +2011,56 @@ public actor LocalACPClient {
                 permissionOptions: LocalACPSessionPermissions.grokOptions,
                 permissionOptionMetadata: LocalACPSessionPermissions.grokMetadata
             )
+        }
+        presentHarnessSpeed()
+    }
+
+    /// Present a harness's Fast mode as the current model's `#fast` variant, so
+    /// the composer shows the same speed control as Pi Durable and saved
+    /// selections carry it with the model.
+    private func presentHarnessSpeed() {
+        guard runtimeKind == .codex || runtimeKind == .claudeCode else { return }
+        let isVariant = { (id: String) in SessionModelSpeed.split(id).speed != nil }
+        let base = configuration.model.map { SessionModelSpeed.split($0).model }
+        var options = configuration.modelOptions.filter { !isVariant($0) }
+        var metadata = configuration.modelOptionMetadata.filter { !isVariant($0.key) }
+        var model = base
+        if let base, fastConfigurationID != nil {
+            let variant = base + "#fast"
+            options.append(variant)
+            metadata[variant] = metadata[base]
+            if fastEnabled { model = variant }
+        }
+        configuration = LocalACPSessionConfiguration(
+            model: model, thinking: configuration.thinking,
+            modelOptions: options, thinkingOptions: configuration.thinkingOptions,
+            slashCommands: configuration.slashCommands,
+            modelOptionMetadata: metadata,
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+            fallbackNotice: configuration.fallbackNotice,
+            permission: configuration.permission,
+            permissionOptions: configuration.permissionOptions,
+            permissionOptionMetadata: configuration.permissionOptionMetadata,
+            workingDirectory: configuration.workingDirectory
+        )
+    }
+
+    /// Turn a harness's own Fast mode option on or off. A model without the
+    /// option keeps standard speed; callers confirm the resulting selection.
+    private func setHarnessFastMode(_ enabled: Bool, sessionID: String) async throws {
+        guard enabled != fastEnabled, let fastConfigurationID else { return }
+        let response = try await request(
+            method: "session/set_config_option",
+            params: .object([
+                "sessionId": .string(sessionID),
+                "configId": .string(fastConfigurationID),
+                "value": fastConfigurationIsBoolean ? .bool(enabled) : .string(enabled ? "on" : "off"),
+            ])
+        )
+        captureSessionConfiguration(from: response)
+        if response?["configOptions"] == nil {
+            fastEnabled = enabled
+            presentHarnessSpeed()
         }
     }
 

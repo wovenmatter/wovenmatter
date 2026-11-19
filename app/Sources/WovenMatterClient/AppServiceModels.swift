@@ -16,7 +16,7 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     }
 
     public static func modelLabel(id: String, metadata: Self?) -> String {
-        guard let name = metadata?.name else { return id }
+        guard let name = metadata?.name else { return SessionModelSpeed.split(id).model }
         // Some ACP catalogs omit the family from otherwise useful GPT names.
         // Restore only the family proven by the exact ID; keep versions intact.
         if id.hasPrefix("gpt-"), name.range(of: "GPT", options: .caseInsensitive) == nil {
@@ -62,18 +62,17 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     }
 }
 
-/// Pi Durable carries a subscription's faster inference as a variant of the
-/// model reference (`provider/model#fast`), so remote workspaces and saved
-/// selections round-trip it with the model. Menus group a variant with its model.
+/// Faster inference is a variant of the model reference (`model#fast`): Pi
+/// Durable advertises its subscription speeds this way, and the Codex and
+/// Claude Code clients present their own Fast mode option the same way. Saved
+/// selections carry it with the model; menus group a variant with its model.
 public enum SessionModelSpeed {
-    private static let providers: Set<String> = ["claude-subscription", "openai-codex"]
     private static let speeds = ["fast": "Fast", "ultrafast": "Ultrafast"]
 
     public static func split(_ id: String) -> (model: String, speed: String?) {
         guard let separator = id.lastIndex(of: "#") else { return (id, nil) }
         let model = String(id[..<separator]), speed = String(id[id.index(after: separator)...])
-        guard speeds[speed] != nil, let provider = model.split(separator: "/").first,
-              providers.contains(String(provider)) else { return (id, nil) }
+        guard speeds[speed] != nil, !model.isEmpty else { return (id, nil) }
         return (model, speed)
     }
 

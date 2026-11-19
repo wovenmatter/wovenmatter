@@ -252,6 +252,26 @@ test('applies only advertised selections and rejects unconfirmed permission befo
  await assert.rejects(()=>applyTaskConfiguration(async()=>assert.fail(),'native',initial,{runtimeKind:'codex',model:'unknown'}),/no longer available/)
 })
 
+test('Codex and Claude Code apply a #fast model variant through their own Fast mode option',async()=>{
+ for (const [runtimeKind,id] of [['codex','fast-mode'],['claude_code','fast']]) {
+  const fast=value=>({id,type:'select',currentValue:value,options:[{value:'on'},{value:'off'}]})
+  let current={configOptions:[{id:'model',currentValue:'a',options:[{value:'a'},{value:'b'}]},fast('off')]}
+  const calls=[]
+  const rpc=async(method,params)=>{calls.push(params)
+   if(params.configId==='model')current={configOptions:[{...current.configOptions[0],currentValue:params.value},...(params.value==='a'?[fast('off')]:[])]}
+   else current={configOptions:[current.configOptions[0],fast(params.value)]}
+   return current}
+  await applyTaskConfiguration(rpc,'native',current,{runtimeKind,model:'a#fast'})
+  assert.deepEqual(calls,[{sessionId:'native',configId:id,value:'on'}])
+  await applyTaskConfiguration(rpc,'native',current,{runtimeKind,model:'a'})
+  assert.deepEqual(calls.at(-1),{sessionId:'native',configId:id,value:'off'})
+  calls.length=0
+  // A model without the option keeps standard speed.
+  await applyTaskConfiguration(rpc,'native',current,{runtimeKind,model:'b#fast'})
+  assert.deepEqual(calls,[{sessionId:'native',configId:'model',value:'b'}])
+ }
+})
+
 test('scheduled full-root Pi runs replace saved approval modes before dispatch and fail if unavailable', async () => {
   const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
   for (const supported of [true, false]) {

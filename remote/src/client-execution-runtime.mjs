@@ -1,7 +1,7 @@
 import { join, isAbsolute } from 'node:path'
 import { ensureScratchDirectory, scratchFolderName } from './projects.mjs'
 import { randomUUID, createHash } from 'node:crypto'
-import { applyTaskConfiguration } from './task-gateway-runner.mjs'
+import { applyTaskConfiguration, harnessFastEnabled, harnessFastOption } from './task-gateway-runner.mjs'
 import { clientInteraction, clientInteractionResponse } from './client-interactions.mjs'
 import { createNativeClientSessions } from './client-native-sessions.mjs'
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
@@ -389,8 +389,13 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     const permission=initial.configOptions?.find(item=>['permission_mode','approval_mode'].includes(item.id)||(item.id==='mode'&&['codex','claude_code'].includes(runtimeKind)))
       ??initial.configOptions?.find(item=>item.id==='mode')
     const modes=(initial.modes?.availableModes??[]).map(mode=>({id:mode.id,label:mode.name??mode.id,...(typeof mode.description==='string'&&mode.description?{description:mode.description}:{})}))
-    return {model:model?.currentValue??initial.models?.currentModelId,thinking:thinking?.currentValue,permission:runtimeKind==='grok_build'?(grokSelected??fullAccessPermissions.grok_build):permission?.currentValue??initial.modes?.currentModeId,
-      models:model?withoutKind(selections(model.options)):(initial.models?.availableModels??[]).map(item=>({id:item.modelId,label:item.name??item.modelId,...(typeof item.description==='string'&&item.description?{description:item.description}:{})})),
+    const fast=['codex','claude_code'].includes(runtimeKind)?harnessFastOption(initial):undefined
+    const currentModel=model?.currentValue??initial.models?.currentModelId
+    const modelChoices=model?withoutKind(selections(model.options)):(initial.models?.availableModels??[]).map(item=>({id:item.modelId,label:item.name??item.modelId,...(typeof item.description==='string'&&item.description?{description:item.description}:{})}))
+    // Present the harness's Fast mode as the current model's `#fast` variant.
+    const variant=fast&&currentModel?modelChoices.find(item=>item.id===currentModel):undefined
+    return {model:variant&&harnessFastEnabled(fast)?currentModel+'#fast':currentModel,thinking:thinking?.currentValue,permission:runtimeKind==='grok_build'?(grokSelected??fullAccessPermissions.grok_build):permission?.currentValue??initial.modes?.currentModeId,
+      models:variant?[...modelChoices,{...variant,id:currentModel+'#fast'}]:modelChoices,
       thinkingLevels:withoutKind(selections(thinking?.options)),permissions:presentPermissionChoices(runtimeKind,runtimeKind==='grok_build'?grokPermissionChoices:permission?selections(permission.options):modes),availableTools:[],enabledTools:[],canConfigure:!(runtimeKind==='opencode')}
   }
   async function settings({native,runtimeKind}) {

@@ -12,12 +12,14 @@ struct SessionModelSpeedTests {
     LocalACPSessionMetadata(sessionKey: "fixture", model: model, thinking: nil, modelOptions: options)
   }
 
-  @Test func speedVariantsParseOnlyForSubscriptionModels() {
+  @Test func speedVariantsParseOnlyKnownSpeeds() {
     let ultrafast = SessionModelSpeed.split("openai-codex/gpt-6.2-sol#ultrafast")
     #expect(ultrafast.model == "openai-codex/gpt-6.2-sol" && ultrafast.speed == "ultrafast")
     let fast = SessionModelSpeed.split("claude-subscription/opus#fast")
     #expect(fast.model == "claude-subscription/opus" && fast.speed == "fast")
-    for id in ["openai/gpt#fast", "claude-subscription/opus#priority", "opus#fast", "claude-subscription/opus"] {
+    let harness = SessionModelSpeed.split("opus#fast")
+    #expect(harness.model == "opus" && harness.speed == "fast")
+    for id in ["claude-subscription/opus#priority", "#fast", "claude-subscription/opus"] {
       let parts = SessionModelSpeed.split(id)
       #expect(parts.model == id && parts.speed == nil)
     }
