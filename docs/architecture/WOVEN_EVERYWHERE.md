@@ -951,7 +951,10 @@ hands them to the macOS job, which checks them with
       (`LibraryWorkspaceAction.createFolderCapability`) in its registry
       row's `capabilities`. A Mac whose row lacks it is sent nothing, since
       it could not decode the action, and the requester says "Update Woven
-      Matter on <name> to create folders there."
+      Matter on <name> to create folders there.", where `<name>` here and in
+      the messages above is the workspace's title on the desktop. The
+      desktop's New folder form shows that reason, or that the workspace has
+      no address, with Create disabled (`RemoteFolderCreation.problem`).
   - A Linux host: `POST v1/projects {name, reuseExisting: false}` creates a
     blank directory in the host's managed workspace root and answers `201
     {path}`; a name that is already there answers `409` with a message, an
@@ -995,9 +998,27 @@ hands them to the macOS job, which checks them with
   directly and otherwise titles another Mac with its tailnet machine name
   (the first label of its `*.ts.net` address, plus `(Dev) · <instance>` for a
   Dev instance) and a Linux workspace with its registry name
-  (`ApplicationModel.workspaceDisplayName`). Its sidebar and New Chat list
+  (`ApplicationModel.workspaceDisplayName`). The address is the row's
+  `endpoint`, else the one in that Mac's `mac_routes` row (by
+  `ownerDeviceID`), so a Mac whose row has no address keeps its title; a
+  production Mac's registry refresh also keeps its row's last `endpoint`
+  when it has none to publish, and only a Dev instance withdraws its own.
+  The desktop's messages about a workspace use the same title. Its sidebar and New Chat list
   every other Mac and Linux workspace as one list of remote workspaces under
-  those titles, online or not (`RemoteWorkspaceSidebarModel.links`). Every
+  those titles, online or not (`RemoteWorkspaceSidebarModel.links`), from the
+  registry as connections are listed (`ExecutionWorkspace.connections`: another
+  device's Dev instance only while that device is active, as in Settings →
+  Workspaces), with one agent per workspace and harness
+  (`RemoteWorkspaceSidebarModel.choices`).
+- **A removed Linux workspace.** The Mac that set a Linux host up marks its
+  registry row `deleted` once the host has uninstalled the workspace
+  (`LibraryHostController.withdrawRemovedLinuxWorkspaces`; owner-written,
+  checked against the row's revision, retried until written). Every device
+  then drops its section, places no agent on it and offers it nowhere; its
+  chats stay readable. Nothing else deletes a row: a Mac without a
+  configuration for a Linux row it owns only stops listing it locally. A
+  deleted row is never changed or registered again, so the same machine set
+  up later is a new row under a new ID. Every
   Mac member advertises `history.library.v1` (it serves its own sessions' history from the library
   change feed), so the host route's agent list ("This Mac", from
   `GET /v1/providers` on the mobile API) belongs only to the registry row of

@@ -26,15 +26,18 @@ struct SettingsWorkspacesView: View {
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
     @State private var sharedLogsWorkspace: ExecutionWorkspace?
 
+    /// This library's host ID, which this Mac's own registry rows name as
+    /// their owner. Read from the library, so it is known while sharing is
+    /// stopped too; the host's discovery identity is not.
+    @State private var libraryHostID: String?
+
     /// Workspaces this Mac did not add. Other paired devices own their Mac and iPhone or iPad
-    /// workspaces; every Linux host without an SSH setup here is managed by signed request.
+    /// workspaces; every Linux host another Mac set up is managed by signed request.
     private var sharedWorkspaces: [ExecutionWorkspace] {
-        let configured = Set(model.workspaces.map { $0.id.uuidString.lowercased() })
-        let thisDevice = application.libraryHost.peerIdentity?.deviceID
-        return application.libraryHost.executionWorkspaces.filter {
-            $0.isVisibleInConnections && !configured.contains($0.id)
-                && ($0.kind == .linux || $0.ownerDeviceID != thisDevice)
-        }.sorted { application.workspaceDisplayName($0).localizedStandardCompare(application.workspaceDisplayName($1)) == .orderedAscending }
+        RemoteWorkspaceSidebarModel.sharedWorkspaces(application.libraryHost.executionWorkspaces,
+            configured: Set(model.workspaces.map { $0.id.uuidString.lowercased() }),
+            localHostDeviceID: libraryHostID ?? application.libraryHost.peerIdentity?.deviceID)
+            .sorted { application.workspaceDisplayName($0).localizedStandardCompare(application.workspaceDisplayName($1)) == .orderedAscending }
     }
 
     /// A workspace another device added. Linux hosts without an SSH setup here are
@@ -127,6 +130,7 @@ struct SettingsWorkspacesView: View {
             // Workspaces added on other paired devices arrive through host status.
             guard selectedWorkspaceID == nil, !addingWorkspace else { return }
             while !Task.isCancelled {
+                if libraryHostID == nil { libraryHostID = try? await application.libraryStore?.database.libraryIdentity().hostDeviceID }
                 await application.libraryHost.refreshStatus()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
@@ -625,12 +629,18 @@ struct SettingsWorkspacesView: View {
 
     private var createCard: some View {
         SettingsSection(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
-            // Left blank, the workspace is named after its machine on the tailnet.
-            SettingsField("Name (optional)") {
-                let machine = RemoteWorkspacesModel.workspaceName(entered: "", hostName: hostName)
+            // Left blank, the workspace takes the first label of its host
+            // name, shown as the placeholder: its machine name on the tailnet.
+            // A host entered as an address has no such label, so the name is
+            // then required and the form says so instead of only disabling Create.
+            let machine = RemoteWorkspacesModel.workspaceName(entered: "", hostName: hostName)
+            SettingsField(machine.isEmpty ? "Name" : "Name (optional)") {
                 TextField(machine.isEmpty ? "Remote workspace name" : machine, text: $name)
                     .wovenInput()
             }
+            SettingsNote(machine.isEmpty
+                ? "This host was entered as an address, which has no machine name to use. Enter a name for the workspace."
+                : "Left blank, the workspace is named \(machine), after its host.")
             SettingsField("Workspace ID") {
                 TextField("remote-workspace-id", text: $workspaceID)
                     .wovenInput()

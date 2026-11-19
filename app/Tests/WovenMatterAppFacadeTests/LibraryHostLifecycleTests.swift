@@ -716,7 +716,7 @@ extension LibraryHostLifecycleTests {
         #expect(unfinished.count == 1)
 
         #expect(await air.model.createFolder(name: "Stuck", onWorkspace: row.id) == nil)
-        #expect(air.model.folderMutationError == "\(row.name) stopped before it finished creating “Stuck”. If the folder does not appear, create it again.")
+        #expect(air.model.folderMutationError == "\(air.model.workspaceDisplayName(row)) stopped before it finished creating “Stuck”. If the folder does not appear, create it again.")
         #expect(try await requestedFolders("Stuck", by: air) == unfinished, "the same request was asked about")
         #expect(try await miniDB.workspaceOverview().folders.isEmpty)
 

@@ -14,7 +14,9 @@ extension LibraryHostController {
     func hostAdministration(for workspace: ExecutionWorkspace) async throws -> RemoteHostAdministrationClient {
         let directory = try await peerSync.members()
         guard workspace.kind == .linux, !workspace.deleted, let endpoint = workspace.endpoint, let host = await directory.audience(for: workspace) else {
-            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspace.name)'s address or member identity has not reached this Mac yet.")
+            // Named as the desktop titles it, not as it registered.
+            let title = model?.workspaceDisplayName(workspace) ?? workspace.name
+            throw LibraryAPIError(code: "workspace_unavailable", message: "\(title)'s address or member identity has not reached this Mac yet.")
         }
         return try RemoteHostAdministrationClient(endpoint: endpoint, signer: directory.identity.signer, audience: host, send: remoteHostSend)
     }

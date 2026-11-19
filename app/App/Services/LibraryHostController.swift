@@ -519,6 +519,9 @@ final class LibraryHostController {
         defer { registryRefreshInProgress = false }
         let identity = try await database.libraryIdentity()
         try await database.saveRemoteWorkspaceConfigurations(model.remoteWorkspaces.workspaces)
+        // A removal that cannot be published now stays on record and is tried
+        // with the next refresh; it never keeps this Mac's own rows from being published.
+        try? await withdrawRemovedLinuxWorkspaces()
         let existing = try await database.libraryExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
         // Local folders are bound to `device:<device id>`, which is
@@ -545,9 +548,17 @@ final class LibraryHostController {
         // Mac, is published as its registry name, so the iPhone, agents and
         // devices that have not updated show it; without one, the default.
         let chosenNames = try await database.executionWorkspaceNames()
+        // This Mac's address is a fact about where it is reached, not whether
+        // it is reachable now: a production Mac that is quit or asleep already
+        // keeps it, and every reader treats an address that does not answer as
+        // an offline Mac. So a refresh while Tailscale is unavailable (a rename
+        // made then) keeps the last address instead of publishing none, which
+        // would only cost the other devices this Mac's tailnet machine name.
+        // A Dev instance is different: no address is how it says it stopped.
+        let address = endpoint ?? (DevelopmentLaunch.instance == nil ? existing.first { $0.id == localID }?.endpoint : nil)
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .mac, name: chosenNames[localID] ?? DevelopmentLaunch.deviceName(), endpoint: endpoint,
+                  kind: .mac, name: chosenNames[localID] ?? DevelopmentLaunch.deviceName(), endpoint: address,
                   capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
@@ -585,6 +596,41 @@ final class LibraryHostController {
                 try? await ensureExecutionToolSettings(workspace: workspace, configuration: configuration)
             }
         }
+    }
+
+    /// Marks deleted the registry row of each Linux workspace this Mac
+    /// uninstalled (`RemoteWorkspacesModel.removedWorkspaceIDs`), as its owner
+    /// and against the row's revision, so every paired device drops its
+    /// section, its agents and its offers. The record of a removal is kept
+    /// until the row is marked, and a removal is the only cause: a row this
+    /// Mac merely holds no configuration for is left alone. A deleted identity
+    /// is final (`registerExecutionWorkspace` refuses to change or replace
+    /// it, and `refreshExecutionRegistry` skips it): adding the same machine
+    /// again is a new configuration under a new ID and so a new row, while
+    /// the old row's chats stay readable history and its folders keep naming
+    /// the workspace that is gone.
+    func withdrawRemovedLinuxWorkspaces() async throws {
+        guard let model, !model.isBackendFrontend, let database = model.libraryStore?.database,
+              !model.remoteWorkspaces.removedWorkspaceIDs.isEmpty else { return }
+        let identity = try await database.libraryIdentity()
+        let existing = try await database.libraryExecutionWorkspaces()
+        var changed = false
+        for removed in model.remoteWorkspaces.removedWorkspaceIDs {
+            let id = removed.uuidString.lowercased()
+            // Never a workspace that is configured here.
+            guard model.remoteWorkspaces.configuration(id: removed) == nil else { model.remoteWorkspaces.acknowledgeRemoval(removed); continue }
+            if var row = existing.first(where: { $0.id == id }), !row.deleted, row.kind == .linux,
+               row.ownerDeviceID == identity.hostDeviceID, row.libraryID == identity.libraryID {
+                let revision = row.revision
+                row.deleted = true
+                _ = try await database.registerExecutionWorkspace(.init(workspace: row, expectedRevision: revision), deviceID: identity.hostDeviceID)
+                changed = true
+            }
+            model.remoteWorkspaces.acknowledgeRemoval(removed)
+        }
+        guard changed else { return }
+        executionWorkspaces = try await database.libraryExecutionWorkspaces()
+        await connectExecutionStreams()
     }
 
     /// Sets up a Linux host this Mac manages: adopts it (this Mac becomes its

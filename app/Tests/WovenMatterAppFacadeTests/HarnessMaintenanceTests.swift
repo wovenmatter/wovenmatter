@@ -97,10 +97,10 @@ struct HarnessMaintenanceTests {
         let links = RemoteWorkspaceSidebarModel.links(configurations: reopened.remoteWorkspaces.workspaces + [other], readyTargets: [],
             registry: [], nameOverrides: [:], localHostDeviceID: nil, localFolderOwnerID: nil)
         let link = try #require(links.first { $0.id == fixture.remote.id.uuidString.lowercased() })
-        let listed = RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: link, peerAgentIDs: [])
+        let listed = RemoteWorkspaceSidebarModel.choices(reopened.remoteWorkspaceAgents, in: link, peerAgentIDs: []).compactMap(\.agent)
         #expect(listed.sorted { $0.id.uuidString < $1.id.uuidString } == saved.sorted { $0.id.uuidString < $1.id.uuidString })
         let unrelated = try #require(links.first { $0.id == other.id.uuidString.lowercased() })
-        #expect(RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: unrelated, peerAgentIDs: []).isEmpty)
+        #expect(RemoteWorkspaceSidebarModel.choices(reopened.remoteWorkspaceAgents, in: unrelated, peerAgentIDs: []).isEmpty)
         // A failed refresh (no inventory) must not remove or rewrite known agents.
         await reopened.synchronizeRemoteAgentCatalog()
         #expect(reopened.remoteWorkspaceAgents == saved)

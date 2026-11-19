@@ -382,6 +382,11 @@ final class ApplicationModel {
     @ObservationIgnored private var ownAgentIDs: Set<UUID> = []
     /// Names people gave workspaces, by registry ID (`execution_workspace_names`).
     private(set) var workspaceNameOverrides: [String: String] = [:]
+    /// Each paired Mac's tailnet address by its library host ID, from the
+    /// routes this library keeps (`mac_routes`, what `peerSync.routes` loads).
+    /// A window reads them here too. A Mac whose registry row has no address
+    /// is still titled by its machine name through these.
+    private(set) var pairedMacAddresses: [String: URL] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
     var executionWorkspaceRegistry: [ExecutionWorkspace] = []
@@ -717,6 +722,12 @@ final class ApplicationModel {
                 await self?.synchronizeRemoteAgentCatalog()
                 await self?.synchronizeRemoteOpenCodeInstances()
                 await self?.refreshDatabases()
+            }
+            // An uninstalled host leaves the registry now; a failure is retried
+            // with every registry refresh until its row is marked.
+            remoteWorkspaces.onWorkspaceRemoved = { [weak self] in
+                try? await self?.libraryHost.withdrawRemovedLinuxWorkspaces()
+                await self?.refreshWorkspace()
             }
             await synchronizeRemoteAgentCatalog()
             remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
@@ -1247,6 +1258,11 @@ final class ApplicationModel {
             if executionWorkspaceRegistry != registry { executionWorkspaceRegistry = registry }
             let names = try await libraryStore.database.executionWorkspaceNames()
             if workspaceNameOverrides != names { workspaceNameOverrides = names }
+            // Unreadable routes keep the last ones: a title is never worth an error here.
+            if let routes = try? await libraryStore.database.macRoutes() {
+                let addresses = Dictionary(routes.map { ($0.deviceID, $0.endpoint) }, uniquingKeysWith: { first, _ in first })
+                if pairedMacAddresses != addresses { pairedMacAddresses = addresses }
+            }
             let nativeDirectories = try await libraryStore.sessionNativeWorkingDirectories(
                 ids: (workspaceOverview?.conversations ?? []).map(\.id))
             guard self.libraryStore === libraryStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
@@ -1740,7 +1756,7 @@ final class ApplicationModel {
                 folderID = try await libraryStore.createFolder(name: name,
                     location: .init(workspaceID: Self.remoteDatabaseSourceID(id), rootPath: project.path, managed: true))
             case .ios:
-                throw WorkspaceToolError.invalid("Create this folder on \(workspace.name).")
+                throw WorkspaceToolError.invalid("Create this folder on \(workspaceDisplayName(workspace)).")
             }
             await refreshWorkspace()
             if LocalExecutionRole.current != .backend { await analytics.record(.active) }
@@ -3160,22 +3176,54 @@ final class ApplicationModel {
     /// name someone chose for it; else, for a Mac, its tailnet machine name
     /// (the first label of its `*.ts.net` address); else the name its owner
     /// registered. The owner also publishes a chosen name as the registered
-    /// one, for devices that only read the registry. A Mac's Dev instance
-    /// shares its machine name with production, so it says "(Dev)" and its
-    /// instance, in the shape `DevelopmentLaunch.deviceName` registers.
-    nonisolated static func workspaceDisplayName(_ workspace: ExecutionWorkspace, overrides: [String: String]) -> String {
+    /// one, for devices that only read the registry.
+    ///
+    /// A Mac's machine name comes from its registry row's address, and when
+    /// the row has none, from the route this library keeps for that Mac
+    /// (`macAddresses`, by library host ID, which is the row's owner), so the
+    /// title and the list's order do not change while a Mac is unreachable.
+    /// The registered computer name is used only for a Mac with neither. A
+    /// route belongs to one library host: a Dev snapshot has its own host ID
+    /// and its own route, and a live Dev instance shares its Mac's host ID
+    /// and machine. Either way a Dev instance says "(Dev)" and its instance,
+    /// in the shape `DevelopmentLaunch.deviceName` registers.
+    ///
+    /// A Linux host goes by the name it registered, the one from its setup.
+    /// One registered under its full tailnet address (a bots-only host is)
+    /// shows that address's machine name. After "Use default name" on a host
+    /// another Mac set up, the registered name is still the chosen one until
+    /// that Mac publishes its row again; nothing here can tell the two apart,
+    /// so the title follows once it has.
+    nonisolated static func workspaceDisplayName(_ workspace: ExecutionWorkspace, overrides: [String: String],
+                                                 macAddresses: [String: URL] = [:]) -> String {
         if let name = overrides[workspace.id.lowercased()] { return name }
-        if workspace.kind == .mac, let machine = SignInDevice.tailnetName(workspace.endpoint?.host) {
-            return workspace.developmentInstance.map { machine + " (Dev) · " + $0 } ?? machine
+        switch workspace.kind {
+        case .mac:
+            if let machine = SignInDevice.tailnetName((workspace.endpoint ?? macAddresses[workspace.ownerDeviceID])?.host) {
+                return workspace.developmentInstance.map { machine + " (Dev) · " + $0 } ?? machine
+            }
+        case .linux:
+            if workspace.name.lowercased().hasSuffix(".ts.net"), let machine = SignInDevice.tailnetName(workspace.name) { return machine }
+        case .ios: break
         }
         return workspace.name
     }
     func workspaceDisplayName(_ workspace: ExecutionWorkspace) -> String {
-        Self.workspaceDisplayName(workspace, overrides: workspaceNameOverrides)
+        Self.workspaceDisplayName(workspace, overrides: workspaceNameOverrides, macAddresses: pairedMacAddresses)
     }
-    /// A Linux host this Mac set up: the chosen name, else the one from setup.
+    /// A Linux host this Mac set up: the chosen name, else the one from
+    /// setup. A typed name is kept as typed. A host stored under its own host
+    /// name (a bots-only host is) shows its tailnet machine name instead.
+    nonisolated static func workspaceDisplayName(_ configuration: RemoteWorkspaceConfiguration, overrides: [String: String]) -> String {
+        if let name = overrides[configuration.id.uuidString.lowercased()] { return name }
+        if configuration.name == configuration.hostName {
+            let machine = RemoteWorkspacesModel.workspaceName(entered: "", hostName: configuration.hostName)
+            if !machine.isEmpty { return machine }
+        }
+        return configuration.name
+    }
     func workspaceDisplayName(_ configuration: RemoteWorkspaceConfiguration) -> String {
-        workspaceNameOverrides[configuration.id.uuidString.lowercased()] ?? configuration.name
+        Self.workspaceDisplayName(configuration, overrides: workspaceNameOverrides)
     }
 
     /// Names a workspace by its registry ID for every paired device; nil or
@@ -3370,7 +3418,7 @@ final class ApplicationModel {
         let database = libraryStore.database
         let registryID = target.configuration.id.uuidString.lowercased()
         guard let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == registryID && !$0.deleted }) else {
-            throw LibraryAPIError(code: "unknown_workspace", message: "\(target.configuration.name) is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
+            throw LibraryAPIError(code: "unknown_workspace", message: "\(workspaceDisplayName(target.configuration)) is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
         }
         let runtime = target.harness.id
         let forced = target.configuration.fullRootPermission(for: runtime)
@@ -3385,7 +3433,7 @@ final class ApplicationModel {
             folderID: folderID, title: title, sessionOptions: options)
         let providerID = try await client.providers(workspace: workspace).first { $0.runtimeKind == runtime.rawValue }?.id ?? runtime.rawValue
         guard receipt.conversationID == nil || receipt.conversationID == id else {
-            throw LibraryAPIError(code: "invalid_response", message: "\(target.configuration.name) created a different chat than this Mac requested.")
+            throw LibraryAPIError(code: "invalid_response", message: "\(workspaceDisplayName(target.configuration)) created a different chat than this Mac requested.")
         }
         return try await libraryStore.createRemoteMemberSession(runtimeKind: runtime, remoteWorkspaceID: target.configuration.id,
             remoteWorkspaceName: target.configuration.name, title: title,

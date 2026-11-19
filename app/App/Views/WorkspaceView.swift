@@ -128,12 +128,29 @@ struct WorkspaceView: View {
             + model.remoteWorkspaceAgents
     }
 
-    /// Every other machine's workspace, as the sidebar and New Chat list them.
-    private var remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink] {
-        RemoteWorkspaceSidebarModel.links(
+    /// Every other machine's workspace with its agents and folders, as the
+    /// sidebar and New Chat list them. A render builds it once
+    /// (`workspaceLayout`) and hands it to both rails and the drawer; an
+    /// action builds its own. The registry is listed as Settings lists
+    /// connections: another device's Dev instance only while that device is
+    /// active (`libraryHost.pairedDevices`), production Macs always.
+    private var remoteListing: RemoteWorkspaceListing {
+        RemoteWorkspaceSidebarModel.listing(
             configurations: model.remoteWorkspaces.workspaces, readyTargets: model.remoteWorkspaces.readyChatTargets,
-            registry: model.executionWorkspaceRegistry, nameOverrides: model.workspaceNameOverrides,
-            localHostDeviceID: localHostDeviceID, localFolderOwnerID: localExecutionWorkspaceID)
+            registry: model.executionWorkspaceRegistry, activeDeviceIDs: Set(model.libraryHost.pairedDevices.map(\.id)),
+            nameOverrides: model.workspaceNameOverrides, macAddresses: model.pairedMacAddresses,
+            localHostDeviceID: localHostDeviceID, localFolderOwnerID: localExecutionWorkspaceID,
+            agents: model.remoteWorkspaceAgents, peerAgentIDs: Set(model.peerAgentWorkspaces.keys),
+            folders: model.workspaceOverview?.folders ?? [])
+    }
+
+    /// Another device's Dev instance that still has an address is listed only
+    /// while that device is active, which the library host knows and a window
+    /// asks its background server for.
+    private var listsAnotherDevInstance: Bool {
+        model.executionWorkspaceRegistry.contains {
+            $0.developmentInstance != nil && $0.endpoint != nil && !$0.deleted && $0.ownerDeviceID != localHostDeviceID
+        }
     }
 
     private var surfacePreferenceSignature: String {
@@ -195,8 +212,32 @@ struct WorkspaceView: View {
             openUtility(.settings)
         }
         .task(id: model.state == .ready) {
-            localExecutionWorkspaceID = try? await model.executionWorkspaceIdentity(workspaceID: nil)
-            localHostDeviceID = try? await model.libraryStore?.database.libraryIdentity().hostDeviceID
+            // Who this Mac is decides which registry row is the Local
+            // workspace. Both IDs are read before either is set, so no render
+            // sees one without the other. A read that fails is tried again
+            // rather than leaving the other machines unlisted until the app
+            // restarts; meanwhile the one that was read is used, and the list
+            // shows only rows it can tell are another machine's
+            // (`RemoteWorkspaceSidebarModel.links`), never this Mac.
+            guard model.state == .ready else { return }
+            var wait = Duration.milliseconds(250)
+            while !Task.isCancelled {
+                let folderOwner = try? await model.executionWorkspaceIdentity(workspaceID: nil)
+                let host = try? await model.libraryStore?.database.libraryIdentity().hostDeviceID
+                guard !Task.isCancelled else { return }
+                if let folderOwner, localExecutionWorkspaceID != folderOwner { localExecutionWorkspaceID = folderOwner }
+                if let host, localHostDeviceID != host { localHostDeviceID = host }
+                if folderOwner != nil, host != nil { return }
+                do { try await Task.sleep(for: wait) } catch { return }
+                wait = min(wait * 2, .seconds(5))
+            }
+        }
+        .task(id: listsAnotherDevInstance) {
+            guard listsAnotherDevInstance else { return }
+            while !Task.isCancelled {
+                await model.libraryHost.refreshStatus()
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            }
         }
     }
 
@@ -214,8 +255,11 @@ struct WorkspaceView: View {
                 compactRail: compactRail
             )
 
+            // Once for this render: both rails and New Chat list from it.
+            let remote = remoteListing
+
             ZStack(alignment: .trailing) {
-                desktopShell(layout: layout)
+                desktopShell(layout: layout, remote: remote)
                 .background(theme.palette.workspace)
                 // Narrowing the window hides the rails again; widening restores
                 // the rails the person requested.
@@ -238,7 +282,7 @@ struct WorkspaceView: View {
                         model: model,
                         folderOwnerID: model.workspaceOverview?.folders.first(where: { $0.id == selectedFolderID })?.executionWorkspaceID,
                         localExecutionWorkspaceID: localExecutionWorkspaceID,
-                        remoteWorkspaceLinks: remoteWorkspaceLinks,
+                        remoteListing: remote,
                         onClose: closeNewChatChooser,
                         onSelect: startNewChat
                     )
@@ -408,7 +452,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private func desktopShell(layout: WorkspaceLayoutState) -> some View {
+    private func desktopShell(layout: WorkspaceLayoutState, remote: RemoteWorkspaceListing) -> some View {
         let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
             : !layout.showsLeftRail
@@ -418,7 +462,7 @@ struct WorkspaceView: View {
 
         return HStack(spacing: WovenMetrics.shellGap) {
             if layout.showsLeftRail {
-                railGroup(side: .left, collapsesAdaptivePages: layout.compact)
+                railGroup(side: .left, collapsesAdaptivePages: layout.compact, remote: remote)
             }
 
             centerSurface(
@@ -430,7 +474,7 @@ struct WorkspaceView: View {
             .frame(minWidth: WovenMetrics.workspaceMinimumWidth)
 
             if layout.showsRightRail {
-                railGroup(side: .right, collapsesAdaptivePages: layout.compact)
+                railGroup(side: .right, collapsesAdaptivePages: layout.compact, remote: remote)
             }
         }
         // A Page is a document like any other artifact, inside the same shell.
@@ -442,7 +486,8 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func railGroup(
         side: SidebarSide,
-        collapsesAdaptivePages: Bool
+        collapsesAdaptivePages: Bool,
+        remote: RemoteWorkspaceListing
     ) -> some View {
         let pages = sidebarNavigation.pages(
             for: side,
@@ -453,7 +498,7 @@ struct WorkspaceView: View {
 
         let content = HStack(spacing: usesUnifiedSurface ? 0 : WovenMetrics.shellGap) {
             ForEach(pages, id: \.self) { page in
-                rail(side: side, page: page, adaptiveExpanded: usesUnifiedSurface)
+                rail(side: side, page: page, adaptiveExpanded: usesUnifiedSurface, remote: remote)
                     .frame(width: WovenMetrics.railWidth)
                     .background {
                         if !usesUnifiedSurface {
@@ -484,7 +529,8 @@ struct WorkspaceView: View {
     private func rail(
         side: SidebarSide,
         page: SidebarPage,
-        adaptiveExpanded: Bool
+        adaptiveExpanded: Bool,
+        remote: RemoteWorkspaceListing
     ) -> some View {
         SidebarRail(
             side: side,
@@ -493,12 +539,10 @@ struct WorkspaceView: View {
             adaptiveExpanded: adaptiveExpanded,
             agents: allAgents,
             navigationAgents: sidebarAgents,
-            peerAgentIDs: Set(model.peerAgentWorkspaces.keys),
             remoteWorkspaces: model.remoteWorkspaces,
-            remoteWorkspaceLinks: remoteWorkspaceLinks,
+            remoteListing: remote,
             localWorkspaceReady: model.localACPWorkspaceAvailability.isReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
-            executionWorkspaces: model.executionWorkspaceRegistry,
             conversationOwners: model.federatedExecutionOwners,
             folders: model.workspaceOverview?.folders ?? [],
             conversations: model.workspaceOverview?.conversations ?? [],
@@ -749,9 +793,11 @@ struct WorkspaceView: View {
 
     private var conversationsForSelectedAgent: [WorkspaceConversationRecord] {
         guard let agent = selectedAgent else { return [] }
-        return (model.workspaceOverview?.conversations ?? []).filter { conversation in
-            return conversation.agentID == agent.id.uuidString.lowercased()
-        }
+        // A remote workspace lists one agent per harness; its row holds the
+        // chats of every agent it stands for.
+        let ids = Set((agent.executionLocation == .remote ? remoteListing.representedAgentIDs(by: agent) : [agent.id])
+            .map { $0.uuidString.lowercased() })
+        return (model.workspaceOverview?.conversations ?? []).filter { $0.agentID.map(ids.contains) == true }
     }
 
     private func selectDefaults() {
@@ -792,11 +838,13 @@ struct WorkspaceView: View {
 
     /// The listed agent a chat belongs to. A chat another Mac runs has no
     /// native session here, yet names that Mac's agent, which is listed under
-    /// its workspace.
+    /// its workspace. A chat on a remote workspace highlights the agent
+    /// listed for its harness there, whichever member's agent holds it.
     private func listedAgentID(of conversation: WorkspaceConversationRecord) -> UUID? {
-        conversation.agentID.flatMap { agentID in
-            allAgents.first { $0.id.uuidString.lowercased() == agentID }?.id
-        }
+        guard let agent = conversation.agentID.flatMap({ agentID in
+            allAgents.first { $0.id.uuidString.lowercased() == agentID }
+        }) else { return nil }
+        return agent.executionLocation == .remote ? remoteListing.listedAgentID(for: agent) : agent.id
     }
 
     private func selectAgent(_ id: UUID) {
@@ -1174,11 +1222,9 @@ struct WorkspaceView: View {
 
     private func startRemoteChat(_ target: RemoteHarnessChatTarget) {
         let requestedFolderID = selectedFolderID
-        // This Mac's own agent for the host; another Mac may hold one for it too.
-        let selection = beginChatCreation(agentID: allAgents.first {
-            $0.executionLocation == .remote && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
-                && model.peerAgentWorkspaces[$0.id] == nil
-        }?.id)
+        // The agent listed for this harness on the host: this Mac's own while
+        // the harness is ready here, as the sidebar and New Chat chose it.
+        let selection = beginChatCreation(agentID: remoteListing.choice(for: target)?.agent?.id)
         Task {
             guard let conversationID = await model.createRemoteACPSession(
                 target: target, requestedConversationID: selection.id, folderID: requestedFolderID

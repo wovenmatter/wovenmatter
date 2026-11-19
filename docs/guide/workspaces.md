@@ -16,8 +16,8 @@ workspace root: `~/.woven-matter` on your Mac while a native Linux host uses
 
 A folder for another paired Mac is created by that Mac, in its own
 `~/.woven-matter`, and appears on every device as soon as they synchronize.
-That Mac must be on and reachable; if it runs an older version, Woven asks you
-to update Woven Matter on it first. If the connection drops before that Mac
+That Mac must be on and reachable; if it runs an older version, the form says
+to update Woven Matter on it and **Create** stays off until it has. If the connection drops before that Mac
 confirms, create the folder again: one it already made is not made twice. Any
 of your Macs can create a folder on a Linux host, whichever Mac set the host
 up. These folders are always created new: **Link Existing** is offered for this
@@ -45,10 +45,21 @@ Under each remote workspace, **Agents** are the harnesses on that machine (the
 plus beside one starts a chat that runs there) and **Folders** are the folders
 that live there.
 
-A paired Mac is titled with its machine name on your tailnet, and a Linux host
-with the name from its setup. To change it, right-click the workspace's heading,
-choose **Rename…**, and save a name; every paired device shows it. **Use
-default name** returns to the original.
+A paired Mac is titled with its machine name on your tailnet, whether or not
+it is online, and a Linux host with the name from its setup. To change it,
+right-click the workspace's heading, choose **Rename…**, and save a name; every
+paired device shows it. **Use default name** returns to the original; for a
+Linux host another Mac set up, the original shows once that Mac has been
+running. Messages about a workspace use the same name.
+
+Each harness on a remote workspace is one row. When two of your Macs both keep
+an agent for the same Linux host and harness, the row is this Mac's while that
+harness is ready from this Mac, and otherwise the other Mac's, so its plus can
+still start a chat; New Chat offers the same agent. Either way the chat runs on
+the Linux host, which this Mac asks directly.
+
+A Linux host you uninstall leaves the list on all your Macs. Another device's
+development build is listed only while it is running.
 
 ## Chats and reference locations
 

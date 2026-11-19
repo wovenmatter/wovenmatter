@@ -33,6 +33,11 @@ final class MemberExecutionClient {
     private let memberRevision: (@MainActor () async -> String?)?
     /// Live state pushed by a stream changed for these conversations.
     var onLive: @MainActor (Set<String>) -> Void = { _ in }
+    /// What a workspace is called in this client's messages. The model sets
+    /// the title the desktop shows (`ApplicationModel.workspaceDisplayName`),
+    /// so an error names a machine as its sidebar section does; the registry
+    /// name is only the fallback. Nothing sent or stored uses it.
+    @ObservationIgnored var workspaceTitle: @MainActor (ExecutionWorkspace) -> String = { $0.name }
     /// Every `conversations`, `pending` and `synchronized` item of a
     /// workspace's stream, in order, for agent-to-agent waiting (`SessionWakeUps`).
     var onWorkspaceItem: (@MainActor (String, StreamItem.Payload) async -> Void)?
@@ -125,7 +130,7 @@ final class MemberExecutionClient {
         guard let descriptor = try await workspace(conversationID: conversationID) else { return }
         guard let stream = await ensureStream(descriptor) else {
             onlineWorkspaces.remove(descriptor.id)
-            if errors[descriptor.id] == nil { errors[descriptor.id] = Self.unstreamedProblem(descriptor) }
+            if errors[descriptor.id] == nil { errors[descriptor.id] = Self.unstreamedProblem(descriptor, name: workspaceTitle(descriptor)) }
             await restoreSaved(conversationID: conversationID)
             return
         }
@@ -145,7 +150,7 @@ final class MemberExecutionClient {
         }
         if onlineWorkspaces.contains(descriptor.id), transcripts[conversationID] != nil { return }
         await restoreSaved(conversationID: conversationID)
-        throw LibraryAPIError(code: "workspace_unavailable", message: errors[descriptor.id] ?? "\(descriptor.name) is not connected yet.")
+        throw LibraryAPIError(code: "workspace_unavailable", message: errors[descriptor.id] ?? "\(workspaceTitle(descriptor)) is not connected yet.")
     }
 
     /// A chat's live view that its owner ended on this connection.
@@ -158,20 +163,22 @@ final class MemberExecutionClient {
         transcripts[conversationID] = Self.markCursor(saved, origin: "library")
     }
 
-    /// Why a workspace has no live stream here.
-    static func unstreamedProblem(_ workspace: ExecutionWorkspace) -> String {
+    /// Why a workspace has no live stream here. `name` is what to call it
+    /// (`workspaceTitle`); without one, the name it registered.
+    static func unstreamedProblem(_ workspace: ExecutionWorkspace, name: String? = nil) -> String {
+        let name = name ?? workspace.name
         if workspace.retainedHistory == true {
-            return "\(workspace.name) is retained history here. Its chats stay readable; start a new session to run work."
+            return "\(name) is retained history here. Its chats stay readable; start a new session to run work."
         }
         if workspace.kind == .ios {
             return "Open Woven Matter on the device that owns this conversation to continue its on-device agent."
         }
-        if workspace.deleted { return "\(workspace.name) was removed from this library. Its chats stay readable." }
-        if workspace.endpoint == nil { return "\(workspace.name) is not connected. Its chats show their saved history." }
+        if workspace.deleted { return "\(name) was removed from this library. Its chats stay readable." }
+        if workspace.endpoint == nil { return "\(name) is not connected. Its chats show their saved history." }
         if !workspace.capabilities.contains(StreamProtocol.capability) {
-            return "\(workspace.name) does not stream its sessions. Its chats show their saved history."
+            return "\(name) does not stream its sessions. Its chats show their saved history."
         }
-        return "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
+        return "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
     }
 
 
@@ -180,8 +187,9 @@ final class MemberExecutionClient {
         transports.removeValue(forKey: workspace.id)
         // A copied owner (a Dev snapshot's, or a Mac unpaired from this one) is
         // history only: it is never signed for.
+        let name = workspaceTitle(workspace)
         guard workspace.retainedHistory != true else {
-            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspace.name) is retained history here. Its chats stay readable; start a new session to run work.")
+            throw LibraryAPIError(code: "workspace_unavailable", message: "\(name) is retained history here. Its chats stay readable; start a new session to run work.")
         }
         guard !workspace.deleted, workspace.kind != .ios || workspace.endpoint != nil else {
             throw LibraryAPIError(code: "workspace_unavailable", message: "Open Woven Matter on the device that owns this conversation to continue its on-device agent.")
@@ -189,9 +197,9 @@ final class MemberExecutionClient {
         // Members sign every request; nothing is provisioned, so the Mac that
         // added the workspace does not need to be online. A refusal is final
         // until the member lists synchronize.
-        let unrecognized = LibraryAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+        let unrecognized = LibraryAPIError(code: "unauthorized", message: "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
         guard workspace.endpoint != nil else {
-            throw LibraryAPIError(code: "workspace_unavailable", message: Self.unstreamedProblem(workspace))
+            throw LibraryAPIError(code: "workspace_unavailable", message: Self.unstreamedProblem(workspace, name: name))
         }
         guard let signed = try await makeSignedTransport(workspace) else { throw unrecognized }
         do {
@@ -228,7 +236,7 @@ final class MemberExecutionClient {
     /// The Linux server's member routes for `workspace`, signed by this Mac.
     func memberRoutes(for workspace: ExecutionWorkspace) async throws -> any MemberExecutionRoutes {
         guard let routes = try await transport(for: workspace) as? any MemberExecutionRoutes else {
-            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspaceTitle(workspace)) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
         }
         return routes
     }
@@ -239,7 +247,7 @@ final class MemberExecutionClient {
                         workingDirectory: String?, model: String?) async throws -> SessionSettings {
         let providers = try await transport(for: workspace).providers()
         guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue }) else {
-            throw LibraryAPIError(code: "unavailable", message: "\(runtimeKind.displayName) is not set up on \(workspace.name).")
+            throw LibraryAPIError(code: "unavailable", message: "\(runtimeKind.displayName) is not set up on \(workspaceTitle(workspace)).")
         }
         let routes = try await memberRoutes(for: workspace)
         return try await routes.sessionOptions(providerID: provider.id, workingDirectory: workingDirectory, model: model)
@@ -381,7 +389,7 @@ final class MemberExecutionClient {
     /// it made is gone since, and the request goes out once more as a new one.
     func createFolder(name: String, on workspace: ExecutionWorkspace, arrived: @MainActor (String) async -> Bool) async throws -> String {
         guard workspace.kind == .mac, workspace.capabilities.contains(LibraryWorkspaceAction.createFolderCapability) else {
-            throw LibraryAPIError(code: "update_required", message: "Update Woven Matter on \(workspace.name) to create folders there.")
+            throw LibraryAPIError(code: "update_required", message: "Update Woven Matter on \(workspaceTitle(workspace)) to create folders there.")
         }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = UnansweredFolderRequest.Key(workspaceID: workspace.id, name: name)
@@ -419,7 +427,7 @@ final class MemberExecutionClient {
     /// made) the folder. Any receipt settles the request, so the next one for
     /// this name is new; without one it stays unanswered.
     private func requestFolder(id: String, key: UnansweredFolderRequest.Key, on workspace: ExecutionWorkspace) async throws {
-        let identity = try await database.libraryIdentity()
+        let identity = try await database.libraryIdentity(), owner = workspaceTitle(workspace)
         unansweredFolderRequests[key] = .init(id: id, sentAt: .now)
         let receipt: LibraryCommandReceipt
         do {
@@ -427,18 +435,18 @@ final class MemberExecutionClient {
                 workspaceAction: .createFolder(id: id, name: key.name), libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
         } catch let error as LibraryAPIError where error.code == "execution_unconfirmed" {
             // The stream lost the answer; the request stays unanswered.
-            throw LibraryAPIError(code: error.code, message: "\(workspace.name) did not confirm the new folder. Try again; a folder it already made is not made twice.")
+            throw LibraryAPIError(code: error.code, message: "\(owner) did not confirm the new folder. Try again; a folder it already made is not made twice.")
         }
         unansweredFolderRequests[key] = nil
         switch receipt.status {
         case .accepted, .completed: return
         case .rejected:
-            throw LibraryAPIError(code: receipt.code ?? "rejected", message: receipt.message ?? "\(workspace.name) could not create this folder.")
+            throw LibraryAPIError(code: receipt.code ?? "rejected", message: receipt.message ?? "\(owner) could not create this folder.")
         case .outcomeUnknown:
             // The owner took the request and stopped before recording its
             // result; it never runs that ID again, so asking again must be new.
             throw LibraryAPIError(code: "execution_unconfirmed",
-                message: "\(workspace.name) stopped before it finished creating “\(key.name)”. If the folder does not appear, create it again.")
+                message: "\(owner) stopped before it finished creating “\(key.name)”. If the folder does not appear, create it again.")
         }
     }
     private func requiredWorkspace(_ id: String) async throws -> ExecutionWorkspace {
@@ -593,7 +601,7 @@ extension MemberExecutionClient {
         if let existing = live[workspace.id] { return existing }
         // Nothing the socket sends counts until its `hello` names the workspace
         // this Mac meant to reach, as `identity()` checks over HTTP.
-        let checked: StreamConnection.Connect = { [id = workspace.id, libraryID = workspace.libraryID, name = workspace.name] in
+        let checked: StreamConnection.Connect = { [id = workspace.id, libraryID = workspace.libraryID, name = workspaceTitle(workspace)] in
             HelloCheckedStreamTransport(try await connect(), workspaceID: id, libraryID: libraryID, name: name)
         }
         let connection = StreamConnection(configuration: streamConfiguration, connect: checked)
@@ -748,10 +756,10 @@ extension MemberExecutionClient {
             let connection = stream.connection, journal = commandJournal
             Task { _ = try? await StreamCommands.resolveUnknown(workspaceID: id, journal: journal, connection: connection) }
         case .waiting(let error):
-            onlineWorkspaces.remove(id); errors[id] = Self.streamProblem(error, workspace: stream.workspace)
+            onlineWorkspaces.remove(id); errors[id] = Self.streamProblem(error, workspace: stream.workspace, name: workspaceTitle(stream.workspace))
             stream.synchronizedConversations = []; stream.releaseAll()
         case .memberRemoved:
-            onlineWorkspaces.remove(id); errors[id] = Self.streamProblem(.memberRemoved, workspace: stream.workspace)
+            onlineWorkspaces.remove(id); errors[id] = Self.streamProblem(.memberRemoved, workspace: stream.workspace, name: workspaceTitle(stream.workspace))
             stream.synchronizedConversations = []; stream.releaseAll()
         case .idle:
             onlineWorkspaces.remove(id); stream.synchronizedConversations = []; stream.releaseAll()
@@ -760,13 +768,15 @@ extension MemberExecutionClient {
         onLive(changed)
     }
 
-    static func streamProblem(_ error: StreamConnectionError?, workspace: ExecutionWorkspace) -> String {
-        switch error {
+    /// `name` is what to call the workspace (`workspaceTitle`); without one, the name it registered.
+    static func streamProblem(_ error: StreamConnectionError?, workspace: ExecutionWorkspace, name: String? = nil) -> String {
+        let name = name ?? workspace.name
+        return switch error {
         case .memberTimeStale: "This Mac's clock is wrong. Set the date and time automatically in System Settings, then try again."
-        case .unauthorized: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
-        case .memberRemoved: "\(workspace.name) no longer lists this Mac as a member. It reconnects once the member lists change."
-        case .protocolUnsupported: "Update Woven Matter on \(workspace.name) and on this Mac."
-        case nil, .disconnected, .timedOut, .notConnected: "\(workspace.name) is not connected. Woven Matter reconnects automatically."
+        case .unauthorized: "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
+        case .memberRemoved: "\(name) no longer lists this Mac as a member. It reconnects once the member lists change."
+        case .protocolUnsupported: "Update Woven Matter on \(name) and on this Mac."
+        case nil, .disconnected, .timedOut, .notConnected: "\(name) is not connected. Woven Matter reconnects automatically."
         case let error?: error.localizedDescription
         }
     }
@@ -777,7 +787,7 @@ extension MemberExecutionClient {
             if case .ended(let error) = event {
                 // For good on this connection: the next one subscribes again.
                 stream.subscription = nil; stream.workspaceEnds += 1
-                errors[id] = error?.message ?? Self.streamProblem(nil, workspace: stream.workspace)
+                errors[id] = error?.message ?? Self.streamProblem(nil, workspace: stream.workspace, name: workspaceTitle(stream.workspace))
             }
             return .accepted
         }
@@ -808,8 +818,9 @@ extension MemberExecutionClient {
             // connection; the read that follows shows its library history.
             stream.conversations.removeValue(forKey: conversationID)
             let reason = error?.message.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let name = workspaceTitle(stream.workspace)
             stream.ended[conversationID] = reason.isEmpty
-                ? "\(stream.workspace.name) stopped sending this chat's live view. It shows its saved history until \(stream.workspace.name) reconnects."
+                ? "\(name) stopped sending this chat's live view. It shows its saved history until \(name) reconnects."
                 : reason
             watched.removeAll { $0 == conversationID }
             sessions.removeValue(forKey: conversationID)

@@ -413,7 +413,11 @@ struct DisclosureHeading: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
+                // The row has one line: a long name (a workspace someone
+                // named, a bot group) is cut at its end, never wrapped.
                 Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
                 LucideIcon(glyph: .chevronDown, size: 12)
                     .rotationEffect(.degrees(expanded ? 0 : -90))

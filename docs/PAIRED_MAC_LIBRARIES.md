@@ -83,17 +83,47 @@ the name as its registry name, which is what the iPhone, agents and devices
 that have not updated show. Without a chosen name a Mac's workspace is titled
 on the desktop with its tailnet machine name (the first label of its
 `*.ts.net` address; a Dev instance adds `(Dev) · <instance>`, since it shares
-the machine), and a Linux workspace with the name from its setup, which
-defaults to the host's tailnet machine name.
+the machine). The address is the registry row's, and when the row has none,
+the one in the route this library keeps for that Mac (`mac_routes`, by its
+library host ID, which is the row's `ownerDeviceID`), so the title and the
+list's order do not change while a Mac is unreachable; the computer name it
+registered is used only for a Mac with neither. A production Mac also keeps
+the last address in its own row when it refreshes the registry while Tailscale
+is unavailable; only a Dev instance publishes no address, which is how it
+says it stopped. A Linux workspace is titled with the name from its setup,
+which defaults to the first label of its host name (its tailnet machine
+name); one registered under its full tailnet address, as a bots-only host
+is, shows that label. The desktop's messages name a workspace by this title.
 
 The desktop sidebar lists every other member's workspace, Mac or Linux, as one
 list of remote workspaces (`RemoteWorkspaceSidebarModel.links`): a registry
-row that is visible in connections and is not this Mac's own (by its library
-host ID or its folder owner), merged with the Linux hosts this Mac set up. An
-offline Mac stays listed. Folders are grouped under the row that names their
+row that is visible in connections and is known not to be this Mac's own,
+merged with the Linux hosts this Mac set up. A Mac row is this Mac's when its
+owner is this library's host or its folder owner is this Mac's; a Linux row
+this Mac owns without a configuration for it is a host it removed. Until this
+Mac has read its host ID, a row that cannot be told from its own is not
+listed. An offline Mac stays listed. Another device's Dev instance is listed
+only while that device is active (`ExecutionWorkspace.connections`), the same
+projection the library host gives Settings → Workspaces, so a Dev instance
+that quit without withdrawing its row drops out of the sidebar, New Chat and
+Settings together. Folders are grouped under the row that names their
 owner (`ExecutionWorkspace.displayOwner`; when a Mac registered several rows
 for one device, such as a Dev instance beside it, the listed one), agents under
-the row their owner record leads to.
+the row their owner record leads to. Each harness on a workspace is one row,
+and one function picks the agent that stands for it everywhere
+(`RemoteWorkspaceSidebarModel.choices`): this Mac's own while this Mac has
+the harness ready there, else another member's, else this Mac's own. A chat
+started from another member's agent for a Linux host is created on the host
+by a request this Mac signs; that member's Mac is not involved.
+
+Uninstalling a Linux workspace on the Mac that set it up marks its registry
+row `deleted` (`LibraryHostController.withdrawRemovedLinuxWorkspaces`,
+written by its owner against the row's revision), so every paired device
+drops it. Only a completed uninstall does this: the removal is recorded on
+that Mac and kept until the row is marked, and a row the Mac merely holds no
+configuration for is never deleted, because a deleted identity cannot be
+registered again. The same machine set up later is a new workspace with a new
+ID.
 
 Another machine's chats arrive in this library by synchronization like any
 other history; there is no separate per-Mac cache of them. While one is open,

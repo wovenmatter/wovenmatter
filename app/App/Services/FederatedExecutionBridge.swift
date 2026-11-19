@@ -80,7 +80,7 @@ extension ApplicationModel {
     /// owner (`retainedHistory`), whose chats stay read-only history.
     func memberExecutionClient() throws -> MemberExecutionClient {
         guard !isBackendFrontend, let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
-        if let federatedExecutionClient { return federatedExecutionClient }
+        if let federatedExecutionClient { return titled(federatedExecutionClient) }
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
         let directory = libraryStore.database.supportDirectory
@@ -108,6 +108,12 @@ extension ApplicationModel {
             memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision })
         client.onLive = { [weak self] ids in self?.federatedLiveChanged(ids) }
         federatedExecutionClient = client
+        return titled(client)
+    }
+
+    /// The client's messages name a workspace as the desktop titles it.
+    private func titled(_ client: MemberExecutionClient) -> MemberExecutionClient {
+        client.workspaceTitle = { [weak self] workspace in self?.workspaceDisplayName(workspace) ?? workspace.name }
         return client
     }
 

@@ -108,13 +108,12 @@ struct SidebarRail: View {
     let adaptiveExpanded: Bool
     let agents: [WorkspaceAgent]
     let navigationAgents: [WorkspaceAgent]
-    /// Other members' agents; the rest of the remote agents are this Mac's own.
-    let peerAgentIDs: Set<UUID>
     let remoteWorkspaces: RemoteWorkspacesModel
-    let remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink]
+    /// Every other machine's workspace with its agents and folders, built once
+    /// for the render by the window and shared with New Chat.
+    let remoteListing: RemoteWorkspaceListing
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
-    let executionWorkspaces: [ExecutionWorkspace]
     let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -152,12 +151,10 @@ struct SidebarRail: View {
         SidebarNavigationPage(
             side: side,
             agents: navigationAgents,
-            peerAgentIDs: peerAgentIDs,
             remoteWorkspaces: remoteWorkspaces,
-            remoteWorkspaceLinks: remoteWorkspaceLinks,
+            remoteListing: remoteListing,
             localWorkspaceReady: localWorkspaceReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
-            executionWorkspaces: executionWorkspaces,
             conversationOwners: conversationOwners,
             folders: folders,
             conversations: conversations,
@@ -185,7 +182,7 @@ struct SidebarRail: View {
             notes: scopedNotes,
             runningConversationIDs: runningConversationIDs,
             agents: agents,
-            workspaceTitles: Dictionary(remoteWorkspaceLinks.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first }),
+            workspaceTitles: Dictionary(remoteListing.links.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first }),
             folders: folders,
             contentRevision: contentRevision,
             contentScopeID: selectedFolderID,
@@ -218,12 +215,10 @@ struct SidebarNavigationPage: View {
     @Environment(\.wovenTheme) private var theme
     let side: SidebarSide
     let agents: [WorkspaceAgent]
-    let peerAgentIDs: Set<UUID>
     let remoteWorkspaces: RemoteWorkspacesModel
-    let remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink]
+    let remoteListing: RemoteWorkspaceListing
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
-    let executionWorkspaces: [ExecutionWorkspace]
     let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -266,6 +261,10 @@ struct SidebarNavigationPage: View {
     private var pinnedAgentIDs: Set<UUID> {
         Set(pinnedAgentOrder)
     }
+
+    private var remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink] { remoteListing.links }
+    /// The registry the listing was built from, as connections are listed.
+    private var executionWorkspaces: [ExecutionWorkspace] { remoteListing.registry }
 
     private var pairedWorkspaceLinks: [ExecutionWorkspace] {
         PairedWorkspaceSidebarModel.workspaces(executionWorkspaces)
@@ -455,7 +454,7 @@ struct SidebarNavigationPage: View {
                 }
             }
             // A folder whose workspace is not listed retains its captured ownership.
-            ForEach(unavailableFolderOwnerIDs, id: \.self) { ownerID in
+            ForEach(remoteListing.unavailableFolderOwnerIDs, id: \.self) { ownerID in
                 let key = "unavailable-workspace:" + ownerID
                 let title = "Unavailable workspace"
                 agentDisclosureHeading(title: title, key: key)
@@ -469,12 +468,6 @@ struct SidebarNavigationPage: View {
                 }
             }
         }
-    }
-
-    private var unavailableFolderOwnerIDs: [String] {
-        RemoteWorkspaceSidebarModel.unavailableFolderOwnerIDs(
-            folders: folders, links: remoteWorkspaceLinks, paired: pairedWorkspaceLinks,
-            localFolderOwnerID: localExecutionWorkspaceID, registry: executionWorkspaces)
     }
 
     /// A paired iPhone or iPad: its Quick Chat history (read-only here) and the
@@ -560,7 +553,8 @@ struct SidebarNavigationPage: View {
                         groupAgents: regular, isPinned: false, remoteWorkspace: remoteWorkspace)
                 }
                 if let remoteWorkspace {
-                    let pendingTargets = remoteWorkspace.readyTargets.filter { remoteAgent(for: $0) == nil }
+                    // A harness this Mac has ready there before its agent is saved.
+                    let pendingTargets = (remoteListing.choices[remoteWorkspace.id] ?? []).compactMap { $0.agent == nil ? $0.target : nil }
                     ForEach(pendingTargets) { target in
                         remoteTargetRow(target, in: remoteWorkspace)
                     }
@@ -610,13 +604,24 @@ struct SidebarNavigationPage: View {
         _ workspace: RemoteWorkspaceSidebarLink
     ) -> some View {
         let key = AgentDisclosureKey.workspace(workspace.id)
+        let rename = {
+            renamedWorkspaceName = workspace.title
+            renamingWorkspaceID = workspace.id
+        }
         // Remote workspace names deliberately align with the local heading.
+        // A long chosen name is cut to the row; the tooltip has all of it.
         agentDisclosureHeading(title: workspace.title, key: key)
+            .help(workspace.title)
             .contextMenu {
-                Button("Rename…") {
-                    renamedWorkspaceName = workspace.title
-                    renamingWorkspaceID = workspace.id
+                Button("Rename…", action: rename)
+                if let configuration = workspace.configuration {
+                    Button("View browser") { browserWorkspace = configuration }
                 }
+            }
+            // The same actions as accessibility actions, so VoiceOver lists
+            // them on the heading itself and not only in its context menu.
+            .accessibilityActions {
+                Button("Rename…", action: rename)
                 if let configuration = workspace.configuration {
                     Button("View browser") { browserWorkspace = configuration }
                 }
@@ -647,8 +652,8 @@ struct SidebarNavigationPage: View {
         if agentSectionExpanded(key) {
             workspaceContents(
                 key: key, title: workspace.title,
-                workspaceAgents: RemoteWorkspaceSidebarModel.agents(agents, in: workspace, peerAgentIDs: peerAgentIDs),
-                workspaceFolders: RemoteWorkspaceSidebarModel.folders(folders, in: workspace, registry: executionWorkspaces),
+                workspaceAgents: (remoteListing.choices[workspace.id] ?? []).compactMap(\.agent),
+                workspaceFolders: remoteListing.folders[workspace.id] ?? [],
                 remoteWorkspace: workspace
             )
         }
@@ -668,17 +673,6 @@ struct SidebarNavigationPage: View {
                 actions.onStartRemoteChat(target)
             }
             .disabled(!canCreateChat(onWorkspace: workspace.id))
-        }
-    }
-
-    /// This Mac's own saved agent for a harness it has ready on a Linux host
-    /// it set up. Another Mac's agent for the same host is not it.
-    private func remoteAgent(for target: RemoteHarnessChatTarget) -> WorkspaceAgent? {
-        agents.first {
-            $0.executionLocation == .remote
-                && $0.runtimeDeviceID == target.configuration.id
-                && $0.runtimeKind == target.harness.id
-                && !peerAgentIDs.contains($0.id)
         }
     }
 
@@ -835,7 +829,8 @@ struct SidebarNavigationPage: View {
                 remoteWorkspaces: remoteWorkspaces,
                 localWorkspaceReady: localWorkspaceReady,
                 workspaceID: remoteWorkspace?.configuration?.id,
-                ownerCreatesFolder: owner.map { $0.workspace?.endpoint != nil },
+                ownerCreatesFolder: owner != nil,
+                ownerProblem: owner.flatMap(RemoteFolderCreation.problem),
                 workspaceTitle: workspaceTitle,
                 onCancel: { creatingFolderWorkspaceKey = nil },
                 onCreate: { name, workspaceID, externalRoot in
@@ -1106,10 +1101,12 @@ struct NewFolderPopover: View {
     let localWorkspaceReady: Bool
     let workspaceID: UUID?
     /// Set when the workspace's owner creates the folder (another Mac, or a
-    /// Linux host this Mac did not set up): only "Create New" applies, and the
-    /// value says whether the workspace has an address to ask. No status is
-    /// kept here for such a workspace.
-    var ownerCreatesFolder: Bool? = nil
+    /// Linux host this Mac did not set up): only "Create New" applies. No
+    /// status is kept here for such a workspace, so `ownerProblem` says why it
+    /// cannot be asked now (`RemoteFolderCreation.problem`), shown in place
+    /// of a form that would fail only after Create; nil when it can.
+    var ownerCreatesFolder = false
+    var ownerProblem: String? = nil
     let workspaceTitle: String
     let onCancel: () -> Void
     let onCreate: (String, UUID?, URL?) -> Void
@@ -1125,7 +1122,7 @@ struct NewFolderPopover: View {
     @FocusState private var nameFocused: Bool
 
     private var ownerIsAvailable: Bool {
-        if let ownerCreatesFolder { return ownerCreatesFolder }
+        if ownerCreatesFolder { return ownerProblem == nil }
         guard let workspaceID else { return localWorkspaceReady }
         return remoteWorkspaces.statuses[workspaceID]?.running == true
             && !remoteWorkspaces.busyWorkspaceIDs.contains(workspaceID)
@@ -1148,7 +1145,10 @@ struct NewFolderPopover: View {
             Text(workspaceTitle)
                 .font(.system(size: 11.5))
                 .foregroundStyle(WovenPalette.mutedForeground)
-            if ownerCreatesFolder == nil, workspaceID == nil || nativeHost != nil {
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(workspaceTitle)
+            if !ownerCreatesFolder, workspaceID == nil || nativeHost != nil {
                 Picker("Directory", selection: $linksExistingDirectory) {
                     Text("Create New").tag(false)
                     Text("Link Existing").tag(true)
@@ -1176,9 +1176,10 @@ struct NewFolderPopover: View {
                     .foregroundStyle(WovenPalette.mutedForeground)
             }
             if !ownerIsAvailable {
-                Text("Connect this workspace before creating a folder.")
+                Text(ownerProblem ?? "Connect this workspace before creating a folder.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(WovenPalette.danger)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()
@@ -1381,36 +1382,13 @@ enum NewChatTarget {
     case peerAgent(UUID)
 }
 
-/// An agent on another Mac or Linux workspace from the synced registry, offered
-/// in New Chat beside this Mac's own targets. The iPhone is never one: it runs
-/// only its own Quick Chats.
+/// An agent of another member on a Mac or Linux workspace, offered in New
+/// Chat beside this Mac's own targets. The iPhone is never one: it runs only
+/// its own Quick Chats.
 struct NewChatPeerTarget: Identifiable, Equatable {
     let agentID: UUID
     let runtimeKind: AgentRuntimeKind
-    let workspace: ExecutionWorkspace
     var id: UUID { agentID }
-
-    /// One row per workspace and harness, skipping those this Mac already
-    /// offers through a Linux host it manages, Macs first, then by name.
-    /// A folder limits the rows to the workspace that owns it; a Mac's folders
-    /// name its folder owner, not its registry ID, so `registry` maps them.
-    static func resolve(agents: [WorkspaceAgent], peerWorkspaces: [UUID: ExecutionWorkspace],
-                        configured: [RemoteHarnessChatTarget], folderOwnerID: String?,
-                        registry: [ExecutionWorkspace] = []) -> [Self] {
-        let owner = folderOwnerID.map { RemoteWorkspaceSidebarModel.workspaceID(ofFolderOwner: $0, in: registry) }
-        var seen = Set(configured.map { $0.configuration.id.uuidString.lowercased() + ":" + $0.harness.id.rawValue })
-        return agents.compactMap { agent -> Self? in
-            guard let workspace = peerWorkspaces[agent.id], !workspace.deleted, workspace.kind == .mac || workspace.kind == .linux,
-                  owner == nil || owner == ExecutionWorkspace.displayID(workspace.id),
-                  seen.insert(ExecutionWorkspace.displayID(workspace.id) + ":" + agent.runtimeKind.rawValue).inserted
-            else { return nil }
-            return .init(agentID: agent.id, runtimeKind: agent.runtimeKind, workspace: workspace)
-        }.sorted {
-            let left = ($0.workspace.kind == .mac ? 0 : 1, $0.workspace.name.lowercased(), $0.runtimeKind.displayName)
-            let right = ($1.workspace.kind == .mac ? 0 : 1, $1.workspace.name.lowercased(), $1.runtimeKind.displayName)
-            return left < right
-        }
-    }
 }
 
 /// A remote workspace's agents in New Chat, under its name: this Mac's ready
@@ -1423,18 +1401,21 @@ struct NewChatWorkspaceGroup: Identifiable, Equatable {
     let peers: [NewChatPeerTarget]
 
     /// One group per listed remote workspace that has an agent to offer, in
-    /// the sidebar's order. A folder leaves only the workspace that owns it.
-    static func resolve(links: [RemoteWorkspaceSidebarLink], agents: [WorkspaceAgent],
-                        peerWorkspaces: [UUID: ExecutionWorkspace], folderOwnerID: String?,
-                        registry: [ExecutionWorkspace]) -> [Self] {
-        let owner = folderOwnerID.map { RemoteWorkspaceSidebarModel.workspaceID(ofFolderOwner: $0, in: registry) }
-        let peers = Dictionary(grouping: NewChatPeerTarget.resolve(
-            agents: agents, peerWorkspaces: peerWorkspaces, configured: links.flatMap(\.readyTargets), folderOwnerID: nil
-        ), by: { ExecutionWorkspace.displayID($0.workspace.id) })
-        return links.compactMap { link in
+    /// the sidebar's order, with the sidebar's agents: one per harness, the
+    /// one `RemoteWorkspaceSidebarModel.choices` picked, so a chat started
+    /// here selects the row the sidebar shows. A harness that only this Mac
+    /// holds and cannot start now is not offered. A folder leaves only the
+    /// workspace that owns it; a Mac's folders name its folder owner, not its
+    /// registry ID, so the listing's registry maps them.
+    static func resolve(listing: RemoteWorkspaceListing, folderOwnerID: String?) -> [Self] {
+        let owner = folderOwnerID.map { RemoteWorkspaceSidebarModel.workspaceID(ofFolderOwner: $0, in: listing.registry) }
+        return listing.links.compactMap { link in
             guard owner == nil || owner == link.id else { return nil }
-            let group = Self(id: link.id, title: link.title, kind: link.kind, targets: link.readyTargets,
-                             peers: (peers[link.id] ?? []).sorted { $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank })
+            let choices = listing.choices[link.id] ?? []
+            let group = Self(id: link.id, title: link.title, kind: link.kind, targets: choices.compactMap(\.target),
+                             peers: choices.compactMap { choice in
+                                 choice.isPeer ? choice.agent.map { .init(agentID: $0.id, runtimeKind: choice.runtimeKind) } : nil
+                             })
             return group.targets.isEmpty && group.peers.isEmpty ? nil : group
         }
     }
@@ -1520,7 +1501,8 @@ struct NewChatDrawer: View {
     @Bindable var model: ApplicationModel
     let folderOwnerID: String?
     let localExecutionWorkspaceID: String?
-    let remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink]
+    /// What the sidebar lists under Remote workspaces, from the same render.
+    let remoteListing: RemoteWorkspaceListing
     let onClose: () -> Void
     let onSelect: (NewChatTarget) -> Void
     @State private var expandedSources = Set(NewChatSource.allCases)
@@ -1528,8 +1510,7 @@ struct NewChatDrawer: View {
     /// Every other Mac's and Linux workspace's agents, whichever Mac added
     /// them, under the workspace that runs them.
     private var remoteGroups: [NewChatWorkspaceGroup] {
-        NewChatWorkspaceGroup.resolve(links: remoteWorkspaceLinks, agents: model.remoteWorkspaceAgents,
-            peerWorkspaces: model.peerAgentWorkspaces, folderOwnerID: folderOwnerID, registry: model.executionWorkspaceRegistry)
+        NewChatWorkspaceGroup.resolve(listing: remoteListing, folderOwnerID: folderOwnerID)
     }
 
     var body: some View {
@@ -1623,6 +1604,9 @@ struct NewChatDrawer: View {
                             Text(group.title)
                                 .font(.system(size: 11.5, weight: .semibold))
                                 .foregroundStyle(WovenPalette.mutedForeground)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .help(group.title)
                                 .padding(.horizontal, 2)
                                 .accessibilityAddTraits(.isHeader)
                             ForEach(group.targets) { target in

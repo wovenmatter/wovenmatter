@@ -40,9 +40,12 @@ there is no fallback connection mode.
    background service startup.
    Preparation does not create a workspace.
 4. Once that host is ready, the workspace form appears. Give the workspace an
-   ID and, if you like, a name; left blank, it is named after the machine's
-   name on your tailnet. Acknowledge the host permission notice where shown,
-   and create it. You can rename it later from its heading in the sidebar.
+   ID and, if you like, a name. Left blank, it takes the first part of the
+   host name you chose, which is the machine's name on your tailnet
+   (`workstation` for `workstation.tail1234.ts.net`); the form shows it. A
+   host entered as a Tailscale IP has no such name, so the form asks for one.
+   Acknowledge the host permission notice where shown, and create it. You can
+   rename it later from its heading in the sidebar.
    Native hosts reuse existing signed-in tools; install any missing adapters or
    harnesses from setup or Settings. Changing the host, SSH user or access
    choice requires a matching host check.
@@ -125,9 +128,14 @@ On the Mac that added the host, the workspace's **Manage** menu has **Start**,
 **Stop**, **Restart**, **Update server**, **View browser**, **Logs**, and
 **Uninstall…** for its native service. **Uninstall…** offers **Uninstall; keep
 data**, which stops the service and keeps workspace files and databases, or
-**Uninstall and remove data**, which cannot be undone. Workspace storage uses
-the host's available disk space. The host operating system controls memory and
-swap.
+**Uninstall and remove data**, which cannot be undone. Once the host has
+uninstalled it, the workspace leaves the sidebar, New Chat and Settings on
+every paired Mac; its chats stay readable, and folders that were on it are
+listed as an unavailable workspace's. Setting the same machine up again makes
+a new workspace: it does not take the old one's place, and those folders stay
+with the one that is gone. A host that cannot be reached is not uninstalled
+and stays listed. Workspace storage uses the host's available disk space. The
+host operating system controls memory and swap.
 
 Closing the Mac app does not stop the remote service. Supported scheduling keeps
 running while the Linux host, agent service and provider access remain available.

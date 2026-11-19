@@ -121,6 +121,18 @@ final class RemoteWorkspacesModel {
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
     private let defaults: UserDefaults
     private let storageKey = "wovenmatter.remote-workspaces.v1"
+    private let removedKey = "wovenmatter.remote-workspaces.removed.v1"
+    /// Workspaces uninstalled from their hosts here whose registry rows this
+    /// Mac has not yet marked deleted. Kept until it has
+    /// (`LibraryHostController.withdrawRemovedLinuxWorkspaces`), so the other
+    /// Macs stop listing a host that is gone. Only a completed uninstall adds
+    /// to it: a missing configuration alone never deletes a row, since a
+    /// deleted registry identity cannot return and this Mac's saved
+    /// configurations can be absent for other reasons (a live Dev build keeps
+    /// its own, a restored library arrives without them).
+    private(set) var removedWorkspaceIDs: [UUID] = []
+    /// Runs once a workspace was uninstalled and forgotten here.
+    var onWorkspaceRemoved: (@MainActor () async -> Void)?
 
     private struct DefaultAgentAcknowledgment {
         let revision: String
@@ -189,6 +201,7 @@ final class RemoteWorkspacesModel {
         // Configured workspaces are always available. Keychain reads remain silent;
         // explicit reconnect or General settings handles permission recovery.
         load()
+        removedWorkspaceIDs = (defaults.stringArray(forKey: removedKey) ?? []).compactMap(UUID.init(uuidString:))
         pendingHarnessSetupIDs = Set((defaults.stringArray(forKey: harnessSetupKey) ?? []).compactMap(UUID.init(uuidString:)))
             .intersection(workspaces.map(\.id))
     }
@@ -222,6 +235,13 @@ final class RemoteWorkspacesModel {
         self.harnesses = [configuration.id: harnesses]
         runtimeMaintenance = [configuration.id: maintenance]
         workspaceRoots[configuration.id] = configuration.workspaceRoot ?? "/fixture/workspace"
+    }
+
+    /// What `delete` does once the host has uninstalled the workspace, without the host.
+    func removeFacadeFixtureWorkspace(_ id: UUID) async {
+        guard let configuration = configuration(id: id) else { return }
+        forget(configuration)
+        await onWorkspaceRemoved?()
     }
 
     func setFacadeHarnessActivity(_ id: UUID, maintaining: Set<AgentRuntimeKind>,
@@ -294,9 +314,11 @@ final class RemoteWorkspacesModel {
         workspaces.first { $0.id == id }
     }
 
-    /// A new workspace's name: the one entered, or, left blank, its host's
-    /// machine name on the tailnet (the first label of its address). A host
-    /// given as a Tailscale IP names no machine, so it needs a name entered.
+    /// A new workspace's name: the one entered, or, left blank, the first
+    /// label of its host name. A host is a tailnet machine named in short or
+    /// by its MagicDNS name, so that label is its machine name on the tailnet.
+    /// A host given as a Tailscale IP has no label to take: the result is
+    /// empty and a name must be entered.
     nonisolated static func workspaceName(entered: String, hostName: String) -> String {
         let name = entered.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.isEmpty else { return name }
@@ -986,18 +1008,36 @@ final class RemoteWorkspacesModel {
             await self.tunnels[configuration.id]?.stop()
             self.tunnels.removeValue(forKey: configuration.id)
             try await self.credentials.deleteToken(for: configuration.id)
-            self.workspaces.removeAll { $0.id == configuration.id }
-            self.dismissHarnessSetup(configuration.id)
-            self.statuses.removeValue(forKey: configuration.id)
-            self.harnesses.removeValue(forKey: configuration.id)
-            self.authenticationSessions.removeValue(forKey: configuration.id)
-            self.workspaceLogs.removeValue(forKey: configuration.id)
-            self.browserSelfTests.removeValue(forKey: configuration.id)
-            self.runtimeMaintenance.removeValue(forKey: configuration.id)
-            self.workspaceInstances.removeValue(forKey: configuration.id)
-            self.save()
+            self.forget(configuration)
+            await self.onWorkspaceRemoved?()
             await self.onRuntimeMaintenanceChanged?()
         }
+    }
+
+    /// Drops a workspace that was uninstalled from its host, and records the
+    /// removal so its registry row is marked deleted (`removedWorkspaceIDs`).
+    /// This is the only way a configuration leaves: turning a bots-only host
+    /// into a workspace keeps its record and its ID (`addWorkspace`), and an
+    /// uninstall that fails, as on a host that is offline, leaves it in place.
+    private func forget(_ configuration: RemoteWorkspaceConfiguration) {
+        workspaces.removeAll { $0.id == configuration.id }
+        dismissHarnessSetup(configuration.id)
+        statuses.removeValue(forKey: configuration.id)
+        harnesses.removeValue(forKey: configuration.id)
+        authenticationSessions.removeValue(forKey: configuration.id)
+        workspaceLogs.removeValue(forKey: configuration.id)
+        browserSelfTests.removeValue(forKey: configuration.id)
+        runtimeMaintenance.removeValue(forKey: configuration.id)
+        workspaceInstances.removeValue(forKey: configuration.id)
+        if !removedWorkspaceIDs.contains(configuration.id) { removedWorkspaceIDs.append(configuration.id) }
+        save()
+    }
+
+    /// The registry row of a removed workspace is marked deleted, or there is none to mark.
+    func acknowledgeRemoval(_ id: UUID) {
+        guard !isBackendProjection, removedWorkspaceIDs.contains(id) else { return }
+        removedWorkspaceIDs.removeAll { $0 == id }
+        save()
     }
 
     func performHarnessAction(
@@ -1774,6 +1814,7 @@ final class RemoteWorkspacesModel {
 
     private func save() {
         guard !isBackendProjection else { return }
+        defaults.set(removedWorkspaceIDs.map(\.uuidString), forKey: removedKey)
         guard let data = try? JSONEncoder().encode(workspaces) else { return }
         defaults.set(data, forKey: storageKey)
     }

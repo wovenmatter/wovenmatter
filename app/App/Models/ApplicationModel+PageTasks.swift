@@ -271,8 +271,20 @@ extension ApplicationModel {
                                             workspaceID: id, runtime: target.harness.id.rawValue, folderID: folder(for: owner)),
                 ready: true, detail: nil, folderOwner: owner))
         }
-        for peer in NewChatPeerTarget.resolve(agents: remoteWorkspaceAgents, peerWorkspaces: peerAgentWorkspaces,
-                                              configured: configured, folderOwnerID: nil) where peer.workspace.id != own?.id {
+        // Other members' workspaces, one row per workspace and harness: a task
+        // is assigned to a harness on a workspace, not to one member's agent,
+        // so this needs no choice among agents. Those this Mac already offers
+        // through a Linux host it manages are skipped; Macs first, then by name.
+        var seen = Set(configured.map { $0.configuration.id.uuidString.lowercased() + ":" + $0.harness.id.rawValue })
+        let peers = remoteWorkspaceAgents.compactMap { agent -> (workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind)? in
+            guard let workspace = peerAgentWorkspaces[agent.id], !workspace.deleted, workspace.kind == .mac || workspace.kind == .linux,
+                  seen.insert(ExecutionWorkspace.displayID(workspace.id) + ":" + agent.runtimeKind.rawValue).inserted else { return nil }
+            return (workspace, agent.runtimeKind)
+        }.sorted {
+            ($0.workspace.kind == .mac ? 0 : 1, $0.workspace.name.lowercased(), $0.runtimeKind.displayName)
+                < ($1.workspace.kind == .mac ? 0 : 1, $1.workspace.name.lowercased(), $1.runtimeKind.displayName)
+        }
+        for peer in peers where peer.workspace.id != own?.id {
             let owner = peer.workspace.folderOwnerID ?? peer.workspace.id
             let place = workspaceDisplayName(peer.workspace)
             targets.append(.init(id: "\(peer.workspace.id):\(peer.runtimeKind.rawValue)", group: .place(place),

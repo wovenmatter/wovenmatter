@@ -393,7 +393,8 @@ struct MemberReachTests {
             makeSignedTransport: { _ in signed.count += 1; return nil })
 
         #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: older.id) == nil)
-        #expect(macA.model.folderMutationError == "Update Woven Matter on Mac mini to create folders there.")
+        // Named as the sidebar titles it: by its tailnet machine name, not the name it registered.
+        #expect(macA.model.folderMutationError == "Update Woven Matter on mac-mini to create folders there.")
         for unavailable in [copied.id, removed.id, UUID().uuidString.lowercased()] {
             #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: unavailable) == nil)
             #expect(macA.model.folderMutationError == "This workspace is no longer available for new folders.")
