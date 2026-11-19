@@ -10,7 +10,6 @@ import WovenMatterCore
 /// bots runtime, and iPhones and iPads. Only token counts and model names leave
 /// an entry; prompts and replies are never read into a sample.
 enum PiDurableUsageRecords {
-  static let format = "pi-durable.entry.v1"
   static let harness = AgentRuntimeKind.defaultAgent.displayName
 
   /// Where an entry's replies are counted.
@@ -256,7 +255,7 @@ public extension UsageDeviceEndpoint {
     .init(identity: identity, alwaysFull: true) { request in
       let stored = try await database.libraryNativeRecords(
         workspaceID: identity.id,
-        format: PiDurableUsageRecords.format
+        format: NativeRecordFormat.piDurableEntry.name
       )
       return .paged(PiDurableUsageRecords.records(from: stored), request: request)
     }

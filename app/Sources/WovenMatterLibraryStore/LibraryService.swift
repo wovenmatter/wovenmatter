@@ -17,7 +17,7 @@ public struct LibraryLocation: Equatable, Sendable {
 public actor LibraryService {
   public typealias RemoteWorkspaceLookup = @Sendable (String) async -> RemoteWorkspaceConfiguration?
   /// Reads an agent's file from a Linux host's server (`POST
-  /// v1/execution/library-file`): workspace ID, conversation ID, the path as
+  /// execution/library-file`): workspace ID, conversation ID, the path as
   /// the agent wrote it (the host resolves a relative one in the chat's own
   /// directory), and the same path under this library's root for the chat,
   /// for history the host does not run.

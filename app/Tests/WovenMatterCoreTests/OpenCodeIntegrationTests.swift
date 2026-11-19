@@ -621,7 +621,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     func respond(_ request: URLRequest) throws -> (Int, OpenCodeValue) {
         try lock.withLock {
             var path = request.url!.path
-            let prefix = "/v1/workspace-instances/opencode"
+            let prefix = "/workspace-instances/opencode"
             if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
             let sessionID = path.contains("/ses_second") ? "ses_second" : "ses_fixture"
             if streamEvents { path = path.replacingOccurrences(of: "/ses_second", with: "/ses_fixture") }

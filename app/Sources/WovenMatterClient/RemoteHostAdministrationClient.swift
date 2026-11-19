@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 
 /// Administration of a Linux host by any Mac member, as signed requests to
-/// its server's `/v1/host/*` routes over the host's private tailnet address
+/// its server's `/host/*` routes over the host's private tailnet address
 /// (docs/architecture/WOVEN_EVERYWHERE.md, "Membership and device keys").
 /// Only first install needs Tailscale SSH from the Mac that adds the machine.
 public struct RemoteHostAdministrationClient: Sendable {
@@ -17,24 +17,24 @@ public struct RemoteHostAdministrationClient: Sendable {
 
     /// `remote-host.sh status` plus `library` and `memberIdentity`.
     public func status() async throws -> JSONValue {
-        try await client.request("v1/host/status", timeout: 60)
+        try await client.request("host/status", timeout: 60)
     }
 
     public func logs(lines: Int = 200) async throws -> String {
         guard (1...1_000).contains(lines) else { throw RemoteWorkspaceClientError.invalidResponse("Choose between 1 and 1,000 log lines.") }
-        let value: JSONValue = try await client.request("v1/host/logs", query: [.init(name: "lines", value: String(lines))], timeout: 60)
+        let value: JSONValue = try await client.request("host/logs", query: [.init(name: "lines", value: String(lines))], timeout: 60)
         return value.objectValue?["logs"]?.stringValue ?? ""
     }
 
     /// Accepted with 202; the host restarts its service a moment later.
     public func restart() async throws {
-        let _: JSONValue = try await client.request("v1/host/restart", method: "POST")
+        let _: JSONValue = try await client.request("host/restart", method: "POST")
     }
 
     /// Bytes, or nil for no cap.
     public func configureBots(poolBytes: Int64?, diskBytes: Int64?) async throws -> JSONValue {
         let body: [String: Any] = ["poolBytes": poolBytes.map { $0 as Any } ?? NSNull(), "diskBytes": diskBytes.map { $0 as Any } ?? NSNull()]
-        return try await client.request("v1/host/bots-configure", method: "POST", body: JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
+        return try await client.request("host/bots-configure", method: "POST", body: JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]))
     }
 
     /// Uploads a host bundle; the host verifies it against `fingerprint` and
@@ -42,25 +42,25 @@ public struct RemoteHostAdministrationClient: Sendable {
     public func update(bundle: Data, fingerprint: String, roles: String? = nil) async throws {
         var query = [URLQueryItem(name: "fingerprint", value: fingerprint)]
         if let roles { query.append(.init(name: "roles", value: roles)) }
-        let _: JSONValue = try await client.request("v1/host/update", method: "POST", query: query, body: bundle,
+        let _: JSONValue = try await client.request("host/update", method: "POST", query: query, body: bundle,
             headers: ["Content-Type": "application/octet-stream"], timeout: 600)
     }
 
     /// `{state: none|running|succeeded|failed, result?, error?}`.
     public func updateState() async throws -> JSONValue {
-        try await client.request("v1/host/update")
+        try await client.request("host/update")
     }
 
     /// Replaces the host's installer bearer, so a removed Mac that installed it
     /// can no longer administer it over Tailscale SSH. The new value is never
     /// sent to a signed caller.
     public func rotateInstallerBearer() async throws {
-        let _: JSONValue = try await client.request("v1/host/installer-bearer", method: "POST")
+        let _: JSONValue = try await client.request("host/installer-bearer", method: "POST")
     }
 
     /// Hands the host the signed member records (`LibraryMemberAdoption`).
     public func adoptMembers(_ adoption: Data) async throws -> JSONValue {
-        try await client.request("v1/host/members/adopt", method: "POST", body: adoption)
+        try await client.request("host/members/adopt", method: "POST", body: adoption)
     }
 
     /// The bundle a signed update uploads, built from this Mac's own app as an

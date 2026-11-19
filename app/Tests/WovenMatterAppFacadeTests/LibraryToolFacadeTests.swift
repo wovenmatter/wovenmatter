@@ -82,23 +82,22 @@ struct LibraryToolFacadeTests {
         var pair = PairRequest(token: offer.payload.token, deviceID: phone.deviceID, deviceName: "Member phone", metadata: .init(kind: .iPhone),
                                requiresConfirmation: true)
         pair.memberPublicKey = phone.publicKey
-        let paired = await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(pair)))
+        let paired = await api.handle(.init(method: "POST", target: "/pair", headers: [:], body: try JSONEncoder().encode(pair)))
         #expect(paired.status == 200)
         // The reply names the Mac's member device ID: the phone's audience.
         let reply = try JSONDecoder().decode(PairResponse.self, from: paired.body)
         #expect(reply.hostDeviceID == mac.identity.deviceID)
         // Confirming the pairing signs the phone's member entry.
         #expect(await mac.member(phone.deviceID) == nil)
-        let confirmed = await api.handle(.init(method: "POST", target: "/v1/pair/confirm", headers: [
-            "authorization": "Bearer " + reply.credential, "x-woven-protocol": String(LibraryProtocol.version),
+        let confirmed = await api.handle(.init(method: "POST", target: "/pair/confirm", headers: [
+            "authorization": "Bearer " + reply.credential,
             "x-woven-workspace": reply.workspaceID], body: Data()))
         #expect(confirmed.status == 200)
         #expect(await mac.member(phone.deviceID)?.kind == .ios)
         func hello() async throws -> Int {
-            var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/v1/hello", audience: mac.identity.deviceID)
-            headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
+            var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/hello", audience: mac.identity.deviceID)
             let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
-            return await api.handle(.init(method: "GET", target: "/wovenmatter/v1/hello", headers: lowered)).status
+            return await api.handle(.init(method: "GET", target: "/wovenmatter/hello", headers: lowered)).status
         }
         #expect(try await hello() == 200)
         try await mac.remove(phone.deviceID)
@@ -125,12 +124,12 @@ struct LibraryToolFacadeTests {
             var request = PairRequest(token: offer.payload.token, deviceID: device, deviceName: "Member phone",
                                                metadata: .init(kind: .iPhone), requiresConfirmation: true)
             request.memberPublicKey = key
-            return await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(request)))
+            return await api.handle(.init(method: "POST", target: "/pair", headers: [:], body: try JSONEncoder().encode(request)))
         }
         func confirm(_ paired: LibraryHTTPResponse) async throws -> Int {
             let reply = try JSONDecoder().decode(PairResponse.self, from: paired.body)
-            return await api.handle(.init(method: "POST", target: "/v1/pair/confirm", headers: [
-                "x-woven-protocol": String(LibraryProtocol.version), "x-woven-workspace": workspaceID,
+            return await api.handle(.init(method: "POST", target: "/pair/confirm", headers: [
+                "x-woven-workspace": workspaceID,
                 "authorization": "Bearer " + reply.credential])).status
         }
         let first = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
@@ -170,7 +169,7 @@ struct LibraryToolFacadeTests {
         let call: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1),
             "method": .string("tools/call"), "params": .object(["name": .string("woven_notes_list"), "arguments": .object([:])])])
         let body = try JSONEncoder().encode(call)
-        var headers = ["x-woven-protocol": String(LibraryProtocol.version), "x-woven-workspace": workspaceID,
+        var headers = ["x-woven-workspace": workspaceID,
             "x-woven-conversation-id": caller, "x-woven-enabled-groups": "notes"]
         func send(_ target: String, signed: Bool = true) async throws -> LibraryHTTPResponse {
             var request = headers
@@ -185,7 +184,7 @@ struct LibraryToolFacadeTests {
         // A pairing bearer reaches nothing but its own confirmation and unpair.
         let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
         let paired = try await auth.pairConfirmed(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(),
-            deviceName: "Bearer phone", protocolVersion: LibraryProtocol.version), workspaceID: workspaceID)
+            deviceName: "Bearer phone"), workspaceID: workspaceID)
         headers["authorization"] = "Bearer " + paired.credential
         #expect(try await send("/mcp", signed: false).status == 401)
         headers.removeValue(forKey: "authorization")

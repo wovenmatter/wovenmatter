@@ -152,7 +152,7 @@ public struct LibraryFileStore: Sendable {
     return FileManager.default.fileExists(atPath: url.path)
   }
 
-  /// A message attachment's bytes, for `GET v1/execution/attachments/<sha256>`:
+  /// A message attachment's bytes, for `GET execution/attachments/<sha256>`:
   /// only a regular file in the attachment store, opened without following a
   /// link, at most the upload limit, and only while it matches its digest.
   public func messageAttachment(contentHash: String) throws -> Data {

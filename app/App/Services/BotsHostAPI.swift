@@ -78,11 +78,11 @@ struct BotsHostAPI: Sendable {
         }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard parts.count >= 3, parts[0] == "v1", parts[1] == "bots-host" else {
+        guard parts.count >= 2, parts[0] == "bots-host" else {
             return .error("not_found", "Unknown bots host route.", status: 404)
         }
         do {
-            switch (request.method, Array(parts.dropFirst(2))) {
+            switch (request.method, Array(parts.dropFirst())) {
             case ("POST", ["mcp-keys"]):
                 let body = try decode(KeyRequest.self, request)
                 try Self.requireIdentifier(body.botID)

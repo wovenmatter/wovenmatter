@@ -278,14 +278,14 @@ final class PairedMacSyncController {
         }
         let payload = try PairingPayload.parseURL(url)
         let own = try await host.peerRoute()
-        let advertisement: DiscoveryAdvertisement = try await network.request(payload.endpoint, path: "v1/discovery")
+        let advertisement: DiscoveryAdvertisement = try await network.request(payload.endpoint, path: "discovery")
         guard advertisement.capabilities?.contains(Self.capability) == true, advertisement.identity.deviceID != own.deviceID else {
             throw LibraryAPIError(code: "update_required", message: "Use a pairing link from another Mac that supports paired Mac synchronization.")
         }
-        let preview: PairingPreview = try await network.request(payload.endpoint, path: "v1/pair/preview",
+        let preview: PairingPreview = try await network.request(payload.endpoint, path: "pair/preview",
             body: JSONEncoder().encode(PairRequest(token: payload.token, deviceID: own.deviceID,
                 deviceName: own.name, metadata: .init(kind: .mac), requiresConfirmation: true, purpose: PairingPurpose.peerMac)))
-        let response: PairResponse = try await network.request(payload.endpoint, path: "v1/pair",
+        let response: PairResponse = try await network.request(payload.endpoint, path: "pair",
             body: JSONEncoder().encode(PairRequest(token: payload.token, deviceID: own.deviceID,
                 deviceName: own.name, metadata: .init(kind: .mac), expectedWorkspaceID: preview.workspaceID, requiresConfirmation: true,
                 purpose: PairingPurpose.peerMac)))
@@ -299,7 +299,7 @@ final class PairedMacSyncController {
         guard let host else { throw CancellationError() }
         let own = try await host.peerRoute()
         guard response.deviceID == own.deviceID else { throw LibraryAPIError(code: "wrong_device", message: "Pairing did not preserve this Mac's identity.") }
-        let advertisement: DiscoveryAdvertisement = try await network.request(endpoint, path: "v1/discovery")
+        let advertisement: DiscoveryAdvertisement = try await network.request(endpoint, path: "discovery")
         guard advertisement.capabilities?.contains(Self.capability) == true else {
             throw LibraryAPIError(code: "update_required", message: "Update both Macs to a version that supports paired Mac synchronization.")
         }
@@ -323,7 +323,7 @@ final class PairedMacSyncController {
         // grant after restart without minting another device identity.
         if credential.confirmationPending == true {
             struct Confirmation: Decodable, Sendable { let confirmed: Bool }
-            let confirmation: Confirmation = try await network.request(route.endpoint, path: "v1/pair/confirm",
+            let confirmation: Confirmation = try await network.request(route.endpoint, path: "pair/confirm",
                 token: credential.token, libraryID: route.libraryID, body: Data("{}".utf8))
             guard confirmation.confirmed else { throw LibraryAPIError(code: "pairing_pending", message: "Pairing confirmation is pending.") }
         }
@@ -338,7 +338,7 @@ final class PairedMacSyncController {
         // the other Mac's key for the reciprocal grant. Both keys are pinned.
         var join = credential.join
         if join == nil {
-            let context: PairedMacJoinContext = try await network.request(route.endpoint, path: "v1/peers/join/prepare", token: credential.token,
+            let context: PairedMacJoinContext = try await network.request(route.endpoint, path: "peers/join/prepare", token: credential.token,
                 body: Data("{}".utf8))
             guard context.route.deviceID == route.deviceID, context.route.libraryID == route.libraryID else {
                 throw LibraryAPIError(code: "wrong_peer", message: "The paired Mac changed its identity during pairing.")
@@ -357,7 +357,7 @@ final class PairedMacSyncController {
         guard let join else { throw CancellationError() }
         let reply: PairedMacJoinReply
         do {
-            reply = try await network.request(route.endpoint, path: "v1/peers/join", token: credential.token, body: JSONEncoder().encode(join))
+            reply = try await network.request(route.endpoint, path: "peers/join", token: credential.token, body: JSONEncoder().encode(join))
         } catch let error as LibraryAPIError where error.code == "revocation_context" {
             // Nothing was admitted; prepare again with the current context.
             var saved = try loadCredentials()
@@ -389,7 +389,7 @@ final class PairedMacSyncController {
             throw LibraryAPIError(code: "unauthorized", message: "\(route.name) has no completed pairing with this Mac.")
         }
         do {
-            return try await network.request(route.endpoint, path: "v1/peers/usage", token: credential.token,
+            return try await network.request(route.endpoint, path: "peers/usage", token: credential.token,
                 body: JSONEncoder().encode(request))
         } catch let error as LibraryAPIError where error.code == "not_found" {
             throw UsageDeviceCollectionError.updateRequired
@@ -398,7 +398,7 @@ final class PairedMacSyncController {
 
     func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
         let path = request.target.replacingOccurrences(of: "/wovenmatter/", with: "/")
-        guard path.hasPrefix("/v1/peers/") else { return nil }
+        guard path.hasPrefix("/peers/") else { return nil }
         if MemberRequestVerifier.isSigned(request.headers) {
             guard host != nil, let librarySync else {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
@@ -406,20 +406,19 @@ final class PairedMacSyncController {
             return await librarySync.handle(request) ?? .error("not_found", "Unknown peer endpoint.", status: 404)
         }
         do {
-            guard let host, let database = host.model?.libraryStore?.database,
-                  request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
+            guard let host, let database = host.model?.libraryStore?.database else {
                 return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
             }
             let authentication = try await host.peerAuthentication()
             guard let bearer = request.bearer else { return .error("unauthorized", "Pair this Mac before synchronizing.", status: 401) }
             let principal = try await authentication.authenticate(bearer: bearer)
             guard !principal.isDevelopment else { return .error("wrong_device", "Only paired Macs may exchange full libraries.", status: 403) }
-            if path == "/v1/peers/join/prepare", request.method == "POST", request.body.count <= 1024 {
+            if path == "/peers/join/prepare", request.method == "POST", request.body.count <= 1024 {
                 let identity = try await identity()
                 return try .json(PairedMacJoinContext(route: try await host.peerRoute(), publicKey: identity.publicKey,
                     acknowledgedRevocations: try await authentication.joinContext(for: principal)))
             }
-            if path == "/v1/peers/join", request.method == "POST", request.body.count <= 16_384 {
+            if path == "/peers/join", request.method == "POST", request.body.count <= 16_384 {
                 let join = try JSONDecoder().decode(PairedMacJoin.self, from: request.body)
                 try join.route.validate()
                 guard join.route.deviceID == principal.id else {
@@ -453,7 +452,7 @@ final class PairedMacSyncController {
             guard await authentication.isAuthorizedPeer(principal) else {
                 return .error("wrong_device", "Only admitted paired Macs may exchange full libraries. Pair this Mac again.", status: 403)
             }
-            if path == "/v1/peers/usage", request.method == "POST", request.body.count <= 4096 {
+            if path == "/peers/usage", request.method == "POST", request.body.count <= 4096 {
                 guard let model = host.model else {
                     return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
                 }

@@ -6,7 +6,7 @@ import WovenMatterCore
 struct RemoteHostWorkspaceTests {
     private func host(mode: RemoteWorkspaceAccessMode = .fullRoot) -> RemoteWorkspaceConfiguration {
         .init(name: "Native", workspaceID: "native-fixture", hostName: "host.invalid", userName: "alice",
-              kind: .host, accessMode: mode, dataRoot: "/home/alice/.local/share/wovenmatter",
+              accessMode: mode, dataRoot: "/home/alice/.local/share/wovenmatter",
               workspaceRoot: "/home/alice/projects", databasesDirectory: "/home/alice/woven-databases",
               attachmentsDirectory: "/home/alice/woven-attachments")
     }

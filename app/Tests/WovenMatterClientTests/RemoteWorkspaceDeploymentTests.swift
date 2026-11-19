@@ -33,7 +33,7 @@ struct RemoteWorkspaceDeploymentTests {
                 Issue.record("A bundle without the host's library host was sent")
                 return Data()
             }, executorDockerScriptLoader: { Data("executor-docker".utf8) })
-        let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid", userName: "alice", kind: .host)
+        let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid", userName: "alice")
         #expect(RemoteHostLibrary.bundled(root: root) == ["x86_64"])
         await #expect(throws: RemoteWorkspaceClientError.self) {
             try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly, architecture: "arm64")
@@ -83,26 +83,26 @@ struct RemoteWorkspaceDeploymentTests {
             #expect(manifest["dependencyInstallation"] as? String == "target-npm-ci")
             #expect((manifest["files"] as? [String: Any])?["host/remote-host.sh"] != nil)
             progress(Data("WM_PROGRESS selftest\n".utf8))
-            return Data(#"{"id":"native-fixture","name":"Native","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#.utf8)
+            return Data(#"{"id":"native-fixture","name":"Native","state":"running","running":true,"startedAt":"","hostPort":7337,"hostStorageLow":false}"#.utf8)
         }, executorDockerScriptLoader: { Data("executor-docker".utf8) })
         let status = try await client.deployHost(configuration: .init(name: "Native", workspaceID: "native-fixture",
-            hostName: "host.invalid", userName: "alice", kind: .host, accessMode: .fullRoot), token: token)
-        #expect(status.running && status.kind == .host)
+            hostName: "host.invalid", userName: "alice", accessMode: .fullRoot), token: token)
+        #expect(status.running)
     }
 
     /// Bots-only hosts use remote-host.sh's roles argument, not a second subcommand.
     @Test func botsOnlyHostUsesTheBotsRole() async throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
         let commands = LockedCommands()
-        let status = #"{"id":"bots","name":"box","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#
+        let status = #"{"id":"bots","name":"box","state":"running","running":true,"startedAt":"","hostPort":7337,"hostStorageLow":false}"#
         let client = RemoteWorkspaceSSHClient(runner: { _, command, _ in
             commands.append(command)
-            return Data(#"{"ready":true,"runtime":"host","version":"","architecture":"x86_64","capabilities":{"memory":false,"swap":false},"limitations":[],"hostStorageLow":false,"blockingIssues":[]}"#.utf8)
+            return Data(#"{"ready":true,"version":"","architecture":"x86_64","limitations":[],"hostStorageLow":false,"blockingIssues":[]}"#.utf8)
         }, scriptLoader: { Data("host-lifecycle".utf8) }, deploymentRoot: root,
         streamingRunner: { _, command, _, _ in commands.append(command); return Data(status.utf8) },
         executorDockerScriptLoader: { Data("executor-docker".utf8) })
         let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid",
-            userName: "alice", kind: .host, accessMode: .user)
+            userName: "alice", accessMode: .user)
         _ = try await client.prepareHost(hostName: "host.invalid", userName: "alice", accessMode: .user,
             roles: RemoteHostInstallMode.botsOnly.roles)
         _ = try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly)

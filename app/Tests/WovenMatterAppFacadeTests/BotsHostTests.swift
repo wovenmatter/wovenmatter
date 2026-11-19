@@ -274,8 +274,8 @@ struct BotsHostTests {
         _ = try await fixture.host.perform(.setMachineEnabled(machineID: "linux-box", false))
         #expect(remote.map(\.0) == ["linux-box"] && remote.map(\.1) == [false])
         // Another member turns this Mac's bots off when they move elsewhere.
-        let off = await fixture.host.remoteRequest(try hostRequest("POST", "/v1/bots/enabled", token: "ignored", body: ["enabled": false]),
-                                                   path: "/v1/bots/enabled")
+        let off = await fixture.host.remoteRequest(try hostRequest("POST", "/bots/enabled", token: "ignored", body: ["enabled": false]),
+                                                   path: "/bots/enabled")
         #expect(off.status == 200)
         #expect(fixture.supervisor.phase == .stopped)
         #expect(await fixture.host.snapshot().machines.first?.state == .off)
@@ -327,16 +327,16 @@ struct BotsHostTests {
         let fixture = try HostFixture(); defer { fixture.remove() }
         let api = fixture.host.makeHostAPI(machineID: "d3vice-0001")
         let token = fixture.host.persisted.hostToken
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/mcp-keys", token: nil, body: ["botID": "b1"])).status == 401)
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/mcp-keys", token: fixture.host.persisted.runtimeToken, body: ["botID": "b1"])).status == 401)
-        let key = await api.handle(try hostRequest("POST", "/v1/bots-host/mcp-keys", token: token, body: ["botID": "b1", "botName": "Builder"]))
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/mcp-keys", token: nil, body: ["botID": "b1"])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/mcp-keys", token: fixture.host.persisted.runtimeToken, body: ["botID": "b1"])).status == 401)
+        let key = await api.handle(try hostRequest("POST", "/bots-host/mcp-keys", token: token, body: ["botID": "b1", "botName": "Builder"]))
         #expect(key.status == 200)
         let keyBody = try #require(try JSONSerialization.jsonObject(with: key.body) as? [String: String])
         #expect(keyBody == ["endpoint": "http://127.0.0.1:1/mcp", "token": "bot-key"])
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/mcp-keys", token: token, body: ["botID": "not valid"])).status == 400)
-        #expect(await api.handle(try hostRequest("DELETE", "/v1/bots-host/mcp-keys/b1", token: token)).status == 200)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/mcp-keys", token: token, body: ["botID": "not valid"])).status == 400)
+        #expect(await api.handle(try hostRequest("DELETE", "/bots-host/mcp-keys/b1", token: token)).status == 200)
         func credential(_ provider: String) async throws -> [String: Any] {
-            let reply = await api.handle(try hostRequest("POST", "/v1/bots-host/inference-credentials", token: token, body: ["provider": provider]))
+            let reply = await api.handle(try hostRequest("POST", "/bots-host/inference-credentials", token: token, body: ["provider": provider]))
             #expect(reply.status == 200)
             return try #require(try JSONSerialization.jsonObject(with: reply.body) as? [String: Any])
         }
@@ -348,16 +348,16 @@ struct BotsHostTests {
         // Not connected is a reply, not an error.
         let missing = try await credential("xai")
         #expect(missing.keys.contains("credential") && missing["credential"] is NSNull)
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/inference-credentials", token: token, body: ["provider": "unknown"])).status == 400)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/inference-credentials", token: token, body: ["provider": "unknown"])).status == 400)
         let batch: [String: Any] = [
             "bot": ["id": "b1", "name": "Builder"],
             "conversations": [["conversationId": 7, "kind": "main"]],
             "entries": [["id": 1, "conversationId": 7, "role": "user", "text": "hi", "createdAt": "2026-11-09T00:00:00Z"]],
         ]
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/conversations/b1/entries", token: token, body: batch)).status == 200)
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/conversations/other/entries", token: token, body: batch)).status == 400)
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/previews", token: token, body: ["botID": "b1", "port": 80, "containerPort": 3000])).status == 400)
-        #expect(await api.handle(try hostRequest("GET", "/v1/bots-host/unknown", token: token)).status == 404)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/conversations/b1/entries", token: token, body: batch)).status == 200)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/conversations/other/entries", token: token, body: batch)).status == 400)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/previews", token: token, body: ["botID": "b1", "port": 80, "containerPort": 3000])).status == 400)
+        #expect(await api.handle(try hostRequest("GET", "/bots-host/unknown", token: token)).status == 404)
         fixture.sync()
         #expect(fixture.issued.map(\.0) == ["d3vice-0001"] && fixture.issued.map(\.2) == ["Builder"])
         #expect(fixture.revoked.map(\.0) == ["woven:bot:d3vice-0001:b1"] && fixture.revoked.map(\.1) == [false])
@@ -376,17 +376,17 @@ struct BotsHostTests {
         }; defer { fixture.remove() }
         let api = fixture.host.makeHostAPI(machineID: "d3vice-0001")
         let token = fixture.host.persisted.hostToken
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: nil, body: ["botID": "b1"])).status == 401)
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: [:])).status == 400)
-        let empty = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: ["botID": "b1"]))
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/git", token: nil, body: ["botID": "b1"])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/git", token: token, body: [:])).status == 400)
+        let empty = await api.handle(try hostRequest("POST", "/bots-host/git", token: token, body: ["botID": "b1"]))
         #expect(String(decoding: empty.body, as: UTF8.self).contains("\"publicKey\":null"))
         setup = .init(publicKey: "ssh-ed25519 AAAA woven-matter", identity: .init(name: "Ada"))
-        let reply = await api.handle(try hostRequest("POST", "/v1/bots-host/git", token: token, body: ["botID": "b1"]))
+        let reply = await api.handle(try hostRequest("POST", "/bots-host/git", token: token, body: ["botID": "b1"]))
         #expect(try JSONDecoder().decode(GitHubBotSetup.self, from: reply.body) == setup)
 
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: nil, body: ["botID": "b1", "message": "Cw=="])).status == 401)
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": ""])).status == 400)
-        let signed = await api.handle(try hostRequest("POST", "/v1/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": "Cw=="]))
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/ssh-agent", token: nil, body: ["botID": "b1", "message": "Cw=="])).status == 401)
+        #expect(await api.handle(try hostRequest("POST", "/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": ""])).status == 400)
+        let signed = await api.handle(try hostRequest("POST", "/bots-host/ssh-agent", token: token, body: ["botID": "b1", "message": "Cw=="]))
         struct Reply: Decodable { let message: String }
         #expect(try JSONDecoder().decode(Reply.self, from: signed.body).message == Data([12, 0, 0, 0, 0]).base64EncodedString())
         #expect(asked.map(\.0) == ["b1"] && asked.first?.1 == Data([11]))
@@ -394,7 +394,7 @@ struct BotsHostTests {
 
     @Test func otherMembersReachTheRuntimeOnlyThroughItsOwnBearer() async throws {
         let fixture = try HostFixture(); defer { fixture.remove() }
-        let upgrade = LibraryHTTPRequest(method: "GET", target: "/v1/bots/ws", headers: [
+        let upgrade = LibraryHTTPRequest(method: "GET", target: "/bots/ws", headers: [
             "host": "mac.tail.ts.net", "upgrade": "websocket", "connection": "Upgrade",
             "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13", "authorization": "Bearer member-grant",
         ])
@@ -408,7 +408,7 @@ struct BotsHostTests {
         #expect(text.hasPrefix("GET /ws HTTP/1.1\r\n"))
         #expect(text.contains("Authorization: Bearer " + fixture.host.persisted.runtimeToken))
         #expect(!text.contains("member-grant"))
-        let status = await fixture.host.remoteRequest(try hostRequest("GET", "/v1/bots/status", token: "ignored"), path: "/v1/bots/status")
+        let status = await fixture.host.remoteRequest(try hostRequest("GET", "/bots/status", token: "ignored"), path: "/bots/status")
         let decoded = try JSONDecoder().decode(BotsRemoteStatus.self, from: status.body)
         #expect(decoded.machine.kind == "mac" && decoded.enabled && decoded.state == "ready")
     }
@@ -427,10 +427,10 @@ struct BotsHostTests {
         #expect(await fixture.host.snapshot().machines.first?.engineUpdateFailure == nil)
 
         fixture.engine.updateError = "The bots VM update failed and was rolled back: Docker did not start."
-        let remote = await fixture.host.remoteRequest(try hostRequest("POST", "/v1/bots/engine/update", token: "ignored"), path: "/v1/bots/engine/update")
+        let remote = await fixture.host.remoteRequest(try hostRequest("POST", "/bots/engine/update", token: "ignored"), path: "/bots/engine/update")
         #expect(remote.status == 200)
         try await waitFor("engine update") { fixture.host.engineUpdateTask == nil }
-        let status = await fixture.host.remoteRequest(try hostRequest("GET", "/v1/bots/status", token: "ignored"), path: "/v1/bots/status")
+        let status = await fixture.host.remoteRequest(try hostRequest("GET", "/bots/status", token: "ignored"), path: "/bots/status")
         let decoded = try JSONDecoder().decode(BotsRemoteStatus.self, from: status.body)
         #expect(decoded.updating == false && decoded.engineUpdateFailure?.contains("rolled back") == true)
 
@@ -509,7 +509,7 @@ struct BotsHostTests {
 
     @Test func anotherMachinesHarnessesAreReadDirectlyAndUpdatedAsAJob() async throws {
         let gate = Gate()
-        var updates: [(String, AgentRuntimeKind, String?, Bool)] = []
+        var updates: [(String, AgentRuntimeKind, Bool)] = []
         let inventory = FleetMemberInventory(runtimes: [RemoteRuntimeMaintenance(
             id: .codex, displayName: "Codex", installed: true,
             components: [RemoteRuntimeComponent(id: "runtime", displayName: "codex-acp", path: nil, installedVersion: "1.0.0",
@@ -520,9 +520,8 @@ struct BotsHostTests {
                 #expect(machine == "MAC-2" && check)
                 return inventory
             }
-            dependencies.memberInstallerPreview = { _, _ in nil }
-            dependencies.updateMemberHarness = { machine, kind, sha, _, force, progress in
-                updates.append((machine, kind, sha, force))
+            dependencies.updateMemberHarness = { machine, kind, force, progress in
+                updates.append((machine, kind, force))
                 progress("Updating Codex…")
                 try await gate.wait()
             }
@@ -531,12 +530,10 @@ struct BotsHostTests {
         // A read answers with the inventory alone, without a machine list to apply.
         let read = try await fixture.host.perform(.memberInventory(machineID: "MAC-2", checkLatest: true))
         #expect(read.memberInventory == inventory && read.machines.isEmpty)
-        #expect(try await fixture.host.perform(.memberInstallerPreview(machineID: "MAC-2", kind: .codex)).installerPreview == nil)
-        let started = try await fixture.host.perform(.updateMemberHarness(machineID: "MAC-2", kind: .codex, sourceSHA256: "abc",
-                                                                         packageSpec: nil, force: true))
+        let started = try await fixture.host.perform(.updateMemberHarness(machineID: "MAC-2", kind: .codex, force: true))
         #expect(started.jobs.first?.kind == .updateHarness && started.jobs.first?.target == "mac-2/codex")
         try await waitFor("harness update") { updates.count == 1 && gate.waiting }
-        #expect(updates.first?.0 == "MAC-2" && updates.first?.2 == "abc" && updates.first?.3 == true)
+        #expect(updates.first?.0 == "MAC-2" && updates.first?.2 == true)
         gate.open(throwing: FleetBusyError())
         try await waitFor("harness update end") { fixture.host.jobTasks.isEmpty }
         #expect(try await fixture.host.perform(.status).jobs.first?.error == FleetBusyError.message)
@@ -556,14 +553,14 @@ struct BotsHostTests {
     }
 
     @Test func theLibraryParserAcceptsAWebSocketUpgradeOnlyWhenAsked() throws {
-        let raw = Data("GET /v1/bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n".utf8)
+        let raw = Data("GET /bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: k\r\nSec-WebSocket-Version: 13\r\n\r\n".utf8)
         var plain = LibraryHTTPParser()
         #expect(throws: (any Error).self) { _ = try plain.append(raw) }
         var upgrading = LibraryHTTPParser(allowsUpgrade: true)
         #expect(try upgrading.append(raw)?.headers["upgrade"] == "websocket")
         var post = LibraryHTTPParser(allowsUpgrade: true)
         #expect(throws: (any Error).self) {
-            _ = try post.append(Data("POST /v1/bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nContent-Type: application/json\r\n\r\n".utf8))
+            _ = try post.append(Data("POST /bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nContent-Type: application/json\r\n\r\n".utf8))
         }
     }
 
@@ -638,8 +635,8 @@ struct UpdatesVersionTests {
         let image = PiBotImageStatus(tag: "wovenmatter-bots:abc", base: "ubuntu:26.04", node: "26.13.1", playwright: "1.65.1", staleBots: 2)
         #expect(image.tools == "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium")
         let decoded = try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(
-            #"{"environment":"mac-vm","bots":3,"image":{"tag":"t","node":"26.13.1","playwright":"1.65.1","staleBots":1}}"#.utf8))
-        #expect(decoded?.image?.staleBots == 1 && decoded?.image?.base == nil)
+            #"{"environment":"mac-vm","bots":3,"image":{"tag":"t","node":"26.13.1","playwright":"1.65.1","staleBots":1,"outdatedBots":2}}"#.utf8))
+        #expect(decoded?.image?.staleBots == 1 && decoded?.image?.botsToUpdate == 2 && decoded?.image?.base == nil)
         // A runtime that reports no image still decodes.
         #expect((try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"environment":"none"}"#.utf8)))?.image == nil)
     }

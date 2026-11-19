@@ -34,7 +34,7 @@ public struct LibraryHostOptions: Equatable, Sendable {
            wovenmatter-library --version
 
       --data-root DIR    Library host data root (created 0700). Holds library/, secrets/ and run/.
-      --port N           Loopback TCP port for /v1/health and mounted peer/mobile routes (default 0: any free port).
+      --port N           Loopback TCP port for `/health` and mounted peer/mobile routes (default 0: any free port).
       --socket PATH      Unix socket for the local API (default DIR/run/library.sock).
       --token-file PATH  Local API bearer token, 0600 (default DIR/run/library-api.token; created if missing).
       --harness-catalog PATH  harnesses/catalog.json (default: the host release's copy beside this binary).

@@ -109,8 +109,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             terminating = true
             Task {
                 do {
-                    // Restore a ready owner before flushing editors or drafts,
-                    // including recovery from a legacy AppKit-backed service.
+                    // Restore a ready owner before flushing editors or drafts.
                     try await model.ensureBackendReady()
                     guard await WorkspaceAssetSession.prepareForRestart() else {
                         terminating = false

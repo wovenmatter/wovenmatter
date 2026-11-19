@@ -402,9 +402,9 @@ struct MemberSyncTests {
     let schema = try await b.database.pairedLibrarySchema()
     let page = PairedLibraryPage(schema: schema, entries: [], cursor: 0, hasMore: false)
     let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 1_000_000_000, page: page, version: "test"))
-    var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
+    var headers = try b.identity.signer.headers(method: "POST", target: "/peers/sync", body: body, audience: a.id)
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
-    let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
+    let response = try #require(await a.sync.handle(.init(method: "POST", target: "/peers/sync", headers: headers, body: body)))
     #expect(response.status == 200)
     #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
   }
@@ -418,15 +418,15 @@ struct MemberSyncTests {
     try await a.add(b); try await b.add(a)
     let page = PairedLibraryPage(schema: "another", entries: [], cursor: 0, hasMore: false)
     let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 0, page: page, version: "0.9"))
-    var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
+    var headers = try b.identity.signer.headers(method: "POST", target: "/peers/sync", body: body, audience: a.id)
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
-    let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
+    let response = try #require(await a.sync.handle(.init(method: "POST", target: "/peers/sync", headers: headers, body: body)))
     #expect(response.status == 200)
     let status = await a.sync.status()
     #expect(status.peers.first?.state == .online)
     // Unsigned or replayed requests are refused.
-    #expect(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: [:], body: body)) == nil)
-    let replay = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
+    #expect(await a.sync.handle(.init(method: "POST", target: "/peers/sync", headers: [:], body: body)) == nil)
+    let replay = try #require(await a.sync.handle(.init(method: "POST", target: "/peers/sync", headers: headers, body: body)))
     #expect(replay.status == 401)
   }
 }

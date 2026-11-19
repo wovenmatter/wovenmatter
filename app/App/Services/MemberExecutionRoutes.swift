@@ -9,24 +9,24 @@ import WovenMatterClient
 /// Durable's unlock and settings. A Mac reaches every one with its member
 /// signature; signed Macs administer the host as its installer bearer does.
 protocol MemberExecutionRoutes: Sendable {
-    /// `PUT v1/execution/attachments/<sha256>?name=&mimeType=`.
+    /// `PUT execution/attachments/<sha256>?name=&mimeType=`.
     func uploadAttachment(_ data: Data, sha256: String, name: String, mimeType: String) async throws -> LibraryAttachmentReference
-    /// `GET v1/execution/providers/<id>/options`: `SessionSettings` with an empty `conversationID`.
+    /// `GET execution/providers/<id>/options`: `SessionSettings` with an empty `conversationID`.
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) async throws -> SessionSettings
-    /// `POST v1/execution/library-file`.
+    /// `POST execution/library-file`.
     func libraryFile(conversationID: String?, path: String) async throws -> MemberLibraryFile
-    /// `POST v1/execution/adopt`, with the transcript this Mac already shows.
+    /// `POST execution/adopt`, with the transcript this Mac already shows.
     func adopt(_ body: Data) async throws
-    /// `POST v1/default-agent/control-sessions` and its `GET`, `DELETE` and `answer`.
+    /// `POST default-agent/control-sessions` and its `GET`, `DELETE` and `answer`.
     func startDefaultAgentControl(_ request: Data) async throws -> DefaultAgentControlSession
     func defaultAgentControl(id: String) async throws -> DefaultAgentControlSession
     func answerDefaultAgentControl(id: String, answerTo: String, answer: String) async throws -> DefaultAgentControlSession
     func cancelDefaultAgentControl(id: String) async throws
-    /// `GET v1/sign-ins`: the host's own accounts and local model servers (no secrets).
+    /// `GET sign-ins`: the host's own accounts and local model servers (no secrets).
     func signIns() async throws -> DeviceSignIns
-    /// `POST v1/sign-ins`: one change, saved only on the host.
+    /// `POST sign-ins`: one change, saved only on the host.
     func changeSignIns(_ change: DeviceSignInChange) async throws -> DeviceSignIns
-    /// `POST v1/projects`: a blank directory in the host's managed workspace
+    /// `POST projects`: a blank directory in the host's managed workspace
     /// root, for a new folder. The host refuses a name that is already there.
     func createProject(name: String) async throws -> RemoteProjectDirectory
 }
@@ -111,7 +111,7 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
 
     func uploadAttachment(_ data: Data, sha256: String, name: String, mimeType: String) async throws -> LibraryAttachmentReference {
         guard sha256.count == 64, sha256.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { throw MobileConnectionError.invalidResponse }
-        return try await member("v1/execution/attachments/" + sha256, method: "PUT",
+        return try await member("execution/attachments/" + sha256, method: "PUT",
             query: [.init(name: "name", value: name), .init(name: "mimeType", value: mimeType)], body: data,
             headers: ["Content-Type": "application/octet-stream"], timeout: 300)
     }
@@ -120,59 +120,58 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
         var query: [URLQueryItem] = []
         if let workingDirectory { query.append(.init(name: "workingDirectory", value: workingDirectory)) }
         if let model { query.append(.init(name: "model", value: model)) }
-        return try await member("v1/execution/providers/" + Self.safeID(providerID) + "/options", query: query, timeout: 90)
+        return try await member("execution/providers/" + Self.safeID(providerID) + "/options", query: query, timeout: 90)
     }
 
     func libraryFile(conversationID: String?, path: String) async throws -> MemberLibraryFile {
         var body: [String: String] = ["path": path]
         if let conversationID { body["conversationID"] = conversationID }
-        return try await member("v1/execution/library-file", method: "POST",
+        return try await member("execution/library-file", method: "POST",
             body: JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), timeout: 120)
     }
 
     func adopt(_ body: Data) async throws {
-        let _: JSONValue = try await member("v1/execution/adopt", method: "POST", body: body, timeout: 120)
+        let _: JSONValue = try await member("execution/adopt", method: "POST", body: body, timeout: 120)
     }
 
     func startDefaultAgentControl(_ request: Data) async throws -> DefaultAgentControlSession {
-        try await member("v1/default-agent/control-sessions", method: "POST", body: request)
+        try await member("default-agent/control-sessions", method: "POST", body: request)
     }
 
     func defaultAgentControl(id: String) async throws -> DefaultAgentControlSession {
-        try await member("v1/default-agent/control-sessions/" + Self.safeID(id))
+        try await member("default-agent/control-sessions/" + Self.safeID(id))
     }
 
     func answerDefaultAgentControl(id: String, answerTo: String, answer: String) async throws -> DefaultAgentControlSession {
-        try await member("v1/default-agent/control-sessions/" + Self.safeID(id) + "/answer", method: "POST",
+        try await member("default-agent/control-sessions/" + Self.safeID(id) + "/answer", method: "POST",
             body: JSONSerialization.data(withJSONObject: ["answerTo": answerTo, "answer": answer], options: [.sortedKeys]))
     }
 
     func cancelDefaultAgentControl(id: String) async throws {
-        let _: JSONValue = try await member("v1/default-agent/control-sessions/" + Self.safeID(id), method: "DELETE")
+        let _: JSONValue = try await member("default-agent/control-sessions/" + Self.safeID(id), method: "DELETE")
     }
 
     func signIns() async throws -> DeviceSignIns {
-        try await member("v1/sign-ins")
+        try await member("sign-ins")
     }
 
     func changeSignIns(_ change: DeviceSignInChange) async throws -> DeviceSignIns {
         // A local model server check can take two 20-second requests on the host.
-        try await member("v1/sign-ins", method: "POST", body: JSONEncoder().encode(change), timeout: 60)
+        try await member("sign-ins", method: "POST", body: JSONEncoder().encode(change), timeout: 60)
     }
 
     func createProject(name: String) async throws -> RemoteProjectDirectory {
         do {
-            return try await client.request("v1/projects", method: "POST",
+            return try await client.request("projects", method: "POST",
                 body: JSONSerialization.data(withJSONObject: ["name": name, "reuseExisting": false], options: [.sortedKeys]))
         } catch MemberSignedHTTPError.http(status: 500, let code, let message) {
             // The host words what it refuses: 400 for a name it does not
             // allow, 409 for one already there. A 500 is a directory it could
-            // not make (no space, no permission, no workspace root) or, on a
-            // host from before the 409, a name already there. Its own words
-            // are kept; a bare code or an empty answer says none of that.
+            // not make (no space, no permission, no workspace root). Its own
+            // words are kept; a bare code or an empty answer says none of that.
             let wordless = message == code || message == MemberSignedHTTPError.unexplained(status: 500)
             throw LibraryAPIError(code: "http_500", message: wordless
-                ? "The host could not create this directory. Check its free space and permissions, and that the name is not already in use there."
+                ? "The host could not create this directory. Check its free space and permissions."
                 : message)
         } catch let error as MemberSignedHTTPError { throw Self.refusal(error) }
     }

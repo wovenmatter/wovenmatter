@@ -92,9 +92,10 @@ public struct AgentDispatchAdmissionLedger: Sendable {
         return true
     }
 
-    /// Legacy Stop still stops current native/scheduled work, but also fences
-    /// all versioned inputs created before it. Legacy sends are not admitted.
-    public mutating func prepareLegacyStop(conversationID: String) throws {
+    /// A Stop that carries no admission (a library stop, or a window that could
+    /// not get one) still stops current native and scheduled work, and fences
+    /// every admitted input created before it.
+    public mutating func prepareUnfencedStop(conversationID: String) throws {
         var state = try conversation(conversationID)
         guard state.revision < UInt64.max else { throw AgentDispatchAdmissionError.capacity }
         state.revision += 1

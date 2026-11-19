@@ -56,7 +56,6 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     public var remotePort: Int
     public var createdAt: Date
     public var backgroundExecutionEnabled: Bool
-    public var kind: RemoteWorkspaceKind
     public var accessMode: RemoteWorkspaceAccessMode
     public var dataRoot: String?
     public var workspaceRoot: String?
@@ -72,7 +71,6 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         remotePort: Int = 7337,
         createdAt: Date = Date(),
         backgroundExecutionEnabled: Bool = true,
-        kind: RemoteWorkspaceKind = .host,
         accessMode: RemoteWorkspaceAccessMode = .user,
         dataRoot: String? = nil,
         workspaceRoot: String? = nil,
@@ -87,50 +85,11 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         self.remotePort = remotePort
         self.createdAt = createdAt
         self.backgroundExecutionEnabled = backgroundExecutionEnabled
-        self.kind = kind
         self.accessMode = accessMode
         self.dataRoot = dataRoot
         self.workspaceRoot = workspaceRoot
         self.databasesDirectory = databasesDirectory
         self.attachmentsDirectory = attachmentsDirectory
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, name, workspaceID, hostName, userName, remotePort, createdAt, backgroundExecutionEnabled
-        case kind, accessMode, dataRoot, workspaceRoot, databasesDirectory, attachmentsDirectory
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        id = try values.decode(UUID.self, forKey: .id)
-        name = try values.decode(String.self, forKey: .name)
-        workspaceID = try values.decode(String.self, forKey: .workspaceID)
-        hostName = try values.decode(String.self, forKey: .hostName)
-        userName = try values.decodeIfPresent(String.self, forKey: .userName)
-        remotePort = try values.decode(Int.self, forKey: .remotePort)
-        createdAt = try values.decode(Date.self, forKey: .createdAt)
-        backgroundExecutionEnabled = try values.decodeIfPresent(Bool.self, forKey: .backgroundExecutionEnabled) ?? true
-        kind = try values.decode(RemoteWorkspaceKind.self, forKey: .kind)
-        accessMode = try values.decodeIfPresent(RemoteWorkspaceAccessMode.self, forKey: .accessMode) ?? .user
-        dataRoot = try values.decodeIfPresent(String.self, forKey: .dataRoot)
-        workspaceRoot = try values.decodeIfPresent(String.self, forKey: .workspaceRoot)
-        databasesDirectory = try values.decodeIfPresent(String.self, forKey: .databasesDirectory)
-        attachmentsDirectory = try values.decodeIfPresent(String.self, forKey: .attachmentsDirectory)
-    }
-
-    /// Saved configurations, skipping any whose kind this build no longer has, such as
-    /// the removed Docker container workspaces.
-    public static func decodeSaved(_ data: Data) throws -> [RemoteWorkspaceConfiguration] {
-        try JSONDecoder().decode([Saved].self, from: data).compactMap(\.configuration)
-    }
-
-    private struct Saved: Decodable {
-        let configuration: RemoteWorkspaceConfiguration?
-
-        init(from decoder: any Decoder) throws {
-            let kind = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent(String.self, forKey: .kind)
-            configuration = kind.flatMap(RemoteWorkspaceKind.init(rawValue:)) == nil ? nil : try RemoteWorkspaceConfiguration(from: decoder)
-        }
     }
 }
 
@@ -149,16 +108,9 @@ public struct LocalHarnessLaunchContext: Sendable {
 }
 
 public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
-    public struct Capabilities: Codable, Equatable, Sendable {
-        public let memory: Bool
-        public let swap: Bool
-    }
-
     public let ready: Bool
-    public let runtime: String
     public let version: String
     public let architecture: String
-    public let capabilities: Capabilities
     public let limitations: [String]
     public let hostStorageCapacityBytes: Int64?
     public let hostStorageAvailableBytes: Int64?
@@ -168,7 +120,6 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
     public let preparationRequired: Bool?
     public let preparationActions: [String]?
     public let blockingIssues: [String]?
-    public var kind: RemoteWorkspaceKind? = nil
     public var dataRoot: String? = nil
     public var workspaceRoot: String? = nil
     public var databasesDirectory: String? = nil
@@ -210,34 +161,18 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
 }
 
 public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
-    public struct Capabilities: Codable, Equatable, Sendable {
-        public let memory: Bool
-        public let swap: Bool
-    }
-
     public let id: String
     public let name: String
     public let state: String
     public let running: Bool
     public let health: String?
     public let startedAt: String
-    public let image: String
-    public let memoryBytes: Int64
-    public let swapBytes: Int64
-    public let swapMode: String?
     public let hostPort: Int
-    public let persistentVolume: String
-    public let capabilities: Capabilities
-    public let storageKind: String
-    public let storageUsedBytes: Int64?
     public let hostStorageCapacityBytes: Int64?
     public let hostStorageAvailableBytes: Int64?
     public let hostStorageLow: Bool
     public let storageWarning: String?
-    public let legacyStorage: Bool
-    public var kind: RemoteWorkspaceKind? = nil
     public var accessMode: RemoteWorkspaceAccessMode? = nil
-    public var runtimeKind: RemoteWorkspaceKind? = nil
     public var serviceFingerprint: String? = nil
     public var fingerprint: String? = nil
     public var linger: Bool? = nil
@@ -351,8 +286,8 @@ public struct RemoteOpenCodeVersionOne: Codable, Equatable, Sendable {
     public let version: String
 }
 
-/// A host's runtime-maintenance failure codes, as the person reads them. Unknown text
-/// (an older host's message) passes through; an unknown code reads as a general failure.
+/// A host's runtime-maintenance failure codes, as the person reads them. Text that is
+/// not a code passes through; an unknown code reads as a general failure.
 public enum RemoteRuntimeFailure {
     public static func describe(_ code: String) -> String {
         if let known = known(code) { return known }
@@ -371,11 +306,8 @@ public enum RemoteRuntimeFailure {
         switch code {
         case "runtime_active_stop_conversations_or_server_first": "Chats are using it. Stop them or the server there, then try again."
         case "runtime_maintenance_in_progress": "It's being installed or updated. Try again when that finishes."
-        // The next code and latest_protocol_sdk_version_unavailable come only from hosts not yet updated.
-        case "adapter_version_below_minimum": "Its adapter release is older than Woven Matter needs. Try again later."
         case "latest_engine_version_unavailable": "Its latest version couldn't be checked. Try again later."
         case "confirmation_required": "This app and the host don't match. Update both, then try again."
-        case "latest_protocol_sdk_version_unavailable": "The latest version of its connection library couldn't be checked. Try again later."
         case "invalid_installer_size": "The official installer download wasn't the expected size."
         case "installer_https_required": "The official installer has to come from a secure address."
         case "runtime_operation_failed": "It didn't finish. Try again."
@@ -406,16 +338,6 @@ public struct RemoteHarnessSetupMethod: Codable, Equatable, Identifiable, Sendab
     public let displayName: String
 }
 
-public struct RemoteInstallerPreview: Codable, Equatable, Sendable {
-    public let harnessID: AgentRuntimeKind
-    public let source: String
-    public let sha256: String?
-    public let bytes: Int?
-    public let command: String
-    public let verification: String
-    public let packageSpec: String?
-}
-
 public struct RemoteHarnessAuthenticationSession: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let harnessID: AgentRuntimeKind
@@ -436,7 +358,6 @@ public struct RemoteWorkspaceHealth: Codable, Equatable, Sendable {
     public let status: String
     public let workspaceRoot: String
     public let harnessCount: Int
-    public var runtimeKind: RemoteWorkspaceKind? = nil
     public var serviceFingerprint: String? = nil
     public var databasesDirectory: String? = nil
     public var attachmentsDirectory: String? = nil
@@ -589,7 +510,7 @@ public actor RemoteWorkspaceSSHClient {
     }
 
     /// Enables a private HTTPS proxy to an existing loopback-only workspace.
-    /// It does not start a container, enroll a device, or change another route.
+    /// It does not start a server, enroll a device, or change another route.
     public func exposeExecution(configuration: RemoteWorkspaceConfiguration, httpsPort: Int = 8443) throws -> URL {
         struct Result: Decodable { let endpoint: URL }
         let result = try decode(Result.self, from: runScript(
@@ -1015,32 +936,32 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         }
         let payload = Payload(libraryID: libraryID, workspaceID: workspaceID, ownerDeviceID: ownerDeviceID,
                               deviceID: deviceID, name: name, workspaceName: workspaceName, endpoint: endpoint, scopes: scopes)
-        return try await request(path: "v1/execution/devices", method: "POST", body: JSONEncoder().encode(payload))
+        return try await request(path: "execution/devices", method: "POST", body: JSONEncoder().encode(payload))
     }
 
-    /// `GET /v1/host/status`, whose `memberIdentity` is the Linux host's
+    /// `GET /host/status`, whose `memberIdentity` is the Linux host's
     /// `{deviceID, kind, name, publicKey, endpoints, libraryEndpoint}`.
     public func hostStatus() async throws -> JSONValue {
-        try await request(path: "v1/host/status", method: "GET", body: nil)
+        try await request(path: "host/status", method: "GET", body: nil)
     }
     /// Hands the Linux host the signed member records (a `LibraryMemberAdoption`);
-    /// the server forwards them to its library socket's `POST /v1/members/adopt`.
+    /// the server forwards them to its library socket's `POST /members/adopt`.
     /// The server accepts the installer bearer only for the first adoption;
     /// after that it needs a signed `mac` member, so `signer` signs the request.
     /// `audience` is the host's member device ID from its `memberIdentity`.
     public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> JSONValue {
-        try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
+        try await request(path: "host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
     /// The host replies with the settings it saved.
     public func configureExecutionMCPSettings(_ settings: JSONValue) async throws -> JSONValue {
-        try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
+        try await request(path: "execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
     }
 
 
     public func revokeExecutionDevice(deviceID: String) async throws {
         guard UUID(uuidString: deviceID) != nil else { throw RemoteWorkspaceClientError.invalidResponse("Invalid client device identity.") }
-        let _: [String: Bool] = try await request(path: "v1/execution/devices/" + deviceID.lowercased(), method: "DELETE", body: nil)
+        let _: [String: Bool] = try await request(path: "execution/devices/" + deviceID.lowercased(), method: "DELETE", body: nil)
     }
 
     public func publishTaskGatewaySchedules(_ publication: RemoteTaskGatewayPublication) async throws -> RemoteTaskGatewayStatus {
@@ -1049,48 +970,48 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             var value = encoder.singleValueContainer()
             try value.encode(WorkspaceCalendarSchedule.timestamp(date))
         }
-        return try await request(path: "v1/task-gateway/schedules", method: "PUT", body: encoder.encode(publication))
+        return try await request(path: "task-gateway/schedules", method: "PUT", body: encoder.encode(publication))
     }
 
     public func taskGatewaySchedules() async throws -> RemoteTaskGatewaySchedules {
-        try await request(path: "v1/task-gateway/schedules", method: "GET", body: nil)
+        try await request(path: "task-gateway/schedules", method: "GET", body: nil)
     }
 
     /// Counts only, built on the host from its own harness history.
     public func usageExport(_ request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
-        try await self.request(path: "v1/usage/export", method: "GET", body: nil, queryItems: [
+        try await self.request(path: "usage/export", method: "GET", body: nil, queryItems: [
             URLQueryItem(name: "since", value: String(request.since)),
             URLQueryItem(name: "offset", value: String(request.offset)),
         ])
     }
 
     public func taskGatewayResults(after cursor: String = "0") async throws -> RemoteTaskGatewayResults {
-        try await request(path: "v1/task-gateway/results", method: "GET", body: nil,
+        try await request(path: "task-gateway/results", method: "GET", body: nil,
                           queryItems: [URLQueryItem(name: "after", value: cursor)])
     }
 
     public func taskGatewayStatus() async throws -> RemoteTaskGatewayStatus {
-        try await request(path: "v1/task-gateway", method: "GET", body: nil)
+        try await request(path: "task-gateway", method: "GET", body: nil)
     }
 
     public func setTaskGatewayEnabled(_ enabled: Bool) async throws -> RemoteTaskGatewayStatus {
-        try await request(path: "v1/task-gateway", method: "PATCH", body: JSONEncoder().encode(["enabled": enabled]))
+        try await request(path: "task-gateway", method: "PATCH", body: JSONEncoder().encode(["enabled": enabled]))
     }
 
     public func databases() async throws -> [RemoteAgentDatabase] {
         struct Document: Decodable { let databases: [RemoteAgentDatabase] }
-        let document: Document = try await request(path: "v1/databases", method: "GET", body: nil)
+        let document: Document = try await request(path: "databases", method: "GET", body: nil)
         return document.databases
     }
 
     public func createDatabase(name: String) async throws -> RemoteAgentDatabase {
-        try await request(path: "v1/databases", method: "POST", body: JSONEncoder().encode(["databaseID": name]))
+        try await request(path: "databases", method: "POST", body: JSONEncoder().encode(["databaseID": name]))
     }
 
     public func browserFrames(tabID: String, profile: String? = nil) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
         do { try validateOrigin(); _ = try browserProfileQuery(profile) }
         catch { return AsyncThrowingStream { $0.finish(throwing: error) } }
-        var components = URLComponents(url: baseURL.appending(path: "v1/browser/stream"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appending(path: "browser/stream"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "tabID", value: tabID)] + ((try? browserProfileQuery(profile)) ?? [])
         var request = URLRequest(url: components.url!)
         request.timeoutInterval = 10
@@ -1110,11 +1031,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func browserTabs(profile: String? = nil) async throws -> RemoteBrowserTabs {
-        try await request(path: "v1/browser/tabs", method: "GET", body: nil, queryItems: browserProfileQuery(profile))
+        try await request(path: "browser/tabs", method: "GET", body: nil, queryItems: browserProfileQuery(profile))
     }
 
     public func browserSelfTest() async throws -> RemoteBrowserSelfTest {
-        try await request(path: "v1/browser/selftest", method: "GET", body: nil)
+        try await request(path: "browser/selftest", method: "GET", body: nil)
     }
 
     private func browserProfileQuery(_ profile: String?) throws -> [URLQueryItem] {
@@ -1145,7 +1066,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             let code: String?
             let requestID: String
         }
-        let value: Response = try await request(path: cancelling ? "v1/browser/mcp/cancel" : "v1/browser/mcp",
+        let value: Response = try await request(path: cancelling ? "browser/mcp/cancel" : "browser/mcp",
             method: "POST", body: JSONEncoder().encode(body))
         guard UUID(uuidString: value.requestID) == UUID(uuidString: requestID) else {
             throw RemoteWorkspaceClientError.invalidResponse("The browser operation identity changed.")
@@ -1154,27 +1075,27 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func browserAction(_ action: RemoteBrowserAction, profile: String? = nil) async throws -> RemoteBrowserActionResult {
-        try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action), queryItems: browserProfileQuery(profile))
+        try await request(path: "browser/action", method: "POST", body: JSONEncoder().encode(action), queryItems: browserProfileQuery(profile))
     }
 
     public func browserActions(_ actions: [RemoteBrowserAction], profile: String? = nil) async throws -> RemoteBrowserActionBatchResult {
         struct Payload: Encodable { let actions: [RemoteBrowserAction] }
-        return try await request(path: "v1/browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)), queryItems: browserProfileQuery(profile))
+        return try await request(path: "browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)), queryItems: browserProfileQuery(profile))
     }
 
     public func browserFrame(tabID: String, previousFrameID: String? = nil, profile: String? = nil) async throws -> RemoteBrowserFrame {
         struct Payload: Encodable { let tabID: String; let previousFrameID: String? }
-        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)), queryItems: browserProfileQuery(profile))
+        return try await request(path: "browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)), queryItems: browserProfileQuery(profile))
     }
 
     public func health() async throws -> RemoteWorkspaceHealth {
-        try await request(path: "v1/health", method: "GET", body: nil)
+        try await request(path: "health", method: "GET", body: nil)
     }
 
     public func harnesses() async throws -> [RemoteHarnessStatus] {
         struct Document: Decodable { let harnesses: [RemoteHarnessStatus] }
         let document: Document = try await request(
-            path: "v1/harnesses",
+            path: "harnesses",
             method: "GET",
             body: nil
         )
@@ -1185,7 +1106,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         _ kind: AgentRuntimeKind, action: String? = nil
     ) async throws -> RemoteWorkspaceInstanceStatus {
         try await request(
-            path: "v1/workspace-instances/\(kind.rawValue)" + (action.map { "/\($0)" } ?? ""),
+            path: "workspace-instances/\(kind.rawValue)" + (action.map { "/\($0)" } ?? ""),
             method: action == nil ? "GET" : "POST", body: nil
         )
     }
@@ -1193,26 +1114,23 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func runtimeMaintenance(checkLatest: Bool = false) async throws -> [RemoteRuntimeMaintenance] {
         struct Document: Decodable { let runtimes: [RemoteRuntimeMaintenance] }
         let document: Document = try await request(
-            path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
+            path: checkLatest ? "runtime-maintenance/check" : "runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
         return document.runtimes
     }
 
     public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {
-        try await request(path: "v1/runtime-maintenance/\(id.rawValue)/check", method: "POST", body: nil)
+        try await request(path: "runtime-maintenance/\(id.rawValue)/check", method: "POST", body: nil)
     }
 
     public func maintainRuntime(
-        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil,
-        replaceOpenCodeV1: Bool = false
+        _ id: AgentRuntimeKind, action: String, replaceOpenCodeV1: Bool = false
     ) async throws -> RemoteHarnessOperation {
         var payload: [String: Any] = ["confirmed": true]
         if replaceOpenCodeV1 { payload["replaceOpenCodeV1"] = true }
-        if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
-        if let packageSpec { payload["packageSpec"] = packageSpec }
         return try await request(
-            path: "v1/runtime-maintenance/\(id.rawValue)/\(action)", method: "POST",
+            path: "runtime-maintenance/\(id.rawValue)/\(action)", method: "POST",
             body: try JSONSerialization.data(withJSONObject: payload)
         )
     }
@@ -1220,27 +1138,15 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func perform(
         harnessID: AgentRuntimeKind,
         action: String,
-        confirmed: Bool = false,
-        sourceSHA256: String? = nil
+        confirmed: Bool = false
     ) async throws -> RemoteHarnessOperation {
-        var payload: [String: Any] = ["confirmed": confirmed]
-        if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
+        let payload: [String: Any] = ["confirmed": confirmed]
         return try await request(
-            path: "v1/harnesses/\(harnessID.rawValue)/\(action)",
+            path: "harnesses/\(harnessID.rawValue)/\(action)",
             method: "POST",
             body: try JSONSerialization.data(
                 withJSONObject: payload
             )
-        )
-    }
-
-    public func installerPreview(
-        harnessID: AgentRuntimeKind
-    ) async throws -> RemoteInstallerPreview {
-        try await request(
-            path: "v1/harnesses/\(harnessID.rawValue)/install-preview",
-            method: "GET",
-            body: nil
         )
     }
 
@@ -1249,7 +1155,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         methodID: String
     ) async throws -> RemoteHarnessAuthenticationSession {
         try await request(
-            path: "v1/harnesses/\(harnessID.rawValue)/sign-in",
+            path: "harnesses/\(harnessID.rawValue)/sign-in",
             method: "POST",
             body: try JSONSerialization.data(
                 withJSONObject: ["methodID": methodID]
@@ -1259,7 +1165,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     /// Runs the harness's own sign-out on the workspace and returns its new status.
     public func signOut(harnessID: AgentRuntimeKind) async throws -> RemoteHarnessStatus {
-        try await request(path: "v1/harnesses/\(harnessID.rawValue)/sign-out", method: "POST",
+        try await request(path: "harnesses/\(harnessID.rawValue)/sign-out", method: "POST",
                           body: Data("{}".utf8))
     }
 
@@ -1267,7 +1173,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         id: UUID
     ) async throws -> RemoteHarnessAuthenticationSession {
         return try await request(
-            path: "v1/authentication-sessions/\(id.uuidString)",
+            path: "authentication-sessions/\(id.uuidString)",
             method: "GET",
             body: nil
         )
@@ -1276,7 +1182,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func submitAuthorizationCode(id: UUID, code: String) async throws {
         struct Accepted: Decodable { let accepted: Bool }
         let _: Accepted = try await request(
-            path: "v1/authentication-sessions/\(id.uuidString)/authorization-code",
+            path: "authentication-sessions/\(id.uuidString)/authorization-code",
             method: "POST",
             body: try JSONSerialization.data(withJSONObject: ["code": code])
         )
@@ -1285,7 +1191,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func cancelAuthenticationSession(id: UUID) async throws {
         struct Stopping: Decodable { let stopping: Bool }
         let _: Stopping = try await request(
-            path: "v1/authentication-sessions/\(id.uuidString)",
+            path: "authentication-sessions/\(id.uuidString)",
             method: "DELETE",
             body: nil
         )
@@ -1293,45 +1199,45 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func operation(id: UUID) async throws -> RemoteHarnessOperation {
         try await request(
-            path: "v1/operations/\(id.uuidString.lowercased())",
+            path: "operations/\(id.uuidString.lowercased())",
             method: "GET",
             body: nil
         )
     }
 
     public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
-        try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
+        try await request(path: "default-agent/configuration", method: "POST", body: payload)
     }
     public func runtimeInspection() async throws -> RuntimeInspection {
-        try await request(path: "v1/runtime/inspection", method: "GET", body: nil)
+        try await request(path: "runtime/inspection", method: "GET", body: nil)
     }
 
     public func defaultAgentSDKs(_ command: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
-        try await request(path: "v1/default-agent/sdks", method: command.action == .status ? "GET" : "POST",
+        try await request(path: "default-agent/sdks", method: command.action == .status ? "GET" : "POST",
                           body: command.action == .status ? nil : JSONEncoder().encode(command))
     }
     /// The host's bots, if its server runs them (docs/architecture/WOVEN_EVERYWHERE.md).
     public func botsStatus() async throws -> BotsRemoteStatus {
-        try await request(path: "v1/bots/status", method: "GET", body: nil)
+        try await request(path: "bots/status", method: "GET", body: nil)
     }
     /// Bots run on one machine, so a host's bots turn off when they move elsewhere.
     public func setBotsEnabled(_ enabled: Bool) async throws -> BotsRemoteStatus {
-        try await request(path: "v1/bots/enabled", method: "POST",
+        try await request(path: "bots/enabled", method: "POST",
                           body: try JSONSerialization.data(withJSONObject: ["enabled": enabled]))
     }
     public func setBotsResources(_ resources: BotResourceSettings) async throws -> BotsRemoteStatus {
         struct Body: Encodable { let resources: BotResourceSettings }
-        return try await request(path: "v1/bots/resources", method: "POST", body: JSONEncoder().encode(Body(resources: resources)))
+        return try await request(path: "bots/resources", method: "POST", body: JSONEncoder().encode(Body(resources: resources)))
     }
     /// The WebSocket this host's server proxies to its bots runtime, over the SSH tunnel.
     public var botsSocket: BotSocketEndpoint {
-        var components = URLComponents(url: baseURL.appending(path: "v1/bots/ws"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appending(path: "bots/ws"), resolvingAgainstBaseURL: false)!
         components.scheme = "ws"
         return BotSocketEndpoint(url: components.url!, bearer: token)
     }
     public func signInStatuses() async throws -> [AgentSignInStatus] {
         struct Response: Decodable { let statuses: [AgentSignInStatus] }
-        let value: Response = try await request(path: "v1/sign-in-status", method: "GET", body: nil)
+        let value: Response = try await request(path: "sign-in-status", method: "GET", body: nil)
         return value.statuses
     }
 
@@ -1364,11 +1270,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
-        if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
-        if path.hasPrefix("v1/browser/") { request.timeoutInterval = 10 }
-        if path == "v1/browser/selftest" { request.timeoutInterval = 45 }
-        if path == "v1/browser/mcp" { request.timeoutInterval = 30 }
-        if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
+        if path.hasPrefix("databases") { request.timeoutInterval = 15 }
+        if path.hasPrefix("browser/") { request.timeoutInterval = 10 }
+        if path == "browser/selftest" { request.timeoutInterval = 45 }
+        if path == "browser/mcp" { request.timeoutInterval = 30 }
+        if path == "default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1383,7 +1289,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
-            if path.hasPrefix("v1/browser/") {
+            if path.hasPrefix("browser/") {
                 let message: String
                 switch (response as? HTTPURLResponse)?.statusCode {
                 case 404: message = "Update this workspace service in Settings to view its browser."
@@ -1393,36 +1299,36 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 }
                 throw RemoteWorkspaceClientError.invalidResponse(message)
             }
-            if path == "v1/default-agent/sdks" {
+            if path == "default-agent/sdks" {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
             }
-            if path.hasPrefix("v1/harnesses/") || path.hasPrefix("v1/runtime-maintenance/"),
+            if path.hasPrefix("harnesses/") || path.hasPrefix("runtime-maintenance/"),
                let code = (try? JSONDecoder().decode(RemoteHostFailure.self, from: data))?.error,
                RemoteRuntimeFailure.isKnown(code) {
                 throw RemoteWorkspaceClientError.invalidResponse(RemoteRuntimeFailure.describe(code))
             }
-            if path.hasPrefix("v1/harnesses/"), path.hasSuffix("/sign-out") {
+            if path.hasPrefix("harnesses/"), path.hasSuffix("/sign-out") {
                 throw RemoteWorkspaceClientError.invalidResponse(
                     (response as? HTTPURLResponse)?.statusCode == 404
                     ? "Update this workspace in Settings → Workspaces to remove accounts from here."
                     : "The account couldn't be removed. Reconnect to the workspace and try again."
                 )
             }
-            if path == "v1/usage/export", (response as? HTTPURLResponse)?.statusCode == 404 {
+            if path == "usage/export", (response as? HTTPURLResponse)?.statusCode == 404 {
                 throw UsageDeviceCollectionError.updateRequired
             }
-            if path.hasPrefix("v1/task-gateway") {
+            if path.hasPrefix("task-gateway") {
                 throw RemoteWorkspaceClientError.invalidResponse(
                     (response as? HTTPURLResponse)?.statusCode == 404
                     ? "Update this workspace service in Settings to use background execution."
                     : "The remote task gateway could not complete this request. Reconnect and try again."
                 )
             }
-            if path.hasPrefix("v1/databases") {
+            if path.hasPrefix("databases") {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")
                 }
@@ -1433,11 +1339,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 String(decoding: data, as: UTF8.self)
             )
         }
-        if path.hasPrefix("v1/browser/"), data.count > 3 * 1024 * 1024 {
+        if path.hasPrefix("browser/"), data.count > 3 * 1024 * 1024 {
             throw RemoteWorkspaceClientError.invalidResponse("The browser response is too large.")
         }
         let decoder = JSONDecoder()
-        if path.hasPrefix("v1/task-gateway") {
+        if path.hasPrefix("task-gateway") {
             decoder.dateDecodingStrategy = .custom { decoder in
                 let value = try decoder.singleValueContainer()
                 let text = try value.decode(String.self)
@@ -1699,21 +1605,21 @@ extension RemoteWorkspaceServiceClient {
         if let path, !path.hasPrefix("/") || path.contains("\0") {
             throw RemoteWorkspaceClientError.invalidResponse("Choose an absolute directory on the Linux host.")
         }
-        return try await request(path: "v1/directories", method: "GET", body: nil,
+        return try await request(path: "directories", method: "GET", body: nil,
             queryItems: path.map { [URLQueryItem(name: "path", value: $0)] })
     }
     public func linkHostProject(path: String) async throws -> RemoteProjectDirectory {
         guard path.hasPrefix("/"), !path.contains("\0") else {
             throw RemoteWorkspaceClientError.invalidResponse("Choose an absolute directory on the Linux host.")
         }
-        return try await request(path: "v1/projects/link", method: "POST", body: JSONEncoder().encode(["path": path]))
+        return try await request(path: "projects/link", method: "POST", body: JSONEncoder().encode(["path": path]))
     }
     public func ensureScratchDirectory(path: String) async throws -> RemoteProjectDirectory {
-        try await request(path: "v1/scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
+        try await request(path: "scratch", method: "POST", body: JSONEncoder().encode(["path": path]))
     }
     public func createProject(name: String, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
         struct Request: Encodable { let name: String; let reuseExisting: Bool }
-        return try await request(path: "v1/projects", method: "POST", body: JSONEncoder().encode(Request(name: name, reuseExisting: reuseExisting)))
+        return try await request(path: "projects", method: "POST", body: JSONEncoder().encode(Request(name: name, reuseExisting: reuseExisting)))
     }
 }
 
@@ -1722,19 +1628,19 @@ extension RemoteWorkspaceServiceClient {
     public func managedDatabaseOperation(action: String, id: String? = nil, sql: String? = nil, name: String? = nil,
                                          snapshot: ManagedDatabaseSnapshot? = nil) async throws -> JSONValue {
         struct Request: Encodable { let databaseID: String?; let sql: String?; let name: String?; let snapshot: ManagedDatabaseSnapshot? }
-        return try await request(path: "v1/databases/" + action, method: "POST",
+        return try await request(path: "databases/" + action, method: "POST",
             body: JSONEncoder().encode(Request(databaseID: id, sql: sql, name: name, snapshot: snapshot)))
     }
     public func databaseSnapshot(id: String) async throws -> ManagedDatabaseSnapshot {
         struct Request: Encodable { let databaseID: String }
-        return try await request(path: "v1/databases/snapshot", method: "POST", body: JSONEncoder().encode(Request(databaseID: id)))
+        return try await request(path: "databases/snapshot", method: "POST", body: JSONEncoder().encode(Request(databaseID: id)))
     }
 }
 
 
 extension RemoteWorkspaceServiceClient {
     public func deleteProject(path: String) async throws -> RemoteProjectDirectory {
-        try await request(path: "v1/projects/delete", method: "POST", body: JSONEncoder().encode(["path": path]))
+        try await request(path: "projects/delete", method: "POST", body: JSONEncoder().encode(["path": path]))
     }
 }
 

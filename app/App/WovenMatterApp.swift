@@ -386,6 +386,9 @@ enum WovenMatterEntryPoint {
         if let status = TailscaleServeSupervisor.dispatch(arguments: CommandLine.arguments) {
             Darwin.exit(status)
         }
+        // Every process this app starts with its environment (Pi Durable's
+        // control helper, harness adapters, installers) names itself by this release.
+        setenv("WOVENMATTER_RELEASE_VERSION", WovenMCPServer.releaseVersion, 1)
         WindowPreferenceUpgrade.moveRenamedKeys(in: .standard)
         // Dispatch before App.main and its delegate adaptor can initialize
         // NSApplication. A service is not a second instance of the GUI app:

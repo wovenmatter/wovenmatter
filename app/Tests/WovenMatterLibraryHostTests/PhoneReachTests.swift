@@ -114,7 +114,7 @@ private final class ReachWorld: @unchecked Sendable {
     // The Mac adds the Linux host (as "Add machine" does) and both sync.
     try await macMembers.add(deviceID: linux.identity.deviceID, kind: .linux, name: "Box", publicKey: linux.identity.publicKey, endpoints: [boxURL])
     let token = try String(contentsOf: LibraryHostLayout(root: root.appending(path: "box")).defaultTokenFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-    let adopted = await linux.handleLocal(.init(method: "POST", target: "/v1/members/adopt", headers: ["authorization": "Bearer " + token],
+    let adopted = await linux.handleLocal(.init(method: "POST", target: "/members/adopt", headers: ["authorization": "Bearer " + token],
                                                 body: try JSONEncoder().encode(await macMembers.adoption())))
     guard adopted.status == 200 else { throw LibraryAPIError(code: "adopt", message: String(decoding: adopted.body, as: UTF8.self)) }
     await linux.startSync(); await macSync.start()

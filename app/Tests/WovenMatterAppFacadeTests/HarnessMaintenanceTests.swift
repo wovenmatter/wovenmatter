@@ -31,10 +31,10 @@ struct HarnessMaintenanceTests {
     func unavailableSessionShowsItsSpecificAdapterFailure(runtime: AgentRuntimeKind) async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let definition = try #require(LocalACPRuntimeCatalog.definition(for: runtime))
-        let detail = "\(definition.commandName) is outdated. Install the current Woven Matter-managed adapter."
+        let detail = "\(definition.commandName) is missing. Install the current Woven Matter-managed adapter."
         var snapshot = fixture.model.backendRuntimeSnapshot()
         snapshot.availability = [.init(runtimeKind: runtime, displayName: runtime.displayName,
-            state: .adapterOutdated, detail: detail, executablePath: "/fixture/\(definition.commandName)")]
+            state: .adapterMissing, detail: detail, executablePath: "/fixture/\(definition.commandName)")]
         snapshot.readyKinds.remove(runtime)
         snapshot.launchableKinds.remove(runtime)
         snapshot.workspace = .init(state: .ready, detail: "Fixture", rootPath: fixture.directory.path,
@@ -92,7 +92,7 @@ struct HarnessMaintenanceTests {
         #expect(reopened.remoteWorkspaces.runtimeMaintenance.isEmpty)
         #expect(reopened.remoteWorkspaces.readyChatTargets.isEmpty)
         // The sidebar lists the saved host and its agents with no status and no registry row.
-        let other = RemoteWorkspaceConfiguration(name: "Other", workspaceID: "other", hostName: "other.invalid", kind: .host,
+        let other = RemoteWorkspaceConfiguration(name: "Other", workspaceID: "other", hostName: "other.invalid",
                                                  dataRoot: "/data", workspaceRoot: "/workspace")
         let links = RemoteWorkspaceSidebarModel.links(configurations: reopened.remoteWorkspaces.workspaces + [other], readyTargets: [],
             registry: [], nameOverrides: [:], localHostDeviceID: nil, localFolderOwnerID: nil)
@@ -283,12 +283,12 @@ struct HarnessMaintenanceTests {
     /// The Mac server hands every path another Mac's Settings → Updates calls, the
     /// operation it follows included, to the signed member-maintenance handler.
     @Test func theMacServerRoutesEveryPathAnotherMacsUpdatesCall() {
-        for path in ["/v1/runtime-maintenance", "/v1/runtime-maintenance/check", "/v1/runtime-maintenance/codex/update",
-                     "/v1/default-agent/sdks", "/v1/operations/" + UUID().uuidString.lowercased()] {
+        for path in ["/runtime-maintenance", "/runtime-maintenance/check", "/runtime-maintenance/codex/update",
+                     "/default-agent/sdks", "/operations/" + UUID().uuidString.lowercased()] {
             #expect(LibraryHostController.servesMemberMaintenance(path), "\(path)")
         }
-        #expect(!LibraryHostController.servesMemberMaintenance("/v1/bots/ws"))
-        #expect(!LibraryHostController.servesMemberMaintenance("/v1/library"))
+        #expect(!LibraryHostController.servesMemberMaintenance("/bots/ws"))
+        #expect(!LibraryHostController.servesMemberMaintenance("/library"))
     }
 
     /// Another Mac's Settings → Updates: the update answers at once with an operation,
@@ -300,21 +300,21 @@ struct HarnessMaintenanceTests {
         func call(_ method: String, _ path: String) async -> LibraryHTTPResponse {
             await fixture.model.memberMaintenance(.init(method: method, target: path, headers: [:], body: Data("{}".utf8)), path: path)
         }
-        let started = await call("POST", "/v1/runtime-maintenance/codex/update")
+        let started = await call("POST", "/runtime-maintenance/codex/update")
         #expect(started.status == 202)
         let operation = try JSONDecoder().decode(RemoteHarnessOperation.self, from: started.body)
         #expect(operation.status == "running" && operation.harnessID == .codex)
         try await eventually { await operations.started == [.codex] }
-        let path = "/v1/operations/" + operation.id.uuidString.lowercased()
+        let path = "/operations/" + operation.id.uuidString.lowercased()
         #expect(try JSONDecoder().decode(RemoteHarnessOperation.self, from: await call("GET", path).body).status == "running")
         try await operations.finish(.codex)
         try await eventually {
             (try? JSONDecoder().decode(RemoteHarnessOperation.self, from: await call("GET", path).body))?.status == "succeeded"
         }
-        #expect(await call("GET", "/v1/operations/" + UUID().uuidString).status == 404)
+        #expect(await call("GET", "/operations/" + UUID().uuidString).status == 404)
         // Pi Durable only updates (its SDKs); there is no harness to check.
-        #expect(await call("POST", "/v1/runtime-maintenance/default_agent/check").status == 404)
-        #expect(await call("POST", "/v1/runtime-maintenance/unknown/update").status == 404)
+        #expect(await call("POST", "/runtime-maintenance/default_agent/check").status == 404)
+        #expect(await call("POST", "/runtime-maintenance/unknown/update").status == 404)
     }
 
     private func eventually(_ condition: () async -> Bool) async throws {

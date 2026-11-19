@@ -43,11 +43,6 @@ struct SignInDevice: Codable, Equatable, Hashable, Identifiable, Sendable {
         let id = machineID.lowercased()
         return devices.first { $0.memberID?.lowercased() == id || $0.workspaceID == id }?.id
     }
-    /// What a device that has not updated to per-device sign-ins shows, once.
-    static func updateMessage(_ name: String) -> String { "Update Woven Matter on \(name) to manage its sign-ins from here." }
-    static func isUpdateMessage(_ message: String?) -> Bool {
-        message.map { $0.hasPrefix("Update Woven Matter on ") && $0.hasSuffix(" to manage its sign-ins from here.") } ?? false
-    }
     /// The first label of a tailnet address (`name.tailnet.ts.net`), the device's Tailnet name.
     static func tailnetName(_ host: String?) -> String? {
         guard let host, !host.isEmpty else { return nil }
@@ -65,7 +60,7 @@ struct SignInDevice: Codable, Equatable, Hashable, Identifiable, Sendable {
     }
 }
 
-/// A Linux host's own sign-ins (`GET`/`POST v1/sign-ins`): account labels and
+/// A Linux host's own sign-ins (`GET`/`POST sign-ins`): account labels and
 /// server addresses, never a secret.
 struct DeviceSignIns: Decodable, Sendable {
     struct Account: Decodable, Sendable {
@@ -153,7 +148,7 @@ extension ApplicationModel {
     }
 
     /// How this Mac's background server reaches another Mac's sign-ins: that Mac's
-    /// `/v1/connections/*` routes, signed with this Mac's member key.
+    /// `/connections/*` routes, signed with this Mac's member key.
     func signInPeerTransport(memberID: String) -> (String, Data) async throws -> Data {
         { [weak self] method, payload in
             guard let self else { throw CancellationError() }
@@ -161,16 +156,13 @@ extension ApplicationModel {
                 throw DefaultAgentError.message("That Mac isn't reachable from this Mac right now.")
             }
             let client = try await self.botsClient(for: target.workspace)
-            let path = method == "connections.command" ? "v1/connections/command" : "v1/connections/snapshot"
+            let path = method == "connections.command" ? "connections/command" : "connections/snapshot"
             do {
                 let snapshot: BackendConnectionsSnapshot = try await client.request(path, method: "POST",
                     body: method == "connections.command" ? payload : Data("{}".utf8), timeout: 55)
                 return try JSONEncoder().encode(snapshot)
             } catch let error as MemberSignedHTTPError {
-                if case .http(let status, _, let message) = error {
-                    if status == 404 || status == 426 {
-                        throw DefaultAgentError.message(SignInDevice.updateMessage(target.workspace.name))
-                    }
+                if case .http(_, _, let message) = error {
                     throw DefaultAgentError.message(message.isEmpty ? "\(target.workspace.name) did not accept this change." : message)
                 }
                 throw DefaultAgentError.message("\(target.workspace.name) could not be reached.")
@@ -182,7 +174,7 @@ extension ApplicationModel {
 
     /// Paths another Mac's Settings → Subscriptions & API Keys calls here.
     nonisolated static func servesMemberSignIns(_ path: String) -> Bool {
-        path == "/v1/connections/command" || path == "/v1/connections/snapshot"
+        path == "/connections/command" || path == "/connections/snapshot"
     }
 
     /// A signed Mac member's sign-in command, run on this Mac with this Mac's own
@@ -220,7 +212,7 @@ extension ApplicationModel {
         do {
             let method: String
             var payload = Data()
-            if path == "/v1/connections/command" {
+            if path == "/connections/command" {
                 let command: BackendConnectionsCommand
                 do { command = try JSONDecoder().decode(BackendConnectionsCommand.self, from: body).forMember() }
                 catch { return .error("invalid_request", "Only this Mac's own sign-ins can be changed here.", status: 400) }

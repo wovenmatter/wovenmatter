@@ -122,17 +122,12 @@ private extension DeviceAPI {
         let current: @Sendable () async throws -> ExecutionWorkspaceMCPPrincipal = {
             guard await members.member(key.deviceID) != nil else { throw LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
             // Any Mac checks the same synced rows: the registry and the member list.
-            let workspace = try await database.libraryExecutionWorkspaces().first { $0.id == workspaceID }
-            let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
-            return try await database.executionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
+            return try await database.executionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID)
         }
         return .success(.init(principal: try await current(), current: current))
     }
 
     func handleWorkspaceMCP(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
-        guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
-            return .error("version_mismatch", "Update Woven Matter on both devices.", status: 426)
-        }
         let caller: WorkspaceMCPCaller
         switch try await authenticateWorkspaceMCP(request) {
         case .success(let value): caller = value
@@ -152,7 +147,6 @@ private extension DeviceAPI {
 
     func prepareWorkspaceMCP(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {
         guard request.method == "POST" else { return .error("method_not_allowed", "Scheduled caller registration uses POST.", status: 405) }
-        guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else { return .error("version_mismatch", "Update the execution workspace to a compatible version.", status: 426) }
         guard request.body.count <= 1_048_576 else { return .error("too_large", "The scheduled caller registration exceeds 1 MiB.", status: 413) }
         let caller: WorkspaceMCPCaller
         switch try await authenticateWorkspaceMCP(request) {
@@ -229,14 +223,14 @@ public final class DeviceAPI {
     /// A phone paired with its member key: the host signs its member entry
     /// (replacing an earlier key the user is pairing again). Throws to refuse.
     private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async throws -> Void
-    /// A phone member unpairs itself (`POST /v1/pair/unpair`, signed): the
+    /// A phone member unpairs itself (`POST /pair/unpair`, signed): the
     /// host removes it from the library as Apple Devices does. Nil where this
     /// machine cannot remove members; the phone is then told to use a Mac.
     private let onMemberUnpaired: (@MainActor @Sendable (_ deviceID: String) async throws -> Void)?
-    /// `GET /v1/sync/status`: every peer's state, so a phone can show
+    /// `GET /sync/status`: every peer's state, so a phone can show
     /// "Update everything" when devices disagree on versions.
     private let syncStatus: @MainActor @Sendable () async -> LibrarySyncStatus?
-    /// The name `GET /v1/hello` reports; nil falls back to this machine's name.
+    /// The name `GET /hello` reports; nil falls back to this machine's name.
     private let hostName: @MainActor @Sendable () async -> String?
     public init(database: WorkspaceDatabase, authentication: DeviceAuthentication,
                 commands: any DeviceCommandServing,
@@ -290,7 +284,7 @@ public final class DeviceAPI {
             var path = target.path
             if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
             let workspaceID = try await database.libraryID()
-            if path == "/v1/discovery", request.method == "GET", let advertisement = discovery() {
+            if path == "/discovery", request.method == "GET", let advertisement = discovery() {
                 return try .json(advertisement)
             }
             if path == "/mcp/workspace/prepare" {
@@ -299,18 +293,18 @@ public final class DeviceAPI {
             if path == "/mcp/workspace" {
                 return try await handleWorkspaceMCP(request)
             }
-            if path == "/v1/pairing/request", request.method == "POST" {
+            if path == "/pairing/request", request.method == "POST" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let pending = try JSONDecoder().decode(PairingApprovalRequest.self, from: request.body)
                 let result = try await authentication.requestPairing(pending, workspaceID: workspaceID)
                 return try .json(result)
             }
-            if path == "/v1/pairing/result", request.method == "POST" {
+            if path == "/pairing/result", request.method == "POST" {
                 guard request.body.count <= 1_024 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let poll = try JSONDecoder().decode(PairingPoll.self, from: request.body)
                 return try .json(try await authentication.pairingResult(poll))
             }
-            if path == "/v1/pairing/cancel", request.method == "POST" {
+            if path == "/pairing/cancel", request.method == "POST" {
                 guard request.body.count <= 1_024 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let poll = try JSONDecoder().decode(PairingPoll.self, from: request.body)
                 if let principal = try await authentication.preparePairingCancellation(poll) {
@@ -320,14 +314,13 @@ public final class DeviceAPI {
                 await onPair()
                 return try .json(["cancelled": true])
             }
-            if request.method == "POST", path == "/v1/pair/preview" {
+            if request.method == "POST", path == "/pair/preview" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(PairRequest.self, from: request.body)
                 return try .json(try await authentication.previewPairing(command, workspaceID: workspaceID))
             }
-            if request.method == "POST", path == "/v1/pair/confirm" {
-                guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version),
-                    request.headers["x-woven-workspace"] == workspaceID, let bearer = request.bearer else {
+            if request.method == "POST", path == "/pair/confirm" {
+                guard request.headers["x-woven-workspace"] == workspaceID, let bearer = request.bearer else {
                     return .error("unauthorized", "Complete pairing on this device.", status: 401)
                 }
                 // The phone's member entry is signed when its pairing is
@@ -341,7 +334,7 @@ public final class DeviceAPI {
                 await onPair()
                 return try .json(["confirmed": true])
             }
-            if request.method == "POST", path == "/v1/pair" {
+            if request.method == "POST", path == "/pair" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(PairRequest.self, from: request.body)
                 let memberKey = command.memberPublicKey.flatMap { key in
@@ -366,9 +359,6 @@ public final class DeviceAPI {
                 await onPair()
                 return try .json(result)
             }
-            guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else {
-                return .error("version_mismatch", "Update Woven Matter on both devices to compatible versions.", status: 426)
-            }
             let device: PairedDevice
             if MemberRequestVerifier.isSigned(request.headers) {
                 guard let members else { return .error("unauthorized", "This device does not accept member requests yet.", status: 401) }
@@ -384,7 +374,7 @@ public final class DeviceAPI {
             } else {
                 // A pairing bearer only confirms (above) or ends its own pairing;
                 // every other request is signed with the device's member key.
-                guard request.method == "POST", path == "/v1/pair/unpair", let presented = request.bearer else {
+                guard request.method == "POST", path == "/pair/unpair", let presented = request.bearer else {
                     return .error("unauthorized", "Sign this request with a member device key. Pair this device again if it has none.", status: 401)
                 }
                 device = try await authentication.authenticate(bearer: presented)
@@ -399,10 +389,10 @@ public final class DeviceAPI {
             if path == "/mcp" {
                 return try await handleDeviceMCP(request, device: device)
             }
-            if path == "/v1/analytics/preference", request.method == "GET" { return try .json(await commands.analyticsPreference()) }
-            if path == "/v1/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
-            if path == "/v1/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
-            if request.method == "POST", path == "/v1/pair/unpair" {
+            if path == "/analytics/preference", request.method == "GET" { return try .json(await commands.analyticsPreference()) }
+            if path == "/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
+            if path == "/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
+            if request.method == "POST", path == "/pair/unpair" {
                 if device.isMember {
                     // Only a phone unpairs itself; a Mac is unpaired from another Mac.
                     guard [.iPhone, .iPad].contains(device.kind), let onMemberUnpaired else {
@@ -420,37 +410,37 @@ public final class DeviceAPI {
             }
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
-            if request.method == "GET", path == "/v1/federation/workspaces" {
+            if request.method == "GET", path == "/federation/workspaces" {
                 var active = Set(await authentication.devices().map(\.id))
                 if let members { active.formUnion(((try? await members.list().members) ?? []).filter { !$0.revoked }.map(\.deviceID)) }
                 return try .json(try await database.libraryConnectionWorkspaces(activeDeviceIDs: active))
             }
-            if path.hasPrefix("/v1/federation/") {
+            if path.hasPrefix("/federation/") {
                 let response = try await FederationAPI.handle(request, path: path, query: values, device: device, database: database)
                 if request.method == "POST", response.status == 200 { onMutation() }
                 return response
             }
-            if path == "/v1/dictations", request.method == "GET" {
+            if path == "/dictations", request.method == "GET" {
                 guard let after = Int64(query("after") ?? "0"), after >= 0 else {
                     return .error("invalid_cursor", "The dictation cursor is invalid.", status: 400)
                 }
                 return try .json(try await database.dictationChanges(after: after))
             }
-            if path == "/v1/dictations", request.method == "POST" {
+            if path == "/dictations", request.method == "POST" {
                 guard request.body.count <= 8_388_608 else { return .error("too_large", "The dictation is too large.", status: 413) }
                 let record = try JSONDecoder().decode(DictationRecord.self, from: request.body)
                 try await database.saveDictation(record)
                 onMutation(); return try .json(record)
             }
-            if path == "/v1/calendar", request.method == "GET" {
+            if path == "/calendar", request.method == "GET" {
                 return try .json(try await database.libraryCalendarSnapshot())
             }
-            if path == "/v1/calendar/runs", request.method == "POST" {
+            if path == "/calendar/runs", request.method == "POST" {
                 let runs = try JSONDecoder().decode([LibraryCalendarRun].self, from: request.body)
                 let accepted = try await database.libraryCalendarPublishRuns(runs, deviceID: device.id)
                 onMutation(); return try .json(accepted)
             }
-            if path == "/v1/calendar/mutations", request.method == "POST" {
+            if path == "/calendar/mutations", request.method == "POST" {
                 let mutation = try JSONDecoder().decode(LibraryCalendarMutation.self, from: request.body)
                 let receipt = try await database.libraryCalendarMutate(mutation, deviceID: device.id)
                 onMutation()
@@ -458,13 +448,11 @@ public final class DeviceAPI {
             }
             if request.method == "GET" {
                 switch path {
-                case "/v1/devices": return try .json(await authentication.deviceConnections())
-                case "/v1/hello":
-                    return try .json(LibraryHello(workspaceID: workspaceID,
-                        hostName: await hostName() ?? Self.machineName,
-                        capabilities: []))
-                case "/v1/snapshot": return try .json(try await database.librarySnapshot())
-                case "/v1/changes":
+                case "/devices": return try .json(await authentication.deviceConnections())
+                case "/hello":
+                    return try .json(LibraryHello(workspaceID: workspaceID, hostName: await hostName() ?? Self.machineName))
+                case "/snapshot": return try .json(try await database.librarySnapshot())
+                case "/changes":
                     guard let after = Int64(query("after") ?? query("cursor") ?? "0"), after >= 0 else {
                         return .error("invalid_cursor", "The change cursor is invalid.", status: 400)
                     }
@@ -478,21 +466,21 @@ public final class DeviceAPI {
                         page = try await database.libraryChanges(after: after, limit: limit)
                     }
                     return try .json(page)
-                case "/v1/providers": return try .json(commands.providers())
-                case "/v1/members":
+                case "/providers": return try .json(commands.providers())
+                case "/members":
                     // A phone learns every Mac and Linux member (with endpoints)
                     // from whichever one it syncs with, so it has no home Mac.
                     guard let members else { return .error("unavailable", "This device does not serve members yet.", status: 503) }
                     return try .json(try await members.list())
-                case "/v1/sync/status":
+                case "/sync/status":
                     guard let status = await syncStatus() else { return .error("unavailable", "Synchronization has not started.", status: 503) }
                     return try .json(status)
-                case "/v1/pending": return try .json(await commands.pendingInteractions())
+                case "/pending": return try .json(await commands.pendingInteractions())
                 default: break
                 }
                 let components = path.split(separator: "/").map(String.init)
-                if components.count == 4, components[0] == "v1", components[1] == "assets", components[3] == "linked-data" {
-                    guard let note = try await database.libraryNote(id: components[2]),
+                if components.count == 3, components[0] == "assets", components[2] == "linked-data" {
+                    guard let note = try await database.libraryNote(id: components[1]),
                           let document = try? NoteDocument.editableDocument(from: note.content) else {
                         return .error("not_found", "This document cannot be previewed by this version of the Mac app.", status: 404)
                     }
@@ -520,49 +508,49 @@ public final class DeviceAPI {
                     }
                     return response
                 }
-                if components.count == 3, components[0] == "v1", components[1] == "command-receipts" {
-                    guard let receipt = try await commands.receipt(commandID: components[2], deviceID: device.id) else {
+                if components.count == 2, components[0] == "command-receipts" {
+                    guard let receipt = try await commands.receipt(commandID: components[1], deviceID: device.id) else {
                         return .error("not_found", "The Mac has no receipt for this command. Retry explicitly using the same command ID.", status: 404)
                     }
                     return try .json(receipt)
                 }
-                if components.count == 4, components[0] == "v1", components[1] == "sessions" {
-                    if components[3] == "transcript" {
-                        if let transcript = try await database.libraryFederatedTranscript(conversationID: components[2], before: query("before")) {
+                if components.count == 3, components[0] == "sessions" {
+                    if components[2] == "transcript" {
+                        if let transcript = try await database.libraryFederatedTranscript(conversationID: components[1], before: query("before")) {
                             return try .json(transcript)
                         }
-                        return try .json(try await commands.transcript(conversationID: components[2], before: query("before")))
+                        return try .json(try await commands.transcript(conversationID: components[1], before: query("before")))
                     }
-                    if components[3] == "capabilities" {
-                        return try .json(try await commands.sessionCapabilities(conversationID: components[2]))
+                    if components[2] == "capabilities" {
+                        return try .json(try await commands.sessionCapabilities(conversationID: components[1]))
                     }
-                    if components[3] == "activity" {
-                        return try .json(try await database.libraryActivityDetails(conversationID: components[2],
+                    if components[2] == "activity" {
+                        return try .json(try await database.libraryActivityDetails(conversationID: components[1],
                             runID: query("run"), activityID: query("id") ?? ""))
                     }
                 }
-                if components.count == 3, components[0] == "v1", ["assets", "notes"].contains(components[1]) {
-                    guard let note = try await database.libraryNote(id: components[2]) else {
+                if components.count == 2, ["assets", "notes"].contains(components[0]) {
+                    guard let note = try await database.libraryNote(id: components[1]) else {
                         return .error("not_found", "This document is no longer available.", status: 404)
                     }
                     return try .json(note)
                 }
             } else if request.method == "POST" {
-                if path == "/v1/workspace-read" {
+                if path == "/workspace-read" {
                     let read = try JSONDecoder().decode(LibraryWorkspaceRead.self, from: request.body)
                     let value = try await commands.readWorkspace(read)
                     guard isActive() else { return .error("unavailable", "Sharing with devices is stopped.", status: 503) }
                     try await reauthenticate(device)
                     return try .json(value)
                 }
-                if path == "/v1/mutations" {
+                if path == "/mutations" {
                     let mutation = try JSONDecoder().decode(LibraryMutation.self, from: request.body)
                     guard mutation.deviceID == device.id else { return .error("wrong_device", "Mutation belongs to another device.", status: 403) }
                     let result = try await database.applyLibraryMutation(mutation)
                     onMutation()
                     return try .json(result)
                 }
-                if path == "/v1/commands" {
+                if path == "/commands" {
                     let command = try JSONDecoder().decode(LibraryCommand.self, from: request.body)
                     guard command.deviceID == device.id else { return .error("wrong_device", "Command belongs to another device.", status: 403) }
                     return try .json(try await commands.execute(command, deviceID: device.id))

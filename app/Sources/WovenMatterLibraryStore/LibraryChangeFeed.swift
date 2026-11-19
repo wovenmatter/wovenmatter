@@ -8,12 +8,12 @@ import WovenMatterCore
 import WovenMatterShared
 
 /// The mobile library change feed (`device_sync_changes`, the phone's
-/// `GET v1/changes`) as a live signal: every Mac's and Linux host's `workspace`
+/// `GET changes`) as a live signal: every Mac's and Linux host's `workspace`
 /// stream carries its cursor as `library` items, so a phone synchronizes its
 /// library when it changes instead of on a timer (docs/architecture/WOVEN_EVERYWHERE.md,
 /// "Streaming").
 extension WorkspaceDatabaseConnection {
-  /// Tables a phone synchronizes outside `GET v1/changes` (calendar,
+  /// Tables a phone synchronizes outside `GET changes` (calendar,
   /// dictation, the workspace registry, saved artifacts). A change to one adds
   /// a wake-only entry to `device_sync_changes`; its kind is not a
   /// `LibraryChange.ResourceKind`, so a change page skips it and only its

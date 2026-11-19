@@ -58,7 +58,7 @@ public struct WorkspaceToolExecutor: Sendable {
                       handlers: WorkspaceToolHandlers) async -> WovenMatterToolResponse {
     var parsedCommand: WovenMatterToolCommand?
     do {
-      guard request.schemaVersion == 1, let requestUUID = UUID(uuidString: request.requestID) else {
+      guard let requestUUID = UUID(uuidString: request.requestID) else {
         throw WorkspaceToolError.invalid("Unsupported tool request.")
       }
       var request = request

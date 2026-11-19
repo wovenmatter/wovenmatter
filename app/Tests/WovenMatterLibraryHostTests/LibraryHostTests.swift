@@ -90,7 +90,7 @@ private final class HostFixture {
   func mcp(_ caller: String, groups: String = "notes,history,calendar,library", _ method: String,
            _ params: [String: JSONValue] = [:]) throws -> JSONValue {
     let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string(method), "params": .object(params)])
-    let reply = try send("POST", "/v1/mcp", unix: socket, headers: [
+    let reply = try send("POST", "/mcp", unix: socket, headers: [
       "Authorization": "Bearer " + token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": groups,
       "MCP-Protocol-Version": "2025-06-18"], body: try JSONEncoder().encode(message))
     #expect(reply.status == 200)
@@ -177,18 +177,20 @@ struct LibraryHostTests {
 
   @Test func healthAndMountsOnLoopbackAndTokenOnTheSocket() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
-    let health = try send("GET", "/v1/health", port: fixture.port)
+    let health = try send("GET", "/health", port: fixture.port)
     #expect(health.status == 200 && health.json?.objectValue?["status"]?.stringValue == "ok")
-    #expect(try send("GET", "/wovenmatter/v1/health", port: fixture.port).status == 200)
-    #expect(try send("GET", "/wovenmatter/v1/peers/challenge", port: fixture.port).status == 404)
-    fixture.host.mount(prefix: "/v1/peers/") { request in .init(status: 200, body: Data(request.target.utf8)) }
-    let mounted = try send("GET", "/wovenmatter/v1/peers/challenge", port: fixture.port)
-    #expect(mounted.status == 200 && String(decoding: mounted.body, as: UTF8.self) == "/wovenmatter/v1/peers/challenge")
+    #expect(try send("GET", "/wovenmatter/health", port: fixture.port).status == 200)
+    #expect(try send("GET", "/wovenmatter/peers/challenge", port: fixture.port).status == 404)
+    fixture.host.mount(prefix: "/peers/") { request in .init(status: 200, body: Data(request.target.utf8)) }
+    let mounted = try send("GET", "/wovenmatter/peers/challenge", port: fixture.port)
+    #expect(mounted.status == 200 && String(decoding: mounted.body, as: UTF8.self) == "/wovenmatter/peers/challenge")
     // The local API is not on the network listener, and requires the token.
-    #expect(try send("POST", "/v1/mcp", port: fixture.port, body: Data("{}".utf8)).status == 404)
-    #expect(try send("GET", "/v1/health", unix: fixture.socket).status == 401)
-    #expect(try send("GET", "/v1/health", unix: fixture.socket, headers: ["Authorization": "Bearer wrong"]).status == 401)
-    #expect(try send("GET", "/v1/health", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token]).status == 200)
+    for local in ["/callers", "/workspaces", "/timers/due", "/members/sign"] {
+      #expect(try send("POST", local, port: fixture.port, body: Data("{}".utf8)).status == 404, "\(local)")
+    }
+    #expect(try send("GET", "/health", unix: fixture.socket).status == 401)
+    #expect(try send("GET", "/health", unix: fixture.socket, headers: ["Authorization": "Bearer wrong"]).status == 401)
+    #expect(try send("GET", "/health", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token]).status == 200)
     var info = stat(); #expect(lstat(fixture.socket, &info) == 0 && info.st_mode & 0o777 == 0o600)
   }
 
@@ -246,7 +248,7 @@ struct LibraryHostTests {
     // An empty newest-first page returns its start cursor; Int64.max came back as 9.223372036854776e+18.
     let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
       "params": .object(["name": .string("woven_history_conversations"), "arguments": .object(["search": .string("no such conversation")])])])
-    let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
+    let reply = try send("POST", "/mcp", unix: fixture.socket, headers: [
       "Authorization": "Bearer " + fixture.token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": "history",
       "MCP-Protocol-Version": "2025-06-18"], body: try JSONEncoder().encode(message))
     let text = String(decoding: reply.body, as: UTF8.self)
@@ -330,10 +332,10 @@ struct LibraryHostTests {
   @Test func membersAdoptionAndSignedMobileRequests() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let auth = ["Authorization": "Bearer " + fixture.token]
-    let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/wovenmatter/v1/identity", port: fixture.port).body)
+    let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/wovenmatter/identity", port: fixture.port).body)
     #expect(identity.kind == .linux && identity.publicKey.count == 32)
-    #expect(try send("GET", "/v1/health", port: fixture.port).json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
-    #expect(try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/v1/identity", unix: fixture.socket, headers: auth).body) == identity)
+    #expect(try send("GET", "/health", port: fixture.port).json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
+    #expect(try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/identity", unix: fixture.socket, headers: auth).body) == identity)
 
     let macRoot = fixture.directory.appending(path: "mac")
     try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
@@ -348,48 +350,45 @@ struct LibraryHostTests {
 
     func signed(_ path: String, as member: MemberIdentity = phone) throws -> HTTPReply {
       let headers = try member.signer.headers(method: "GET", target: path, audience: identity.deviceID)
-        .merging(["X-Woven-Protocol": String(LibraryProtocol.version)]) { a, _ in a }
       return try send("GET", path, port: fixture.port, headers: headers)
     }
     // Unsigned or from a stranger: refused before adoption.
-    #expect(try signed("/wovenmatter/v1/hello").status == 401)
-    #expect(try send("GET", "/wovenmatter/v1/hello", port: fixture.port, headers: ["X-Woven-Protocol": String(LibraryProtocol.version)]).status == 401)
+    #expect(try signed("/wovenmatter/hello").status == 401)
+    #expect(try send("GET", "/wovenmatter/hello", port: fixture.port).status == 401)
     // An adoption whose anchor did not sign this host's key is refused.
     let stranger = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "other.key"),
       deviceID: UUID().uuidString.lowercased(), kind: .mac))
-    #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await stranger.adoption())).status == 400)
+    #expect(try send("POST", "/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await stranger.adoption())).status == 400)
 
-    let adopted = try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption()))
+    let adopted = try send("POST", "/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption()))
     #expect(adopted.status == 200, "\(String(decoding: adopted.body, as: UTF8.self))")
-    let members = try JSONDecoder().decode(LibraryMemberList.self, from: send("GET", "/v1/members", unix: fixture.socket, headers: auth).body)
+    let members = try JSONDecoder().decode(LibraryMemberList.self, from: send("GET", "/members", unix: fixture.socket, headers: auth).body)
     #expect(Set(members.members.map(\.deviceID)) == [identity.deviceID, mac.identity.deviceID, phone.deviceID])
     #expect(members.members.first { $0.deviceID == identity.deviceID }?.endpoints.first?.absoluteString == "https://box.tailnet.ts.net/wovenmatter/")
-    let raw = try #require(send("GET", "/v1/members", unix: fixture.socket, headers: auth).json?.objectValue)
+    let raw = try #require(send("GET", "/members", unix: fixture.socket, headers: auth).json?.objectValue)
     #expect(raw["revision"]?.stringValue?.isEmpty == false)
     #expect(raw["members"]?.arrayValue?.first?.objectValue?["publicKey"]?.stringValue?.count == 44)
 
-    let hello = try signed("/wovenmatter/v1/hello")
+    let hello = try signed("/wovenmatter/hello")
     #expect(hello.status == 200, "\(String(decoding: hello.body, as: UTF8.self))")
     // The phone sees this machine's own member name, not a Mac placeholder.
     #expect(hello.json?.objectValue?["hostName"]?.stringValue == "Box")
-    #expect(try signed("/v1/snapshot").status == 200)
+    #expect(try signed("/snapshot").status == 200)
     // The phone can show whether some device needs an update.
-    let syncStatus = try signed("/wovenmatter/v1/sync/status")
+    let syncStatus = try signed("/wovenmatter/sync/status")
     #expect(syncStatus.status == 200 && syncStatus.json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
     // A signed request cannot be replayed.
-    let headers = try phone.signer.headers(method: "GET", target: "/v1/hello", audience: identity.deviceID)
-      .merging(["X-Woven-Protocol": String(LibraryProtocol.version)]) { a, _ in a }
-    #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 200)
-    #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 401)
+    let headers = try phone.signer.headers(method: "GET", target: "/hello", audience: identity.deviceID)
+    #expect(try send("GET", "/hello", port: fixture.port, headers: headers).status == 200)
+    #expect(try send("GET", "/hello", port: fixture.port, headers: headers).status == 401)
     // A request the phone addressed to another member is refused here, with a fresh nonce.
-    let elsewhere = try phone.signer.headers(method: "GET", target: "/v1/hello", audience: mac.identity.deviceID)
-      .merging(["X-Woven-Protocol": String(LibraryProtocol.version)]) { a, _ in a }
-    #expect(try send("GET", "/v1/hello", port: fixture.port, headers: elsewhere).status == 401)
+    let elsewhere = try phone.signer.headers(method: "GET", target: "/hello", audience: mac.identity.deviceID)
+    #expect(try send("GET", "/hello", port: fixture.port, headers: elsewhere).status == 401)
 
     try await mac.remove(phone.deviceID)
-    #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption())).status == 200)
-    #expect(try signed("/v1/hello").status == 401)
-    let status = try #require(send("GET", "/v1/sync/status", unix: fixture.socket, headers: auth).json?.objectValue)
+    #expect(try send("POST", "/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption())).status == 200)
+    #expect(try signed("/hello").status == 401)
+    let status = try #require(send("GET", "/sync/status", unix: fixture.socket, headers: auth).json?.objectValue)
     #expect(status["peers"]?.arrayValue?.first?.objectValue?["deviceID"]?.stringValue == mac.identity.deviceID)
   }
 
@@ -399,7 +398,7 @@ struct LibraryHostTests {
   @Test func socketSignsForTheServerAndListsWorkspaces() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let auth = ["Authorization": "Bearer " + fixture.token]
-    let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/v1/identity", unix: fixture.socket, headers: auth).body)
+    let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/identity", unix: fixture.socket, headers: auth).body)
     // A Mac adds this host, a phone and a second Linux host.
     let macRoot = fixture.directory.appending(path: "mac")
     try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
@@ -411,11 +410,11 @@ struct LibraryHostTests {
     let phone = UUID().uuidString.lowercased(), linux = UUID().uuidString.lowercased()
     try await mac.add(deviceID: phone, kind: .ios, name: "iPhone", publicKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }), endpoints: [])
     try await mac.add(deviceID: linux, kind: .linux, name: "Other", publicKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }), endpoints: [])
-    #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption())).status == 200)
-    let body = Data("{\"kind\":\"send\"}".utf8), target = "/wovenmatter-execution/abc/v1/execution/commands"
+    #expect(try send("POST", "/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption())).status == 200)
+    let body = Data("{\"kind\":\"send\"}".utf8), target = "/wovenmatter-execution/abc/execution/commands"
     let peer = linux
     let request = LibraryHost.SignatureRequest(method: "post", target: target, bodySHA256: MemberRequestSignature.bodyHash(body), audience: peer)
-    let reply = try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(request))
+    let reply = try send("POST", "/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(request))
     #expect(reply.status == 200, "\(String(decoding: reply.body, as: UTF8.self))")
     let headers = try #require(reply.json?.objectValue?["headers"]?.objectValue)
     #expect(headers[MemberRequestSignature.deviceHeader]?.stringValue == identity.deviceID)
@@ -427,40 +426,40 @@ struct LibraryHostTests {
       message: MemberRequestSignature.message(audience: peer, method: "POST", target: target, time: time, nonce: nonce, body: body)))
     // Not a bearer for anything else: malformed requests and other callers are refused.
     let bad = LibraryHost.SignatureRequest(method: "TRACE", target: "relative", bodySHA256: "zz", audience: peer)
-    #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(bad)).status == 400)
+    #expect(try send("POST", "/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(bad)).status == 400)
     // Every signature names a destination other than this host.
     for audience in ["", "not-a-device", peer.uppercased(), identity.deviceID] {
-      let unaddressed = LibraryHost.SignatureRequest(method: "GET", target: "/v1/hello", bodySHA256: MemberRequestSignature.bodyHash(Data()), audience: audience)
-      #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(unaddressed)).status == 400, "\(audience)")
+      let unaddressed = LibraryHost.SignatureRequest(method: "GET", target: "/hello", bodySHA256: MemberRequestSignature.bodyHash(Data()), audience: audience)
+      #expect(try send("POST", "/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(unaddressed)).status == 400, "\(audience)")
     }
     // Only the requests the Node server makes, to members of the right kind.
     let empty = MemberRequestSignature.bodyHash(Data())
     func signs(_ method: String, _ path: String, for audience: String) throws -> Int {
-      try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth,
+      try send("POST", "/members/sign", unix: fixture.socket, headers: auth,
                body: JSONEncoder().encode(LibraryHost.SignatureRequest(method: method, target: path, bodySHA256: empty, audience: audience))).status
     }
     let conversation = UUID().uuidString.lowercased(), macID = mac.identity.deviceID
     #expect(try signs("POST", "/wovenmatter/mcp/workspace", for: macID) == 200)
     #expect(try signs("POST", "/wovenmatter/mcp/workspace/prepare", for: macID) == 200)
-    #expect(try signs("GET", "/wovenmatter/v1/execution/conversations/\(conversation)/transcript?before=abc", for: macID) == 200)
-    #expect(try signs("GET", "/wovenmatter-execution/one/v1/execution/providers", for: linux) == 200)
+    #expect(try signs("GET", "/wovenmatter/execution/conversations/\(conversation)/transcript?before=abc", for: macID) == 200)
+    #expect(try signs("GET", "/wovenmatter-execution/one/execution/providers", for: linux) == 200)
     #expect(try signs("POST", "/wovenmatter/mcp/workspace", for: linux) == 403, "Woven MCP goes to a Mac")
-    #expect(try signs("GET", "/wovenmatter/v1/execution/providers", for: phone) == 403, "never for a phone")
-    #expect(try signs("GET", "/wovenmatter/v1/execution/providers", for: UUID().uuidString.lowercased()) == 403, "only for members")
-    for (method, path) in [("POST", "/wovenmatter/v1/peers/sync"), ("GET", "/wovenmatter/v1/snapshot"), ("POST", "/wovenmatter/v1/host/restart"),
-                           ("DELETE", "/wovenmatter/v1/execution/commands"), ("GET", "/wovenmatter/v1/execution/conversations/x/transcript"),
-                           ("POST", "/wovenmatter/mcp/workspace?x=1"), ("POST", "/wovenmatter/mcp"), ("GET", "/elsewhere/v1/execution/providers")] {
+    #expect(try signs("GET", "/wovenmatter/execution/providers", for: phone) == 403, "never for a phone")
+    #expect(try signs("GET", "/wovenmatter/execution/providers", for: UUID().uuidString.lowercased()) == 403, "only for members")
+    for (method, path) in [("POST", "/wovenmatter/peers/sync"), ("GET", "/wovenmatter/snapshot"), ("POST", "/wovenmatter/host/restart"),
+                           ("DELETE", "/wovenmatter/execution/commands"), ("GET", "/wovenmatter/execution/conversations/x/transcript"),
+                           ("POST", "/wovenmatter/mcp/workspace?x=1"), ("POST", "/wovenmatter/mcp"), ("GET", "/elsewhere/execution/providers")] {
       #expect(try signs(method, path, for: macID) == 403, "\(method) \(path)")
     }
-    #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, body: JSONEncoder().encode(request)).status == 401)
-    #expect(try send("POST", "/v1/members/sign", port: fixture.port, body: JSONEncoder().encode(request)).status == 404)
+    #expect(try send("POST", "/members/sign", unix: fixture.socket, body: JSONEncoder().encode(request)).status == 401)
+    #expect(try send("POST", "/members/sign", port: fixture.port, body: JSONEncoder().encode(request)).status == 404)
     // Launched by `node`, the socket admits only that parent process.
     #expect(LibraryHost.allowsLocalPeer(41, launchedBy: 41, currentParent: 41))
     #expect(!LibraryHost.allowsLocalPeer(42, launchedBy: 41, currentParent: 41), "another process of this user")
     #expect(!LibraryHost.allowsLocalPeer(41, launchedBy: 41, currentParent: 1), "orphaned")
     #expect(!LibraryHost.allowsLocalPeer(nil, launchedBy: 41, currentParent: 41))
-    #expect(try send("POST", "/wovenmatter/v1/members/adopt", port: fixture.port, body: Data("{}".utf8)).status == 404)
-    let workspaces = try #require(send("GET", "/v1/workspaces", unix: fixture.socket, headers: auth).json?.objectValue?["workspaces"]?.arrayValue)
+    #expect(try send("POST", "/wovenmatter/members/adopt", port: fixture.port, body: Data("{}".utf8)).status == 404)
+    let workspaces = try #require(send("GET", "/workspaces", unix: fixture.socket, headers: auth).json?.objectValue?["workspaces"]?.arrayValue)
     #expect(workspaces.allSatisfy { $0.objectValue?["deleted"]?.boolValue != true })
   }
 
@@ -475,19 +474,19 @@ struct LibraryHostTests {
                                   "text": .string("Hello"), "createdAt": .string("2026-11-09T12:00:00Z")])])
     ])
     for _ in 0..<2 {
-      let reply = try send("POST", "/v1/bots/\(bot)/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch))
+      let reply = try send("POST", "/bots/\(bot)/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch))
       #expect(reply.status == 200 && reply.json?.objectValue?["entries"] == .number(1), "\(String(decoding: reply.body, as: UTF8.self))")
     }
     let conversations = try await fixture.host.database.botConversations()
     #expect(conversations.count == 1 && conversations.first?.botName == "Helper" && conversations.first?.machineID == fixture.host.identity.deviceID)
     #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
-    #expect(try send("POST", "/v1/bots/\(UUID().uuidString.lowercased())/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch)).status == 400)
+    #expect(try send("POST", "/bots/\(UUID().uuidString.lowercased())/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch)).status == 400)
 
     // Deleting the bot marks its conversations deleted for every device; entries stay.
-    #expect(try send("DELETE", "/v1/bots/\(bot)/conversations", unix: fixture.socket).status == 401)
-    #expect(try send("POST", "/v1/bots/\(bot)/conversations", unix: fixture.socket, headers: auth).status == 405)
-    #expect(try send("DELETE", "/v1/bots/not-a-bot!/conversations", unix: fixture.socket, headers: auth).status == 400)
-    let deleted = try send("DELETE", "/v1/bots/\(bot)/conversations", unix: fixture.socket, headers: auth)
+    #expect(try send("DELETE", "/bots/\(bot)/conversations", unix: fixture.socket).status == 401)
+    #expect(try send("POST", "/bots/\(bot)/conversations", unix: fixture.socket, headers: auth).status == 405)
+    #expect(try send("DELETE", "/bots/not-a-bot!/conversations", unix: fixture.socket, headers: auth).status == 400)
+    let deleted = try send("DELETE", "/bots/\(bot)/conversations", unix: fixture.socket, headers: auth)
     #expect(deleted.status == 200 && deleted.json?.objectValue?["deleted"] == .bool(true), "\(String(decoding: deleted.body, as: UTF8.self))")
     #expect(try await fixture.host.database.botConversations().isEmpty)
     #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
@@ -501,14 +500,14 @@ struct LibraryHostTests {
     let entry = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation, kind: .conversation,
       conversation: .init(id: conversation, title: "Linux session", runtimeKind: "default_agent"))
     let journal = ExecutionJournalBatch(libraryID: workspace.libraryID, entries: [entry])
-    #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal)).status == 403)
+    #expect(try send("POST", "/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal)).status == 403)
     _ = try await fixture.host.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: library.hostDeviceID)
-    let published = try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal))
+    let published = try send("POST", "/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal))
     #expect(published.status == 200, "\(String(decoding: published.body, as: UTF8.self))")
     #expect(try JSONDecoder().decode(ExecutionJournalBatchResult.self, from: published.body).libraryID == workspace.libraryID)
     #expect(try await fixture.host.database.executionJournal(after: 0).entries.map(\.eventID) == [entry.eventID])
     let foreign = ExecutionJournalBatch(libraryID: UUID().uuidString.lowercased(), entries: [entry])
-    #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(foreign)).status == 400)
+    #expect(try send("POST", "/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(foreign)).status == 400)
   }
 
   /// Two Linux hosts that one Mac added synchronize through their mounted
@@ -540,7 +539,7 @@ struct LibraryHostTests {
     // off for a presence interval, and announces new rows only to peers it
     // sees online; the note below must travel by that announcement.
     for fixture in [one, two] {
-      #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token],
+      #expect(try send("POST", "/members/adopt", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token],
                        body: JSONEncoder().encode(await mac.adoption())).status == 200)
     }
     for fixture in [one, two] { await fixture.host.startSync() }
@@ -582,7 +581,7 @@ struct LibraryHostTests {
     func call(_ name: String, _ arguments: [String: JSONValue], groups: String = "notes", botID: String? = nil) throws -> JSONValue? {
       let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
         "params": .object(["name": .string(name), "arguments": .object(arguments)])])
-      let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
+      let reply = try send("POST", "/mcp", unix: fixture.socket, headers: [
         "Authorization": "Bearer " + fixture.token, "X-Woven-Caller": principal, "X-Woven-Bot-ID": botID ?? bot,
         "X-Woven-Bot-Name": "Helper%20Bot", "X-Woven-Enabled-Groups": groups], body: try JSONEncoder().encode(message))
       return reply.status == 200 ? reply.json?.objectValue?["result"]?.objectValue?["structuredContent"] : nil

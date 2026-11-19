@@ -383,7 +383,7 @@ final class DefaultAgentSettingsModel {
             default: result = try await routes.signIns()
             }
         } catch let error as DefaultAgentError { throw error }
-        catch { throw DefaultAgentError.message(linuxMessage(error)) }
+        catch { throw DefaultAgentError.message(error.localizedDescription) }
         guard linuxTarget == workspace else { return true }
         applyLinux(result)
         return true
@@ -394,15 +394,6 @@ final class DefaultAgentSettingsModel {
         await backendCommandTask?.value
     }
     private var linuxTarget: UUID? { SignInDevice.linuxWorkspace(of: device) }
-    /// The selected device has not updated to per-device sign-ins (`updateMessage`).
-    var deviceNeedsUpdate: Bool { SignInDevice.isUpdateMessage(error) }
-    /// A Linux host from before per-device sign-ins has no `v1/sign-ins`.
-    private func linuxMessage(_ error: any Error) -> String {
-        if let error = error as? LibraryAPIError, ["not_found", "http_404"].contains(error.code), let name = selectedDevice?.name {
-            return SignInDevice.updateMessage(name)
-        }
-        return error.localizedDescription
-    }
     private func linuxRoutes(_ workspace: UUID) async throws -> any MemberExecutionRoutes {
         guard let memberRoutes else { throw DefaultAgentError.message("Reconnect this workspace to change its sign-ins.") }
         return try await memberRoutes(workspace)
@@ -421,7 +412,7 @@ final class DefaultAgentSettingsModel {
             if let provider = change.provider { invalidateConnection(provider) }
             return true
         } catch {
-            if generation == runID { self.error = linuxMessage(error) }
+            if generation == runID { self.error = error.localizedDescription }
             return false
         }
     }
@@ -490,7 +481,7 @@ final class DefaultAgentSettingsModel {
     private var process: Process?
     private var input: FileHandle?
     /// A Linux host's settings helper runs on that host, started through its
-    /// server (`v1/default-agent/control-sessions`), never over SSH.
+    /// server (`default-agent/control-sessions`), never over SSH.
     /// A Linux workspace's signed member routes, by its registry ID.
     var memberRoutes: (@MainActor (UUID) async throws -> any MemberExecutionRoutes)?
     private var remoteControl: (routes: any MemberExecutionRoutes, id: String)?
@@ -646,7 +637,7 @@ final class DefaultAgentSettingsModel {
                 guard !Task.isCancelled, generation == runID, device == target else { return }
                 applyLinux(value)
             } catch is CancellationError { }
-            catch { if generation == runID, device == target { self.error = linuxMessage(error) } }
+            catch { if generation == runID, device == target { self.error = error.localizedDescription } }
             return
         }
         do {

@@ -44,9 +44,9 @@ public final class LibraryHost: @unchecked Sendable {
   /// Mobile library routes (today's `DeviceAPI`), mounted under
   /// these prefixes so a phone can synchronize with this machine.
   public static let mobilePrefixes = [
-    "/v1/hello", "/v1/snapshot", "/v1/changes", "/v1/mutations", "/v1/commands", "/v1/command-receipts/", "/v1/federation/",
-    "/v1/calendar", "/v1/dictations", "/v1/notes/", "/v1/assets/", "/v1/sessions/", "/v1/devices", "/v1/providers",
-    "/v1/pending", "/v1/workspace-read", "/v1/sync/status", "/v1/members", "/mcp"
+    "/hello", "/snapshot", "/changes", "/mutations", "/commands", "/command-receipts/", "/federation/",
+    "/calendar", "/dictations", "/notes/", "/assets/", "/sessions/", "/devices", "/providers",
+    "/pending", "/workspace-read", "/sync/status", "/members", "/mcp"
   ]
 
   public let layout: LibraryHostLayout
@@ -89,7 +89,7 @@ public final class LibraryHost: @unchecked Sendable {
     configuration.presenceInterval = presenceInterval
     sync = LibraryPeerSync(directory: members, transport: transport, configuration: configuration)
     let sync = sync
-    for prefix in ["/v1/peers/sync", "/v1/peers/notify", "/v1/peers/files", "/v1/peers/file"] {
+    for prefix in ["/peers/sync", "/peers/notify", "/peers/files", "/peers/file"] {
       mount(prefix: prefix) { await sync.handle($0) ?? .error("unauthorized", "Peer routes need a signed member request.", status: 401) }
     }
     // Bearer grants are never issued here; the store only backs the API.
@@ -130,8 +130,8 @@ public final class LibraryHost: @unchecked Sendable {
     await announcer.start()
   }
 
-  /// Routes another handler under a loopback path prefix, such as `/v1/peers/`
-  /// for peer sync or `/v1/workspace/` for the mobile API. Requests reach it
+  /// Routes another handler under a loopback path prefix, such as `/peers/`
+  /// for peer sync or `/workspace/` for the mobile API. Requests reach it
   /// with the `/wovenmatter` Serve prefix already removed.
   public func mount(prefix: String, _ handler: @escaping LibraryHTTPResponseHandler) {
     lock.withLock { mounts.append((prefix, handler)); mounts.sort { $0.prefix.count > $1.prefix.count } }
@@ -165,11 +165,11 @@ public final class LibraryHost: @unchecked Sendable {
       return .error("invalid_request", "Invalid request path.", status: 400)
     }
     if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
-    if path == "/v1/health" { return await health(request) }
-    if path == "/v1/identity" { return await identityResponse(request) }
-    // The mobile API serves only `GET /v1/members`; `/v1/members/sign`,
+    if path == "/health" { return await health(request) }
+    if path == "/identity" { return await identityResponse(request) }
+    // The mobile API serves only `GET /members`; `/members/sign`,
     // `adopt` and `self` exist on the socket alone.
-    if path.hasPrefix("/v1/members/") { return .error("not_found", "This library route is not served here.", status: 404) }
+    if path.hasPrefix("/members/") { return .error("not_found", "This library route is not served here.", status: 404) }
     // Whole path segments only, so a prefix never mounts a longer name.
     let handler = lock.withLock { mounts.first { mount in
       path == mount.prefix || path.hasPrefix(mount.prefix.hasSuffix("/") ? mount.prefix : mount.prefix + "/")
@@ -190,19 +190,19 @@ public final class LibraryHost: @unchecked Sendable {
     }
     do {
       switch path {
-      case "/v1/health": return await health(request)
-      case "/v1/identity": return await identityResponse(request)
-      case "/v1/callers": return try await registerCaller(request)
-      case "/v1/mcp": return try await mcp(request)
-      case "/v1/members":
+      case "/health": return await health(request)
+      case "/identity": return await identityResponse(request)
+      case "/callers": return try await registerCaller(request)
+      case "/mcp": return try await mcp(request)
+      case "/members":
         guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
         return try .json(try await members.list())
-      case "/v1/members/adopt":
+      case "/members/adopt":
         guard request.method == "POST", request.body.count <= 1_048_576 else { return .error("invalid_request", "POST an adoption of at most 1 MiB.", status: 400) }
         let list = try await members.adopt(JSONDecoder().decode(LibraryMemberAdoption.self, from: request.body))
         await sync.scheduleAll()
         return try .json(list)
-      case "/v1/members/self":
+      case "/members/self":
         guard request.method == "POST", request.body.count <= 8_192 else { return .error("invalid_request", "POST at most 8 KiB.", status: 400) }
         struct Update: Decodable { var name: String?; var endpoints: [URL] }
         let update = try JSONDecoder().decode(Update.self, from: request.body)
@@ -211,46 +211,46 @@ public final class LibraryHost: @unchecked Sendable {
         }
         try await members.ensureSelf(name: update.name ?? ProcessInfo.processInfo.hostName, endpoints: update.endpoints)
         return try .json(try await members.list())
-      case "/v1/sync/status":
+      case "/sync/status":
         return try .json(await sync.status())
-      case "/v1/github":
+      case "/github":
         // Settings → GitHub for the Woven server's signing agent: this host's copy of the key,
         // its device ID (its place in the access list), the identity and the list.
         guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
         return try .json(GitHubHostCopy(deviceID: identity.deviceID, configuration: try await github.hostCopy()))
-      case "/v1/timers/due":
+      case "/timers/due":
         guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
         return try .json(await timers.due())
-      case "/v1/timers/settle":
+      case "/timers/settle":
         guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
         try await timers.settle(JSONDecoder().decode(LibraryHostTimers.Settlement.self, from: request.body))
         return try .json(["settled": true])
-      case "/v1/members/sign":
+      case "/members/sign":
         return try await signForServer(request)
-      case "/v1/workspaces":
+      case "/workspaces":
         guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
         struct Workspaces: Encodable { let workspaces: [ExecutionWorkspace] }
         return try .json(Workspaces(workspaces: try await database.libraryExecutionWorkspaces().filter { !$0.deleted }))
       default:
-        if path.hasPrefix("/v1/publisher/") {
+        if path.hasPrefix("/publisher/") {
           return try await DevicePublisherAPI.handleLocal(request, path: path, database: database)
         }
         let parts = path.split(separator: "/").map(String.init)
-        if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "entries" {
+        if parts.count == 3, parts[0] == "bots", parts[2] == "entries" {
           guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
           guard request.body.count <= 8 * 1_024 * 1_024 else { return .error("too_large", "The conversation batch is too large.", status: 413) }
           let batch = try JSONDecoder().decode(BotConversationMirror.self, from: request.body)
-          guard batch.bot.id.lowercased() == parts[2].lowercased() else {
+          guard batch.bot.id.lowercased() == parts[1].lowercased() else {
             return .error("invalid_request", "The batch must name the bot in its path.", status: 400)
           }
           let added = try await database.recordBotConversation(machineID: identity.deviceID, batch)
           return try .json(["conversations": batch.conversations.count, "entries": batch.entries.count, "added": added])
         }
         // The bots runtime deleted this bot: its conversations stop syncing as live ones.
-        if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "conversations" {
+        if parts.count == 3, parts[0] == "bots", parts[2] == "conversations" {
           guard request.method == "DELETE" else { return .error("method_not_allowed", "Use DELETE.", status: 405) }
-          guard WovenMCPCaller.isIdentifier(parts[2]) else { return .error("invalid_request", "A bot ID is required.", status: 400) }
-          try await database.deleteBotConversations(machineID: identity.deviceID, botID: parts[2])
+          guard WovenMCPCaller.isIdentifier(parts[1]) else { return .error("invalid_request", "A bot ID is required.", status: 400) }
+          try await database.deleteBotConversations(machineID: identity.deviceID, botID: parts[1])
           return try .json(["deleted": true])
         }
         return .error("not_found", "Unknown library API route.", status: 404)
@@ -264,7 +264,7 @@ public final class LibraryHost: @unchecked Sendable {
     }
   }
 
-  /// `POST /v1/members/sign {method, target, bodySHA256, audience}` →
+  /// `POST /members/sign {method, target, bodySHA256, audience}` →
   /// `{headers}`: the Node server's requests to other members are signed with
   /// this machine's member key, which never leaves this process. `target` is
   /// the path with query exactly as the Node server sends it; `audience` is
@@ -316,12 +316,12 @@ public final class LibraryHost: @unchecked Sendable {
     switch (method, segments) {
     case ("POST", ["mcp", "workspace"]), ("POST", ["mcp", "workspace", "prepare"]):
       return query == nil ? [.mac] : nil
-    case ("POST", ["v1", "execution", "commands"]), ("GET", ["v1", "execution", "providers"]),
-         ("GET", ["v1", "execution", "conversations"]), ("GET", ["v1", "execution", "interactions"]):
+    case ("POST", ["execution", "commands"]), ("GET", ["execution", "providers"]),
+         ("GET", ["execution", "conversations"]), ("GET", ["execution", "interactions"]):
       return query == nil ? [.mac, .linux] : nil
-    case ("GET", let segments) where segments.count == 5 && Array(segments[0...2]) == ["v1", "execution", "conversations"] && id(segments[3]):
-      if segments[4] == "capabilities" { return query == nil ? [.mac, .linux] : nil }
-      guard segments[4] == "transcript" else { return nil }
+    case ("GET", let segments) where segments.count == 4 && Array(segments[0...1]) == ["execution", "conversations"] && id(segments[2]):
+      if segments[3] == "capabilities" { return query == nil ? [.mac, .linux] : nil }
+      guard segments[3] == "transcript" else { return nil }
       return query == nil || query?.hasPrefix("before=") == true && query?.contains("&") == false ? [.mac, .linux] : nil
     default: return nil
     }
@@ -384,7 +384,7 @@ public final class LibraryHost: @unchecked Sendable {
     }
   }
 
-  /// `POST /v1/callers` registers one of the Node server's conversations as a
+  /// `POST /callers` registers one of the Node server's conversations as a
   /// local session, so Woven tools attribute notes, receipts and versions to it.
   public struct CallerRegistration: Codable, Sendable {
     public var conversationID: String
@@ -433,7 +433,7 @@ public final class LibraryHost: @unchecked Sendable {
     return id
   }
 
-  /// `POST /v1/mcp`: stateless MCP JSON-RPC, the same messages the Node server
+  /// `POST /mcp`: stateless MCP JSON-RPC, the same messages the Node server
   /// sends a Mac's `/mcp/workspace`. The caller and its tool selection come
   /// from `X-Woven-Conversation-ID` and `X-Woven-Enabled-Groups`.
   private func mcp(_ request: LibraryHTTPRequest) async throws -> LibraryHTTPResponse {

@@ -250,7 +250,7 @@ public enum RuntimeMaintenanceError: LocalizedError {
 }
 
 extension RuntimeInventory {
-    /// This Mac's inventory in the shape a Linux host serves at `/v1/runtime-maintenance`,
+    /// This Mac's inventory in the shape a Linux host serves at `/runtime-maintenance`,
     /// so another Mac's Settings → Updates reads both the same way. Paths stay on this Mac.
     public func maintenance(operation: RemoteHarnessOperation? = nil, failureCount: Int = 0) -> RemoteRuntimeMaintenance {
         // As a Linux host reports it: the person's own CLI is `cli` (native) beside the ACP

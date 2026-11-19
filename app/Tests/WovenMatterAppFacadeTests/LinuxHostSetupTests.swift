@@ -57,7 +57,7 @@ struct LinuxHostSetupTests {
         let steps = Steps()
         install(f, steps)
         let bots = RemoteWorkspaceConfiguration(name: "bots.invalid", workspaceID: RemoteHostInstallMode.botsOnlyWorkspaceID,
-            hostName: "bots.invalid", kind: .host)
+            hostName: "bots.invalid")
         f.model.remoteWorkspaces.configureFacadeFixture(bots, status: try #require(f.model.remoteWorkspaces.statuses[f.remote.id]),
             harnesses: [], maintenance: [])
         f.model.libraryHost.setUpLinuxHost(bots, restart: true)

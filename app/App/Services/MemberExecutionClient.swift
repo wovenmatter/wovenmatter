@@ -20,7 +20,7 @@ final class MemberExecutionClient {
     /// A transport signed with this Mac's member key, or nil when this Mac has
     /// no member identity yet or the workspace's serving member is unknown.
     typealias MakeSignedTransport = @MainActor (ExecutionWorkspace) async throws -> (any ExecutionWorkspaceTransport)?
-    /// Opens the live stream to a `stream.v1` workspace (one signed socket per
+    /// Opens the live stream to a workspace that lists `StreamProtocol.capability` (one signed socket per
     /// attempt), or nil when this Mac cannot sign for it yet.
     typealias MakeStream = @MainActor (ExecutionWorkspace) async throws -> StreamConnection.Connect?
     private let database: WorkspaceDatabase
@@ -66,17 +66,6 @@ final class MemberExecutionClient {
 
     /// The command journal's file name in the library's support directory.
     nonisolated static let commandJournalName = "member-execution-commands.json"
-
-    /// v0.4.2 saved the journal as `central-execution-commands.json`. It moves
-    /// once before the client opens it, so commands awaiting a receipt keep it.
-    nonisolated static func moveLegacyCommandJournal(in directory: URL) throws {
-        let legacy = directory.appending(path: "central-execution-commands.json")
-        let current = directory.appending(path: commandJournalName)
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: legacy.path) else { return }
-        if manager.fileExists(atPath: current.path) { try manager.removeItem(at: legacy) }
-        else { try manager.moveItem(at: legacy, to: current) }
-    }
 
     init(database: WorkspaceDatabase, commandJournalURL: URL,
          makeSignedTransport: @escaping MakeSignedTransport,
@@ -124,7 +113,7 @@ final class MemberExecutionClient {
     /// returns what the stream holds, waiting briefly for a first snapshot;
     /// while the machine is not connected it shows what the library holds and
     /// throws why. A workspace this Mac holds no stream to (one without
-    /// `stream.v1`, or that cannot yet verify this Mac) shows what the library
+    /// the stream capability, or that cannot yet verify this Mac) shows what the library
     /// holds, marked offline with the reason. Nothing is read from the workspace.
     func refresh(conversationID: String) async throws {
         guard let descriptor = try await workspace(conversationID: conversationID) else { return }
@@ -242,7 +231,7 @@ final class MemberExecutionClient {
     }
 
     /// A harness's model, thinking and permission choices on `workspace`
-    /// before a session exists (`GET v1/execution/providers/<id>/options`).
+    /// before a session exists (`GET execution/providers/<id>/options`).
     func sessionOptions(workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind,
                         workingDirectory: String?, model: String?) async throws -> SessionSettings {
         let providers = try await transport(for: workspace).providers()
@@ -502,7 +491,7 @@ final class MemberExecutionClient {
                 throw LibraryAPIError(code: "workspace_unavailable", message: errors[workspace.id] ?? error.localizedDescription)
             }
         } else {
-            // A workspace without `stream.v1` takes one signed request per command.
+            // A workspace without the stream capability takes one signed request per command.
             let transport = try await transport(for: workspace)
             if let existing = try await transport.receipt(command.commandID) { receipt = existing }
             else { try beforeDispatch(); receipt = try await transport.command(command) }
@@ -516,7 +505,7 @@ final class MemberExecutionClient {
 
 // MARK: Live stream
 
-/// One `stream.v1` workspace's connection and what it is subscribed to.
+/// One streaming workspace's connection and what it is subscribed to.
 @MainActor
 final class LiveWorkspace {
     let workspace: ExecutionWorkspace
@@ -711,7 +700,7 @@ extension MemberExecutionClient {
     }
 
     /// A message file of a session another machine runs, from that machine
-    /// (`GET v1/execution/attachments/<sha256>`), checked against its digest.
+    /// (`GET execution/attachments/<sha256>`), checked against its digest.
     func attachment(conversationID: String, reference: LibraryAttachmentReference) async throws -> Data {
         try await transport(for: requiredWorkspace(conversationID)).attachment(reference)
     }
@@ -775,7 +764,6 @@ extension MemberExecutionClient {
         case .memberTimeStale: "This Mac's clock is wrong. Set the date and time automatically in System Settings, then try again."
         case .unauthorized: "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
         case .memberRemoved: "\(name) no longer lists this Mac as a member. It reconnects once the member lists change."
-        case .protocolUnsupported: "Update Woven Matter on \(name) and on this Mac."
         case nil, .disconnected, .timedOut, .notConnected: "\(name) is not connected. Woven Matter reconnects automatically."
         case let error?: error.localizedDescription
         }

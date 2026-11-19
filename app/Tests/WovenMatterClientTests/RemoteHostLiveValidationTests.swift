@@ -48,7 +48,7 @@ struct RemoteHostLiveValidationTests {
             }
         } else {
             state = State(configuration: .init(name: "Native host validation", workspaceID: workspaceID,
-                hostName: host, userName: user, kind: .host, accessMode: accessMode),
+                hostName: host, userName: user, accessMode: accessMode),
                 token: UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
         }
         let client: RemoteWorkspaceSSHClient
@@ -84,7 +84,7 @@ struct RemoteHostLiveValidationTests {
         try Self.save(state, to: stateURL)
         let status = try await client.deployHost(configuration: state.configuration, token: state.token,
             update: updating) { print("Host deployment: " + $0) }
-        #expect(status.running && status.kind == .host)
+        #expect(status.running)
         state.configuration.remotePort = status.hostPort
         state.configuration.dataRoot = status.dataRoot ?? state.configuration.dataRoot
         state.configuration.workspaceRoot = status.workspaceRoot ?? state.configuration.workspaceRoot
@@ -101,7 +101,7 @@ struct RemoteHostLiveValidationTests {
             let port = try #require(await tunnel.localPort)
             let service = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:\(port)")!, token: token)
             let health = try await service.health()
-            #expect(health.runtimeKind == .host && health.accessMode == accessMode)
+            #expect(health.accessMode == accessMode)
             #expect(health.workspaceRoot == state.configuration.workspaceRoot)
             #expect(health.serviceFingerprint != nil)
             if environment["WOVENMATTER_LIVE_HOST_ROLLBACK"] == "1" {
@@ -240,7 +240,7 @@ struct RemoteHostLiveValidationTests {
     }
 
     private static func requireValidationWorkspace(_ configuration: RemoteWorkspaceConfiguration) throws {
-        guard configuration.kind == .host, configuration.workspaceID == "host-mode-validation",
+        guard configuration.workspaceID == "host-mode-validation",
               configuration.hostName == "workstation-home-1" else {
             throw RemoteWorkspaceClientError.invalidResponse("Mutating live fixtures are limited to host-mode-validation on workstation-home-1.")
         }

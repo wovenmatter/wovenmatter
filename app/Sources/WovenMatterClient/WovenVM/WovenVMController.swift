@@ -91,14 +91,14 @@ public struct WovenVMController: Sendable {
     }
 
     public func status() async throws -> WovenVMStatus {
-        try await call("GET", "/v1/status", as: WovenVMStatus.self)
+        try await call("GET", "/status", as: WovenVMStatus.self)
     }
 
     /// What explains a stuck or failed VM: status, the ends of the helper log
     /// and console, and the guest agent's report (provisioning log, kernel
     /// alerts, failed units, processes). Works while provisioning is stuck.
     public func diagnostics() async throws -> WovenVMDiagnostics {
-        try await call("GET", "/v1/diagnostics", as: WovenVMDiagnostics.self, timeout: 90)
+        try await call("GET", "/diagnostics", as: WovenVMDiagnostics.self, timeout: 90)
     }
 
     /// Polls until the VM is ready; throws with the helper's reason if it fails.
@@ -124,24 +124,24 @@ public struct WovenVMController: Sendable {
     /// applied through the balloon, which the guest may deflate under pressure.
     @discardableResult
     public func applyResources(_ resources: WovenVMResources) async throws -> WovenVMStatus {
-        try await call("PUT", "/v1/resources", body: resources, as: WovenVMStatus.self)
+        try await call("PUT", "/resources", body: resources, as: WovenVMStatus.self)
     }
 
     /// Woven's Update action for the VM: snapshot, update, health check,
     /// rollback on failure. Returns at once; follow `status()`.
     @discardableResult
     public func update() async throws -> WovenVMStatus {
-        try await call("POST", "/v1/update", as: WovenVMStatus.self)
+        try await call("POST", "/update", as: WovenVMStatus.self)
     }
 
     public func restart() async throws {
-        _ = try await call("POST", "/v1/restart", as: WovenVMStatus.self)
+        _ = try await call("POST", "/restart", as: WovenVMStatus.self)
     }
 
     /// Shuts the guest down, stops the helper and removes the launch agent, so
     /// nothing starts at the next login. `ensureRunning()` brings it back.
     public func stop() async throws {
-        _ = try? await call("POST", "/v1/stop", as: WovenVMStatus.self)
+        _ = try? await call("POST", "/stop", as: WovenVMStatus.self)
         try await Self.background { [self] in
             let deadline = Date() + 60
             while FileManager.default.fileExists(atPath: controlSocket.path), Date() < deadline {
@@ -167,16 +167,16 @@ public struct WovenVMController: Sendable {
     /// Publishes a container port on `127.0.0.1:<hostPort>`. Idempotent for the
     /// same target. Forwards survive helper and VM restarts.
     public func forwardPreview(_ request: WovenVMForwardRequest) async throws -> WovenVMForward {
-        try await call("POST", "/v1/forwards", body: try request.validated(), as: WovenVMForward.self)
+        try await call("POST", "/forwards", body: try request.validated(), as: WovenVMForward.self)
     }
 
     public func unforwardPreview(id: String) async throws {
         guard id.allSatisfy({ $0.isHexDigit || $0 == "-" }) else { throw WovenVMError.invalid("Unknown forward.") }
-        _ = try await raw("DELETE", "/v1/forwards/" + id, body: nil)
+        _ = try await raw("DELETE", "/forwards/" + id, body: nil)
     }
 
     public func forwards() async throws -> [WovenVMForward] {
-        try await call("GET", "/v1/forwards", as: [WovenVMForward].self)
+        try await call("GET", "/forwards", as: [WovenVMForward].self)
     }
 
     // MARK: Transport

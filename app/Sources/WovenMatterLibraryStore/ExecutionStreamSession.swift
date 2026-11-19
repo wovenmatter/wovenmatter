@@ -92,7 +92,7 @@ struct StreamSessionContext: Sendable {
 
 /// One stream socket: its subscriptions, calls and bounded outbound queue.
 actor StreamSession {
-  /// Member kinds a WebSocket may belong to, as for `/v1/execution/*`.
+  /// Member kinds a WebSocket may belong to, as for `/execution/*`.
   static let memberKinds: Set<MemberKind> = [.mac, .ios, .linux]
   nonisolated let id = UUID()
   private let context: StreamSessionContext

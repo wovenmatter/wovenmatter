@@ -12,7 +12,6 @@ struct SharedHostState: Codable, Equatable, Sendable {
     var updatedAt: Date?
 
     var serviceState: String? { status?.objectValue?["state"]?.stringValue ?? status?.objectValue?["status"]?.stringValue }
-    var version: String? { status?.objectValue?["version"]?.stringValue ?? status?.objectValue?["fingerprint"]?.stringValue }
 }
 
 enum SharedHostAction: Codable, Equatable, Sendable {
@@ -22,7 +21,7 @@ enum SharedHostAction: Codable, Equatable, Sendable {
 
 extension RemoteWorkspacesModel {
     /// Status, logs, restart, update and bot resources for any Linux host in
-    /// the registry, over its signed `/v1/host/*` routes. The Mac that added a
+    /// the registry, over its signed `/host/*` routes. The Mac that added a
     /// host keeps SSH for first install and as the update fallback.
     func manageSharedHost(_ workspaceID: String, _ action: SharedHostAction) {
         if isBackendProjection {

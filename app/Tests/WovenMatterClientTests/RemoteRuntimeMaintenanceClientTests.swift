@@ -26,11 +26,11 @@ struct RemoteRuntimeMaintenanceClientTests {
         let selected = try await first.checkRuntimeUpdates(.codex)
         #expect(selected.id == .codex)
         #expect(selected.versionCheckAvailable == true)
-        let operation = try await second.maintainRuntime(.codex, action: "update", sourceSHA256: "reviewed-digest", packageSpec: "fixture@1.2.3")
+        let operation = try await second.maintainRuntime(.codex, action: "update")
         #expect(operation.status == "running")
         let polled = try await second.operation(id: operation.id)
         #expect(polled.id == operation.id)
-        let claude = try await second.maintainRuntime(.claudeCode, action: "update", sourceSHA256: nil)
+        let claude = try await second.maintainRuntime(.claudeCode, action: "update")
         #expect(claude.harnessID == .claudeCode)
         let status = try await second.workspaceInstance(.opencode, action: "start")
         #expect(status.state == "running")
@@ -61,41 +61,37 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         let row = #"{"id":"codex","displayName":"Codex","installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true,"versionCheckAvailable":true}"#
         let value: String
         switch path {
-        case "/v1/runtime-maintenance":
+        case "/runtime-maintenance":
             #expect(first)
             #expect(request.httpMethod == "GET")
             value = "{\"runtimes\":[\(row)]}"
-        case "/v1/runtime-maintenance/check":
+        case "/runtime-maintenance/check":
             #expect(!first)
             #expect(request.httpMethod == "POST")
             value = "{\"runtimes\":[\(row)]}"
-        case "/v1/runtime-maintenance/codex/check":
+        case "/runtime-maintenance/codex/check":
             #expect(first)
             #expect(request.httpMethod == "POST")
             #expect(body.isEmpty)
             value = row
-        case "/v1/runtime-maintenance/codex/update":
+        case "/runtime-maintenance/codex/update":
             #expect(!first)
-            #expect(payload?["confirmed"] as? Bool == true)
-            #expect(payload?["sourceSHA256"] as? String == "reviewed-digest")
-            #expect(payload?["packageSpec"] as? String == "fixture@1.2.3")
+            #expect(payload?.keys.sorted() == ["confirmed"] && payload?["confirmed"] as? Bool == true)
             #expect(request.httpMethod == "POST")
             value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
-        case "/v1/operations/abcdef01-abcd-abcd-abcd-abcdef012345":
+        case "/operations/abcdef01-abcd-abcd-abcd-abcdef012345":
             #expect(!first)
             #expect(request.httpMethod == "GET")
             value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"succeeded","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
-        case "/v1/runtime-maintenance/claude_code/update":
+        case "/runtime-maintenance/claude_code/update":
             #expect(!first)
             #expect(request.httpMethod == "POST")
             #expect(payload?["confirmed"] as? Bool == true)
-            #expect(payload?["sourceSHA256"] == nil)
-            #expect(payload?["packageSpec"] == nil)
             value = #"{"id":"00000000-0000-0000-0000-000000000002","harnessID":"claude_code","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
-        case "/v1/workspace-instances/opencode/start":
+        case "/workspace-instances/opencode/start":
             #expect(!first)
             #expect(request.httpMethod == "POST")
-            value = #"{"kind":"opencode","state":"running","pid":123,"version":"2.0.22","endpointPath":"/v1/workspace-instances/opencode/api","lastError":null}"#
+            value = #"{"kind":"opencode","state":"running","pid":123,"version":"2.0.22","endpointPath":"/workspace-instances/opencode/api","lastError":null}"#
         default:
             Issue.record("Unexpected remote route: \(path)")
             value = "{}"

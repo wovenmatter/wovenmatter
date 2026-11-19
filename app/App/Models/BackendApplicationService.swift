@@ -185,7 +185,7 @@ final class BackendApplicationService {
     }
 
     func recordLibraryStop(conversationID: String) {
-        do { try dispatchAdmissions.prepareLegacyStop(conversationID: conversationID) }
+        do { try dispatchAdmissions.prepareUnfencedStop(conversationID: conversationID) }
         catch { dispatchAdmissions.refuseFurtherSends(conversationID: conversationID) }
     }
 
@@ -363,7 +363,7 @@ final class BackendApplicationService {
             // The window sends an unfenced Stop when it could not get a dispatch
             // admission. It still reaches native and scheduled work, even at
             // capacity; future unknown sends fail closed.
-            do { try dispatchAdmissions.prepareLegacyStop(conversationID: id) }
+            do { try dispatchAdmissions.prepareUnfencedStop(conversationID: id) }
             catch {
                 dispatchAdmissions.refuseFurtherSends(conversationID: id)
                 let barrier = model.beginAgentStop(conversationID: id)

@@ -339,7 +339,7 @@ extension PairedLibraryTests {
 
 extension PairedLibraryTests {
   /// History moves only by library sync: a Linux host writes its sessions
-  /// into its own library copy (`/v1/publisher/journal` on its library
+  /// into its own library copy (`/publisher/journal` on its library
   /// socket), and that copy's peer sync carries them to every other Mac, with
   /// the Mac that added the host offline. A phone's federation journal is read
   /// from the same rows on whichever library host it reaches.
@@ -358,7 +358,7 @@ extension PairedLibraryTests {
     let output = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: id, kind: .transcript,
       transcript: .init(conversationID: id, messages: [.init(id: UUID().uuidString.lowercased(), conversationID: id, role: "assistant", content: "Output while the managing Mac is offline")]))
     // The host's own Node server publishes into its library copy.
-    let path = "/v1/publisher/journal"
+    let path = "/publisher/journal"
     let published = try await DevicePublisherAPI.handleLocal(.init(method: "POST", target: path, headers: [:],
       body: try JSONEncoder().encode(ExecutionJournalBatch(libraryID: libraryID, entries: [creation, output]))), path: path, database: linux.database)
     #expect(published.status == 200)
@@ -1227,11 +1227,8 @@ extension PairedLibraryTests {
     #expect(page.entries.contains(table))
   }
 
-  /// What a build can apply is marked by the hash of its shared tables alone.
-  /// A waiting record is tried again when that hash changes and not before;
-  /// the marker an earlier build stored (the hash of its tables and a number)
-  /// differs from this build's, so waiting records are tried once more after
-  /// the update and the marker becomes the hash.
+  /// What a build can apply is marked by the hash of its shared tables. A
+  /// waiting record is tried again when that hash changes and not before.
   @Test func waitingRecordsAreRetriedWhenTheSharedTablesChange() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     func marker() async throws -> String? { try await b.database.read { try $0.peerSyncStateUnlocked("understands") } }
@@ -1248,8 +1245,8 @@ extension PairedLibraryTests {
     try await b.database.write { try $0.migratePeerSync() }
     #expect(try await b.database.peerSyncWaitingForUpdate() == 1)
 
-    // The marker as the earlier build stored it.
-    try await b.database.write { try $0.setPeerSyncStateUnlocked("understands", "0123abcd:1") }
+    // The library was last opened by a build with other shared tables.
+    try await b.database.write { try $0.setPeerSyncStateUnlocked("understands", "0123abcd") }
     try await b.database.write { try $0.migratePeerSync() }
     #expect(try await marker() == schema)
     #expect(try await b.database.peerSyncWaitingForUpdate() == 0)

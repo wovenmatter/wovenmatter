@@ -84,7 +84,6 @@ extension ApplicationModel {
         // The command journal lives beside the library it addresses, never in a
         // global directory a fixture or another instance could share.
         let directory = libraryStore.database.supportDirectory
-        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
         let client = try MemberExecutionClient(database: libraryStore.database,
             commandJournalURL: directory.appending(path: MemberExecutionClient.commandJournalName),
             makeSignedTransport: { [weak self] workspace in
@@ -101,7 +100,7 @@ extension ApplicationModel {
                       let directory = try? await self.libraryHost.peerSync.members(),
                       let audience = await directory.audience(for: workspace) else { return nil }
                 return try WebSocketStreamTransport.connector(endpoint: endpoint, signer: directory.identity.signer, audience: audience, headers: [
-                    "X-Woven-Protocol": String(LibraryProtocol.version), "X-Woven-Library": workspace.libraryID,
+                    "X-Woven-Library": workspace.libraryID,
                     "X-Woven-Workspace": workspace.id, "X-Woven-Device": directory.identity.deviceID
                 ])
             },
@@ -273,7 +272,7 @@ extension ApplicationModel {
 
     /// A chat that ran over SSH before moves to its Linux host's server on
     /// first open, refresh or send: the host adopts its native session
-    /// (`POST v1/execution/adopt`, signed) with the transcript this Mac shows.
+    /// (`POST execution/adopt`, signed) with the transcript this Mac shows.
     /// The database fence precedes the request; every retry sends the same
     /// immutable adoption, so a lost acknowledgement never creates a run.
     /// Nothing runs a chat over SSH any more, so one that cannot move stays

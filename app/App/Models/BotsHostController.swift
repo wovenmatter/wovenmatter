@@ -31,16 +31,15 @@ enum BotsCommand: Codable, Sendable {
     case updateEngine(machineID: String)
     case restartRuntime
     /// Fresh headers for one signed upgrade of another member's bots socket or
-    /// live stream (`…/v1/stream?protocol=1`; `audience`: its member device ID).
+    /// live stream (`StreamProtocol.path`; `audience`: its member device ID).
     /// The window process holds no member key.
     case signSocket(url: URL, audience: String)
     /// Another machine's harnesses and Pi Durable SDKs, for Settings → Updates.
     case memberInventory(machineID: String, checkLatest: Bool)
     /// The installer a Linux host would download for a harness update; none for a Mac.
-    case memberInstallerPreview(machineID: String, kind: AgentRuntimeKind)
     /// Starts updating a harness on another machine, as a job. `force` stops the chats
     /// using it on a Mac first.
-    case updateMemberHarness(machineID: String, kind: AgentRuntimeKind, sourceSHA256: String?, packageSpec: String?, force: Bool)
+    case updateMemberHarness(machineID: String, kind: AgentRuntimeKind, force: Bool)
     /// Starts updating another machine's Pi Durable SDKs, as a job.
     case updateMemberSDKs(machineID: String)
 }
@@ -56,8 +55,6 @@ struct BotsCommandResult: Codable, Sendable {
     var socketHeaders: [String: String]?
     /// The reply to `memberInventory`.
     var memberInventory: FleetMemberInventory?
-    /// The reply to `memberInstallerPreview`.
-    var installerPreview: RemoteInstallerPreview?
     /// Long bots commands running in the process that owns execution, and how the last
     /// one for each target ended.
     var jobs: [BotsJob] = []
@@ -103,7 +100,7 @@ struct BotsHostDependencies {
     var setRemoteResources: @MainActor (_ machineID: String, _ resources: BotResourceSettings) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
-    /// Another machine's `POST /v1/bots/enabled`.
+    /// Another machine's `POST /bots/enabled`.
     var setRemoteEnabled: @MainActor (_ machineID: String, _ enabled: Bool) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
@@ -112,7 +109,7 @@ struct BotsHostDependencies {
         throw BotsError.unavailable("Installing bots on Linux is unavailable.")
     }
     var updateLinuxHost: @MainActor (_ machineID: String, _ progress: @escaping @MainActor (String) -> Void) async throws -> Void = { _, _ in }
-    /// Another Mac's `POST /v1/bots/engine/update`.
+    /// Another Mac's `POST /bots/engine/update`.
     var updateRemoteEngine: @MainActor (_ machineID: String) async throws -> Void = { _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
@@ -123,9 +120,8 @@ struct BotsHostDependencies {
     var memberInventory: @MainActor (_ machineID: String, _ checkLatest: Bool) async throws -> FleetMemberInventory = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
-    var memberInstallerPreview: @MainActor (_ machineID: String, _ kind: AgentRuntimeKind) async throws -> RemoteInstallerPreview? = { _, _ in nil }
-    var updateMemberHarness: @MainActor (_ machineID: String, _ kind: AgentRuntimeKind, _ sourceSHA256: String?, _ packageSpec: String?,
-                                         _ force: Bool, _ progress: @escaping @MainActor (String) -> Void) async throws -> Void = { _, _, _, _, _, _ in
+    var updateMemberHarness: @MainActor (_ machineID: String, _ kind: AgentRuntimeKind,
+                                         _ force: Bool, _ progress: @escaping @MainActor (String) -> Void) async throws -> Void = { _, _, _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
     var updateMemberSDKs: @MainActor (_ machineID: String) async throws -> Void = { _ in
@@ -134,7 +130,7 @@ struct BotsHostDependencies {
 }
 
 /// Owns bots on this Mac inside the process that owns execution: the VM, the runtime
-/// child, the Runtime host API, and this Mac's side of `/v1/bots/*` for other members.
+/// child, the Runtime host API, and this Mac's side of `/bots/*` for other members.
 @MainActor @Observable
 final class BotsHostController {
     struct Persisted: Codable, Equatable {
@@ -263,9 +259,6 @@ final class BotsHostController {
         if case let .memberInventory(machineID, checkLatest) = command {
             return BotsCommandResult(memberInventory: try await dependencies.memberInventory(machineID, checkLatest))
         }
-        if case let .memberInstallerPreview(machineID, kind) = command {
-            return BotsCommandResult(installerPreview: try await dependencies.memberInstallerPreview(machineID, kind))
-        }
         var devices: [BotDiscoveredDevice]?
         if case .status = command {} else { remoteCache = nil }
         switch command {
@@ -320,17 +313,17 @@ final class BotsHostController {
             else { try await dependencies.updateRemoteEngine(machineID) }
         case .restartRuntime:
             if persisted.enabled, !shuttingDown { await supervisor?.stop(); restartIfStillOn() }
-        case let .updateMemberHarness(machineID, kind, sourceSHA256, packageSpec, force):
+        case let .updateMemberHarness(machineID, kind, force):
             let update = dependencies.updateMemberHarness
             try startJob(.updateHarness, target: machineID.lowercased() + "/" + kind.rawValue, progress: "Starting the update…") { progress in
-                try await update(machineID, kind, sourceSHA256, packageSpec, force, progress)
+                try await update(machineID, kind, force, progress)
             }
         case .updateMemberSDKs(let machineID):
             let update = dependencies.updateMemberSDKs
             try startJob(.updateHarness, target: machineID.lowercased() + "/pi-durable-sdk", progress: "Updating \(FleetHarness.piDurableSDKName)…") { _ in
                 try await update(machineID)
             }
-        case .signSocket, .memberInventory, .memberInstallerPreview: break
+        case .signSocket, .memberInventory: break
         }
         return await snapshot(devices: devices ?? lastDevices)
     }
@@ -578,7 +571,7 @@ final class BotsHostController {
         throw BotsError.unavailable("Bots on this Mac did not answer.")
     }
 
-    // MARK: Other members (`/v1/bots/*` on this Mac's library server)
+    // MARK: Other members (`/bots/*` on this Mac's library server)
 
     /// The caller is already authorized as a member by the library server.
     func remoteUpgrade(_ request: LibraryHTTPRequest) -> WebSocketUpgradeDecision {
@@ -592,18 +585,18 @@ final class BotsHostController {
     func remoteRequest(_ request: LibraryHTTPRequest, path: String) async -> LibraryHTTPResponse {
         do {
             switch (request.method, path) {
-            case ("GET", "/v1/bots/status"):
+            case ("GET", "/bots/status"):
                 return try .json(try await remoteStatus())
-            case ("POST", "/v1/bots/engine/update"):
+            case ("POST", "/bots/engine/update"):
                 let identity = try await resolveIdentity()
                 _ = try await perform(.updateEngine(machineID: identity.deviceID))
                 return try .json(try await remoteStatus())
-            case ("POST", "/v1/bots/enabled"):
+            case ("POST", "/bots/enabled"):
                 struct Body: Decodable { let enabled: Bool }
                 let body = try JSONDecoder().decode(Body.self, from: request.body)
                 _ = try await perform(.setEnabled(body.enabled))
                 return try .json(try await remoteStatus())
-            case ("POST", "/v1/bots/resources"):
+            case ("POST", "/bots/resources"):
                 struct Body: Decodable { let resources: BotResourceSettings }
                 let body = try JSONDecoder().decode(Body.self, from: request.body)
                 let identity = try await resolveIdentity()

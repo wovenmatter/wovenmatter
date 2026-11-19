@@ -2246,9 +2246,8 @@ struct ConversationListMeta: Equatable, Sendable {
     /// one runs it, as the sidebar titles that workspace.
     /// A chat's agent among those listed. A chat that names an agent is found
     /// by ID only: paired Macs' agents share a codename, so a chat whose agent
-    /// is not listed (another Mac's, before its owner record has arrived, or
-    /// while that Mac has not updated) must not be given this Mac's agent of
-    /// that codename. The codename serves a chat that names no agent.
+    /// is not listed (another Mac's, before its owner record has arrived) must
+    /// not be given this Mac's agent of that codename. The codename serves a chat that names no agent.
     static func agent(for conversation: WorkspaceConversationRecord, byID: [String: WorkspaceAgent],
                       byCodename: [String: WorkspaceAgent]) -> WorkspaceAgent? {
         if let id = conversation.agentID { return byID[id] }

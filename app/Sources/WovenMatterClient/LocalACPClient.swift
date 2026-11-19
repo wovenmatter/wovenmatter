@@ -662,6 +662,8 @@ public actor LocalACPClient {
                 && !removedPrefixes.contains(where: upperKey.hasPrefix)
         }
         environment["WOVENMATTER_LOCAL_ACP"] = "1"
+        // What a harness adapter or Pi Durable names itself by.
+        environment["WOVENMATTER_RELEASE_VERSION"] = WovenMCPServer.releaseVersion
         // Harness tools run on this Mac with nobody necessarily at its screen.
         // A wrapped command gets its own environment from its wrapper.
         if launch.wrappedCommand == nil {

@@ -48,7 +48,7 @@ struct RuntimeCredentialProbeTests {
   func repairedInstallationClearsPriorFailure(kind: AgentRuntimeKind) async throws {
     let definition = try #require(LocalACPRuntimeCatalog.definition(for: kind))
     let discovered = resolution(kind)
-    for state in [LocalACPRuntimeAvailability.State.adapterOutdated, .adapterMissing, .cliMissing] {
+    for state in [LocalACPRuntimeAvailability.State.adapterMissing, .cliMissing] {
       let previous = LocalACPRuntimeResolution(availability: .init(runtimeKind: kind, displayName: kind.displayName,
         state: state, detail: "Previous installation failure", executablePath: discovered.availability.executablePath), launchConfiguration: nil)
       let refreshed = await LocalACPRuntimeVerifier.refresh(definition: definition, resolution: discovered,

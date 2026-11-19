@@ -377,7 +377,7 @@ struct PageAndArtifactPersistenceTests {
     let db = try await fixture.openDatabase()
     let id = try await db.createNote(folderID: nil, title: "Form", content: NoteDocument(kind: .html, html: "<input>").encoded(), kind: .html)
     _ = try await db.applyArtifactStateEdit(noteID: id, edit: set("app:x", .number(1)))
-    let future = #"{"artifactState":{"app:x":{"futureField":true,"updatedAt":"t","value":1,"version":1}},"blocks":[],"html":"<input>","kind":"html","version":2}"#
+    let future = #"{"artifactState":{"app:x":{"futureField":true,"updatedAt":"t","value":1,"version":1}},"blocks":[],"html":"<input>","kind":"html"}"#
     try await db.write { try $0.toolsExecuteUnlocked("UPDATE notes SET content=? WHERE id=?", [future, id]) }
     await #expect(throws: NoteDocumentSafetyError.unsupportedFormat) {
       _ = try await db.applyArtifactStateEdit(noteID: id, edit: set("app:x", .number(2), expected: 1))

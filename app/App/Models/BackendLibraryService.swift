@@ -20,7 +20,7 @@ struct BackendLibraryResult: Codable, Sendable {
 
 struct BackendLibraryService: Sendable {
     /// Reads a message file from the machine that runs its session
-    /// (`GET v1/execution/attachments/<sha256>`), checked against its digest.
+    /// (`GET execution/attachments/<sha256>`), checked against its digest.
     typealias RemoteAttachment = @Sendable (_ conversationID: String, _ reference: LibraryAttachmentReference) async throws -> Data
     let service: LibraryService
     var remoteAttachment: RemoteAttachment?

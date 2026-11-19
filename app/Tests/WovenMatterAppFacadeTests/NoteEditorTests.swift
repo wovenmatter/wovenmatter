@@ -30,7 +30,6 @@ import WovenMatterCore
                 table.rows[0].cells[0].runs = [NoteTextRun(text: "Column")]
                 table.rows[1].cells[0].runs = [NoteTextRun(text: "Stored cell")]
                 let original = NoteDocument(
-                    version: 1,
                     kind: kind,
                     blocks: [
                         .richText(NoteRichTextBlock(id: "paragraph", text: "Original text")),
@@ -250,7 +249,7 @@ import WovenMatterCore
         #expect(decodes == 4, "Switching notes must not reuse the prior note's entry")
         #expect(validations == 4, "External sources and note switches must validate exactly once")
 
-        let unsupported = "{\"version\":999,\"blocks\":[]}"
+        let unsupported = "{\"blocks\":[],\"fieldThisBuildDoesNotKnow\":true}"
         for _ in 0..<100 {
             _ = cache.value(noteID: "second", source: unsupported)
             #expect(!cache.isEditable(noteID: "second", source: unsupported),
@@ -620,6 +619,5 @@ import WovenMatterCore
         #expect(document.databaseLink == original.databaseLink, "Database link lost \(label)")
         #expect(document.kind == original.kind, "Artifact kind lost \(label)")
         #expect(document.html == original.html, "HTML metadata lost \(label)")
-        #expect(document.version == NoteDocument.currentVersion, "Version not normalized \(label)")
     }
 }

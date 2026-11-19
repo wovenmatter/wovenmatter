@@ -148,7 +148,6 @@ public actor LibraryStore {
       return
     }
     try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
-    try DeviceIdentityFile.moveLegacyFile(in: supportDirectory)
     // Complete usage DDL before opening the workspace owner and its recovery
     // transaction. A second handle changing schema after workspace triggers are
     // loaded can leave startup recovery with a stale schema on system SQLite.
@@ -672,21 +671,6 @@ public actor LibraryStore {
 actor DeviceIdentityFile {
   static let fileName = "device-id"
   private static let localLock = NSLock()
-
-  /// v0.4.2 saved the ID as `dashboard-device-id`. The writer moves it once
-  /// before opening the library, so this machine keeps its identity.
-  static func moveLegacyFile(in directory: URL) throws {
-    let legacy = directory.appending(path: "dashboard-device-id")
-    let current = directory.appending(path: fileName)
-    let manager = FileManager.default
-    try? manager.removeItem(at: directory.appending(path: ".dashboard-device-id.lock"))
-    guard manager.fileExists(atPath: legacy.path) else { return }
-    if manager.fileExists(atPath: current.path) {
-      try manager.removeItem(at: legacy)
-    } else {
-      try manager.moveItem(at: legacy, to: current)
-    }
-  }
 
   private let fileURL: URL
   private let readOnlyProjection: Bool

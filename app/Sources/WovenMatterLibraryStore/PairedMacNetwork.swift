@@ -25,7 +25,7 @@ public final class PairedMacNetwork: Sendable {
   }
   public func request<T: Decodable & Sendable>(_ endpoint: URL, path: String, token: String? = nil, libraryID: String? = nil, body: Data? = nil) async throws -> T {
     guard PairingPayload.isValidEndpoint(endpoint),
-          ["v1/discovery", "v1/pair", "v1/pair/preview", "v1/pair/confirm"].contains(path) || path.hasPrefix("v1/peers/") else {
+          ["discovery", "pair", "pair/preview", "pair/confirm"].contains(path) || path.hasPrefix("peers/") else {
       throw LibraryAPIError(code: "invalid_endpoint", message: "Invalid paired Mac endpoint.")
     }
     if let injectedRequest {
@@ -33,7 +33,6 @@ public final class PairedMacNetwork: Sendable {
     }
     var request = URLRequest(url: endpoint.appending(path: path)); request.httpMethod = body == nil ? "GET" : "POST"; request.httpBody = body
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
     if let libraryID { request.setValue(libraryID, forHTTPHeaderField: "X-Woven-Workspace") }
     let (bytes, response) = try await session.bytes(for: request)

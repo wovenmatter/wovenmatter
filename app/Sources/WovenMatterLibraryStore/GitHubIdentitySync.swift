@@ -33,10 +33,6 @@ public struct GitHubSharedIdentity: Codable, Equatable, Sendable {
     /// Base64: ChaChaPoly combined box of the `GitHubSSHKey` JSON.
     public var box: String
   }
-  /// A key earlier records carry inside their signature (`"version"`).
-  /// Nothing reads it and no record signed now has it; it is kept only so a
-  /// stored record re-encodes to the bytes that were signed.
-  var earlierSignedKey: Int?
   public var revision: Int64
   public var author: String
   public var identity: GitHubGitIdentity
@@ -45,11 +41,6 @@ public struct GitHubSharedIdentity: Codable, Equatable, Sendable {
   public var access: GitHubAccess?
   public var sealed: [Sealed]
   public var signature: String?
-
-  enum CodingKeys: String, CodingKey {
-    case earlierSignedKey = "version"
-    case revision, author, identity, key, access, sealed, signature
-  }
 
   static let domain = "woven.github.identity.v1"
 
@@ -391,7 +382,6 @@ public actor GitHubIdentitySync {
   private func write(_ record: GitHubSharedIdentity) async throws {
     var record = record
     record.sealed.sort { $0.device < $1.device }
-    record.earlierSignedKey = nil
     record.signature = nil
     record.signature = try directory.identity.sign(record.statement).base64EncodedString()
     try await database.setGitHubSharedIdentity(record)

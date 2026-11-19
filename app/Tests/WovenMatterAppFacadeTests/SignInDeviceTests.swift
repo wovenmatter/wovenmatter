@@ -93,11 +93,9 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         return try JSONDecoder().decode(DeviceSignIns.self, from: JSONSerialization.data(withJSONObject: ["accounts": accounts, "servers": []]))
     }
     func signIns() throws -> DeviceSignIns {
-        if outdated { throw LibraryAPIError(code: "not_found", message: "not_found") }
         return try view()
     }
     func changeSignIns(_ change: DeviceSignInChange) throws -> DeviceSignIns {
-        if outdated { throw LibraryAPIError(code: "not_found", message: "not_found") }
         let provider = change.provider ?? ""
         switch change.action {
         case "saveKey": keys[provider, default: []].append((UUID().uuidString.lowercased(), change.label ?? "API key", change.key ?? ""))
@@ -136,9 +134,7 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         return try defaultAgentControl(id: id)
     }
     func cancelDefaultAgentControl(id: String) {}
-    /// A host that has not updated has no `v1/sign-ins`.
-    private(set) var outdated = false
-    func makeOutdated() { outdated = true }
+    /// A host that has not updated has no `sign-ins`.
     func uploadAttachment(_ data: Data, sha256: String, name: String, mimeType: String) throws -> LibraryAttachmentReference { throw LibraryAPIError(code: "unavailable", message: "") }
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) throws -> SessionSettings { throw LibraryAPIError(code: "unavailable", message: "") }
     func libraryFile(conversationID: String?, path: String) throws -> MemberLibraryFile { throw LibraryAPIError(code: "unavailable", message: "") }
@@ -184,7 +180,7 @@ private func peerRoute(_ peer: DefaultAgentSettingsModel, keychain: SignInKeycha
     let operations = keychain.operations
     return { _ in
         { method, payload in
-            let path = method == "connections.command" ? "/v1/connections/command" : "/v1/connections/snapshot"
+            let path = method == "connections.command" ? "/connections/command" : "/connections/snapshot"
             let response = await KeychainAccess.$testOperations.withValue(operations) {
                 await ApplicationModel.memberSignIns(method: "POST", path: path, body: method == "connections.command" ? payload : Data("{}".utf8), model: peer)
             }
@@ -198,7 +194,7 @@ private func peerRoute(_ peer: DefaultAgentSettingsModel, keychain: SignInKeycha
 private func command(_ value: BackendConnectionsCommand, on model: DefaultAgentSettingsModel, keychain: SignInKeychainFixture) async -> LibraryHTTPResponse {
     let body = (try? JSONEncoder().encode(value)) ?? Data()
     return await KeychainAccess.$testOperations.withValue(keychain.operations) {
-        await ApplicationModel.memberSignIns(method: "POST", path: "/v1/connections/command", body: body, model: model)
+        await ApplicationModel.memberSignIns(method: "POST", path: "/connections/command", body: body, model: model)
     }
 }
 
@@ -251,7 +247,7 @@ struct SignInDeviceTests {
         #expect(keychain.stored == before)
     }
 
-    /// `/v1/connections/*` through this Mac's server authentication: Mac members only.
+    /// `/connections/*` through this Mac's server authentication: Mac members only.
     @Test func onlySignedMacMembersReachThisMacsSignIns() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
@@ -276,7 +272,7 @@ struct SignInDeviceTests {
                 await host.memberSignIns(.init(method: "POST", target: path, headers: lowered, body: body), path: path)
             }
         }
-        for path in ["/v1/connections/snapshot", "/v1/connections/command"] {
+        for path in ["/connections/snapshot", "/connections/command"] {
             let body = path.hasSuffix("command") ? try JSONEncoder().encode(BackendConnectionsCommand(action: "accounts")) : Data("{}".utf8)
             #expect(try await call(mac, path, body: body).status == 200, "\(path)")
             for refused in [phone, linux, stranger] {
@@ -436,8 +432,8 @@ struct SignInDeviceTests {
         let model = fixture.model
         // A stopping server takes no new sign-in work from another Mac.
         model.backendStopping = true
-        let refused = await model.memberSignIns(.init(method: "POST", target: "/v1/connections/snapshot", headers: [:], body: Data("{}".utf8)),
-                                                path: "/v1/connections/snapshot", memberID: UUID().uuidString.lowercased())
+        let refused = await model.memberSignIns(.init(method: "POST", target: "/connections/snapshot", headers: [:], body: Data("{}".utf8)),
+                                                path: "/connections/snapshot", memberID: UUID().uuidString.lowercased())
         #expect(refused.status == 503 && model.memberSignInSessions.isEmpty)
         model.backendStopping = false
         #expect(!model.connections.busy && !model.signInConnections.busy)
@@ -627,25 +623,6 @@ struct SignInDeviceTests {
         #expect(keychain.stored.isEmpty)
     }
 
-    /// A Linux host that has not updated answers with the existing update message.
-    @Test func anOutdatedLinuxHostAsksForAnUpdate() async throws {
-        let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
-        let host = FakeLinuxSignInHost(), workspace = UUID()
-        await host.makeOutdated()
-        let model = deviceModel(keychain, helper: helper)
-        model.memberRoutes = { _ in host }
-        model.devices = [.init(id: SignInDevice.linuxID(workspace), kind: .linux, name: "workstation", runsBots: false, workspaceID: workspace.uuidString.lowercased())]
-        try await KeychainAccess.$testOperations.withValue(keychain.operations) {
-            model.selectDevice(SignInDevice.linuxID(workspace))
-            try await waitUntil(model) { model.error != nil }
-            #expect(model.error == "Update Woven Matter on workstation to manage its sign-ins from here.")
-            // The page shows it once, under the picker, with no sections below.
-            #expect(model.deviceNeedsUpdate)
-            #expect(!(await model.saveKeyConfirmed("k", provider: "openai")))
-            #expect(model.error == "Update Woven Matter on workstation to manage its sign-ins from here.")
-        }
-    }
-
     @Test func signingInOnThisMacKeepsTheCredentialInItsKeychain() async throws {
         let keychain = SignInKeychainFixture(), helper = try FakeSettingsHelper(); defer { helper.remove() }
         let model = deviceModel(keychain, helper: helper)
@@ -714,7 +691,7 @@ struct SignInDeviceTests {
         model.peerTransport = { member in
             #expect(member == memberID)
             return { method, payload in
-                let path = method == "connections.command" ? "/v1/connections/command" : "/v1/connections/snapshot"
+                let path = method == "connections.command" ? "/connections/command" : "/connections/snapshot"
                 routed.append(path)
                 let response = await KeychainAccess.$testOperations.withValue(operations) {
                     await ApplicationModel.memberSignIns(method: "POST", path: path, body: method == "connections.command" ? payload : Data("{}".utf8), model: peer)
@@ -743,10 +720,10 @@ struct SignInDeviceTests {
         #expect(here.stored.isEmpty)
         #expect(localHelper.requests.isEmpty)
         // The route refuses anything but that Mac's own sign-ins.
-        let refused = await ApplicationModel.memberSignIns(method: "POST", path: "/v1/connections/command",
+        let refused = await ApplicationModel.memberSignIns(method: "POST", path: "/connections/command",
             body: try JSONEncoder().encode(BackendConnectionsCommand(action: "device", value: "local")), model: peer)
         #expect(refused.status == 400)
-        let remote = await ApplicationModel.memberSignIns(method: "GET", path: "/v1/connections/snapshot", body: Data(), model: peer)
+        let remote = await ApplicationModel.memberSignIns(method: "GET", path: "/connections/snapshot", body: Data(), model: peer)
         #expect(remote.status == 404)
     }
 

@@ -28,7 +28,7 @@ extension ApplicationModel {
                 identity: .init(id: target.audience, name: local?.name ?? target.workspace.name, kind: .linux),
                 formerIDs: [target.workspace.id]
             ) { request in
-                try await client.request("v1/usage/export", query: [
+                try await client.request("usage/export", query: [
                     URLQueryItem(name: "since", value: String(request.since)),
                     URLQueryItem(name: "offset", value: String(request.offset)),
                 ], timeout: 60)

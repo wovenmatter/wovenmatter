@@ -17,15 +17,15 @@ private final class HostInspectionFixture: @unchecked Sendable {
         try lock.withLock {
             commands.append(command)
             if command.contains("'status'") {
-                return Data(#"{"id":"fixture","name":"Fixture","state":"exited","running":false,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#.utf8)
+                return Data(#"{"id":"fixture","name":"Fixture","state":"exited","running":false,"startedAt":"","hostPort":7337,"hostStorageLow":false}"#.utf8)
             }
             if command.contains("'prepare'") { ready = true }
             let value: [String: Any] = [
-                "ready": ready, "runtime": "docker", "version": ready ? "29.9.2" : "",
-                "architecture": "x86_64", "capabilities": ["memory": ready, "swap": ready],
+                "ready": ready, "version": "",
+                "architecture": "x86_64",
                 "limitations": [], "hostStorageLow": false,
                 "canPrepare": !ready, "preparationRequired": !ready,
-                "preparationActions": ready ? [] : ["Start Docker."],
+                "preparationActions": ready ? [] : ["Install the required packages."],
                 "blockingIssues": []
             ]
             return try JSONSerialization.data(withJSONObject: value)
@@ -42,7 +42,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
     @Test func fullRootWorkspaceOverridesOldChatDefaultsAndCalendarPermissionsForEveryFolder() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         var host = fixture.remote
-        host.kind = .host; host.accessMode = .fullRoot
+        host.accessMode = .fullRoot
         host.dataRoot = "/home/trey/.local/share/wovenmatter"
         host.workspaceRoot = "/home/trey/.local/share/wovenmatter/workspace"
         let status = try #require(fixture.model.remoteWorkspaces.statuses[host.id])
@@ -105,7 +105,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
 
     @Test func aWorkspaceAddedToABotsOnlyHostReusesItsServerRecord() async throws {
         let placeholder = RemoteWorkspaceConfiguration(name: "box", workspaceID: RemoteHostInstallMode.botsOnlyWorkspaceID,
-            hostName: "native.invalid", userName: "trey", remotePort: 7400, kind: .host, accessMode: .user)
+            hostName: "native.invalid", userName: "trey", remotePort: 7400, accessMode: .user)
         let converted = try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "studio", accessMode: .user)
         // Same record (id, so the same Keychain token), host, port and access level; the real name and id.
         #expect(converted.id == placeholder.id && converted.remotePort == 7400 && converted.accessMode == .user)
@@ -140,7 +140,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let suite = "native-host-duplicate-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let existing = RemoteWorkspaceConfiguration(name: "Native", workspaceID: "native", hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)
+        let existing = RemoteWorkspaceConfiguration(name: "Native", workspaceID: "native", hostName: "native.invalid", userName: "trey", accessMode: .fullRoot)
         defaults.set(try JSONEncoder().encode([existing]), forKey: RemoteWorkspacesModel.storageKey)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.checkHost(hostName: existing.hostName, userName: "trey", accessMode: .fullRoot)
@@ -185,7 +185,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let suite = "remote-startup-test-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
+        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
         defaults.set(try JSONEncoder().encode([workspace]), forKey: RemoteWorkspacesModel.storageKey)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.refreshRuntimeMaintenanceAtStartup()
@@ -205,7 +205,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = RemoteWorkspaceConfiguration(name: "Studio", workspaceID: "studio", hostName: "studio.invalid", userName: "trey",
-                                                    remotePort: 7400, kind: .host, accessMode: .fullRoot)
+                                                    remotePort: 7400, accessMode: .fullRoot)
         defaults.set(try JSONEncoder().encode([existing]), forKey: RemoteWorkspacesModel.storageKey)
         let host = BotsHostFixture(root: root, installation: #"{"id":"studio","port":7400,"accessMode":"fullRoot","roles":{"workspace":true,"bots":false}}"#)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: host.client)
@@ -280,7 +280,7 @@ private final class BotsHostFixture: @unchecked Sendable {
 
     private func inspect() -> Data {
         let installation = installation.map { #","installation":"# + $0 } ?? ""
-        return Data((#"{"ready":true,"runtime":"host","version":"","architecture":"amd64","capabilities":{"memory":false,"swap":false},"limitations":[],"hostStorageLow":false,"blockingIssues":[],"preparationRequired":true,"bots":{"state":""# + botsState + #"","blockingIssues":[]}"# + installation + "}").utf8)
+        return Data((#"{"ready":true,"version":"","architecture":"amd64","limitations":[],"hostStorageLow":false,"blockingIssues":[],"preparationRequired":true,"bots":{"state":""# + botsState + #"","blockingIssues":[]}"# + installation + "}").utf8)
     }
 
     var client: RemoteWorkspaceSSHClient {
@@ -294,7 +294,7 @@ private final class BotsHostFixture: @unchecked Sendable {
                 streamed.append(input.flatMap { $0.split(separator: 10, maxSplits: 1, omittingEmptySubsequences: false).first.map { String(decoding: $0, as: UTF8.self) } } ?? "")
             }
             progress(Data("WM_PROGRESS bots-engine\n".utf8))
-            return Data(#"{"id":"studio","name":"Studio","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7400,"persistentVolume":"/home/trey/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#.utf8)
+            return Data(#"{"id":"studio","name":"Studio","state":"running","running":true,"startedAt":"","hostPort":7400,"hostStorageLow":false}"#.utf8)
         })
     }
 }

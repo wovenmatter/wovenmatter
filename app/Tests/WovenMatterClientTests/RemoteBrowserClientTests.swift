@@ -29,8 +29,8 @@ private final class BrowserMCPFixtureProtocol: URLProtocol, @unchecked Sendable 
     override func startLoading() {
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer private-fixture")
         #expect(request.url?.host == "127.0.0.1" && request.httpMethod == "POST")
-        let cancelling = request.url?.path == "/v1/browser/mcp/cancel"
-        #expect(cancelling || request.url?.path == "/v1/browser/mcp")
+        let cancelling = request.url?.path == "/browser/mcp/cancel"
+        #expect(cancelling || request.url?.path == "/browser/mcp")
         #expect(request.timeoutInterval == (cancelling ? 10 : 30))
         var data = request.httpBody ?? Data()
         if let stream = request.httpBodyStream {

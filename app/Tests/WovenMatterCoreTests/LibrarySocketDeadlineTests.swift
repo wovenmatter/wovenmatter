@@ -51,7 +51,7 @@ struct LibrarySocketDeadlineTests {
     let (server, path, directory) = try Self.server()
     defer { server.stop(); try? FileManager.default.removeItem(at: directory) }
     let body = Data(repeating: 0x20, count: 4_000)
-    let head = Data("POST /v1/x HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
+    let head = Data("POST /x HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
     // Four body chunks 0.35 s apart: well past the 0.5 s head deadline in all.
     let parts = stride(from: 0, to: body.count, by: 1_000).map { body.subdata(in: $0..<min($0 + 1_000, body.count)) }
     let reply = try #require(try Self.exchange(path, chunks: [head] + parts, gap: 0.35))
@@ -61,9 +61,9 @@ struct LibrarySocketDeadlineTests {
   @Test func aStalledBodyOrHeadIsDropped() throws {
     let (server, path, directory) = try Self.server()
     defer { server.stop(); try? FileManager.default.removeItem(at: directory) }
-    let head = Data("POST /v1/x HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 10\r\n\r\n".utf8)
+    let head = Data("POST /x HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 10\r\n\r\n".utf8)
     #expect(try Self.exchange(path, chunks: [head, Data("12345".utf8), Data("67890".utf8)], gap: 1.0) == nil)
-    let partial = Data("POST /v1/x HTTP/1.1\r\nHost: local".utf8)
+    let partial = Data("POST /x HTTP/1.1\r\nHost: local".utf8)
     #expect(try Self.exchange(path, chunks: [partial, Data("host\r\n\r\n".utf8)], gap: 0.8) == nil)
   }
 }

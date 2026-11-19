@@ -6,7 +6,7 @@ import WovenMatterClient
 /// conversation. Some harnesses expose their catalog through an empty session.
 public enum CalendarSessionOptions {
   /// A Linux host's options for a harness before a session exists
-  /// (`GET v1/execution/providers/<id>/options`), as the editors read them:
+  /// (`GET execution/providers/<id>/options`), as the editors read them:
   /// each choice's label and description go in its metadata.
   public static func metadata(from settings: SessionSettings, directory: String?) -> LocalACPSessionMetadata {
     func metadata(_ options: [SessionSettingOption]) -> [String: SessionOptionMetadata] {

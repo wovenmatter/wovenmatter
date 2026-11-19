@@ -105,7 +105,7 @@ public struct GitHubConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-/// What a bot's container receives from its machine (`POST /v1/bots-host/git`): the public key
+/// What a bot's container receives from its machine (`POST /bots-host/git`): the public key
 /// while that bot may use the key (it signs through the machine's agent), and the identity.
 public struct GitHubBotSetup: Codable, Equatable, Sendable {
     public var publicKey: String?
@@ -132,7 +132,7 @@ public struct GitHubBotSetup: Codable, Equatable, Sendable {
     }
 }
 
-/// A Linux host's own copy, opened by its library host for the Woven server (`GET /v1/github`
+/// A Linux host's own copy, opened by its library host for the Woven server (`GET /github`
 /// on the library's local socket): the server signs with the key while the host is on.
 public struct GitHubHostCopy: Codable, Equatable, Sendable {
     public struct Key: Codable, Equatable, Sendable { public var privateKey: String; public var publicKey: String }
@@ -363,8 +363,6 @@ public enum GitHubGitFiles {
 
             """,
             "known_hosts": knownHosts,
-            // Never on disk: a key file from an earlier build is removed.
-            "id_github": nil as String?,
         ]
         if let publicKey {
             files["id_github.pub"] = publicKey + "\n"

@@ -35,7 +35,6 @@ final class RemoteWorkspacesModel {
         let action: String
         let harness: RemoteHarnessStatus
         let configuration: RemoteWorkspaceConfiguration
-        let preview: RemoteInstallerPreview
         var id: String {
             "\(configuration.id.uuidString):\(harness.id.rawValue):\(action)"
         }
@@ -456,10 +455,10 @@ final class RemoteWorkspacesModel {
         guard let memberClient else { throw RemoteWorkspaceClientError.invalidResponse("Reconnect this workspace to use its OpenCode.") }
         let client = try await memberClient(configuration)
         try requireCurrent(identity)
-        let health: RemoteWorkspaceHealth = try await client.request("v1/health")
+        let health: RemoteWorkspaceHealth = try await client.request("health")
         try requireCurrent(identity)
         guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
-        let status: RemoteWorkspaceInstanceStatus = try await client.request("v1/workspace-instances/opencode" + (allowStart ? "/start" : ""),
+        let status: RemoteWorkspaceInstanceStatus = try await client.request("workspace-instances/opencode" + (allowStart ? "/start" : ""),
             method: allowStart ? "POST" : "GET", timeout: 120)
         try requireCurrent(identity)
         workspaceRoots[configuration.id] = health.workspaceRoot
@@ -500,7 +499,7 @@ final class RemoteWorkspacesModel {
         } catch {
             guard (try? requireCurrent(identity)) != nil else { return }
             runtimeChecksVerifiedAfterError.removeValue(forKey: configuration.id)
-            runtimeErrors[configuration.id] = "Runtime inventory unavailable. Update this workspace service if it predates runtime management. " + error.localizedDescription
+            runtimeErrors[configuration.id] = "Runtime inventory unavailable. " + error.localizedDescription
         }
     }
 
@@ -1065,9 +1064,8 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    /// Installs or updates a harness on a Linux workspace with nothing to review: the host
-    /// runs the vendor's official installer or update command straight away. An older host
-    /// still names its download's digest first, which is passed back. The one question is
+    /// Installs or updates a harness on a Linux workspace: the host runs the vendor's
+    /// official installer or update command straight away. The one question is
     /// OpenCode 1 on the host, whose command OpenCode 2 replaces.
     func runHarnessMaintenance(
         _ action: String,
@@ -1076,35 +1074,13 @@ final class RemoteWorkspacesModel {
     ) {
         if forwardToBackend(.prepareHarness(configuration.id, harness.id, action)) { return }
         guard action == "install" || action == "update" else { return }
+        if action == "install", harness.id == .opencode,
+           runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.openCodeV1 != nil {
+            preparedHarnessAction = PreparedHarnessAction(action: action, harness: harness, configuration: configuration)
+            return
+        }
         performHarnessMaintenance(configuration, kind: harness.id) {
-            let identity = try self.requestIdentity(configuration)
-            let client = try await self.serviceClient(for: configuration)
-            try self.requireCurrent(identity)
-            guard action == "install" else {
-                // Updates run the vendor's own update command. An older host still wants
-                // the installer digest, so it is passed along when the host names one.
-                let preview = try? await client.installerPreview(harnessID: harness.id)
-                try self.requireCurrent(identity)
-                try await self.runRuntimeMaintenance(harness.id, action: action, configuration: configuration,
-                                                     sourceSHA256: preview?.sha256, packageSpec: preview?.packageSpec)
-                return
-            }
-            let preview: RemoteInstallerPreview
-            do {
-                preview = try await client.installerPreview(harnessID: harness.id)
-            } catch {
-                await self.refreshRuntimeMaintenance(configuration)
-                throw error
-            }
-            try self.requireCurrent(identity)
-            if action == "install", harness.id == .opencode,
-               self.runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.openCodeV1 != nil {
-                self.preparedHarnessAction = PreparedHarnessAction(action: action, harness: harness,
-                                                                   configuration: configuration, preview: preview)
-                return
-            }
-            try await self.runRuntimeMaintenance(harness.id, action: action, configuration: configuration,
-                                                 sourceSHA256: preview.sha256, packageSpec: preview.packageSpec)
+            try await self.runRuntimeMaintenance(harness.id, action: action, configuration: configuration)
         }
     }
 
@@ -1143,8 +1119,6 @@ final class RemoteWorkspacesModel {
             try await self.runRuntimeMaintenance(
                 preparedHarnessAction.harness.id, action: preparedHarnessAction.action,
                 configuration: preparedHarnessAction.configuration,
-                sourceSHA256: preparedHarnessAction.preview.sha256,
-                packageSpec: preparedHarnessAction.preview.packageSpec,
                 replaceOpenCodeV1: preparedHarnessAction.harness.id == .opencode
             )
         }
@@ -1152,14 +1126,11 @@ final class RemoteWorkspacesModel {
 
     private func runRuntimeMaintenance(_ kind: AgentRuntimeKind, action: String,
                                        configuration: RemoteWorkspaceConfiguration,
-                                       sourceSHA256: String? = nil, packageSpec: String? = nil,
                                        replaceOpenCodeV1: Bool = false) async throws {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
-        var operation = try await client.maintainRuntime(kind, action: action,
-                                                       sourceSHA256: sourceSHA256, packageSpec: packageSpec,
-                                                       replaceOpenCodeV1: replaceOpenCodeV1)
+        var operation = try await client.maintainRuntime(kind, action: action, replaceOpenCodeV1: replaceOpenCodeV1)
         try requireCurrent(identity)
         operations[configuration.id] = operation
         await refreshRuntimeMaintenance(configuration)
@@ -1387,7 +1358,7 @@ final class RemoteWorkspacesModel {
             let receipt: DefaultAgentSyncReceipt
             if let memberClient, let signed = try? await memberClient(configuration) {
                 try requireCurrent(identity)
-                receipt = try await signed.request("v1/default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)
+                receipt = try await signed.request("default-agent/configuration", method: "POST", body: payload.data(), timeout: 120)
             } else {
                 let client = try await serviceClient(for: configuration)
                 try requireCurrent(identity)
@@ -1410,7 +1381,7 @@ final class RemoteWorkspacesModel {
     }
 
     /// Enroll a paired library client using the existing administrative SSH channel.
-    /// The returned bearer is device-scoped; the container administration token stays in Keychain.
+    /// The returned bearer is device-scoped; the host administration token stays in Keychain.
     func provisionExecutionDevice(
         configuration: RemoteWorkspaceConfiguration, libraryID: String,
         ownerDeviceID: String, deviceID: String, deviceName: String
@@ -1421,7 +1392,7 @@ final class RemoteWorkspacesModel {
         // Send the current Pi Durable chat settings again, even after a service restart.
         try await synchronizeDefaultAgent(configuration)
         try requireCurrent(identity)
-        // Deterministic dedicated port per configured container; the remote script
+        // Deterministic dedicated port per configured host; the remote script
         // refuses collisions and never replaces another service's Serve route.
         let portKey = "wovenmatter.execution.https-port." + configuration.id.uuidString.lowercased()
         let suffix = configuration.id.uuidString.replacingOccurrences(of: "-", with: "").suffix(4)
@@ -1494,7 +1465,7 @@ final class RemoteWorkspacesModel {
     ) async {
         guard let identity = try? requestIdentity(configuration) else { return }
         // A lifecycle snapshot from before this refresh must not override newer
-        // harness inventory (for example after an external stop or container restart).
+        // harness inventory (for example after an external stop or server restart).
         // Responses from lifecycle requests arriving during/after these awaits stay
         // in the cache and remain authoritative over the pre-launch inventory.
         workspaceInstances[configuration.id]?.removeValue(forKey: .opencode)
@@ -1809,7 +1780,7 @@ final class RemoteWorkspacesModel {
 
     private func load() {
         guard let data = defaults.data(forKey: Self.storageKey),
-              let decoded = try? RemoteWorkspaceConfiguration.decodeSaved(data) else { return }
+              let decoded = try? JSONDecoder().decode([RemoteWorkspaceConfiguration].self, from: data) else { return }
         workspaces = decoded
     }
 

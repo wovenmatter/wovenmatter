@@ -297,10 +297,10 @@ struct WovenVMTests {
     }
 
     @Test func controlHTTPParsesCompleteRequestsOnly() throws {
-        let head = "PUT /v1/resources HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n"
+        let head = "PUT /resources HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\n"
         #expect(try WovenVMControlHTTP.parseRequest(Data(head.utf8)) == nil)
         let request = try WovenVMControlHTTP.parseRequest(Data((head + "{\"a\"}").utf8))
-        #expect(request == .init(method: "PUT", path: "/v1/resources", body: Data("{\"a\"}".utf8)))
+        #expect(request == .init(method: "PUT", path: "/resources", body: Data("{\"a\"}".utf8)))
         #expect(throws: WovenVMError.self) {
             try WovenVMControlHTTP.parseRequest(Data("POST / HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n".utf8))
         }
@@ -349,12 +349,12 @@ struct WovenVMTests {
         let paths = WovenVMPaths(root: root)
         let server = try FakeControlServer(path: paths.controlSocket.path) { request in
             switch (request.method, request.path) {
-            case ("GET", "/v1/status"):
+            case ("GET", "/status"):
                 return (200, try JSONEncoder().encode(WovenVMStatus(phase: .provisioning, detail: "Installing Docker Engine",
                                                                     engineSocket: paths.engineSocket.path)))
-            case ("POST", "/v1/update"):
+            case ("POST", "/update"):
                 return (409, try JSONEncoder().encode(WovenVMControlHTTP.ErrorBody(error: "The VM can update only when it is ready.")))
-            case ("GET", "/v1/diagnostics"):
+            case ("GET", "/diagnostics"):
                 return (200, try JSONEncoder().encode(WovenVMDiagnostics(
                     status: WovenVMStatus(phase: .provisioning, detail: "Starting Docker Engine", engineSocket: paths.engineSocket.path),
                     helperLog: "provisioning: Starting Docker Engine", console: "",

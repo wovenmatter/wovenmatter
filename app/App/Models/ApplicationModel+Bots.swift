@@ -119,7 +119,7 @@ extension ApplicationModel {
                       let workspace = await self.otherMacWorkspaces().first(where: { $0.id == workspaceID }) else {
                     throw BotsError.unavailable("That Mac is unavailable.")
                 }
-                let _: BotsRemoteStatus = try await self.botsClient(for: workspace).request("v1/bots/engine/update", method: "POST",
+                let _: BotsRemoteStatus = try await self.botsClient(for: workspace).request("bots/engine/update", method: "POST",
                                                                                             body: Data("{}".utf8))
             },
             signSocket: { [weak self] url, audience in
@@ -130,14 +130,9 @@ extension ApplicationModel {
                 guard let self else { throw CancellationError() }
                 return try await self.memberInventory(machineID: machineID, checkLatest: checkLatest)
             },
-            memberInstallerPreview: { [weak self] machineID, kind in
+            updateMemberHarness: { [weak self] machineID, kind, force, progress in
                 guard let self else { throw CancellationError() }
-                return try await self.memberInstallerPreview(machineID: machineID, kind: kind)
-            },
-            updateMemberHarness: { [weak self] machineID, kind, sourceSHA256, packageSpec, force, progress in
-                guard let self else { throw CancellationError() }
-                try await self.updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: sourceSHA256,
-                                                   packageSpec: packageSpec, force: force, progress: progress)
+                try await self.updateMemberHarness(machineID: machineID, kind: kind, force: force, progress: progress)
             },
             updateMemberSDKs: { [weak self] machineID in
                 guard let self else { throw CancellationError() }
@@ -147,7 +142,7 @@ extension ApplicationModel {
 
     // MARK: Other machines
 
-    /// Every other machine whose Woven server answers `/v1/bots/status`: every Mac and
+    /// Every other machine whose Woven server answers `/bots/status`: every Mac and
     /// Linux workspace in the synced registry, reached with this Mac's member signature
     /// whichever Mac added it. A Linux host this Mac added that is not in the registry
     /// (a bots-only server) is still reached through its SSH tunnel.
@@ -197,11 +192,11 @@ extension ApplicationModel {
         let kind: BotMachine.Kind = workspace.kind == .linux ? .linux : .mac
         do {
             let client = try await botsClient(for: workspace)
-            let status: BotsRemoteStatus = try await botsTimeout { try await client.request("v1/bots/status", timeout: 10) }
+            let status: BotsRemoteStatus = try await botsTimeout { try await client.request("bots/status", timeout: 10) }
             // A server that answers for another device is not this workspace's.
             guard status.machine.deviceID.lowercased() == client.audience else { throw BotsError.unavailable("It answered as another device.") }
             directory.members[client.audience] = workspace.id
-            let socket = BotSocketEndpoint.signed(client.endpoint.appending(path: "v1/bots/ws"), audience: client.audience)
+            let socket = BotSocketEndpoint.signed(client.endpoint.appending(path: "bots/ws"), audience: client.audience)
             var machine = status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
                                          expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil,
                                          thisMacLibrarySchema: schema)
@@ -242,7 +237,7 @@ extension ApplicationModel {
         await memberBotWorkspaces().filter { $0.kind == .mac }
     }
 
-    /// How this Mac reaches another member's `/v1/bots/*`: its own member signature,
+    /// How this Mac reaches another member's `/bots/*`: its own member signature,
     /// addressed to the workspace's execution device. Nothing is issued or stored.
     func botsClient(for workspace: ExecutionWorkspace) async throws -> MemberSignedHTTPClient {
         let directory = try await libraryHost.peerSync.members()
@@ -255,8 +250,8 @@ extension ApplicationModel {
 
     /// Headers for one signed socket upgrade, for a process without the member
     /// key (a window). Only a member's private tailnet address is signed, and
-    /// only two targets: `…/v1/bots/ws` of a bots machine in the registry, and
-    /// `…/v1/stream?protocol=1` of any Mac or Linux workspace in the registry.
+    /// only two targets: `…/bots/ws` of a bots machine in the registry, and
+    /// the live stream (`StreamProtocol.path`, no query) of any Mac or Linux workspace in the registry.
     func signMemberSocket(url: URL, audience: String) async throws -> [String: String] {
         let audience = audience.lowercased()
         guard ["wss", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.lowercased().hasSuffix(".ts.net") == true,
@@ -265,14 +260,13 @@ extension ApplicationModel {
             throw BotsError.unavailable("That connection is not a member's.")
         }
         let allowed: Bool
-        if url.path.hasSuffix("/v1/bots/ws"), components.percentEncodedQuery == nil {
+        if url.path.hasSuffix("/bots/ws"), components.percentEncodedQuery == nil {
             allowed = await memberBotTargets().contains { $0.audience == audience }
-        } else if url.path.hasSuffix("/" + StreamProtocol.path), components.percentEncodedQuery == StreamProtocol.query {
+        } else if url.path.hasSuffix("/" + StreamProtocol.path), components.percentEncodedQuery == nil {
             allowed = await memberStreamAudiences().contains(audience)
         } else { allowed = false }
         guard allowed else { throw BotsError.unavailable("That connection is not a member's.") }
-        let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
-        return try await libraryHost.memberSigner().headers(method: "GET", target: target, audience: audience)
+        return try await libraryHost.memberSigner().headers(method: "GET", target: components.percentEncodedPath, audience: audience)
     }
 
     /// The members serving a Mac or Linux workspace in the registry.
@@ -290,7 +284,7 @@ extension ApplicationModel {
         let id = machineID.lowercased()
         if let workspaceID = directory.members[id], let workspace = await memberBotWorkspaces().first(where: { $0.id == workspaceID }) {
             struct Body: Encodable { let resources: BotResourceSettings }
-            let _: BotsRemoteStatus = try await botsClient(for: workspace).request("v1/bots/resources", method: "POST",
+            let _: BotsRemoteStatus = try await botsClient(for: workspace).request("bots/resources", method: "POST",
                 body: JSONEncoder().encode(Body(resources: resources)))
             return
         }
@@ -306,7 +300,7 @@ extension ApplicationModel {
     fileprivate func setRemoteBotsEnabled(machineID: String, _ enabled: Bool, directory: BotsRemoteDirectory) async throws {
         let id = machineID.lowercased()
         if let workspaceID = directory.members[id], let workspace = await memberBotWorkspaces().first(where: { $0.id == workspaceID }) {
-            let _: BotsRemoteStatus = try await botsClient(for: workspace).request("v1/bots/enabled", method: "POST",
+            let _: BotsRemoteStatus = try await botsClient(for: workspace).request("bots/enabled", method: "POST",
                 body: JSONSerialization.data(withJSONObject: ["enabled": enabled]))
             return
         }
@@ -317,7 +311,7 @@ extension ApplicationModel {
         throw BotsError.unavailable("That machine is unavailable.")
     }
 
-    /// "Update everything" for one Linux host: the signed `/v1/host/update` from any
+    /// "Update everything" for one Linux host: the signed `/host/update` from any
     /// Mac. SSH is only the fallback for a host this Mac added itself. Returns once the
     /// update has finished.
     fileprivate func updateLinuxBotHost(machineID: String, directory: BotsRemoteDirectory,
@@ -393,11 +387,11 @@ extension ApplicationModel {
         }
     }
 
-    /// The `GET /v1/bots/status` of a host another Mac added: bots are on when it says so.
+    /// The `GET /bots/status` of a host another Mac added: bots are on when it says so.
     private func memberBotsState(_ workspace: ExecutionWorkspace) async -> BotDiscoveredDevice.State {
         do {
             let client = try await botsClient(for: workspace)
-            let status: BotsRemoteStatus = try await botsTimeout { try await client.request("v1/bots/status", timeout: 10) }
+            let status: BotsRemoteStatus = try await botsTimeout { try await client.request("bots/status", timeout: 10) }
             return status.enabled ? .ready : .installBots
         } catch {
             let text = Self.botsUnavailableText(error)

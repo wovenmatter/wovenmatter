@@ -639,15 +639,15 @@ public struct PiBotImageStatus: Codable, Equatable, Sendable {
     public let node: String?
     public let playwright: String?
     public let staleBots: Int
-    /// Bots an update changes at all; an older runtime reports only `staleBots`.
-    public let outdatedBots: Int?
+    /// Bots whose next update changes their tools, base image or helper: those in
+    /// `staleBots` and every bot whose toolchain or helper is behind.
+    public let outdatedBots: Int
     public init(tag: String, base: String? = nil, node: String? = nil, playwright: String? = nil, staleBots: Int = 0, outdatedBots: Int? = nil) {
         self.tag = tag; self.base = base; self.node = node; self.playwright = playwright; self.staleBots = staleBots
-        self.outdatedBots = outdatedBots
+        self.outdatedBots = outdatedBots ?? staleBots
     }
 
-    /// Bots whose next update changes their tools, base image or helper.
-    public var botsToUpdate: Int { max(outdatedBots ?? staleBots, staleBots) }
+    public var botsToUpdate: Int { outdatedBots }
 
     /// "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium"
     public var tools: String {

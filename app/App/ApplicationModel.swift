@@ -4053,7 +4053,7 @@ final class ApplicationModel {
                 case .ready: .ready
                 case .authenticationRequired: .needsAuthentication
                 case .executableUnavailable: .failed
-                case .cliMissing, .adapterMissing, .adapterOutdated: .offline
+                case .cliMissing, .adapterMissing: .offline
                 }
                 return (resolution.availability.runtimeKind, status)
             }

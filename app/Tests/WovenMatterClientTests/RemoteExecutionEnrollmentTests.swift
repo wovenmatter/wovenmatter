@@ -37,7 +37,7 @@ private final class EnrollmentFixtureProtocol: URLProtocol, @unchecked Sendable 
                 if count <= 0 { break }; data.append(contentsOf: bytes.prefix(count))
             }
         }
-        if request.url?.path == "/v1/execution/devices" {
+        if request.url?.path == "/execution/devices" {
             let scopes = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["scopes"] as? [String]
             Self.lock.withLock { Self.captured = scopes }
         }

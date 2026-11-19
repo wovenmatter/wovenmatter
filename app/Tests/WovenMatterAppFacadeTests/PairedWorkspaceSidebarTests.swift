@@ -54,7 +54,7 @@ struct PairedWorkspaceSidebarTests {
         let mac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio",
                                      folderOwnerID: macFolderOwner)
         let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")
-        let managed = RemoteWorkspaceConfiguration(name: "Managed", workspaceID: "managed", hostName: "managed.invalid", kind: .host,
+        let managed = RemoteWorkspaceConfiguration(name: "Managed", workspaceID: "managed", hostName: "managed.invalid",
                                                    dataRoot: "/data", workspaceRoot: "/workspace")
         let managedLinux = ExecutionWorkspace(id: managed.id.uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-a", kind: .linux, name: "Managed")
         let phone = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
@@ -188,7 +188,7 @@ struct PairedWorkspaceSidebarTests {
         // its own host name (a bots-only host is) shows its machine name, on
         // the Mac that set it up and, by its registered name, on the others.
         func host(_ name: String, _ hostName: String) -> RemoteWorkspaceConfiguration {
-            .init(name: name, workspaceID: "bots", hostName: hostName, kind: .host, dataRoot: "/data", workspaceRoot: "/workspace")
+            .init(name: name, workspaceID: "bots", hostName: hostName, dataRoot: "/data", workspaceRoot: "/workspace")
         }
         let botsOnly = host("build-box.tail1234.ts.net", "build-box.tail1234.ts.net"), typed = host("Build box", "build-box.tail1234.ts.net")
         let byAddress = host(["100", "64", "0", "7"].joined(separator: "."), ["100", "64", "0", "7"].joined(separator: "."))
@@ -239,7 +239,7 @@ struct PairedWorkspaceSidebarTests {
                         endpoint: URL(string: "https://this-mac.tail1234.ts.net:8443/wovenmatter"), folderOwnerID: folderOwner)
             other = .init(id: id(), libraryID: "library", ownerDeviceID: "host-other-mac", kind: .mac, name: "James’s Mac mini",
                           endpoint: URL(string: "https://jamess-mac-mini.tail1234.ts.net:8443/wovenmatter"), folderOwnerID: otherFolderOwner)
-            configured = .init(name: "workstation", workspaceID: "workstation", hostName: "workstation.tail1234.ts.net", kind: .host,
+            configured = .init(name: "workstation", workspaceID: "workstation", hostName: "workstation.tail1234.ts.net",
                                dataRoot: "/data", workspaceRoot: "/workspace")
             configuredRow = .init(id: configured.id.uuidString.lowercased(), libraryID: "library", ownerDeviceID: hostID, kind: .linux, name: "workstation")
             shared = .init(id: id(), libraryID: "library", ownerDeviceID: "host-other-mac", kind: .linux, name: "build-box")
@@ -696,13 +696,13 @@ struct PairedWorkspaceSidebarTests {
         for _ in 0..<3 { try await host.refreshExecutionRegistry() }
         #expect(try await database.peerSyncHead() == head)
         #expect(try await row(linuxID) == gone)
-        let status = try JSONDecoder().decode(RemoteWorkspaceStatus.self, from: Data(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#.utf8))
+        let status = try JSONDecoder().decode(RemoteWorkspaceStatus.self, from: Data(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","hostPort":7337,"hostStorageLow":false}"#.utf8))
         remote.configureFacadeFixture(fixture.remote, status: status, harnesses: [], maintenance: [])
         try await host.refreshExecutionRegistry()
         #expect(try await row(linuxID) == gone)
         // The same machine set up again is a new configuration, so a new row beside the deleted one.
         let again = RemoteWorkspaceConfiguration(name: fixture.remote.name, workspaceID: "fixture", hostName: fixture.remote.hostName,
-            kind: .host, dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter")
+            dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter")
         #expect(again.id != fixture.remote.id)
         remote.configureFacadeFixture(again, status: status, harnesses: [], maintenance: [])
         try await host.refreshExecutionRegistry()

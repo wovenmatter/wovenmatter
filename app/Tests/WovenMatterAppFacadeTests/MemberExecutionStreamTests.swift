@@ -6,7 +6,7 @@ import WovenMatterClient
 @testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
-/// A `stream.v1` workspace reaches this Mac on its stream: questions and
+/// A streaming workspace reaches this Mac on its stream: questions and
 /// approvals, the open chat's transcript, capabilities and settings, and
 /// commands. History arrives only by library sync. Nothing polls it.
 @MainActor @Suite(.serialized)

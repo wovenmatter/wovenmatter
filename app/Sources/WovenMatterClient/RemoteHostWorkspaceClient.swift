@@ -78,7 +78,7 @@ private actor BundledHostFingerprint {
 
 extension RemoteWorkspaceSSHClient {
     /// The fingerprint `deployHost` installs from this app: a Linux host reporting any other
-    /// release in `GET /v1/bots/status` is out of date. nil without bundled host sources.
+    /// release in `GET /bots/status` is out of date. nil without bundled host sources.
     public static func bundledHostFingerprint() async -> String? {
         await BundledHostFingerprint.shared.value()
     }

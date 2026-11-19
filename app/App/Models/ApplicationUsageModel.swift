@@ -26,8 +26,7 @@ struct BackendUsageSnapshot: Codable, Sendable {
     var enabledUsageProviders: Set<ProviderKind>
     var usageConnectionChoices: [UsageConnectionChoice]
     var selectedUsageConnections: [String: String]
-    /// Optional so a service from an earlier build can still answer.
-    var usageDevices: [UsageDeviceSummary]?
+    var usageDevices: [UsageDeviceSummary]
     var usageHistoryImport: UsageHistoryImportProgress?
 }
 
@@ -157,7 +156,7 @@ final class ApplicationUsageModel {
         signingInUsageProviders = value.signingInUsageProviders; hasAcknowledgedCredentialAccessDisclosure = value.hasAcknowledgedCredentialAccessDisclosure
         enabledUsageProviders = value.enabledUsageProviders; usageConnectionChoices = value.usageConnectionChoices
         selectedUsageConnections = value.selectedUsageConnections
-        usageDevices = value.usageDevices ?? [Self.thisDevice]
+        usageDevices = value.usageDevices
         usageHistoryImport = value.usageHistoryImport
     }
 

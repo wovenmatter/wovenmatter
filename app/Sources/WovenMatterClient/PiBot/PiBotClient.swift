@@ -45,7 +45,7 @@ public actor PiBotClient {
     public private(set) var state = ConnectionState.closed
 
     /// `socketURL` is the full WebSocket address: `ws://127.0.0.1:<port>/ws` for this Mac's
-    /// runtime, or `<server>/v1/bots/ws` on another machine. An http(s) scheme is converted.
+    /// runtime, or `<server>/bots/ws` on another machine. An http(s) scheme is converted.
     public init(socketURL: URL, bearer: String?, authorize: Authorize? = nil, onEvent: @escaping @Sendable (Event) -> Void) {
         var components = URLComponents(url: socketURL, resolvingAgainstBaseURL: false)!
         if components.scheme == "https" { components.scheme = "wss" }

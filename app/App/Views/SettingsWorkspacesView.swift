@@ -474,7 +474,6 @@ struct SettingsWorkspacesView: View {
             if let status {
                 SettingsSummaryRow("Storage", value: hostStorageLabel(status)) {
                     SettingsValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
-                    SettingsValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
                     SettingsValueRow(label: "Host storage", value: hostStorageLabel(status))
                 }
             }
@@ -702,13 +701,6 @@ struct SettingsWorkspacesView: View {
             }
         }
         .task(id: workspace.id) { await model.refreshSignInStatus(workspace) }
-    }
-
-    private func workspaceUsageLabel(_ status: RemoteWorkspaceStatus) -> String {
-        let usage = status.storageUsedBytes.map {
-            ByteCountFormatter.string(fromByteCount: max($0, 0), countStyle: .file)
-        } ?? "Usage unavailable"
-        return status.legacyStorage ? "\(usage) · legacy storage" : "\(usage) · no fixed limit"
     }
 
     private func hostStorageLabel(_ status: RemoteWorkspaceStatus) -> String {

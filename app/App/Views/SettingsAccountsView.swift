@@ -36,32 +36,27 @@ struct SettingsAccountsView: View {
                 }
             }
             .disabled(agent.busy)
-            // A device that has not updated says so once, here, with nothing to change below.
-            if agent.deviceNeedsUpdate, let message = agent.error {
-                SettingsError(message)
-            } else {
-                SettingsSection(title: "Model providers") {
-                    SettingsConnectionsView(model: model, connections: agent, focus: .providers, embedded: true, onConnected: accountConnected)
-                    if let provider = connectedProvider, SignInDevice.kind(of: agent.device) != .mac {
-                        SettingsRow(title: "Account added", detail: "Choose models if you also want to use it for chat.") {
-                            Button("Choose chat models") {
-                                model.pendingDefaultAgentModelProvider = provider
-                                model.pendingDefaultAgentSettingsScope = agent.inherits ? "global" : agent.scope
-                            }
-                            .buttonStyle(SettingsQuietButtonStyle())
+            SettingsSection(title: "Model providers") {
+                SettingsConnectionsView(model: model, connections: agent, focus: .providers, embedded: true, onConnected: accountConnected)
+                if let provider = connectedProvider, SignInDevice.kind(of: agent.device) != .mac {
+                    SettingsRow(title: "Account added", detail: "Choose models if you also want to use it for chat.") {
+                        Button("Choose chat models") {
+                            model.pendingDefaultAgentModelProvider = provider
+                            model.pendingDefaultAgentSettingsScope = agent.inherits ? "global" : agent.scope
                         }
+                        .buttonStyle(SettingsQuietButtonStyle())
                     }
                 }
-                SettingsSection(title: "Web search", detail: "Pi Durable uses the selected provider.") {
-                    SettingsConnectionsView(model: model, connections: agent, focus: .webSearch, embedded: true)
-                    if agent.inherits {
-                        SettingsNote("This workspace follows the provider chosen for All workspaces. To choose here, turn off Use shared chat settings on its Pi Durable page.")
-                    }
+            }
+            SettingsSection(title: "Web search", detail: "Pi Durable uses the selected provider.") {
+                SettingsConnectionsView(model: model, connections: agent, focus: .webSearch, embedded: true)
+                if agent.inherits {
+                    SettingsNote("This workspace follows the provider chosen for All workspaces. To choose here, turn off Use shared chat settings on its Pi Durable page.")
                 }
-                SettingsSection(title: "Local model servers") {
-                    LocalModelServerConnections(agent: agent)
-                        .id(agent.device)
-                }
+            }
+            SettingsSection(title: "Local model servers") {
+                LocalModelServerConnections(agent: agent)
+                    .id(agent.device)
             }
             SettingsHelp {
                 if agent.device == SignInDevice.localID {

@@ -72,7 +72,7 @@ struct LibraryFacadeTests {
     let usageService: LocalUsageService
     let device = UUID().uuidString.lowercased()
     let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid",
-        kind: .host, dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter")
+        dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter")
     init() async throws {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appending(path: "library-facade-\(UUID())")
@@ -96,7 +96,7 @@ struct LibraryFacadeTests {
             limitCollector: { request in probe.collectLimits(request); return [] })
         model = ApplicationModel(applicationDefaults: defaults, libraryStore: store, startsAutomatically: false,
             localUsageService: usageService)
-        let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)
+        let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","hostPort":7337,"hostStorageLow":false}"#)
         let harnesses: [RemoteHarnessStatus] = try AgentRuntimeKind.allCases.map { runtime in
             try decode("""
                 {"id":"\(runtime.rawValue)","displayName":"\(runtime.displayName)","transport":"\(runtime == .opencode ? "native" : "acp")","capabilities":[],"state":"\(runtime == .opencode ? "transport_unavailable" : "ready")","authenticationStatus":"ready","setupMethods":[],"detectedProviders":[]}

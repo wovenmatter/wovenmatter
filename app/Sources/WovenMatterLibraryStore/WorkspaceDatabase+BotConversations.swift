@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-/// One mirror batch from a bots runtime (`POST /v1/bots-host/conversations/{botID}/entries`,
+/// One mirror batch from a bots runtime (`POST /bots-host/conversations/{botID}/entries`,
 /// docs/architecture/WOVEN_EVERYWHERE.md). Entry ids are unique per bot and never reused,
 /// so a resent batch never duplicates anything.
 public struct BotConversationMirror: Codable, Equatable, Sendable {

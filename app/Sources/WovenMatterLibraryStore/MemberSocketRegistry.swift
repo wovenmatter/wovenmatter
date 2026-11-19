@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 
 /// Every long-lived socket a member holds on this server (stream sockets and
-/// `/v1/bots/ws` relays), by member device ID. When the member list changes,
+/// `/bots/ws` relays), by member device ID. When the member list changes,
 /// each socket whose member was removed, or is no longer a kind its route
 /// allows, is closed: a stream socket with close code 4401, a relay by closing
 /// its connection.

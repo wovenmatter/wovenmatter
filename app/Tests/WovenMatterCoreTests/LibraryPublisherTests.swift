@@ -28,7 +28,7 @@ struct LibraryPublisherTests {
     let entries = [entry(firstRun.runID, 1), entry(secondRun, 2)]
     let first = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: [entries[0]])
     let all = ExecutionJournalBatch(libraryID: f.identity.libraryID, entries: entries)
-    let path = "/v1/publisher/retained/settle"
+    let path = "/publisher/retained/settle"
     #expect(try await DevicePublisherAPI.handleLocal(f.request(path, first), path: path, database: f.database).status == 200)
     #expect(try await f.database.libraryExecutionOwner(conversationID: conversationID) == nil)
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestExecutionJournal(first, deviceID: f.workspace.executionDeviceID!) }
@@ -70,7 +70,7 @@ struct LibraryPublisherTests {
       conversation: .init(id: conversationID, title: "Complete reasoning", runtimeKind: "default_agent"))
     var entries = [creation]
     for index in 0..<count {
-      entries.append(entry(.nativeRecord, native: .init(recordID: recordID, format: "wovenmatter.activity.v1",
+      entries.append(entry(.nativeRecord, native: .init(recordID: recordID, format: NativeRecordFormat.activity.name,
         partIndex: index, partCount: count, byteCount: Int64(bytes.count), sha256: digest,
         data: bytes.subdata(in: index * chunkSize..<min(bytes.count, (index + 1) * chunkSize)))))
     }
@@ -138,7 +138,7 @@ struct LibraryPublisherTests {
     }
     try await expectUnavailable()
     for index in 0..<count {
-      let part = NativeRecordPart(recordID: recordID, format: "wovenmatter.activity.v1",
+      let part = NativeRecordPart(recordID: recordID, format: NativeRecordFormat.activity.name,
         partIndex: index, partCount: count, byteCount: Int64(bytes.count), sha256: digest,
         data: bytes.subdata(in: index * chunkSize..<min(bytes.count, (index + 1) * chunkSize)))
       let event = ExecutionJournalEntry(workspaceID: f.workspace.id, originSequence: Int64(index + 3),
@@ -192,7 +192,7 @@ struct LibraryPublisherTests {
       let bytes = try JSONSerialization.data(withJSONObject: envelope), chunk = 131_072
       let count = (bytes.count + chunk - 1) / chunk
       let digest = SHA256.hash(data: bytes).hexString
-      return (0..<count).map { .init(recordID: recordID, format: "wovenmatter.activity.v2", partIndex: $0,
+      return (0..<count).map { .init(recordID: recordID, format: NativeRecordFormat.chainedActivity.name, partIndex: $0,
         partCount: count, byteCount: Int64(bytes.count), sha256: digest,
         data: bytes.subdata(in: $0 * chunk..<min(bytes.count, ($0 + 1) * chunk))) }
     }
@@ -330,7 +330,7 @@ struct LibraryPublisherTests {
     var body = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(batch)) as? [String: Any])
     var rows = try #require(body["entries"] as? [[String: Any]])
     rows[1]["kind"] = "forkedConversation"; body["entries"] = rows
-    let path = "/v1/publisher/journal"
+    let path = "/publisher/journal"
     let request = LibraryHTTPRequest(method: "POST", target: path, headers: ["x-woven-workspace": f.identity.libraryID],
                                      body: try JSONSerialization.data(withJSONObject: body))
     await #expect(throws: DecodingError.self) { _ = try await DevicePublisherAPI.handleLocal(request, path: path, database: f.database) }

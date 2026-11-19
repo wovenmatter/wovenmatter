@@ -99,8 +99,6 @@ public struct LocalACPRuntimeAvailability: Codable, Equatable, Identifiable, Sen
         case ready
         case cliMissing = "cli_missing"
         case adapterMissing = "adapter_missing"
-        /// Reported only by background servers from before connector minimums were removed.
-        case adapterOutdated = "adapter_outdated"
         case authenticationRequired = "authentication_required"
         case executableUnavailable = "executable_unavailable"
     }
@@ -119,8 +117,7 @@ public struct LocalACPRuntimeAvailability: Codable, Equatable, Identifiable, Sen
             "Installed with ACP"
         case .authenticationRequired:
             "Needs sign-in — see Settings"
-        case .cliMissing, .adapterMissing, .adapterOutdated,
-             .executableUnavailable:
+        case .cliMissing, .adapterMissing, .executableUnavailable:
             "Unavailable — see Settings"
         }
     }

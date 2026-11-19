@@ -86,7 +86,7 @@ struct LibraryToolBridgeTests {
           conversation: .init(id: conversationID, title: "Device agent", runtimeKind: "piDurable"))
       ])
       if kind == .linux {
-        let path = "/v1/publisher/journal"
+        let path = "/publisher/journal"
         let request = LibraryHTTPRequest(method: "POST", target: path,
           headers: ["x-woven-workspace": identity.libraryID], body: try JSONEncoder().encode(batch))
         #expect(try await DevicePublisherAPI.handleLocal(request, path: path, database: database).status == 200)

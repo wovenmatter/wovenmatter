@@ -68,7 +68,7 @@ final class LibraryTransportTests: XCTestCase {
         {"device":{"id":"\(waiting)","name":"Waiting Mac","pairedAt":800000000,"lastSeenAt":800000000,"metadata":{"kind":"mac"},
                    "credentialHash":"\(digest("waiting"))"},
          "workspaceID":"fixture-workspace","expiresAt":800000300,"offerProof":"\(digest("offer"))",
-         "encryptedCredential":"\(Data(repeating: 5, count: 60).base64EncodedString())","purpose":"library.peers.v2"}]}
+         "encryptedCredential":"\(Data(repeating: 5, count: 60).base64EncodedString())","purpose":"\(PairingPurpose.peerMac)"}]}
       """.utf8)
     try stored.write(to: file)
 
@@ -107,33 +107,9 @@ final class LibraryTransportTests: XCTestCase {
     XCTAssertTrue(stillAdmitted)
   }
 
-  /// A grant from before grants carried a role takes one from what it is: a
-  /// Mac may complete one signed join, anything else is a client.
-  func testAGrantWithoutARoleTakesOneFromItsKind() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let file = directory.appendingPathComponent(DeviceAuthentication.fileName)
-    let own = "00000000-0000-4000-8000-000000000001", mac = "00000000-0000-4000-8000-000000000002"
-    let phone = "00000000-0000-4000-8000-000000000003"
-    func digest(_ value: String) -> String { Data(SHA256.hash(data: Data(value.utf8))).base64EncodedString() }
-    try Data("""
-      {"devices":[
-        {"id":"\(phone)","name":"Fixture iPhone","pairedAt":800000000,"metadata":{"kind":"iPhone"},"credentialHash":"\(digest("phone"))"},
-        {"id":"\(mac)","name":"Fixture Mac","pairedAt":800000000,"metadata":{"kind":"mac"},"credentialHash":"\(digest("mac"))"}]}
-      """.utf8).write(to: file)
-    let auth = try DeviceAuthentication(fileURL: file)
-    await auth.useIdentity(.init(deviceID: own, libraryID: "00000000-0000-4000-8000-00000000000a", key: .init()))
-    // Membership lists this Mac's client grants; a Mac waiting to join is not one.
-    let membership = await auth.peerMembership()
-    XCTAssertEqual(membership.entries.map(\.deviceID), [phone])
-    let devices = await auth.devices()
-    XCTAssertEqual(devices.map(\.id), [phone, mac])
-  }
-
   func testHTTPReaderHandlesSplitUTF8AndRejectsSmugglingAndBrowserOrigins() async throws {
     let body = Data("{\"title\":\"Idea 🌿\"}".utf8)
-    var wire = Data("POST /v1/mutations HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
+    var wire = Data("POST /mutations HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
     wire.append(body)
     var parser = LibraryHTTPParser()
     var request: LibraryHTTPRequest?
@@ -141,7 +117,7 @@ final class LibraryTransportTests: XCTestCase {
     XCTAssertEqual(request?.body, body)
     for header in ["Content-Length: 0\r\nContent-Length: 5", "Transfer-Encoding: chunked", "Origin: https://hostile.example", "Upgrade: websocket"] {
       var invalid = LibraryHTTPParser()
-      XCTAssertThrowsError(try invalid.append(Data("GET /v1/snapshot HTTP/1.1\r\nHost: localhost\r\n\(header)\r\n\r\n".utf8)))
+      XCTAssertThrowsError(try invalid.append(Data("GET /snapshot HTTP/1.1\r\nHost: localhost\r\n\(header)\r\n\r\n".utf8)))
     }
     var oversized = LibraryHTTPParser()
     XCTAssertThrowsError(try oversized.append(Data(repeating: 65, count: LibraryHTTPParser.maximumHeaderBytes + 1)))

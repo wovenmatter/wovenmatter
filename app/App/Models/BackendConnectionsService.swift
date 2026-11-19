@@ -49,7 +49,7 @@ extension BackendConnectionsCommand {
     }
 
     /// What another Mac may ask of this Mac's own sign-ins
-    /// (`/v1/connections/command`): an explicit list of commands, each with only
+    /// (`/connections/command`): an explicit list of commands, each with only
     /// the arguments it needs. Device selection, Keychain checks, other devices
     /// (`remote`) and the helper's internal arguments are never accepted.
     func forMember() throws -> Self {

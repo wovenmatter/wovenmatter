@@ -360,7 +360,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         return WovenVMGuestDiagnostics.kernelFault(texts).map { " The guest kernel reported a fault: \($0)" } ?? ""
     }
 
-    /// Helper, console and guest state for `GET /v1/diagnostics`.
+    /// Helper, console and guest state for `GET /diagnostics`.
     func diagnostics() -> WovenVMDiagnostics {
         var guest: [String: String]?
         var guestError: String?
@@ -981,31 +981,31 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         }
         do {
             switch (request.method, request.path) {
-            case ("GET", "/v1/status"):
+            case ("GET", "/status"):
                 return json(200, status())
-            case ("GET", "/v1/diagnostics"):
+            case ("GET", "/diagnostics"):
                 return json(200, diagnostics())
-            case ("PUT", "/v1/resources"):
+            case ("PUT", "/resources"):
                 try applyResources(JSONDecoder().decode(WovenVMResources.self, from: request.body))
                 return json(200, status())
-            case ("GET", "/v1/forwards"):
+            case ("GET", "/forwards"):
                 return json(200, queue.sync { state.forwards })
-            case ("POST", "/v1/forwards"):
+            case ("POST", "/forwards"):
                 return json(201, try addForward(JSONDecoder().decode(WovenVMForwardRequest.self, from: request.body)))
-            case ("DELETE", let path) where path.hasPrefix("/v1/forwards/"):
-                return removeForward(id: String(path.dropFirst("/v1/forwards/".count)))
+            case ("DELETE", let path) where path.hasPrefix("/forwards/"):
+                return removeForward(id: String(path.dropFirst("/forwards/".count)))
                     ? WovenVMControlHTTP.response(status: 204, body: Data())
                     : reply(404, WovenVMError.invalid("No such forward."))
-            case ("POST", "/v1/update"):
+            case ("POST", "/update"):
                 guard queue.sync(execute: { phase == .ready && !busy }) else {
                     return reply(409, WovenVMError.unavailable("The VM can update only when it is ready."))
                 }
                 detach { [self] in runUpdate() }
                 return json(202, status())
-            case ("POST", "/v1/restart"):
+            case ("POST", "/restart"):
                 detach { [self] in restartVM() }
                 return json(202, status())
-            case ("POST", "/v1/stop"):
+            case ("POST", "/stop"):
                 detach { [self] in terminate(code: 0) }
                 return json(202, status())
             default:

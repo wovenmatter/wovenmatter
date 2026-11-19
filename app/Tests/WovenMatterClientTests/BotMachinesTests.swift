@@ -108,7 +108,7 @@ struct BotMachinesTests {
     @Test func remoteStatusBecomesAMachineAndFlagsAVersionMismatch() {
         let status = BotsRemoteStatus(machine: .init(deviceID: "D1", name: "box", kind: "linux"), enabled: true, state: "ready",
                                       versions: .init(app: "1.3.0"), runtimeInstalled: true)
-        let socket = BotSocketEndpoint(url: URL(string: "ws://127.0.0.1:4000/v1/bots/ws")!, bearer: "secret")
+        let socket = BotSocketEndpoint(url: URL(string: "ws://127.0.0.1:4000/bots/ws")!, bearer: "secret")
         let mismatched = status.machine(kind: .linux, socket: socket, thisMacVersion: "1.4.0")
         #expect(mismatched.state == .needsUpdate)
         #expect(mismatched.message?.contains("Settings → Updates") == true)
@@ -135,7 +135,7 @@ struct BotMachinesTests {
     }
 
     @Test func socketDescriptionNeverPrintsTheBearer() {
-        let socket = BotSocketEndpoint(url: URL(string: "wss://mac.tail.ts.net/wovenmatter/v1/bots/ws")!, bearer: "secret-token")
+        let socket = BotSocketEndpoint(url: URL(string: "wss://mac.tail.ts.net/wovenmatter/bots/ws")!, bearer: "secret-token")
         #expect(!String(describing: socket).contains("secret-token"))
     }
 

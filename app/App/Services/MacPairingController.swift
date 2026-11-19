@@ -26,7 +26,7 @@ final class MacPairingController {
          loadClaim: @escaping (String) throws -> StoredPairingClaim? = { try PendingPairingVault.load(deviceID: $0) },
          saveClaim: @escaping (StoredPairingClaim?, String) throws -> Void = { try PendingPairingVault.save($0, deviceID: $1) },
          cancelClaim: @escaping @MainActor (URL, PairingPoll) async throws -> Void = { endpoint, poll in
-             let result: [String: Bool] = try await PairingNetwork().request(endpoint, path: "v1/pairing/cancel", body: JSONEncoder().encode(poll))
+             let result: [String: Bool] = try await PairingNetwork().request(endpoint, path: "pairing/cancel", body: JSONEncoder().encode(poll))
              guard result["cancelled"] == true else { throw LibraryAPIError(code: "invalid_response", message: "The Mac did not confirm cancellation.") }
          }) {
         self.identity = identity; self.onPaired = onPaired
@@ -71,7 +71,7 @@ final class MacPairingController {
                     guard claim.expiresAt > Date() else { throw LibraryAPIError(code: "pairing_expired", message: "The pairing request expired. Try again.") }
                     let body = registered ? try JSONEncoder().encode(claim.poll) : try JSONEncoder().encode(claim.request)
                     let result: PairingApprovalResult = try await self.network.request(claim.endpoint,
-                        path: registered ? "v1/pairing/result" : "v1/pairing/request", body: body)
+                        path: registered ? "pairing/result" : "pairing/request", body: body)
                     registered = true
                     guard self.requestGeneration == attempt else { return }
                     self.hasSubmittedRequest = true
@@ -95,7 +95,7 @@ final class MacPairingController {
     private func acceptResult(_ result: PairingApprovalResult, endpoint: URL, identity: PairingDeviceIdentity) async throws -> Bool {
         if result.state == .denied { throw LibraryAPIError(code: "pairing_denied", message: "The other Mac declined this pairing request.") }
         guard result.state == .approved else { return false }
-        guard let response = result.pairing, response.deviceID == identity.deviceID, response.protocolVersion == LibraryProtocol.version else {
+        guard let response = result.pairing, response.deviceID == identity.deviceID else {
             throw LibraryAPIError(code: "invalid_response", message: "The pairing response belongs to another device.")
         }
         isInstallingPairing = true

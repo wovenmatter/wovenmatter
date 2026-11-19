@@ -72,11 +72,11 @@ final class LibraryHostController {
     private(set) var lastSeenAt: Date?
     private var authentication: DeviceAuthentication?
     private var executionAPI: MacExecutionAPI?
-    /// `GET /v1/stream`: live sessions for every other member device.
+    /// `GET /stream`: live sessions for every other member device.
     private(set) var executionStream: ExecutionStreamServer?
     /// Open stream sockets and bots relays by member, closed when a member is removed.
     private var memberSockets: MemberSocketRegistry?
-    /// Who may use this Mac's bots from another device (`/v1/bots/*`).
+    /// Who may use this Mac's bots from another device (`/bots/*`).
     private var authorizeBots: (@MainActor (LibraryHTTPRequest) async throws -> Void)?
     private var enrollingWorkspaceIDs: Set<String> = []
     private var revokingDeviceIDs: Set<String> = []
@@ -292,8 +292,8 @@ final class LibraryHostController {
     /// harness inventory, checks and updates, the Pi Durable SDKs, and the operations an update
     /// answers with, which the caller follows until they finish.
     nonisolated static func servesMemberMaintenance(_ path: String) -> Bool {
-        path == "/v1/runtime-maintenance" || path.hasPrefix("/v1/runtime-maintenance/")
-            || path == "/v1/default-agent/sdks" || path.hasPrefix("/v1/operations/")
+        path == "/runtime-maintenance" || path.hasPrefix("/runtime-maintenance/")
+            || path == "/default-agent/sdks" || path.hasPrefix("/operations/")
     }
 
     private func handle(_ request: LibraryHTTPRequest, generation expected: UUID, libraryAPI: DeviceAPI) async -> LibraryHTTPResponse {
@@ -305,7 +305,7 @@ final class LibraryHostController {
             return await libraryAPI.handle(request)
         }
         if path == "/mcp/workspace" || path == "/wovenmatter/mcp/workspace" { return await libraryAPI.handle(request) }
-        if path == "/v1/execution" || path.hasPrefix("/v1/execution/") || path == "/wovenmatter/v1/execution" || path.hasPrefix("/wovenmatter/v1/execution/") {
+        if path == "/execution" || path.hasPrefix("/execution/") || path == "/wovenmatter/execution" || path.hasPrefix("/wovenmatter/execution/") {
             guard let executionAPI else { return .error("unavailable", "This execution workspace is starting.", status: 503) }
             return await executionAPI.handle(request)
         }
@@ -323,7 +323,7 @@ final class LibraryHostController {
         }
         // Another Mac's Settings → Subscriptions & API Keys: this Mac's own sign-ins.
         if ApplicationModel.servesMemberSignIns(botsPath) { return await memberSignIns(request, path: botsPath) }
-        if botsPath.hasPrefix("/v1/bots/") {
+        if botsPath.hasPrefix("/bots/") {
             guard let authorizeBots, let host = model?.botsHost else { return .error("unavailable", "Bots on this Mac are starting.", status: 503) }
             do { try await authorizeBots(request) }
             catch { return .error("unauthorized", error.localizedDescription, status: 401) }
@@ -332,8 +332,8 @@ final class LibraryHostController {
         return await libraryAPI.handle(request)
     }
 
-    /// Two upgrades: a member's live stream (`/v1/stream`), and its WebSocket
-    /// to this Mac's bots runtime (`/v1/bots/ws`). Both are held in the member
+    /// Two upgrades: a member's live stream (`/stream`), and its WebSocket
+    /// to this Mac's bots runtime (`/bots/ws`). Both are held in the member
     /// socket registry, so removing the member closes them.
     private func upgrade(_ request: LibraryHTTPRequest, generation expected: UUID) async -> WebSocketUpgradeDecision {
         guard generation == expected else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
@@ -342,7 +342,7 @@ final class LibraryHostController {
             guard let executionStream else { return .reject(.error("unavailable", "This Mac's stream is starting.", status: 503)) }
             return await executionStream.upgrade(request)
         }
-        guard path == "/v1/bots/ws" || path == "/wovenmatter/v1/bots/ws" else {
+        guard path == "/bots/ws" || path == "/wovenmatter/bots/ws" else {
             return .reject(.error("not_found", "Unknown upgrade route.", status: 404))
         }
         guard authorizeBots != nil, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
@@ -893,7 +893,7 @@ final class LibraryHostController {
     func pairAtEndpoint(_ endpoint: URL) async {
         if model?.isBackendFrontend == true { await forward(.pairAtEndpoint(endpoint)); return }
         do {
-            let advertisement: DiscoveryAdvertisement = try await pairingNetwork.request(endpoint, path: "v1/discovery")
+            let advertisement: DiscoveryAdvertisement = try await pairingNetwork.request(endpoint, path: "discovery")
             guard advertisement.capabilities?.contains(PairedMacSyncController.capability) == true else { throw LibraryAPIError(code: "update_required", message: "Update both Macs before pairing their libraries.") }
             await pairWithPeer(.init(endpoint: endpoint, advertisement: advertisement))
         } catch { errorMessage = error.localizedDescription }
@@ -921,7 +921,7 @@ final class LibraryHostController {
         try await peerSync.members().authenticate(request, allowing: kinds)
     }
 
-    /// `/v1/connections/*`: only a signed Mac member reaches this Mac's sign-ins;
+    /// `/connections/*`: only a signed Mac member reaches this Mac's sign-ins;
     /// a phone, a Linux host, bots and unsigned requests are refused.
     func memberSignIns(_ request: LibraryHTTPRequest, path: String) async -> LibraryHTTPResponse {
         guard let model else { return .error("unavailable", "This Mac is starting.", status: 503) }

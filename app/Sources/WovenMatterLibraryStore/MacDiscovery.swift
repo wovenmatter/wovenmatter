@@ -22,14 +22,13 @@ public final class PairingNetwork: @unchecked Sendable {
   }
   public func request<T: Decodable & Sendable>(_ endpoint: URL, path: String, body: Data? = nil) async throws -> T {
     guard PairingPayload.isValidEndpoint(endpoint),
-          ["v1/discovery", "v1/pair", "v1/pairing/request", "v1/pairing/result", "v1/pairing/cancel"].contains(path) else {
+          ["discovery", "pair", "pairing/request", "pairing/result", "pairing/cancel"].contains(path) else {
       throw LibraryAPIError(code: "invalid_endpoint", message: "Use a Woven Matter Tailscale HTTPS endpoint.")
     }
     var request = URLRequest(url: endpoint.appending(path: path))
     request.httpMethod = body == nil ? "GET" : "POST"
     request.httpBody = body
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     let (bytes, response) = try await session.bytes(for: request)
     guard let response = response as? HTTPURLResponse else { throw invalidResponse }
     guard response.expectedContentLength <= 65_536 else { throw invalidResponse }
@@ -58,7 +57,7 @@ public struct MacDiscovery: Sendable {
       return try await CLIProcessProbe().run(executable: URL(fileURLWithPath: path), arguments: ["status", "--json"])
     }
     let network = PairingNetwork()
-    self.probe = probe ?? { try await network.request($0, path: "v1/discovery") }
+    self.probe = probe ?? { try await network.request($0, path: "discovery") }
   }
   public static func candidates(status data: Data) throws -> [URL] {
     guard let root = RemoteWorkspaceTailnet.statusObject(data) else {
@@ -89,7 +88,7 @@ public struct MacDiscovery: Sendable {
       result += await withTaskGroup(of: DiscoveredPeer?.self) { group in
         for endpoint in batch {
           group.addTask {
-            guard let advertisement = try? await probe(endpoint), advertisement.protocolVersion == LibraryProtocol.version,
+            guard let advertisement = try? await probe(endpoint),
                   UUID(uuidString: advertisement.identity.deviceID) != nil,
                   advertisement.identity.metadata.kind == .mac,
                   !advertisement.identity.deviceName.isEmpty, advertisement.identity.deviceName.utf8.count <= 120,

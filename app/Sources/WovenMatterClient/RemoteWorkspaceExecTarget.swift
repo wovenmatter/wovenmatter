@@ -1,12 +1,6 @@
 import Foundation
 import WovenMatterCore
 
-public enum RemoteWorkspaceKind: String, Codable, CaseIterable, Sendable {
-    case host
-
-    public var displayName: String { "Linux host" }
-}
-
 public enum RemoteWorkspaceAccessMode: String, Codable, CaseIterable, Sendable {
     case fullRoot
     case user

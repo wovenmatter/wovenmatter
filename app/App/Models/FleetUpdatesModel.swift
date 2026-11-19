@@ -1056,8 +1056,7 @@ final class FleetUpdatesModel {
             return nil
         case (.member(let machineID), .runtime(let kind)):
             return await followMemberJob(machineID: machineID, item: kind.rawValue, run: run,
-                                         .updateMemberHarness(machineID: machineID, kind: kind, sourceSHA256: nil,
-                                                              packageSpec: nil, force: force))
+                                         .updateMemberHarness(machineID: machineID, kind: kind, force: force))
         case (_, .executor):
             guard let tools = model.agentTools, let config = tools.settings.executor else { return "Executor isn't set up." }
             do { try await tools.controlExecutor(.setup(config)) }

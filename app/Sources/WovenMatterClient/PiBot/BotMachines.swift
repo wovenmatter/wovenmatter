@@ -1,7 +1,7 @@
 import Foundation
 
 /// How a Woven app reaches one machine's bots runtime: the loopback socket on this
-/// Mac with its runtime bearer, or another member's Woven server at `/v1/bots/ws`
+/// Mac with its runtime bearer, or another member's Woven server at `/bots/ws`
 /// with a member signature addressed to `audience` (that machine's member device ID;
 /// a fresh signature for every connection, so `bearer` is empty).
 public struct BotSocketEndpoint: Codable, Equatable, Sendable, CustomStringConvertible {
@@ -79,8 +79,8 @@ public struct BotMachine: Codable, Equatable, Identifiable, Sendable {
     public var displayName: String { kind == .thisMac ? "This Mac" : name }
 }
 
-/// `GET /v1/bots/status` on any machine's Woven server, and the body of
-/// `POST /v1/bots/resources`'s reply. Linux hosts and Macs answer with the same shape.
+/// `GET /bots/status` on any machine's Woven server, and the body of
+/// `POST /bots/resources`'s reply. Linux hosts and Macs answer with the same shape.
 public struct BotsRemoteStatus: Codable, Equatable, Sendable {
     public struct Machine: Codable, Equatable, Sendable {
         public var deviceID: String

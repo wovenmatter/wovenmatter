@@ -462,7 +462,6 @@ private struct SettingsAgentsView: View {
             case .ready: break
             case .cliMissing: return ("CLI required", .warning)
             case .adapterMissing: return ("Adapter required", .warning)
-            case .adapterOutdated: return ("Update required", .warning)
             case .authenticationRequired: return ("Sign in required", .warning)
             case .executableUnavailable: return ("Setup required", .warning)
             }

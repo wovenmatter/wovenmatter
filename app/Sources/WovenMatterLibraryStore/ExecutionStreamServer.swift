@@ -6,7 +6,7 @@ import WovenMatterCore
 import WovenMatterShared
 
 /// What one Mac's stream serves: the same data and command path as its
-/// `/v1/execution/*` routes (`MacExecutionAPI`).
+/// `/execution/*` routes (`MacExecutionAPI`).
 @MainActor public protocol ExecutionStreamSource: ExecutionConversationSource {
   var workspaceDescriptor: ExecutionWorkspace { get }
   var isServing: Bool { get }
@@ -40,16 +40,15 @@ public struct ExecutionStreamConfiguration: Sendable {
   public init() {}
 }
 
-/// Refusals of `GET /v1/stream` before the upgrade.
+/// Refusals of `GET /stream` before the upgrade.
 enum ExecutionStreamRefusal {
   private struct Body: Encodable {
     let code: String
     let message: String
-    var supported: [Int]? = nil
     var serverTime: Int64? = nil
   }
-  static func response(_ code: String, _ message: String, status: Int, supported: [Int]? = nil, serverTime: Int64? = nil) -> LibraryHTTPResponse {
-    (try? .json(Body(code: code, message: message, supported: supported, serverTime: serverTime), status: status))
+  static func response(_ code: String, _ message: String, status: Int, serverTime: Int64? = nil) -> LibraryHTTPResponse {
+    (try? .json(Body(code: code, message: message, serverTime: serverTime), status: status))
       ?? .error(code, message, status: status)
   }
 }
@@ -116,7 +115,7 @@ actor ExecutionStreamTail {
 }
 
 #if canImport(Network)
-/// `GET /v1/stream?protocol=1` on this Mac. The outer library server verifies
+/// The live stream (`GET` of `StreamProtocol.path`, no query) on this Mac. The outer library server verifies
 /// the member signature, then relays the connection's bytes to this server's
 /// loopback listener, which terminates the WebSocket with the Network
 /// framework. That listener is never published: it accepts only connections
@@ -229,17 +228,15 @@ public final class ExecutionStreamServer: @unchecked Sendable {
     return counts
   }
 
-  /// The outer server's decision for `GET /v1/stream`: every refusal happens
+  /// The outer server's decision for `GET /stream`: every refusal happens
   /// here, before the upgrade, as a JSON HTTP error.
   public func upgrade(_ request: LibraryHTTPRequest) async -> WebSocketUpgradeDecision {
-    let components = URLComponents(string: "http://localhost" + request.target)
-    let versions = components?.queryItems?.filter { $0.name == "protocol" }.compactMap { $0.value.flatMap(Int.init) } ?? []
-    guard versions.count == 1, StreamProtocol.supportedVersions.contains(versions[0]) else {
-      return .reject(ExecutionStreamRefusal.response(StreamProtocol.ErrorCode.protocolUnsupported.rawValue,
-        "Update this app: this server streams protocol \(StreamProtocol.version).", status: 426, supported: StreamProtocol.supportedVersions))
-    }
     guard request.headers["origin"] == nil, request.headers["cookie"] == nil else {
       return .reject(.error(LibraryHTTPParser.browserRequest.code, LibraryHTTPParser.browserRequest.message, status: 403))
+    }
+    // The stream takes no query: what a server can do is in its hello's capabilities.
+    guard !request.target.contains("?") else {
+      return .reject(.error("bad_request", "Open the stream without a query.", status: 400))
     }
     guard MemberRequestVerifier.isSigned(request.headers) else {
       return .reject(.error("unauthorized", MemberRequestError.missing.message, status: 401))
@@ -254,7 +251,7 @@ public final class ExecutionStreamServer: @unchecked Sendable {
       return .reject(.error(error == .kind ? error.code : "unauthorized", error.message, status: error == .kind ? 403 : 401))
     } catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
     guard await source.isServing, let port = queue.sync(execute: { self.port }),
-          let head = WebSocketUpgradeDecision.webSocketHead(for: request, port: port, path: "/v1/stream", bearer: secret) else {
+          let head = WebSocketUpgradeDecision.webSocketHead(for: request, port: port, path: "/" + StreamProtocol.path, bearer: secret) else {
       return .reject(.error("unavailable", "This Mac's stream is starting.", status: 503))
     }
     let queue = queue

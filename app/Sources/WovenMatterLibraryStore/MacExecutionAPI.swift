@@ -29,8 +29,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
       guard let url = URLComponents(string: "http://localhost" + request.target) else { return .error("invalid_request", "Invalid execution path.", status: 400) }
       var path = url.path
       if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
-      guard path == "/v1/execution" || path.hasPrefix("/v1/execution/") else { return .error("not_found", "Unknown execution endpoint.", status: 404) }
-      guard request.headers["x-woven-protocol"] == String(LibraryProtocol.version) else { return .error("version_mismatch", "Update both clients to compatible versions.", status: 426) }
+      guard path == "/execution" || path.hasPrefix("/execution/") else { return .error("not_found", "Unknown execution endpoint.", status: 404) }
       // Every caller is a member signing with its own key.
       guard MemberRequestVerifier.isSigned(request.headers) else {
         return .error("unauthorized", "Sign this request with a member device key.", status: 401)
@@ -54,11 +53,11 @@ public final class MacExecutionAPI: ExecutionStreamSource {
       func query(_ key: String) -> String? { url.queryItems?.first(where: { $0.name == key })?.value }
       if request.method == "GET" {
         switch path {
-        case "/v1/execution": return try .json(descriptor)
-        case "/v1/execution/providers": return try .json(commands.providers().filter { $0.id.hasPrefix("local:") })
-        case "/v1/execution/conversations": return try .json(try await localConversations())
-        case "/v1/execution/interactions": return try .json(try await localPendingInteractions())
-        case "/v1/execution/events":
+        case "/execution": return try .json(descriptor)
+        case "/execution/providers": return try .json(commands.providers().filter { $0.id.hasPrefix("local:") })
+        case "/execution/conversations": return try .json(try await localConversations())
+        case "/execution/interactions": return try .json(try await localPendingInteractions())
+        case "/execution/events":
           if let events {
             guard let cursor = Int64(query("after") ?? "0"), cursor >= 0 else { return .error("invalid_cursor", "Invalid execution history cursor.", status: 400) }
             return try .json(try await events(cursor))
@@ -69,26 +68,26 @@ public final class MacExecutionAPI: ExecutionStreamSource {
           return try .json(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0))
         default: break
         }
-        if parts.count == 4, parts[2] == "attachments" { return try await attachment(contentHash: parts[3], name: query("name")) }
-        if parts.count == 4, parts[2] == "commands" {
-          guard let receipt = try await localReceipt(commandID: parts[3], deviceID: scope.deviceID) else { return .error("not_found", "No receipt exists for this command.", status: 404) }
+        if parts.count == 3, parts[1] == "attachments" { return try await attachment(contentHash: parts[2], name: query("name")) }
+        if parts.count == 3, parts[1] == "commands" {
+          guard let receipt = try await localReceipt(commandID: parts[2], deviceID: scope.deviceID) else { return .error("not_found", "No receipt exists for this command.", status: 404) }
           return try .json(receipt)
         }
-        if parts.count == 5, parts[2] == "conversations" {
-          try await requireLocal(parts[3])
-          if parts[4] == "transcript" { return try .json(try await commands.transcript(conversationID: parts[3], before: query("before"))) }
-          if parts[4] == "capabilities" { return try .json(try await commands.sessionCapabilities(conversationID: parts[3])) }
-          if parts[4] == "activity" {
-            return try .json(try await database.libraryActivityDetails(conversationID: parts[3], runID: query("run"), activityID: query("id") ?? ""))
+        if parts.count == 4, parts[1] == "conversations" {
+          try await requireLocal(parts[2])
+          if parts[3] == "transcript" { return try .json(try await commands.transcript(conversationID: parts[2], before: query("before"))) }
+          if parts[3] == "capabilities" { return try .json(try await commands.sessionCapabilities(conversationID: parts[2])) }
+          if parts[3] == "activity" {
+            return try .json(try await database.libraryActivityDetails(conversationID: parts[2], runID: query("run"), activityID: query("id") ?? ""))
           }
         }
       } else if request.method == "POST" {
-        if path == "/v1/execution/commands" {
+        if path == "/execution/commands" {
           let command = try JSONDecoder().decode(LibraryCommand.self, from: request.body)
           guard command.deviceID == scope.deviceID, command.libraryID == scope.libraryID, command.workspaceID == scope.workspaceID else { return .error("wrong_workspace", "Command identity does not match its authenticated execution scope.", status: 403) }
           return try .json(try await executeLocal(command, deviceID: scope.deviceID, kind: member.kind, authorize: authorize))
         }
-        if path == "/v1/execution/workspace-read" {
+        if path == "/execution/workspace-read" {
           let read = try JSONDecoder().decode(LibraryWorkspaceRead.self, from: request.body)
           switch read {
           case .session(let id), .exportConversation(let id, _): try await requireLocal(id)
@@ -129,7 +128,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
     try await requireLocal(conversationID)
     return try await commands.sessionCapabilities(conversationID: conversationID)
   }
-  /// The session settings, as `POST v1/execution/workspace-read` `.session` answers them.
+  /// The session settings, as `POST execution/workspace-read` `.session` answers them.
   public func localSessionSettings(conversationID: String) async throws -> SessionSettings {
     try await requireLocal(conversationID)
     guard case .session(let settings) = try await commands.readWorkspace(.session(id: conversationID)) else {
@@ -142,7 +141,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
     if let id = receipt.conversationID { try await requireLocal(id) }
     return scoped(receipt)
   }
-  /// `POST v1/execution/commands` once the caller is authenticated: only agents
+  /// `POST execution/commands` once the caller is authenticated: only agents
   /// this Mac runs, with the shared idempotent command receipts. The stream's
   /// `execution.command` uses the same path. `kind` is the verified member's.
   public func executeLocal(_ command: LibraryCommand, deviceID: String, kind: MemberKind,
@@ -161,7 +160,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
       case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
       // A new folder on this Mac's own disk: there is no session to own it,
       // so only a Mac may ask, as for a directory on a Linux host
-      // (`POST v1/projects`). A phone or a Linux host is refused here.
+      // (`POST projects`). A phone or a Linux host is refused here.
       case .createFolder:
         guard kind == .mac else { throw LibraryAPIError(code: "wrong_device", message: "Only a Mac can ask this Mac for a new folder.") }
       default: throw LibraryAPIError(code: "unsupported", message: "This app-data change syncs through the library.")
@@ -173,7 +172,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
     try await authorize()
     return scoped(try await commands.execute(command, deviceID: deviceID))
   }
-  /// `GET v1/execution/attachments/<sha256>?name=`: a message file of a
+  /// `GET execution/attachments/<sha256>?name=`: a message file of a
   /// session this Mac runs, from this library's attachment store, with the
   /// type it was sent with. Nothing outside that store is read, and only
   /// bytes that still match the digest are served.

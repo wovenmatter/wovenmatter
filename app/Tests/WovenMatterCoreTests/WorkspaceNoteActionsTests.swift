@@ -66,7 +66,7 @@ struct WorkspaceNoteActionsTests {
     guard case .richText(let unchanged) = styled.blocks[0] else { Issue.record("Missing parent"); return }
     #expect(unchanged.list?.levels == [parent])
 
-    let old = #"{"version":2,"kind":"note","blocks":[{"type":"richText","value":{"id":"old","style":"numberedList","runs":[]}}],"html":""}"#
+    let old = #"{"kind":"note","blocks":[{"type":"richText","value":{"id":"old","style":"numberedList","runs":[]}}],"html":""}"#
     let decoded = try JSONDecoder().decode(NoteDocument.self, from: Data(old.utf8))
     guard case .richText(let oldList) = decoded.blocks[0] else { Issue.record("Missing old list"); return }
     #expect(oldList.style == .numberedList && oldList.list == nil)

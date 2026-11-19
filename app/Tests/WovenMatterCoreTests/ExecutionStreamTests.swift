@@ -8,7 +8,7 @@ import WorkspaceFixtures
 import WovenMatterCore
 @testable import WovenMatterLibraryStore
 
-/// The Mac's side of `GET /v1/stream` ("Streaming" in
+/// The Mac's side of `GET /stream` ("Streaming" in
 /// docs/architecture/WOVEN_EVERYWHERE.md): its change source, the signed
 /// upgrade through the real library server, and the frames it serves.
 @Suite(.serialized)
@@ -150,7 +150,7 @@ struct ExecutionStreamTests {
 
     let client = try await mac.connect(phone)
     guard case .hello(let hello) = try await client.next() else { Issue.record("hello was not first"); return }
-    #expect(hello.protocol == 1 && hello.deviceID == mac.hostID && hello.workspaceID == mac.descriptor.id)
+    #expect(hello.deviceID == mac.hostID && hello.workspaceID == mac.descriptor.id)
     #expect(hello.libraryID == mac.descriptor.libraryID && hello.capabilities.contains(StreamProtocol.capability))
     #expect(hello.maxFrameBytes == StreamProtocol.maximumFrameBytes)
 
@@ -160,7 +160,7 @@ struct ExecutionStreamTests {
     guard case .conversations(let conversations) = snapshot.payload else { Issue.record("no conversations snapshot"); return }
     #expect(conversations.snapshot && conversations.conversations.map(\.id) == [conversation])
     #expect(conversations.conversations.first?.workspaceID == mac.descriptor.id)
-    #expect(try await mac.api.localConversations() == conversations.conversations, "the same data as GET v1/execution/conversations")
+    #expect(try await mac.api.localConversations() == conversations.conversations, "the same data as GET execution/conversations")
     guard case .pending(let pending) = try await client.item("w").payload else { Issue.record("no pending"); return }
     #expect(pending.interactions.isEmpty)
     #expect(try await client.item("w").payload == .library(.init(cursor: mac.database.libraryWakeCursor())))
@@ -291,7 +291,7 @@ struct ExecutionStreamTests {
     return Double(arrivals.count - 1) <= ((last - start) + interval) / interval
   }
 
-  /// `execution.command` passes the same gate as `POST v1/execution/commands`:
+  /// `execution.command` passes the same gate as `POST execution/commands`:
   /// a folder on this Mac is a Mac member's to ask for, never a phone's or a
   /// Linux host's, though both hold a stream here.
   @Test func aFolderRequestOverTheStreamIsRefusedUnlessAMacSendsIt() async throws {
@@ -319,11 +319,18 @@ struct ExecutionStreamTests {
   @Test func upgradesAreRefusedBeforeTheyBegin() async throws {
     let mac = try await StreamMac(); defer { mac.remove() }
     let phone = try await mac.member(.ios)
-    let target = "/wovenmatter/v1/stream?protocol=1"
+    let target = "/wovenmatter/" + StreamProtocol.path
 
-    let future = try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=2", signer: phone)
-    #expect(future.status == 426 && future.json?["code"] as? String == "protocol_unsupported")
-    #expect(future.json?["supported"] as? [Int] == [1])
+    // The stream takes no query, whatever it says. It says so before it checks
+    // who asks (an unsigned request gets the same answer) and after it refuses a browser.
+    for query in ["?protocol=1", "?", "?x"] {
+      let signed = try await mac.rawUpgrade(target: target + query, signer: phone)
+      #expect(signed.status == 400 && signed.json?["code"] as? String == "bad_request")
+      #expect(signed.json?["message"] as? String == "Open the stream without a query.")
+    }
+    let queried = try await mac.rawUpgrade(target: target + "?protocol=1", signer: nil)
+    #expect(queried.status == 400 && queried.json?["message"] as? String == "Open the stream without a query.")
+    #expect(try await mac.rawUpgrade(target: target + "?protocol=1", signer: phone, extra: ["Origin": "https://hostile.example"]).status == 403)
 
     let stale = MemberRequestSignature.now() - 10 * 60 * 1_000
     let staleResponse = try await mac.rawUpgrade(target: target, signer: phone, time: stale)
@@ -343,7 +350,7 @@ struct ExecutionStreamTests {
 
     // Every refusal repeats its code in X-Woven-Error and carries a Date:
     // URLSessionWebSocketTask exposes a refused upgrade's headers, not its body.
-    for (response, code) in [(future, "protocol_unsupported"), (staleResponse, "member_time_stale"), (unsigned, "unauthorized"),
+    for (response, code) in [(queried, "bad_request"), (staleResponse, "member_time_stale"), (unsigned, "unauthorized"),
                              (browser, LibraryHTTPParser.browserRequest.code), (cookie, LibraryHTTPParser.browserRequest.code)] {
       #expect(response.headers["x-woven-error"] == code && response.json?["code"] as? String == code, "\(code)")
       let date = try #require(response.headers["date"].flatMap(Self.httpDate), "\(code) has a Date")
@@ -489,13 +496,13 @@ struct ExecutionStreamTests {
     let staying = try await mac.connect(other)
     guard case .hello = try await staying.next() else { Issue.record("no hello"); return }
     // A client busy elsewhere, which writes before it reads the close.
-    let late = try #require(try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=1", signer: phone, keepOpen: true).connection)
+    let late = try #require(try await mac.rawUpgrade(target: "/wovenmatter/" + StreamProtocol.path, signer: phone, keepOpen: true).connection)
     // Each socket is kept once it is set up, which its handshake does not wait for.
     #expect(try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { await mac.registry.openSockets()[phone.deviceID] == 2 })
 
     // The bots relay: raw bytes to the runtime, held for the member that opened it.
     let runtime = try await EchoListener.start()
-    let relay = try await mac.rawUpgrade(target: "/wovenmatter/v1/bots/ws", signer: phone, keepOpen: true, botsRuntime: runtime.port)
+    let relay = try await mac.rawUpgrade(target: "/wovenmatter/bots/ws", signer: phone, keepOpen: true, botsRuntime: runtime.port)
     #expect(relay.status == 101)
     let echoed = try await relay.connection!.roundTrip(Data("ping".utf8))
     #expect(echoed == Data("ping".utf8))
@@ -548,7 +555,7 @@ struct ExecutionStreamTests {
     try await mac.database.replaceLocalACPAssistantMessage(runID: run.runID, content: String(repeating: "y", count: 4 * 1_024 * 1_024))
     let phone = try await mac.member(.ios)
     // A client that stops reading after the handshake.
-    let raw = try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=1", signer: phone, keepOpen: true)
+    let raw = try await mac.rawUpgrade(target: "/wovenmatter/" + StreamProtocol.path, signer: phone, keepOpen: true)
     #expect(raw.status == 101)
     let connection = try #require(raw.connection)
     for index in 0..<10 {
@@ -571,7 +578,7 @@ struct ExecutionStreamTests {
     let answering = try await mac.connect(phone)
     guard case .hello = try await answering.next() else { Issue.record("no hello"); return }
     // The raw client never answers pings (nor reads them).
-    let silent = try await mac.rawUpgrade(target: "/wovenmatter/v1/stream?protocol=1", signer: phone, keepOpen: true)
+    let silent = try await mac.rawUpgrade(target: "/wovenmatter/" + StreamProtocol.path, signer: phone, keepOpen: true)
     let connection = try #require(silent.connection)
     #expect(try await connection.waitForClose(timeout: .seconds(15)))
     // Pings were answered automatically throughout: past another timeout too.
@@ -691,7 +698,7 @@ struct ExecutionStreamTests {
   }
 
   /// The calendar, dictation, registry and artifact tables a phone syncs
-  /// outside `GET v1/changes` move the cursor too; their entries are skipped
+  /// outside `GET changes` move the cursor too; their entries are skipped
   /// by change pages. The announcer reads once per window and only reports moves.
   @Test func wakeTablesMoveTheCursorAndTheAnnouncerCoalesces() async throws {
     let fixture = try PersistenceFixture(); defer { fixture.remove() }
@@ -741,7 +748,7 @@ struct ExecutionStreamTests {
 
   // MARK: Attachments
 
-  /// `GET v1/execution/attachments/<sha256>`: a message file of a session this
+  /// `GET execution/attachments/<sha256>`: a message file of a session this
   /// Mac runs, with its type, signed like every execution read; nothing
   /// outside the attachment store, and nothing that no longer matches.
   @Test func attachmentsOfLocalSessionsAreServedFromTheAttachmentStoreOnly() async throws {
@@ -759,29 +766,28 @@ struct ExecutionStreamTests {
     func get(_ path: String, signer: MemberIdentity?) async throws -> (Int, String?, Data) {
       let target = "/wovenmatter/" + path
       var request = URLRequest(url: URL(string: "http://127.0.0.1:\(mac.port)" + target)!)
-      request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
       if let signer { for (key, value) in try signer.signer.headers(method: "GET", target: target, audience: mac.hostID) { request.setValue(value, forHTTPHeaderField: key) } }
       let (data, response) = try await URLSession.shared.data(for: request)
       let http = try #require(response as? HTTPURLResponse)
       return (http.statusCode, http.value(forHTTPHeaderField: "Content-Type"), data)
     }
-    let read = try await get("v1/execution/attachments/\(hash)?name=photo.png", signer: phone)
+    let read = try await get("execution/attachments/\(hash)?name=photo.png", signer: phone)
     #expect(read.0 == 200 && read.1 == "image/png" && read.2 == bytes)
-    #expect(try await get("v1/execution/attachments/\(hash)?name=photo.png", signer: nil).0 == 401, "unsigned")
+    #expect(try await get("execution/attachments/\(hash)?name=photo.png", signer: nil).0 == 401, "unsigned")
     let stranger = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .ios, key: .init())
-    #expect(try await get("v1/execution/attachments/\(hash)", signer: stranger).0 == 401, "not a member")
+    #expect(try await get("execution/attachments/\(hash)", signer: stranger).0 == 401, "not a member")
     // Only a digest names a file; nothing else in the support directory is reachable.
-    #expect(try await get("v1/execution/attachments/..%2F..%2Fworkspace.sqlite", signer: phone).0 != 200)
-    #expect(try await get("v1/execution/attachments/" + String(repeating: "a", count: 64), signer: phone).0 == 404, "no message carries it")
+    #expect(try await get("execution/attachments/..%2F..%2Fworkspace.sqlite", signer: phone).0 != 200)
+    #expect(try await get("execution/attachments/" + String(repeating: "a", count: 64), signer: phone).0 == 404, "no message carries it")
     // A blob replaced by a link out of the store, or edited, is refused.
     let outside = mac.database.supportDirectory.appending(path: "outside.txt")
     try bytes.write(to: outside)
     try FileManager.default.removeItem(at: blobs.appending(path: hash))
     try FileManager.default.createSymbolicLink(at: blobs.appending(path: hash), withDestinationURL: outside)
-    #expect(try await get("v1/execution/attachments/\(hash)", signer: phone).0 == 404)
+    #expect(try await get("execution/attachments/\(hash)", signer: phone).0 == 404)
     try FileManager.default.removeItem(at: blobs.appending(path: hash))
     try Data("edited".utf8).write(to: blobs.appending(path: hash))
-    #expect(try await get("v1/execution/attachments/\(hash)", signer: phone).0 == 409)
+    #expect(try await get("execution/attachments/\(hash)", signer: phone).0 == 409)
     try FileManager.default.removeItem(at: blobs.appending(path: hash))
 
     // A file read from the machine that runs its session is kept only when it matches its digest.
@@ -836,9 +842,9 @@ private final class StreamMac: @unchecked Sendable {
     let stream = stream, api = api, registry = registry, botsPort = botsPort
     server = LibraryHTTPServer(upgradeHandler: { request in
       let path = request.target.split(separator: "?").first.map(String.init) ?? ""
-      if path.hasSuffix("/v1/stream") { return await stream.upgrade(request) }
-      // As LibraryHostController relays `/v1/bots/ws` for a signed member.
-      guard path.hasSuffix("/v1/bots/ws"), let port = botsPort.value,
+      if path.hasSuffix("/stream") { return await stream.upgrade(request) }
+      // As LibraryHostController relays `/bots/ws` for a signed member.
+      guard path.hasSuffix("/bots/ws"), let port = botsPort.value,
             let member = try? await directory.authenticate(request, allowing: [.mac, .ios]) else {
         return .reject(.error("unauthorized", "No.", status: 401))
       }
@@ -857,7 +863,7 @@ private final class StreamMac: @unchecked Sendable {
   }
 
   func connect(_ member: MemberIdentity) async throws -> StreamClient {
-    let target = "/wovenmatter/v1/stream?protocol=1"
+    let target = "/wovenmatter/" + StreamProtocol.path
     let headers = try member.signer.headers(method: "GET", target: target, audience: hostID)
     let client = StreamClient(port: port, target: target, headers: headers)
     try await client.connect()

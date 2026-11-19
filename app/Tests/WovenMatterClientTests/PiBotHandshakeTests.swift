@@ -7,13 +7,13 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterClient
 
-/// What the Mac actually puts on the wire when it opens `/v1/bots/ws`. A Woven server's bots
+/// What the Mac actually puts on the wire when it opens `/bots/ws`. A Woven server's bots
 /// proxy refuses any request with an `Origin` header (browser pages); remote/test/bots.test.mjs
 /// replays these headers against it.
 struct PiBotHandshakeTests {
     @Test func theBotsSocketHandshakeCarriesTheBearerAndNoOrigin() async throws {
         let headers = try await Self.handshake { port in
-            PiBotClient(socketURL: URL(string: "http://127.0.0.1:\(port)/v1/bots/ws")!, bearer: "fixture-bearer") { _ in }
+            PiBotClient(socketURL: URL(string: "http://127.0.0.1:\(port)/bots/ws")!, bearer: "fixture-bearer") { _ in }
         }
         #expect(headers["origin"] == nil)
         #expect(headers["authorization"] == "Bearer fixture-bearer")
@@ -26,10 +26,10 @@ struct PiBotHandshakeTests {
     @Test func aSignedBotsSocketUpgradeVerifiesAtItsMemberOnly() async throws {
         let key = Curve25519.Signing.PrivateKey(), device = UUID().uuidString.lowercased(), machine = UUID().uuidString.lowercased()
         let signer = MemberRequestSigner(deviceID: device, key: key)
-        let endpoint = BotSocketEndpoint.signed(URL(string: "http://127.0.0.1/v1/bots/ws")!, audience: machine)
+        let endpoint = BotSocketEndpoint.signed(URL(string: "http://127.0.0.1/bots/ws")!, audience: machine)
         #expect(endpoint.isSigned && endpoint.bearer.isEmpty)
         let headers = try await Self.handshake { port in
-            PiBotClient(socketURL: URL(string: "http://127.0.0.1:\(port)/v1/bots/ws")!, bearer: nil, authorize: { url in
+            PiBotClient(socketURL: URL(string: "http://127.0.0.1:\(port)/bots/ws")!, bearer: nil, authorize: { url in
                 let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
                 return try signer.headers(method: "GET", target: components.percentEncodedPath, audience: machine)
             }) { _ in }
@@ -37,10 +37,10 @@ struct PiBotHandshakeTests {
         #expect(headers["authorization"] == nil && headers["origin"] == nil)
         let member = MemberKey(deviceID: device, kind: .mac, name: "Mac", publicKey: key.publicKey.rawRepresentation)
         let there = MemberRequestVerifier(audience: machine, lookup: { $0 == device ? member : nil })
-        #expect(try await there.verify(method: "GET", target: "/v1/bots/ws", headers: headers, body: Data(), allowing: [.mac]) == member)
+        #expect(try await there.verify(method: "GET", target: "/bots/ws", headers: headers, body: Data(), allowing: [.mac]) == member)
         let elsewhere = MemberRequestVerifier(audience: UUID().uuidString.lowercased(), lookup: { $0 == device ? member : nil })
         await #expect(throws: MemberRequestError.audience) {
-            try await elsewhere.verify(method: "GET", target: "/v1/bots/ws", headers: headers, body: Data(), allowing: [.mac])
+            try await elsewhere.verify(method: "GET", target: "/bots/ws", headers: headers, body: Data(), allowing: [.mac])
         }
     }
 
@@ -71,7 +71,7 @@ struct PiBotHandshakeTests {
         let request = try #require(await requests.next())
 
         let lines = request.components(separatedBy: "\r\n")
-        #expect(lines.first == "GET /v1/bots/ws HTTP/1.1")
+        #expect(lines.first == "GET /bots/ws HTTP/1.1")
         return Dictionary(lines.dropFirst().compactMap { line -> (String, String)? in
             guard let colon = line.firstIndex(of: ":") else { return nil }
             return (line[..<colon].lowercased(), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))

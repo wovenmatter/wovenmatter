@@ -325,7 +325,7 @@ public actor LibraryPeerSync {
       for member in peers where statuses[member.deviceID]?.state == .online {
         group.addTask { [weak self] in
           do {
-            let response = try await self?.send(member, path: "v1/peers/notify", body: JSONEncoder().encode(notice))
+            let response = try await self?.send(member, path: "peers/notify", body: JSONEncoder().encode(notice))
             if let response, response.status != 200 { await self?.failed(member, response) }
           } catch { await self?.offline(member, error) }
         }
@@ -406,7 +406,7 @@ public actor LibraryPeerSync {
         let page = try await database.pairedLibraryPage(after: cursors.pushed)
         let exchange = LibraryPeerExchange(deviceID: own, after: cursors.pulled, page: page, version: configuration.version,
                                            attachment: await attachments?.outgoing(member.deviceID))
-        let response = try await send(member, path: "v1/peers/sync", body: JSONEncoder().encode(exchange))
+        let response = try await send(member, path: "peers/sync", body: JSONEncoder().encode(exchange))
         guard response.status == 200 else { await failed(member, response); return }
         let reply = try JSONDecoder().decode(LibraryPeerExchange.self, from: response.body)
         guard reply.deviceID == member.deviceID, reply.after == page.cursor else {
@@ -442,14 +442,14 @@ public actor LibraryPeerSync {
     for _ in 0..<8 {
       // A removal made during a transfer sends no further request.
       guard await directory.member(member.deviceID) != nil else { return true }
-      let response = try await send(member, path: "v1/peers/files", body: JSONEncoder().encode(cursor))
+      let response = try await send(member, path: "peers/files", body: JSONEncoder().encode(cursor))
       guard response.status == 200 else { throw LibraryAPIError(code: "peer_file", message: "The peer did not list its files.") }
       let page = try JSONDecoder().decode(PairedLibraryFilePage.self, from: response.body)
       for file in page.files where await files.keeps(file) {
         while let offset = try await files.nextOffset(file) {
           guard chunks < 64, !Task.isCancelled else { return false }
           guard await directory.member(member.deviceID) != nil else { return true }
-          let reply = try await send(member, path: "v1/peers/file", body: JSONEncoder().encode(PairedLibraryFileRequest(file: file, offset: offset)))
+          let reply = try await send(member, path: "peers/file", body: JSONEncoder().encode(PairedLibraryFileRequest(file: file, offset: offset)))
           guard reply.status == 200 else { throw LibraryAPIError(code: "peer_file", message: "The peer did not return a shared file.") }
           let chunk = try JSONDecoder().decode(PairedLibraryFileChunk.self, from: reply.body)
           guard chunk.file == file, chunk.offset == offset else { throw LibraryAPIError(code: "peer_file", message: "Shared file identity changed.") }
@@ -527,7 +527,6 @@ public actor LibraryPeerSync {
       do {
         var headers = try directory.identity.signer.headers(method: "POST", target: target, body: body, audience: member.deviceID)
         headers["Content-Type"] = "application/json"
-        headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
         headers["Host"] = endpoint.host ?? "localhost"
         return try await transport.send(endpoint, .init(method: "POST", target: target, headers: headers, body: body))
       } catch { lastError = error }
@@ -537,13 +536,13 @@ public actor LibraryPeerSync {
 
   // MARK: Server
 
-  /// Serves `/v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
-  /// `/v1/peers/file` to signed Mac and Linux members. Returns nil for any
+  /// Serves `/peers/sync`, `/peers/notify`, `/peers/files` and
+  /// `/peers/file` to signed Mac and Linux members. Returns nil for any
   /// other path or an unsigned request, so later handlers in the chain can answer it.
   public func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
     let target = MemberRequestSignature.canonicalTarget(request.target)
     let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
-    guard ["/v1/peers/sync", "/v1/peers/notify", "/v1/peers/files", "/v1/peers/file"].contains(path),
+    guard ["/peers/sync", "/peers/notify", "/peers/files", "/peers/file"].contains(path),
           MemberRequestVerifier.isSigned(request.headers) else { return nil }
     guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
     let member: MemberKey
@@ -558,11 +557,11 @@ public actor LibraryPeerSync {
     // was away never reached it, so catch it up once.
     if started, statuses[resolved.deviceID]?.state != .online || backoff[resolved.deviceID] != nil {
       backoff[resolved.deviceID] = nil; nextPresence[resolved.deviceID] = nil
-      if path != "/v1/peers/sync" { scheduleSync(resolved.deviceID, reason: "contact") }
+      if path != "/peers/sync" { scheduleSync(resolved.deviceID, reason: "contact") }
     }
     do {
       switch path {
-      case "/v1/peers/notify":
+      case "/peers/notify":
         guard request.body.count <= 1_024 else { return .error("too_large", "Notice too large.", status: 413) }
         let notice = try JSONDecoder().decode(LibraryPeerNotice.self, from: request.body)
         guard notice.deviceID == member.deviceID else { return .error("wrong_peer", "This notice names another device.", status: 403) }
@@ -570,7 +569,7 @@ public actor LibraryPeerSync {
         let pulled = try await database.peerSyncCursors(member.deviceID).pulled
         if notice.cursor > pulled { scheduleSync(member.deviceID, reason: "notice") }
         return try .json(["accepted": true])
-      case "/v1/peers/sync":
+      case "/peers/sync":
         guard request.body.count <= 48 * 1_024 * 1_024 else { return .error("too_large", "Page too large.", status: 413) }
         let exchange = try JSONDecoder().decode(LibraryPeerExchange.self, from: request.body)
         guard exchange.deviceID == member.deviceID, exchange.after >= 0 else {
@@ -603,7 +602,7 @@ public actor LibraryPeerSync {
         update(resolved) { $0.version = exchange.version }
         if !exchange.page.entries.isEmpty, let onChange { Task { await onChange() } }
         return try .json(reply)
-      case "/v1/peers/files":
+      case "/peers/files":
         guard request.body.count <= 4_096 else { return .error("too_large", "Cursor too large.", status: 413) }
         return try .json(try await files.page(after: JSONDecoder().decode(String.self, from: request.body)))
       default:

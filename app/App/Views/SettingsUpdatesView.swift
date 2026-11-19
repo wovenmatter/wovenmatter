@@ -249,9 +249,7 @@ struct SettingsUpdatesView: View {
     /// Another machine's harnesses, as it reports them.
     @ViewBuilder private func memberHarnesses(_ machine: BotMachine) -> some View {
         let id = machine.id.lowercased()
-        if let inventory = updates.memberInventories[id], inventory.unsupported {
-            SettingsNote("Update its Woven Matter to see and update its harnesses here.")
-        } else if updates.memberInventories[id] == nil, let error = updates.memberErrors[id] {
+        if updates.memberInventories[id] == nil, let error = updates.memberErrors[id] {
             SettingsRow(title: "Harnesses", detail: error) { SettingsStatus("Unavailable", tone: .warning) }
         } else if updates.memberInventories[id] == nil {
             SettingsRow(title: "Harnesses") {

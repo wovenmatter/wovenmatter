@@ -17,32 +17,32 @@ enum FederationAPI {
     }
     if request.method == "GET" {
       switch path {
-      case "/v1/federation/identity": return try .json(try await database.libraryIdentity())
-      case "/v1/federation/workspaces": return try .json(try await database.libraryExecutionWorkspaces())
-      case "/v1/federation/journal":
+      case "/federation/identity": return try .json(try await database.libraryIdentity())
+      case "/federation/workspaces": return try .json(try await database.libraryExecutionWorkspaces())
+      case "/federation/journal":
         guard let cursor = Int64(value("after") ?? "0"), cursor >= 0 else { return .error("invalid_cursor", "Invalid library journal cursor.", status: 400) }
         return try .json(try await database.executionJournal(after: cursor, limit: Int(value("limit") ?? "200") ?? 200))
-      case "/v1/federation/artifacts": return try .json(try await database.librarySavedArtifacts())
+      case "/federation/artifacts": return try .json(try await database.librarySavedArtifacts())
       default: break
       }
-      if parts.count == 4, parts[2] == "artifacts" {
-        guard let transfer = try await database.libraryArtifactTransfer(id: parts[3]) else { return .error("not_found", "Saved artifact not found.", status: 404) }
+      if parts.count == 3, parts[1] == "artifacts" {
+        guard let transfer = try await database.libraryArtifactTransfer(id: parts[2]) else { return .error("not_found", "Saved artifact not found.", status: 404) }
         return try .json(transfer)
       }
-      if parts.count == 5, parts[2] == "artifacts", parts[4] == "chunk" {
+      if parts.count == 4, parts[1] == "artifacts", parts[3] == "chunk" {
         guard let offset = Int64(value("offset") ?? "0"), offset >= 0 else { return .error("invalid_offset", "Invalid artifact offset.", status: 400) }
-        return try .json(try await database.libraryArtifactChunk(id: parts[3], revision: value("revision").flatMap(Int64.init), offset: offset))
+        return try .json(try await database.libraryArtifactChunk(id: parts[2], revision: value("revision").flatMap(Int64.init), offset: offset))
       }
-      if parts.count == 6, parts[2] == "workspaces", parts[4] == "native-history" {
+      if parts.count == 5, parts[1] == "workspaces", parts[3] == "native-history" {
         guard let index = Int(value("part") ?? "0"), index >= 0 else { return .error("invalid_part", "Invalid native history part.", status: 400) }
-        guard let part = try await database.libraryNativeHistoryPart(workspaceID: parts[3], recordID: parts[5], partIndex: index) else {
+        guard let part = try await database.libraryNativeHistoryPart(workspaceID: parts[2], recordID: parts[4], partIndex: index) else {
           return .error("not_found", "This complete native history record is unavailable.", status: 404)
         }
         return try .json(part)
       }
     } else if request.method == "POST" {
       switch path {
-      case "/v1/federation/workspaces":
+      case "/federation/workspaces":
         let registration = try JSONDecoder().decode(LibraryWorkspaceRegistration.self, from: request.body)
         // Root-host provisioning uses the internal store API. A remote request
         // always registers under its authenticated managing-device identity.
@@ -50,22 +50,22 @@ enum FederationAPI {
           return .error("wrong_owner", "Only this workspace's managing device can register or change it.", status: 403)
         }
         return try .json(try await database.registerExecutionWorkspace(registration, deviceID: device.id))
-      case "/v1/federation/journal":
+      case "/federation/journal":
         let batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
         for workspaceID in Set(batch.entries.map(\.workspaceID)) {
           guard try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
         }
         return try .json(try await database.ingestExecutionJournal(batch, deviceID: device.id))
-      case "/v1/federation/artifacts/register":
+      case "/federation/artifacts/register":
         let registration = try JSONDecoder().decode(LibraryArtifactRegistration.self, from: request.body)
         guard try await ownsClientWorkspace(registration.manifest.workspaceID) else { return rejectedRelay() }
         return try .json(try await database.registerLibraryArtifact(registration, deviceID: device.id))
-      case "/v1/federation/artifacts/chunk":
+      case "/federation/artifacts/chunk":
         let chunk = try JSONDecoder().decode(LibraryArtifactChunk.self, from: request.body)
         guard let workspaceID = try await database.libraryArtifactTransfer(id: chunk.id)?.manifest.workspaceID,
               try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }
         return try .json(try await database.appendLibraryArtifactChunk(chunk, deviceID: device.id))
-      case "/v1/federation/artifacts/commit":
+      case "/federation/artifacts/commit":
         let commit = try JSONDecoder().decode(LibraryArtifactCommit.self, from: request.body)
         guard let workspaceID = try await database.libraryArtifactTransfer(id: commit.id)?.manifest.workspaceID,
               try await ownsClientWorkspace(workspaceID) else { return rejectedRelay() }

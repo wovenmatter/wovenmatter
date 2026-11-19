@@ -5,7 +5,7 @@ import WovenMatterLibraryStore
 
 /// Harnesses and Pi Durable SDKs across machines, for Settings → Updates.
 ///
-/// This Mac serves its own at `/v1/runtime-maintenance` and `/v1/default-agent/sdks`
+/// This Mac serves its own at `/runtime-maintenance` and `/default-agent/sdks`
 /// to other Macs, in the shapes a Linux host already serves. It reaches another Mac,
 /// or a Linux host another Mac added, the same way, signed with its member key. All of
 /// it runs in the process that owns execution; the window asks through bots commands.
@@ -18,19 +18,19 @@ extension ApplicationModel {
 
     /// A signed Mac member's request. Phones don't manage harnesses. Every answer comes
     /// well inside the Mac server's 60-second response limit: an update answers at once
-    /// with a running operation that the caller follows at `/v1/operations/:id`, as on a
+    /// with a running operation that the caller follows at `/operations/:id`, as on a
     /// Linux host, and a check answers with what it has after 15 seconds.
     func memberMaintenance(_ request: LibraryHTTPRequest, path: String) async -> LibraryHTTPResponse {
         do {
-            if path.hasPrefix("/v1/operations/") {
-                let id = path.dropFirst("/v1/operations/".count)
+            if path.hasPrefix("/operations/") {
+                let id = path.dropFirst("/operations/".count)
                 guard request.method == "GET", let uuid = UUID(uuidString: String(id)),
                       let operation = MemberMaintenanceStore.operations[uuid] else {
                     return .error("not_found", "Unknown operation.", status: 404)
                 }
                 return try .json(operation)
             }
-            if path == "/v1/default-agent/sdks" {
+            if path == "/default-agent/sdks" {
                 let command = request.method == "GET" ? DefaultAgentSDKRequest(action: .status)
                     : try JSONDecoder().decode(DefaultAgentSDKRequest.self, from: request.body)
                 switch command.action {
@@ -40,9 +40,9 @@ extension ApplicationModel {
                 }
             }
             switch (request.method, path) {
-            case ("GET", "/v1/runtime-maintenance"):
+            case ("GET", "/runtime-maintenance"):
                 return try .json(MaintenanceDocument(runtimes: localMaintenanceRows()))
-            case ("POST", "/v1/runtime-maintenance/check"):
+            case ("POST", "/runtime-maintenance/check"):
                 refreshRuntimeInventory()
                 await waitForRuntime(timeout: .seconds(15)) { !self.checkingRuntimeInventory && self.checkingRuntimeKinds.isEmpty }
                 return try .json(MaintenanceDocument(runtimes: localMaintenanceRows()))
@@ -50,12 +50,12 @@ extension ApplicationModel {
                 break
             }
             let parts = path.split(separator: "/").map(String.init)
-            guard request.method == "POST", parts.count == 4, parts[1] == "runtime-maintenance",
-                  let kind = AgentRuntimeKind(rawValue: parts[2]),
-                  Self.fleetHarnessKinds.contains(kind) || (kind == .defaultAgent && parts[3] == "update") else {
+            guard request.method == "POST", parts.count == 3, parts[0] == "runtime-maintenance",
+                  let kind = AgentRuntimeKind(rawValue: parts[1]),
+                  Self.fleetHarnessKinds.contains(kind) || (kind == .defaultAgent && parts[2] == "update") else {
                 return .error("not_found", "Unknown maintenance route.", status: 404)
             }
-            switch parts[3] {
+            switch parts[2] {
             case "check":
                 checkRuntimeUpdate(kind)
                 await waitForRuntime(timeout: .seconds(15)) { !self.checkingRuntimeKinds.contains(kind) }
@@ -185,59 +185,36 @@ extension ApplicationModel {
         return (try await botsClient(for: target.workspace), target.workspace.kind == .mac)
     }
 
-    /// A Mac from before these routes answers 404, or 426 from its library API.
-    private static func predatesRoutes(_ error: MemberSignedHTTPError) -> Bool {
-        if case .http(let status, _, _) = error { return status == 404 || status == 426 }
-        return false
-    }
-
-    /// Another machine's harnesses and Pi Durable SDKs. A machine that predates these
-    /// routes answers 404, reported as needing an update.
+    /// Another machine's harnesses and Pi Durable SDKs.
     func memberInventory(machineID: String, checkLatest: Bool) async throws -> FleetMemberInventory {
         let client = try await memberClient(machineID: machineID).client
         // Both at once: the window waits at most 30 seconds for this answer.
         let sdkBody = checkLatest ? try JSONEncoder().encode(DefaultAgentSDKRequest(action: .check)) : nil
         async let sdkReply: DefaultAgentSDKStatus = client.request(
-            "v1/default-agent/sdks", method: checkLatest ? "POST" : "GET", body: sdkBody, timeout: 20)
+            "default-agent/sdks", method: checkLatest ? "POST" : "GET", body: sdkBody, timeout: 20)
         do {
             let document: MaintenanceDocument = try await client.request(
-                checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
+                checkLatest ? "runtime-maintenance/check" : "runtime-maintenance",
                 method: checkLatest ? "POST" : "GET", body: checkLatest ? Data() : nil, timeout: 20)
             let sdks = try? await sdkReply
             return .init(runtimes: document.runtimes.filter { $0.installed && $0.source != "system" && $0.id != .defaultAgent },
                          sdks: sdks)
         } catch let error as MemberSignedHTTPError {
-            if Self.predatesRoutes(error) { return .init(runtimes: [], sdks: nil, unsupported: true) }
             // A bots-only Linux host has no workspace, so no harnesses.
             if case .http(status: 409, let code, _) = error, code == "workspace_disabled" { return .init(runtimes: [], sdks: nil) }
             throw error
         }
     }
 
-    /// The download a Linux host would run for this update; nil for a Mac, whose
-    /// harnesses update from their package registries with integrity checks.
-    func memberInstallerPreview(machineID: String, kind: AgentRuntimeKind) async throws -> RemoteInstallerPreview? {
-        let (client, isMac) = try await memberClient(machineID: machineID)
-        guard !isMac else { return nil }
-        do {
-            return try await client.request("v1/harnesses/\(kind.rawValue)/install-preview", timeout: 25)
-        } catch let error as MemberSignedHTTPError {
-            if Self.predatesRoutes(error) { return nil }
-            throw error
-        }
-    }
-
     /// Updates a harness on another machine and follows it to the end. A Linux host
-    /// verifies the reviewed download; a Mac stops its chats first when `force`.
-    func updateMemberHarness(machineID: String, kind: AgentRuntimeKind, sourceSHA256: String?, packageSpec: String?,
+    /// runs the vendor's own update command; a Mac stops its chats first when `force`.
+    func updateMemberHarness(machineID: String, kind: AgentRuntimeKind,
                              force: Bool, progress: @escaping @MainActor (String) -> Void) async throws {
         let client = try await memberClient(machineID: machineID).client
-        var payload: [String: Any] = ["confirmed": true, "force": force]
-        if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
-        if let packageSpec { payload["packageSpec"] = packageSpec }
+        let payload: [String: Any] = ["confirmed": true, "force": force]
         var operation: RemoteHarnessOperation
         do {
-            operation = try await client.request("v1/runtime-maintenance/\(kind.rawValue)/update", method: "POST",
+            operation = try await client.request("runtime-maintenance/\(kind.rawValue)/update", method: "POST",
                                                  body: try JSONSerialization.data(withJSONObject: payload), timeout: 30)
         } catch let error as MemberSignedHTTPError {
             if case .http(status: 409, let code, let message) = error,
@@ -255,7 +232,7 @@ extension ApplicationModel {
         var operation = started, polls = 0
         while operation.status == "running", polls < 1_000 {
             try await Task.sleep(for: .seconds(1))
-            operation = try await client.request("v1/operations/\(operation.id.uuidString.lowercased())", timeout: 20)
+            operation = try await client.request("operations/\(operation.id.uuidString.lowercased())", timeout: 20)
             polls += 1
         }
         if operation.status == "running" { throw BotsError.unavailable("It did not finish in time.") }
@@ -271,12 +248,12 @@ extension ApplicationModel {
         let (client, isMac) = try await memberClient(machineID: machineID)
         if isMac {
             let operation: RemoteHarnessOperation = try await client.request(
-                "v1/runtime-maintenance/default_agent/update", method: "POST", body: Data("{}".utf8), timeout: 30)
+                "runtime-maintenance/default_agent/update", method: "POST", body: Data("{}".utf8), timeout: 30)
             try await follow(operation, client: client)
             return
         }
         let _: DefaultAgentSDKStatus = try await client.request(
-            "v1/default-agent/sdks", method: "POST",
+            "default-agent/sdks", method: "POST",
             body: JSONEncoder().encode(DefaultAgentSDKRequest(action: .update)), timeout: 590)
     }
 }
@@ -301,8 +278,6 @@ enum MemberMaintenanceStore {
 struct FleetMemberInventory: Codable, Equatable, Sendable {
     var runtimes: [RemoteRuntimeMaintenance]
     var sdks: DefaultAgentSDKStatus?
-    /// Its Woven server predates harness reporting.
-    var unsupported = false
 }
 
 /// The harness is in use by chats on that machine.

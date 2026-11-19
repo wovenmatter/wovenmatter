@@ -154,7 +154,7 @@ public struct WovenVMStatus: Codable, Sendable, Equatable {
     }
 }
 
-/// What explains a stuck or failed VM (`GET /v1/diagnostics`).
+/// What explains a stuck or failed VM (`GET /diagnostics`).
 public struct WovenVMDiagnostics: Codable, Sendable, Equatable {
     public var status: WovenVMStatus
     /// The end of `helper.log`.

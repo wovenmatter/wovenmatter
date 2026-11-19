@@ -180,14 +180,14 @@ struct WorkspaceLibraryTests {
   }
 
   /// A Linux host's file is read through its server (`POST
-  /// v1/execution/library-file`), named by workspace, chat and path.
+  /// execution/library-file`), named by workspace, chat and path.
   @Test("retained remote handback opens offline and copies deduplicate by content")
   func remoteRetention() async throws {
     let f = try await Fixture()
     defer { f.close() }
     let chat = try await f.session()
     let configuration = RemoteWorkspaceConfiguration(name: "Server", workspaceID: "test", hostName: "host.invalid",
-      kind: .host, dataRoot: "/srv/wovenmatter-test", workspaceRoot: "/srv/wovenmatter-test/workspace")
+      dataRoot: "/srv/wovenmatter-test", workspaceRoot: "/srv/wovenmatter-test/workspace")
     try await f.db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked(
         "UPDATE harness_sessions SET remote_workspace_id=? WHERE conversation_id=?",

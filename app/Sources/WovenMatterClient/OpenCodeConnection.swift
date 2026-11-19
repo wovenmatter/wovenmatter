@@ -21,7 +21,7 @@ public struct OpenCodeConnection: Equatable, Sendable {
     public let version: String?
     public let servicePathPrefix: String
     /// A Linux host's OpenCode, reached through its server's proxy
-    /// (`/v1/workspace-instances/opencode/api/*`) with this Mac's member signature.
+    /// (`/workspace-instances/opencode/api/*`) with this Mac's member signature.
     private let memberSigner: MemberRequestSigner?
     private let memberAudience: String?
     public var isRemoteWorkspaceProxy: Bool { memberSigner != nil }
@@ -51,7 +51,7 @@ public struct OpenCodeConnection: Equatable, Sendable {
         let base = origin.percentEncodedPath.hasSuffix("/") ? String(origin.percentEncodedPath.dropLast()) : origin.percentEncodedPath
         origin.percentEncodedPath = ""
         guard let url = origin.url else { throw OpenCodeError.message("Remote OpenCode must use its workspace's private signed proxy.") }
-        servicePathPrefix = base + "/v1/workspace-instances/opencode"
+        servicePathPrefix = base + "/workspace-instances/opencode"
         memberSigner = signer; memberAudience = audience.lowercased()
         self.identity = identity; self.url = url; username = "opencode"; password = ""
         registration = nil; pid = nil; self.version = version

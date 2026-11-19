@@ -3,12 +3,10 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterLibraryStore
 
-/// Settings saved under an earlier name move to their current one, once, at
-/// launch. Through v0.4.2 the window, sidebar and theme settings were saved
-/// under "wovenmatter.dashboard." keys; through v0.4.6 the Linux hosts, Mac
-/// access, session choices, built-in agent settings, local model servers and
-/// the pending update receipt were saved under names ending in a number. The
-/// left side names stored data and appears nowhere else.
+/// Settings v0.4.6 saved under names ending in a number move to their
+/// current names, once, at launch: the Linux hosts, Mac access, session
+/// choices, built-in agent settings, local model servers and the pending
+/// update receipt. The left side names stored data and appears nowhere else.
 ///
 /// The window and the background server share one defaults domain and both
 /// run this before reading anything. Each move writes the value that is
@@ -22,28 +20,13 @@ enum WindowPreferenceUpgrade {
         "wovenmatter.analytics.pending-update.v1": ProductAnalyticsModel.updateReceiptKey,
         "wovenmatter.default-agent.settings.v1": DefaultAgentSupport.settingsKey,
         "wovenmatter.connections.local-servers.v1": LocalModelServerStore.storageKey,
-        "wovenmatter.dashboard.theme": WovenTheme.storageKey,
-        "wovenmatter.dashboard.sidebar-style": SidebarStyle.storageKey,
-        "wovenmatter.dashboard.single-sidebar-side": SidebarSide.storageKey,
-        "wovenmatter.dashboard.left-rail": "wovenmatter.layout.left-rail",
-        "wovenmatter.dashboard.right-rail": "wovenmatter.layout.right-rail",
-        "wovenmatter.dashboard.single-rail": "wovenmatter.layout.single-rail",
-        "wovenmatter.dashboard.chat-width-percent": "wovenmatter.layout.chat-width-percent",
-        "wovenmatter.dashboard.note-on-left": "wovenmatter.layout.note-on-left",
-        "wovenmatter.dashboard.workspace-mode": "wovenmatter.layout.workspace-mode",
-        "wovenmatter.dashboard.show-localWorkspace": WorkspaceSidebarVisibility.localWorkspace.storageKey,
-        "wovenmatter.dashboard.show-remoteWorkspaces": WorkspaceSidebarVisibility.remoteWorkspaces.storageKey,
-        "wovenmatter.dashboard.collapsed-agent-sections": AgentDisclosureStore.storageKey,
-        "wovenmatter.dashboard.agent-order-by-group": AgentOrderStore.storageKey,
-        "wovenmatter.dashboard.pinned-agent-ids": PinnedAgentsStore.storageKey,
-        "wovenmatter.dashboard.bots.expanded-threads": BotThreadDisclosure.storageKey,
     ]
 
     static func moveRenamedKeys(in defaults: UserDefaults) {
-        for (legacy, current) in renamedKeys {
-            guard let value = defaults.object(forKey: legacy) else { continue }
+        for (saved, current) in renamedKeys {
+            guard let value = defaults.object(forKey: saved) else { continue }
             if defaults.object(forKey: current) == nil { defaults.set(value, forKey: current) }
-            defaults.removeObject(forKey: legacy)
+            defaults.removeObject(forKey: saved)
         }
         // A cache is read again, not moved.
         for key in defaults.dictionaryRepresentation().keys where removedCachePrefixes.contains(where: key.hasPrefix) {

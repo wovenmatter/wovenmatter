@@ -5,7 +5,7 @@ import WovenMatterCore
 import WovenMatterClient
 
 /// A transport that reads one activity's complete projection when its
-/// disclosure opens (`GET v1/execution/conversations/<id>/activity?id=&run=`).
+/// disclosure opens (`GET execution/conversations/<id>/activity?id=&run=`).
 protocol ExecutionActivityDetailsReading: Sendable {
     func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
 }
@@ -16,7 +16,7 @@ func activityDetailsQuery(runID: String, activityID: String) -> [URLQueryItem] {
 }
 
 /// Execution transport to another member's workspace (a paired Mac's
-/// `/wovenmatter/v1/execution/*` or a Linux host's Node server behind
+/// `/wovenmatter/execution/*` or a Linux host's Node server behind
 /// `/wovenmatter-execution/<id>/`), authenticated by this Mac's member
 /// signature. Nothing is provisioned or stored for it, so any Mac reaches any
 /// workspace as soon as both are members.
@@ -33,7 +33,7 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
         guard let audience = audience ?? workspace.executionDeviceID else { throw MemberRequestError.audienceUnknown }
         self.workspace = workspace
         client = try MemberSignedHTTPClient(endpoint: endpoint, signer: signer, audience: audience, headers: [
-            "X-Woven-Protocol": String(LibraryProtocol.version), "X-Woven-Library": workspace.libraryID,
+            "X-Woven-Library": workspace.libraryID,
             "X-Woven-Workspace": workspace.id, "X-Woven-Device": signer.deviceID
         ], send: send)
     }
@@ -43,7 +43,6 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
         catch let error as MemberSignedHTTPError {
             switch error {
             case .http(let status, _, _) where status == 401 || status == 403: throw MobileConnectionError.revoked
-            case .http(426, _, _): throw MobileConnectionError.versionMismatch
             case .http(let status, _, let message): throw MobileConnectionError.http(status, message)
             case .insecureEndpoint: throw MobileConnectionError.insecureEndpoint
             case .invalidResponse, .responseTooLarge: throw MobileConnectionError.invalidResponse
@@ -52,7 +51,7 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
     }
 
     func identity() async throws -> ExecutionWorkspace {
-        let value: ExecutionWorkspace = try await call("v1/execution")
+        let value: ExecutionWorkspace = try await call("execution")
         guard value.id == workspace.id, value.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
         return value
     }
@@ -61,40 +60,40 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
     private func list<Element: Decodable>(_ path: String) async throws -> [Element] {
         (try await call(path) as LossyArray<Element>).wrappedValue
     }
-    func providers() async throws -> [HarnessCapabilities] { try await list("v1/execution/providers") }
-    func pending() async throws -> [PendingInteraction] { try await list("v1/execution/interactions") }
+    func providers() async throws -> [HarnessCapabilities] { try await list("execution/providers") }
+    func pending() async throws -> [PendingInteraction] { try await list("execution/interactions") }
     func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
         guard command.deviceID == deviceID else { throw MobileConnectionError.revoked }
         var value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(command)) as? [String: Any] ?? [:]
         value["libraryID"] = workspace.libraryID; value["workspaceID"] = workspace.id
-        return try await call("v1/execution/commands", method: "POST", body: JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
+        return try await call("execution/commands", method: "POST", body: JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
     }
     func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
-        do { return try await call("v1/execution/commands/" + Self.safeID(id), query: [.init(name: "deviceID", value: deviceID)]) }
+        do { return try await call("execution/commands/" + Self.safeID(id), query: [.init(name: "deviceID", value: deviceID)]) }
         catch MobileConnectionError.http(404, _) { return nil }
     }
     func events(after: Int64) async throws -> ExecutionJournalPage {
-        try await call("v1/execution/events", query: [.init(name: "after", value: String(after))])
+        try await call("execution/events", query: [.init(name: "after", value: String(after))])
     }
-    func conversations() async throws -> [LibraryConversation] { try await list("v1/execution/conversations") }
+    func conversations() async throws -> [LibraryConversation] { try await list("execution/conversations") }
     func transcript(_ id: String) async throws -> LibraryTranscript {
-        try await call("v1/execution/conversations/" + Self.safeID(id) + "/transcript")
+        try await call("execution/conversations/" + Self.safeID(id) + "/transcript")
     }
     func transcript(_ id: String, before: String) async throws -> LibraryTranscript {
-        try await call("v1/execution/conversations/" + Self.safeID(id) + "/transcript", query: [.init(name: "before", value: before)])
+        try await call("execution/conversations/" + Self.safeID(id) + "/transcript", query: [.init(name: "before", value: before)])
     }
     func capabilities(_ id: String) async throws -> HarnessCapabilities {
-        try await call("v1/execution/conversations/" + Self.safeID(id) + "/capabilities")
+        try await call("execution/conversations/" + Self.safeID(id) + "/capabilities")
     }
     func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
-        try await call("v1/execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
+        try await call("execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
     }
     func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
-        try await call("v1/execution/conversations/" + Self.safeID(id) + "/activity",
+        try await call("execution/conversations/" + Self.safeID(id) + "/activity",
             query: activityDetailsQuery(runID: runID, activityID: activityID))
     }
     /// A message file of one of this workspace's sessions
-    /// (`GET v1/execution/attachments/<sha256>?name=`), checked against its digest.
+    /// (`GET execution/attachments/<sha256>?name=`), checked against its digest.
     func attachment(_ reference: LibraryAttachmentReference) async throws -> Data {
         guard reference.isReadable else { throw MobileConnectionError.http(404, "This file was not saved with its message.") }
         let (data, response) = try await client.data(reference.readPath, query: [.init(name: "name", value: reference.name)],

@@ -302,10 +302,9 @@ struct MemberReachTests {
             let asked = UUID().uuidString.lowercased()
             let body = try JSONEncoder().encode(LibraryCommand(commandID: asked, deviceID: other.deviceID, kind: .workspace,
                 workspaceAction: .createFolder(id: asked, name: "Elsewhere"), libraryID: descriptor.libraryID, workspaceID: descriptor.id))
-            let target = "/wovenmatter/v1/execution/commands"
+            let target = "/wovenmatter/execution/commands"
             var headers = Dictionary(uniqueKeysWithValues: try other.signer.headers(method: "POST", target: target, body: body, audience: bDevice)
                 .map { ($0.key.lowercased(), $0.value) })
-            headers["x-woven-protocol"] = String(LibraryProtocol.version)
             let response = await api.handle(.init(method: "POST", target: target, headers: headers, body: body))
             #expect(response.status == 403, "\(kind)")
             #expect(try JSONDecoder().decode(LibraryAPIError.self, from: response.body)
@@ -439,7 +438,7 @@ struct MemberReachTests {
         // asserting a cause it did not name, and in its own words when it sent any.
         #expect(await macB.model.createFolder(name: "Unwritable", onWorkspace: workspace.id) == nil)
         #expect(macB.model.folderMutationError
-            == "The host could not create this directory. Check its free space and permissions, and that the name is not already in use there.")
+            == "The host could not create this directory. Check its free space and permissions.")
         #expect(await macB.model.createFolder(name: "Full", onWorkspace: workspace.id) == nil)
         #expect(macB.model.folderMutationError == "No space left on the workspace volume.")
         #expect(try await macB.database.workspaceOverview().folders.map(\.id) == [id])
@@ -478,14 +477,14 @@ struct MemberReachTests {
         #expect(macB.model.remoteWorkspaces.sharedHosts[workspace.id]?.logs == "server started")
         await macB.model.remoteWorkspaces.performSharedHost(workspace.id, .restart)
         await macB.model.remoteWorkspaces.performSharedHost(workspace.id, .configureBots(poolBytes: 8 << 30, diskBytes: nil))
-        #expect(linux.hostRequests == ["GET /v1/host/status", "GET /v1/host/logs?lines=500", "POST /v1/host/restart",
-                                       "POST /v1/host/bots-configure", "GET /v1/host/status"])
+        #expect(linux.hostRequests == ["GET /host/status", "GET /host/logs?lines=500", "POST /host/restart",
+                                       "POST /host/bots-configure", "GET /host/status"])
         #expect(linux.botsBody == ["poolBytes": 8 << 30, "diskBytes": NSNull()] as NSDictionary)
 
         // "Update everything" updates it with the signed route: upload, then poll until it reports success.
         macB.model.remoteWorkspaces.sharedHostBundle = { (Data("host bundle".utf8), String(repeating: "f", count: 64)) }
         try await macB.model.remoteWorkspaces.runSharedHost(workspace.id, .update, pollInterval: .milliseconds(10), updateTimeout: .seconds(5))
-        #expect(linux.hostRequests.suffix(3) == ["POST /v1/host/update?fingerprint=" + String(repeating: "f", count: 64), "GET /v1/host/update", "GET /v1/host/status"])
+        #expect(linux.hostRequests.suffix(3) == ["POST /host/update?fingerprint=" + String(repeating: "f", count: 64), "GET /host/update", "GET /host/status"])
         #expect(linux.uploaded == Data("host bundle".utf8))
         #expect(macB.model.remoteWorkspaces.sharedHosts[workspace.id]?.error == nil)
 
@@ -516,7 +515,6 @@ struct MemberReachTests {
         let message = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)
         func call(_ signer: MemberIdentity, conversation: String = UUID().uuidString.lowercased(), workspace named: String? = nil) async throws -> (Int, String?) {
             var headers = try signer.signer.headers(method: "POST", target: "/wovenmatter/mcp/workspace", body: message, audience: device)
-            headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
             headers["X-Woven-Workspace-ID"] = named ?? workspace.id
             headers["X-Woven-Conversation-ID"] = conversation
             headers["X-Woven-Enabled-Groups"] = "timers"
@@ -545,31 +543,6 @@ struct MemberReachTests {
         let served = try await call(linux, conversation: session)
         #expect(served.0 == 200, "\(served)")
         #expect(try await call(other, conversation: session).1?.contains("does not execute") == true)
-
-        // A real host's registry row names its Node server's own execution device ID; the
-        // member that serves that endpoint's host (from the synced member list) is accepted.
-        let hostM = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .linux, key: .init())
-        try await mac.add(deviceID: hostM.deviceID, kind: .linux, name: "Linux M", publicKey: hostM.publicKey,
-                          endpoints: [URL(string: "https://linux-m.fixture.ts.net:8443/wovenmatter/")!])
-        let m = try await fixture.database.receiveSyncedWorkspace(.init(id: UUID().uuidString.lowercased(), libraryID: UUID().uuidString.lowercased(),
-            ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux M",
-            endpoint: URL(string: "https://linux-m.fixture.ts.net/wovenmatter-execution/m"), executionDeviceID: UUID().uuidString.lowercased()))
-        let mSession = UUID().uuidString.lowercased()
-        let mRow = LibraryConversation(id: mSession, title: "M session", providerID: "local:codex", routeID: "local:codex",
-                                         runtimeKind: "codex", libraryID: m.libraryID, workspaceID: m.id)
-        try await fixture.database.write { db in
-            try db.toolsExecuteUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
-                                        [mSession, m.id, String(decoding: try JSONEncoder().encode(mRow), as: UTF8.self)])
-        }
-        #expect(await mac.audience(for: m) == hostM.deviceID)
-        let fromM = try await call(hostM, conversation: mSession, workspace: m.id)
-        #expect(fromM.0 == 200, "\(fromM)")
-        #expect(try await call(linux, conversation: mSession, workspace: m.id).1?.contains("does not execute") == true)
-        // Two members claiming that host: nobody is trusted to serve it.
-        try await mac.add(deviceID: other.deviceID, kind: .linux, name: "Linux", publicKey: other.publicKey,
-                          endpoints: [URL(string: "https://linux-m.fixture.ts.net/wovenmatter/")!])
-        #expect(await mac.audience(for: m) == nil)
-        #expect(try await call(hostM, conversation: mSession, workspace: m.id).1?.contains("does not execute") == true)
     }
 
     /// Bots on a Linux host another Mac added: this Mac lists it from the registry, reads its
@@ -585,15 +558,14 @@ struct MemberReachTests {
         let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
         try await linux.join(host.peerSync.members())
         host.remoteHostSend = linux.send
-        // The host's member ID, not the execution device ID its Node server names.
         let machineID = linux.memberID
-        #expect(workspace.executionDeviceID != machineID)
+        #expect(workspace.executionDeviceID == machineID)
 
         #expect(await macB.model.memberBotWorkspaces().map(\.id) == [workspace.id])
         let client = try await macB.model.botsClient(for: workspace)
-        let status: BotsRemoteStatus = try await client.request("v1/bots/status")
+        let status: BotsRemoteStatus = try await client.request("bots/status")
         #expect(status.machine.deviceID == machineID && client.audience == machineID)
-        #expect(linux.hostRequests.isEmpty && linux.botsRequests == ["GET /v1/bots/status"])
+        #expect(linux.hostRequests.isEmpty && linux.botsRequests == ["GET /bots/status"])
 
         // A host whose library schema differs from this Mac's cannot sync: it needs Update everything.
         linux.librarySchema = "another-schema"
@@ -605,22 +577,22 @@ struct MemberReachTests {
         #expect(current.first { $0.id == machineID }?.message?.contains("library format") != true)
 
         // The socket upgrade is signed for that machine only, and only for a member's bots socket.
-        let socket = try #require(workspace.endpoint).appending(path: "v1/bots/ws")
+        let socket = try #require(workspace.endpoint).appending(path: "bots/ws")
         var wss = try #require(URLComponents(url: socket, resolvingAgainstBaseURL: false)); wss.scheme = "wss"
         let headers = try await macB.model.signMemberSocket(url: try #require(wss.url), audience: machineID)
         #expect(headers[MemberRequestSignature.audienceHeader] == machineID && headers["Authorization"] == nil)
-        #expect(try await linux.verifies(method: "GET", target: "/wovenmatter-execution/linux-l/v1/bots/ws", headers: headers))
+        #expect(try await linux.verifies(method: "GET", target: "/wovenmatter-execution/linux-l/bots/ws", headers: headers))
         await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: try #require(wss.url), audience: UUID().uuidString.lowercased()) }
         await #expect(throws: BotsError.self) {
-            _ = try await macB.model.signMemberSocket(url: URL(string: "wss://linux-l.fixture.ts.net/wovenmatter-execution/linux-l/v1/host/update")!, audience: machineID)
+            _ = try await macB.model.signMemberSocket(url: URL(string: "wss://linux-l.fixture.ts.net/wovenmatter-execution/linux-l/host/update")!, audience: machineID)
         }
 
-        // The live stream upgrade is signed too, with its protocol query, and only that query.
+        // The live stream upgrade is signed too, and only without a query.
         let stream = try StreamEndpoint.url(for: try #require(workspace.endpoint))
         let streamHeaders = try await macB.model.signMemberSocket(url: stream, audience: machineID)
-        #expect(try await linux.verifies(method: "GET", target: "/wovenmatter-execution/linux-l/v1/stream?protocol=1", headers: streamHeaders))
+        #expect(try await linux.verifies(method: "GET", target: "/wovenmatter-execution/linux-l/" + StreamProtocol.path, headers: streamHeaders))
         #expect(streamHeaders[MemberRequestSignature.nonceHeader] != headers[MemberRequestSignature.nonceHeader])
-        var otherQuery = try #require(URLComponents(url: stream, resolvingAgainstBaseURL: false)); otherQuery.query = "protocol=2"
+        var otherQuery = try #require(URLComponents(url: stream, resolvingAgainstBaseURL: false)); otherQuery.query = "protocol=1"
         await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: try #require(otherQuery.url), audience: machineID) }
         var plain = otherQuery; plain.scheme = "ws"; plain.query = "protocol=1"
         await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: try #require(plain.url), audience: machineID) }
@@ -665,7 +637,7 @@ final class ReachLinuxHost: @unchecked Sendable {
     private let lock = NSLock()
     private var _commands: [LibraryCommand] = [], _receipts: [String: LibraryCommandReceipt] = [:]
     private var _hostRequests: [String] = [], _botsBody: NSDictionary?, _botsRequests: [String] = [], _uploaded: Data?
-    /// The directories `POST /v1/projects` made in the host's managed workspace root.
+    /// The directories `POST /projects` made in the host's managed workspace root.
     private var _projects: [String] = []
     var projects: [String] { lock.withLock { _projects } }
     static let workspaceRoot = "/home/woven/.local/share/wovenmatter/workspace"
@@ -692,12 +664,9 @@ final class ReachLinuxHost: @unchecked Sendable {
         self.prefix = prefix
         let host = UUID().uuidString.lowercased()
         memberID = host
-        // As in a workspace a host registered with a random ID before v0.4.0, the Node server's
-        // execution device ID is its own, not the member ID, so these tests also cover the
-        // audience fallback kept for such workspaces.
         descriptor = .init(id: workspaceID, libraryID: libraryID, ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux L",
             endpoint: URL(string: "https://linux-l.fixture.ts.net" + prefix)!, capabilities: ["execution", "historyReplay"],
-            executionDeviceID: UUID().uuidString.lowercased())
+            executionDeviceID: host)
         // Like the Node server, it accepts only requests addressed to its own member device ID.
         verifier = MemberRequestVerifier(audience: host, lookup: { id in members[id].map { MemberKey(deviceID: id, kind: .mac, name: "Member", publicKey: $0) } })
     }
@@ -725,14 +694,14 @@ final class ReachLinuxHost: @unchecked Sendable {
             catch { return try reply(401, ["error": "unauthorized"]) }
             guard target.hasPrefix(prefix + "/") else { return try reply(404, ["error": "not_found"]) }
             let path = String(target.dropFirst(prefix.count)), method = request.httpMethod ?? "GET"
-            if path.hasPrefix("/v1/host/") { lock.withLock { _hostRequests.append(method + " " + path) } }
-            if path.hasPrefix("/v1/bots/") { lock.withLock { _botsRequests.append(method + " " + path) } }
+            if path.hasPrefix("/host/") { lock.withLock { _hostRequests.append(method + " " + path) } }
+            if path.hasPrefix("/bots/") { lock.withLock { _botsRequests.append(method + " " + path) } }
             switch (method, path.split(separator: "?").first.map(String.init) ?? path) {
-            case ("GET", "/v1/execution"): return (try JSONEncoder().encode(descriptor), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/execution/providers"):
+            case ("GET", "/execution"): return (try JSONEncoder().encode(descriptor), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case ("GET", "/execution/providers"):
                 let providers = [HarnessCapabilities(id: "codex", runtimeKind: "codex", displayName: "Codex", routeName: "Linux L", available: true)]
                 return (try JSONEncoder().encode(providers), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("POST", "/v1/execution/commands"):
+            case ("POST", "/execution/commands"):
                 let command = try JSONDecoder().decode(LibraryCommand.self, from: body)
                 let receipt = lock.withLock { () -> LibraryCommandReceipt in
                     if let saved = _receipts[command.commandID] { return saved }
@@ -743,21 +712,21 @@ final class ReachLinuxHost: @unchecked Sendable {
                     return receipt
                 }
                 return (try JSONEncoder().encode(receipt), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", let route) where route.hasPrefix("/v1/execution/commands/"):
-                let id = String(route.dropFirst("/v1/execution/commands/".count))
+            case ("GET", let route) where route.hasPrefix("/execution/commands/"):
+                let id = String(route.dropFirst("/execution/commands/".count))
                 guard let saved = lock.withLock({ _receipts[id] }) else { return try reply(404, ["error": "not_found"]) }
                 return (try JSONEncoder().encode(saved), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/execution/interactions"):
+            case ("GET", "/execution/interactions"):
                 return (try JSONEncoder().encode(pending), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/execution/conversations"):
+            case ("GET", "/execution/conversations"):
                 let running = running
                 let sessions = created.compactMap(\.conversationID).map { id in
                     LibraryConversation(id: id, title: "Build it", providerID: "codex", runtimeKind: "codex", activeRunID: running[id],
                                           preview: "Working", updatedAt: "2026-11-09T12:00:00Z", libraryID: descriptor.libraryID, workspaceID: descriptor.id)
                 }
                 return (try JSONEncoder().encode(sessions), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", let route) where route.hasPrefix("/v1/execution/conversations/") && route.hasSuffix("/transcript"):
-                let id = String(route.dropFirst("/v1/execution/conversations/".count).dropLast("/transcript".count))
+            case ("GET", let route) where route.hasPrefix("/execution/conversations/") && route.hasSuffix("/transcript"):
+                let id = String(route.dropFirst("/execution/conversations/".count).dropLast("/transcript".count))
                 let paged = target.contains("before=")
                 let messages = (paged ? ["Earlier"] : (0..<25).map { "Message \($0)" }).enumerated().map { index, text in
                     LibraryMessage(id: "\(id)-\(paged ? "old" : "new")-\(index)", conversationID: id, role: "assistant",
@@ -765,25 +734,25 @@ final class ReachLinuxHost: @unchecked Sendable {
                 }
                 return (try JSONEncoder().encode(LibraryTranscript(conversationID: id, messages: messages, olderCursor: paged ? nil : "cursor-1")),
                         HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", let route) where route.hasPrefix("/v1/execution/conversations/") && route.hasSuffix("/capabilities"):
+            case ("GET", let route) where route.hasPrefix("/execution/conversations/") && route.hasSuffix("/capabilities"):
                 let provider = HarnessCapabilities(id: "codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: canSteer)
                 return (try JSONEncoder().encode(provider), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/execution/events"): return (try JSONEncoder().encode(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0)), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/host/status"): return try reply(200, ["state": "running", "roles": ["workspace": true]])
-            case ("GET", "/v1/host/logs"): return try reply(200, ["logs": "server started"])
-            case ("POST", "/v1/host/restart"): return try reply(202, ["restarting": true])
-            case ("POST", "/v1/host/update"):
+            case ("GET", "/execution/events"): return (try JSONEncoder().encode(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0)), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case ("GET", "/host/status"): return try reply(200, ["state": "running", "roles": ["workspace": true]])
+            case ("GET", "/host/logs"): return try reply(200, ["logs": "server started"])
+            case ("POST", "/host/restart"): return try reply(202, ["restarting": true])
+            case ("POST", "/host/update"):
                 lock.withLock { _uploaded = body }
                 return try reply(202, ["state": "running"])
-            case ("GET", "/v1/host/update"): return try reply(200, ["state": "succeeded", "result": ["state": "running"]])
-            case ("GET", "/v1/bots/status"):
+            case ("GET", "/host/update"): return try reply(200, ["state": "succeeded", "result": ["state": "running"]])
+            case ("GET", "/bots/status"):
                 let status = BotsRemoteStatus(machine: .init(deviceID: memberID, name: "Linux L", kind: "linux"),
                                               enabled: true, state: "ready", versions: .init(librarySchema: librarySchema), runtimeInstalled: true)
                 return (try JSONEncoder().encode(status), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("POST", "/v1/host/bots-configure"):
+            case ("POST", "/host/bots-configure"):
                 lock.withLock { _botsBody = try? JSONSerialization.jsonObject(with: body) as? NSDictionary }
                 return try reply(200, ["configured": true])
-            case ("POST", "/v1/projects"):
+            case ("POST", "/projects"):
                 // As `remote/src/projects.mjs`: a blank directory, or 409 for a taken name.
                 struct Project: Decodable { let name: String; let reuseExisting: Bool }
                 let project = try JSONDecoder().decode(Project.self, from: body)
@@ -796,7 +765,7 @@ final class ReachLinuxHost: @unchecked Sendable {
                 }
                 if taken { return try reply(409, ["error": "A directory with that name already exists in this workspace."]) }
                 return try reply(201, ["path": Self.workspaceRoot + "/" + project.name])
-            case ("POST", "/v1/execution/devices"):
+            case ("POST", "/execution/devices"):
                 struct Enrollment: Decodable { let deviceID: String }
                 let enrollment = try JSONDecoder().decode(Enrollment.self, from: body)
                 let credential = ExecutionCredential(workspace: descriptor, deviceID: enrollment.deviceID, token: String(repeating: "t", count: 43))

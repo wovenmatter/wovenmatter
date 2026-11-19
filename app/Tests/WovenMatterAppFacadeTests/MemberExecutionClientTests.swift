@@ -46,25 +46,6 @@ struct MemberExecutionClientTests {
                      journal: fixture.directory.appending(path: "member-commands.json"))
     }
 
-    /// The v0.4.2 command journal moves once to its current name; an existing
-    /// current journal wins and the old file is dropped.
-    @Test func theCommandJournalMovesOnceFromItsV042Name() throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "member-journal-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let legacy = directory.appending(path: "central-execution-commands.json")
-        let current = directory.appending(path: MemberExecutionClient.commandJournalName)
-        try Data("saved".utf8).write(to: legacy)
-        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
-        #expect(try Data(contentsOf: current) == Data("saved".utf8))
-        #expect(!FileManager.default.fileExists(atPath: legacy.path))
-        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
-        try Data("stale".utf8).write(to: legacy)
-        try MemberExecutionClient.moveLegacyCommandJournal(in: directory)
-        #expect(try Data(contentsOf: current) == Data("saved".utf8))
-        #expect(!FileManager.default.fileExists(atPath: legacy.path))
-    }
-
     @Test func aMachineWithoutAStreamShowsItsLibraryHistoryOfflineAndIsNeverRead() async throws {
         let setup = try await setup(); defer { setup.fixture.remove() }
         let (fixture, workspace, id) = (setup.fixture, setup.workspace, setup.conversation.id)

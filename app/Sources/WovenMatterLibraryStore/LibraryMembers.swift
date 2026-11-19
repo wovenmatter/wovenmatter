@@ -15,7 +15,7 @@ public struct LibraryMemberEntry: Codable, Equatable, Sendable {
   public let kind: MemberKind
   public let name: String
   public let publicKey: Data
-  /// Base URLs where the member serves `v1/...` routes, for example
+  /// Base URLs where the member serves its routes, for example
   /// `https://studio.tailnet.ts.net/wovenmatter/`. Empty for a phone.
   public let endpoints: [URL]
   public let addedBy: String
@@ -90,7 +90,7 @@ public struct LibraryMemberAnchor: Codable, Equatable, Sendable {
   }
 }
 
-/// The resolved member list (`GET /v1/members` on the library socket).
+/// The resolved member list (`GET /members` on the library socket).
 public struct LibraryMember: Codable, Equatable, Sendable, Identifiable {
   public var id: String { deviceID }
   public let deviceID: String

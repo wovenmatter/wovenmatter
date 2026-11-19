@@ -76,12 +76,11 @@ struct LibraryHostLifecycleTests {
         let mac = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
         _ = try await members.add(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: phone.publicKey, endpoints: [])
         _ = try await members.add(deviceID: mac.deviceID, kind: .mac, name: "Other Mac", publicKey: mac.publicKey, endpoints: [])
-        let url = try fixture.loopbackURL(path: "v1/pair/unpair")
+        let url = try fixture.loopbackURL(path: "pair/unpair")
         func unpair(_ member: MemberIdentity) async throws -> Int {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"; request.httpBody = Data("{}".utf8)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
             for (name, value) in try member.signer.headers(method: "POST", target: url.path, body: Data("{}".utf8), audience: members.identity.deviceID) {
                 request.setValue(value, forHTTPHeaderField: name)
             }
@@ -112,27 +111,27 @@ struct LibraryHostLifecycleTests {
             let (data, response) = try await URLSession.shared.data(for: request)
             return (data, try #require((response as? HTTPURLResponse)?.statusCode))
         }
-        let (advertised, _) = try await URLSession.shared.data(from: base.appending(path: "v1/discovery"))
+        let (advertised, _) = try await URLSession.shared.data(from: base.appending(path: "discovery"))
         let advertisement = try JSONDecoder().decode(DiscoveryAdvertisement.self, from: advertised)
         #expect(advertisement.identity.metadata.kind == .mac)
         #expect(!String(decoding: advertised, as: UTF8.self).contains("credential"))
         let request = PairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: UUID().uuidString + UUID().uuidString,
             identity: .init(deviceID: UUID().uuidString.lowercased(), deviceName: "Peer Mac", metadata: .init(kind: .mac, osVersion: "fixtureOS", appVersion: "fixtureApp")))
-        let (pendingData, pendingStatus) = try await post("v1/pairing/request", JSONEncoder().encode(request))
+        let (pendingData, pendingStatus) = try await post("pairing/request", JSONEncoder().encode(request))
         let pending = try JSONDecoder().decode(PairingApprovalResult.self, from: pendingData)
         #expect(pendingStatus == 200 && pending.state == .pending && pending.pairing == nil)
         await fixture.host.refreshStatus()
         #expect(fixture.host.pendingPairingRequests.first?.identity == request.identity)
         #expect(fixture.host.pairedDevices.isEmpty)
-        let (_, forbidden) = try await post("v1/pairing/approve", Data("{}".utf8))
+        let (_, forbidden) = try await post("pairing/approve", Data("{}".utf8))
         #expect(forbidden != 200)
         await fixture.host.approvePairing(id: request.requestID)
-        let (approvedData, status) = try await post("v1/pairing/result", JSONEncoder().encode(PairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
+        let (approvedData, status) = try await post("pairing/result", JSONEncoder().encode(PairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
         let approved = try JSONDecoder().decode(PairingApprovalResult.self, from: approvedData)
         #expect(status == 200 && approved.pairing?.deviceID == request.identity.deviceID)
         #expect(fixture.host.pairedDevices.first?.metadata == request.identity.metadata)
         #expect(fixture.host.pairedDevices.first?.lastSeenAt == nil)
-        let (_, cancelled) = try await post("v1/pairing/cancel", JSONEncoder().encode(PairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
+        let (_, cancelled) = try await post("pairing/cancel", JSONEncoder().encode(PairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)))
         #expect(cancelled == 200)
         #expect(fixture.host.pairedDevices.isEmpty)
     }
@@ -207,9 +206,8 @@ private enum HostFixtureError: Error { case timeout }
             peerStorage: storage, makeExposure: { [unowned self] in makeExposure() })
     }
     func libraryStatus(bearer: String) async throws -> Int {
-        var request = URLRequest(url: try loopbackURL(path: "v1/snapshot"))
+        var request = URLRequest(url: try loopbackURL(path: "snapshot"))
         request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization")
-        request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
         let (_, response) = try await URLSession.shared.data(for: request)
         return try #require((response as? HTTPURLResponse)?.statusCode)
     }
@@ -322,15 +320,14 @@ private enum HostFixtureError: Error { case timeout }
     func request(_ endpoint: URL, path: String, token: String?, libraryID: String?, body: Data?) async throws -> Data {
         guard !offline.contains(endpoint.absoluteString), let fixture = hosts[endpoint.absoluteString] else { throw URLError(.notConnectedToInternet) }
         requested.append(endpoint.absoluteString + " " + path)
-        if path == "v1/discovery" && !overHTTP {
+        if path == "discovery" && !overHTTP {
             let identity = try #require(fixture.host.peerIdentity)
             return try JSONEncoder().encode(DiscoveryAdvertisement(identity: identity, capabilities: [PairedMacSyncController.capability]))
         }
-        if overHTTP || ["v1/pair/preview", "v1/pair", "v1/pair/confirm"].contains(path) {
+        if overHTTP || ["pair/preview", "pair", "pair/confirm"].contains(path) {
             var request = URLRequest(url: try fixture.loopbackURL(path: path))
             request.httpMethod = body == nil ? "GET" : "POST"; request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
             if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
             if let libraryID { request.setValue(libraryID, forHTTPHeaderField: "X-Woven-Workspace") }
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -339,7 +336,7 @@ private enum HostFixtureError: Error { case timeout }
             try await afterResponse?(endpoint, path)
             return data
         }
-        var headers = ["x-woven-protocol": String(LibraryProtocol.version)]
+        var headers: [String: String] = [:]
         if let token { headers["authorization"] = "Bearer " + token }
         if let libraryID { headers["x-woven-workspace"] = libraryID }
         let response = try #require(await fixture.host.peerSync.handle(.init(method: body == nil ? "GET" : "POST", target: "/" + path, headers: headers, body: body ?? Data())))
@@ -409,7 +406,7 @@ extension LibraryHostLifecycleTests {
             reach.count(request)
             await reach.takeBeforeRequest()?()
             let url = try #require(request.url), listener = try #require(listeners[url.host() ?? ""])
-            let isCommand = request.httpMethod == "POST" && url.path.hasSuffix("/v1/execution/commands")
+            let isCommand = request.httpMethod == "POST" && url.path.hasSuffix("/execution/commands")
             if isCommand, let command = reach.takeCommand() {
                 try await command(JSONDecoder().decode(LibraryCommand.self, from: try #require(request.httpBody)))
             }
@@ -510,7 +507,7 @@ extension LibraryHostLifecycleTests {
         #expect(isDirectory(air.directory.appending(path: "Mine")))
         #expect(reach.requests == sent)
 
-        // A phone's host route (`POST /v1/commands`) runs the action on the Mac it reaches, never elsewhere.
+        // A phone's host route (`POST /commands`) runs the action on the Mac it reaches, never elsewhere.
         let phone = UUID().uuidString.lowercased(), phoneFolder = UUID().uuidString.lowercased()
         let viaPhone = LibraryCommand(commandID: phoneFolder, deviceID: phone, kind: .workspace, workspaceAction: .createFolder(id: phoneFolder, name: "From the phone"))
         #expect(try await mini.model.libraryCommands.execute(viaPhone, deviceID: phone).status == .completed)
@@ -675,7 +672,7 @@ extension LibraryHostLifecycleTests {
             #expect(try await airDB.folderName(id: id) == nil)
             return id
         }
-        func receiptRequests(_ id: String) -> Int { reach.log.filter { $0.hasPrefix("GET ") && $0.hasSuffix("/v1/execution/commands/" + id) }.count }
+        func receiptRequests(_ id: String) -> Int { reach.log.filter { $0.hasPrefix("GET ") && $0.hasSuffix("/execution/commands/" + id) }.count }
 
         // Soon after: the old ID is asked once more, the Mini answers it as
         // done, no folder arrives for it, and a new request makes the folder.
@@ -745,7 +742,7 @@ extension LibraryHostLifecycleTests {
         let airID = try await air.host.peerRoute().deviceID, thirdID = try await third.host.peerRoute().deviceID
         _ = try await airDB.applyLibraryMutation(.init(deviceID: airID, kind: .createNote, resourceID: first, title: "Air offline", content: try NoteDocument(blocks: [.richText(.init(text: "Air writing"))]).encoded()))
         _ = try await thirdDB.applyLibraryMutation(.init(deviceID: thirdID, kind: .createNote, resourceID: second, title: "Third offline", content: try NoteDocument(blocks: [.richText(.init(text: "Third writing"))]).encoded()))
-        let remote = RemoteWorkspaceConfiguration(name: "Added from third Mac", workspaceID: "new-remote", hostName: "linux.fixture.ts.net", kind: .host)
+        let remote = RemoteWorkspaceConfiguration(name: "Added from third Mac", workspaceID: "new-remote", hostName: "linux.fixture.ts.net")
         try await thirdDB.saveRemoteWorkspaceConfigurations([remote])
         let phoneID = UUID().uuidString.lowercased()
         let authentication = try await third.host.peerAuthentication()
@@ -781,7 +778,7 @@ extension LibraryHostLifecycleTests {
             await #expect(throws: LibraryAPIError.self) { try await airAuth.authenticate(bearer: bearer) }
             #expect(try await air.libraryStatus(bearer: bearer) == 401)
             await #expect(throws: (any Error).self) {
-                try await mesh.request(air.host.peerRoute().endpoint, path: "v1/peers/files", token: bearer, libraryID: nil, body: JSONEncoder().encode(""))
+                try await mesh.request(air.host.peerRoute().endpoint, path: "peers/files", token: bearer, libraryID: nil, body: JSONEncoder().encode(""))
             }
         }
         // Membership never carries a bearer.
@@ -818,7 +815,7 @@ extension LibraryHostLifecycleTests {
         mesh.offline.insert(try await mini.host.peerRoute().endpoint.absoluteString)
         let first = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
         try await writeNote(air, first, "Air over HTTP"); try await writeNote(third, second, "Third over HTTP")
-        mesh.loseReplyOnce = ["v1/peers/sync"]
+        mesh.loseReplyOnce = ["peers/sync"]
         await air.host.peerSync.synchronize(force: true)
         #expect(mesh.loseReplyOnce.isEmpty)
         var storage = air.storage
@@ -846,13 +843,13 @@ extension LibraryHostLifecycleTests {
         let hash = try LibraryFileStore(supportDirectory: miniDB.supportDirectory).retain(Data(repeating: 91, count: 1_300_000))
         let miniRoute = try await mini.host.peerRoute()
         mesh.afterResponse = { endpoint, path in
-            guard endpoint == miniRoute.endpoint, path == "v1/peers/file" else { return }
+            guard endpoint == miniRoute.endpoint, path == "peers/file" else { return }
             mesh.afterResponse = nil
             await air.host.revoke(miniRoute.deviceID)
         }
         mesh.requested = []
         await air.host.peerSync.synchronize(force: true)
-        #expect(mesh.requested.filter { $0 == miniRoute.endpoint.absoluteString + " v1/peers/file" }.count == 1)
+        #expect(mesh.requested.filter { $0 == miniRoute.endpoint.absoluteString + " peers/file" }.count == 1)
         #expect(!FileManager.default.fileExists(atPath: airDB.supportDirectory.appending(path: "library-files/" + hash).path))
     }
 
@@ -971,13 +968,13 @@ extension LibraryHostLifecycleTests {
         let air = try await mesh.add("link-air"), mini = try await mesh.add("link-mini")
         await mini.host.createPairingCode()
         let payload = try #require(mini.host.pairingPayload)
-        mesh.loseReplyOnce = ["v1/pair/confirm"]
+        mesh.loseReplyOnce = ["pair/confirm"]
         await #expect(throws: URLError.self) { try await air.host.peerSync.pairUsingLink(payload.encodedURL.absoluteString) }
         let pending = try #require(mesh.credentials["link-air"]?.first)
         #expect(pending.confirmationPending == true && pending.needsJoin == true)
         let auth = try await mini.host.peerAuthentication()
         #expect(try await auth.authenticate(bearer: pending.token).id == pending.deviceID)
-        mesh.loseReplyOnce = ["v1/peers/join"]
+        mesh.loseReplyOnce = ["peers/join"]
         let network = PairedMacNetwork(request: { endpoint, path, token, libraryID, body in
             try await mesh.request(endpoint, path: path, token: token, libraryID: libraryID, body: body)
         })

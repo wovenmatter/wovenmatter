@@ -188,7 +188,7 @@ final class BotsRuntimeSupervisor {
             "NODE_ENV": "production",
             "LANG": "en_US.UTF-8",
             // What the runtime names itself by (its `--version`, its agent SDK client name).
-            "WOVENMATTER_RELEASE_VERSION": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
+            "WOVENMATTER_RELEASE_VERSION": WovenMCPServer.releaseVersion,
         ]
         do {
             child = try launch(bundle.node, [bundle.entry.path, "serve", "--config", configURL.path], environment, logURL) { [weak self] status in

@@ -91,8 +91,6 @@ public actor DeviceAuthentication {
     /// A phone's member key, signed into its member entry at confirmation.
     var memberPublicKey: Data?
   }
-  /// The file holds exactly these keys. A key an earlier build left in it
-  /// (`version`, `admissionVersion`) is not read and is gone at the next save.
   private struct State: Codable {
     var devices: [PairedDevice] = []
     var approvals: [Approval]?
@@ -127,14 +125,6 @@ public actor DeviceAuthentication {
       guard size <= 16_777_216 else { throw Self.error("credential_store", "The paired-device store exceeds its safety limit.") }
       state = try JSONDecoder().decode(State.self, from: Data(contentsOf: fileURL))
     } else { state = State() }
-    // A grant without a role was issued before paired-Mac identity existed,
-    // locally and through explicit approval; such a Mac grant may complete
-    // one signed join. Every grant issued since carries its role, so this
-    // changes nothing in a store that has them.
-    for index in state.devices.indices where state.devices[index].role == nil {
-      let device = state.devices[index]
-      state.devices[index].role = device.kind == .mac && !device.isDevelopment ? .peerCandidate : .client
-    }
     lastSeenSaved = state.devices.reduce(into: [:]) { $0[$1.id] = $1.lastSeenAt }
   }
 
@@ -451,7 +441,6 @@ public actor DeviceAuthentication {
 
   /// Verify the code and target without enrolling a device or consuming the code.
   public func previewPairing(_ request: PairRequest, workspaceID: String) throws -> PairingPreview {
-    guard request.protocolVersion == LibraryProtocol.version else { throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.") }
     guard request.expectedWorkspaceID == nil || request.expectedWorkspaceID == workspaceID else {
       throw Self.error("workspace_mismatch", "The paired library changed. Generate a new pairing code.")
     }
@@ -491,8 +480,8 @@ public actor DeviceAuthentication {
 
   public func pair(_ request: PairRequest, workspaceID: String) throws -> PairResponse {
     // Every device confirms its pairing in a second request, so a lost reply never leaves a grant it does not hold.
-    guard request.protocolVersion == PairingPayload.currentProtocolVersion, request.requiresConfirmation == true else {
-      throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.")
+    guard request.requiresConfirmation == true else {
+      throw Self.error("invalid_pairing", "This pairing request does not confirm itself. Generate a new pairing code.")
     }
     _ = try previewPairing(request, workspaceID: workspaceID)
     let instant = try checkPairingRate()
@@ -584,9 +573,6 @@ public actor DeviceAuthentication {
   }
 
   public func requestPairing(_ request: PairingApprovalRequest, workspaceID: String? = nil) throws -> PairingApprovalResult {
-    guard request.protocolVersion == LibraryProtocol.version else {
-      throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.")
-    }
     try Self.validateIdentity(request.identity)
     guard UUID(uuidString: request.requestID) != nil, (32...256).contains(request.requestSecret.utf8.count) else {
       throw Self.error("invalid_pairing", "The pairing request is invalid.")

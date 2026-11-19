@@ -4,7 +4,7 @@ import WovenMatterCore
 @MainActor
 public enum DevicePublisherAPI {
   /// Execution history on a library host's local socket
-  /// (`POST /v1/publisher/...`), for this machine's own Node server. The
+  /// (`POST /publisher/...`), for this machine's own Node server. The
   /// socket's bearer already proves the caller; the workspace named in the
   /// body must be a Linux execution workspace this library knows (its
   /// descriptor arrives with the adding Mac's records), and history is
@@ -36,7 +36,7 @@ public enum DevicePublisherAPI {
       var copy = result; copy.libraryID = libraryID; return copy
     }
     switch path {
-    case "/v1/publisher/association":
+    case "/publisher/association":
       // The workspace comes from the body or the `X-Woven-Workspace-ID` header.
       struct Request: Decodable { var workspaceID: String?; var runID: String?; var nativeSessionID: String? }
       let value = try JSONDecoder().decode(Request.self, from: request.body)
@@ -49,7 +49,7 @@ public enum DevicePublisherAPI {
         return .error("not_found", "No exact retained execution association exists in this workspace.", status: 404)
       }
       return try .json(association)
-    case "/v1/publisher/retained/settle", "/v1/publisher/journal":
+    case "/publisher/retained/settle", "/publisher/journal":
       var batch = try JSONDecoder().decode(ExecutionJournalBatch.self, from: request.body)
       let original = batch.libraryID
       guard let target = try await batchWorkspace(batch), let device = target.executionDeviceID else {
@@ -59,15 +59,15 @@ public enum DevicePublisherAPI {
       let result = path.hasSuffix("settle") ? try await database.settleLibraryRetainedRuns(batch, deviceID: device)
         : try await database.ingestExecutionJournal(batch, deviceID: device)
       return try .json(relabel(result, original))
-    case "/v1/publisher/artifacts/register":
+    case "/publisher/artifacts/register":
       let value = try JSONDecoder().decode(LibraryArtifactRegistration.self, from: request.body)
       let target = try await workspace(value.manifest.workspaceID)
       return try .json(try await database.registerLibraryArtifact(value, deviceID: target.executionDeviceID ?? ""))
-    case "/v1/publisher/artifacts/chunk":
+    case "/publisher/artifacts/chunk":
       let value = try JSONDecoder().decode(LibraryArtifactChunk.self, from: request.body)
       guard let id = try await database.libraryArtifactTransfer(id: value.id)?.manifest.workspaceID else { return .error("not_found", "Register this artifact first.", status: 404) }
       return try .json(try await database.appendLibraryArtifactChunk(value, deviceID: try await workspace(id).executionDeviceID ?? ""))
-    case "/v1/publisher/artifacts/commit":
+    case "/publisher/artifacts/commit":
       let value = try JSONDecoder().decode(LibraryArtifactCommit.self, from: request.body)
       guard let id = try await database.libraryArtifactTransfer(id: value.id)?.manifest.workspaceID else { return .error("not_found", "Register this artifact first.", status: 404) }
       return try .json(try await database.commitLibraryArtifact(value, deviceID: try await workspace(id).executionDeviceID ?? ""))
