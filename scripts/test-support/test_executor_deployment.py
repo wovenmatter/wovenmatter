@@ -25,10 +25,12 @@ CURRENT_IMAGE = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(DOCKERFIL
 
 class ExecutorDeploymentTests(unittest.TestCase):
     def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False, refresh=False,
-                network='stored', foreign_network=False, label='stored'):
+                network='stored', foreign_network=False, label='stored', as_root=False, daemon_ignores=None):
         # `label` and `network` are what the ownership label holds on an existing container and
         # network: 'stored' stands for the value the current release wrote there, which is as
         # much ours as today's. `network=None` is a host with no network yet.
+        # `as_root` runs the script as root sees itself; `daemon_ignores` names a `docker run`
+        # option the daemon accepts and does not apply.
         stored = 'managed-v1'
         labels = {'container': None if foreign else stored if label == 'stored' else label,
                   'network': None if foreign_network else stored if network == 'stored' else network}
@@ -64,18 +66,43 @@ elif args[0]=='inspect':
     if name not in state: sys.exit(1)
     if '--format' in args:
         fmt=args[args.index('--format')+1]
+        # What the daemon reports of the container this deployment created: the options
+        # `docker run` was given, less one the fixture is told the daemon did not apply.
+        record=pathlib.Path(os.environ['WM_FIXTURE_CREATED'])
+        created=json.loads(record.read_text()) if record.exists() else []
+        created=[arg for index, arg in enumerate(created) if os.environ.get('WM_FIXTURE_DAEMON_IGNORES') not in (arg, created[index-1] if index else None)]
+        option=lambda flag: created[created.index(flag)+1] if flag in created else None
+        port=(option('--publish') or '').split(':')
+        compact=lambda value: json.dumps(value, separators=(',',':'))
         values={
-            '.Config.Image': state[name],
-            'eq $key "sh.wovenmatter.executor"': 'owned' if json.loads(os.environ['WM_FIXTURE_LABELS'])['container'] is not None else '',
+            '{{.Config.Image}}': state[name],
+            '{{range $key, $value := .Config.Labels}}{{if eq $key "sh.wovenmatter.executor"}}owned{{end}}{{end}}': 'owned' if json.loads(os.environ['WM_FIXTURE_LABELS'])['container'] is not None else '',
+            '{{.Config.User}}': option('--user') or '',
+            '{{.HostConfig.NetworkMode}}': option('--network') or 'bridge',
+            '{{.HostConfig.ReadonlyRootfs}}': 'true' if '--read-only' in created else 'false',
+            '{{json .HostConfig.PortBindings}}': compact({port[2]+'/tcp':[{'HostIp':port[0],'HostPort':port[1]}]}) if len(port)==3 else '{}',
+            '{{json .HostConfig.CapDrop}}': compact([option('--cap-drop')]) if option('--cap-drop') else 'null',
+            '{{json .HostConfig.SecurityOpt}}': compact([option('--security-opt')]) if option('--security-opt') else 'null',
+            '{{.HostConfig.PidsLimit}}': option('--pids-limit') or '0',
         }
-        print(next(value for key, value in values.items() if key in fmt))
+        print(values[fmt])
 elif args[0]=='rename':
     if os.environ.get('WM_FIXTURE_RENAME_FAIL') and args[1]=='wovenmatter-executor': sys.exit(1)
     state[args[2]]=state.pop(args[1])
 elif args[0]=='rm': state.pop(args[-1], None)
-elif args[0]=='run' and '--name' in args: state['wovenmatter-executor']=args[-1]
+elif args[0]=='run' and '--name' in args:
+    state['wovenmatter-executor']=args[-1]
+    pathlib.Path(os.environ['WM_FIXTURE_CREATED']).write_text(json.dumps(args))
 path.write_text(json.dumps(state))
 ''')
+        if as_root:
+            # Only what root sees of itself and may do: the user it is, and changing an owner.
+            (commands / 'id').write_text('#!/bin/sh\necho 0\n')
+            (commands / 'chown').write_text('''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['WM_FIXTURE_LOG'], 'a') as out: out.write(json.dumps(['chown']+sys.argv[1:])+'\\n')
+''')
+            for name in ('id', 'chown'): (commands / name).chmod(0o755)
         (commands / 'sudo').write_text('#!/bin/sh\nexit 1\n')
         (commands / 'sudo').chmod(0o755)
         # Stub only HTTP readiness, while production validation and rollback run.
@@ -114,8 +141,9 @@ elif sys.argv[1:]==['serve','status','--json']:
             'securityFiles': SECURITY_FILES,
             **({'generation':'11111111-1111-4111-8111-111111111111'} if refresh else {})}))
         env = {**os.environ, 'PATH': str(commands)+':/usr/bin:/bin', 'WM_FIXTURE_LOG': str(log), 'WM_FIXTURE_STATE': str(state), 'PYTHONPATH': str(root),
-               'WM_FIXTURE_LABELS': json.dumps(labels)}
+               'WM_FIXTURE_LABELS': json.dumps(labels), 'WM_FIXTURE_CREATED': str(root / 'created.json')}
         if network is None: env['WM_FIXTURE_NO_NETWORK'] = '1'
+        if daemon_ignores: env['WM_FIXTURE_DAEMON_IGNORES'] = daemon_ignores
         for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure)]:
             if value: env[flag] = '1'
         # Replace only the home directory anchor; every deployment command and
@@ -165,6 +193,37 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertEqual((root / 'runtime/executor-runtime/package-lock.json').read_text(), EXECUTOR_RUNTIME_LOCK)
             self.assertEqual((root / 'runtime/security/backports.json').read_text(), (ROOT / 'remote/security/backports.json').read_text())
             self.assertEqual((root / 'runtime/.dockerignore').read_text(), '*\n!Dockerfile\n!npm-runtime/\n!npm-runtime/package*.json\n!executor-runtime/\n!executor-runtime/package*.json\n!security/\n!security/**\n')
+
+    def test_root_deployment_gives_the_data_directory_to_the_user_the_container_runs_as(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result, log = self.fixture(root, as_root=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            run = next(i for i, call in enumerate(calls) if call[:2] == ['docker', 'run'])
+            self.assertEqual(calls[run][calls[run].index('--user') + 1], '1000:1000')
+            # Root created the directory closed to everyone else, so the container's user must own it.
+            owned = [i for i, call in enumerate(calls) if call[0] == 'chown']
+            self.assertEqual([calls[i] for i in owned], [['chown', '1000:1000', str(root / 'runtime/data')]])
+            self.assertLess(owned[0], run)
+            self.assertEqual((root / 'runtime/data').stat().st_mode & 0o777, 0o700)
+
+    def test_a_container_created_without_its_hardening_is_not_kept(self):
+        # The deployment checks the container it has just created. One the daemon made
+        # writable, on another network, with capabilities or as root is removed before it is
+        # waited for or published, and the previous one runs again.
+        for ignored in ('--read-only', '--cap-drop', '--security-opt', '--pids-limit', '--user', '--publish', '--network'):
+            with self.subTest(ignored=ignored), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                result, log = self.fixture(root, existing=True, old_version=True, daemon_ignores=ignored)
+                self.assertNotEqual(result.returncode, 0)
+                calls = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertTrue(any(call[:2] == ['docker', 'run'] for call in calls))
+                self.assertNotIn(['readiness'], calls)
+                self.assertFalse(any(call[:2] == ['tailscale', 'serve'] and '--bg' in call for call in calls))
+                self.assertIn(['docker', 'rm', '-f', 'wovenmatter-executor'], calls)
+                self.assertIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
+                self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.7'})
 
     def test_retry_restarts_only_owned_container(self):
         # Owned is the label being there: with the value the current release wrote, or today's.

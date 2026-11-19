@@ -13,9 +13,15 @@ case "$wm_docker_major" in ''|*[!0-9]*) exit 69 ;; esac
 wm_root="$HOME/.local/share/wovenmatter-executor"
 mkdir -p "$wm_root/data"
 chmod 700 "$wm_root" "$wm_root/data"
+# The container runs as the deploying user and never as root. When root
+# deploys, it runs as 1000:1000, and that user owns the data directory it is
+# given: root created it above, closed to everyone else.
 wm_runtime_uid="$(id -u)"
 wm_runtime_gid="$(id -g)"
-if [ "$wm_runtime_uid" = 0 ]; then wm_runtime_uid=1000; wm_runtime_gid=1000; fi
+if [ "$wm_runtime_uid" = 0 ]; then
+  wm_runtime_uid=1000; wm_runtime_gid=1000
+  chown "$wm_runtime_uid:$wm_runtime_gid" "$wm_root/data"
+fi
 wm_network=wovenmatter-executor
 # The network and container this deployment owns carry the label sh.wovenmatter.executor.
 # Ownership is the label being there; its value is not read.
@@ -26,6 +32,19 @@ else
     --opt com.docker.network.bridge.enable_icc=false \
     --label sh.wovenmatter.executor=managed "$wm_network" >/dev/null
 fi
+# What the container this deployment creates must be: not root, on its own
+# network, read-only, published on loopback only, with no capabilities. The
+# deployment checks the container it has just created and keeps it only if so.
+wm_container_hardened() {
+  wm_user="$($wm_docker inspect --format '{{.Config.User}}' wovenmatter-executor)"
+  case "$wm_user" in ''|0|0:*|root|root:*) return 1 ;; esac
+  test "$($wm_docker inspect --format '{{.HostConfig.NetworkMode}}' wovenmatter-executor)" = "$wm_network" \
+    && test "$($wm_docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' wovenmatter-executor)" = true \
+    && test "$($wm_docker inspect --format '{{json .HostConfig.PortBindings}}' wovenmatter-executor)" = '{"4312/tcp":[{"HostIp":"127.0.0.1","HostPort":"4312"}]}' \
+    && test "$($wm_docker inspect --format '{{json .HostConfig.CapDrop}}' wovenmatter-executor)" = '["ALL"]' \
+    && test "$($wm_docker inspect --format '{{json .HostConfig.SecurityOpt}}' wovenmatter-executor)" = '["no-new-privileges"]' \
+    && test "$($wm_docker inspect --format '{{.HostConfig.PidsLimit}}' wovenmatter-executor)" = 512
+}
 # Verify the selected private origin belongs to this machine before installing.
 tailscale status --json > "$wm_root/host.json"
 tailscale serve status --json > "$wm_root/serve.json"
@@ -129,6 +148,7 @@ if [ "$wm_current" = false ]; then
       --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
       --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --init \
       --mount "type=bind,src=$wm_root/data,dst=/data" "$wm_image" >/dev/null
+  wm_container_hardened
 fi
 # Require authenticated readiness before publishing the route or deleting the
 # rollback container. Keys stay inside the private payload, never command args.
