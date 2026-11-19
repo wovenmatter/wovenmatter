@@ -1,0 +1,287 @@
+import Foundation
+import WovenProtocol
+
+/// How a table's rows travel between machines.
+public enum SyncRule: Sendable, Equatable {
+  /// Never leaves this machine.
+  case local
+  /// Written once by the owning machine, never edited.
+  case appendOnly
+  /// A received row replaces the local one when its stamp is newer.
+  case newestWins
+  /// Newest wins; when two writes were made apart, the loser is saved as a
+  /// row of the `history` table.
+  case newestWinsKeepLoser(history: String)
+}
+
+public enum ColumnType: String, Sendable {
+  case text = "TEXT"
+  case integer = "INTEGER"
+  case real = "REAL"
+  case blob = "BLOB"
+}
+
+public struct Column: Sendable {
+  public let name: String
+  public let type: ColumnType
+  /// When set, the column is NOT NULL with this default, so it can always be
+  /// added to an existing file.
+  public let fallback: SQLValue?
+  let primaryKey: Bool
+
+  static func text(_ name: String, _ fallback: String? = nil) -> Column {
+    Column(name: name, type: .text, fallback: fallback.map(SQLValue.text), primaryKey: false)
+  }
+  static func integer(_ name: String, _ fallback: Int64? = nil) -> Column {
+    Column(name: name, type: .integer, fallback: fallback.map(SQLValue.integer), primaryKey: false)
+  }
+  static func real(_ name: String, _ fallback: Double? = nil) -> Column {
+    Column(name: name, type: .real, fallback: fallback.map(SQLValue.real), primaryKey: false)
+  }
+  static func blob(_ name: String) -> Column {
+    Column(name: name, type: .blob, fallback: nil, primaryKey: false)
+  }
+  static func key(_ name: String, _ type: ColumnType = .text) -> Column {
+    Column(name: name, type: type, fallback: nil, primaryKey: true)
+  }
+
+  var definition: String {
+    var sql = "\(name) \(type.rawValue)"
+    if primaryKey { sql += " PRIMARY KEY NOT NULL" }
+    if let fallback { sql += " NOT NULL DEFAULT \(fallback.literal)" }
+    return sql
+  }
+}
+
+/// A column that names a row of another table that this row belongs to.
+/// When that row is deleted, this one goes too, and a late copy of this one
+/// is not accepted. The writer does it in code, in the same transaction.
+public struct Parent: Sendable {
+  public let column: String
+  public let table: String
+}
+
+public struct Table: Sendable {
+  public let name: String
+  public let rule: SyncRule
+  /// The table's own columns. Synced tables also get the standard ones.
+  public let columns: [Column]
+  public let parents: [Parent]
+  let indexes: [[String]]
+
+  init(_ name: String, _ rule: SyncRule, _ columns: [Column], parents: [Parent] = [], indexes: [[String]] = []) {
+    self.name = name
+    self.rule = rule
+    self.columns = columns
+    self.parents = parents
+    self.indexes = indexes
+  }
+
+  public var synced: Bool { rule != .local }
+
+  var keepsLoser: Bool {
+    if case .newestWinsKeepLoser = rule { true } else { false }
+  }
+
+  /// `id`, `stamp`, `changed` and `deleted` on every synced row, and
+  /// `edited_from` where the loser of a conflict is kept.
+  static let standardColumns: Set<String> = ["id", "stamp", "changed", "deleted", "edited_from"]
+
+  var allColumns: [Column] {
+    guard synced else { return columns }
+    var standard: [Column] = [.key("id"), .text("stamp", ""), .integer("changed", 0), .integer("deleted", 0)]
+    if keepsLoser { standard.append(.text("edited_from")) }
+    return standard + columns
+  }
+
+  var allIndexes: [[String]] {
+    (synced ? [["changed"]] : []) + parents.map { [$0.column] } + indexes
+  }
+
+  var createSQL: String {
+    "CREATE TABLE \(name) (\(allColumns.map(\.definition).joined(separator: ", ")))"
+  }
+}
+
+extension SQLValue {
+  /// The value as an SQL literal, for DEFAULT clauses.
+  var literal: String {
+    switch self {
+    case .null: "NULL"
+    case .integer(let value): String(value)
+    case .real(let value): String(value)
+    case .text(let value): "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+    case .blob(let value): "X'\(value.map { String(format: "%02x", $0) }.joined())'"
+    }
+  }
+}
+
+/// The whole library, declared once. At open the file is compared with this
+/// and whatever is missing is added. There is no schema counter.
+public enum Schema {
+  public static let tables: [Table] = [
+    // Newest write wins.
+    Table("machines", .newestWins, [
+      .text("name", ""),
+      // Sealed secrets for this machine are sealed with this key.
+      .text("public_key"),
+      .integer("created_at", 0),
+    ]),
+    Table("sessions", .newestWins, [
+      .text("machine_id", ""),
+      .text("runtime", ""),
+      .text("title", ""),
+      .text("folder_id"),
+      .integer("archived", 0),
+      .text("goal"),
+      .integer("created_at", 0),
+    ], parents: [Parent(column: "machine_id", table: "machines")]),
+    Table("folders", .newestWins, [
+      .text("machine_id", ""),
+      .text("name", ""),
+      .text("path", ""),
+      .integer("created_at", 0),
+    ], parents: [Parent(column: "machine_id", table: "machines")]),
+    // `id` is the setting's key, so two machines setting one key write one row.
+    Table("settings", .newestWins, [
+      .text("value", "null"),
+    ]),
+    // Scheduled tasks, timers and wake-ups; each belongs to the machine that
+    // runs it. When an entry next fires is local state (`schedule_state`).
+    Table("schedules", .newestWins, [
+      .text("machine_id", ""),
+      .text("kind", ""),
+      .text("title", ""),
+      .text("prompt", ""),
+      .text("session_id"),
+      .text("folder_id"),
+      .text("runtime"),
+      .integer("starts_at"),
+      .text("recurrence"),
+      .integer("enabled", 1),
+      .integer("created_at", 0),
+    ], parents: [Parent(column: "machine_id", table: "machines")]),
+    // One API key sealed for one machine. `id` is `name:machine_id`, so
+    // sealing the same key twice for a machine writes one row.
+    Table("sealed_secrets", .newestWins, [
+      .text("name", ""),
+      .text("machine_id", ""),
+      .blob("sealed"),
+    ], parents: [Parent(column: "machine_id", table: "machines")]),
+    // A database's description and its latest published copy, by digest.
+    Table("databases", .newestWins, [
+      .text("machine_id", ""),
+      .text("name", ""),
+      .text("description", ""),
+      .text("copy_digest"),
+      .integer("copy_size"),
+      .integer("copied_at"),
+      .integer("created_at", 0),
+    ], parents: [Parent(column: "machine_id", table: "machines")]),
+
+    // Newest write wins, loser kept: notes, pages and apps.
+    Table("artifacts", .newestWinsKeepLoser(history: "artifact_versions"), [
+      .text("kind", ""),
+      .text("title", ""),
+      .text("folder_id"),
+      // The document, including an app's saved state.
+      .text("body", ""),
+      .integer("created_at", 0),
+    ]),
+
+    // Append-only.
+    // `id` is `artifact_id:version_stamp`, so every machine that saves the
+    // same loser saves the same row.
+    Table("artifact_versions", .appendOnly, [
+      .text("artifact_id", ""),
+      .text("version_stamp", ""),
+      .text("kind", ""),
+      .text("title", ""),
+      .text("body", ""),
+      .integer("saved_at", 0),
+    ], parents: [Parent(column: "artifact_id", table: "artifacts")]),
+    Table("session_items", .appendOnly, [
+      .text("session_id", ""),
+      .integer("sequence", 0),
+      .text("kind", ""),
+      // The item's content as JSON (`ItemContent`).
+      .text("body", ""),
+      .integer("created_at", 0),
+    ], parents: [Parent(column: "session_id", table: "sessions")], indexes: [["session_id", "sequence"]]),
+    Table("usage_records", .appendOnly, [
+      .text("machine_id", ""),
+      .text("session_id"),
+      .text("runtime", ""),
+      .text("model", ""),
+      .integer("input_tokens", 0),
+      .integer("output_tokens", 0),
+      .integer("cache_read_tokens", 0),
+      .integer("cache_write_tokens", 0),
+      .real("cost", 0),
+      .integer("recorded_at", 0),
+    ], indexes: [["recorded_at"]]),
+    Table("dictation_history", .appendOnly, [
+      .text("machine_id", ""),
+      .text("text", ""),
+      .real("duration", 0),
+      .text("audio_digest"),
+      .integer("recorded_at", 0),
+    ], indexes: [["recorded_at"]]),
+
+    // Never syncs.
+    // One row: this machine's identifier, its clock and its `changed` counter.
+    Table("this_machine", .local, [
+      .key("id"),
+      .text("clock", ""),
+      .integer("changed", 0),
+    ]),
+    // How far this library has received each other machine's rows.
+    Table("sync_cursors", .local, [
+      .key("machine_id"),
+      .integer("received", 0),
+    ]),
+    // The runtime's own handle for each session this machine owns.
+    Table("native_sessions", .local, [
+      .key("session_id"),
+      .text("runtime", ""),
+      .text("handle", ""),
+      // The runtime said the native session no longer exists.
+      .integer("gone", 0),
+      .integer("updated_at", 0),
+    ]),
+    Table("schedule_state", .local, [
+      .key("schedule_id"),
+      .integer("next_fire_at"),
+      .integer("last_fired_at"),
+    ]),
+    // The content store's index: files this machine holds, by digest.
+    Table("files", .local, [
+      .key("digest"),
+      .integer("size", 0),
+      .integer("added_at", 0),
+    ]),
+  ]
+
+  static let byName: [String: Table] = Dictionary(uniqueKeysWithValues: tables.map { ($0.name, $0) })
+  static let synced: [Table] = tables.filter(\.synced)
+
+  /// Brings the file up to the declaration: creates missing tables, adds
+  /// missing columns and indexes. Never removes or rewrites anything.
+  static func apply(to connection: Connection) throws {
+    for table in tables {
+      let existing = Set(try connection.query("SELECT name FROM pragma_table_info(?)", [.text(table.name)])
+        .compactMap { $0.text("name") })
+      if existing.isEmpty {
+        try connection.execute(table.createSQL)
+      } else {
+        for column in table.allColumns where !existing.contains(column.name) {
+          try connection.execute("ALTER TABLE \(table.name) ADD COLUMN \(column.definition)")
+        }
+      }
+      for columns in table.allIndexes {
+        let name = ([table.name] + columns).joined(separator: "_")
+        try connection.execute("CREATE INDEX IF NOT EXISTS \(name) ON \(table.name) (\(columns.joined(separator: ", ")))")
+      }
+    }
+  }
+}
