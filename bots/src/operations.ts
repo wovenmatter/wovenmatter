@@ -9,6 +9,12 @@ import type { EnvironmentSummary, ServerMessage } from "./protocol.ts";
 export const INTERRUPTED_NOTE =
   "[Woven Matter: your environment was just updated, which stopped your last turn part-way. Your files, restart list and browser are back. Check what was left unfinished and continue if it still needs doing.]";
 
+/** What an update needs of the Forum (`Forum.hold` and `Forum.release`). */
+export type ForumHold = {
+  hold(botId: string): Promise<void>;
+  release(botId: string, note: string): Promise<void>;
+};
+
 /**
  * Operations on bots' environments that the Woven UI starts: status, stop, rebuild and the
  * all-bots update. They belong to the runtime, not to a single bot's tools.
@@ -19,6 +25,7 @@ export class RuntimeOperations {
   readonly #previews: PreviewManager | undefined;
   readonly #notify: (message: ServerMessage) => void;
   readonly #log: (message: string) => void;
+  readonly #forum: ForumHold | undefined;
   #updating: Promise<UpdateResult[]> | undefined;
 
   constructor(options: {
@@ -27,12 +34,15 @@ export class RuntimeOperations {
     previews?: PreviewManager;
     notify?: (message: ServerMessage) => void;
     log?: (message: string) => void;
+    /** The Forum: an update stops and holds a bot's Forum turns like its other conversations. */
+    forum?: ForumHold;
   }) {
     this.#manager = options.manager;
     this.#env = options.env;
     this.#previews = options.previews;
     this.#notify = options.notify ?? (() => {});
     this.#log = options.log ?? (() => {});
+    this.#forum = options.forum;
   }
 
   #requireEnv(): BotEnvironmentAdapter {
@@ -128,7 +138,27 @@ export class RuntimeOperations {
       const bot = await this.#manager.get(botId);
       for (const conversationId of conversations) await bot.abort(conversationId).catch(() => {});
       if (conversations.length) interrupted.set(botId, conversations);
+      await this.#forum
+        ?.hold(botId)
+        .catch((error: unknown) => this.#log(`bot ${botId}: forum hold: ${String(error)}`));
     }
+    try {
+      return await this.#updateStopped(env, ids, interrupted);
+    } finally {
+      for (const botId of ids) {
+        await this.#forum
+          ?.release(botId, INTERRUPTED_NOTE)
+          .catch((error: unknown) => this.#log(`bot ${botId}: forum release: ${String(error)}`));
+      }
+    }
+  }
+
+  async #updateStopped(
+    env: BotEnvironmentAdapter,
+    ids: readonly string[],
+    interrupted: ReadonlyMap<string, number[]>,
+  ): Promise<UpdateResult[]> {
+    if (!env.updateBot) throw new Error("this environment cannot update bots");
     const results: UpdateResult[] = [];
     for (const botId of ids) {
       this.#notify({ type: "runtime.update", botId, phase: "updating" });

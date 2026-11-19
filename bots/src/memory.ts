@@ -280,7 +280,7 @@ export class MemoryExtractor {
     const memory = await manager.registry.memory(botId);
     let checkpoint = memory.checkpoint;
     const lines: { id: number; text: string }[] = [];
-    for (const { conversationId } of await bot.conversations()) {
+    for (const { conversationId } of await bot.memoryConversations()) {
       for await (const entry of bot.ownEntries(conversationId, memory.checkpoint)) {
         checkpoint = Math.max(checkpoint, entry.id);
         const shown = displayEntry(entry);

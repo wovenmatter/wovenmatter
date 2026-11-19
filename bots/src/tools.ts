@@ -1,6 +1,7 @@
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { BotManager } from "./bots.ts";
+import type { Forum } from "./forum.ts";
 import { describeProfile, type ProfileStore } from "./profiles.ts";
 import type { SettingsService } from "./settings/service.ts";
 import type { BotRecord } from "./storage/registry.ts";
@@ -17,7 +18,20 @@ export type BotPlatform = {
   readonly maxMessagesPerHourPerPair?: number;
   /** `[bot_to_bot] max_rounds_per_request`: bot-to-bot hops after one user message. */
   readonly maxRoundsPerRequest?: number;
+  /** The Forum, once it is open (it opens after the bots do). */
+  readonly forum?: () => Forum | undefined;
+  /** What bots call the user; undefined: no name yet. */
+  readonly userName?: () => Promise<string | undefined>;
+  /** Save what bots call the user ("" clears it). Returns the saved name. */
+  readonly setUserName?: (name: string) => Promise<string>;
 };
+
+/** The user's name as stored: trimmed, at most 80 characters, "" for none. */
+export function checkUserName(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  if (trimmed.length > 80) throw new Error("that name is too long (80 characters at most)");
+  return trimmed;
+}
 
 type Result = { output: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -539,6 +553,21 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
         run(async () => {
           const record = await platform.manager().setProfile(args.botId, args.profileId);
           return `${record.name} now runs profile "${store().resolve(record.profile).id}".`;
+        }),
+    }),
+    defineTool({
+      name: "set_user_name",
+      description:
+        "Save what the user wants to be called. Every bot is told this name. Call it when the user tells you their name or asks to be called something else.",
+      parameters: Type.Object({
+        name: Type.String({ description: "The name (80 characters at most)" }),
+      }),
+      execute: (args) =>
+        run(async () => {
+          const save = platform.setUserName;
+          if (!save) throw new Error("the user's name can't be saved on this server");
+          const saved = await save(args.name);
+          return saved ? `Saved: every bot now calls the user ${saved}.` : "Cleared the user's name.";
         }),
     }),
     defineTool({

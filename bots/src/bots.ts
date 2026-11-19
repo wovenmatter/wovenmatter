@@ -69,6 +69,11 @@ export class Bot {
   readonly #hasModel: () => boolean;
   /** Set before greet's first await: two setMainModel calls can't both greet. */
   #greeting = false;
+  /**
+   * The conversations this bot hears the Forum through (set by the app). They are its own, like
+   * the main channel and threads, but never listed with them: no client opens one.
+   */
+  forumConversations: () => Promise<readonly number[]> = async () => [];
 
   constructor(
     record: BotRecord,
@@ -98,15 +103,16 @@ export class Bot {
   }
 
   /**
-   * Point the main channel and every thread at `model` (a profile's main model). Conversations
-   * already on it are left alone; a change applies from each one's next request. Returns how many
-   * conversations changed.
+   * Point the main channel, every thread and the Forum seats at `model` (a profile's main model).
+   * Conversations already on it are left alone; a change applies from each one's next request.
+   * Returns how many conversations changed.
    */
   async applyModel(model: ModelRef): Promise<number> {
     const ids = [(await this.main()).id];
     for (const thread of await this.#registry.listThreads(this.id)) {
       ids.push(toConversationId(thread.conversationId));
     }
+    for (const seat of await this.forumConversations()) ids.push(toConversationId(seat));
     let changed = 0;
     for (const id of ids) {
       const conversation = await this.harness.conversation(id, ctx);
@@ -130,9 +136,13 @@ export class Bot {
     return conversation;
   }
 
-  /** Round metadata belongs to the placed input, not a later queued follow-up. */
+  /**
+   * Round metadata belongs to the placed input, not a later queued follow-up. Any conversation of
+   * the bot may ask (a Forum seat too): an input that is not a bot's message starts at round 0.
+   */
   async round(conversationId: number): Promise<number> {
-    const conversation = await this.conversation(conversationId);
+    const conversation = await this.harness.conversation(toConversationId(conversationId), ctx);
+    if (!conversation) throw new NotFoundError(`no conversation ${conversationId} on bot ${this.id}`);
     let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
     do {
       const page = await conversation.entries({ order: "descending" }, 100, cursor, ctx);
@@ -348,10 +358,18 @@ export class Bot {
     }
   }
 
-  /** The newest entry id across the main channel and threads (0 for an empty bot). */
+  /** What memory extraction reads: the bot's own history and its Forum seats. */
+  async memoryConversations(): Promise<{ readonly conversationId: number }[]> {
+    return [
+      ...(await this.conversations()),
+      ...(await this.forumConversations()).map((conversationId) => ({ conversationId })),
+    ];
+  }
+
+  /** The newest entry id across the main channel, threads and Forum seats (0 for an empty bot). */
   async latestEntryId(): Promise<number> {
     let latest = 0;
-    for (const { conversationId } of await this.conversations()) {
+    for (const { conversationId } of await this.memoryConversations()) {
       const conversation = await this.harness.conversation(toConversationId(conversationId), ctx);
       const page = await conversation?.entries({ order: "descending" }, 1, undefined, ctx);
       latest = Math.max(latest, page?.items[0]?.id ?? 0);
@@ -472,6 +490,8 @@ export type BotManagerOptions = {
   readonly availability?: ModelAvailability;
   /** A bot's main-model status changed (fallback, paused, returned). */
   readonly onModelStatus?: (botId: string, status: ModelStatus | undefined) => void;
+  /** The conversations a bot hears the Forum through; they follow its profile's model too. */
+  readonly forumConversations?: (botId: string) => Promise<readonly number[]>;
 };
 
 /**
@@ -856,6 +876,8 @@ export class BotManager {
       () => this.#noteFor(id),
       () => this.#hasModel(id),
     );
+    const seats = this.#options.forumConversations;
+    if (seats) bot.forumConversations = () => seats(id);
     let report: RecoveryReport;
     try {
       report = await this.#recover(bot);
