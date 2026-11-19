@@ -13,6 +13,8 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case moveFolder(id: String, up: Bool)
     case deleteFolder(id: String, deleteRoot: Bool)
     case folderReferences(id: String, paths: [String])
+    /// A name for an execution workspace, by registry ID; nil returns it to its default.
+    case renameWorkspace(registryID: String, name: String?)
     case conversation(id: String, mutation: WorkspaceConversationMutation)
     case note(id: String, mutation: WorkspaceNoteMutation, expectedRevision: String)
     case moveConversation(id: String, folderID: String?)
@@ -53,6 +55,11 @@ extension BackendApplicationService {
             if !result.accepted { throw BackendRPCError.remote(model.folderMutationError ?? "Folder deletion failed.") }
         case let .folderReferences(id, paths):
             result.accepted = await model.setFolderReferencePaths(id: id, paths: paths)
+        case let .renameWorkspace(registryID, name):
+            guard await model.renameWorkspace(registryID: registryID, name: name) else {
+                throw BackendRPCError.remote(model.folderMutationError ?? "The workspace could not be renamed.")
+            }
+            return result
         case let .conversation(id, mutation):
             try await model.mutateConversation(id: id, mutation: mutation)
         case let .note(id, mutation, revision):

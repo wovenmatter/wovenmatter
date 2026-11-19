@@ -144,6 +144,8 @@ enum PairedLibraryTables {
     "execution_runs", "execution_native_history", "execution_native_history_parts",
     "saved_artifacts", "artifact_uploads", "artifact_chunks",
     "library_messages", "library_items", "library_locations", "mac_routes", "remote_workspace_configurations",
+    // Names people give execution workspaces, by registry ID.
+    "execution_workspace_names",
     // Signed member entries and revocations; trust is resolved from signatures.
     "library_members", "library_member_revocations",
     "bot_conversations", "bot_conversation_entries",

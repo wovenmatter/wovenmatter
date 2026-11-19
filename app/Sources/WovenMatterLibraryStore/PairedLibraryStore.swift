@@ -121,7 +121,7 @@ extension WorkspaceDatabaseConnection {
   /// They are enabled for all writers, including notes saved during a sync call.
   func migratePeerSync() throws {
     try transaction {
-      try executeUnlocked(Self.peerSyncTablesSQL + """
+      try executeUnlocked(Self.peerSyncTablesSQL + Self.executionWorkspaceNamesTableSQL + """
         CREATE INDEX IF NOT EXISTS peer_sync_versions_pending ON peer_sync_versions(cursor) WHERE pending_peer IS NOT NULL;
         CREATE INDEX IF NOT EXISTS peer_sync_versions_waiting ON peer_sync_versions(cursor) WHERE waits_for_update=1;
         INSERT OR IGNORE INTO peer_sync_clock(singleton,device_id) SELECT 1,host_device_id FROM library_identity WHERE singleton=1;
@@ -150,6 +150,22 @@ extension WorkspaceDatabaseConnection {
         WHEN (SELECT applying FROM peer_sync_clock WHERE singleton=1)=0 BEGIN
           INSERT OR IGNORE INTO calendar_item_owners VALUES(NEW.id,(SELECT device_id FROM peer_sync_clock WHERE singleton=1));
         END;
+        """)
+      // Where an agent or a chat is placed is decided by owner records, the
+      // registry and its names, which arrive on their own: each advances the
+      // workspace overview's change counter like the rows they place. Of a
+      // chat's execution projection only its workspace counts; its content is
+      // rewritten with every observed message.
+      for table in ["agent_owners", "execution_workspaces", "execution_workspace_names"] {
+        try createWorkspaceRevisionTriggersUnlocked(table)
+      }
+      try createWorkspaceRevisionTriggersUnlocked("execution_conversations", operations: ["INSERT", "DELETE"])
+      try executeUnlocked("""
+        CREATE TRIGGER IF NOT EXISTS execution_conversations_workspace_revision_update
+        AFTER UPDATE OF workspace_id ON execution_conversations WHEN OLD.workspace_id IS NOT NEW.workspace_id
+        BEGIN
+          UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
+        END
         """)
       // Replaying observed rows must not manufacture fresh native history or
       // derived library work. FTS indexing still runs on the original, stable
@@ -206,6 +222,8 @@ extension WorkspaceDatabaseConnection {
           try toolsExecuteUnlocked("INSERT INTO peer_sync_seeded VALUES(?)", [table.name])
         }
       }
+      // After the capture triggers, so each claim is an ordinary local version.
+      try claimEvidencedOwnershipUnlocked()
       // What this build understands changed (an update added a table or a
       // column, or reads newer content): versions kept for it are tried again.
       let understands = try peerSchema() + ":" + String(PairedLibraryFormat.content)
@@ -353,7 +371,7 @@ extension WorkspaceDatabaseConnection {
   ///   only for what it serves itself: its own workspace's registration and
   ///   that workspace's sessions, and owner rows naming itself. Everything
   ///   else it relays is skipped, so it can never point a Mac's workspace or
-  ///   sessions at itself.
+  ///   sessions at itself, or rename a workspace.
   private func peerRecordAllowed(_ record: PairedLibraryRecord, sender: PairedLibrarySender?) throws -> Bool {
     func column(_ name: String) -> String? { peerText(record.row[name]) }
     switch record.table {
@@ -397,7 +415,7 @@ extension WorkspaceDatabaseConnection {
       let current = try historyRowsUnlocked("SELECT workspace_id FROM execution_conversations WHERE id=?", values: [id])
         .first?.objectValue?["workspace_id"]?.stringValue
       return try current == nil || servesWorkspace(current)
-    case "mac_routes", "remote_workspace_configurations":
+    case "mac_routes", "remote_workspace_configurations", "execution_workspace_names":
       return false
     case "agent_owners", "conversation_owners", "calendar_item_owners":
       guard column("device_id")?.lowercased() == own, let id = column("id") else { return false }
@@ -1000,7 +1018,7 @@ extension WorkspaceDatabaseConnection {
         if current != nil { try toolsExecuteUnlocked("DELETE FROM execution_conversations WHERE id=?", [id]) }
         continue
       }
-      guard let workspace = workspaces.first(where: { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }),
+      guard let workspace = ExecutionWorkspace.macWorkspace(ownedBy: owner, in: workspaces),
             let conversation = try libraryConversationUnlocked(id: id) else { continue }
       var projected = conversation; projected.workspaceID = workspace.id; projected.libraryID = workspace.libraryID
       if let current = try historyRowsUnlocked("SELECT title,folder_id,is_pinned FROM conversations WHERE id=?", values: [id]).first?.objectValue {

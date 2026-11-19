@@ -112,7 +112,17 @@ extension WorkspaceDatabaseConnection {
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceDatabaseError.execute("Remote workspace agent identity collision")
     }
+    try claimAgentUnlocked(id)
     return id
+  }
+
+  /// This Mac owns the agents it ensures. The insert trigger claims a new
+  /// row, but never fires when the row already existed (a library older
+  /// than the owner tables), so the claim is repeated here. An owner record
+  /// that exists, or was received, stays.
+  private func claimAgentUnlocked(_ id: String) throws {
+    try toolsExecuteUnlocked(
+      "INSERT OR IGNORE INTO agent_owners(id,device_id) SELECT ?,device_id FROM peer_sync_clock WHERE singleton=1", [id])
   }
 
   @discardableResult
@@ -209,6 +219,7 @@ extension WorkspaceDatabaseConnection {
     guard changed || agentAlreadyExisted else {
       throw WorkspaceDatabaseError.execute("Local CLI agent identity collision")
     }
+    try claimAgentUnlocked(id)
     return id
   }
 
@@ -226,6 +237,14 @@ extension WorkspaceDatabaseConnection {
           updatedAt: updatedAt
         )
       }
+      // Every agent row this Mac's device ID created is this Mac's, including
+      // harnesses no longer in the catalog and its agents for Linux hosts. A
+      // Dev snapshot has a new device ID, so it claims nothing it copied.
+      try toolsExecuteUnlocked("""
+        INSERT OR IGNORE INTO agent_owners(id,device_id)
+          SELECT a.id,(SELECT device_id FROM peer_sync_clock WHERE singleton=1) FROM agents a
+          WHERE lower(a.owner_device_id)=? AND NOT EXISTS(SELECT 1 FROM agent_owners o WHERE o.id=a.id)
+        """, [ownerDeviceID.uuidString.lowercased()])
     }
   }
 

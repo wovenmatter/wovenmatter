@@ -1302,3 +1302,312 @@ extension PairedLibraryTests {
     #expect(try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: Data(received.utf8)) == renamed)
   }
 }
+
+
+/// Libraries older than the owner tables hold rows no owner record names,
+/// and paired ones already hold each other's. Each Mac claims, on every
+/// open, exactly what it has local evidence of having run.
+extension PairedLibraryTests {
+  /// Leaves `mac`'s rows as a library from before the owner tables had them:
+  /// no owner record, and no version of one to send.
+  private func forgetOwners(_ mac: Mac) async throws {
+    try await mac.database.write { connection in
+      try connection.executeUnlocked("""
+        UPDATE peer_sync_clock SET applying=1;
+        DELETE FROM agent_owners; DELETE FROM conversation_owners; DELETE FROM calendar_item_owners;
+        DELETE FROM peer_sync_versions WHERE table_name IN ('agent_owners','conversation_owners','calendar_item_owners');
+        UPDATE peer_sync_clock SET applying=0;
+        """)
+    }
+  }
+  private func owner(_ database: WorkspaceDatabase, _ table: String, _ id: String) async throws -> String? {
+    try await database.read { try $0.historyRowsUnlocked("SELECT device_id FROM \(table) WHERE id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue }
+  }
+  private func owners(_ database: WorkspaceDatabase, _ table: String) async throws -> [String: String] {
+    try await database.read { connection in
+      Dictionary(uniqueKeysWithValues: try connection.historyRowsUnlocked("SELECT id,device_id FROM \(table)", values: []).compactMap {
+        guard let id = $0.objectValue?["id"]?.stringValue, let device = $0.objectValue?["device_id"]?.stringValue else { return nil }
+        return (id, device)
+      })
+    }
+  }
+  /// The agents `device` created, as its catalog reconciliation writes them.
+  private func agents(_ database: WorkspaceDatabase, of device: UUID) async throws -> Set<UUID> {
+    Set(try await database.workspaceAgents().filter { $0.ownerDeviceID == device }.map(\.id))
+  }
+  private func schedule(_ mac: Mac, _ title: String) async throws -> String {
+    let start = Date().addingTimeInterval(-30)
+    let task = WorkspaceCalendarTask(prompt: "Fixture", configuration: .init(runtimeKind: .codex, title: "Fixture", model: "fixture", permission: "agent"))
+    return try await mac.database.saveCalendarEvent(draft: .init(title: title, startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
+  }
+
+  @Test func aLibraryOlderThanOwnerRecordsClaimsWhatThisMacRanWhenItOpens() async throws {
+    let mac = try await Mac(); defer { mac.remove() }
+    let device = UUID()
+    try await mac.database.reconcileLocalCLIAgentCatalog(ownerDeviceID: device)
+    let chat = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Before owner records", ownerDeviceID: device)
+    let item = try await schedule(mac, "Before owner records")
+    let own = try await agents(mac.database, of: device)
+    #expect(!own.isEmpty)
+    try await forgetOwners(mac)
+    #expect(try await !mac.database.read { try $0.locallyOwnsConversationUnlocked(chat) })
+    #expect(try await mac.database.dueCalendarRuns().isEmpty)
+    #expect(try await mac.database.agentPlacements() == .init())
+
+    let reopened = try await WorkspaceDatabase(url: mac.database.fileURL)
+    // Its chat has a native session here; its schedule predates any peer.
+    #expect(try await reopened.read { try $0.locallyOwnsConversationUnlocked(chat) })
+    #expect(try await owner(reopened, "calendar_item_owners", item) == mac.id)
+    #expect(try await reopened.dueCalendarRuns().map(\.eventID) == [item])
+    // Its agents are claimed once the device that created them is known.
+    #expect(try await reopened.agentPlacements().own.isEmpty)
+    try await reopened.reconcileLocalCLIAgentCatalog(ownerDeviceID: device)
+    #expect(try await reopened.agentPlacements() == .init(own: own))
+    // Every claim is an ordinary local version, sent like any other writing.
+    let claims = try await journal(reopened).filter { $0.table.hasSuffix("_owners") }
+    #expect(claims.allSatisfy { $0.origin == mac.id && !$0.deleted && $0.row["device_id"]?.value == mac.id })
+    #expect(Set(claims.filter { $0.table == "agent_owners" }.compactMap { $0.row["id"]?.value }) == Set(own.map { $0.uuidString.lowercased() }))
+    #expect(claims.filter { $0.table == "conversation_owners" }.compactMap { $0.row["id"]?.value } == [chat])
+    #expect(claims.filter { $0.table == "calendar_item_owners" }.compactMap { $0.row["id"]?.value } == [item])
+    // Opening again claims nothing more.
+    let settled = try await lastChange(reopened)
+    let again = try await WorkspaceDatabase(url: mac.database.fileURL)
+    try await again.reconcileLocalCLIAgentCatalog(ownerDeviceID: device)
+    #expect(try await lastChange(again) == settled)
+  }
+
+  /// The maintainer's two Macs: each library held the other's agents and
+  /// chats with no owner record anywhere. After both update, each owns
+  /// exactly what it ran, and the other's rows lead to the other Mac.
+  @Test func twoMacsThatExchangedEverythingWithoutOwnerRecordsEachClaimOnlyTheirOwn() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let devices = [a.id: UUID(), b.id: UUID()]
+    var chats: [String: String] = [:], workspaces: [String: ExecutionWorkspace] = [:], created: [String: Set<UUID>] = [:]
+    for mac in [a, b] {
+      let device = try #require(devices[mac.id])
+      try await mac.database.reconcileLocalCLIAgentCatalog(ownerDeviceID: device)
+      chats[mac.id] = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Chat of " + mac.id, ownerDeviceID: device)
+      workspaces[mac.id] = try await registerMacWorkspace(mac)
+      created[mac.id] = try await agents(mac.database, of: device)
+      try await forgetOwners(mac)
+    }
+    try await a.send(to: b); try await b.send(to: a)
+    for (mac, other) in [(a, b), (b, a)] {
+      // Each holds the other's chat and agents, the chat without a native session.
+      let theirs = try #require(chats[other.id])
+      #expect(try await mac.database.read { try !$0.historyRowsUnlocked("SELECT id FROM conversations WHERE id=?", values: [theirs]).isEmpty })
+      #expect(try await mac.database.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM harness_sessions WHERE conversation_id=?", values: [theirs]).isEmpty })
+      #expect(try await agents(mac.database, of: try #require(devices[other.id])) == created[other.id])
+      for table in ["agent_owners", "conversation_owners"] { #expect(try await owners(mac.database, table).isEmpty) }
+      #expect(try await mac.database.agentPlacements() == .init())
+    }
+
+    // Both update: the open claims chats, the catalog reconciliation agents.
+    for mac in [a, b] {
+      let reopened = try await WorkspaceDatabase(url: mac.database.fileURL)
+      try await reopened.reconcileLocalCLIAgentCatalog(ownerDeviceID: try #require(devices[mac.id]))
+    }
+    for (mac, other) in [(a, b), (b, a)] {
+      // Before the next exchange each already owns its own and nothing else.
+      #expect(try await owners(mac.database, "conversation_owners") == [try #require(chats[mac.id]): mac.id])
+      #expect(try await mac.database.agentPlacements() == .init(own: try #require(created[mac.id])))
+      #expect(try await projectedWorkspace(mac.database, try #require(chats[other.id])) == nil)
+    }
+    try await a.send(to: b); try await b.send(to: a)
+    for (mac, other) in [(a, b), (b, a)] {
+      let mine = try #require(chats[mac.id]), theirs = try #require(chats[other.id])
+      #expect(try await owners(mac.database, "conversation_owners") == [mine: mac.id, theirs: other.id])
+      #expect(try await mac.database.read { try $0.locallyOwnsConversationUnlocked(mine) })
+      #expect(try await !mac.database.read { try $0.locallyOwnsConversationUnlocked(theirs) })
+      // The other Mac's chat is routed to its registry row; this Mac's stays native.
+      #expect(try await projectedWorkspace(mac.database, theirs) == workspaces[other.id]?.id)
+      #expect(try await projectedWorkspace(mac.database, mine) == nil)
+      let placements = try await mac.database.agentPlacements()
+      #expect(placements.own == created[mac.id])
+      #expect(Set(placements.workspaces.keys) == created[other.id])
+      #expect(Set(placements.workspaces.values.map(\.id)) == [try #require(workspaces[other.id]).id])
+      #expect(try await mac.database.pairedAgentWorkspaces() == placements.workspaces)
+      #expect(try await mac.database.peerSyncConflicts().filter { $0.record.table.hasSuffix("_owners") }.isEmpty)
+      #expect(try await mac.database.peerSyncQuarantineCount() == 0)
+    }
+    // Later opens and exchanges change nothing.
+    let heads = [try await lastChange(a.database), try await lastChange(b.database)]
+    for mac in [a, b] {
+      let reopened = try await WorkspaceDatabase(url: mac.database.fileURL)
+      try await reopened.reconcileLocalCLIAgentCatalog(ownerDeviceID: try #require(devices[mac.id]))
+    }
+    try await a.send(to: b); try await b.send(to: a)
+    #expect([try await lastChange(a.database), try await lastChange(b.database)] == heads)
+  }
+
+  /// In a library that has received peer data only local evidence claims a
+  /// schedule: one this Mac has run, unless it is assigned to another device.
+  @Test func afterPeerDataOnlySchedulesThisMacRanAreClaimed() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let ran = try await schedule(a, "Ran here"), phone = try await schedule(a, "Ran here for a phone")
+    #expect(try await a.database.dueCalendarRuns().count == 2)
+    let observed = try await schedule(b, "Another Mac's")
+    try await forgetOwners(a); try await forgetOwners(b)
+    try await b.send(to: a)
+    try await a.database.write { connection in
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO calendar_task_executors(event_id,device_id) VALUES(?,?)", [phone, UUID().uuidString.lowercased()])
+    }
+    #expect(try await a.database.calendarItems().map(\.id).contains(observed))
+    let reopened = try await WorkspaceDatabase(url: a.database.fileURL)
+    #expect(try await owners(reopened, "calendar_item_owners") == [ran: a.id])
+  }
+
+  /// A Dev snapshot is prepared as `scripts/dev-build.py` does
+  /// (`disconnect_snapshot`): a new library and device identity, no native
+  /// sessions, no peer bookkeeping, copied agents retired and every schedule
+  /// assigned to a device that does not exist. Whether or not the source had
+  /// owner records, the snapshot claims nothing it copied.
+  @Test(arguments: [true, false])
+  func aDevSnapshotClaimsNothingItCopied(sourceHasOwnerRecords: Bool) async throws {
+    let source = try await Mac(); defer { source.remove() }
+    let device = UUID()
+    try await source.database.reconcileLocalCLIAgentCatalog(ownerDeviceID: device)
+    let chat = try await source.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Production chat", ownerDeviceID: device)
+    let item = try await schedule(source, "Production schedule")
+    #expect(try await source.database.dueCalendarRuns().count == 1)
+    let copied = try await agents(source.database, of: device)
+    if !sourceHasOwnerRecords { try await forgetOwners(source) }
+    let host = UUID().uuidString.lowercased(), nobody = UUID().uuidString.lowercased()
+    try await source.database.write { connection in
+      // Without a clock row no capture trigger fires, as with the triggers dropped.
+      try connection.executeUnlocked("""
+        DELETE FROM peer_sync_clock; DELETE FROM peer_sync_versions; DELETE FROM peer_sync_seeded; DELETE FROM peer_sync_cursors;
+        DELETE FROM peer_sync_state; DELETE FROM peer_sync_conflicts; DELETE FROM peer_sync_quarantine; DELETE FROM peer_sync_reassert;
+        DELETE FROM harness_sessions; DELETE FROM mac_routes; DELETE FROM remote_workspace_configurations;
+        DELETE FROM calendar_task_executors; DELETE FROM library_identity;
+        INSERT OR IGNORE INTO retained_execution_history SELECT id FROM conversations WHERE is_archived=0;
+        UPDATE conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history);
+        UPDATE agents SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),status='offline'
+          WHERE execution_location='local' AND runtime_device_id IS NULL AND deleted_at IS NULL;
+        UPDATE calendar_runs SET status='cancelled' WHERE status IN ('queued','pending','sending','running','accepted');
+        """)
+      try connection.toolsExecuteUnlocked("INSERT INTO library_identity(singleton,host_device_id,library_id) VALUES(1,?,?)", [host, UUID().uuidString.lowercased()])
+      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO calendar_task_executors(event_id,device_id) SELECT id,? FROM calendar_items", [nobody])
+    }
+    let snapshot = try await WorkspaceDatabase(url: source.database.fileURL)
+    let snapshotDevice = UUID()
+    try await snapshot.reconcileLocalCLIAgentCatalog(ownerDeviceID: snapshotDevice)
+    #expect(try await snapshot.libraryIdentity().hostDeviceID == host)
+    #expect(try await !snapshot.read { try $0.locallyOwnsConversationUnlocked(chat) })
+    #expect(try await owner(snapshot, "conversation_owners", chat) == (sourceHasOwnerRecords ? source.id : nil))
+    #expect(try await owner(snapshot, "calendar_item_owners", item) == (sourceHasOwnerRecords ? source.id : nobody))
+    #expect(try await snapshot.dueCalendarRuns().isEmpty)
+    for table in ["conversation_owners", "calendar_item_owners"] {
+      #expect(try await owners(snapshot, table).values.allSatisfy { $0 != host })
+    }
+    // Only the agents its own new device ID creates are its own.
+    let created = try await agents(snapshot, of: snapshotDevice)
+    #expect(Set(try await owners(snapshot, "agent_owners").filter { $0.value == host }.keys) == Set(created.map { $0.uuidString.lowercased() }))
+    let placements = try await snapshot.agentPlacements()
+    #expect(!created.isEmpty && placements.own == created && placements.own.isDisjoint(with: copied))
+  }
+}
+
+
+/// Names people give workspaces, and the change counter the views follow.
+extension PairedLibraryTests {
+  @Test func workspaceNamesAreValidatedSharedBetweenMacsAndNeverWrittenByALinuxHost() async throws {
+    let a = try await Mac(), b = try await Mac(), linux = try await Mac(); defer { a.remove(); b.remove(); linux.remove() }
+    let workspace = try await registerMacWorkspace(a)
+    try await a.database.setExecutionWorkspaceName(workspaceID: workspace.id.uppercased(), name: "  Studio \n")
+    #expect(try await a.database.executionWorkspaceNames() == [workspace.id: "Studio"])
+    // The same name again writes nothing to send.
+    let named = try await lastChange(a.database)
+    try await a.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Studio")
+    #expect(try await lastChange(a.database) == named)
+    // 256 bytes at most, no NUL, and only a registry ID.
+    for (id, name) in [(workspace.id, String(repeating: "n", count: 257)), (workspace.id, "Stu\0dio"), ("device:" + workspace.id, "Studio"), ("", "Studio")] {
+      await #expect(throws: LibraryAPIError.self) { try await a.database.setExecutionWorkspaceName(workspaceID: id, name: name) }
+    }
+    #expect(try await a.database.executionWorkspaceNames() == [workspace.id: "Studio"])
+    #expect(try await lastChange(a.database) == named)
+    let longest = String(repeating: "é", count: 128)
+    try await a.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: longest)
+    #expect(try await a.database.executionWorkspaceNames() == [workspace.id: longest])
+    try await a.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Studio")
+
+    // Any Mac names any workspace; the last name reaches every Mac.
+    try await a.send(to: b)
+    #expect(try await b.database.executionWorkspaceNames() == [workspace.id: "Studio"])
+    try await b.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Desk")
+    try await b.send(to: a)
+    #expect(try await a.database.executionWorkspaceNames() == [workspace.id: "Desk"])
+    // A row a peer wrote is read with the same rules.
+    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE execution_workspace_names SET name=? WHERE workspace_id=?", ["   ", workspace.id]) }
+    #expect(try await a.database.executionWorkspaceNames().isEmpty)
+    try await a.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Desk")
+
+    // A Linux host holds and relays the table but cannot write it.
+    try await linux.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Forged by a host")
+    let sender = PairedLibrarySender(deviceID: linux.id, kind: .linux, members: [
+      .init(deviceID: a.id, kind: .mac, endpoints: [], revoked: false), .init(deviceID: linux.id, kind: .linux, endpoints: [], revoked: false)])
+    var cursor: Int64 = 0, relayed = false
+    for _ in 0..<1000 {
+      let page = try await linux.database.pairedLibraryPage(after: cursor)
+      relayed = relayed || page.entries.contains { $0.table == "execution_workspace_names" }
+      try await a.database.receivePairedLibrary(page, from: linux.id, sender: sender)
+      cursor = page.cursor
+      if !page.hasMore { break }
+    }
+    #expect(relayed)
+    #expect(try await a.database.executionWorkspaceNames() == [workspace.id: "Desk"])
+    #expect(try await a.database.peerSyncQuarantineCount() == 0)
+
+    // Blank or nil returns the workspace to its default name, everywhere.
+    try await a.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "  ")
+    #expect(try await a.database.executionWorkspaceNames().isEmpty)
+    try await a.send(to: b)
+    #expect(try await b.database.executionWorkspaceNames().isEmpty)
+    try await b.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Again")
+    try await b.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: nil)
+    #expect(try await b.database.executionWorkspaceNames().isEmpty)
+  }
+
+  /// The workspace overview is read again only when its change counter
+  /// moved. What places an agent or a chat on a machine arrives apart from
+  /// the agent or chat, so each of those rows moves the counter by itself.
+  @Test func whatPlacesAgentsAndChatsAdvancesTheWorkspaceRevision() async throws {
+    let mac = try await Mac(); defer { mac.remove() }
+    var revision = try await mac.database.workspaceRevision()
+    func changed(_ what: String, _ sql: String? = nil, _ values: [String] = []) async throws -> Bool {
+      if let sql { try await mac.database.write { connection in
+        try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+        try connection.toolsExecuteUnlocked(sql, values)
+        try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
+      } }
+      let next = try await mac.database.workspaceRevision()
+      defer { revision = next }
+      return next != revision
+    }
+    let workspace = try await registerMacWorkspace(mac)
+    #expect(try await changed("a registry row"))
+    var renamed = workspace; renamed.name = "Renamed"
+    _ = try await mac.database.registerExecutionWorkspace(.init(workspace: renamed, expectedRevision: workspace.revision), deviceID: mac.id)
+    #expect(try await changed("a registry change"))
+    _ = try await mac.database.registerExecutionWorkspace(.init(workspace: renamed, expectedRevision: workspace.revision + 1), deviceID: mac.id)
+    #expect(try await !changed("an unchanged registration"))
+    try await mac.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Studio")
+    #expect(try await changed("a name"))
+    try await mac.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Studio")
+    #expect(try await !changed("the same name"))
+    try await mac.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: nil)
+    #expect(try await changed("a removed name"))
+
+    // As a receive applies them: an owner record with nothing else.
+    let agent = UUID().uuidString.lowercased(), other = UUID().uuidString.lowercased(), chat = UUID().uuidString.lowercased()
+    #expect(try await changed("an owner record", "INSERT INTO agent_owners VALUES(?,?)", [agent, other]))
+    #expect(try await changed("a changed owner", "UPDATE agent_owners SET device_id=? WHERE id=?", [mac.id, agent]))
+    #expect(try await changed("a removed owner", "DELETE FROM agent_owners WHERE id=?", [agent]))
+    // Of a chat's execution projection, only where it runs.
+    #expect(try await changed("a projection", "INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [chat, workspace.id]))
+    #expect(try await !changed("projected content", "UPDATE execution_conversations SET conversation='{\"title\":\"Observed\"}',active_run_id='run' WHERE id=?", [chat]))
+    #expect(try await !changed("the same workspace", "UPDATE execution_conversations SET workspace_id=workspace_id WHERE id=?", [chat]))
+    #expect(try await changed("another workspace", "UPDATE execution_conversations SET workspace_id=? WHERE id=?", [other, chat]))
+    #expect(try await changed("a removed projection", "DELETE FROM execution_conversations WHERE id=?", [chat]))
+  }
+}

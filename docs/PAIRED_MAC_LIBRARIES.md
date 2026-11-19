@@ -10,7 +10,8 @@ authority. Any Mac can add a remote workspace or pair another Apple device.
 `PairedLibraryTables` is the reviewed content boundary. Shared rows cover notes,
 versions, folders and roots, conversation/message/run observations, native history,
 calendar definitions, dictation history, library settings and indexes, saved
-artifacts, workspace descriptors and remote workspace definitions. Shared library
+artifacts, workspace descriptors, the names people give workspaces
+(`execution_workspace_names`) and remote workspace definitions. Shared library
 and attachment bytes transfer by content hash. A new paired Mac downloads the
 shared data; there is no optional per-chat offline flag or automatic eviction of
 the only locally saved copy.
@@ -47,7 +48,14 @@ from its owner record. Ownership is positive: a
 Mac recovers interrupted runs, schedules goals, records
 goal usage, runs schedules, indexes library messages and captures workspace files
 only for rows whose owner record names that Mac. A row received before its owner
-record stays read-only, including across restarts. Imported observations do not
+record stays read-only, including across restarts. Agents are listed the same
+way (`AgentPlacements`): a Mac lists as its own only the agents whose owner
+record names it, and lists another member's agent under the workspace that
+record leads to, by its plain harness name. An agent whose owner record, or
+whose Mac's registry row, has not arrived is listed nowhere, never under this
+Mac. Owner records, registry rows and workspace names advance the workspace
+change counter, so each view follows one that arrives on its own.
+Imported observations do not
 fire native-history, library-indexing or capture triggers, or dispatch commands.
 Native workspace files are outside library sync; an observer downloads the
 owner's retained library bytes and never resolves a path on its own disk.
@@ -64,6 +72,14 @@ from that host, requested by any Mac; for another Mac's own workspace, from
 that Mac. Remote workspace definitions appear in the shared inventory; SSH
 credentials stay on the Mac that installed the host and do not become shared
 configuration.
+
+Any Mac can name any workspace. The name is a shared row keyed
+by the workspace's registry ID, so it reaches every paired Mac; a Linux host
+relays the row and can never write it. The workspace's owner also publishes
+the name as its registry name, which is what the iPhone, agents and devices
+that have not updated show. Without a chosen name a Mac's workspace is titled
+on the desktop with its tailnet machine name (the first label of its
+`*.ts.net` address), and a Linux workspace with the name from its setup.
 
 Another machine's chats arrive in this library by synchronization like any
 other history; there is no separate per-Mac cache of them. While one is open,
@@ -239,13 +255,34 @@ until it finishes. A backup that fails, usually for lack of space for a second
 copy, is retried after one minute, doubling to fifteen; meanwhile the first
 synchronization reports its error.
 Retain the original database and device-only credential vaults when recovering.
-Ownership of rows that existed before pairing is claimed exactly once, before any
-peer data arrives; a schedule assigned to a phone keeps that executor.
+
+A library can hold rows older than the owner records, and paired libraries
+may already hold each other's such rows. Nothing marks such a claim
+as done once: every time a Mac opens its library for writing it claims the
+unowned rows it has local evidence of having run, and nothing else.
+
+- A conversation with a native session on this Mac (`harness_sessions`, which
+  never synchronizes and is written only where the chat was created) and no
+  execution projection.
+- A schedule this Mac has run (`calendar_runs`, also local), unless its
+  executor record assigns it to another device. In a library that has never
+  received peer data every other schedule is claimed too, and one assigned to
+  a phone keeps that executor.
+- Agents, once the Mac's device ID is known at startup: the ones that device
+  ID created, and each agent the Mac ensures for itself.
+
+An owner record that exists or was received always wins; who last edited a row
+is never evidence, because any Mac may edit it; and a row without evidence
+stays unclaimed and read-only until its owner's record arrives. Claims are
+ordinary shared records, so two Macs claim disjoint rows and each learns the
+other's on the next exchange, which also routes the other Mac's chats to it.
 
 Provider credentials remain in their original local storage. A fresh Dev snapshot drops copied peer routes,
 membership state, counters and cursors, retaining source history without
-connecting to production. It keeps the copied ownership records, so a snapshot's
-new identity owns nothing it copied and never runs another Mac's schedules.
+connecting to production. It keeps the copied ownership records, and it has a
+new device ID, no native sessions and every schedule assigned to a device that
+does not exist, so a snapshot's new identity owns nothing it copied and never
+runs another Mac's schedules, whether or not its source had owner records.
 
 ## Review and device test plan
 

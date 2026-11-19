@@ -231,7 +231,8 @@ extension WorkspaceDatabaseConnection {
   }
 
   /// Every change to these tables advances `workspace_revision`, the
-  /// workspace overview's change counter.
+  /// workspace overview's change counter. The tables that place agents and
+  /// chats on a machine get theirs once all of them exist (`migratePeerSync`).
   private func createWorkspaceRevisionTriggersUnlocked() throws {
     for table in [
       "folders",
@@ -250,15 +251,19 @@ extension WorkspaceDatabaseConnection {
       "opencode_sessions",
       "opencode_submissions",
     ] {
-      for operation in ["INSERT", "UPDATE", "DELETE"] {
-        try executeUnlocked("""
-          CREATE TRIGGER IF NOT EXISTS \(table)_workspace_revision_\(operation.lowercased())
-          AFTER \(operation) ON \(table)
-          BEGIN
-            UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
-          END
-          """)
-      }
+      try createWorkspaceRevisionTriggersUnlocked(table)
+    }
+  }
+
+  func createWorkspaceRevisionTriggersUnlocked(_ table: String, operations: [String] = ["INSERT", "UPDATE", "DELETE"]) throws {
+    for operation in operations {
+      try executeUnlocked("""
+        CREATE TRIGGER IF NOT EXISTS \(table)_workspace_revision_\(operation.lowercased())
+        AFTER \(operation) ON \(table)
+        BEGIN
+          UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
+        END
+        """)
     }
   }
 }

@@ -104,4 +104,92 @@ struct PairedWorkspaceSidebarTests {
         #expect(PairedWorkspaceSidebarModel.isPhoneHistory(owner: mac, registry: registry) == false)
         #expect(PairedWorkspaceSidebarModel.isPhoneHistory(owner: "device:" + phone, registry: registry))
     }
+
+    /// Agents are listed by their owner records: this Mac's as stored;
+    /// another member's under its workspace by the plain harness name; a local
+    /// agent of unknown owner nowhere; this Mac's Linux agents unchanged.
+    @Test func agentsAreListedWhereTheirOwnerRecordsPlaceThem() {
+        func agent(_ runtime: AgentRuntimeKind, _ location: AgentExecutionLocation, name: String? = nil, on device: UUID? = nil) -> WorkspaceAgent {
+            .init(codename: runtime.rawValue, displayName: name ?? runtime.displayName, iconKey: "bot", executionLocation: location,
+                  runtimeKind: runtime, runtimeDeviceID: device)
+        }
+        let studio = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio")
+        let workstation = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")
+        let mine = agent(.codex, .local), theirs = agent(.codex, .local), unknown = agent(.claudeCode, .local)
+        let ownLinux = agent(.codex, .remote, name: "Codex · Fixture remote", on: UUID())
+        let theirLinux = agent(.claudeCode, .remote, name: "Claude Code · Workstation", on: UUID(uuidString: workstation.id))
+        let listed = ApplicationModel.presentedAgents([mine, theirs, unknown, ownLinux, theirLinux], own: [mine.id, ownLinux.id],
+                                                      peerWorkspaces: [theirs.id: studio, theirLinux.id: workstation])
+        #expect(listed.filter { $0.executionLocation == .local } == [mine])
+        let remote = listed.filter { $0.executionLocation == .remote }
+        #expect(remote.map(\.id) == [theirs.id, ownLinux.id, theirLinux.id])
+        #expect(remote.map(\.displayName) == ["Codex", "Codex · Fixture remote", AgentRuntimeKind.claudeCode.displayName])
+        #expect(remote.map(\.runtimeDeviceID) == [UUID(uuidString: studio.id), ownLinux.runtimeDeviceID, UUID(uuidString: workstation.id)])
+        // Before any owner record or registry row: nothing of another Mac's is local.
+        #expect(ApplicationModel.presentedAgents([theirs, unknown], own: [], peerWorkspaces: [:]).isEmpty)
+    }
+
+    /// One rule titles another machine's workspace everywhere: the name
+    /// someone chose; else a Mac's tailnet machine name; else the name its
+    /// owner registered, which is all a Linux host has.
+    @Test func aWorkspaceIsTitledByItsChosenNameThenItsTailnetNameThenItsRegisteredName() async throws {
+        let endpoint = URL(string: "https://jamess-mac-mini.tail1234.ts.net:8443/wovenmatter")!
+        let mac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac,
+                                     name: "James’s Mac mini", endpoint: endpoint)
+        var offline = mac; offline.endpoint = nil
+        let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux,
+                                       name: "workstation-home-1", endpoint: URL(string: "https://other-label.tail1234.ts.net/wovenmatter-execution/x")!)
+        #expect(ApplicationModel.workspaceDisplayName(mac, overrides: [:]) == "jamess-mac-mini")
+        #expect(ApplicationModel.workspaceDisplayName(offline, overrides: [:]) == "James’s Mac mini")
+        #expect(ApplicationModel.workspaceDisplayName(linux, overrides: [:]) == "workstation-home-1")
+        let chosen = [mac.id: "Studio", linux.id: "Build box"]
+        #expect(ApplicationModel.workspaceDisplayName(mac, overrides: chosen) == "Studio")
+        #expect(ApplicationModel.workspaceDisplayName(offline, overrides: chosen) == "Studio")
+        #expect(ApplicationModel.workspaceDisplayName(linux, overrides: chosen) == "Build box")
+    }
+
+    /// The Mac that owns a workspace publishes its chosen name as the
+    /// registry name, for its own row and each Linux host it set up, returns
+    /// to the default when the name is cleared, and writes nothing while the
+    /// name stays the same. A window sends a rename to its background server.
+    @Test func theOwnerPublishesChosenNamesInItsRegistryRowsAndReturnsToTheDefaults() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let host = fixture.model.libraryHost
+        try await host.refreshExecutionRegistry()
+        let identity = try await fixture.database.libraryIdentity(), linuxID = fixture.remote.id.uuidString.lowercased()
+        func rows() async throws -> (mac: ExecutionWorkspace, linux: ExecutionWorkspace) {
+            let all = try await fixture.database.libraryExecutionWorkspaces()
+            return (try #require(all.first { $0.kind == .mac && $0.ownerDeviceID == identity.hostDeviceID }), try #require(all.first { $0.id == linuxID }))
+        }
+        let original = try await rows()
+        #expect(original.mac.name == DevelopmentLaunch.deviceName() && original.linux.name == fixture.remote.name)
+        #expect(fixture.model.workspaceDisplayName(fixture.remote) == fixture.remote.name)
+
+        // As the background server runs a window's rename.
+        let service = BackendApplicationService(model: fixture.model)
+        _ = try await service.executeWorkspaceMutation(.renameWorkspace(registryID: original.mac.id, name: "Studio"))
+        #expect(await fixture.model.renameWorkspace(registryID: linuxID.uppercased(), name: "Build box"))
+        #expect(fixture.model.workspaceNameOverrides == [original.mac.id: "Studio", linuxID: "Build box"])
+        #expect(fixture.model.workspaceDisplayName(fixture.remote) == "Build box")
+        try await host.refreshExecutionRegistry()
+        let named = try await rows()
+        #expect(named.mac.name == "Studio" && named.linux.name == "Build box")
+        #expect(named.mac.revision == original.mac.revision + 1 && named.linux.revision == original.linux.revision + 1)
+        #expect(fixture.model.workspaceDisplayName(named.linux) == "Build box")
+
+        let head = try await fixture.database.peerSyncHead()
+        for _ in 0..<3 { try await host.refreshExecutionRegistry() }
+        let unchanged = try await rows()
+        #expect(unchanged.mac == named.mac && unchanged.linux == named.linux)
+        #expect(try await fixture.database.peerSyncHead() == head)
+
+        #expect(await fixture.model.renameWorkspace(registryID: original.mac.id, name: "  "))
+        #expect(await fixture.model.renameWorkspace(registryID: linuxID, name: nil))
+        try await host.refreshExecutionRegistry()
+        let cleared = try await rows()
+        #expect(cleared.mac.name == DevelopmentLaunch.deviceName() && cleared.linux.name == fixture.remote.name)
+        #expect(cleared.mac.revision == named.mac.revision + 1 && cleared.linux.revision == named.linux.revision + 1)
+        #expect(fixture.model.workspaceNameOverrides.isEmpty)
+        await #expect(throws: (any Error).self) { try await service.executeWorkspaceMutation(.renameWorkspace(registryID: "local", name: "Studio")) }
+    }
 }

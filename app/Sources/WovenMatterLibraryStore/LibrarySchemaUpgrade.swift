@@ -93,6 +93,12 @@ extension WorkspaceDatabaseConnection {
         if !present.isEmpty { try connection.executeUnlocked("ALTER TABLE usage_events DROP COLUMN account_label") }
       }
     },
+    // A version 3 library to the shared table of workspace names people
+    // choose (`ExecutionWorkspaceNames.swift`). A device that has not updated
+    // keeps its records waiting and relays them.
+    .init(version: 4, rewritesData: false) { connection in
+      try connection.libraryStepUnlocked(4) { try connection.executeUnlocked(WorkspaceDatabaseConnection.executionWorkspaceNamesTableSQL) }
+    },
   ]
 
   /// `PRAGMA user_version` of the current schema: the last step. A library

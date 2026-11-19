@@ -541,9 +541,13 @@ final class LibraryHostController {
                 _ = try await database.registerExecutionWorkspace(.init(workspace: copied, expectedRevision: copied.revision), deviceID: identity.hostDeviceID)
             }
         }
+        // A name someone chose for one of this Mac's workspaces, on any paired
+        // Mac, is published as its registry name, so the iPhone, agents and
+        // devices that have not updated show it; without one, the default.
+        let chosenNames = try await database.executionWorkspaceNames()
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
+                  kind: .mac, name: chosenNames[localID] ?? DevelopmentLaunch.deviceName(), endpoint: endpoint,
                   capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
@@ -555,7 +559,7 @@ final class LibraryHostController {
             let id = configuration.id.uuidString.lowercased()
             let prior = existing.first { $0.id == id }
             return .init(id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                kind: .linux, name: configuration.name, endpoint: prior?.endpoint,
+                kind: .linux, name: chosenNames[id] ?? configuration.name, endpoint: prior?.endpoint,
                 // Linux hosts no longer serve inference; a record from before v0.4.6 drops it.
                 capabilities: (prior?.capabilities ?? ["execution.v1"]).filter { $0 != "inference.v1" },
                 executionDeviceID: prior?.executionDeviceID)

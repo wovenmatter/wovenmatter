@@ -199,8 +199,11 @@ final class ApplicationModel {
                 remoteWorkspaceID: workspaceID, remoteWorkspaceName: configuration.name)
             await refreshWorkspace()
         }
+        // This Mac's own OpenCode: a paired Mac's local agent is a local row here too.
+        let own = try await libraryStore.database.agentPlacements().own
         guard let agent = try await libraryStore.database.workspaceAgents().first(where: {
-            $0.runtimeKind == .opencode && (workspaceID == nil ? $0.executionLocation == .local : $0.runtimeDeviceID == workspaceID)
+            $0.runtimeKind == .opencode && own.contains($0.id)
+                && (workspaceID == nil ? $0.executionLocation == .local : $0.runtimeDeviceID == workspaceID)
         }) else { throw ApplicationModelError.localACPRuntimeUnavailable }
         return agent
     }
@@ -372,7 +375,13 @@ final class ApplicationModel {
     /// A background server's side of its windows' live connections.
     @ObservationIgnored var backendWindowStream: ExecutionWindowStreamServer?
     @ObservationIgnored var backendWindowSource: BackendWindowStreamSource?
+    /// Other members' agents, each with the workspace that runs it (`AgentPlacements`).
     private(set) var peerAgentWorkspaces: [UUID: ExecutionWorkspace] = [:]
+    /// The agents this Mac owns. Another Mac's local agent is never one, also
+    /// before its owner record or its Mac's registry row has arrived.
+    @ObservationIgnored private var ownAgentIDs: Set<UUID> = []
+    /// Names people gave workspaces, by registry ID (`execution_workspace_names`).
+    private(set) var workspaceNameOverrides: [String: String] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
     var executionWorkspaceRegistry: [ExecutionWorkspace] = []
@@ -1224,13 +1233,20 @@ final class ApplicationModel {
             let priorRevision = force || workspaceOverview == nil ? nil : workspaceRevision
             if let snapshot = try await libraryStore.snapshot(ifChangedFrom: priorRevision) {
                 guard self.libraryStore === libraryStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
-                peerAgentWorkspaces = try await libraryStore.database.pairedAgentWorkspaces()
+                // Owner records and registry rows advance the revision too, so
+                // a placement that arrives on its own is read here.
+                let placements = try await libraryStore.database.agentPlacements()
+                guard self.libraryStore === libraryStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
+                if peerAgentWorkspaces != placements.workspaces { peerAgentWorkspaces = placements.workspaces }
+                ownAgentIDs = placements.own
                 apply(snapshot)
             }
             guard self.libraryStore === libraryStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             federatedExecutionOwners = try await libraryStore.database.libraryExecutionOwners()
             let registry = try await libraryStore.database.libraryExecutionWorkspaces()
             if executionWorkspaceRegistry != registry { executionWorkspaceRegistry = registry }
+            let names = try await libraryStore.database.executionWorkspaceNames()
+            if workspaceNameOverrides != names { workspaceNameOverrides = names }
             let nativeDirectories = try await libraryStore.sessionNativeWorkingDirectories(
                 ids: (workspaceOverview?.conversations ?? []).map(\.id))
             guard self.libraryStore === libraryStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
@@ -3085,6 +3101,71 @@ final class ApplicationModel {
         return .localACPRuntimeUnavailable
     }
 
+    /// The agents to list, placed by their owner records. This Mac's own stay
+    /// as stored. Another member's agent is remote from here whatever its row
+    /// says: it runs on the workspace its owner record leads to
+    /// (`runtimeDeviceID` is that registry ID) under its harness's plain name,
+    /// since the workspace it is listed under already says where. A local
+    /// agent that is neither (no owner record, or its Mac is not registered
+    /// here yet) is not listed: it must never look like this Mac's.
+    nonisolated static func presentedAgents(_ agents: [WorkspaceAgent], own: Set<UUID>,
+                                            peerWorkspaces: [UUID: ExecutionWorkspace]) -> [WorkspaceAgent] {
+        agents.compactMap { agent in
+            guard let workspace = peerWorkspaces[agent.id] else {
+                return agent.executionLocation == .local && !own.contains(agent.id) ? nil : agent
+            }
+            return WorkspaceAgent(id: agent.id, codename: agent.codename,
+                displayName: agent.runtimeKind.displayName, iconKey: agent.iconKey,
+                executionLocation: .remote, ownerDeviceID: agent.ownerDeviceID, runtimeKind: agent.runtimeKind,
+                runtimeDeviceID: UUID(uuidString: workspace.id), platformCodename: agent.platformCodename,
+                runtimeStatus: agent.runtimeStatus, revision: agent.revision, createdAt: agent.createdAt,
+                updatedAt: agent.updatedAt, deletedAt: agent.deletedAt)
+        }
+    }
+
+    /// The title of another machine's workspace, wherever one is shown: the
+    /// name someone chose for it; else, for a Mac, its tailnet machine name
+    /// (the first label of its `*.ts.net` address); else the name its owner
+    /// registered. The owner also publishes a chosen name as the registered
+    /// one, for devices that only read the registry.
+    nonisolated static func workspaceDisplayName(_ workspace: ExecutionWorkspace, overrides: [String: String]) -> String {
+        if let name = overrides[workspace.id.lowercased()] { return name }
+        if workspace.kind == .mac, let machine = SignInDevice.tailnetName(workspace.endpoint?.host) { return machine }
+        return workspace.name
+    }
+    func workspaceDisplayName(_ workspace: ExecutionWorkspace) -> String {
+        Self.workspaceDisplayName(workspace, overrides: workspaceNameOverrides)
+    }
+    /// A Linux host this Mac set up: the chosen name, else the one from setup.
+    func workspaceDisplayName(_ configuration: RemoteWorkspaceConfiguration) -> String {
+        workspaceNameOverrides[configuration.id.uuidString.lowercased()] ?? configuration.name
+    }
+
+    /// Names a workspace by its registry ID for every paired device; nil or
+    /// blank returns it to its default name. A window sends it to its
+    /// background server. This Mac's own workspaces publish the name in their
+    /// registry rows at once; another machine's owner does once the name has
+    /// synchronized to it.
+    @discardableResult
+    func renameWorkspace(registryID: String, name: String?) async -> Bool {
+        folderMutationError = nil
+        do {
+            if isBackendFrontend {
+                _ = try await sendBackendCommand(.workspaceMutation(.renameWorkspace(registryID: registryID, name: name)))
+            } else {
+                guard let database = libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
+                try await database.setExecutionWorkspaceName(workspaceID: registryID, name: name)
+                // Not a reason to fail the rename: the next registry refresh publishes it.
+                if libraryHost.isEnabled { try? await libraryHost.refreshExecutionRegistry() }
+            }
+            await refreshWorkspace()
+            return true
+        } catch {
+            folderMutationError = error.localizedDescription
+            return false
+        }
+    }
+
     func createPairedMacSession(agentID: UUID, conversationID: UUID, folderID: String?) async throws -> String {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.createPeerSession(agentID: agentID, conversationID: conversationID, folderID: folderID))
@@ -4242,15 +4323,7 @@ final class ApplicationModel {
             )
             loggedLibraryRecordCounts = counts
         }
-        let presentedAgents = snapshot.agents.map { agent -> WorkspaceAgent in
-            guard let workspace = peerAgentWorkspaces[agent.id] else { return agent }
-            return WorkspaceAgent(id: agent.id, codename: agent.codename,
-                displayName: agent.runtimeKind.displayName + " · " + workspace.name, iconKey: agent.iconKey,
-                executionLocation: .remote, ownerDeviceID: agent.ownerDeviceID, runtimeKind: agent.runtimeKind,
-                runtimeDeviceID: UUID(uuidString: workspace.id), platformCodename: agent.platformCodename,
-                runtimeStatus: agent.runtimeStatus, revision: agent.revision, createdAt: agent.createdAt,
-                updatedAt: agent.updatedAt, deletedAt: agent.deletedAt)
-        }
+        let presentedAgents = Self.presentedAgents(snapshot.agents, own: ownAgentIDs, peerWorkspaces: peerAgentWorkspaces)
         let nextLocalCLIAgents = presentedAgents.filter { $0.executionLocation == .local }
         let nextRemoteWorkspaceAgents = presentedAgents.filter { $0.executionLocation == .remote }
         if localCLIAgents != nextLocalCLIAgents {

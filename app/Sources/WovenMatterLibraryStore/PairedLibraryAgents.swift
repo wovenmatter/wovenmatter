@@ -6,24 +6,52 @@ import CSQLite
 #endif
 import WovenMatterCore
 
+/// Where each agent runs, from its owner record alone. An agent's
+/// `execution_location` says only how its owner reaches it: another Mac's
+/// local agent is remote from here.
+public struct AgentPlacements: Equatable, Sendable {
+  /// Agents whose owner record names this library's host.
+  public var own: Set<UUID>
+  /// Agents another member owns, each with the workspace that runs it: the
+  /// Linux workspace it names, else its owner Mac's. An agent without an
+  /// owner record, or whose workspace is not registered here yet, is in
+  /// neither.
+  public var workspaces: [UUID: ExecutionWorkspace]
+  public init(own: Set<UUID> = [], workspaces: [UUID: ExecutionWorkspace] = [:]) { self.own = own; self.workspaces = workspaces }
+}
+
+extension ExecutionWorkspace {
+  /// The registry row that stands for the Mac whose library host is `owner`.
+  /// A Mac can have more than one (its Dev instances register beside it):
+  /// the one paired devices connect to wins, then one that is not copied
+  /// history, then any.
+  public static func macWorkspace(ownedBy owner: String, in registry: [ExecutionWorkspace]) -> ExecutionWorkspace? {
+    let rows = registry.filter { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }
+    return rows.first { $0.isVisibleInConnections && $0.endpoint != nil } ?? rows.first { $0.retainedHistory != true } ?? rows.first
+  }
+}
+
 extension WorkspaceDatabase {
-  public func pairedAgentWorkspaces() async throws -> [UUID: ExecutionWorkspace] {
+  public func agentPlacements() async throws -> AgentPlacements {
     try await read { connection in
       let own = try connection.libraryIdentityUnlocked().hostDeviceID
       let workspaces = try connection.libraryExecutionWorkspaces()
-      var result: [UUID: ExecutionWorkspace] = [:]
-      for row in try connection.historyRowsUnlocked("SELECT a.id,a.execution_location,a.runtime_device_id,p.device_id FROM agents a JOIN agent_owners p ON p.id=a.id WHERE p.device_id<>? AND a.deleted_at IS NULL", values: [own]) {
+      var result = AgentPlacements()
+      for row in try connection.historyRowsUnlocked("SELECT a.id,a.execution_location,a.runtime_device_id,p.device_id FROM agents a JOIN agent_owners p ON p.id=a.id WHERE a.deleted_at IS NULL", values: []) {
         guard let fields = row.objectValue, let id = fields["id"]?.stringValue.flatMap(UUID.init(uuidString:)),
               let owner = fields["device_id"]?.stringValue else { continue }
+        if owner == own { result.own.insert(id); continue }
         let workspace: ExecutionWorkspace?
         if fields["execution_location"]?.stringValue == "remote", let remote = fields["runtime_device_id"]?.stringValue {
           workspace = workspaces.first { $0.id == remote.lowercased() && !$0.deleted }
-        } else { workspace = workspaces.first { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted } }
-        if let workspace { result[id] = workspace }
+        } else { workspace = ExecutionWorkspace.macWorkspace(ownedBy: owner, in: workspaces) }
+        if let workspace { result.workspaces[id] = workspace }
       }
       return result
     }
   }
+
+  public func pairedAgentWorkspaces() async throws -> [UUID: ExecutionWorkspace] { try await agentPlacements().workspaces }
 
   /// Acknowledged remote creation gets an immediate local presentation. It owns
   /// no runtime bindings and is replaced by the owner's ordinary shared rows.

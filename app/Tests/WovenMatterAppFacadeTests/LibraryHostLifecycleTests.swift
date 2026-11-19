@@ -880,3 +880,119 @@ extension LibraryHostLifecycleTests {
     }
 }
 
+extension LibraryHostLifecycleTests {
+    /// Another Mac's agent is listed under that Mac's workspace by its plain
+    /// harness name, and never under this Mac, also while its owner record or
+    /// its Mac's registry row has not arrived. Either one arriving alone, with
+    /// no agent or chat changing, is enough for the views to place it: a
+    /// window reads the workspace again only when the change counter moved.
+    @Test func anotherMacsAgentIsNeverLocalAndIsPlacedWhenItsOwnerOrRegistryRowArrivesAlone() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("place-air"), mini = try await mesh.add("place-mini")
+        let source = try #require(air.model.libraryStore?.database), other = try #require(mini.model.libraryStore?.database)
+        _ = try await source.createFixtureLocalACPSession(runtimeKind: .codex, title: "Air's chat", ownerDeviceID: UUID())
+        let agent = try #require(try await source.workspaceAgents().first)
+        try await mesh.pair(air, with: mini)
+        await air.host.peerSync.synchronize(force: true)
+        let airID = try await air.host.peerRoute().deviceID, key = agent.id.uuidString.lowercased()
+        let workspace = try #require(try await other.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == airID })
+        // As a receive applies a row: nothing is recorded to send back.
+        func arrive(_ sql: String, _ values: [String]) async throws {
+            try await other.write { connection in
+                try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+                try connection.toolsExecuteUnlocked(sql, values)
+                try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
+            }
+        }
+        // What a window does when its server reports a workspace change.
+        func placed(_ expected: Bool) async throws -> Bool {
+            try await pollUntil(attempts: 200, interval: .milliseconds(10)) {
+                try await mini.model.applyServerScopes([.workspace], reloadAll: false)
+                guard !mini.model.localCLIAgents.contains(where: { $0.id == agent.id }) else { return false }
+                let listed = mini.model.remoteWorkspaceAgents.first { $0.id == agent.id }
+                guard expected else { return listed == nil && mini.model.peerAgentWorkspaces[agent.id] == nil }
+                return listed?.executionLocation == .remote && listed?.displayName == AgentRuntimeKind.codex.displayName
+                    && listed?.runtimeDeviceID == UUID(uuidString: workspace.id) && mini.model.peerAgentWorkspaces[agent.id]?.id == workspace.id
+            }
+        }
+        await air.model.refreshWorkspace(); await mini.model.refreshWorkspace()
+        #expect(air.model.localCLIAgents.contains { $0.id == agent.id } && !air.model.remoteWorkspaceAgents.contains { $0.id == agent.id })
+        #expect(try await placed(true))
+        #expect(mini.model.remoteWorkspaceAgents.first { $0.id == agent.id }.map(agentDisplayName) == "Codex")
+
+        // Its owner record is not here yet: unknown, so not listed anywhere.
+        var revision = try await other.workspaceRevision()
+        try await arrive("DELETE FROM agent_owners WHERE id=?", [key])
+        #expect(try await placed(false))
+        try await arrive("INSERT INTO agent_owners VALUES(?,?)", [key, airID])
+        #expect(try await other.workspaceRevision() > revision)
+        #expect(try await placed(true))
+
+        // Its Mac's registry row is not here yet.
+        let stored = try await other.read { connection in
+            try #require(try connection.historyRowsUnlocked("SELECT owner_device_id,revision,deleted,payload FROM execution_workspaces WHERE id=?", values: [workspace.id]).first?.objectValue)
+        }
+        try await arrive("DELETE FROM execution_workspaces WHERE id=?", [workspace.id])
+        #expect(try await placed(false))
+        revision = try await other.workspaceRevision()
+        try await arrive("INSERT INTO execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES(?,?,CAST(? AS INTEGER),CAST(? AS INTEGER),?)",
+            [workspace.id, try #require(stored["owner_device_id"]?.stringValue), String(try #require(stored["revision"]?.intValue)),
+             String(try #require(stored["deleted"]?.intValue)), try #require(stored["payload"]?.stringValue)])
+        #expect(try await other.workspaceRevision() > revision)
+        #expect(try await placed(true))
+        #expect(!mini.model.localCLIAgents.contains { $0.ownerDeviceID == agent.ownerDeviceID })
+    }
+
+    /// Any Mac names any workspace. The name reaches every Mac, the owner
+    /// publishes it as its registry name for devices that only read the
+    /// registry, and clearing it returns the default: a Mac's tailnet name.
+    @Test func aWorkspaceNameChosenOnAnotherMacSynchronizesAndItsOwnerPublishesIt() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("names-air"), mini = try await mesh.add("names-mini")
+        try await mesh.pair(air, with: mini)
+        await air.host.peerSync.synchronize(force: true)
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
+        let airID = try await air.host.peerRoute().deviceID
+        func row(_ database: WorkspaceDatabase) async throws -> ExecutionWorkspace {
+            try #require(try await database.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == airID })
+        }
+        let original = try await row(miniDB)
+        await mini.model.refreshWorkspace()
+        #expect(original.name == DevelopmentLaunch.deviceName() && mini.model.workspaceDisplayName(original) == "names-air")
+
+        #expect(await mini.model.renameWorkspace(registryID: original.id, name: " Studio "))
+        #expect(mini.model.workspaceNameOverrides == [original.id: "Studio"] && mini.model.workspaceDisplayName(original) == "Studio")
+        // Only the owner writes its registry row.
+        #expect(try await row(miniDB) == original)
+        await mini.host.peerSync.synchronize(force: true)
+        #expect(try await airDB.executionWorkspaceNames() == [original.id: "Studio"])
+        try await air.host.refreshExecutionRegistry()
+        let published = try await row(airDB)
+        #expect(published.name == "Studio" && published.revision == original.revision + 1)
+        // Refreshing the registry with the same name writes nothing.
+        let head = try await airDB.peerSyncHead(), revision = try await airDB.workspaceRevision()
+        for _ in 0..<3 { try await air.host.refreshExecutionRegistry() }
+        #expect(try await row(airDB) == published)
+        #expect(try await airDB.peerSyncHead() == head)
+        #expect(try await airDB.workspaceRevision() == revision)
+        await air.host.peerSync.synchronize(force: true)
+        #expect(try await row(miniDB).name == "Studio")
+
+        // Cleared on the owner: its row and every Mac return to the default.
+        #expect(await air.model.renameWorkspace(registryID: original.id, name: nil))
+        try await air.host.refreshExecutionRegistry()
+        let cleared = try await row(airDB)
+        #expect(cleared.name == DevelopmentLaunch.deviceName() && cleared.revision == published.revision + 1)
+        await air.host.peerSync.synchronize(force: true)
+        await mini.model.refreshWorkspace()
+        #expect(mini.model.workspaceNameOverrides.isEmpty)
+        let restored = try await row(miniDB)
+        #expect(mini.model.workspaceDisplayName(restored) == "names-air" && restored.name == DevelopmentLaunch.deviceName())
+        #expect(air.host.peerSync.errors.isEmpty && mini.host.peerSync.errors.isEmpty)
+
+        // A name the registry would refuse is refused, and reported like a folder rename.
+        #expect(await mini.model.renameWorkspace(registryID: original.id, name: String(repeating: "n", count: 257)) == false)
+        #expect(mini.model.folderMutationError != nil && mini.model.workspaceNameOverrides.isEmpty)
+    }
+}
+
