@@ -31,7 +31,7 @@ const own = Symbol('this workspace')
  */
 export function createMemberSessions({ transport, identity, deviceID, localProviders, db = null, local = null, probeTimeout = 5000, workspaceRole = () => true, observe = () => {} }) {
   db?.exec('CREATE TABLE IF NOT EXISTS member_sessions (id TEXT PRIMARY KEY, caller TEXT NOT NULL, workspace TEXT NOT NULL, created_at TEXT NOT NULL)')
-  const headers = workspace => ({ 'x-woven-protocol': '3', 'x-woven-library': workspace.libraryID, 'x-woven-workspace': workspace.id, 'x-woven-device': deviceID() })
+  const headers = workspace => ({ 'x-woven-library': workspace.libraryID, 'x-woven-workspace': workspace.id, 'x-woven-device': deviceID() })
   // A bots-only host has no workspace of its own, and a workspace host has
   // none until its Mac enrolls it (`identity` throws until then); its bots
   // still reach every other workspace.

@@ -78,7 +78,7 @@ if (!args.some(value => ['--portable', '--native', '--all'].includes(value))) {
     });
     results.push({ id: contract.id, status, elapsedMS: Math.round(performance.now() - start), coverage: contract.coverage });
   }
-  const report = { schemaVersion: 1, at: new Date().toISOString(), providerRequests: false, results };
+  const report = { at: new Date().toISOString(), providerRequests: false, results };
   if (args.includes('--output')) await writeFile(args[args.indexOf('--output') + 1], JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
   process.exitCode = results.every(value => value.status === 0) ? 0 : 1;

@@ -28,7 +28,7 @@ async function fixture(t, { holdAdmission = false } = {}) {
       if (holdAdmission) await written.promise;
       return writePrivateJSON(path, value);
     } });
-  const load = token => service.invoke({ method: 'session/load', attachmentProtocol: 1, attachmentToken: token, params: { sessionId: 'native' } });
+  const load = token => service.invoke({ method: 'session/load', attachmentTokens: true, attachmentToken: token, params: { sessionId: 'native' } });
   const prompt = token => ({ method: 'session/prompt', operationID: crypto.randomUUID(), attachmentToken: token,
     params: { sessionId: 'native', _meta: { wovenRunID: 'logical-run' } } });
   return { service, load, prompt, calls, writing, written, execution, directory };
@@ -42,7 +42,7 @@ test('replacement load follows queued admission and fences the previous attachme
   await f.writing.promise;
   const replacing = f.load();
   // Another session has its own queue, even while this journal write waits.
-  const other = await f.service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId: 'other' } });
+  const other = await f.service.invoke({ method: 'session/load', attachmentTokens: true, params: { sessionId: 'other' } });
   assert.ok(other.result._meta.attachmentToken);
   f.written.resolve();
   await accepted;

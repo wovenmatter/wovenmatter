@@ -168,7 +168,7 @@ def operation(directory, request):
             columns = [column[0] for column in cursor.description or []]
             require(columns and len(columns) <= 128 and len(columns) == len(set(columns)), 'Use unique query column names.')
             values = []
-            size = len(json.dumps({'contractVersion': 1, 'columns': columns, 'rows': []}).encode())
+            size = len(json.dumps({'columns': columns, 'rows': []}).encode())
             for row in cursor:
                 converted = []
                 size += 2 + max(0, len(row) - 1) * 2 + (2 if values else 0)
@@ -179,7 +179,7 @@ def operation(directory, request):
                 values.append(converted)
                 if len(values) == 1000:
                     break
-            result = {'contractVersion': 1, 'columns': columns, 'rows': values}
+            result = {'columns': columns, 'rows': values}
             return {'query': result}
 
     except MemoryError as error:

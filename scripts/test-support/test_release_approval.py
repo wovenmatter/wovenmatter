@@ -14,7 +14,7 @@ with open(os.environ['RELEASE_CALLS'], 'a') as log:
     log.write(json.dumps([name, args]) + '\n')
 sha = 'a' * 40
 asset = 'WovenMatter_1.2.3_arm64.dmg'
-manifest = dict(schema_version=1, version='1.2.3', build=1, architecture='arm64', minimum_macos='26.0', download_url='https://github.com/wovenmatter/wovenmatter/releases/download/v1.2.3/' + asset, release_url='https://github.com/wovenmatter/wovenmatter/releases/tag/v1.2.3', sha256=hashlib.sha256(b'fixture').hexdigest())
+manifest = dict(version='1.2.3', build=1, architecture='arm64', minimum_macos='26.0', download_url='https://github.com/wovenmatter/wovenmatter/releases/download/v1.2.3/' + asset, release_url='https://github.com/wovenmatter/wovenmatter/releases/tag/v1.2.3', sha256=hashlib.sha256(b'fixture').hexdigest())
 files = {asset: b'fixture', 'latest-mac.json': json.dumps(manifest).encode()}
 files['SHA256SUMS.txt'] = ''.join(hashlib.sha256(v).hexdigest() + '  ' + n + '\n' for n, v in files.items()).encode()
 ids = {n: i for i, n in enumerate(sorted(files), 1)}

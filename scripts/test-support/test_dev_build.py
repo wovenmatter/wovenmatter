@@ -213,6 +213,12 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertNotEqual(device_id, source_id)
                 self.assertEqual((target / "device-id").stat().st_mode & 0o777, 0o600)
                 self.assertFalse((target / "dashboard-device-id").exists())
+                # The marker that makes this folder a development snapshot: an ID, where it
+                # came from and when.
+                marker = json.loads((target / "development-snapshot.json").read_text())
+                self.assertEqual(sorted(marker), ["createdAt", "id", "source"])
+                self.assertEqual(str(uuid.UUID(marker["id"])), marker["id"])
+                self.assertEqual(marker["source"], str(source.resolve()))
                 with sqlite3.connect(target / "workspace.sqlite") as db:
                     self.assertEqual(db.execute("SELECT workspace_id FROM folder_execution_roots").fetchone(), ("device:" + device_id,))
 

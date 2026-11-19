@@ -353,7 +353,8 @@ test('client routes read with device grants, change only as administrator, and r
   assert.deepEqual(status.body.machine, { ...f.machine, kind: 'linux' })
   assert.equal(status.body.state, 'starting'); assert.equal(status.body.paused, false)
   // A release that recorded nothing reports nulls; apps then treat it as out of date.
-  assert.deepEqual(status.body.versions, { app: null, fingerprint: null, librarySchema: null, runtime: null, protocol: 1 })
+  assert.deepEqual(status.body.versions, { app: null, fingerprint: null, librarySchema: null })
+  assert.equal(status.body.runtimeInstalled, false, 'this fixture release has no bots package')
   assert.deepEqual(status.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 4 * 1024 ** 3, diskBytes: null })
   assert.ok(status.body.capacity === null || Number.isSafeInteger(status.body.capacity.memoryBytes))
   const resources = await f.call('/v1/bots/resources', { token: 'device' })
@@ -394,7 +395,18 @@ test('the bots status names the host release, its fingerprint and the library sc
     engine: { status: async () => ({ installed: false }) }, runtime: null, previews: { recover: async () => {}, close: async () => {} },
     library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: randomUUID(), name: 'box' },
     serverPort: () => 1, authorizeClient: () => false, log: () => {} })
-  assert.deepEqual((await service.status()).versions, { app: '1.4.0', fingerprint, librarySchema: null, runtime: null, protocol: 1 })
+  assert.deepEqual((await service.status()).versions, { app: '1.4.0', fingerprint, librarySchema: null })
+  assert.equal((await service.status()).runtimeInstalled, false, 'a release without the bots package')
+  // A release that ships the bots package is a machine with bots, running or not.
+  const shipped = temporary(t)
+  mkdirSync(join(shipped, 'bots/src'), { recursive: true }); writeFileSync(join(shipped, 'bots/src/cli.ts'), '')
+  const withRuntime = createBotsService({ configuration: { stateDirectory: temporary(t), dataRoot: temporary(t), serviceRoot: shipped, botsEnabled: false, workspaceEnabled: true, botsInstance: 'wmtest' },
+    engine: { status: async () => ({ installed: false }) }, runtime: { status: () => ({ running: false }) }, previews: { recover: async () => {}, close: async () => {} },
+    library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: randomUUID(), name: 'box' },
+    serverPort: () => 1, authorizeClient: () => false, log: () => {} })
+  const installed = await withRuntime.status()
+  assert.equal(installed.runtimeInstalled, true)
+  assert.deepEqual(Object.keys(installed.versions), ['app', 'fingerprint', 'librarySchema'])
   // The server passes its library host's schema through once it reports one.
   const withLibrary = createBotsService({ configuration: { stateDirectory: temporary(t), dataRoot: temporary(t), serviceRoot: temporary(t), botsEnabled: false, workspaceEnabled: true, botsInstance: 'wmtest' },
     release: () => ({ version: '1.4.0', fingerprint, librarySchema: 'a'.repeat(64) }),

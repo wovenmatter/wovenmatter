@@ -95,9 +95,9 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
     const reply = await request(url, options)
     if (reply.status >= 200 && reply.status < 300) return reply.body
     const message = typeof reply.body?.message === 'string' ? reply.body.message.slice(0, 512) : typeof reply.body?.error === 'string' ? reply.body.error : 'The member refused this request.'
-    // A refusal before any effect (authentication, unknown route, old version)
-    // lets the caller try another member; anything else is reported as is.
-    throw fail(reply.status, message, [401, 403, 404, 426].includes(reply.status) ? 'member_refused' : reply.body?.code ?? 'member_http_' + reply.status)
+    // A refusal before any effect (authentication, unknown route) lets the
+    // caller try another member; anything else is reported as is.
+    throw fail(reply.status, message, [401, 403, 404].includes(reply.status) ? 'member_refused' : reply.body?.code ?? 'member_http_' + reply.status)
   }
 
   async function peerStates() {
@@ -142,13 +142,13 @@ export function createMemberMacDelegate({ transport, workspaceID, hasMac = () =>
     if (preparedOn.size > 1000) preparedOn.delete(preparedOn.keys().next().value)
   }
   async function once(mac, path, scope, body, { groups = [], signal, timeout }) {
-    const headers = { accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18', 'x-woven-protocol': '3',
+    const headers = { accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18',
       'x-woven-workspace-id': workspaceID(), 'x-woven-enabled-groups': [...groups].join(','), 'x-woven-conversation-id': scope.conversationID }
     const reply = await transport.request(memberURL(mac.endpoint, path), { method: 'POST', body, headers, signal, timeout, audience: mac.deviceID })
     if (reply.status === 202) return { value: null }
     if (reply.status >= 200 && reply.status < 300) return { value: reply.body }
     // Only a refusal before any effect moves on to another Mac.
-    const before = [401, 403, 404, 426, 503].includes(reply.status)
+    const before = [401, 403, 404, 503].includes(reply.status)
     const error = fail(reply.status, typeof reply.body?.message === 'string' ? reply.body.message.slice(0, 512) : 'The Mac refused this Woven MCP request.', before ? 'member_refused' : undefined)
     if (!before) throw error
     return { refused: error }

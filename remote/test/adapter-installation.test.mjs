@@ -99,7 +99,7 @@ test('real npm installs the adapter exactly as published, pointed at the native 
   const verification = JSON.parse(await readFile(join(generation, 'verification.json'), 'utf8'));
   assert.equal(verification.engineVersion, undefined);
   assert.equal(verification.cli, nativeCLI);
-  assert.equal(verification.protocolVersion, 1);
+  assert.deepEqual(Object.keys(verification), ['adapter', 'adapterVersion', 'cli']);
   assert.equal(verification.adapterVersion, '2.5.1');
   assert.equal(verification.protocolSDKVersion, undefined);
   const manifest = JSON.parse(await readFile(join(generation, 'package.json'), 'utf8'));

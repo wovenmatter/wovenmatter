@@ -117,8 +117,7 @@ jq -e \
   --arg version "$version" \
   --arg asset "$expected_asset" \
   --arg sha "$dmg_sha" '
-    .schema_version == 1
-    and .version == $version
+    .version == $version
     and (.build | type == "number" and . > 0)
     and .architecture == "arm64"
     and .minimum_macos == "26.0"

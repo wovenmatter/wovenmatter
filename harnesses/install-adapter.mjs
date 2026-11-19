@@ -62,7 +62,7 @@ export async function verifyAdapter(executable, adapterVersion, environment) {
     });
     child.stdin.on('error', () => finish(new Error('Adapter verification input closed.')));
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-      protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'Woven Matter verification', version: '1' },
+      protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'Woven Matter verification', version: process.env.WOVENMATTER_RELEASE_VERSION || 'development' },
     } }) + '\n');
   });
 }
@@ -107,7 +107,7 @@ export async function installAdapter({ prefix, adapter, adapterVersion, npm, cli
     env[selection.cliVariable] = cli;
     const executable = join(modules, '.bin', selection.command);
     await verifyAdapter(executable, adapterVersion, env);
-    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli, protocolVersion: 1 }) + '\n', { mode: 0o600 });
+    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, cli }) + '\n', { mode: 0o600 });
     await rm(probeHome, { recursive: true, force: true });
     await mkdir(join(prefix, 'bin'), { recursive: true, mode: 0o700 });
     const link = join(prefix, 'bin', selection.command);

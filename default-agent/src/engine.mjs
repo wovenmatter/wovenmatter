@@ -14,6 +14,7 @@ import { modelOption } from './model-presentation.mjs';
 import { reportProgramStatus } from './program-status.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { releaseName } from './release.mjs';
 
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, catalog }) {
@@ -486,7 +487,7 @@ export class DefaultAgentEngine {
     return record.acceptSteer(text, inputID ?? crypto.randomUUID(), mcpContext);
   }
   async handle(method, params = {}, emit = () => {}) {
-    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
+    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: releaseName() }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
     if (method === 'session/new' || method === 'session/load') {
       const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd, params._meta?.wovenMCPConnection);
       if (!record.busy) record.emit = emit;

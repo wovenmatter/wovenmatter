@@ -123,7 +123,6 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   const codex = catalog.harnesses.find((value) => value.id === 'codex')
   const testCatalog = resolve(fixture, 'catalog.json')
   await writeFile(testCatalog, JSON.stringify({
-    schemaVersion: 4,
     harnesses: [{
       ...codex,
       authentication: {
@@ -224,7 +223,7 @@ test('sign-in and sign-out wait while that harness installs or updates; others a
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
   const codex = catalog.harnesses.find(value => value.id === 'codex')
   const testCatalog = resolve(fixture, 'catalog.json')
-  await writeFile(testCatalog, JSON.stringify({ schemaVersion: 4, harnesses: [
+  await writeFile(testCatalog, JSON.stringify({ harnesses: [
     catalog.harnesses.find(value => value.id === 'grok_build'),
     { ...codex, authentication: { ...codex.authentication, statusCommands: ['false'], signOutCommand: ':' } },
   ] }))
@@ -543,7 +542,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 `)
   await chmod(executable, 0o700)
   const catalog = resolve(root, 'catalog.json')
-  await writeFile(catalog, JSON.stringify({ schemaVersion: 4, harnesses: [{
+  await writeFile(catalog, JSON.stringify({ harnesses: [{
     id: 'codex', displayName: 'Synthetic ACP', transport: 'acp', command: 'fixture-acp.mjs', arguments: [], cliCommand: 'fixture-acp.mjs',
     install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
     authentication: { statusCommands: ['true'], discoveries: [], methods: [] }, capabilities: ['conversations'],
@@ -610,7 +609,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 `)
   await chmod(executable, 0o700)
   const catalog = resolve(root, 'catalog.json')
-  await writeFile(catalog, JSON.stringify({ schemaVersion: 4, harnesses: [{
+  await writeFile(catalog, JSON.stringify({ harnesses: [{
     id: 'codex', displayName: 'Synthetic ACP', transport: 'acp', command: 'fixture-acp.mjs', arguments: [], cliCommand: 'fixture-acp.mjs',
     install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
     authentication: { statusCommands: ['true'], discoveries: [], methods: [] }, capabilities: ['conversations'],
@@ -702,7 +701,7 @@ test('host health reports native paths and source inventory without exposing its
   context.after(() => stopService(service.child))
   const headers = { Authorization: 'Bearer ' + token }
   const health = await (await fetch(service.url + '/v1/health', { headers })).json()
-  assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
+  assert.deepEqual(health, { status: 'ready', workspaceRoot: workspace, harnessCount: 4,
     runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
     // What apps compare to tell an out-of-date host (no library host here, so no schema).
     release: { version: '1.4.0', fingerprint: 'a'.repeat(64), librarySchema: null },

@@ -8,6 +8,7 @@ import { createNativeTaskExecutor } from './task-gateway-native.mjs'
 import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration, presentPermissionChoices, fullAccessPermissions, supportedPermissions, supportedPermission } from './config.mjs'
 import { openEphemeralACP, ephemeralSession } from './ephemeral-acp.mjs'
 import { promptBlocks, textWithFiles } from './execution-attachments.mjs'
+import { releaseName } from './release.mjs'
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve,milliseconds))
 const fail = message => Object.assign(new Error(message), { statusCode: 409 })
@@ -80,9 +81,9 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if (channels.has(native.channelID) && !channels.get(native.channelID).stopped) return channels.get(native.channelID)
     channels.delete(native.channelID)
     let recovered=false
-    let page = await durableACP.handle('POST','/v1/durable-acp/attach',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentProtocol:1})
+    let page = await durableACP.handle('POST','/v1/durable-acp/attach',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentTokens:true})
     if (page.state === 'stopped' && native.sessionID) {
-      page=await durableACP.handle('POST','/v1/durable-acp/recover',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentProtocol:1})
+      page=await durableACP.handle('POST','/v1/durable-acp/recover',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentTokens:true})
       recovered=true
     }
     if (page.state !== 'running') throw fail('This native session was interrupted. Reopen it on the execution host before sending again.')
@@ -113,7 +114,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     })
     if(recovered||load) {
       try {
-        const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
+        const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:releaseName()}})
         if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
         native.steeringSupported=initialized._meta?.steering?.supported===true
         native.configuration=await rpc(channel,'session/load',{sessionId:native.sessionID,cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}})
@@ -174,7 +175,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(!requestedDirectory)await ensureScratchDirectory(workspaceRoot,nativeWorkingDirectory)
     if(runtimeKind==='default_agent') {
       const status=await defaultAgent.status()
-      const opened=await defaultAgent.invoke({method:'session/new',attachmentProtocol:1,params:{cwd:nativeWorkingDirectory,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
+      const opened=await defaultAgent.invoke({method:'session/new',attachmentTokens:true,params:{cwd:nativeWorkingDirectory,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
       const native = {nativeWorkingDirectory,sessionID:opened.result.sessionId,attachmentToken:opened.result._meta?.attachmentToken,epoch:status.epoch,configuration:opened.result}
       await applyWorkspacePolicy(native, runtimeKind, (method, params) => invoke(native, method, params), { permission: requestedPermission })
       return native
@@ -188,7 +189,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(!harness||!['acp','agent-stdio'].includes(harness.transport))throw fail('This native runtime is unavailable for direct execution.')
     const native={channelID:conversationID,sessionID:null,nativeWorkingDirectory,...(runtimeKind==='grok_build'?{permission:permission??fullAccessPermissions.grok_build}:{})}
     const channel=await attach(native,runtimeKind)
-    const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
+    const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:releaseName()}})
     native.steeringSupported=initialized._meta?.steering?.supported===true
     if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
     native.configuration=await rpc(channel,'session/new',{cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}});native.sessionID=native.configuration.sessionId
@@ -201,7 +202,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(typeof native?.sessionID!=='string'||!native.sessionID||native.sessionID.length>4096)throw fail('A native session identity is required.')
     if(runtimeKind==='default_agent') {
       const status=await defaultAgent.status()
-      const opened=await defaultAgent.invoke({method:'woven/adopt',attachmentProtocol:1,params:{sessionId:native.sessionID}})
+      const opened=await defaultAgent.invoke({method:'woven/adopt',attachmentTokens:true,params:{sessionId:native.sessionID}})
       if(opened.result.sessionId!==native.sessionID)throw fail('Native session identity changed.')
       const adopted = {nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,epoch:status.epoch,attachmentToken:opened.result._meta?.attachmentToken,configuration:opened.result}
       await applyWorkspacePolicy(adopted, runtimeKind, (method, params) => invoke(adopted, method, params))
@@ -241,7 +242,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
         throw error
       }
     }
-    const page=await durableACP.handle('POST','/v1/durable-acp/adopt',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:runtimeKind==='grok_build'?grokPermission(native):native.permission,attachmentProtocol:1,expectedNativeSessionID:native.sessionID})
+    const page=await durableACP.handle('POST','/v1/durable-acp/adopt',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:runtimeKind==='grok_build'?grokPermission(native):native.permission,attachmentTokens:true,expectedNativeSessionID:native.sessionID})
     const actual=page.snapshot.session?.sessionId
     if(actual!==native.sessionID)throw fail('The durable channel belongs to a different native session.')
     const result={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:grokPermission(native)}:{}),configuration:page.snapshot.session,steeringSupported:page.snapshot.initialized?._meta?.steering?.supported===true}
@@ -359,7 +360,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   async function ensureBuiltIn(native,mcpConnection) {
     const status=await defaultAgent.status()
     if(native.epoch===status.epoch)return
-    const opened=await defaultAgent.invoke({method:'session/load',attachmentProtocol:1,params:{cwd:native.nativeWorkingDirectory??workspaceRoot,sessionId:native.sessionID,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
+    const opened=await defaultAgent.invoke({method:'session/load',attachmentTokens:true,params:{cwd:native.nativeWorkingDirectory??workspaceRoot,sessionId:native.sessionID,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
     if(opened.result.sessionId!==native.sessionID)throw fail('Pi Durable reopened a different native session.')
     native.attachmentToken=opened.result._meta?.attachmentToken;native.epoch=status.epoch;native.configuration=opened.result
   }
@@ -410,7 +411,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     }
     if(runtimeKind==='opencode')return nativeSessions.perform(runtimeKind,{nativeWorkingDirectory:cwd},'options',{model})
     if(runtimeKind==='default_agent') {
-      const opened=await defaultAgent.invoke({method:'session/new',attachmentProtocol:1,params:{cwd,_meta:{}}})
+      const opened=await defaultAgent.invoke({method:'session/new',attachmentTokens:true,params:{cwd,_meta:{}}})
       const native={sessionID:opened.result.sessionId,attachmentToken:opened.result._meta?.attachmentToken}
       return project(runtimeKind,await chosen({...opened.result,sessionId:native.sessionID},(method,params)=>invoke(native,method,params)))
     }

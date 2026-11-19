@@ -61,9 +61,9 @@ async function deployedSmoke() {
   const verify = arguments_.includes('--verify-state')
   check(!verify || statePath, '--verify-state requires --state')
   const state = verify ? JSON.parse(await readFile(statePath, 'utf8')) : {
-    schemaVersion: 1, runID: randomUUID(), callerID: randomUUID(), marker: randomUUID(),
+    runID: randomUUID(), callerID: randomUUID(), marker: randomUUID(),
   }
-  check(state.schemaVersion === 1 && /^[0-9a-f-]{36}$/.test(state.runID), 'Invalid validation receipt')
+  check(/^[0-9a-f-]{36}$/.test(state.runID), 'Invalid validation receipt')
   const report = { ok: false, mode: verify ? 'verify-persistence' : 'initial', checks: [] }
   const completed = name => report.checks.push(name)
 

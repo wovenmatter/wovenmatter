@@ -57,7 +57,7 @@ elif name == 'ps':
     home = fixture / 'home'
     snapshot = home / 'Library/Application Support/Woven Matter Dev/signing-test/snapshot'
     snapshot.mkdir(parents=True)
-    (snapshot / 'development-snapshot.json').write_text('{"version": 1}')
+    (snapshot / 'development-snapshot.json').write_text('{"id": "5f0e7a52-6c1d-4c8e-9b7a-2f1d3e4c5b6a"}')
 
     def run(cache, count, identity=None, fail=False, backend="", rewrite=False):
         calls.write_text('')

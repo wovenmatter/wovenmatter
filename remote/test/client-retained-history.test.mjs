@@ -128,7 +128,7 @@ test('retained reasoning crosses publication pages and restart without clipping 
   let bridge=capture(f,{taskGateway});await bridge.pump();await bridge.close();offset=1
   bridge=capture(f,{taskGateway,execution:{descriptor:()=>f.execution.descriptor(),importRetainedEvents:batch=>{
     f.execution.importRetainedEvents(batch)
-    if(lost&&batch.some(item=>item.nativeRecord?.format==='wovenmatter.activity.v2')){lost=false;throw new Error('lost detail ACK')}
+    if(lost&&batch.some(item=>item.nativeRecord?.format==='wovenmatter.activity.chained')){lost=false;throw new Error('lost detail ACK')}
   }}})
   await assert.rejects(()=>bridge.pump(),/lost detail ACK/);await bridge.close();await f.restart()
   bridge=capture(f,{taskGateway});await bridge.pump();await bridge.close()
@@ -154,7 +154,7 @@ test('retained terminal flush preserves coalesced suffix and replays a lost fina
     updateOffset:0,updates,complete:true}]}),retainedRunIDs:()=>[]}
   let bridge=capture(f,{taskGateway,execution:{descriptor:()=>f.execution.descriptor(),importRetainedEvents:batch=>{
     f.execution.importRetainedEvents(batch)
-    if(!lost&&batch.some(item=>item.nativeRecord?.format==='wovenmatter.activity.v2'&&Buffer.from(item.nativeRecord.data,'base64').includes(Buffer.from('final suffix')))) {
+    if(!lost&&batch.some(item=>item.nativeRecord?.format==='wovenmatter.activity.chained'&&Buffer.from(item.nativeRecord.data,'base64').includes(Buffer.from('final suffix')))) {
       lost=true;throw new Error('lost terminal ACK')
     }
   }}})

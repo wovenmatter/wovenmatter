@@ -52,7 +52,7 @@ export async function openDurableSession(engine, id, requested) {
     const cwd = manifest?.cwd ?? requested ?? await engine.sessionDirectory(engine.cwd);
     if (requested !== undefined && requested !== cwd) throw new DefaultAgentError('This Pi Durable session belongs to a different working directory. Create a new session for this location.');
     await engine.sessionDirectory(cwd);
-    manifest ??= { schemaVersion: 1, sessionID, storeID: randomUUID(), cwd };
+    manifest ??= { sessionID, storeID: randomUUID(), cwd };
     if (!/^[0-9a-f-]{36}$/i.test(manifest.storeID ?? '') || manifest.sessionID !== sessionID) throw new DefaultAgentError('Pi Durable native identity is invalid.');
     await writePrivateJSON(join(root, 'woven-session.json'), manifest);
     const archivePath = join(root, `woven-native-records-${randomUUID()}.jsonl`);
@@ -60,7 +60,7 @@ export async function openDurableSession(engine, id, requested) {
     const archiveIDs = archiveStore.identities;
     const pendingArchiveIDs = new Set();
     record = { mcp: new SessionMCPContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
-    const batch = records => ({ schemaVersion: 1, sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
+    const batch = records => ({ sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
     record.nativeRoot = root;
     record.nativeContext = context;
     const scopes = new Map(), childMetadata = new Map(), childModels = new Map(), modelScopes = new Map(), toolScopes = new AsyncLocalStorage();

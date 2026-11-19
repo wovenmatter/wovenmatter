@@ -58,7 +58,7 @@ test('a tool row carries the compact projection; its disclosure reads the full o
   // The settled tool's full projection is journaled once, for library history.
   assert.match(row.detailsRecordID, /^activity-[0-9a-f]{64}-[0-9a-f]{64}$/)
   const parts = f.service.events().entries.flatMap(entry => entry.nativeRecord?.recordID === row.detailsRecordID ? [entry.nativeRecord] : [])
-  assert.equal(parts[0].format, 'wovenmatter.activity.v2')
+  assert.equal(parts[0].format, 'wovenmatter.activity.chained')
   const bytes = Buffer.concat(parts.map(part => Buffer.from(part.data, 'base64')))
   assert.equal(createHash('sha256').update(bytes).digest('hex'), parts[0].sha256)
   assert.equal(JSON.parse(bytes).activity.rawInputJSON, full.rawInputJSON)

@@ -19,6 +19,7 @@ import { createMemberMacDelegate } from './member-client.mjs'
 import { createMemberSessions } from './member-sessions.mjs'
 import { createLocalSessionSource, createRemoteSessionSource, createSessionWatch, sessionState } from './session-watch.mjs'
 import { maximumWaitSeconds } from './stream-protocol.mjs'
+import { nativeRecordFormats } from './native-record-formats.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
@@ -712,7 +713,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const partCount = Math.max(1, Math.ceil(bytes.length / 131072))
       transaction(() => {
         for (let partIndex = 0; partIndex < partCount; partIndex++) event('nativeRecord', conversationID,
-          {nativeRecord:{recordID,format:'woven-native-update-v1',partIndex,partCount,byteCount:bytes.length,sha256,
+          {nativeRecord:{recordID,format:nativeRecordFormats.nativeUpdate,partIndex,partCount,byteCount:bytes.length,sha256,
             data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}},runID)
       })
     }

@@ -3,10 +3,8 @@
 // message per frame. `decodeFrame` keeps only the fields a frame type defines,
 // as the Swift decoder does, so encoding a decoded frame gives the same JSON.
 
-export const streamProtocolVersion = 1
-export const supportedStreamProtocols = Object.freeze([1])
 export const streamPath = '/v1/stream'
-export const streamCapability = 'stream.v1'
+export const streamCapability = 'stream'
 export const maximumFrameBytes = 8 * 1024 * 1024
 // Client frames are requests, subscriptions and cancels: small.
 export const maximumClientFrameBytes = 1024 * 1024
@@ -39,7 +37,7 @@ export function normalizeFrame(frame) {
   switch (frame.t) {
     case 'hello':
       if (!Array.isArray(frame.capabilities) || frame.capabilities.some(item => typeof item !== 'string')) invalid('Hello capabilities are strings.')
-      return { t: 'hello', protocol: integer(frame.protocol, 'protocol'), deviceID: text(frame.deviceID, 'device ID'), libraryID: text(frame.libraryID, 'library ID'),
+      return { t: 'hello', deviceID: text(frame.deviceID, 'device ID'), libraryID: text(frame.libraryID, 'library ID'),
         workspaceID: text(frame.workspaceID, 'workspace ID'), serverTime: integer(frame.serverTime, 'server time'), capabilities: [...frame.capabilities],
         maxFrameBytes: integer(frame.maxFrameBytes, 'maximum frame size') }
     case 'req':

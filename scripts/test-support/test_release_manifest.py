@@ -1,9 +1,8 @@
 """The update manifest generator and the release validator agree on one exact
-contract, including the device setup capability the app advertises."""
+contract: the release's version, build, platform and download, and nothing else."""
 import importlib.util
 import json
 from pathlib import Path
-import plistlib
 import subprocess
 import tempfile
 
@@ -25,11 +24,6 @@ def rejected(action):
     return False
 
 
-with open(ROOT / 'app/App/Info.plist', 'rb') as source:
-    advertised = plistlib.load(source)['WovenMatterDeviceSetupVersion']
-assert type(advertised) is int and advertised >= 0
-assert assets.device_setup_version() == advertised
-
 with tempfile.TemporaryDirectory() as directory:
     temp = Path(directory)
     folder = temp / 'release'
@@ -48,33 +42,26 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run([str(ROOT / 'scripts/generate-release-manifest.sh'), VERSION, str(BUILD),
                     str(folder / LEGACY), str(manifest_path)], check=True)
     generated = json.loads(manifest_path.read_text())
-    assert generated['device_setup_version'] == advertised
+    assert sorted(generated) == ['architecture', 'build', 'download_url', 'minimum_macos', 'release_url', 'sha256', 'version']
     assets.prepare(folder, VERSION, BUILD, SHA)
+    assert sorted(json.loads((folder / 'release-build.json').read_text())) == [
+        'build', 'delta_assets', 'full_asset', 'public_ed_key', 'source_revision', 'supported_builds', 'version']
 
-    # Any other capability value, type or shape is rejected. Checksums are
+    # Any other build value, type or shape is rejected. Checksums are
     # regenerated each time, so only the manifest contract can fail.
-    variants = [MISSING, True, False, None, -1, advertised + 1, str(advertised), float(advertised), [advertised]]
-    for value in variants:
+    for value in [MISSING, True, False, None, -1, BUILD + 1, str(BUILD), float(BUILD), [BUILD]]:
         manifest = dict(generated)
         if value is MISSING:
-            del manifest['device_setup_version']
+            del manifest['build']
         else:
-            manifest['device_setup_version'] = value
+            manifest['build'] = value
         manifest_path.write_text(json.dumps(manifest))
-        assert rejected(lambda: assets.prepare(folder, VERSION, BUILD, SHA)), f'Accepted device_setup_version={value!r}'
-    # The contract is exact: an unknown field is rejected, not ignored.
+        assert rejected(lambda: assets.prepare(folder, VERSION, BUILD, SHA)), f'Accepted build={value!r}'
+    # The contract is exact: a field it does not define is rejected, not ignored.
     manifest_path.write_text(json.dumps(dict(generated, future_capability=1)))
     assert rejected(lambda: assets.prepare(folder, VERSION, BUILD, SHA)), 'Accepted an unknown manifest field'
     manifest_path.write_text(json.dumps(generated))
     assets.prepare(folder, VERSION, BUILD, SHA)
 
-    # The advertised capability itself must be a non-negative integer.
-    for value in (True, -1, '1', 1.5):
-        info = temp / 'Info.plist'
-        info.write_bytes(plistlib.dumps(dict(WovenMatterDeviceSetupVersion=value)))
-        assert rejected(lambda: assets.device_setup_version(info)), f'Accepted app capability {value!r}'
-    info.write_bytes(plistlib.dumps({}))
-    assert assets.device_setup_version(info) == 0
-
 print('Update manifest contract: generator output accepted; missing, boolean, negative, mismatched, '
-      'mistyped and unknown capability metadata rejected.')
+      'mistyped and unknown fields rejected.')

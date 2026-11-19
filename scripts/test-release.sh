@@ -17,12 +17,10 @@ printf 'fixture\n' > "$asset"
 scripts/generate-release-manifest.sh 0.1.0 1 "$asset" "${temporary}/latest-mac.json"
 
 jq -e '
-  .schema_version == 1
-  and .version == "0.1.0"
+  .version == "0.1.0"
   and .build == 1
   and .architecture == "arm64"
   and .minimum_macos == "26.0"
-  and .device_setup_version == 1
   and .download_url == "https://github.com/wovenmatter/wovenmatter/releases/download/v0.1.0/WovenMatter_0.1.0_arm64.dmg"
   and .release_url == "https://github.com/wovenmatter/wovenmatter/releases/tag/v0.1.0"
   and (.sha256 | test("^[0-9a-f]{64}$"))

@@ -593,10 +593,9 @@ describe("websocket server", () => {
     const response = await fetch(`${app.server.url}/health`, {
       headers: { authorization: `Bearer ${TEST_TOKEN}` },
     });
-    expect(await response.json()).toMatchObject({
+    // Clients tell what this runtime can do by its named capabilities; it carries no number.
+    expect(await response.json()).toEqual({
       ok: true,
-      version: "0.1.0",
-      protocol: 1,
       installationId: expect.any(String),
       capabilities: [
         "groups",
@@ -606,6 +605,7 @@ describe("websocket server", () => {
         "runtime.update",
         "previews",
       ],
+      environment: expect.any(String),
     });
   });
 

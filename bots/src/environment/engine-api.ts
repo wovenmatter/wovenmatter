@@ -516,6 +516,8 @@ export type ContainerSummary = {
   readonly Names: readonly string[];
   readonly State: string;
   readonly Labels: Record<string, string>;
+  /** Its mounts, as an inspection reports them (the engine lists them for every container). */
+  readonly Mounts?: ContainerInfo["Mounts"];
 };
 
 function engineMessage(response: EngineResponse): string {

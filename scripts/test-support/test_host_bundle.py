@@ -38,7 +38,7 @@ class BundleTests(unittest.TestCase):
             shutil.copy2(ROOT/path,self.root/path)
         (self.root/'remote/package.json').write_text('{}\n')
         (self.root/'remote/src/server.mjs').write_text('export const fixture=true\n')
-        (self.root/'harnesses/catalog.json').write_text('{"schemaVersion":4}\n')
+        (self.root/'harnesses/catalog.json').write_text('{"harnesses":[]}\n')
         (self.root/'harnesses/mcp/adapter.mjs').write_text('export const fixture=true\n')
         (self.root/'default-agent/src/main.mjs').write_text('export const fixture=true\n')
         (self.root/'default-agent/package.json').write_text('{}\n')

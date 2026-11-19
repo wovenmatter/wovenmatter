@@ -7,6 +7,17 @@ const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value
 async function exists(path) {
   try { return await lstat(path); } catch(error) { if (error.code === 'ENOENT') return null; throw error; }
 }
+// A database an earlier build made lists its stores with one more column, `format`,
+// which nothing reads and a new row does not fill. The list is recognised by that
+// column and loses it, in the transaction that finds it; the rows stay as they are.
+const earlierStoreList = async database => (await database.all('PRAGMA table_info(wm_pi_runtime_stores)')).some(column => column.name === 'format');
+async function convertEarlierStoreList(database) {
+  if (!await earlierStoreList(database)) return;
+  await database.transaction(async transaction => {
+    // Another runtime that opened this database meanwhile may have converted it.
+    if (await earlierStoreList(transaction)) await transaction.exec('ALTER TABLE wm_pi_runtime_stores DROP COLUMN format');
+  });
+}
 export async function openWorkspacePiStorage({databasePath, manifest, context, beforeActivation}) {
   if (!isAbsolute(databasePath) || !uuid(manifest.storeID) || !uuid(manifest.sessionID)) throw new Error('Invalid Pi SQLite store identity.');
   const parent = dirname(databasePath);
@@ -21,10 +32,11 @@ export async function openWorkspacePiStorage({databasePath, manifest, context, b
     // upstream SQLite adapter's less durable NORMAL default.
     await database.exec('PRAGMA synchronous = FULL');
     await database.exec('PRAGMA foreign_keys = ON');
-    await database.exec('CREATE TABLE IF NOT EXISTS wm_pi_runtime_stores (store_id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, schema_prefix TEXT NOT NULL UNIQUE, format INTEGER NOT NULL, activated_at TEXT NOT NULL)');
+    await database.exec('CREATE TABLE IF NOT EXISTS wm_pi_runtime_stores (store_id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, schema_prefix TEXT NOT NULL UNIQUE, activated_at TEXT NOT NULL)');
+    await convertEarlierStoreList(database);
     const installed = await database.get('SELECT * FROM wm_pi_runtime_stores WHERE store_id = ?',manifest.storeID);
     if (installed) {
-      if (installed.session_id !== manifest.sessionID || installed.schema_prefix !== prefix || installed.format !== 1) throw new Error('The Pi SQLite store identity changed.');
+      if (installed.session_id !== manifest.sessionID || installed.schema_prefix !== prefix) throw new Error('The Pi SQLite store identity changed.');
     } else {
       await database.transaction(async transaction => {
         // Every schema change and the activation receipt share one SQLite
@@ -33,7 +45,7 @@ export async function openWorkspacePiStorage({databasePath, manifest, context, b
           transaction: operation=>operation(transaction),close:async()=>{}};
         const target = await SqliteStorage.open(facade,{prefix});
         await beforeActivation?.(target);
-        await transaction.run('INSERT INTO wm_pi_runtime_stores VALUES (?,?,?,?,?)',manifest.storeID,manifest.sessionID,prefix,1,new Date().toISOString());
+        await transaction.run('INSERT INTO wm_pi_runtime_stores (store_id, session_id, schema_prefix, activated_at) VALUES (?,?,?,?)',manifest.storeID,manifest.sessionID,prefix,new Date().toISOString());
         await target.close(context);
       });
     }

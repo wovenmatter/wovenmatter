@@ -1,7 +1,6 @@
 {
   "name": "wovenmatter-executor-runtime-security",
   "private": true,
-  "version": "0.1.0",
   "engines": {
     "node": ">=26"
   },

@@ -178,7 +178,6 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
     const value = release?.() ?? { version: configuration.releaseVersion ?? null, fingerprint: configuration.serviceFingerprint ?? null, librarySchema: null }
     return { app: value.version ?? null, fingerprint: value.fingerprint ?? null, librarySchema: value.librarySchema ?? null }
   }
-  const runtimeVersion = packageRoot ? readJSONFile(join(packageRoot, 'package.json'), {}).then(value => typeof value.version === 'string' ? value.version : null) : Promise.resolve(null)
   const size = value => Number.isSafeInteger(value) && value >= 0 ? value : null
 
   // The shape every Woven server that hosts bots answers (docs/architecture/
@@ -198,9 +197,11 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
     const memoryBytes = size(report?.memory?.totalBytes), diskTotalBytes = size(report?.disk?.totalBytes), diskFreeBytes = size(report?.disk?.freeBytes)
     return {
       machine: { ...identity, kind: 'linux' }, enabled: active(), state, ...(message ? { message } : {}),
-      // `app` is the Woven Matter version that shipped this host release; apps compare the
-      // fingerprint (exact) and the library schema to tell an out-of-date host.
-      versions: { ...releaseVersions(), runtime: await runtimeVersion, protocol: 1 },
+      // `app` is the Woven Matter release that shipped this host; apps compare the fingerprint
+      // (exact) and the library schema to tell an out-of-date host.
+      versions: releaseVersions(),
+      // Whether this release ships the bots runtime package: what makes a machine one with bots.
+      runtimeInstalled: !!packageRoot,
       resources: engineStatus.installed ? { poolBytes: engineStatus.poolBytes ?? null, perBotBytes: saved.botMemoryBytes ?? null, diskBytes: engineStatus.diskBytes ?? null } : null,
       capacity: memoryBytes !== null && diskTotalBytes !== null && diskFreeBytes !== null
         ? { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes: size(report.disk.usedBytes) } : null,

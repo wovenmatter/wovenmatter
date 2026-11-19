@@ -501,7 +501,7 @@ class Engine:
         write_root_file(layout.helper,Path(__file__).read_bytes(),0o755)
         memory=total_memory(); storage=filesystem(layout.var)
         ip_forward=Path('/proc/sys/net/ipv4/ip_forward').read_text().strip()=='1'
-        config={'schemaVersion':1,'instance':layout.instance,'user':user,'uid':entry.pw_uid,'group':group,'gid':entry.pw_gid,
+        config={'instance':layout.instance,'user':user,'uid':entry.pw_uid,'group':group,'gid':entry.pw_gid,
             'subnet':bridge_network(existing['subnet']) if existing else choose_subnet(existing_networks(self.host)),
             'bridge':layout.bridge,'socket':str(layout.socket),'dockerVersion':version,
             'ipForwardWasEnabled':existing.get('ipForwardWasEnabled',ip_forward) if existing else ip_forward,

@@ -25,7 +25,7 @@ function page(rows,input,{descending=false,offset=false,map=value=>value,scope='
     if(output.length&&bytes+size>800000)break
     output.push(row);bytes+=size;index++
   }
-  return {schemaVersion:1,rows:output,hasMore:index<selected.length,nextCursor:index?selected[index-1].sequence:after,
+  return {rows:output,hasMore:index<selected.length,nextCursor:index?selected[index-1].sequence:after,
     ...(offset?{nextOffset:(input.offset??0)+index}:{}),scope,historicalCoverage:coverage}
 }
 

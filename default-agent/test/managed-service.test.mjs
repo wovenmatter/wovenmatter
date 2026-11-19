@@ -51,7 +51,7 @@ test('SDK retirement transfers only the current attachment authority and trusted
     }
   `;
   const f = await fixture(t, source);
-  const load = sessionId => f.service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId } });
+  const load = sessionId => f.service.invoke({ method: 'session/load', attachmentTokens: true, params: { sessionId } });
   const old = (await load('native')).result._meta.attachmentToken;
   const attached = await load('native');
   const current = attached.result._meta.attachmentToken;

@@ -30,7 +30,7 @@ export async function authenticateMemberUpgrade(request, { members, servedTarget
   return { member }
 }
 
-const reasons = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 426: 'Upgrade Required', 502: 'Bad Gateway', 503: 'Service Unavailable' }
+const reasons = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 502: 'Bad Gateway', 503: 'Service Unavailable' }
 
 /**
  * Ends an upgrade request with a JSON HTTP error. The code is repeated in

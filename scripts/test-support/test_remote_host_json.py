@@ -254,7 +254,7 @@ class HostFixtures(unittest.TestCase):
             'src/server.mjs':b'fixture',
             'npm-runtime/package.json':(ROOT/'remote/npm-runtime/package.json').read_bytes(),
             'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
-        if bots: files.update({'bots/package.json':b'{"version":"0.1.0"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
+        if bots: files.update({'bots/package.json':b'{"name":"wovenmatter-bots"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
         if library and packed_library is None: files['host/library/linux-x86_64/wovenmatter-library']=b'fixture library host'
         if packed_library is not None:
             # As build-linux-library.sh ships it: the gzip and the uncompressed binary's SHA-256.

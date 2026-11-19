@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline'
 import { durableJSON, read, sha256 as hash } from './durable-json.mjs'
 import { assemblePresentationFrame } from './presentation-frames.mjs'
 import { defaultAgentModule } from './config.mjs'
+import { nativeRecordFormats } from './native-record-formats.mjs'
 
 const { sanitizeNativeTransportBytes } = await import(defaultAgentModule('src/native-journal.mjs'))
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
@@ -66,7 +67,7 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     const recordID=stableID(binding.key+':native:'+index),sha256=hash(bytes),partCount=Math.max(1,Math.ceil(bytes.length/131072))
     const entries=[]
     for(let partIndex=0;partIndex<partCount;partIndex++)entries.push(event(binding,`native-${index}-${partIndex}`,'nativeRecord',{nativeRecord:{recordID,
-      format:'woven-native-update-v1',partIndex,partCount,byteCount:bytes.length,sha256,data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}}))
+      format:nativeRecordFormats.nativeUpdate,partIndex,partCount,byteCount:bytes.length,sha256,data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}}))
     const next=structuredClone(state)
     next.presentationFrames??={}
     const update=assemblePresentationFrame(JSON.parse(bytes.toString('utf8')),next.presentationFrames),kind=update?.sessionUpdate

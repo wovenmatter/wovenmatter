@@ -14,9 +14,8 @@ def api(path):
 def collect(history, repository, fetch=api, now=None):
     now = now or datetime.now(timezone.utc).isoformat()
     history = json.loads(json.dumps(history))  # Never partially modify the previous snapshot on API failure.
-    if history and (history.get("schema_version") != 1 or history.get("repository") != repository):
-        raise ValueError("History belongs to another repository or schema")
-    history.setdefault("schema_version", 1)
+    if history and history.get("repository") != repository:
+        raise ValueError("History belongs to another repository")
     history.setdefault("repository", repository)
     repo = fetch(f"repos/{repository}")
     history.setdefault("repository_observations", {})[now[:10]] = {

@@ -17,12 +17,14 @@ wm_runtime_uid="$(id -u)"
 wm_runtime_gid="$(id -g)"
 if [ "$wm_runtime_uid" = 0 ]; then wm_runtime_uid=1000; wm_runtime_gid=1000; fi
 wm_network=wovenmatter-executor
+# The network and container this deployment owns carry the label sh.wovenmatter.executor.
+# Ownership is the label being there: what an earlier deployment wrote as its value is not read.
 if $wm_docker network inspect "$wm_network" >/dev/null 2>&1; then
-  test "$($wm_docker network inspect --format '{{index .Labels "sh.wovenmatter.executor"}}' "$wm_network")" = managed-v1
+  test "$($wm_docker network inspect --format '{{range $key, $value := .Labels}}{{if eq $key "sh.wovenmatter.executor"}}owned{{end}}{{end}}' "$wm_network")" = owned
 else
   $wm_docker network create --driver bridge \
     --opt com.docker.network.bridge.enable_icc=false \
-    --label sh.wovenmatter.executor=managed-v1 "$wm_network" >/dev/null
+    --label sh.wovenmatter.executor=managed "$wm_network" >/dev/null
 fi
 wm_container_hardened() {
   wm_name="$1"
@@ -102,7 +104,7 @@ wm_rollback() {
 }
 trap wm_rollback EXIT
 if $wm_docker inspect wovenmatter-executor >/dev/null 2>&1; then
-  test "$($wm_docker inspect --format '{{index .Config.Labels "sh.wovenmatter.executor"}}' wovenmatter-executor)" = 'managed-v1'
+  test "$($wm_docker inspect --format '{{range $key, $value := .Config.Labels}}{{if eq $key "sh.wovenmatter.executor"}}owned{{end}}{{end}}' wovenmatter-executor)" = owned
   if [ "$($wm_docker inspect --format '{{.Config.Image}}' wovenmatter-executor)" = "$wm_image" ] \
       && wm_container_hardened wovenmatter-executor; then
     $wm_docker start wovenmatter-executor >/dev/null
@@ -147,7 +149,7 @@ if [ "$wm_current" = false ]; then
       --mount "type=bind,src=$wm_root/data,dst=/data" --entrypoint /usr/bin/find "$wm_image" \
       /data -xdev -uid 0 -exec /usr/bin/chown --no-dereference "$wm_runtime_uid:$wm_runtime_gid" '{}' +
   wm_new=true
-  $wm_docker run -d --name wovenmatter-executor --label sh.wovenmatter.executor=managed-v1 \
+  $wm_docker run -d --name wovenmatter-executor --label sh.wovenmatter.executor=managed \
       --restart unless-stopped --network "$wm_network" --publish 127.0.0.1:4312:4312 \
       --env-file "$wm_root/runtime.env" --env HOME=/data --user "$wm_runtime_uid:$wm_runtime_gid" \
       --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \

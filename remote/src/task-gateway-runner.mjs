@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import { isAbsolute, dirname, join } from 'node:path'
 import { ensureScratchDirectory } from './projects.mjs'
 import { runtimeConfiguration, workspaceExecutionConfiguration, supportedPermissions } from './config.mjs'
+import { releaseName } from './release.mjs'
 
 const before = message => Object.assign(new Error(message), { beforePrompt:true })
 const values = options => (options ?? []).flatMap(o => o.value == null ? values(o.options) : [o.value])
@@ -136,7 +137,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     }
     signal.addEventListener('abort',abort,{once:true})
     try {
-      const initialized=await rpc('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false},clientInfo:{name:'Woven Matter Task Gateway',version:'1'}})
+      const initialized=await rpc('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false},clientInfo:{name:'Woven Matter Task Gateway',version:releaseName()}})
       if (initialized.protocolVersion!==1) throw before('The scheduled agent uses an unsupported protocol.')
       if (nativeSessionID && initialized.agentCapabilities?.loadSession!==true) throw before('This agent cannot reopen the recurring task session.')
       const opened=await rpc(nativeSessionID?'session/load':'session/new',{cwd:directory,mcpServers:mcpConnection?[{type:'http',name:'woven',url:mcpConnection.endpointURL,headers:[{name:'Authorization',value:'Bearer '+mcpConnection.bearerToken}]}]:[],...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{sessionTitle:run.title,...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}})
@@ -168,7 +169,7 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
   if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
   let sessionID,attachmentToken,accepted=false
   try {
-    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentProtocol:1,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
+    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentTokens:true,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
     const session=opened.result
     attachmentToken=session?._meta?.attachmentToken ?? opened.attachmentToken
     sessionID=session?.sessionId ?? nativeSessionID

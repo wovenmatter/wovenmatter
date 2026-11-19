@@ -46,8 +46,8 @@ def snapshot(repository, name, report_day, observed_at, properties):
 
 def pending_snapshots(history):
     repository = history["repository"]
-    if history.get("schema_version") != 1 or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
-        raise ValueError("Unsupported GitHub history repository or schema")
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
+        raise ValueError("Unsupported GitHub history repository")
     accepted = history.get("posthog_accepted", {})
     pending = []
 

@@ -1,5 +1,5 @@
 import { memberURL } from './member-client.mjs'
-import { decodeFrame, encodeFrame, maximumFrameBytes, streamCloseCodes, streamProtocolVersion, streamTimings } from './stream-protocol.mjs'
+import { decodeFrame, encodeFrame, maximumFrameBytes, streamCloseCodes, streamPath, streamTimings } from './stream-protocol.mjs'
 import { WebSocket } from './websocket.mjs'
 
 // One stream from this server to another member's server, for agent-to-agent
@@ -14,12 +14,8 @@ import { WebSocket } from './websocket.mjs'
 
 const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra })
 
-/** The signed upgrade target: `<endpoint>/v1/stream?protocol=1`. */
-export function streamURL(endpoint) {
-  const url = memberURL(endpoint, 'v1/stream')
-  url.search = '?protocol=' + streamProtocolVersion
-  return url
-}
+/** The signed upgrade target: `<endpoint>/v1/stream`, with no query. */
+export const streamURL = endpoint => memberURL(endpoint, streamPath.slice(1))
 
 /**
  * `endpoint` is the member's execution endpoint (https on the tailnet).
@@ -110,7 +106,6 @@ export function createStreamClient({ endpoint, sign, expected = null, webSocket 
 
   function receive(frame) {
     if (frame.t === 'hello') {
-      if (frame.protocol !== streamProtocolVersion) { socket?.close(streamCloseCodes.protocolViolation); return }
       if (!identifies(frame)) {
         // Another workspace answers at this endpoint: nothing it says is used.
         mismatched = true

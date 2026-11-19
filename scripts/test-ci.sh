@@ -35,7 +35,7 @@ for directory in ('scripts', 'remote/security'):
 PY
 python3 scripts/test-support/test_ci_scopes.py
 python3 scripts/test-support/test_ci_runner.py
-jq -e '.schemaVersion == 4 and (.harnesses | length == 4)' harnesses/catalog.json >/dev/null
+jq -e '.harnesses | length == 4' harnesses/catalog.json >/dev/null
 
 selection="$(python3 scripts/ci-scopes.py < "$changed")"
 printf '%s\n' "$selection"
@@ -64,7 +64,7 @@ fi
 if enabled scripts; then
   # These fixtures stub external tools; native fixtures run in manual validation.
   scripts/test-release.sh --portable
-  for suite in ios_runner verify_ios_app dev_build executor_deployment cua_runtime; do
+  for suite in ios_runner verify_ios_app dev_build executor_deployment cua_runtime github_analytics; do
     python3 "scripts/test-support/test_${suite}.py"
   done
   scripts/test-dev-signing.sh

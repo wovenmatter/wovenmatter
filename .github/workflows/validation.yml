@@ -69,8 +69,8 @@ jobs:
             ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/SharedSwiftPM
             ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/Integration
             ~/Library/Caches/WovenMatter/Downloads
-          key: native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-${{ github.sha }}
-          restore-keys: native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-
+          key: native-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-${{ github.sha }}
+          restore-keys: native-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-
       - name: Test native desktop
         shell: bash
         run: |
@@ -139,8 +139,8 @@ jobs:
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/modules
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/Build/Intermediates.noindex
             ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/SourcePackages
-          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-
+          key: ios-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-${{ github.sha }}
+          restore-keys: ios-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-
       - name: Test native mobile flows
         env:
           WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device == 'iPhone' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' || 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB' }}

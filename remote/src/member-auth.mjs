@@ -8,7 +8,7 @@ export const memberHeaders = Object.freeze({
   device: 'x-woven-member-device', audience: 'x-woven-member-audience', time: 'x-woven-member-time',
   nonce: 'x-woven-member-nonce', signature: 'x-woven-member-signature',
 })
-export const memberSignatureDomain = 'woven-member-v2'
+export const memberSignatureDomain = 'woven-member'
 export const memberSignatureWindowMilliseconds = 300_000
 const fail = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, code })
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)

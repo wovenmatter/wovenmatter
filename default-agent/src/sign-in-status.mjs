@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { releaseName } from './release.mjs';
 const exec = promisify(execFile);
 const checks = {
   codex: [['login', 'status']],
@@ -131,7 +132,7 @@ export function readCodexAccount(executable, environment = process.env) {
         }
       }
     });
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'wovenmatter_status', version: '1.0' } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'wovenmatter_status', version: releaseName() } } });
   });
 }
 

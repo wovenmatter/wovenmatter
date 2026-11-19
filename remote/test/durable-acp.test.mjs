@@ -24,8 +24,8 @@ async function fixture(t) {
 
 test('replacement attachment fences delayed old input, cancel and approval without blocking read-only polling', async t => {
   const f = await fixture(t)
-  const old = await f.call('attach', { attachmentProtocol: 1 })
-  const current = await f.call('attach', { attachmentProtocol: 1 })
+  const old = await f.call('attach', { attachmentTokens: true })
+  const current = await f.call('attach', { attachmentTokens: true })
   assert.notEqual(current.attachmentToken, old.attachmentToken)
   for (const message of [
     { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native' } },

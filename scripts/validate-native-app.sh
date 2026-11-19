@@ -115,7 +115,9 @@ test ! -e "$bots/node_modules/typescript"
 test -f "$bots/node_modules/zod/package.json"
 test ! -e "$bots/node_modules/@anthropic-ai"
 test ! -e "$bots/node_modules/@earendil-works"
-test "$("${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$bots/package.json")"
+# The runtime names the Woven Matter release its host gives it, and says so when it has none.
+test "$(WOVENMATTER_RELEASE_VERSION=1.2.3 "${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = 1.2.3
+test "$(env -u WOVENMATTER_RELEASE_VERSION "${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = development
 test -f "${resources}/harnesses/catalog.json"
 for integration in adapter.mjs hook.mjs binding.mjs proxy.mjs instructions.mjs opencode.mjs install.mjs; do
   test -f "${resources}/harnesses/mcp/$integration"

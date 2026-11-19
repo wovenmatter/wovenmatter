@@ -63,6 +63,8 @@ export class FakeEngine {
   /** Links each image carries (from a commit). */
   readonly imageLinks = new Map<string, Map<string, string>>();
   builds = 0;
+  /** Whether the container list carries each container's mounts (an inspection always does). */
+  listsMounts = true;
   /** Answer every request 503, as a Mac VM's socket does while the VM boots. */
   unavailable = false;
   /** Extra environment for each container's supervisor (and so its browser). */
@@ -127,6 +129,13 @@ export class FakeEngine {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk as Buffer);
     return Buffer.concat(chunks);
+  }
+
+  /** A container's mounts as the engine reports them, in an inspection and in its list. */
+  #mounts(container: Container) {
+    return ((container.spec.HostConfig as { Mounts?: { Source: string; Target: string; ReadOnly?: boolean }[] })?.Mounts ?? []).map(
+      (mount) => ({ Type: "volume", Name: mount.Source, Destination: mount.Target, RW: !mount.ReadOnly }),
+    );
   }
 
   #mountDir(container: Container, target: string): string | undefined {
@@ -279,7 +288,13 @@ export class FakeEngine {
         200,
         [...this.containers.values()]
           .filter((c) => !label || label in c.labels)
-          .map((c) => ({ Id: c.id, Names: [`/${c.name}`], State: c.running ? "running" : "exited", Labels: c.labels })),
+          .map((c) => ({
+            Id: c.id,
+            Names: [`/${c.name}`],
+            State: c.running ? "running" : "exited",
+            Labels: c.labels,
+            ...(this.listsMounts ? { Mounts: this.#mounts(c) } : {}),
+          })),
       );
     }
     if (path === "/commit") {
@@ -307,9 +322,7 @@ export class FakeEngine {
             ExitCode: container.exitCode ?? 0,
           },
           HostConfig: container.spec.HostConfig,
-          Mounts: ((container.spec.HostConfig as { Mounts?: { Source: string; Target: string; ReadOnly?: boolean }[] })?.Mounts ?? []).map(
-            (mount) => ({ Type: "volume", Name: mount.Source, Destination: mount.Target, RW: !mount.ReadOnly }),
-          ),
+          Mounts: this.#mounts(container),
         });
       }
       if (action === "/start") {

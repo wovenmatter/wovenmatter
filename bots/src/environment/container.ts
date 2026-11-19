@@ -3,7 +3,7 @@ import type { Context } from "@earendil-works/chord/context";
 import { randomUUID } from "node:crypto";
 import { Duplex } from "node:stream";
 import type { BotEnvironmentAdapter, HarnessEnvFactory } from "../env.ts";
-import { type DockerEngineAPI, EngineError, type ExecProcess } from "./engine-api.ts";
+import { type ContainerInfo, type ContainerSummary, type DockerEngineAPI, EngineError, type ExecProcess } from "./engine-api.ts";
 import {
   BASELINE,
   CAPTURE,
@@ -50,12 +50,13 @@ export const BOT_LABEL = "woven.bot";
 export const IMAGE_LABEL = "woven.bots.image";
 export const MACHINE_LABEL = "woven.bots.machine";
 /**
- * The container layout: "2" has the shared volume at /opt/woven, its helper and toolchain links,
- * and its home folder in storage. A container without it predates that and moves on its next
- * update.
+ * Whether a container is in the current layout: it mounts the shared volume at /opt/woven (its
+ * helper and toolchain are links into it, and its home folder is in storage). One that does not
+ * was made before that and moves on its next update. The container itself says so, in what the
+ * engine reports of its mounts.
  */
-export const LAYOUT_LABEL = "woven.bots.layout";
-export const LAYOUT = "2";
+export const usesSharedVolume = (mounts: ContainerInfo["Mounts"]): boolean =>
+  (mounts ?? []).some((mount) => mount.Name === SHARED_VOLUME && mount.Destination === SHARED_MOUNT);
 /** The contract's fixed idle period: a bot stops fully after 15 minutes idle. */
 export const IDLE_STOP_MS = 15 * 60_000;
 const AGENT_COMMAND = ["node", `${HELPER_MOUNT}/agent.mjs`];
@@ -515,7 +516,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     for (const container of await this.#engine.listContainers(BOT_LABEL)) {
       const botId = container.Labels[BOT_LABEL];
       if (!botId || container.Labels[MACHINE_LABEL] !== this.#options.machineId) continue;
-      if (container.Labels[LAYOUT_LABEL] !== LAYOUT || container.Labels[IMAGE_LABEL] !== tag) {
+      if (!usesSharedVolume(await this.#mountsOf(container)) || container.Labels[IMAGE_LABEL] !== tag) {
         staleBots.push(botId);
         outdatedBots.push(botId);
         continue;
@@ -529,6 +530,11 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       if (tools !== toolchain || runtime !== helper || pending) outdatedBots.push(botId);
     }
     return { tag, tools: await imageTools(this.#options.imageDir ?? IMAGE_DIR), staleBots, outdatedBots };
+  }
+
+  /** A listed container's mounts; an engine whose list leaves them out is asked for them. */
+  async #mountsOf(container: ContainerSummary): Promise<ContainerInfo["Mounts"]> {
+    return container.Mounts ?? (await this.#engine.inspectContainer(container.Id))?.Mounts;
   }
 
   /** A new container of the base image `image`, in the current layout. */
@@ -546,7 +552,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
           ? Object.entries(gitEnvironment(this.#options.gitDirectory)).map(([key, value]) => `${key}=${value}`)
           : []),
       ],
-      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [IMAGE_LABEL]: image, [LAYOUT_LABEL]: LAYOUT },
+      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [IMAGE_LABEL]: image },
       StopTimeout: STOP_SECONDS,
       HostConfig: {
         Mounts: [
@@ -634,12 +640,12 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       return;
     }
     if (!info.State.Running) {
-      const labels = info.Config.Labels ?? {};
-      await this.#healLinks(botId, labels);
+      const current = usesSharedVolume(info.Mounts);
+      if (current) await this.#healLinks(botId);
       await this.#engine.startContainer(name);
       // A move that stopped after its new container was made: apply what it captured, then start
       // again so the restart list comes back with it.
-      if (labels[LAYOUT_LABEL] === LAYOUT && (await this.#resumePending(botId))) {
+      if (current && (await this.#resumePending(botId))) {
         await this.#engine.stopContainer(name, STOP_SECONDS);
         await this.#engine.startContainer(name);
       }
@@ -652,8 +658,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
    * A current-layout container whose links are missing (interrupted while they were written)
    * gets the current ones, so it can start.
    */
-  async #healLinks(botId: string, labels: Record<string, string>): Promise<void> {
-    if (labels[LAYOUT_LABEL] !== LAYOUT) return;
+  async #healLinks(botId: string): Promise<void> {
     const name = containerName(botId);
     const [runtime, tools] = await Promise.all([
       this.#engine.linkTarget(name, HELPER_MOUNT),
@@ -852,8 +857,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     const keep = new Set([`helper/${shared.helper}`, `toolchain/${shared.toolchain}`]);
     try {
       for (const container of await this.#engine.listContainers(BOT_LABEL)) {
-        // Every container on this engine (any machine's) whose layout uses the shared volume.
-        if (!container.Labels[BOT_LABEL] || container.Labels[LAYOUT_LABEL] !== LAYOUT) continue;
+        // Every container on this engine (any machine's) that mounts the shared volume.
+        if (!container.Labels[BOT_LABEL] || !usesSharedVolume(await this.#mountsOf(container))) continue;
         for (const path of [HELPER_MOUNT, TOOLCHAIN_PATH]) {
           const target = await this.#engine.linkTarget(container.Id, path);
           if (target?.startsWith(`${SHARED_MOUNT}/`)) keep.add(target.slice(SHARED_MOUNT.length + 1));
@@ -1006,7 +1011,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       const wasRunning = info.State.Running;
       const base = await this.image();
       const shared = await this.shared();
-      const moving = rebuild || labels[LAYOUT_LABEL] !== LAYOUT || previousBase !== base;
+      const moving = rebuild || !usesSharedVolume(info.Mounts) || previousBase !== base;
       const previousToolchain = moving ? undefined : await this.#engine.linkTarget(name, TOOLCHAIN_PATH).catch(() => undefined);
       this.#connections.get(botId)?.close();
       this.#gitWritten.delete(botId);

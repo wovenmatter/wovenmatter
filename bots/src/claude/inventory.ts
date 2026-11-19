@@ -15,7 +15,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     result = {
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "woven-bot-inventory", version: "1" },
+      // The Woven Matter release, as the runtime's environment names it (`releaseVersion`).
+      serverInfo: { name: "woven-bot-inventory", version: process.env.WOVENMATTER_RELEASE_VERSION || "development" },
     };
   } else if (message.method === "tools/list") {
     result = { tools };

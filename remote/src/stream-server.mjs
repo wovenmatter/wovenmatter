@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto'
 import { WebSocketServer } from './websocket.mjs'
 import { authenticateMemberUpgrade, executionMemberKinds, refuseUpgrade } from './member-sockets.mjs'
 import { decodeFrame, encodeFrame, maximumClientFrameBytes, maximumFrameBytes, streamCloseCodes, streamErrorFor, streamFailure, subscriptionErrorFor,
-  streamPath, streamProtocolVersion, streamQueueLimits, streamTimings, supportedStreamProtocols } from './stream-protocol.mjs'
+  streamPath, streamQueueLimits, streamTimings } from './stream-protocol.mjs'
 
 // The Linux host's live stream (docs/architecture/WOVEN_EVERYWHERE.md,
-// "Streaming"): `GET /v1/stream?protocol=1` at the execution endpoint,
+// "Streaming"): `GET /v1/stream` at the execution endpoint,
 // member-signed, upgraded to a WebSocket that carries `workspace` and
 // `conversation` subscriptions and `execution.*` calls. The stream reads the
 // stored execution state as it changes (`execution.watch`); it never writes
@@ -138,18 +138,16 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     const url = new URL(request.url, 'http://localhost')
     if (url.pathname !== streamPath) return false
     socket.on('error', () => {})
-    void accept(request, socket, head, url).catch(error => { log('A stream upgrade failed: ' + error.message); socket.destroy() })
+    void accept(request, socket, head).catch(error => { log('A stream upgrade failed: ' + error.message); socket.destroy() })
     return true
   }
 
-  async function accept(request, socket, head, url) {
+  async function accept(request, socket, head) {
     // Native apps and servers only: a browser page cannot open the stream.
     if (request.headers.origin !== undefined || request.headers.cookie !== undefined) return refuseUpgrade(socket, 403, { code: 'browser_request', message: 'Browser requests cannot open the stream.' })
     if (request.method !== 'GET' || (request.headers.upgrade ?? '').toLowerCase() !== 'websocket') return refuseUpgrade(socket, 400, { code: 'invalid', message: 'Open the stream with a WebSocket upgrade.' })
-    const requested = url.searchParams.getAll('protocol')
-    if (requested.length !== 1 || !supportedStreamProtocols.some(version => String(version) === requested[0])) {
-      return refuseUpgrade(socket, 426, { code: 'protocol_unsupported', message: 'This server speaks another stream protocol. Update the app.', supported: [...supportedStreamProtocols] })
-    }
+    // The stream takes no query: what a server can do is in its hello's capabilities.
+    if (request.url.includes('?')) return refuseUpgrade(socket, 400, { code: 'bad_request', message: 'Open the stream without a query.' })
     const authenticated = await authenticateMemberUpgrade(request, { members, servedTargets, kinds })
     if (!authenticated.member) return refuseUpgrade(socket, authenticated.status, authenticated.body)
     let descriptor, deviceID
@@ -162,7 +160,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
   function open(ws, member, { descriptor, deviceID }) {
     const connection = createConnection(ws, member)
     connections.add(connection)
-    connection.enqueue({ t: 'hello', protocol: streamProtocolVersion, deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id,
+    connection.enqueue({ t: 'hello', deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id,
       serverTime: Date.now(), capabilities: descriptor.capabilities ?? [], maxFrameBytes: limit.frameBytes })
   }
 

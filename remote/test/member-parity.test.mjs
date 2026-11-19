@@ -403,7 +403,7 @@ test('adoption reopens a stopped or missing durable channel and never leaves a f
   assert.equal(service.ownsConversation(failing), false)
   // A channel a host restart stopped is recovered and reloaded.
   const stopped = randomUUID()
-  const page = await relay.handle('POST', '/v1/durable-acp/attach', { channelID: stopped, harnessID: 'fixture', cwd: workspaceRoot, attachmentProtocol: 1 })
+  const page = await relay.handle('POST', '/v1/durable-acp/attach', { channelID: stopped, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
   const message = value => relay.handle('POST', '/v1/durable-acp/message', { channelID: stopped, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'initialize', params: { protocolVersion: 1 } })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'session/load', params: { sessionId: 'native-second', cwd: workspaceRoot } })
@@ -422,7 +422,7 @@ test('adoption reopens a durable channel its owner left interrupted, never one a
   // The former owner ran the channel and died without recording a stop.
   const former = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
   const channelID = randomUUID()
-  const page = await former.handle('POST', '/v1/durable-acp/attach', { channelID, harnessID: 'fixture', cwd: workspaceRoot, attachmentProtocol: 1 })
+  const page = await former.handle('POST', '/v1/durable-acp/attach', { channelID, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
   const message = value => former.handle('POST', '/v1/durable-acp/message', { channelID, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'initialize', params: { protocolVersion: 1 } })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'session/load', params: { sessionId: 'native-left', cwd: workspaceRoot } })

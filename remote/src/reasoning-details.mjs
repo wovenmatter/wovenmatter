@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, mkdirSync, openSync, writeSync, readSync, fsyncSync, closeSync, fstatSync, ftruncateSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { durableJSON, read, sha256 as hash } from './durable-json.mjs'
+import { nativeRecordFormats } from './native-record-formats.mjs'
 
 const statePath = (directory, activity) => resolve(directory, 'activity-details', hash(activity.id) + '.json')
 const recordPath = (directory, sha256) => resolve(directory, 'activity-details', 'records', sha256 + '.json')
@@ -75,7 +76,7 @@ function materialize(directory, path, activity, state, force) {
 function parts(directory, result) {
   if (!result.recordID) return []
   const bytes = readFileSync(recordPath(directory, result.sha256)), partCount = Math.ceil(bytes.length / 131072)
-  return Array.from({ length: partCount }, (_, partIndex) => ({ recordID: result.recordID, format: 'wovenmatter.activity.v2',
+  return Array.from({ length: partCount }, (_, partIndex) => ({ recordID: result.recordID, format: nativeRecordFormats.chainedActivity,
     partIndex, partCount, byteCount: bytes.length, sha256: result.sha256, data: bytes.subarray(partIndex * 131072, (partIndex + 1) * 131072).toString('base64') }))
 }
 function apply(activity, row) {

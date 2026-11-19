@@ -1,6 +1,5 @@
 {
   "name": "wovenmatter-bots",
-  "version": "0.1.0",
   "private": true,
   "description": "Woven Matter bots runtime: many bots in one Node process on Pi Durable, tools in per-bot containers",
   "license": "MIT",

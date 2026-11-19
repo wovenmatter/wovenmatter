@@ -338,8 +338,6 @@ export type StreamEvent =
 export type ServerMessage =
   | {
       type: "hello";
-      version: string;
-      protocol: number;
       installationId: string;
       capabilities: string[];
     }

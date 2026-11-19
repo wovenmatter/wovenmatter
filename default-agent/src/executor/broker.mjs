@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { writePrivateJSON } from '../config.mjs';
+import { releaseName } from '../release.mjs';
 
 // The broker implements Executor's V2 managed app API; V1 lacks it and a later
 // major is an unverified API. Newer V2 releases install without an app update;
@@ -382,7 +383,7 @@ export class ExecutorBroker {
       let client;
       if (this.connectOverride) client = await this.connectOverride(scope);
       else {
-        client = new Client({ name: 'wovenmatter', version: '1' }, { capabilities: {} });
+        client = new Client({ name: 'wovenmatter', version: releaseName() }, { capabilities: {} });
         try { await client.connect(new StreamableHTTPClientTransport(new URL(scope.grant.resource), { requestInit: { headers: { authorization: `Bearer ${scope.grant.token}` } } })); }
         catch (error) { await client.close().catch(() => {}); throw error; }
       }

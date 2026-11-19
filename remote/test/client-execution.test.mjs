@@ -327,7 +327,7 @@ test('reasoning disclosure retains complete chunked text while snapshots stay bo
   assert.ok(chunks.length>=3)
   const complete=JSON.parse(Buffer.concat(chunks.map(item=>Buffer.from(item.data,'base64'))))
   assert.equal(complete.activity.kind,'thought');assert.equal(complete.activity.content,original.content.text+tail.content.text)
-  const raw=all.filter(item=>item.nativeRecord?.format==='woven-native-update-v1'),groups=new Map()
+  const raw=all.filter(item=>item.nativeRecord?.format==='woven-native-update'),groups=new Map()
   for(const item of raw){const part=item.nativeRecord,values=groups.get(part.recordID)??[];values[part.partIndex]=Buffer.from(part.data,'base64');groups.set(part.recordID,values)}
   assert.deepEqual([...groups.values()].map(parts=>JSON.parse(Buffer.concat(parts))),[original,tail])
   await f.restart()
@@ -353,7 +353,7 @@ for(const terminal of ['completed','failed','cancelled'])test(`rapid dirty flush
   const text='x'.repeat(20000),publish=value=>f.runs[0].publish({sessionUpdate:'agent_thought_chunk',content:{text:value},_meta:{wovenThoughtID:'trace'}})
   publish(text)
   for(let i=0;i<20;i++){publish(' suffix');t.mock.timers.tick(500)}
-  assert.equal(new Set(f.service.events().entries.filter(item=>item.nativeRecord?.format==='wovenmatter.activity.v2').map(item=>item.nativeRecord.recordID)).size,1)
+  assert.equal(new Set(f.service.events().entries.filter(item=>item.nativeRecord?.format==='wovenmatter.activity.chained').map(item=>item.nativeRecord.recordID)).size,1)
   if(terminal==='failed')f.runs[0].done.reject(new Error('fixture failure'))
   else if(terminal==='cancelled')await f.service.command(f.command('stop',{conversationID:opened.conversationID,runID:f.runs[0].command.runID}),f.principal)
   else f.runs[0].done.resolve()

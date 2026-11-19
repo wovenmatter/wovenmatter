@@ -16,8 +16,8 @@ const deadline = setTimeout(() => {
 }, 15000);
 deadline.unref();
 
-const client = new Client({ name: 'woven-native-http-fixture', version: '1' }, { capabilities: {} });
-const denied = new Client({ name: 'woven-native-denied-fixture', version: '1' }, { capabilities: {} });
+const client = new Client({ name: 'woven-native-http-fixture', version: 'development' }, { capabilities: {} });
+const denied = new Client({ name: 'woven-native-denied-fixture', version: 'development' }, { capabilities: {} });
 try {
   await client.connect(new StreamableHTTPClientTransport(endpoint, {
     requestInit: { headers: outside ? {} : { authorization: `Bearer ${token}` } }

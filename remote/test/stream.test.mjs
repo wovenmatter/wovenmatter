@@ -21,7 +21,7 @@ import { enroll } from './fixtures/execution.mjs'
 
 const fixturesPath = new URL('../../shared/Tests/WovenMatterSharedTests/StreamProtocolFixtures.json', import.meta.url)
 const prefix = '/wovenmatter-execution/box'
-const streamTarget = prefix + '/v1/stream?protocol=1'
+const streamTarget = prefix + '/v1/stream'
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 async function eventually(condition, message, timeout = 10_000) {
@@ -102,7 +102,7 @@ async function fixture(t, { clock, limits, timings, refreshMilliseconds = 15_000
   const command = (kind, values = {}) => ({ commandID: randomUUID(), deviceID: mac.deviceID, libraryID: enrollment.libraryID, workspaceID: enrollment.workspaceID, kind, ...values })
   const device = { id: mac.deviceID }
   function connect(headers = signed(), options = {}) {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/v1/stream?protocol=1`, { headers, ...options })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/v1/stream`, { headers, ...options })
     sockets.push(socket)
     return frameReader(socket)
   }
@@ -138,7 +138,7 @@ function frameReader(socket) {
 }
 
 // A raw upgrade request: the refusal's status and JSON body, or 101.
-function handshake(port, { path = '/v1/stream?protocol=1', headers = {} } = {}) {
+function handshake(port, { path = '/v1/stream', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const request = httpRequest({ host: '127.0.0.1', port, path, headers: { connection: 'Upgrade', upgrade: 'websocket',
       'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13', ...headers } })
@@ -167,7 +167,6 @@ test('ws comes from the Built-in agent graph: one declared, locked selection', (
 
 test('every shared stream fixture decodes and re-encodes to the same JSON', () => {
   const fixtures = JSON.parse(readFileSync(fixturesPath, 'utf8'))
-  assert.equal(fixtures.protocol, 1)
   const types = new Set(), kinds = new Set()
   for (const { name, frame } of fixtures.frames) {
     const decoded = decodeFrame(JSON.stringify(frame))
@@ -217,16 +216,19 @@ test('the outbound queue supersedes queued entities and ends an overflowing subs
   assert.equal(queue.enqueue({ t: 'item', id: 'b', kind: 'pending', data: { big: 'x'.repeat(10_000) } }, { subscription: b }), true)
 })
 
-test('the stream upgrade refuses bad protocols, stale clocks, bearers and browsers before upgrading', async t => {
+test('the stream upgrade refuses a query, stale clocks, bearers and browsers before upgrading', async t => {
   const f = await fixture(t)
-  const refused = await handshake(f.port, { path: '/v1/stream', headers: f.signed(prefix + '/v1/stream') })
-  assert.deepEqual([refused.status, refused.body.code, refused.body.supported], [426, 'protocol_unsupported', [1]])
-  assert.equal((await handshake(f.port, { path: '/v1/stream?protocol=2', headers: f.signed(prefix + '/v1/stream?protocol=2') })).status, 426)
+  // The stream takes no query at all, whatever it says and however it is signed.
+  let refused
+  for (const query of ['?stream=workspace', '?x=1', '?']) {
+    refused = await handshake(f.port, { path: '/v1/stream' + query, headers: f.signed(prefix + '/v1/stream' + query) })
+    assert.deepEqual([refused.status, refused.body.code], [400, 'bad_request'], query)
+  }
   const stale = await handshake(f.port, { headers: f.signed(streamTarget, { time: Date.now() - 400_000 }) })
   assert.deepEqual([stale.status, stale.body.code, typeof stale.body.serverTime], [401, 'member_time_stale', 'number'])
   assert.ok(Math.abs(stale.body.serverTime - Date.now()) < 60_000)
   for (const headers of [{}, { authorization: 'Bearer ' + 'i'.repeat(43) }, f.signed(streamTarget, { audience: randomUUID() }),
-    f.signed(prefix + '/v1/stream?protocol=1&x=1')]) {
+    f.signed(prefix + '/v1/streams')]) {
     const result = await handshake(f.port, { headers })
     assert.deepEqual([result.status, result.body.code], [401, 'unauthorized'], JSON.stringify(Object.keys(headers)))
   }
@@ -238,24 +240,25 @@ test('the stream upgrade refuses bad protocols, stale clocks, bearers and browse
   // clients that cannot read a refused upgrade's body.
   const browser = await handshake(f.port, { headers: { ...f.signed(), origin: 'https://evil.example' } })
   const unsigned = await handshake(f.port, {})
-  for (const [result, code] of [[refused, 'protocol_unsupported'], [stale, 'member_time_stale'], [browser, 'browser_request'], [unsigned, 'unauthorized']]) {
+  for (const [result, code] of [[refused, 'bad_request'], [stale, 'member_time_stale'], [browser, 'browser_request'], [unsigned, 'unauthorized']]) {
     assert.equal(result.headers['x-woven-error'], code)
     assert.equal(result.body.code, code)
     assert.ok(Math.abs(Date.parse(result.headers.date) - Date.now()) < 60_000, 'a Date header')
   }
   // Signed for the path the member sent, or as this server saw it.
   assert.equal((await handshake(f.port, { headers: f.signed() })).status, 101)
-  assert.equal((await handshake(f.port, { headers: f.signed('/v1/stream?protocol=1') })).status, 101)
+  assert.equal((await handshake(f.port, { headers: f.signed('/v1/stream') })).status, 101)
   const replay = f.signed()
   assert.equal((await handshake(f.port, { headers: replay })).status, 101)
   assert.equal((await handshake(f.port, { headers: replay })).status, 401, 'an upgrade cannot be replayed')
   // Hello names this server's member device, its library and workspace.
   const client = f.connect()
   const hello = await client.next(frame => frame.t === 'hello')
-  assert.deepEqual([hello.deviceID, hello.libraryID, hello.workspaceID, hello.protocol, hello.maxFrameBytes], [f.host, f.enrollment.libraryID, f.enrollment.workspaceID, 1, 8 * 1024 * 1024])
-  assert.ok(hello.capabilities.includes('stream.v1'))
+  assert.deepEqual(Object.keys(hello), ['t', 'deviceID', 'libraryID', 'workspaceID', 'serverTime', 'capabilities', 'maxFrameBytes'])
+  assert.deepEqual([hello.deviceID, hello.libraryID, hello.workspaceID, hello.maxFrameBytes], [f.host, f.enrollment.libraryID, f.enrollment.workspaceID, 8 * 1024 * 1024])
+  assert.ok(hello.capabilities.includes('stream'))
   assert.equal(client.frames[0].t, 'hello', 'hello is the first frame')
-  assert.ok(f.execution.descriptor().capabilities.includes('stream.v1'))
+  assert.ok(f.execution.descriptor().capabilities.includes('stream'))
   // A stopping server refuses with 503 unavailable, in the header too.
   await f.stream.close()
   const stopping = await handshake(f.port, { headers: f.signed() })

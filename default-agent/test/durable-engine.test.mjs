@@ -162,7 +162,7 @@ test('native messages and exposed thinking reach display and the live archive wi
   assert.equal(events.filter(e => e.sessionUpdate === 'agent_message_chunk').map(e => e.content.text).join(''), 'Visible reply');
   assert.equal(events.filter(e => e.sessionUpdate === 'agent_thought_chunk').map(e => e.content.text).join(''), 'Exposed summary');
   const page = await record.history(0, 200);
-  assert.equal(page.recordBatch.schemaVersion, 1);
+  assert.deepEqual(Object.keys(page.recordBatch), ['sourceID', 'nativeSessionID', 'records']);
   assert.ok(page.recordBatch.records.some(r => r.runID === runID && r.text?.includes('Visible reply')));
   assert.ok(!JSON.stringify(page).includes('credential-sentinel-not-history'));
   const source = page.recordBatch.sourceID;

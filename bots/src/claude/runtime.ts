@@ -1,6 +1,6 @@
 import { chmod, lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { VERSION } from "../version.ts";
+import { releaseVersion } from "../identity.ts";
 import type { ClaudeCredential } from "./provider.ts";
 
 /**
@@ -100,7 +100,7 @@ export class ClaudeAgentRuntime {
       ...(credential.native?.secureStorageDir
         ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: credential.native.secureStorageDir }
         : {}),
-      CLAUDE_AGENT_SDK_CLIENT_APP: `wovenmatter-bots/${VERSION}`,
+      CLAUDE_AGENT_SDK_CLIENT_APP: `wovenmatter-bots/${releaseVersion(source)}`,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       DISABLE_TELEMETRY: "1",
       DISABLE_ERROR_REPORTING: "1",

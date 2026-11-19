@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Type } from 'typebox';
 import { validateMCPConnection } from './mcp-context.mjs';
 import { prepareHTMLTool } from './html-resources.mjs';
+import { releaseName } from './release.mjs';
 
 // App connection material is supplied by the native execution owner, never by
 // model arguments, workspace configuration, shell environment or saved history.
@@ -16,7 +17,7 @@ export class WovenMCPClient {
     if (!this.#clients.has(key)) {
       const generation = this.#generation;
       const pending = (async () => {
-        const client = new Client({ name: 'woven-pi-durable', version: '1' }, { capabilities: {} });
+        const client = new Client({ name: 'woven-pi-durable', version: releaseName() }, { capabilities: {} });
         try {
           await client.connect(new StreamableHTTPClientTransport(new URL(bound.endpointURL), {
             requestInit: { headers: { authorization: `Bearer ${bound.bearerToken}` }, redirect: 'error' },

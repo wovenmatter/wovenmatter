@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { harnessLaunch } from './durable-acp.mjs'
+import { releaseName } from './release.mjs'
 
 const fail = message => Object.assign(new Error(message), { statusCode: 409 })
 
@@ -72,7 +73,7 @@ export function openEphemeralACP({ harness, runtimeKind = harness.id, cwd, envir
 // configuration (models, modes, config options).
 export async function ephemeralSession(connection, cwd) {
   const initialized = await connection.request('initialize', { protocolVersion: 1,
-    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'Woven Matter Workspace', version: '1' } })
+    clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'Woven Matter Workspace', version: releaseName() } })
   if (initialized.protocolVersion !== 1) throw fail('Unsupported native agent protocol.')
   const session = await connection.request('session/new', { cwd, mcpServers: [] })
   if (typeof session.sessionId !== 'string' || !session.sessionId) throw fail('The native agent did not create a session.')

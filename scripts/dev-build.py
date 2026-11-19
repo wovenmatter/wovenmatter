@@ -351,7 +351,7 @@ def snapshot(source, destination):
         (temporary / "mcp-access.json").unlink(missing_ok=True)
         (temporary / "device-id").write_text(device_id)
         (temporary / "device-id").chmod(0o600)
-        (temporary / "development-snapshot.json").write_text(json.dumps({"version": 1, "id": str(uuid.uuid4()), "source": str(source), "createdAt": time.time()}))
+        (temporary / "development-snapshot.json").write_text(json.dumps({"id": str(uuid.uuid4()), "source": str(source), "createdAt": time.time()}))
         os.rename(temporary, destination)
     finally:
         if temporary.exists():

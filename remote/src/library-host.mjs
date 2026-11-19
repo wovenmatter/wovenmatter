@@ -247,7 +247,7 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
     /** Calls `listener(cursor)` whenever the announced cursor moves; returns the unsubscribe. */
     watchLibrary: listener => { libraryListeners.add(listener); return () => libraryListeners.delete(listener) },
     endpoint: () => ready ? { port: ready.port, socket: ready.socket, pid: ready.pid } : null,
-    status: () => ({ running: !!child, ready: !!ready, pid: child?.pid ?? null, port: ready?.port ?? null, version: ready?.version ?? null,
+    status: () => ({ running: !!child, ready: !!ready, pid: child?.pid ?? null, port: ready?.port ?? null,
       // The paired-library schema hash, once the library host includes it in its ready line.
       schema: typeof ready?.schema === 'string' ? ready.schema : null,
       restarts, lastExit, lastError, startedAt: ready?.startedAt ?? null, binary }),

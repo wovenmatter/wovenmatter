@@ -40,7 +40,7 @@ def restore(repository, fetch=api, bootstrap=None):
         if not bootstrap:
             raise ValueError("No retained analytics history. Restore a complete backup through the bootstrap_history input; refusing to reset history.")
         history = json.loads(bootstrap)
-    if (history.get("schema_version") != 1 or history.get("repository") != repository
+    if (history.get("repository") != repository
             or not isinstance(history.get("traffic_days"), dict)
             or not isinstance(history.get("download_observations"), dict)
             or not history["download_observations"]):

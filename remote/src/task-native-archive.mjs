@@ -27,7 +27,7 @@ export async function createTaskNativeArchive({sourceID, nativeSessionID, runID,
         do {
           const page = await archive.page(after, 200)
           publish({sessionUpdate: 'woven_native_record', recordBatch: {
-            schemaVersion: 1, sourceID, nativeSessionID, records: page.records}})
+            sourceID, nativeSessionID, records: page.records}})
           after = page.nextAfter
           if (!page.hasMore) break
         } while (true)

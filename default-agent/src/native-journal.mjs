@@ -255,7 +255,7 @@ function manifestRecord(entry, ordinal, page) {
   const manifestPages = Math.ceil(entry.parts.length / MANIFEST_PARTS);
   return {
     id: `native-file.manifest:${entry.sha256}:${page}`, ...(entry.runID ? { runID: entry.runID } : {}), kind: 'native-file.manifest', contentMode: 'event', completeness: 'native-record-chunk-manifest',
-    payload: JSON.stringify({ format: 'woven-native-file-manifest/v2', originalRecord: originalMetadata(entry, ordinal), sourceSHA256: entry.sha256, sourceTotalBytes: entry.length,
+    payload: JSON.stringify({ format: 'woven-native-file-manifest', originalRecord: originalMetadata(entry, ordinal), sourceSHA256: entry.sha256, sourceTotalBytes: entry.length,
       sha256: entry.archivedSHA256, byteFidelity: entry.redacted ? 'tool-endpoint-redacted' : 'exact-native-bytes', totalBytes: entry.archivedLength,
       manifestPage: page, manifestPages, chunkBytes: CHUNK_BYTES,
       parts: entry.parts.slice(page * MANIFEST_PARTS, (page + 1) * MANIFEST_PARTS).map(part => ({ byteOffset: part.byteOffset, byteCount: part.byteCount, chunkID: chunkID(entry, part) })) }),
@@ -329,7 +329,7 @@ export async function openNativeArchive(path) {
             } finally { await projected.close(); }
             if (digest(content) !== part.sha256) throw new Error('An archived native chunk failed its content checksum.');
             record = { id: chunkID(entry, part), ...(entry.runID ? { runID: entry.runID } : {}), kind: 'native-file.chunk', contentMode: 'event', completeness: 'native-record-chunk',
-              payload: JSON.stringify({ format: 'woven-native-file-chunk/v1', encoding: 'base64', sha256: part.sha256, dataBase64: content.toString('base64') }),
+              payload: JSON.stringify({ format: 'woven-native-file-chunk', encoding: 'base64', sha256: part.sha256, dataBase64: content.toString('base64') }),
               text: projection, projectionJSON: JSON.stringify({ ...entry.nativeGrouping, originalRecord: originalMetadata(entry, ordinal), byteOffset: part.byteOffset, byteCount: part.byteCount }) };
             nextOffset = byteOffset + part.byteCount; complete = false;
           } else {

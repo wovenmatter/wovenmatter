@@ -8,7 +8,6 @@ import {
   BotEnvironment,
   containerName,
   IMAGE_LABEL,
-  LAYOUT_LABEL,
   snapshotImage,
   snapshotVolumeName,
   volumeName,
@@ -87,7 +86,7 @@ describe("bot containers on the Engine API", () => {
       { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
       { Type: "volume", Source: SHARED_VOLUME, Target: "/opt/woven", ReadOnly: true },
     ]);
-    expect(container?.labels).toMatchObject({ "woven.bot": BOT, "woven.bots.machine": "machine-1", [LAYOUT_LABEL]: "2" });
+    expect(container?.labels).toEqual({ "woven.bot": BOT, "woven.bots.machine": "machine-1", [IMAGE_LABEL]: await env.image() });
     // Its helper and toolchain are links into the shared volume, both filled and complete.
     const shared = await env.shared();
     expect(Object.fromEntries(container?.links ?? [])).toEqual({
@@ -279,9 +278,8 @@ describe("bot containers on the Engine API", () => {
     must(await shell().writeFile("keep.txt", "kept", ctx));
     const container = engine.containers.get(containerName(BOT));
     if (!container) throw new Error("no container");
-    // The old layout: no layout label, a per-version helper volume at /opt/woven-bot, no links.
+    // The earlier layout: its own helper volume at /opt/woven-bot, no shared volume, no links.
     engine.volumes.set("woven-bots-helper-legacy", { [HELPER_LABEL]: "woven-bots-helper-legacy", "woven.bots.machine": "machine-1" });
-    delete container.labels[LAYOUT_LABEL];
     container.labels[HELPER_LABEL] = "woven-bots-helper-legacy";
     container.links.clear();
     (container.spec.HostConfig as { Mounts: unknown[] }).Mounts = [
@@ -302,16 +300,55 @@ describe("bot containers on the Engine API", () => {
       { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
       { Type: "volume", Source: "woven-bots-helper-legacy", Target: "/opt/woven-bot", ReadOnly: true },
     ]);
-    expect(restored?.labels[LAYOUT_LABEL]).toBeUndefined();
     expect(engine.volumes.has("woven-bots-helper-legacy")).toBe(true);
     // A move that works puts it in the current layout, and the old helper volume can go.
     env.close();
     env = make();
     expect(await env.updateBot(BOT)).toMatchObject({ ok: true, movedToImage: true });
-    expect(engine.containers.get(containerName(BOT))?.labels[LAYOUT_LABEL]).toBe("2");
+    expect((engine.containers.get(containerName(BOT))?.spec.HostConfig as { Mounts: unknown[] }).Mounts).toEqual([
+      { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
+      { Type: "volume", Source: SHARED_VOLUME, Target: "/opt/woven", ReadOnly: true },
+    ]);
+    expect((await env.imageStatus()).staleBots).toEqual([]);
     expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
     // Pruned once the update finished.
     await expect.poll(() => engine.volumes.has("woven-bots-helper-legacy")).toBe(false);
+  });
+
+  it("treats a container an earlier build made as current: it is told by its mounts, with or without the engine listing them", async () => {
+    must(await shell().writeFile("keep.txt", "kept", ctx));
+    const container = engine.containers.get(containerName(BOT));
+    if (!container) throw new Error("no container");
+    // A label earlier builds put on their containers. Nothing reads it; it stays where it is.
+    container.labels["woven.bots.layout"] = "2";
+    for (const listsMounts of [true, false]) {
+      engine.listsMounts = listsMounts;
+      expect(await env.imageStatus()).toMatchObject({ staleBots: [], outdatedBots: [] });
+      // Its links are healed when missing, and the directories it links to survive a prune.
+      await env.stop(BOT);
+      container.links.clear();
+      expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+      expect(container.links.size).toBe(2);
+      const toolchain = container.links.get("/opt/woven-toolchain") ?? "";
+      container.links.set("/opt/woven-toolchain", "/opt/woven/toolchain/older");
+      engine.lastPrune = undefined;
+      await env.pruneShared();
+      expect(engine.lastPrune ?? "").toContain("'toolchain/older'");
+      container.links.set("/opt/woven-toolchain", toolchain);
+      // A move that stopped after this container was made is resumed on its next start.
+      const pending = join(engine.volumeDir(volumeName(BOT)), ".woven/system/carry/.pending");
+      await mkdir(join(pending, ".."), { recursive: true });
+      await writeFile(pending, "");
+      await env.stop(BOT);
+      expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
+      expect(existsSync(pending)).toBe(false);
+    }
+    // Its update stays in place: the same container, still carrying the label it was made with.
+    const id = container.id;
+    expect(await env.updateBot(BOT)).toEqual({ botId: BOT, ok: true });
+    expect(engine.containers.get(containerName(BOT))?.id).toBe(id);
+    expect(engine.containers.get(containerName(BOT))?.labels["woven.bots.layout"]).toBe("2");
+    expect((await env.imageStatus()).staleBots).toEqual([]);
   });
 
   it("rebuilds from a clean image behind a snapshot, carrying its installs, and purges everything", async () => {

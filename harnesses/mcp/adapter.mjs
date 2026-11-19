@@ -52,7 +52,7 @@ export function configure(runtime, directory, args, env) {
       args.push('-c', `hooks.state.${JSON.stringify(state)}.trusted_hash=${JSON.stringify(hash)}`);
     }
   } else if (runtime === 'claude_code') {
-    writeJSON(join(plugin, '.claude-plugin', 'plugin.json'), { name: 'woven-mcp', version: '1.0.0' });
+    writeJSON(join(plugin, '.claude-plugin', 'plugin.json'), { name: 'woven-mcp' });
     writeJSON(join(plugin, 'hooks', 'hooks.json'), { hooks });
   } else if (runtime === 'grok_build') {
     // Grok intentionally excludes hooks from its environment config overlay.

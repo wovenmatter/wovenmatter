@@ -105,7 +105,7 @@ test('direct clients run an actual fixture ACP process, answer approvals and rep
   assert.equal(service.transcript(opened.conversationID).messages.at(-1).content,'before approval after approval')
   assert.equal(service.interactions().length,0)
   assert.ok(service.events().entries.some(entry=>entry.nativeRecord))
-  const legacyID=randomUUID(),legacy=await relay.handle('POST','/v1/durable-acp/attach',{channelID:legacyID,harnessID:'fixture',cwd:workspaceRoot,attachmentProtocol:1})
+  const legacyID=randomUUID(),legacy=await relay.handle('POST','/v1/durable-acp/attach',{channelID:legacyID,harnessID:'fixture',cwd:workspaceRoot,attachmentTokens:true})
   const legacySend=message=>relay.handle('POST','/v1/durable-acp/message',{channelID:legacyID,attachmentToken:legacy.attachmentToken,deliveryID:randomUUID(),message})
   await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
   await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'session/new',params:{cwd:workspaceRoot}})

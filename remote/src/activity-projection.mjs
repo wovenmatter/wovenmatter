@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { durableJSON, read, sha256 as hash } from './durable-json.mjs'
+import { nativeRecordFormats } from './native-record-formats.mjs'
 
 // Canonical `AgentRunActivity` projections for a run's tools, plans,
 // commentary and Pi Durable subagents, as the Mac's ACP client builds them
@@ -152,8 +153,8 @@ export function storedActivity(directory, id) {
   return read(fullPath(directory, id))
 }
 
-// A settled activity's full projection, as an immutable journal record
-// (`wovenmatter.activity.v2`) that library history discloses from.
+// A settled activity's full projection, as an immutable journal record (a
+// chained activity with nothing before it) that library history discloses from.
 export function settleActivity(directory, row) {
   if (row.detailsRecordID) return []
   const full = storedActivity(directory, row.id)
@@ -164,7 +165,7 @@ export function settleActivity(directory, row) {
   if (!existsSync(file)) durableJSON(file, JSON.parse(bytes))
   row.detailsRecordID = recordID
   const partCount = Math.max(1, Math.ceil(bytes.length / partBytes))
-  return Array.from({ length: partCount }, (_, partIndex) => ({ recordID, format: 'wovenmatter.activity.v2', partIndex, partCount,
+  return Array.from({ length: partCount }, (_, partIndex) => ({ recordID, format: nativeRecordFormats.chainedActivity, partIndex, partCount,
     byteCount: bytes.length, sha256, data: bytes.subarray(partIndex * partBytes, (partIndex + 1) * partBytes).toString('base64') }))
 }
 

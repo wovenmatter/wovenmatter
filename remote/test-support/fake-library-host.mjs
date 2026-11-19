@@ -59,7 +59,7 @@ const local = createServer(async (request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname
   log({ method: request.method, path, headers: Object.fromEntries(Object.entries(request.headers).filter(([key]) => key.startsWith('x-woven-'))), body })
   if (request.headers.authorization !== 'Bearer ' + token) return reply(response, 401, { code: 'unauthorized', message: 'A valid library API token is required.' })
-  if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', version: '1', deviceID, uptimeSeconds: 1 })
+  if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', deviceID, uptimeSeconds: 1 })
   if (path === '/v1/identity' && process.env.FAKE_LIBRARY_IDENTITY !== '0') return reply(response, 200, { deviceID, kind: 'linux', name: 'Fake Linux', publicKey: memberPublicKey, endpoints: [] })
   if (path === '/v1/members') {
     if (!process.env.FAKE_LIBRARY_MEMBERS) return reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
@@ -71,7 +71,7 @@ const local = createServer(async (request, response) => {
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body?.audience ?? '')) return reply(response, 400, { code: 'invalid_request', message: 'Invalid signature request.' })
     const time = String(Date.now()), nonce = randomBytes(16).toString('base64url'), method = String(body.method).toUpperCase()
     const target = body.target === '/wovenmatter' ? '/' : body.target.startsWith('/wovenmatter/') || body.target.startsWith('/wovenmatter?') ? (body.target.slice('/wovenmatter'.length).replace(/^\?/, '/?')) : body.target
-    const message = `woven-member-v2\n${body.audience}\n${method}\n${target}\n${time}\n${nonce}\n${body.bodySHA256}`
+    const message = `woven-member\n${body.audience}\n${method}\n${target}\n${time}\n${nonce}\n${body.bodySHA256}`
     signatures.push({ method, target: body.target, audience: body.audience })
     return reply(response, 200, { headers: { 'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Audience': body.audience, 'X-Woven-Member-Time': time, 'X-Woven-Member-Nonce': nonce,
       'X-Woven-Member-Signature': sign(null, Buffer.from(message), memberKey).toString('base64url') } })
@@ -130,13 +130,13 @@ const local = createServer(async (request, response) => {
 })
 const network = createServer((request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname.replace(/^\/wovenmatter(?=\/)/, '')
-  if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', version: '1', deviceID, uptimeSeconds: 1 })
+  if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', deviceID, uptimeSeconds: 1 })
   reply(response, 404, { code: 'not_found' })
 })
 rmSync(socketPath, { force: true })
 network.listen(Number(option('--port') ?? 0), '127.0.0.1', () => local.listen(socketPath, () => {
   chmodSync(socketPath, 0o600)
-  const ready = { event: 'ready', pid: process.pid, port: network.address().port, socket: socketPath, version: '1', schema: 'fake-library-schema' }
+  const ready = { event: 'ready', pid: process.pid, port: network.address().port, socket: socketPath, schema: 'fake-library-schema' }
   writeFileSync(join(dataRoot, 'run/library.json'), JSON.stringify(ready) + '\n', { mode: 0o600 })
   process.stdout.write(JSON.stringify(ready) + '\n')
   process.stdout.write(JSON.stringify({ event: 'library', cursor: libraryCursor }) + '\n')

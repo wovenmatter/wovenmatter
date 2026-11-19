@@ -19,7 +19,7 @@ const executable = flag('--executable') ?? (harness === 'grok_build' ? 'grok'
   : join(homedir(), 'Library/Application Support/Woven Matter/Node Tools/bin', harness === 'codex' ? 'codex-acp' : 'claude-agent-acp'));
 const root = await mkdtemp(join(tmpdir(), 'woven-streaming-smoke-'));
 const started = performance.now();
-const report = { schemaVersion: 1, harness, model: flag('--model') ?? 'advertised-default',
+const report = { harness, model: flag('--model') ?? 'advertised-default',
   scope: 'selected ACP adapter wire, not Woven UI', at: new Date().toISOString(),
   events: [], counts: {}, firstMS: {}, terminal: null, permissionsDenied: 0, textCharacters: 0,
   reasoningCharacters: 0, textBeforeTerminal: false };
@@ -63,7 +63,7 @@ createInterface({ input: child.stdout }).on('line', line => {
 const timeout = setTimeout(() => fail(new Error('120 second deadline exceeded')), 120_000);
 try {
   const initialized = await request('initialize', { protocolVersion: harness === 'grok_build' ? 2 : 1,
-    clientCapabilities: {}, clientInfo: { name: 'woven-streaming-smoke', version: '1' } });
+    clientCapabilities: {}, clientInfo: { name: 'woven-streaming-smoke', version: 'development' } });
   report.protocolVersion = initialized.protocolVersion;
   const session = await request('session/new', { cwd: root, mcpServers: [] });
   sessionID = session.sessionId;

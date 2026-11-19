@@ -139,13 +139,13 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     const e = await engine(), sessionID = message.params?.sessionId;
     if (['session/prompt', '_session/steering', 'session/load', 'woven/adopt', 'session/cancel', 'session/set_config_option', 'woven/history', 'woven/idle', 'woven/recover'].includes(message.method)
       && (attachmentTokens.has(sessionID) || message.attachmentToken)) {
-      const freshLoad = ['session/load','woven/adopt'].includes(message.method) && message.attachmentProtocol === 1 && !message.attachmentToken;
+      const freshLoad = ['session/load','woven/adopt'].includes(message.method) && message.attachmentTokens === true && !message.attachmentToken;
       if (!freshLoad && message.attachmentToken !== attachmentTokens.get(sessionID)) throw new DefaultAgentError('This session attachment was replaced. Reconnect before sending another message.');
     }
     if (message.method === 'session/cancel') cancellationRevisions.set(sessionID, (cancellationRevisions.get(sessionID) ?? 0) + 1);
     if (message.method !== 'session/prompt') {
       const result = await e.handle(message.method, message.params);
-      if (['session/new', 'session/load', 'woven/adopt'].includes(message.method) && message.attachmentProtocol === 1) {
+      if (['session/new', 'session/load', 'woven/adopt'].includes(message.method) && message.attachmentTokens === true) {
         const token = crypto.randomUUID();
         attachmentTokens.set(result.sessionId, token);
         result._meta = { ...result._meta, attachmentToken: token };

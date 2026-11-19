@@ -43,6 +43,7 @@ import { hostname } from 'node:os'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { releaseName } from './release.mjs'
 
 const modulePath = fileURLToPath(import.meta.url)
 // Node resolves module URLs through release symlinks, but preserves argv[1].
@@ -63,10 +64,8 @@ const installerBearer = createInstallerBearer({ token: apiToken, rotate: async (
 } })
 const catalogDocument = runningAsService
   ? JSON.parse(await readFile(catalogPath, 'utf8'))
-  : { schemaVersion: 4, harnesses: [] }
-if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnesses)) {
-  throw new Error('Unsupported harness catalog')
-}
+  : { harnesses: [] }
+if (!Array.isArray(catalogDocument?.harnesses)) throw new Error('The harness catalog has no harness list.')
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
 // Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
 // This host stores and renews its own sign-ins (`sign-ins.json`), and the
@@ -253,7 +252,7 @@ const bots = nativeLinuxHost ? createBotsService({
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
-// The live stream at the execution endpoint (`GET /v1/stream?protocol=1`).
+// The live stream at the execution endpoint (`GET /v1/stream`).
 // Its `workspace` stream also carries the library host's change cursor, so
 // phones sync this machine's library when it changes.
 const stream = clientExecution && members ? createStreamServer({ members, servedTargets, execution: clientExecution, registry: memberSockets,
@@ -587,7 +586,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (request.method === 'GET' && url.pathname === '/v1/health') {
       return json(response, 200, {
         status: 'ready',
-        version: '0.1.0',
         workspaceRoot,
         // Installers and older apps confirm the native host by this field.
         runtimeKind: 'host',
@@ -867,7 +865,7 @@ function probeHarnessTransport(harness, timeoutMilliseconds) {
             // Both adapters use the stable session API implemented by clients.
             protocolVersion: ['codex', 'claude_code'].includes(harness.id) ? 1 : 2,
             clientCapabilities: {},
-            clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
+            clientInfo: { name: 'Woven Matter Readiness Probe', version: releaseName() },
           },
         }
     const child = spawn(harness.command, harness.arguments ?? [], {

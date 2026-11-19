@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITES = ('ios_runner', 'verify_ios_app', 'dev_build', 'executor_deployment',
-          'cua_runtime')
+          'cua_runtime', 'github_analytics')
 
 
 class CIRunnerTests(unittest.TestCase):
@@ -44,8 +44,7 @@ class CIRunnerTests(unittest.TestCase):
             pinned.write_text('#!/bin/sh\nexec "$@"\n')
             pinned.chmod(0o755)
             (root / 'harnesses').mkdir()
-            (root / 'harnesses/catalog.json').write_text(json.dumps({
-                'schemaVersion': 4, 'harnesses': [1, 2, 3, 4]}))
+            (root / 'harnesses/catalog.json').write_text(json.dumps({'harnesses': [1, 2, 3, 4]}))
             binaries = root / 'bin'
             binaries.mkdir()
             for name in ('npm', 'node', 'swift', 'xcodebuild', 'docker'):

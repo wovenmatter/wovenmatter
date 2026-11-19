@@ -7,7 +7,7 @@ import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type { BotManager, ModelStatus } from "./bots.ts";
 import { NotFoundError } from "./bots.ts";
 import { isLoopbackHost } from "./config.ts";
-import { CAPABILITIES, PROTOCOL } from "./identity.ts";
+import { CAPABILITIES } from "./identity.ts";
 import { entryId as toEntryId } from "./ids.ts";
 import { editFacts, type MemoryEdit } from "./memory.ts";
 import { describeProfile, type ProfileStore } from "./profiles.ts";
@@ -27,7 +27,6 @@ import type { SettingsService } from "./settings/service.ts";
 import type { BotRecord, ThreadRecord } from "./storage/registry.ts";
 import { ACCOUNT_NOTES } from "./tools.ts";
 import { assistantText, type DisplayEntry, displayEntry } from "./transcript.ts";
-import { VERSION } from "./version.ts";
 import type { WovenMCP } from "./woven-mcp.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -200,7 +199,7 @@ class Connection {
     this.#server = server;
     socket.on("message", (data, isBinary) => void this.#onMessage(data, isBinary));
     socket.on("close", () => void this.dispose());
-    this.send({ type: "hello", version: VERSION, ...server.identity });
+    this.send({ type: "hello", ...server.identity });
   }
 
   send(message: ServerMessage): void {
@@ -467,7 +466,6 @@ class Connection {
       case "runtime.status": {
         const image = await this.#operations().imageStatus();
         return {
-          version: VERSION,
           environment: this.#server.identity.environment,
           bots: (await manager.list()).length,
           // The tools every bot container gets, the bots an update moves to a new base image, and
@@ -705,7 +703,6 @@ class Server {
   readonly onActivity: ((botId: string) => void) | undefined;
   readonly connections = new Set<Connection>();
   readonly identity: {
-    protocol: number;
     installationId: string;
     capabilities: string[];
     environment: string;
@@ -725,7 +722,6 @@ class Server {
   ) {
     this.manager = manager;
     this.identity = {
-      protocol: PROTOCOL,
       installationId,
       capabilities: [...CAPABILITIES],
       environment,
@@ -805,7 +801,7 @@ export async function startServer(
       }
       if (request.method === "GET" && url.pathname === "/health") {
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ ok: true, version: VERSION, ...state.identity }));
+        response.end(JSON.stringify({ ok: true, ...state.identity }));
         return;
       }
       response.writeHead(404, { "content-type": "text/plain" }).end("not found");
