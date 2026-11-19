@@ -140,6 +140,46 @@ export function parseCatalog(value: unknown, source: string): Model<Api>[] {
   return models;
 }
 
+/**
+ * `models` newest release first. The catalog carries no release dates, so the version numbers in a
+ * model's id decide, highest first (gpt-6.2 before gpt-6.1 before gpt-6 before gpt-5.6), then the
+ * name. Dates (2024-08-06, 12-2024, 20251001, 2508) and sizes (70b, 8x22b) are not versions, and an
+ * id with no version goes last. A provider that resells other labs' models (`openai/gpt-6`) keeps
+ * each lab's models together, labs by name: version numbers of different labs say nothing about
+ * which is newer.
+ */
+export function newestFirst<T extends { readonly id: string; readonly name: string }>(
+  models: readonly T[],
+): T[] {
+  const keyOf = (id: string) => {
+    const slash = id.indexOf("/");
+    const version = [
+      ...id
+        .slice(slash + 1)
+        .replace(/\d{4}-\d{2}-\d{2}|(?<!\d)\d{2}-\d{4}(?!\d)/gu, "")
+        .matchAll(/(?<!\d)\d{1,3}(?![\dbB]|x\d)/gu),
+    ].map((match) => Number(match[0]));
+    return { lab: slash < 0 ? "" : id.slice(0, slash), version };
+  };
+  return models
+    .map((model) => ({ model, ...keyOf(model.id) }))
+    .sort((a, b) => {
+      if (a.lab !== b.lab) return a.lab < b.lab ? -1 : 1;
+      for (let index = 0; index < Math.max(a.version.length, b.version.length); index++) {
+        const [x, y] = [a.version[index], b.version[index]];
+        // The longer version is the later one: 6.1 follows 6.
+        if (x === undefined) return 1;
+        if (y === undefined) return -1;
+        if (x !== y) return y - x;
+      }
+      return (
+        a.model.name.localeCompare(b.model.name, "en", { numeric: true, sensitivity: "base" }) ||
+        (a.model.id < b.model.id ? -1 : a.model.id > b.model.id ? 1 : 0)
+      );
+    })
+    .map((entry) => entry.model);
+}
+
 export type LiveCatalogOptions = {
   /**
    * The provider whose catalog this one reads, when it is not its own: `xai-api` reads `xai`, and

@@ -1,6 +1,7 @@
 import type { CredentialStore, Models } from "@earendil-works/pi-ai";
 import { parseModelRef } from "../config.ts";
 import { LIMIT_LABELS, type LimitEntry, type LimitKind } from "../limits.ts";
+import { newestFirst } from "../model-catalog.ts";
 import { type ModelAccess, type ModelPricing, modelAccess, modelFacts } from "../model-info.ts";
 import { TITLE_REASONING } from "../titles.ts";
 import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
@@ -162,7 +163,12 @@ export class SettingsService {
           : {}),
       });
     }
-    return { providers: [...byProvider.values()], roles: this.roles(), reasoningLevels: TITLE_REASONING };
+    // Every list of models a person or a bot reads comes from here, newest first.
+    const providers = [...byProvider.values()].map((provider) => ({
+      ...provider,
+      models: newestFirst(provider.models),
+    }));
+    return { providers, roles: this.roles(), reasoningLevels: TITLE_REASONING };
   }
 
   roles(): Roles {

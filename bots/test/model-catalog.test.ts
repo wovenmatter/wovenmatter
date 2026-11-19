@@ -12,6 +12,7 @@ import {
   CATALOG_REFRESH_MS,
   checkCatalogModel,
   FileModelsStore,
+  newestFirst,
   parseCatalog,
 } from "../src/model-catalog.ts";
 import { createBotModels, refreshBotModels } from "../src/models.ts";
@@ -255,8 +256,8 @@ describe("Pi's live model catalog for bots", () => {
     };
     let runtime = await start();
     try {
-      // Nothing is fetched at start: asking for the list is what loads the catalog.
-      expect(await listed(runtime)).toEqual(["grok-4.3", "grok-5"]);
+      // Nothing is fetched at start: asking for the list is what loads the catalog, newest first.
+      expect(await listed(runtime)).toEqual(["grok-5", "grok-4.3"]);
       expect(JSON.parse(await readFile(join(dir.path, "provider-models", "xai.json"), "utf8")).models).toHaveLength(2);
     } finally {
       await runtime.close();
@@ -268,10 +269,90 @@ describe("Pi's live model catalog for bots", () => {
     try {
       expect(runtime.models.getModel("xai", "grok-5")).toMatchObject({ id: "grok-5", provider: "xai" });
       expect(logs.filter((line) => line.includes("has no model"))).toEqual([]);
-      expect(await listed(runtime)).toEqual(["grok-4.3", "grok-5"]);
+      expect(await listed(runtime)).toEqual(["grok-5", "grok-4.3"]);
     } finally {
       await runtime.close();
     }
+  });
+
+  describe("the order of a model list", () => {
+    const sorted = (...ids: string[]) => newestFirst(ids.map((id) => ({ id, name: id }))).map((model) => model.id);
+
+    it("puts the newest release first", () => {
+      // The catalog's own order, as the ChatGPT subscription lists it.
+      const models = [
+        ["gpt-5.6-luna", "GPT-5.6 Luna"],
+        ["gpt-5.6-sol", "GPT-5.6 Sol"],
+        ["gpt-5.6-terra", "GPT-5.6 Terra"],
+        ["gpt-6-astra", "GPT-6 Astra"],
+        ["gpt-6-luna", "GPT-6 Luna"],
+        ["gpt-6-sol", "GPT-6 Sol"],
+        ["gpt-6.1-sol", "GPT-6.1 Sol"],
+        ["gpt-6.1-terra", "GPT-6.1 Terra"],
+        ["gpt-6.2-astra", "GPT-6.2 Astra"],
+        ["gpt-6.2-sol", "GPT-6.2 Sol"],
+      ].map(([id, name]) => ({ id: id as string, name: name as string }));
+      expect(newestFirst(models).map((model) => model.name)).toEqual([
+        "GPT-6.2 Astra",
+        "GPT-6.2 Sol",
+        "GPT-6.1 Sol",
+        "GPT-6.1 Terra",
+        "GPT-6 Astra",
+        "GPT-6 Luna",
+        "GPT-6 Sol",
+        "GPT-5.6 Luna",
+        "GPT-5.6 Sol",
+        "GPT-5.6 Terra",
+      ]);
+      // The list given is left as it was.
+      expect(models[0]?.id).toBe("gpt-5.6-luna");
+    });
+
+    it("reads versions, not dates or sizes, and puts ids without one last", () => {
+      expect(
+        sorted("gpt-5.6-luna", "gpt-6.1-terra", "gpt-6-sol", "gpt-6.1-sol", "claude-opus-4-5", "claude-opus-5-5", "chat-latest"),
+      ).toEqual(["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-luna", "claude-opus-5-5", "claude-opus-4-5", "chat-latest"]);
+      expect(
+        sorted("gpt-4o-2024-08-06", "gpt-4.1", "mistral-medium-2508", "llama-3.3-70b", "claude-haiku-4-5-20251001", "claude-haiku-5-5"),
+      ).toEqual(["claude-haiku-5-5", "claude-haiku-4-5-20251001", "gpt-4.1", "gpt-4o-2024-08-06", "llama-3.3-70b", "mistral-medium-2508"]);
+      expect(sorted("grok-4.3", "grok-10", "grok-5")).toEqual(["grok-10", "grok-5", "grok-4.3"]);
+      expect(sorted("command-r-08-2024", "mixtral-8x22b-instruct", "command-a", "command-r7b-12-2024", "command-2")).toEqual([
+        "command-2",
+        "command-a",
+        "command-r-08-2024",
+        "command-r7b-12-2024",
+        "mixtral-8x22b-instruct",
+      ]);
+    });
+
+    it("keeps each lab's models together where a provider resells several labs", () => {
+      expect(
+        sorted(
+          "openai/gpt-5.6-sol",
+          "ai21/jamba-large-1.7",
+          "anthropic/claude-opus-4.8",
+          "openai/gpt-6.2-sol",
+          "auto",
+          "anthropic/claude-fable-5.2",
+          "anthropic/claude-fable-5.2:batch",
+        ),
+      ).toEqual([
+        "auto",
+        "ai21/jamba-large-1.7",
+        "anthropic/claude-fable-5.2",
+        "anthropic/claude-fable-5.2:batch",
+        "anthropic/claude-opus-4.8",
+        "openai/gpt-6.2-sol",
+        "openai/gpt-5.6-sol",
+      ]);
+    });
+
+    it("orders the same way whatever order the catalog came in", () => {
+      const ids = ["gpt-6-sol", "gpt-6.1-sol", "o3", "chat-latest", "gpt-6", "openai/gpt-6", "gpt-4o-2024-08-06", "gpt-4o"];
+      const expected = sorted(...ids);
+      expect(sorted(...ids.toReversed())).toEqual(expected);
+      expect(sorted(...expected)).toEqual(expected);
+    });
   });
 
   describe("what a catalog may say", () => {

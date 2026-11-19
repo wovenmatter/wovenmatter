@@ -1642,11 +1642,16 @@ Changed:
   profile has a signed-in main model; the app's chooser lists every connected
   model (Pi's live catalog, read as `DISTRIBUTED_CLIENT_ARCHITECTURE.md`
   "Provider model metadata" describes, with the list pi-ai ships only as the
-  fallback), newest first, and saves the user's pick with `onboarding.setMainModel`,
+  fallback) and saves the user's pick with `onboarding.setMainModel`,
   which then starts Admin Bot's greeting once (a hidden input, only while its
   main channel is empty). A bot whose profile has no main model refuses
   `message.send`. Bot messages may link to `wovenmatter://settings/accounts` and
   `wovenmatter://settings/bots/profiles`, which open those pages in the app.
+- `models.catalog` lists each provider's models newest first, and every chooser
+  shows them in that order: the runtime orders them once, clients do not. The
+  catalog carries no release dates, so the version numbers in a model's id
+  decide, highest first, then the name. A provider that resells several labs'
+  models keeps each lab's together.
 - Chat entries carry `issue` (`signIn` or `limit`) when a failed reply has a fix
   in Settings; the app shows Subscriptions & API Keys and Change model there.
   Claude subscription is offered to bots only while a Claude account is signed

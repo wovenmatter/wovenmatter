@@ -138,11 +138,11 @@ struct BotOnboardingView: View {
         }.disabled(state.disabled)
     }
 
-    /// Each provider's models, newest first, narrowed by the search.
+    /// Each provider's models in the runtime's order (newest first), narrowed by the search.
     private func listed(_ catalog: PiBotModelCatalog) -> [PiBotProviderModels] {
         let terms = search.lowercased().split(separator: " ").map(String.init)
         return catalog.providers.compactMap { provider in
-            let models = PiBotModelCatalog.newestFirst(provider.models).filter { model in
+            let models = provider.models.filter { model in
                 terms.allSatisfy { model.name.lowercased().contains($0) || model.id.lowercased().contains($0) }
             }
             return models.isEmpty ? nil : PiBotProviderModels(id: provider.id, name: provider.name,
@@ -202,7 +202,7 @@ struct BotOnboardingView: View {
         if let selection { return selection }
         if let current = bots.onboarding?.mainModel, catalog.isKnown(current) { return current }
         guard let provider = catalog.providers.first,
-              let model = PiBotModelCatalog.newestFirst(provider.models).first else { return "" }
+              let model = provider.models.first else { return "" }
         return "\(provider.id)/\(model.id)"
     }
 
