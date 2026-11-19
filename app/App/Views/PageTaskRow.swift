@@ -17,8 +17,7 @@ struct PageTaskRow: View {
     @FocusState private var focus: Field?
     enum Field { case title, instructions }
 
-    private var page: NoteDocument { document.materializedPage() }
-    private var item: BoardItem? { page.boardItems?[componentID] }
+    private var item: BoardItem? { document.boardItems?[componentID] }
     private var task: BoardTask { item?.task ?? BoardTask() }
     private var assignees: [BoardTaskAssignee] { task.assignees }
     /// Agents and bots that are assigned but not sent yet.
@@ -141,19 +140,19 @@ struct PageTaskRow: View {
     // MARK: Edits
 
     private var textBinding: Binding<String> {
-        Binding(get: { page.blocks.first { $0.id == componentID }?.plainText ?? "" }, set: { text in
-            apply(.init(action: .update, id: componentID, expectedRevision: page.boardItemRevision(for: componentID), patch: .init(text: text)))
+        Binding(get: { document.blocks.first { $0.id == componentID }?.plainText ?? "" }, set: { text in
+            apply(.init(action: .update, id: componentID, expectedRevision: document.boardItemRevision(for: componentID), patch: .init(text: text)))
         })
     }
 
     private var detailsBinding: Binding<String> {
         Binding(get: { task.details }, set: { text in
-            apply(.init(action: .update, id: componentID, expectedRevision: page.boardItemRevision(for: componentID), patch: .init(details: text)))
+            apply(.init(action: .update, id: componentID, expectedRevision: document.boardItemRevision(for: componentID), patch: .init(details: text)))
         })
     }
 
     private func setStatus(_ status: BoardTaskStatus) {
-        apply(.init(action: .update, id: componentID, expectedRevision: page.boardItemRevision(for: componentID), patch: .init(status: status)))
+        apply(.init(action: .update, id: componentID, expectedRevision: document.boardItemRevision(for: componentID), patch: .init(status: status)))
     }
 
     private func assign(_ assignee: BoardTaskAssignee) { apply(.init(action: .assign, id: componentID, assignee: assignee)) }

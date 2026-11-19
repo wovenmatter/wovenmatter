@@ -28,7 +28,7 @@ struct PageAndArtifactPersistenceTests {
     }
     _ = try await apply(.init(action: .add, id: "outer", kind: .section, patch: .init(title: "Outer")),
                         .init(action: .add, id: "inner", kind: .section, patch: .init(title: "Inner"), position: .init(parentID: "outer")),
-                        .init(action: .add, id: "task", kind: .task, patch: .init(text: "Do it", assignee: "Me"), position: .init(parentID: "inner")),
+                        .init(action: .add, id: "task", kind: .task, patch: .init(text: "Do it"), position: .init(parentID: "inner")),
                         .init(action: .add, id: "link", patch: .init(title: "The spec"), assetID: original, position: .init(parentID: "inner")))
     var current = try #require(try await db.readNoteForEditing(id: id).document)
     #expect(current.pageSubtreeIDs(of: "outer") == ["outer", "inner", "task", "link"])

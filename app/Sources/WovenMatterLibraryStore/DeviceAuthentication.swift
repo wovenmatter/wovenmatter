@@ -505,7 +505,8 @@ public actor DeviceAuthentication {
     try persist(next); state = next
   }
 
-  public func pair(_ request: PairRequest, workspaceID: String) throws -> PairResponse {
+  /// `hostDeviceID` is this machine's member device ID, which every pairing answer names.
+  public func pair(_ request: PairRequest, workspaceID: String, hostDeviceID: String) throws -> PairResponse {
     // Every device confirms its pairing in a second request, so a lost reply never leaves a grant it does not hold.
     guard request.requiresConfirmation == true else {
       throw Self.error("invalid_pairing", "This pairing request does not confirm itself. Generate a new pairing code.")
@@ -518,7 +519,7 @@ public actor DeviceAuthentication {
     }) {
       let data = try AES.GCM.open(AES.GCM.SealedBox(combined: pending.encryptedCredential), using: Self.key(request.token))
       guard let credential = String(data: data, encoding: .utf8) else { throw Self.unauthorized }
-      return .init(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, confirmationRequired: true)
+      return .init(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, hostDeviceID: hostDeviceID, confirmationRequired: true)
     }
     guard UUID(uuidString: request.deviceID) != nil,
           !request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -541,7 +542,7 @@ public actor DeviceAuthentication {
     try persist(next)
     state = next
     self.offer = nil
-    return PairResponse(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, confirmationRequired: true)
+    return PairResponse(workspaceID: workspaceID, deviceID: request.deviceID, credential: credential, hostDeviceID: hostDeviceID, confirmationRequired: true)
   }
 
   public func authenticate(bearer: String, metadata: DeviceMetadata? = nil) throws -> PairedDevice {
@@ -599,7 +600,7 @@ public actor DeviceAuthentication {
     (state.approvals ?? []).filter { $0.state == .pending && $0.request.expiresAt > now() }.map(\.request)
   }
 
-  public func requestPairing(_ request: PairingApprovalRequest, workspaceID: String? = nil) throws -> PairingApprovalResult {
+  public func requestPairing(_ request: PairingApprovalRequest, workspaceID: String? = nil, hostDeviceID: String) throws -> PairingApprovalResult {
     try Self.validateIdentity(request.identity)
     guard UUID(uuidString: request.requestID) != nil, (32...256).contains(request.requestSecret.utf8.count) else {
       throw Self.error("invalid_pairing", "The pairing request is invalid.")
@@ -610,7 +611,7 @@ public actor DeviceAuthentication {
             existing.invitationProof == request.invitationToken.map(Self.digest) else {
         throw Self.error("pairing_conflict", "This pairing request has changed. Start a new request.")
       }
-      return try pairingResult(.init(requestID: request.requestID, requestSecret: request.requestSecret))
+      return try pairingResult(.init(requestID: request.requestID, requestSecret: request.requestSecret), hostDeviceID: hostDeviceID)
     }
     try checkPairingRate()
     guard !state.devices.contains(where: { $0.revokedAt == nil && $0.id.lowercased() == request.identity.deviceID.lowercased() }) else {
@@ -640,10 +641,10 @@ public actor DeviceAuthentication {
     try persist(next); state = next
     if request.invitationToken != nil { self.offer = nil }
     approvalKeys[request.requestID] = Self.key(request.requestSecret)
-    return try pairingResult(.init(requestID: request.requestID, requestSecret: request.requestSecret))
+    return try pairingResult(.init(requestID: request.requestID, requestSecret: request.requestSecret), hostDeviceID: hostDeviceID)
   }
 
-  public func pairingResult(_ request: PairingPoll) throws -> PairingApprovalResult {
+  public func pairingResult(_ request: PairingPoll, hostDeviceID: String) throws -> PairingApprovalResult {
     guard (32...256).contains(request.requestSecret.utf8.count),
           let entry = (state.approvals ?? []).first(where: { $0.request.id == request.requestID }),
           entry.request.expiresAt > now(), GrantSecrets.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
@@ -658,7 +659,7 @@ public actor DeviceAuthentication {
       throw Self.unauthorized
     }
     return .init(state: .approved, expiresAt: entry.request.expiresAt,
-      pairing: .init(workspaceID: workspaceID, deviceID: entry.request.identity.deviceID, credential: credential))
+      pairing: .init(workspaceID: workspaceID, deviceID: entry.request.identity.deviceID, credential: credential, hostDeviceID: hostDeviceID))
   }
 
   /// Only the local settings/backend owner invokes this method. There is no HTTP

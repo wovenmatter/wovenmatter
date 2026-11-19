@@ -165,7 +165,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
       result.confirmationRequired == true else { throw MobileConnectionError.invalidResponse }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
       token: result.credential, confirmationPending: result.confirmationRequired,
-      hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil },
+      hostDeviceID: MemberRequestSignature.isDeviceID(result.hostDeviceID.lowercased()) ? result.hostDeviceID : nil,
       libraryIDs: result.libraryIDs)
   }
   public func executeMCP(_ message: JSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> JSONValue {

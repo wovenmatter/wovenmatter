@@ -87,6 +87,13 @@ struct LibraryToolFacadeTests {
         // The reply names the Mac's member device ID: the phone's audience.
         let reply = try JSONDecoder().decode(PairResponse.self, from: paired.body)
         #expect(reply.hostDeviceID == mac.identity.deviceID)
+        // So does a Mac whose member list is not loaded: its member ID is its library's host ID.
+        let unloadedAuth = try DeviceAuthentication(fileURL: fixture.directory.appending(path: "unloaded-devices.json"))
+        let unloaded = DeviceAPI(database: fixture.database, authentication: unloadedAuth, commands: fixture.model.libraryCommands, isActive: { true })
+        let other = PairRequest(token: try await unloadedAuth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!).payload.token,
+                                deviceID: UUID().uuidString.lowercased(), deviceName: "Other phone", metadata: .init(kind: .iPhone), requiresConfirmation: true)
+        let answered = await unloaded.handle(.init(method: "POST", target: "/pair", headers: [:], body: try JSONEncoder().encode(other)))
+        #expect(try JSONDecoder().decode(PairResponse.self, from: answered.body).hostDeviceID == mac.identity.deviceID)
         // Confirming the pairing signs the phone's member entry.
         #expect(await mac.member(phone.deviceID) == nil)
         let confirmed = await api.handle(.init(method: "POST", target: "/pair/confirm", headers: [

@@ -253,10 +253,12 @@ extension WorkspaceDatabaseConnection {
         ORDER BY execution_location DESC, created_at, id
         """)
       defer { sqlite3_finalize(statement) }
-      var agents: [WorkspaceAgent] = []
+      // An agent row that does not read is damaged: it is left out and
+      // recorded, so the other agents still list.
+      var agents: [WorkspaceAgent] = [], unreadable: [String] = []
       while true {
         let code = sqlite3_step(statement)
-        if code == SQLITE_DONE { return agents }
+        if code == SQLITE_DONE { replaceUnreadable("agent", ids: unreadable); return agents }
         guard code == SQLITE_ROW else { throw stepError() }
         do {
           let rawID = try text(statement, column: 0)
@@ -265,18 +267,9 @@ extension WorkspaceDatabaseConnection {
           let rawStatus = try text(statement, column: 9)
           guard let location = AgentExecutionLocation(rawValue: rawLocation),
                 let runtime = AgentRuntimeKind(rawValue: rawRuntime),
-                let status = AgentRuntimeStatus(rawValue: rawStatus) else {
-            NSLog(
-              "Ignoring incompatible agent id=%@ location=%@ runtime=%@ status=%@",
-              rawID,
-              rawLocation,
-              rawRuntime,
-              rawStatus
-            )
-            continue
-          }
-          guard let id = UUID(uuidString: rawID) else {
-            NSLog("Ignoring agent with invalid UUID id=%@", rawID)
+                let status = AgentRuntimeStatus(rawValue: rawStatus),
+                let id = UUID(uuidString: rawID) else {
+            unreadable.append(rawID)
             continue
           }
           agents.append(WorkspaceAgent(
@@ -296,7 +289,7 @@ extension WorkspaceDatabaseConnection {
             deletedAt: Self.storedDate(optionalText(statement, column: 13))
           ))
         } catch WorkspaceDatabaseError.corruptRow {
-          NSLog("Ignoring agent row with missing required text")
+          unreadable.append(optionalText(statement, column: 0) ?? "")
         }
       }
     }

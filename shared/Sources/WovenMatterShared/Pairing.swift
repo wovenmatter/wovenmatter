@@ -99,15 +99,14 @@ public struct PairResponse: Codable, Equatable, Sendable {
   public let deviceID: String
   public let credential: String
   public let confirmationRequired: Bool?
-  /// The pairing Mac's member device ID: the audience of the phone's signed
-  /// requests to it. A phone given none cannot sign requests to that Mac and
-  /// asks to be paired again.
-  public var hostDeviceID: String?
+  /// The pairing machine's member device ID: the audience of the paired
+  /// device's signed requests to it.
+  public let hostDeviceID: String
   /// The libraries in the pairing Mac's workspace registry, for a phone that
   /// sent a member key: a phone already holding one of them keeps its copy.
   public var libraryIDs: [String]?
-  public init(workspaceID: String, deviceID: String, credential: String,
-              confirmationRequired: Bool? = nil, hostDeviceID: String? = nil) {
+  public init(workspaceID: String, deviceID: String, credential: String, hostDeviceID: String,
+              confirmationRequired: Bool? = nil) {
     self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential
     self.confirmationRequired = confirmationRequired; self.hostDeviceID = hostDeviceID
   }

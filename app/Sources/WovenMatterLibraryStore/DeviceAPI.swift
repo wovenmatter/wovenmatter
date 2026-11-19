@@ -296,13 +296,14 @@ public final class DeviceAPI {
             if path == "/pairing/request", request.method == "POST" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let pending = try JSONDecoder().decode(PairingApprovalRequest.self, from: request.body)
-                let result = try await authentication.requestPairing(pending, workspaceID: workspaceID)
+                let result = try await authentication.requestPairing(pending, workspaceID: workspaceID,
+                                                                      hostDeviceID: try await database.libraryIdentity().hostDeviceID)
                 return try .json(result)
             }
             if path == "/pairing/result", request.method == "POST" {
                 guard request.body.count <= 1_024 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let poll = try JSONDecoder().decode(PairingPoll.self, from: request.body)
-                return try .json(try await authentication.pairingResult(poll))
+                return try .json(try await authentication.pairingResult(poll, hostDeviceID: try await database.libraryIdentity().hostDeviceID))
             }
             if path == "/pairing/cancel", request.method == "POST" {
                 guard request.body.count <= 1_024 else { return .error("too_large", "The pairing request is too large.", status: 413) }
@@ -347,14 +348,13 @@ public final class DeviceAPI {
                     do { try await members.checkAdd(deviceID: command.deviceID, kind: .ios, publicKey: memberKey, replacingKey: true) }
                     catch let error as LibraryAPIError { return .error(error.code, error.message, status: 409) }
                 }
-                var result = try await authentication.pair(command, workspaceID: workspaceID)
-                if let members {
-                    result.hostDeviceID = members.identity.deviceID
-                    // Whether the phone's current library is one this Mac
-                    // shares, decided before any signed request can work.
-                    if memberKey != nil {
-                        result.libraryIDs = Array(Set(try await database.libraryExecutionWorkspaces().filter { !$0.deleted }.map(\.libraryID))).sorted()
-                    }
+                // A machine's member device ID is its library's host device ID.
+                var result = try await authentication.pair(command, workspaceID: workspaceID,
+                                                           hostDeviceID: try await database.libraryIdentity().hostDeviceID)
+                // Whether the phone's current library is one this Mac
+                // shares, decided before any signed request can work.
+                if members != nil, memberKey != nil {
+                    result.libraryIDs = Array(Set(try await database.libraryExecutionWorkspaces().filter { !$0.deleted }.map(\.libraryID))).sorted()
                 }
                 await onPair()
                 return try .json(result)

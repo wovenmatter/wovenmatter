@@ -57,10 +57,9 @@ struct PageComponentMenu: View {
     @Binding var document: NoteDocument
     @Binding var viewState: CanvasViewState
     let componentID: String
-    private var page: NoteDocument { document.materializedPage() }
 
     var entries: [PageMenuEntry] {
-        let page = self.page
+        let page = document
         guard page.blocks.contains(where: { $0.id == componentID }) else { return [] }
         let id = componentID
         let item = page.boardItems?[id]
@@ -100,7 +99,7 @@ struct PageComponentMenu: View {
     }
 
     private func move(direction: Int) {
-        let page = self.page
+        let page = document
         let siblings = page.pageChildren(of: page.pageParentID(for: componentID))
         guard let index = siblings.firstIndex(of: componentID) else { return }
         let destination = index + direction
@@ -113,12 +112,12 @@ struct PageComponentMenu: View {
         move(to: position)
     }
     private func move(to position: PagePosition) {
-        let page = self.page
+        let page = document
         apply(.init(action: .move, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
             expectedSubtreeRevision: page.pageSubtreeRevision(for: componentID), position: position))
     }
     private func remove(_ removal: PageEdit.Removal?) {
-        let page = self.page
+        let page = document
         apply(.init(action: .remove, id: componentID, expectedRevision: page.boardItemRevision(for: componentID),
             expectedSubtreeRevision: removal == .removeSubtree ? page.pageSubtreeRevision(for: componentID) : nil, removal: removal))
     }
@@ -140,7 +139,7 @@ struct PageComponentMenu: View {
     @Binding var viewState: CanvasViewState
     let folderID: String?
 
-    var cursorPosition: PagePosition { viewState.insertionPosition(in: document.materializedPage()) }
+    var cursorPosition: PagePosition { viewState.insertionPosition(in: document) }
 
     func menu(position: @escaping () -> PagePosition) -> some View {
         PageMenuEntries(entries: addEntries(position: position))

@@ -483,6 +483,18 @@ extension WorkspaceDatabaseConnection {
 
   private static let visibleConversationPredicate = "conversation.id = ? AND " + listedConversation("conversation")
 
+  /// What a record type is called where unreadable rows are reported:
+  /// `WorkspaceNoteRecord` is a `note`, `WorkspaceLibraryItem` a `library item`.
+  static func recordKind<Value>(_ type: Value.Type) -> String {
+    var name = String(describing: type)
+    for prefix in ["Workspace"] where name.hasPrefix(prefix) { name.removeFirst(prefix.count) }
+    for suffix in ["Record"] where name.hasSuffix(suffix) { name.removeLast(suffix.count) }
+    return name.reduce(into: "") { result, character in
+      if character.isUppercase, !result.isEmpty { result.append(" ") }
+      result.append(contentsOf: character.lowercased())
+    }
+  }
+
   func decodeCanonicalRowsUnlocked<Value: Decodable>(
     _ sql: String,
     bindings: [String],
@@ -499,15 +511,11 @@ extension WorkspaceDatabaseConnection {
       let code = sqlite3_step(statement)
       if code == SQLITE_DONE { return values }
       guard code == SQLITE_ROW else { throw stepError() }
-      do {
-        values.append(try decoder.decode(Value.self, from: blob(statement, column: 0)))
-      } catch {
-        NSLog(
-          "Ignoring incompatible cached %@ projection: %@",
-          String(reflecting: Value.self),
-          String(describing: error)
-        )
-      }
+      // A row that does not decode is damaged: it is left out and
+      // recorded, so the rest of the list still shows.
+      let row = try blob(statement, column: 0)
+      if let value = try? decoder.decode(Value.self, from: row) { values.append(value) }
+      else { addUnreadable(Self.recordKind(Value.self), id: ((try? JSONSerialization.jsonObject(with: row)) as? [String: Any])?["id"] as? String ?? "") }
     }
   }
 }

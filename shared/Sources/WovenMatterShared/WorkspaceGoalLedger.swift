@@ -1,13 +1,12 @@
 import Foundation
 
 /// Owner-local state for runtimes without the desktop run database. Persist this
-/// value before submitting input. An interrupted claim is never replayed.
+/// value before submitting input.
 public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
     public var goal: WorkspaceGoal?
     public var runIDs: Set<String> = []
     public var settledRunIDs: Set<String> = []
     public var runTokens: [String: Int64] = [:]
-    public var claims: [String: String] = [:]
     public var receipts: [String: Receipt] = [:]
     public struct Receipt: Codable, Equatable, Sendable {
         public var mutation: WorkspaceGoalMutation
@@ -25,7 +24,7 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
             try WorkspaceGoal.validate(objective: objective, tokenBudget: tokens, turnBudget: turns)
             guard goal == nil || goal?.status == .complete else { throw WorkspaceToolError.invalid("Clear or edit the existing goal first.") }
             goal = WorkspaceGoal(sessionID: sessionID ?? goal?.sessionID ?? "", objective: objective, tokenBudget: tokens, turnBudget: turns)
-            runIDs = []; settledRunIDs = []; runTokens = [:]; claims = [:]
+            runIDs = []; settledRunIDs = []; runTokens = [:]
             if let currentRunID { runIDs.insert(currentRunID) }
         default:
             guard var value = goal else { throw WorkspaceToolError.notFound("No goal is set.") }
@@ -40,10 +39,10 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
                 try WorkspaceGoal.validate(objective: objective, tokenBudget: tokens, turnBudget: turns)
                 value.id = UUID().uuidString.lowercased(); value.objective = objective
                 value.tokenBudget = tokens; value.turnBudget = turns; value.status = .paused
-                value.pendingDeliveryID = nil; claims = [:]
+                value.pendingDeliveryID = nil
             case .pause:
                 guard value.status != .complete else { throw WorkspaceToolError.invalid("Set a new goal after completion.") }
-                value.status = .paused; value.pendingDeliveryID = nil; claims = [:]
+                value.status = .paused; value.pendingDeliveryID = nil
             case .resume:
                 guard value.status != .complete else { throw WorkspaceToolError.invalid("Set a new goal after completion.") }
                 if value.status != .active {
@@ -53,17 +52,16 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
                     guard !budgetReached else { throw WorkspaceToolError.invalid("Increase or remove the budget before resuming.") }
                     value.status = .active; value.evidence = nil; value.pendingDeliveryID = nil
                     value.pendingProgressRevision = value.progressRevision - 1
-                    claims = [:]
                     if let currentRunID { runIDs.insert(currentRunID) }
                 }
-            case .clear: goal = nil; claims = [:]
+            case .clear: goal = nil
             case .complete(_, let evidence), .block(_, let evidence), .checkpoint(_, let evidence):
                 guard value.status == .active else { throw WorkspaceToolError.invalid("Only an active goal can report progress.") }
                 let evidence = evidence.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !evidence.isEmpty, evidence.utf8.count <= 4096 else { throw WorkspaceToolError.invalid("Provide evidence of at most 4 KiB.") }
                 value.evidence = evidence
-                if case .complete = mutation { value.status = .complete; value.pendingDeliveryID = nil; claims = [:] }
-                else if case .block = mutation { value.status = .blocked; value.pendingDeliveryID = nil; claims = [:] }
+                if case .complete = mutation { value.status = .complete; value.pendingDeliveryID = nil }
+                else if case .block = mutation { value.status = .blocked; value.pendingDeliveryID = nil }
                 else if evidence != goal?.evidence { value.progressRevision += 1 }
             case .set: break
             }
@@ -76,7 +74,7 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
     public mutating func enroll(_ runID: String) {
         guard goal?.status == .active else { return }
         runIDs.insert(runID)
-        if goal?.pendingDeliveryID == runID { goal?.pendingDeliveryID = nil; claims.removeValue(forKey: runID) }
+        if goal?.pendingDeliveryID == runID { goal?.pendingDeliveryID = nil }
     }
     public mutating func settle(_ runID: String, tokens: Int64?, succeeded: Bool) {
         guard runIDs.contains(runID), settledRunIDs.insert(runID).inserted else { return }
@@ -96,24 +94,9 @@ public struct WorkspaceGoalLedger: Codable, Equatable, Sendable {
         guard let goal else { return false }
         return goal.turnBudget.map { goal.completedTurns >= $0 } == true || goal.tokenBudget.map { (goal.tokensUsed ?? 0) >= $0 } == true
     }
-    public mutating func claimContinuation(id: String) -> String? {
-        guard var value = goal, value.status == .active, value.pendingDeliveryID == nil else { return nil }
-        guard value.tokenBudget == nil || runIDs.allSatisfy({ runTokens[$0] != nil }) else {
-            goal?.status = .blocked; goal?.evidence = "Token usage is unavailable; remove the token budget before resuming."
-            return nil
-        }
-        guard !budgetReached else { goal?.status = .budgetLimited; return nil }
-        // A fresh/resumed idle goal gets one initial attempt. Every settled run
-        // after that must have produced a new checkpoint.
-        if !runIDs.isEmpty && value.progressRevision <= value.pendingProgressRevision { return nil }
-        value.pendingDeliveryID = id; value.pendingProgressRevision = value.progressRevision
-        goal = value; claims[id] = value.id
-        return value.continuationPrompt
-    }
-    public func authorizes(_ id: String) -> Bool { goal?.status == .active && goal?.pendingDeliveryID == id && claims[id] == goal?.id }
     public mutating func recover() {
         if goal?.status == .active { goal?.status = .paused; goal?.evidence = "Execution owner restarted or was interrupted. Resume explicitly." }
-        goal?.pendingDeliveryID = nil; claims = [:]
+        goal?.pendingDeliveryID = nil
     }
 }
 

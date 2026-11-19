@@ -22,11 +22,7 @@ public struct PairingDeviceIdentity: Codable, Equatable, Sendable {
 /// contains no workspace contents or secrets.
 public struct DiscoveryAdvertisement: Codable, Equatable, Sendable {
   public let identity: PairingDeviceIdentity
-  public let capabilities: [String]?
-  public init(identity: PairingDeviceIdentity, capabilities: [String]? = nil) {
-    self.capabilities = capabilities
-    self.identity = identity
-  }
+  public init(identity: PairingDeviceIdentity) { self.identity = identity }
 }
 public struct DiscoveredPeer: Codable, Equatable, Sendable, Identifiable {
   public var id: String { endpoint.absoluteString }

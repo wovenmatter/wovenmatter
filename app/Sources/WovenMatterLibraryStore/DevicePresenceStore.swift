@@ -28,7 +28,7 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       let hostID = try libraryIdentityUnlocked().hostDeviceID
       return ExecutionWorkspace.connections(
-        try federationValuesUnlocked("SELECT payload FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self),
+        try federationListUnlocked("SELECT payload,id FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self, kind: "workspace"),
         hostDeviceID: hostID, activeDeviceIDs: activeDeviceIDs)
     }
   }

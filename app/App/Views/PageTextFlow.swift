@@ -19,7 +19,7 @@ struct PageTextFlow: View {
     @State private var editContext = PageFlowEditingContext()
 
     var body: some View {
-        let base = document.materializedPage()
+        let base = document
         NoteEditor(document: flowBinding(base: base), controller: controller,
             dictationEditor: dictationEditor, dictationIdentity: "page:\(pageID):\(flowID)",
             sizesToContent: true, editsPageFlow: true, onFocus: { controller in
@@ -34,7 +34,7 @@ struct PageTextFlow: View {
                     viewState.cursor = .init(selection: selection, position: .init(parentID: parentID, afterID: afterID, atStart: afterID == nil))
                 }
                 onFocus?(controller)
-            }, onSynchronize: { editContext.base = document.materializedPage() }, sharedUndoManager: undoManager,
+            }, onSynchronize: { editContext.base = document }, sharedUndoManager: undoManager,
             contextMenuItems: inserter.map { inserter in { inserter.menuItems { inserter.cursorPosition } } })
             .frame(minHeight: 40)
             .accessibilityLabel("Page document text")
@@ -55,7 +55,7 @@ struct PageTextFlow: View {
 
     private func flowBinding(base: NoteDocument) -> Binding<NoteDocument> {
         Binding(get: {
-            let page = document.materializedPage()
+            let page = document
             let ids = liveIDs(in: page)
             var flow = page.pageFlowDocument(blockIDs: ids)
             // Page text uses the same native editor, adding only task metadata
@@ -96,10 +96,10 @@ struct PageTextFlow: View {
                         local.boardItems?[block.id]?.task = nil
                     }
                 }
-                let remote = document.materializedPage()
+                let remote = document
                 let merged = try NoteDocument.mergePage(base: base, local: local, remote: remote)
                 commitPage(document: $document, state: $viewState, recordsComponentUndo: false) { $0 = merged.document }
-                editContext.base = document.materializedPage()
+                editContext.base = document
                 if !merged.conflictedIDs.isEmpty {
                     viewState.error = "Concurrent edits were retained as separate components and marked for review."
                 }
@@ -110,7 +110,7 @@ struct PageTextFlow: View {
     /// Handles a reveal request once. Clearing it keeps flows created later from
     /// taking focus and lets the same component be revealed again.
     private func focusRequestedComponent() {
-        guard let id = viewState.revealCardID, liveIDs(in: document.materializedPage()).contains(id) else { return }
+        guard let id = viewState.revealCardID, liveIDs(in: document).contains(id) else { return }
         DispatchQueue.main.async {
             controller.focus(blockID: id, atEnd: true)
             if viewState.revealCardID == id { viewState.revealCardID = nil }

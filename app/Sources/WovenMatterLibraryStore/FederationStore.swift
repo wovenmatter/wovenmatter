@@ -17,7 +17,7 @@ extension WorkspaceDatabaseConnection {
   }
   public func libraryExecutionWorkspaces() throws -> [ExecutionWorkspace] {
     try withLock {
-      try federationValuesUnlocked("SELECT payload FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self)
+      try federationListUnlocked("SELECT payload,id FROM execution_workspaces ORDER BY id", as: ExecutionWorkspace.self, kind: "workspace")
     }
   }
   public func libraryExecutionOwners() throws -> [String: String] {
@@ -222,8 +222,24 @@ extension WorkspaceDatabaseConnection {
     value.isPinned = sqlite3_column_int(statement, 2) != 0; value.updatedAt = try text(statement, column: 3)
     return value
   }
-  /// Every row's value, decoded. Every device runs the same build, so a row
-  /// that does not decode is damaged and the read fails.
+  /// The rows of a list `sql` reads whole: each row's value, then its ID. A
+  /// row that does not decode is damaged; it is left out and recorded
+  /// (`UnreadableRecords`), so the rest of the list still shows.
+  func federationListUnlocked<Value: Decodable>(_ sql: String, as type: Value.Type, kind: String) throws -> [Value] {
+    let statement = try prepareUnlocked(sql); defer { sqlite3_finalize(statement) }
+    var result: [Value] = [], unreadable: [String] = []
+    while true {
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      if let value = try? JSONDecoder().decode(type, from: try blob(statement, column: 0)) { result.append(value) }
+      else { unreadable.append(try text(statement, column: 1)) }
+    }
+    replaceUnreadable(kind, ids: unreadable)
+    return result
+  }
+  /// The values `sql` selects, for a read or a write of those rows
+  /// themselves: one that does not decode is damaged and the read fails.
   func federationValuesUnlocked<Value: Decodable>(_ sql: String, bindings: [String] = [], as type: Value.Type) throws -> [Value] {
     let statement = try prepareUnlocked(sql); defer { sqlite3_finalize(statement) }
     for (index, value) in bindings.enumerated() { try bind(value, at: Int32(index + 1), to: statement) }

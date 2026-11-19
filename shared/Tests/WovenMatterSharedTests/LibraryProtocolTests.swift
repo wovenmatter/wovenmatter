@@ -19,7 +19,7 @@ struct LibraryProtocolTests {
     }
     let identity = PairingDeviceIdentity(deviceID: "mac", deviceName: "Mac", metadata: DeviceMetadata(kind: .mac))
     #expect(try keys(PairRequest(token: token, deviceID: "phone", deviceName: "iPhone")) == ["token", "deviceID", "deviceName"])
-    #expect(try keys(PairResponse(workspaceID: "workspace", deviceID: "phone", credential: token)) == ["workspaceID", "deviceID", "credential"])
+    #expect(try keys(PairResponse(workspaceID: "workspace", deviceID: "phone", credential: token, hostDeviceID: "mac")) == ["workspaceID", "deviceID", "credential", "hostDeviceID"])
     #expect(try keys(LibraryHello(workspaceID: "workspace", hostName: "Mac")) == ["workspaceID", "hostName"])
     #expect(try keys(DiscoveryAdvertisement(identity: identity)) == ["identity"])
     #expect(try keys(PairingApprovalRequest(requestID: "r", requestSecret: "s", identity: identity)) == ["requestID", "requestSecret", "identity"])

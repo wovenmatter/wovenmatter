@@ -475,7 +475,7 @@ extension WorkspaceDatabaseConnection {
     guard var merged = try? NoteDocument.mergePage(base: base, local: draft, remote: current).document else {
       throw WorkspaceNoteMutationError.revisionConflict
     }
-    merged.stampBoardChanges(from: current.materializedPage(), actor: BoardActor(kind: .user), at: Self.timestamp(Date()))
+    merged.stampBoardChanges(from: current, actor: BoardActor(kind: .user), at: Self.timestamp(Date()))
     return (resolvedTitle, try merged.encoded())
   }
 

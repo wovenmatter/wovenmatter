@@ -50,7 +50,7 @@ extension ApplicationModel {
         guard !pages.isEmpty else { return }
         let own = ownsExecution ? (try? await agentToolWorkspaces().own) : nil
         for page in pages {
-            let document = NoteDocument.decode(page.content).materializedPage()
+            let document = NoteDocument.decode(page.content)
             guard document.kind == .canvas else { continue }
             for block in document.blocks {
                 guard let task = document.boardItems?[block.id]?.task else { continue }

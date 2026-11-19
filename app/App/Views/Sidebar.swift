@@ -2492,7 +2492,7 @@ final class ListPresentationCache: @unchecked Sendable {
         case .html:
             document.databaseLink == nil ? "Interactive App" : "Live App"
         case .canvas:
-            "Page · \(document.materializedPage().blocks.count) components"
+            "Page · \(document.blocks.count) components"
         }
         let presentation = NoteRowPresentation(
             note: note,

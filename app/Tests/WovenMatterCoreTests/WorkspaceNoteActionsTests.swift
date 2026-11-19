@@ -6,12 +6,12 @@ import WovenMatterCore
 @Suite("Note menu revisions, retention and export")
 struct WorkspaceNoteActionsTests {
 
-  @Test func canvasPersistsLayoutAndExportsWithoutFlatteningReferences() async throws {
+  @Test func aPagePersistsALinkedOriginalAndExportsWithoutFlatteningIt() async throws {
     let f = try await Fixture(); defer { f.close() }
     let target = try await f.db.createNote(folderID: nil, title: "Research")
     let block = NoteRichTextBlock(text: "Research")
     let document = NoteDocument(kind: .canvas, blocks: [.richText(block)],
-      canvas: [block.id: .init(x: 800, y: 240, width: 720, height: 500, assetID: target)])
+      canvas: [block.id: .init(assetID: target, height: 500)])
     let id = try await f.db.createNote(folderID: nil, title: "Planning board", content: document.encoded(), kind: .canvas)
     let stored = try await f.db.readNoteForEditing(id: id)
     #expect(stored.document == document)

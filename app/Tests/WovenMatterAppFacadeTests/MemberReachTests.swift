@@ -21,7 +21,7 @@ struct MemberReachTests {
         try await directory.ensureSelf(name: "Mac B", endpoints: [])
         let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
             ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
-            capabilities: ["history.library"], executionDeviceID: bDevice)
+            capabilities: [ExecutionWorkspace.libraryHistoryCapability], executionDeviceID: bDevice)
         let commands = ReachMacCommands()
         let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
         let send = Self.route { request in await api.handle(request) }
@@ -268,7 +268,7 @@ struct MemberReachTests {
         try await directory.add(deviceID: macA.deviceID, kind: .mac, name: "Mac A", publicKey: macA.publicKey, endpoints: [])
         let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
             ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
-            capabilities: ["history.library"], executionDeviceID: bDevice)
+            capabilities: [ExecutionWorkspace.libraryHistoryCapability], executionDeviceID: bDevice)
         let commands = ReachMacCommands()
         let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
         let transport = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: macA.signer, send: Self.route { request in await api.handle(request) })
@@ -380,7 +380,7 @@ struct MemberReachTests {
                 ownerDeviceID: device, kind: kind, name: name, endpoint: URL(string: "https://mac-mini.fixture.ts.net:8443/wovenmatter")!,
                 capabilities: capabilities, executionDeviceID: device, deleted: deleted, retainedHistory: retained))
         }
-        let current = ["history.library", StreamProtocol.capability]
+        let current = [ExecutionWorkspace.libraryHistoryCapability, StreamProtocol.capability]
         let copied = try await row("Copied Mac", capabilities: current, retained: true)
         let removed = try await row("Removed Mac", capabilities: current, deleted: true)
         let phone = try await row("iPhone", kind: .ios, capabilities: [])

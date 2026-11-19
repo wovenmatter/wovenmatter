@@ -144,10 +144,14 @@ extension WorkspaceDatabaseConnection {
       draft.recurrence = .init(unit: native, interval: value.recurrenceInterval)
     }
     if let task = value.task {
+      // A task's tool list is in the vocabulary of the device that runs it:
+      // tool groups for a task a Mac runs, a phone's own tool names for one
+      // the phone runs, which are kept as sent (`calendar_task_executors`).
+      // The groups among them are what applies to a task run here.
       guard let runtime = AgentRuntimeKind(rawValue: task.runtime), task.workspaceID == nil || UUID(uuidString: task.workspaceID!) != nil else { throw LibraryCalendarError.invalid }
       draft.task = .init(prompt: task.prompt, configuration: .init(runtimeKind: runtime, workspaceID: task.workspaceID.flatMap(UUID.init), folderID: task.folderID,
         title: value.title, model: task.model, thinking: task.thinking, permission: task.permission,
-        tools: task.enabledTools.map { .init(enabled: Set($0.compactMap { WorkspaceToolGroup(rawValue: $0.replacingOccurrences(of: "wovenmatter_", with: "")) })) } ?? .init()), sessionMode: task.newSessionEachTime ? .new : .same)
+        tools: task.enabledTools.map { .init(enabled: Set($0.compactMap(WorkspaceToolGroup.init(rawValue:)))) } ?? .init()), sessionMode: task.newSessionEachTime ? .new : .same)
     }
     return try draft.validated()
   }

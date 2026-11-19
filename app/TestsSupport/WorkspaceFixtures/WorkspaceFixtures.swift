@@ -134,14 +134,18 @@ extension WorkspaceDatabase {
 }
 
 extension DeviceAuthentication {
+  /// The member device ID a fixture's pairing answers name when a test has no host of its own.
+  public static let fixtureHostDeviceID = "f0000000-0000-4000-8000-0000000000aa"
+
   /// Pairs and confirms, as a device does with its two requests: `request`
   /// with confirmation required, then `confirmPairing` with the returned bearer.
-  public func pairConfirmed(_ request: PairRequest, workspaceID: String) async throws -> PairResponse {
+  public func pairConfirmed(_ request: PairRequest, workspaceID: String,
+                            hostDeviceID: String = DeviceAuthentication.fixtureHostDeviceID) async throws -> PairResponse {
     var confirmed = PairRequest(token: request.token, deviceID: request.deviceID, deviceName: request.deviceName,
       metadata: request.metadata, expectedWorkspaceID: request.expectedWorkspaceID,
       requiresConfirmation: true, purpose: request.purpose)
     confirmed.memberPublicKey = request.memberPublicKey
-    let response = try await pair(confirmed, workspaceID: workspaceID)
+    let response = try await pair(confirmed, workspaceID: workspaceID, hostDeviceID: hostDeviceID)
     try await confirmPairing(bearer: response.credential, workspaceID: workspaceID)
     return response
   }

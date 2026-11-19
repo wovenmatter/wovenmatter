@@ -865,7 +865,7 @@ private final class StreamMac: @unchecked Sendable {
     registry = MemberSocketRegistry(members: directory)
     descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: hostID, kind: .mac,
       name: "This Mac", endpoint: URL(string: "https://mac.fixture.ts.net:8443/wovenmatter")!,
-      capabilities: ["history.library", StreamProtocol.capability], executionDeviceID: hostID)
+      capabilities: [ExecutionWorkspace.libraryHistoryCapability, StreamProtocol.capability], executionDeviceID: hostID)
     let database = database, descriptor = descriptor, directory = directory
     let pair = await MainActor.run {
       let commands = StreamCommands(database: database)

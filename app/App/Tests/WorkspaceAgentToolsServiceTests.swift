@@ -205,7 +205,7 @@ extension WorkspaceAgentToolsServiceTests {
         defer { model.stop() }
 
         let card = NoteRichTextBlock(text: "Original")
-        let placement = CanvasCardPlacement(x: 420, y: 240, assetID: "retained-reference")
+        let placement = CanvasCardPlacement(assetID: "retained-reference")
         let document = NoteDocument(kind: .canvas, blocks: [.richText(card)], canvas: [card.id: placement])
         let note = try await database.createNote(folderID: nil, title: "Board", content: document.encoded(), kind: .canvas, callerConversationID: caller, requestID: UUID().uuidString)
         let read = await model.handle(.init(arguments: ["notes", "read", note]), callerID: caller)
@@ -227,9 +227,8 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(saved.document?.blocks.count == 3)
         #expect(saved.document?.plainText.contains("Agent idea") == true)
         #expect(saved.document?.plainText.contains("Comparison") == true)
+        // Generic note edits leave a component's linked original as it was.
         #expect(saved.document?.canvas?[card.id] == placement)
-        // A generic insert migrated it without moving anything or losing its layout record.
-        #expect(saved.document?.pageNodes != nil)
         // Exercise the actual command parser, permissions, service and transactional store.
         let asset = try await database.createNote(folderID: nil, title: "Independent artifact", kind: .html,
             callerConversationID: caller, requestID: UUID().uuidString)

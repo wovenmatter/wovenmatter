@@ -115,9 +115,9 @@ import WovenMatterCore
       _ = try await authentication.pairConfirmed(.init(token: try await offer(), deviceID: tablet, deviceName: "iPad", metadata: .init(kind: .iPad)), workspaceID: workspace)
       try await authentication.revoke(deviceID: tablet)
       _ = try await authentication.pair(.init(token: try await offer(), deviceID: UUID().uuidString.lowercased(), deviceName: "Second iPhone",
-        metadata: .init(kind: .iPhone), requiresConfirmation: true), workspaceID: workspace)
+        metadata: .init(kind: .iPhone), requiresConfirmation: true), workspaceID: workspace, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
       _ = try await authentication.requestPairing(.init(requestID: UUID().uuidString.lowercased(), requestSecret: String(repeating: "s", count: 43),
-        identity: .init(deviceID: UUID().uuidString.lowercased(), deviceName: "Other Mac", metadata: .init(kind: .mac))), workspaceID: workspace)
+        identity: .init(deviceID: UUID().uuidString.lowercased(), deviceName: "Other Mac", metadata: .init(kind: .mac))), workspaceID: workspace, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
       // The two keys the released build also writes, which nothing reads.
       var stored = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
       stored["version"] = 1; stored["admissionVersion"] = 3

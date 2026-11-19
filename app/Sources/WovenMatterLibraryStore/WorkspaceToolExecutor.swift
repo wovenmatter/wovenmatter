@@ -411,7 +411,7 @@ public struct WorkspaceToolExecutor: Sendable {
   private func pageConflict(pageID: String, componentID: String?, callerID: String, requestID: String,
                             note: WorkspaceToolHandlers.Note) async -> WovenMatterToolResponse {
     let stored = try? await readPage(pageID, callerID: callerID, requestID: requestID, note: note)
-    let ids = stored.map { PageTool.linkedAssetIDs($0.0.materializedPage(), componentID: componentID) } ?? []
+    let ids = stored.map { PageTool.linkedAssetIDs($0.0, componentID: componentID) } ?? []
     let assets = (try? await database.boardAssetSummaries(callerID: callerID, ids: ids)) ?? [:]
     return PageTool.conflict(pageID: pageID, componentID: componentID, stored: stored?.0, revision: stored?.1.revision, assets: assets)
   }

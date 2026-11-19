@@ -221,10 +221,9 @@ private struct PageProjection {
     private var projection: PageProjection?
     func value(_ source: NoteDocument) -> PageProjection {
         if self.source == source, let projection { return projection }
-        let page = source.materializedPage()
-        let result = PageProjection(document: page,
-            blocks: Dictionary(page.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
-            segments: page.pageSegments)
+        let result = PageProjection(document: source,
+            blocks: Dictionary(source.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+            segments: source.pageSegments)
         self.source = source
         projection = result
         return result
@@ -236,9 +235,9 @@ func commitPage(document: Binding<NoteDocument>, state: Binding<CanvasViewState>
                 change: (inout NoteDocument) throws -> Void) {
     do {
         let before = document.wrappedValue
-        var value = before.materializedPage()
+        var value = before
         try change(&value)
-        value.stampBoardChanges(from: before.materializedPage(), actor: .init(kind: .user))
+        value.stampBoardChanges(from: before, actor: .init(kind: .user))
         try value.validateEditableShape()
         guard try value.encoded().utf8.count <= NoteDocument.maximumBoardBytes else { throw NoteDocumentSafetyError.tooLarge }
         state.wrappedValue.recordLocalChange(from: before, to: value, undoable: recordsComponentUndo)

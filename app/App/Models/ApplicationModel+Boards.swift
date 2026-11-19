@@ -21,8 +21,7 @@ extension ApplicationModel {
               let conversation = workspaceOverview?.conversations.first(where: { $0.id == conversationID }) else {
             throw BoardDispatchError.unavailable
         }
-        let original = try NoteDocument.editableDocument(from: noteDraft(for: note).content)
-        let before = original.materializedPage()
+        let before = try NoteDocument.editableDocument(from: noteDraft(for: note).content)
         guard before.kind == .canvas, before.blocks.contains(where: { $0.id == itemID }) else {
             throw BoardDispatchError.unavailable
         }
@@ -57,7 +56,7 @@ extension ApplicationModel {
                 throw BoardDispatchError.sendFailed("Another edit to this component arrived while the Page was saving. Your version was kept as a separate component marked for review. Review it, then send the intended component. No task was sent.")
             }
             let current = workspaceOverview?.notes.first(where: { $0.id == boardID }).flatMap {
-                try? NoteDocument.editableDocument(from: noteDraft(for: $0).content).materializedPage()
+                try? NoteDocument.editableDocument(from: noteDraft(for: $0).content)
             }
             if current?.blocks.first(where: { $0.id == itemID })?.normalized != intended {
                 throw BoardDispatchError.sendFailed("This component changed while it was being sent. Send it again to include the latest text. No task was sent.")
@@ -70,7 +69,7 @@ extension ApplicationModel {
         let quoted = String(decoding: try JSONEncoder().encode([
             "pageID": boardID,
             "componentID": itemID,
-            "title": original.canvasPlacement(for: itemID).title ?? saved.canvasPlacement(for: itemID).title ?? "",
+            "title": before.canvasPlacement(for: itemID).title ?? saved.canvasPlacement(for: itemID).title ?? "",
             "text": String(block.plainText.prefix(16_000))
         ]), as: UTF8.self)
             .replacingOccurrences(of: "<", with: "\\u003c")

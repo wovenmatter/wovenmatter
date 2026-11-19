@@ -337,8 +337,6 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
   private let closeTimeout: Duration
   private let maximumFrameBytes: Int
   private let lock = NSLock()
-  /// The client sent a frame over `maximumFrameBytes`: the close says 1009.
-  private var tooLarge = false
   /// This side's close frame was written.
   private var closeSent = false
   /// The client sent its close frame, or the connection ended.
@@ -365,10 +363,9 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
       guard let session else { self.connection.cancel(); return }
       // The listener reads at most `maximumFrameBytes` of one message; a larger one fails the read.
       let tooLarge = (data?.count ?? 0) > self.maximumFrameBytes || Self.isTooLarge(error)
-      if tooLarge { self.lock.withLock { self.tooLarge = true } }
       Task {
         let input: StreamWireInput
-        if tooLarge { input = .closed(.protocolViolation) }
+        if tooLarge { input = .closed(.frameTooLarge) }
         else if error != nil { input = .closed(nil) }
         else {
           switch metadata?.opcode {
@@ -428,8 +425,12 @@ final class WebSocketStreamWire: ExecutionStreamWire, @unchecked Sendable {
     lock.withLock { closing = true }
     guard let code else { connection.cancel(); return }
     let metadata = NWProtocolWebSocket.Metadata(opcode: .close)
-    metadata.closeCode = lock.withLock({ tooLarge }) ? .protocolCode(.messageTooBig)
-      : code.rawValue < 4000 ? .protocolCode(code == .normal ? .normalClosure : .goingAway) : .privateCode(UInt16(code.rawValue))
+    metadata.closeCode = switch code {
+    case .normal: .protocolCode(.normalClosure)
+    case .goingAway: .protocolCode(.goingAway)
+    case .frameTooLarge: .protocolCode(.messageTooBig)
+    case .protocolViolation, .memberRemoved: .privateCode(UInt16(code.rawValue))
+    }
     let context = NWConnection.ContentContext(identifier: "close", metadata: [metadata])
     connection.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
       guard let self, error == nil else { connection.cancel(); return }

@@ -59,7 +59,7 @@ import WovenMatterCore
     @Test func enteringBeforeTaskTextKeepsItsIdentityAndAssignmentOnTheExistingText() throws {
         let block = NoteRichTextBlock(id: "task", text: "Book the train")
         let original = NoteDocument(kind: .canvas, blocks: [.richText(block)],
-            boardItems: [block.id: .init(task: .init(status: .doing, assignee: "Travel agent", outcome: "Compare fares"))])
+            boardItems: [block.id: .init(task: .init(status: .doing, outcome: "Compare fares", assignees: [assignedToMe]))])
         let (coordinator, view, saved) = editor(original)
         view.textStorage!.replaceCharacters(in: NSRange(location: 0, length: 0), with: "\n")
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view))
@@ -68,18 +68,18 @@ import WovenMatterCore
         #expect(result.blocks.first?.id != block.id)
         #expect(result.blocks.last?.id == block.id)
         #expect(result.blocks.last?.plainText == block.plainText)
-        #expect(result.boardItems?[block.id]?.task?.assignee == "Travel agent")
+        #expect(result.boardItems?[block.id]?.task?.assignees == [assignedToMe])
         #expect(result.boardItems?[block.id]?.task?.outcome == "Compare fares")
         #expect(result.boardItems?[result.blocks[0].id]?.task?.status == .todo)
     }
 
     @Test func nativeTaskCheckboxUpdatesDurableDocumentMetadata() throws {
         let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],
-            boardItems: ["task": .init(task: .init(assignee: "Trey"))])
+            boardItems: ["task": .init(task: .init(assignees: [assignedToMe]))])
         let (coordinator, _, saved) = editor(original)
         coordinator.toggleTask("task")
         #expect(saved().boardItems?["task"]?.task?.status == .done)
-        #expect(saved().boardItems?["task"]?.task?.assignee == "Trey")
+        #expect(saved().boardItems?["task"]?.task?.assignees == [assignedToMe])
         let reopened = try NoteDocument.editableDocument(from: saved().encoded())
         #expect(reopened.boardItems?["task"]?.task?.status == .done)
         coordinator.toggleTask("task")
@@ -90,7 +90,7 @@ import WovenMatterCore
     /// its text and history, and its stored metadata follows the new details.
     @Test func detailsOnlyChangesRefreshTaskMetadataInPlace() {
         let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],
-            boardItems: ["task": .init(task: .init(assignee: "Trey"))])
+            boardItems: ["task": .init(task: .init(assignees: [assignedToMe]))])
         let (coordinator, view, saved) = editor(original)
         let text = NSAttributedString(attributedString: view.attributedString())
         var details = original
@@ -100,7 +100,7 @@ import WovenMatterCore
         coordinator.toggleTask("task")
         #expect(saved().boardItems?["task"]?.task?.status == .done)
         #expect(saved().boardItems?["task"]?.task?.outcome == "Bags are ready")
-        #expect(saved().boardItems?["task"]?.task?.assignee == "Trey")
+        #expect(saved().boardItems?["task"]?.task?.assignees == [assignedToMe])
     }
 
     @Test func multilineContentKeepsOneStableComponentWhileTyping() throws {
@@ -147,7 +147,7 @@ import WovenMatterCore
 
     @Test func nativeEnterCreatesAStableTaskComponentAcrossFurtherTyping() {
         let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],
-            boardItems: ["task": .init(task: .init(assignee: "Trey", outcome: "Existing task"))])
+            boardItems: ["task": .init(task: .init(outcome: "Existing task", assignees: [assignedToMe]))])
         let (coordinator, view, saved) = editor(original)
         view.setSelectedRange(NSRange(location: 4, length: 0))
         #expect(coordinator.textView(view, doCommandBy: #selector(NSTextView.insertNewline(_:))))
@@ -159,13 +159,13 @@ import WovenMatterCore
         #expect(saved().blocks.last?.id == id)
         #expect(saved().blocks.last?.plainText == "Next task")
         #expect(saved().boardItems?[id]?.task?.status == .todo)
-        #expect(saved().boardItems?[id]?.task?.assignee.isEmpty == true)
+        #expect(saved().boardItems?[id]?.task?.assignees.isEmpty == true)
         #expect(saved().boardItems?["task"]?.task?.outcome == "Existing task")
     }
 
     @Test func restoringNativeUndoAttributesRecoversTaskIdentityAndOutcome() {
         let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "task", text: "Pack"))],
-            boardItems: ["task": .init(task: .init(assignee: "Trey", outcome: "Keep this outcome"))])
+            boardItems: ["task": .init(task: .init(outcome: "Keep this outcome", assignees: [assignedToMe]))])
         let (coordinator, view, saved) = editor(original)
         let previous = NSAttributedString(attributedString: view.attributedString())
         view.textStorage!.replaceCharacters(in: NSRange(location: 0, length: view.string.utf16.count), with: "")
@@ -173,10 +173,13 @@ import WovenMatterCore
         view.textStorage!.setAttributedString(previous)
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view))
         #expect(saved().blocks.first?.id == "task")
-        #expect(saved().boardItems?["task"]?.task?.assignee == "Trey")
+        #expect(saved().boardItems?["task"]?.task?.assignees == [assignedToMe])
         #expect(saved().boardItems?["task"]?.task?.outcome == "Keep this outcome")
     }
 }
+
+/// The assignment the tests above keep through edits.
+private let assignedToMe = BoardTaskAssignee(kind: .user)
 
 @MainActor struct ArtifactInputBridgeTests {
     @Test func acceptedInputQueueSurvivesViewClosureAndParticipatesInShutdownFlush() async throws {

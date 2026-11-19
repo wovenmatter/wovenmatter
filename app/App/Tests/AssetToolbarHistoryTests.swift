@@ -8,7 +8,7 @@ import WovenMatterCore
         var page = NoteDocument(kind: .canvas)
         _ = try page.apply([.page(.init(action: .add, id: "intro", patch: .init(text: "Intro")))])
         _ = try page.apply([.page(.init(action: .add, id: "plan", kind: .section, patch: .init(title: "Plan")))])
-        return page.materializedPage()
+        return page
     }
 
     @Test func addComponentInsertsAtTheCursorThenTheSelection() throws {

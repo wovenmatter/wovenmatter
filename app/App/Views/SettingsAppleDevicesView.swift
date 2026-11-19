@@ -30,6 +30,13 @@ struct SettingsAppleDevicesView: View {
                     }
                 }
             }
+            if !host.unreadableRecords.isEmpty {
+                SettingsSection(title: "Records that can’t be read",
+                                detail: "They are left out of lists and stay in the library file. Everything else works as usual.") {
+                    SettingsError(LibraryHostSnapshot.unreadableSummary(host.unreadableRecords))
+                }
+                .accessibilityIdentifier("devices.unreadable-records")
+            }
             if !model.recoveredNoteDrafts.isEmpty { recoveredDrafts }
             SettingsHelp {
                 SettingsNote("Each Mac keeps a complete local library with shared notes, chats, library files, settings, and connections. You can add workspaces or Apple devices from any Mac. Offline changes synchronize automatically when the Macs reconnect.")

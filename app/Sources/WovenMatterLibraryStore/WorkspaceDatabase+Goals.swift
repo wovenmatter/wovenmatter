@@ -49,15 +49,23 @@ extension WorkspaceDatabaseConnection {
 
     public func sessionGoals() throws -> [WorkspaceGoal] {
         try withLock {
-            try historyRowsUnlocked("""
-                SELECT g.value FROM session_goals g JOIN conversations c ON c.id=g.session_id
+            // A goal that does not decode is damaged: it is left out and
+            // recorded, so the other sessions' goals still list.
+            var unreadable: [String] = []
+            let goals = try historyRowsUnlocked("""
+                SELECT g.value,g.session_id FROM session_goals g JOIN conversations c ON c.id=g.session_id
                 WHERE c.deleted_at IS NULL AND c.is_archived=0 ORDER BY g.session_id
-                """, values: []).map { row in
-                    guard let json = row.objectValue?["value"]?.stringValue else { throw WorkspaceDatabaseError.corruptRow }
-                    var goal = try JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8))
+                """, values: []).compactMap { row -> WorkspaceGoal? in
+                    guard let json = row.objectValue?["value"]?.stringValue,
+                          var goal = try? JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8)) else {
+                        unreadable.append(row.objectValue?["session_id"]?.stringValue ?? "")
+                        return nil
+                    }
                     goal.completedTurns = try completedTurnsUnlocked(goal.id) ?? goal.completedTurns
                     return goal
                 }
+            replaceUnreadable("goal", ids: unreadable)
+            return goals
         }
     }
 

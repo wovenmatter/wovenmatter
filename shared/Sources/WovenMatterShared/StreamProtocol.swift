@@ -15,8 +15,6 @@ public enum StreamProtocol {
   public static let lengthPrefixBytes = 4
   public static let pingInterval: Duration = .seconds(25)
   public static let pongTimeout: Duration = .seconds(60)
-  public static let reconnectInitial: Duration = .seconds(1)
-  public static let reconnectMaximum: Duration = .seconds(30)
   /// Changes to one conversation are sent at most this often while every
   /// changed message is at most `smallMessageBytes`, and `largeMessageInterval`
   /// once one is larger.

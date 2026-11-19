@@ -71,6 +71,8 @@ final class LibraryHostController {
     /// Pairing on this Mac was reset and the person has neither dismissed the
     /// notice about it nor paired a device since (`clearUnverifiablePairing`).
     private(set) var showsPairingResetNotice = false
+    /// Rows of the library that could not be read and are left out of lists (`UnreadableRecords`).
+    private(set) var unreadableRecords: [UnreadableRecord] = []
     @ObservationIgnored private var pairingCheck: Task<Void, any Error>?
     @ObservationIgnored private var pairingChecked = false
     private(set) var lastSeenAt: Date?
@@ -552,7 +554,7 @@ final class LibraryHostController {
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: chosenNames[localID] ?? DevelopmentLaunch.deviceName(), endpoint: address,
-                  capabilities: ["history.library", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  capabilities: [ExecutionWorkspace.libraryHistoryCapability, StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
@@ -784,6 +786,7 @@ final class LibraryHostController {
         pairedDevices = await authentication?.devices() ?? []
         let active = Set(pairedDevices.map(\.id))
         executionWorkspaces = try await database.libraryConnectionWorkspaces(activeDeviceIDs: active)
+        unreadableRecords = try await database.unreadableRecords()
     }
 
     var snapshot: LibraryHostSnapshot {
@@ -791,7 +794,7 @@ final class LibraryHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              showsPairingResetNotice: showsPairingResetNotice, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
+              showsPairingResetNotice: showsPairingResetNotice, unreadableRecords: unreadableRecords, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
               librarySync: peerSync.syncStatus)
     }
 
@@ -834,6 +837,7 @@ final class LibraryHostController {
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
             showsPairingResetNotice = value.showsPairingResetNotice
+            unreadableRecords = value.unreadableRecords
             peerPairingStatus = value.peerPairingStatus ?? ""; peerPairingError = value.peerPairingError
             projectedPeerRoutes = value.peerRoutes ?? []; discoveryIdentity = value.peerIdentity
             peerSyncErrors = value.peerSyncErrors ?? [:]
@@ -1018,6 +1022,7 @@ struct LibraryHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [ExecutionWorkspace]
     let showsPairingResetNotice: Bool
+    let unreadableRecords: [UnreadableRecord]
     var peerPairingStatus: String? = nil
     var peerPairingError: String? = nil
     var peerSyncErrors: [String: String]? = nil
@@ -1025,4 +1030,10 @@ struct LibraryHostSnapshot: Codable, Sendable {
     var peerIdentity: PairingDeviceIdentity? = nil
     /// Every peer's synchronization state.
     var librarySync: LibrarySyncStatus? = nil
+
+    /// What Settings says about the unreadable rows: how many of each kind.
+    static func unreadableSummary(_ records: [UnreadableRecord]) -> String {
+        Dictionary(grouping: records, by: \.kind).map { kind, rows in "\(rows.count) \(kind)\(rows.count == 1 ? "" : "s")" }
+            .sorted().joined(separator: ", ")
+    }
 }

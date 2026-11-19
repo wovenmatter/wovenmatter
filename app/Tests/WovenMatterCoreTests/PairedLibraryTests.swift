@@ -74,7 +74,7 @@ struct PairedLibraryTests {
     _ = try await a.database.applyArtifactStateEdit(noteID: artifact,
       edit: .init(action: .set, key: "form:text:title:0", value: .string("Trip plan")))
     let page = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "section", text: "Work")), .richText(.init(id: "embed", text: ""))],
-      canvas: ["embed": .init(x: 0, y: 0, assetID: artifact)],
+      canvas: ["embed": .init(assetID: artifact)],
       pageNodes: ["section": .init(isSection: true), "embed": .init(parentID: "section")])
     let id = try await a.database.createNote(folderID: nil, title: "Page", content: page.encoded(), kind: .canvas)
     try await a.send(to: b); try await b.send(to: a)
@@ -94,7 +94,7 @@ struct PairedLibraryTests {
       content: NoteDocument(blocks: [.richText(.init(text: "One original"))]).encoded())
     let task = NoteRichTextBlock(id: "task", text: "Investigate"), reference = NoteRichTextBlock(id: "reference", text: "Reference")
     let source = NoteDocument(kind: .canvas, blocks: [.richText(task), .richText(reference)],
-      canvas: [reference.id: .init(x: 400, y: 0, assetID: asset)],
+      canvas: [reference.id: .init(assetID: asset)],
       boardPurpose: "Coordinate the project", boardItems: [task.id: BoardItem(task: .init())])
     let board = try await a.database.createNote(folderID: nil, title: "Project board", content: source.encoded(), kind: .canvas)
     try await a.send(to: b); try await b.send(to: a)

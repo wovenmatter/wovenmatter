@@ -266,9 +266,10 @@ struct LibraryPublisherTests {
   }
 
   /// Every device runs the same build, so a row this one cannot read is
-  /// damaged. It is neither left out nor passed over: the registry fails to
-  /// list, and the journal page that reaches the entry fails.
-  @Test func aRowThisBuildCannotReadFailsTheRegistryAndItsJournalPage() async throws {
+  /// damaged. The registry lists the other workspaces and reports the
+  /// damaged one, which does not read as missing. A journal is a sequence,
+  /// so the page that reaches a damaged entry fails: nothing is served past it.
+  @Test func aDamagedWorkspaceIsReportedAndADamagedJournalEntryFailsItsPage() async throws {
     let f = try await Fixture(); defer { f.remove() }
     func conversation(_ sequence: Int64) -> ExecutionJournalEntry {
       let id = UUID().uuidString.lowercased()
@@ -277,6 +278,7 @@ struct LibraryPublisherTests {
     }
     let entries = (1...4).map { conversation(Int64($0)) }
     _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID, entries: entries), deviceID: f.workspace.executionDeviceID!)
+    let registry = try await f.database.libraryExecutionWorkspaces().map(\.id)
     let future = UUID().uuidString.lowercased()
     var row = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(f.workspace)) as? [String: Any])
     row["id"] = future; row["kind"] = "visionos"
@@ -288,9 +290,10 @@ struct LibraryPublisherTests {
                                   [future, f.identity.hostDeviceID, payload])
     }
 
-    await #expect(throws: DecodingError.self) { _ = try await f.database.libraryExecutionWorkspaces() }
-    await #expect(throws: DecodingError.self) { _ = try await f.database.libraryConnectionWorkspaces(activeDeviceIDs: []) }
-    // Nor is the unread row taken for a missing one and replaced.
+    #expect(try await f.database.libraryExecutionWorkspaces().map(\.id) == registry)
+    #expect(try await f.database.libraryConnectionWorkspaces(activeDeviceIDs: []).map(\.id) == registry)
+    #expect(try await f.database.unreadableRecords() == [.init(kind: "workspace", id: future)])
+    // The damaged row is not taken for a missing one and replaced.
     await #expect(throws: DecodingError.self) { _ = try await f.database.read { try $0.federationWorkspaceUnlocked(future) } }
     var replacement = f.workspace; replacement.id = future
     await #expect(throws: DecodingError.self) {

@@ -12,13 +12,13 @@ import WovenMatterCore
         let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter")!, deviceID: original.identity.deviceID)
         let wrong = PairingApprovalRequest(requestID: UUID().uuidString, requestSecret: original.requestSecret,
             identity: fixture.request().identity, invitationToken: offer.payload.token)
-        await #expect(throws: LibraryAPIError.self) { try await auth.requestPairing(wrong, workspaceID: fixture.libraryID) }
+        await #expect(throws: LibraryAPIError.self) { try await auth.requestPairing(wrong, workspaceID: fixture.libraryID, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID) }
         let accepted = PairingApprovalRequest(requestID: original.requestID, requestSecret: original.requestSecret,
             identity: original.identity, invitationToken: offer.payload.token)
-        let result = try await auth.requestPairing(accepted, workspaceID: fixture.libraryID)
+        let result = try await auth.requestPairing(accepted, workspaceID: fixture.libraryID, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         #expect(result.state == .approved)
         let reopened = try fixture.authentication()
-        let replay = try await reopened.requestPairing(accepted, workspaceID: fixture.libraryID)
+        let replay = try await reopened.requestPairing(accepted, workspaceID: fixture.libraryID, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         #expect(replay.pairing == result.pairing)
         #expect(await reopened.devices().count == 1)
         let disk = try String(contentsOf: fixture.file, encoding: .utf8)
@@ -34,12 +34,12 @@ import WovenMatterCore
             metadata: .init(kind: .iPhone), expectedWorkspaceID: fixture.libraryID, requiresConfirmation: true)
         #expect(try await auth.previewPairing(request, workspaceID: fixture.libraryID).workspaceID == fixture.libraryID)
         #expect(await auth.devices().isEmpty)
-        let first = try await auth.pair(request, workspaceID: fixture.libraryID)
+        let first = try await auth.pair(request, workspaceID: fixture.libraryID, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         #expect(first.confirmationRequired == true)
         #expect(await auth.devices().isEmpty)
         await #expect(throws: LibraryAPIError.self) { try await auth.authenticate(bearer: first.credential) }
         let reopened = try fixture.authentication()
-        let replay = try await reopened.pair(request, workspaceID: fixture.libraryID)
+        let replay = try await reopened.pair(request, workspaceID: fixture.libraryID, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         #expect(replay == first)
         let disk = try String(contentsOf: fixture.file, encoding: .utf8)
         #expect(!disk.contains(first.credential) && !disk.contains(offer.payload.token))
@@ -56,18 +56,18 @@ import WovenMatterCore
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let auth = try fixture.authentication()
         let request = fixture.request()
-        let pending = try await auth.requestPairing(request)
+        let pending = try await auth.requestPairing(request, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         #expect(pending.state == .pending && pending.pairing == nil)
         #expect(await auth.devices().isEmpty)
         await #expect(throws: LibraryAPIError.self) { try await auth.authenticate(bearer: request.requestSecret) }
         await #expect(throws: LibraryAPIError.self) {
-            try await auth.pairingResult(.init(requestID: request.requestID, requestSecret: String(repeating: "x", count: 43)))
+            try await auth.pairingResult(.init(requestID: request.requestID, requestSecret: String(repeating: "x", count: 43)), hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         }
         let poll = PairingPoll(requestID: request.requestID, requestSecret: request.requestSecret)
         try await auth.approvePairing(id: request.requestID, workspaceID: fixture.libraryID)
-        let first = try #require(try await auth.pairingResult(poll).pairing)
+        let first = try #require(try await auth.pairingResult(poll, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID).pairing)
         let reopened = try fixture.authentication()
-        let replay = try #require(try await reopened.pairingResult(poll).pairing)
+        let replay = try #require(try await reopened.pairingResult(poll, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID).pairing)
         #expect(first == replay)
         #expect(try await reopened.authenticate(bearer: first.credential).id == request.identity.deviceID)
         let contents = try String(contentsOf: fixture.file, encoding: .utf8)
@@ -75,28 +75,28 @@ import WovenMatterCore
         let roster = try JSONEncoder().encode(await reopened.deviceConnections())
         #expect(!String(decoding: roster, as: UTF8.self).contains("credentialHash"))
         try await reopened.revoke(deviceID: request.identity.deviceID)
-        await #expect(throws: LibraryAPIError.self) { try await reopened.pairingResult(poll) }
+        await #expect(throws: LibraryAPIError.self) { try await reopened.pairingResult(poll, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID) }
     }
 
     @Test func deniedExpiredAndCancelledRequestsNeverRegainAuthority() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
         let denied = fixture.request()
-        _ = try await auth.requestPairing(denied)
+        _ = try await auth.requestPairing(denied, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         try await auth.denyPairing(id: denied.requestID)
-        #expect(try await auth.pairingResult(.init(requestID: denied.requestID, requestSecret: denied.requestSecret)).state == .denied)
+        #expect(try await auth.pairingResult(.init(requestID: denied.requestID, requestSecret: denied.requestSecret), hostDeviceID: DeviceAuthentication.fixtureHostDeviceID).state == .denied)
         await #expect(throws: LibraryAPIError.self) { try await auth.approvePairing(id: denied.requestID, workspaceID: fixture.libraryID) }
         let approved = fixture.request()
-        _ = try await auth.requestPairing(approved)
+        _ = try await auth.requestPairing(approved, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         try await auth.approvePairing(id: approved.requestID, workspaceID: fixture.libraryID)
         let poll = PairingPoll(requestID: approved.requestID, requestSecret: approved.requestSecret)
-        let credential = try #require(try await auth.pairingResult(poll).pairing?.credential)
+        let credential = try #require(try await auth.pairingResult(poll, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID).pairing?.credential)
         let paired = try #require(try await auth.preparePairingCancellation(poll))
         try await auth.revoke(deviceID: paired.id, expected: paired)
         try await auth.cancelPairing(poll)
         await #expect(throws: LibraryAPIError.self) { try await auth.authenticate(bearer: credential) }
         let expired = fixture.request()
-        _ = try await auth.requestPairing(expired)
+        _ = try await auth.requestPairing(expired, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         clock.advance(601)
         await #expect(throws: LibraryAPIError.self) { try await auth.approvePairing(id: expired.requestID, workspaceID: fixture.libraryID) }
         #expect(await auth.pendingPairingRequests().isEmpty)
@@ -105,12 +105,12 @@ import WovenMatterCore
     @Test func cancellationClosesPendingApprovalAtomicallyAndRequiresHostRevocationForApprovedClaims() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let auth = try fixture.authentication(), pending = fixture.request()
-        _ = try await auth.requestPairing(pending)
+        _ = try await auth.requestPairing(pending, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         let pendingPoll = PairingPoll(requestID: pending.requestID, requestSecret: pending.requestSecret)
         #expect(try await auth.preparePairingCancellation(pendingPoll) == nil)
         await #expect(throws: LibraryAPIError.self) { try await auth.approvePairing(id: pending.requestID, workspaceID: fixture.libraryID) }
         let approved = fixture.request()
-        _ = try await auth.requestPairing(approved)
+        _ = try await auth.requestPairing(approved, hostDeviceID: DeviceAuthentication.fixtureHostDeviceID)
         try await auth.approvePairing(id: approved.requestID, workspaceID: fixture.libraryID)
         let poll = PairingPoll(requestID: approved.requestID, requestSecret: approved.requestSecret)
         let device = try #require(try await auth.preparePairingCancellation(poll))

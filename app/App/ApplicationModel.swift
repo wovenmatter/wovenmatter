@@ -3395,7 +3395,9 @@ final class ApplicationModel {
         let runtime = target.harness.id
         let forced = target.configuration.fullRootPermission(for: runtime)
         let permission = forced ?? (usesProductPermissionDefault ? nil : selections.permission)
-        let tools = selections.tools?.filter { WorkspaceToolGroup(rawValue: $0) != nil }
+        // A saved selection holds tool group names; one that names anything else is refused, as the host would refuse it.
+        let tools = selections.tools
+        if let tools { _ = try WorkspaceSessionTools(identifiers: tools) }
         let options = LibrarySessionOptions(workingDirectory: workingDirectory, model: selections.model,
             thinking: selections.thinking, permission: permission, enabledTools: tools)
         let id = conversationID.uuidString.lowercased()
