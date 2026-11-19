@@ -27,12 +27,12 @@ public enum LibraryWorkspaceAction: Codable, Equatable, Sendable {
   /// Asks a Mac for a new folder of its own: a blank `~/.woven-matter/<name>`
   /// and that Mac's `folders` and `folder_execution_roots` rows under `id`
   /// (a lowercase UUID the requester picks, so a retry is exact). Sent only to
-  /// a Mac whose registry row lists `createFolderCapability`: an older build
-  /// cannot decode this case.
+  /// a Mac whose registry row lists `createFolderCapability`: a Mac that does
+  /// not list it cannot decode this case.
   case createFolder(id: String, name: String)
 
   /// The registry capability of a Mac that accepts `createFolder`.
-  public static let createFolderCapability = "folders.create.v1"
+  public static let createFolderCapability = "folders.create"
 }
 
 public struct FileContents: Codable, Equatable, Sendable {

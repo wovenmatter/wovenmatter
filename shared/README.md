@@ -1,12 +1,16 @@
 # Shared document and wire types
 
 `WovenMatterShared` is a Foundation-only package used by iOS and macOS.
-It owns the note model, Woven Matter tool grammar and versioned Codable contracts;
+It owns the note model, Woven Matter tool grammar and the Codable wire contracts;
 `WovenMatterCore` re-exports those types. It contains no credentials, execution,
 UI state or persistence implementation.
 
-Protocol version and payload bounds live in `LibraryProtocol.swift`. Update
-both apps together when the wire contract changes. Unknown note structures remain
+Payload bounds live in `LibraryProtocol.swift`. Nothing here carries a format
+or protocol number: every device updates together, an optional feature is a
+named capability in a workspace's registry row, and stored data from an earlier
+build is recognised by its shape. `NativeRecordFormat` is the one place that
+names the tags on native history records, including the tags rows already
+stored carry. Unknown note structures remain
 read-only through `NoteDocument.editableDocument(from:)`; unsupported content
 must survive round trips without normalization or field loss.
 

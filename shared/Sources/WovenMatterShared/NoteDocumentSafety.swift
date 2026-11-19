@@ -13,7 +13,8 @@ public enum NoteDocumentSafetyError: LocalizedError, Equatable {
 
 extension NoteDocument {
   /// Decodes an editable document only if every original JSON field survives
-  /// typed decoding. Unknown versions, blocks and attributes remain read-only.
+  /// typed decoding. A shape that is not a structured document, and unknown
+  /// blocks and attributes, remain read-only.
   public static func editableDocument(from content: String) throws -> NoteDocument {
     // Synchronization clocks belong to the library store, not to the document.
     let content = NoteSync.strip(content)
@@ -28,14 +29,16 @@ extension NoteDocument {
       // Existing plain text/HTML legacy notes remain intentionally migratable.
       return NoteDocument.decode(content)
     }
-    guard var original = object as? [String: Any], original["version"] != nil,
+    guard var original = object as? [String: Any], isStructured(original),
           let document = try? JSONDecoder().decode(NoteDocument.self, from: bytes),
           let encoded = try? JSONEncoder().encode(document),
           let roundTrip = try? JSONSerialization.jsonObject(with: encoded) else {
       throw NoteDocumentSafetyError.unsupportedFormat
     }
     try document.validateEditableShape()
-    if (original["version"] as? Int) == 1 { original["version"] = currentVersion }
+    // Names stored data: a key notes already stored carry. It is not part of
+    // the document, so it is not among the fields that must survive.
+    original.removeValue(forKey: "version")
     guard preserves(original, in: roundTrip) else { throw NoteDocumentSafetyError.unsupportedFormat }
     return document
   }

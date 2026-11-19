@@ -1,9 +1,7 @@
 import Foundation
 
-/// Additive federation capability: legacy library protocol v3 records remain unchanged.
+/// Bounds of the federation exchange between library members.
 public enum FederationProtocol {
-  public static let version = 1
-  public static let capability = "library.federation.v1"
   public static let maximumBatchEntries = 200
   public static let maximumBatchBytes = 8 * 1_024 * 1_024
   public static let maximumEntryBytes = 1_024 * 1_024
@@ -13,9 +11,8 @@ public enum FederationProtocol {
 public struct LibraryIdentity: Codable, Equatable, Sendable {
   public var libraryID: String
   public var hostDeviceID: String
-  public var protocolVersion: Int
-  public init(libraryID: String, hostDeviceID: String, protocolVersion: Int = FederationProtocol.version) {
-    self.libraryID = libraryID; self.hostDeviceID = hostDeviceID; self.protocolVersion = protocolVersion
+  public init(libraryID: String, hostDeviceID: String) {
+    self.libraryID = libraryID; self.hostDeviceID = hostDeviceID
   }
 }
 

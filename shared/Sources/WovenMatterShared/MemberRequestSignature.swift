@@ -22,9 +22,9 @@ public enum MemberRequestSignature {
   public static let signatureHeader = "X-Woven-Member-Signature"
   /// Accepted clock difference in either direction.
   public static let windowMilliseconds: Int64 = 300_000
-  public static let domain = "woven-member-v2"
+  public static let domain = "woven-member"
 
-  /// `woven-member-v2\n<audience>\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
+  /// `woven-member\n<audience>\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
   /// The path is `canonicalTarget(target)`; `audience` is the destination
   /// member's lowercase device ID.
   public static func message(audience: String, method: String, target: String, time: Int64, nonce: String, body: Data) -> Data {

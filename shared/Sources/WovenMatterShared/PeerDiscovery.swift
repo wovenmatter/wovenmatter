@@ -22,11 +22,10 @@ public struct PairingDeviceIdentity: Codable, Equatable, Sendable {
 /// contains no workspace contents or secrets.
 public struct DiscoveryAdvertisement: Codable, Equatable, Sendable {
   public let identity: PairingDeviceIdentity
-  public let protocolVersion: Int
   public let capabilities: [String]?
-  public init(identity: PairingDeviceIdentity, protocolVersion: Int = LibraryProtocol.version, capabilities: [String]? = nil) {
+  public init(identity: PairingDeviceIdentity, capabilities: [String]? = nil) {
     self.capabilities = capabilities
-    self.identity = identity; self.protocolVersion = protocolVersion
+    self.identity = identity
   }
 }
 public struct DiscoveredPeer: Codable, Equatable, Sendable, Identifiable {
@@ -44,10 +43,9 @@ public struct PairingApprovalRequest: Codable, Equatable, Sendable {
   public let requestSecret: String
   public let invitationToken: String?
   public let identity: PairingDeviceIdentity
-  public let protocolVersion: Int
   public let purpose: String?
-  public init(requestID: String, requestSecret: String, identity: PairingDeviceIdentity, protocolVersion: Int = LibraryProtocol.version, invitationToken: String? = nil, purpose: String? = nil) {
-    self.requestID = requestID; self.requestSecret = requestSecret; self.identity = identity; self.protocolVersion = protocolVersion; self.invitationToken = invitationToken
+  public init(requestID: String, requestSecret: String, identity: PairingDeviceIdentity, invitationToken: String? = nil, purpose: String? = nil) {
+    self.requestID = requestID; self.requestSecret = requestSecret; self.identity = identity; self.invitationToken = invitationToken
     self.purpose = purpose
   }
 }

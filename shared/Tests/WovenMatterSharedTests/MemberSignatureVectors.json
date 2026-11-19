@@ -1,5 +1,5 @@
 {
-  "description": "Signed member request vectors (docs/architecture/WOVEN_EVERYWHERE.md, \"Membership and device keys\"). Signatures are deterministic RFC 8032 Ed25519 over the UTF-8 message; Node regenerates them byte for byte. CryptoKit signatures are randomized, so Swift checks the message bytes and verification. Each reject reuses the named case's signature with one field changed and must be refused. The message is woven-member-v2, audience, method, canonical target, time, nonce and body SHA-256, joined by newlines; a verifier whose own device ID is not the audience refuses the request before checking the signature.",
+  "description": "Signed member request vectors (docs/architecture/WOVEN_EVERYWHERE.md, \"Membership and device keys\"). Signatures are deterministic RFC 8032 Ed25519 over the UTF-8 message; Node regenerates them byte for byte. CryptoKit signatures are randomized, so Swift checks the message bytes and verification. Each reject reuses the named case's signature with one field changed and must be refused. The message is woven-member, audience, method, canonical target, time, nonce and body SHA-256, joined by newlines; a verifier whose own device ID is not the audience refuses the request before checking the signature.",
   "privateKeySeedHex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
   "publicKeyBase64": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
   "publicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
@@ -16,14 +16,14 @@
       "body": "{\"deviceID\":\"6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b\",\"after\":0}",
       "bodyBase64": "eyJkZXZpY2VJRCI6IjZmMWMyYjNhLTRkNWUtNGY2MC04YTdiLTljMGQxZTJmM2E0YiIsImFmdGVyIjowfQ==",
       "bodySHA256": "6992f2d1dc03f3aaa3785f93b725c5c16642813cd50cd5f4d15d4a7d009c4c5f",
-      "message": "woven-member-v2\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nPOST\n/v1/peers/sync\n1762646400000\nAAECAwQFBgcICQoLDA0ODw\n6992f2d1dc03f3aaa3785f93b725c5c16642813cd50cd5f4d15d4a7d009c4c5f",
-      "signature": "nuDfY8JpER_V7ycAIRPA8Vgdn3BNKI-d4n5NZ6G5o7_arkdfglT2lFglu2wpSppO-C7VOkbgqBg-3NBzGm-dBA",
+      "message": "woven-member\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nPOST\n/v1/peers/sync\n1762646400000\nAAECAwQFBgcICQoLDA0ODw\n6992f2d1dc03f3aaa3785f93b725c5c16642813cd50cd5f4d15d4a7d009c4c5f",
+      "signature": "sMzkWrJPXuHYZWh0A-pp7MaWB-FAvMDSPF0TU6t-0cqHzXa1hFsjmN2ERWCOJOjGELZf-t4QZCDBEhbALPpYDQ",
       "headers": {
         "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
         "X-Woven-Member-Audience": "a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c",
         "X-Woven-Member-Time": "1762646400000",
         "X-Woven-Member-Nonce": "AAECAwQFBgcICQoLDA0ODw",
-        "X-Woven-Member-Signature": "nuDfY8JpER_V7ycAIRPA8Vgdn3BNKI-d4n5NZ6G5o7_arkdfglT2lFglu2wpSppO-C7VOkbgqBg-3NBzGm-dBA"
+        "X-Woven-Member-Signature": "sMzkWrJPXuHYZWh0A-pp7MaWB-FAvMDSPF0TU6t-0cqHzXa1hFsjmN2ERWCOJOjGELZf-t4QZCDBEhbALPpYDQ"
       }
     },
     {
@@ -35,14 +35,14 @@
       "body": "",
       "bodyBase64": "",
       "bodySHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "message": "woven-member-v2\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nGET\n/v1/changes?after=12&limit=200\n1762646400123\nEBESExQVFhcYGRobHB0eHw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "signature": "CeFnGIp20x-QR9G53J-9Rd_3bRLei3bjMuPrFmy9fgYpqZKwsz2VgTtZv4Ac3CnNslrtTmkS6E1613WKXy9cBw",
+      "message": "woven-member\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nGET\n/v1/changes?after=12&limit=200\n1762646400123\nEBESExQVFhcYGRobHB0eHw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "EXX0c1ewQTiVmQJn_QmPNxiJvEsJ85MkzqL8124_ooMJwl8JNJO8puI0oPaaw3wB7AmjWKz-3hhFvZDDCq1_AA",
       "headers": {
         "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
         "X-Woven-Member-Audience": "a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c",
         "X-Woven-Member-Time": "1762646400123",
         "X-Woven-Member-Nonce": "EBESExQVFhcYGRobHB0eHw",
-        "X-Woven-Member-Signature": "CeFnGIp20x-QR9G53J-9Rd_3bRLei3bjMuPrFmy9fgYpqZKwsz2VgTtZv4Ac3CnNslrtTmkS6E1613WKXy9cBw"
+        "X-Woven-Member-Signature": "EXX0c1ewQTiVmQJn_QmPNxiJvEsJ85MkzqL8124_ooMJwl8JNJO8puI0oPaaw3wB7AmjWKz-3hhFvZDDCq1_AA"
       }
     },
     {
@@ -54,14 +54,14 @@
       "body": "",
       "bodyBase64": "",
       "bodySHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "message": "woven-member-v2\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nGET\n/v1/bots/ws\n1762646401000\nICEiIyQlJicoKSorLC0uLw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "signature": "kGhqb7gPE0HrCvu1MagV853FO7_zNoog9sJpZSERxIi6b7dKbBnRS0dr47xaBIEO4MqUHhNl66SgKEDjdnYnAg",
+      "message": "woven-member\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nGET\n/v1/bots/ws\n1762646401000\nICEiIyQlJicoKSorLC0uLw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "CF8msNEnyMiX_-wTQoJSX1OcN_YGvsT4ykeFFIFlY7UKcLjwNKmJseip7QKlO4lYHf3CL6Lq3bNBgn4T53wHBA",
       "headers": {
         "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
         "X-Woven-Member-Audience": "a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c",
         "X-Woven-Member-Time": "1762646401000",
         "X-Woven-Member-Nonce": "ICEiIyQlJicoKSorLC0uLw",
-        "X-Woven-Member-Signature": "kGhqb7gPE0HrCvu1MagV853FO7_zNoog9sJpZSERxIi6b7dKbBnRS0dr47xaBIEO4MqUHhNl66SgKEDjdnYnAg"
+        "X-Woven-Member-Signature": "CF8msNEnyMiX_-wTQoJSX1OcN_YGvsT4ykeFFIFlY7UKcLjwNKmJseip7QKlO4lYHf3CL6Lq3bNBgn4T53wHBA"
       }
     },
     {
@@ -73,14 +73,14 @@
       "body": "{\"title\":\"Café — notes 📝\"}",
       "bodyBase64": "eyJ0aXRsZSI6IkNhZsOpIOKAlCBub3RlcyDwn5OdIn0=",
       "bodySHA256": "701135f4863ccfad9175f20b54cbae0cf4fdef0b30cba4d8f70e11a32cefc9f0",
-      "message": "woven-member-v2\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nPOST\n/v1/mutations\n1762646402000\nMDEyMzQ1Njc4OTo7PD0-Pw\n701135f4863ccfad9175f20b54cbae0cf4fdef0b30cba4d8f70e11a32cefc9f0",
-      "signature": "HveiVUQmXiPffAUz-INPatvVTo-9TC67jPxxVy2qIN2EikmYnd95RkHQD2muvJCoguhk2tF7YMbmUL3QOADlDA",
+      "message": "woven-member\na3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c\nPOST\n/v1/mutations\n1762646402000\nMDEyMzQ1Njc4OTo7PD0-Pw\n701135f4863ccfad9175f20b54cbae0cf4fdef0b30cba4d8f70e11a32cefc9f0",
+      "signature": "UtBh2U-prHEI1_-mItMekQw3hEGXY5ajZEkipv6bfQqekSiCYU9eZvnzIC75qg4xFjYzNKIPzSSkqbBbYaB6CA",
       "headers": {
         "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
         "X-Woven-Member-Audience": "a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c",
         "X-Woven-Member-Time": "1762646402000",
         "X-Woven-Member-Nonce": "MDEyMzQ1Njc4OTo7PD0-Pw",
-        "X-Woven-Member-Signature": "HveiVUQmXiPffAUz-INPatvVTo-9TC67jPxxVy2qIN2EikmYnd95RkHQD2muvJCoguhk2tF7YMbmUL3QOADlDA"
+        "X-Woven-Member-Signature": "UtBh2U-prHEI1_-mItMekQw3hEGXY5ajZEkipv6bfQqekSiCYU9eZvnzIC75qg4xFjYzNKIPzSSkqbBbYaB6CA"
       }
     }
   ],

@@ -7,7 +7,6 @@ import WovenMatterShared
 private struct StreamFixtures: Decodable {
   struct Named: Decodable { let name: String; let frame: JSONValue }
   struct Prefixed: Decodable { let frame: JSONValue; let hex: String }
-  let `protocol`: Int
   let frames: [Named]
   let unknownFrames: [JSONValue]
   let lengthPrefixed: Prefixed
@@ -27,7 +26,6 @@ private func object(_ data: Data) throws -> NSObject {
 @Suite struct StreamProtocolTests {
   @Test func fixturesRoundTripExactly() throws {
     let fixtures = try StreamFixtures.load()
-    #expect(fixtures.protocol == StreamProtocol.version)
     for fixture in fixtures.frames {
       let source = try json(fixture.frame)
       let frame = try StreamProtocol.decode(source)

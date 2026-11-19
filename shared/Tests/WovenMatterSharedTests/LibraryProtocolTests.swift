@@ -5,19 +5,39 @@ import Testing
 @Suite("Library wire compatibility")
 struct LibraryProtocolTests {
 
-  @Test("pairing and hello agree on the current format and reject older pairing codes")
-  func versionNegotiation() throws {
+  @Test("a pairing code is its endpoint and token, and pairing messages carry no format number")
+  func pairingCarriesNoFormatNumber() throws {
     let endpoint = URL(string: "https://fixture.test.ts.net/wovenmatter")!
     let token = String(repeating: "a", count: 32)
     let payload = try PairingPayload(endpoint: endpoint, token: token)
-    #expect(payload.protocolVersion == LibraryProtocol.version)
+    let items = URLComponents(url: payload.encodedURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    #expect(items.map(\.name) == ["endpoint", "token"])
     #expect(try PairingPayload.parseURL(payload.encodedURL) == payload)
-    #expect(PairRequest(token: token, deviceID: "phone", deviceName: "iPhone").protocolVersion == LibraryProtocol.version)
-    #expect(PairResponse(workspaceID: "workspace", deviceID: "phone", credential: token).protocolVersion == LibraryProtocol.version)
-    #expect(LibraryHello(workspaceID: "workspace", hostName: "Mac", capabilities: []).protocolVersion == LibraryProtocol.version)
-    #expect(throws: LibraryAPIError.self) {
-      try PairingPayload(endpoint: endpoint, token: token, protocolVersion: 1)
+    #expect(throws: LibraryAPIError.self) { try PairingPayload(endpoint: endpoint, token: "short") }
+    func keys<Value: Encodable>(_ value: Value) throws -> Set<String> {
+      Set((try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:]).keys)
     }
+    let identity = PairingDeviceIdentity(deviceID: "mac", deviceName: "Mac", metadata: DeviceMetadata(kind: .mac))
+    #expect(try keys(PairRequest(token: token, deviceID: "phone", deviceName: "iPhone")) == ["token", "deviceID", "deviceName"])
+    #expect(try keys(PairResponse(workspaceID: "workspace", deviceID: "phone", credential: token)) == ["workspaceID", "deviceID", "credential"])
+    #expect(try keys(LibraryHello(workspaceID: "workspace", hostName: "Mac")) == ["workspaceID", "hostName"])
+    // A tool request a Mac stored under an earlier build still reads: the key it carries is not looked at.
+    let stored = Data(#"{"schemaVersion":1,"requestID":"r","arguments":["notes","list"],"contextID":"c"}"#.utf8)
+    let request = try JSONDecoder().decode(WovenMatterToolRequest.self, from: stored)
+    #expect(request.requestID == "r" && request.arguments == ["notes", "list"] && request.contextID == "c")
+    #expect(try keys(DiscoveryAdvertisement(identity: identity)) == ["identity"])
+    #expect(try keys(PairingApprovalRequest(requestID: "r", requestSecret: "s", identity: identity)) == ["requestID", "requestSecret", "identity"])
+    #expect(try keys(LibraryIdentity(libraryID: "l", hostDeviceID: "mac")) == ["libraryID", "hostDeviceID"])
+    #expect(try keys(WovenMatterToolRequest(arguments: ["notes", "list"], requestID: "r")) == ["requestID", "arguments"])
+    #expect(try keys(StreamHello(deviceID: "d", libraryID: "l", workspaceID: "w", serverTime: 1))
+      == ["deviceID", "libraryID", "workspaceID", "serverTime", "capabilities", "maxFrameBytes"])
+  }
+
+  @Test("capabilities and the peer pairing purpose are plain names")
+  func capabilityNames() {
+    #expect(StreamProtocol.capability == "stream")
+    #expect(LibraryWorkspaceAction.createFolderCapability == "folders.create")
+    #expect(PairingPurpose.peerMac == "library.peers")
   }
 
   @Test("session choices, attachments and context encode as the Linux execution server reads them")
@@ -54,7 +74,6 @@ struct LibraryProtocolTests {
     let action = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["workspaceAction"] as? [String: [String: String]]
     #expect(action == ["createFolder": ["id": id, "name": "Field notes"]])
     #expect(command.conversationID == nil)
-    #expect(LibraryWorkspaceAction.createFolderCapability == "folders.create.v1")
     #expect(!LibraryWorkspaceAction.createFolder(id: id, name: "Field notes").qualifiesForAnalytics)
     // A Mac from before the action reads it as this build reads a later one:
     // the whole command is refused, so only a Mac that lists the capability is sent it.

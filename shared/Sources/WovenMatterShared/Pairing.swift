@@ -1,19 +1,15 @@
 import Foundation
 
 public struct PairingPayload: Codable, Equatable, Sendable {
-  public static let currentProtocolVersion = LibraryProtocol.version
   public let endpoint: URL
   public let token: String
-  public let protocolVersion: Int
 
-  public init(endpoint: URL, token: String, protocolVersion: Int = LibraryProtocol.version) throws {
-    guard Self.isValidEndpoint(endpoint), (32...256).contains(token.utf8.count),
-          protocolVersion == Self.currentProtocolVersion else {
+  public init(endpoint: URL, token: String) throws {
+    guard Self.isValidEndpoint(endpoint), (32...256).contains(token.utf8.count) else {
       throw LibraryAPIError(code: "invalid_pairing", message: "Use a current pairing code from Woven Matter Settings on your Mac.")
     }
     self.endpoint = endpoint
     self.token = token
-    self.protocolVersion = protocolVersion
   }
 
   public static func isValidEndpoint(_ url: URL) -> Bool {
@@ -47,8 +43,7 @@ public struct PairingPayload: Codable, Equatable, Sendable {
     value.scheme = "wovenmatter"
     value.host = "pair"
     value.queryItems = [URLQueryItem(name: "endpoint", value: endpoint.absoluteString),
-                        URLQueryItem(name: "token", value: token),
-                        URLQueryItem(name: "version", value: String(protocolVersion))]
+                        URLQueryItem(name: "token", value: token)]
     return value.url!
   }
 
@@ -60,17 +55,15 @@ public struct PairingPayload: Codable, Equatable, Sendable {
           Set(items.map(\.name)).count == items.count,
           let endpointText = items.first(where: { $0.name == "endpoint" })?.value,
           let endpoint = URL(string: endpointText),
-          let token = items.first(where: { $0.name == "token" })?.value,
-          let versionText = items.first(where: { $0.name == "version" })?.value,
-          let version = Int(versionText) else {
+          let token = items.first(where: { $0.name == "token" })?.value else {
       throw LibraryAPIError(code: "invalid_pairing", message: "This is not a Woven Matter pairing code.")
     }
-    return try Self(endpoint: endpoint, token: token, protocolVersion: version)
+    return try Self(endpoint: endpoint, token: token)
   }
 }
 
 public enum PairingPurpose {
-  public static let peerMac = "library.peers.v2"
+  public static let peerMac = "library.peers"
 }
 
 public struct PairRequest: Codable, Equatable, Sendable {
@@ -78,7 +71,6 @@ public struct PairRequest: Codable, Equatable, Sendable {
   public let deviceID: String
   public let deviceName: String
   public let metadata: DeviceMetadata?
-  public let protocolVersion: Int
   public let expectedWorkspaceID: String?
   public let requiresConfirmation: Bool?
   /// Explicit pairing purpose. Only `PairingPurpose.peerMac` can
@@ -88,11 +80,11 @@ public struct PairRequest: Codable, Equatable, Sendable {
   /// that accepts the pairing signs a member entry for it, so the device
   /// then signs its requests to every Mac and Linux member.
   public var memberPublicKey: Data? = nil
-  public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = LibraryProtocol.version,
+  public init(token: String, deviceID: String, deviceName: String,
               metadata: DeviceMetadata? = nil, expectedWorkspaceID: String? = nil, requiresConfirmation: Bool? = nil,
               purpose: String? = nil) {
     self.token = token; self.deviceID = deviceID; self.deviceName = deviceName
-    self.protocolVersion = protocolVersion; self.metadata = metadata
+    self.metadata = metadata
     self.expectedWorkspaceID = expectedWorkspaceID; self.requiresConfirmation = requiresConfirmation; self.purpose = purpose
   }
 }
@@ -106,7 +98,6 @@ public struct PairResponse: Codable, Equatable, Sendable {
   public let workspaceID: String
   public let deviceID: String
   public let credential: String
-  public let protocolVersion: Int
   public let confirmationRequired: Bool?
   /// The pairing Mac's member device ID: the audience of the phone's signed
   /// requests to it. Absent from Macs that predate member requests.
@@ -114,9 +105,9 @@ public struct PairResponse: Codable, Equatable, Sendable {
   /// The libraries in the pairing Mac's workspace registry, for a phone that
   /// sent a member key: a phone already holding one of them keeps its copy.
   public var libraryIDs: [String]?
-  public init(workspaceID: String, deviceID: String, credential: String, protocolVersion: Int = LibraryProtocol.version,
+  public init(workspaceID: String, deviceID: String, credential: String,
               confirmationRequired: Bool? = nil, hostDeviceID: String? = nil) {
-    self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential; self.protocolVersion = protocolVersion
+    self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential
     self.confirmationRequired = confirmationRequired; self.hostDeviceID = hostDeviceID
   }
 }
@@ -130,11 +121,8 @@ public struct LibraryAPIError: Codable, Equatable, Sendable, Error, LocalizedErr
 
 public struct LibraryHello: Codable, Equatable, Sendable {
   public let workspaceID: String
-  public let protocolVersion: Int
   public let hostName: String
-  public let capabilities: [String]
-  public init(workspaceID: String, protocolVersion: Int = LibraryProtocol.version, hostName: String, capabilities: [String]) {
-    self.workspaceID = workspaceID; self.protocolVersion = protocolVersion
-    self.hostName = hostName; self.capabilities = capabilities
+  public init(workspaceID: String, hostName: String) {
+    self.workspaceID = workspaceID; self.hostName = hostName
   }
 }

@@ -2,16 +2,14 @@ import Foundation
 
 /// The live stream between a user interface (or another server) and one Woven
 /// server. See "Streaming" in docs/architecture/WOVEN_EVERYWHERE.md. The same
-/// frames travel on a member-signed WebSocket (`GET /v1/stream?protocol=1`)
+/// frames travel on a member-signed WebSocket (`GET /v1/stream`)
 /// and, from a Mac window to its own server, on the length-prefixed Unix socket.
 public enum StreamProtocol {
-  public static let version = 1
-  public static let supportedVersions = [1]
   /// Relative to a server's endpoint (a Mac's `/wovenmatter`, a Linux host's
-  /// execution endpoint). The signed target includes the query.
+  /// execution endpoint). The request carries no query; a server refuses one.
   public static let path = "v1/stream"
-  public static let query = "protocol=1"
-  public static let capability = "stream.v1"
+  /// The registry capability of a workspace that serves the stream.
+  public static let capability = "stream"
   public static let maximumFrameBytes = 8 * 1_024 * 1_024
   /// Unix-socket frames carry this many big-endian length bytes before the JSON.
   public static let lengthPrefixBytes = 4
@@ -62,8 +60,8 @@ public enum StreamProtocol {
 
   public enum ErrorCode: String, Codable, Sendable {
     case unauthorized, notFound = "not_found", invalid, unavailable, conflict, resync
-    /// HTTP refusals before an upgrade.
-    case protocolUnsupported = "protocol_unsupported", memberTimeStale = "member_time_stale"
+    /// An HTTP refusal before an upgrade.
+    case memberTimeStale = "member_time_stale"
   }
 
   public static func encode(_ frame: StreamFrame) throws -> Data {
@@ -122,16 +120,15 @@ public struct StreamError: Codable, Equatable, Error, Sendable {
 }
 
 public struct StreamHello: Codable, Equatable, Sendable {
-  public var `protocol`: Int
   public var deviceID: String
   public var libraryID: String
   public var workspaceID: String
   public var serverTime: Int64
   public var capabilities: [String]
   public var maxFrameBytes: Int
-  public init(protocol: Int = StreamProtocol.version, deviceID: String, libraryID: String, workspaceID: String,
+  public init(deviceID: String, libraryID: String, workspaceID: String,
               serverTime: Int64, capabilities: [String] = [], maxFrameBytes: Int = StreamProtocol.maximumFrameBytes) {
-    self.protocol = `protocol`; self.deviceID = deviceID; self.libraryID = libraryID; self.workspaceID = workspaceID
+    self.deviceID = deviceID; self.libraryID = libraryID; self.workspaceID = workspaceID
     self.serverTime = serverTime; self.capabilities = capabilities; self.maxFrameBytes = maxFrameBytes
   }
 }

@@ -1,7 +1,8 @@
 import Foundation
 
-/// Opaque native activity records. V1 is a complete activity JSON object; V2
-/// wraps an activity and may reference an immutable predecessor for a suffix.
+/// Opaque native activity records. A complete activity is the activity's own
+/// JSON object; a chained activity wraps an activity and may reference an
+/// immutable predecessor for a suffix (`NativeRecordFormat`).
 /// Storage backends must validate record scope, chunk manifests and digests
 /// before supplying bytes. Reconstruction preserves the newest metadata.
 public enum LibraryActivityDetails {
@@ -28,13 +29,13 @@ public enum LibraryActivityDetails {
       totalBytes += record.data.count
       guard let object = try? JSONSerialization.jsonObject(with: record.data) as? [String: Any] else { throw invalid }
       let activity: [String: Any], previous: String?
-      switch record.format {
-      case "wovenmatter.activity.v1":
+      let complete = NativeRecordFormat.activity.matches(record.format)
+      if complete {
         activity = object; previous = nil
-        // Existing V1 disclosures return the original projection unchanged.
-        // A legacy delta cannot serve as the complete base of a new V2 chain.
+        // A complete activity's disclosure returns the original projection unchanged.
+        // A delta stored as a complete activity cannot be the base of a chain.
         guard visited.count == 1 || activity["contentIsDelta"] as? Bool != true else { throw invalid }
-      case "wovenmatter.activity.v2":
+      } else if NativeRecordFormat.chainedActivity.matches(record.format) {
         guard let value = object["activity"] as? [String: Any],
           let delta = value["contentIsDelta"] as? Bool else { throw invalid }
         activity = value
@@ -45,16 +46,16 @@ public enum LibraryActivityDetails {
           guard object["previousDetailsRecordID"] == nil else { throw invalid }
           previous = nil
         }
-      default: throw invalid
-      }
+      } else { throw invalid }
       guard activity["id"] as? String == activityID else { throw invalid }
       if let head {
         guard activity["kind"] as? String == head["kind"] as? String else { throw invalid }
       } else { head = activity }
-      // Preserve exact legacy JSON, including non-text tool data, when there
-      // is no chain. V2 always returns the inner activity rather than envelope.
+      // Preserve a complete activity's exact JSON, including non-text tool data,
+      // when there is no chain. A chained activity always returns the inner
+      // activity rather than its envelope.
       if visited.count == 1, previous == nil {
-        return record.format == "wovenmatter.activity.v1" ? record.data : try JSONSerialization.data(withJSONObject: activity)
+        return complete ? record.data : try JSONSerialization.data(withJSONObject: activity)
       }
       guard let content = activity["content"] as? String else { throw invalid }
       suffixes.append(content)

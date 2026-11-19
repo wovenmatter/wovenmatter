@@ -11,7 +11,6 @@ public struct WovenMatterToolRequest: Codable, Sendable {
   public var maximumEncodedBytes: Int {
     (try? WovenMatterToolCommand(arguments).group) == .html ? Self.maximumHTMLRequestBytes : 4 * 1_024 * 1_024
   }
-  public var schemaVersion: Int
   public var requestID: String
   public var arguments: [String]
   /// Immutable input binding supplied by the native tool integration.
@@ -20,7 +19,6 @@ public struct WovenMatterToolRequest: Codable, Sendable {
   /// authority separately; native conversation callers cannot retarget themselves.
   public var targetSessionID: String?
   public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), contextID: String? = nil) {
-    self.schemaVersion = 1
     self.requestID = UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID
     self.arguments = arguments
     self.contextID = contextID

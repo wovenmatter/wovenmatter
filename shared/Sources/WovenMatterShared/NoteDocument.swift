@@ -1,9 +1,11 @@
 import Foundation
 
+/// A note's stored content: a JSON object recognised by its shape (see
+/// `isStructured`). Reading gives an absent key its default, so a document an
+/// earlier build stored with fewer keys reads as the same document. Notes
+/// already stored also carry a number under a `version` key; it is not part of
+/// the document, is never read, and is not written.
 public struct NoteDocument: Codable, Equatable, Sendable {
-  public static let currentVersion = 2
-
-  public var version: Int
   public var kind: NoteArtifactKind
   public var blocks: [NoteBlock]
   public var canvas: [String: CanvasCardPlacement]?
@@ -21,7 +23,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   public var artifactState: [String: ArtifactStateEntry]?
 
   public init(
-    version: Int = currentVersion,
     kind: NoteArtifactKind = .note,
     blocks: [NoteBlock] = [],
     html: String = "",
@@ -34,7 +35,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     pageNodes: [String: PageNode]? = nil,
     artifactState: [String: ArtifactStateEntry]? = nil
   ) {
-    self.version = version
     self.kind = kind
     self.blocks = if blocks.isEmpty && kind != .canvas {
       kind == .spreadsheet
@@ -55,21 +55,19 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case version, kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
+    case kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
     case pageNodes, artifactState
+  }
+
+  /// Whether a decoded JSON value has the shape of a structured document: an
+  /// object holding a `blocks` array, which every build has always written.
+  /// Anything else is earlier plain text or HTML, or not a note this build edits.
+  public static func isStructured(_ json: Any) -> Bool {
+    (json as? [String: Any])?["blocks"] is [Any]
   }
 
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
-    let decodedVersion = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
-    guard decodedVersion == 1 || decodedVersion == Self.currentVersion else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .version,
-        in: values,
-        debugDescription: "Unsupported note document version"
-      )
-    }
-    version = Self.currentVersion
     kind = try values.decodeIfPresent(NoteArtifactKind.self, forKey: .kind) ?? .note
     blocks = try values.decodeIfPresent([NoteBlock].self, forKey: .blocks) ?? []
     canvasSections = try values.decodeIfPresent([CanvasSection].self, forKey: .canvasSections)
@@ -89,7 +87,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   public static func decode(_ content: String) -> NoteDocument {
     guard let data = NoteSync.strip(content).data(using: .utf8),
           let document = try? JSONDecoder().decode(NoteDocument.self, from: data),
-          document.version == currentVersion,
           (try? document.validateEditableShape()) != nil else {
       return NoteDocument(legacyContent: content)
     }
@@ -112,7 +109,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
 
   public func normalized() -> NoteDocument {
     NoteDocument(
-      version: Self.currentVersion,
       kind: kind,
       blocks: blocks.map(\.normalized),
       html: html,

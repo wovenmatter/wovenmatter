@@ -35,7 +35,6 @@ public struct AgentNoteContext: Codable, Equatable, Sendable {
 /// prompt that disclosed the note and prevents an unrelated transcript block
 /// from being applied as an edit.
 public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
-  public static let currentVersion = 1
   public static let maximumEnvelopeBytes = 1 * 1_024 * 1_024
   public static let maximumOperationCount = 128
   public static let maximumBlockCount = 10_000
@@ -43,20 +42,17 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   public static let maximumTableColumns = 128
   public static let maximumTableCells = 100_000
 
-  public var version: Int
   public var nonce: String
   public var noteID: String
   public var expectedRevision: String
   public var operations: [NoteEditOperation]
 
   public init(
-    version: Int = Self.currentVersion,
     nonce: String,
     noteID: String,
     expectedRevision: String,
     operations: [NoteEditOperation]
   ) {
-    self.version = version
     self.nonce = nonce
     self.noteID = noteID
     self.expectedRevision = expectedRevision
@@ -99,8 +95,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
     } catch {
       throw RemoteNoteEditError.invalidEnvelope
     }
-    guard envelope.version == currentVersion,
-          envelope.nonce == nonce,
+    guard envelope.nonce == nonce,
           envelope.noteID == noteID,
           envelope.expectedRevision == expectedRevision,
           !envelope.operations.isEmpty,
@@ -114,7 +109,6 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   }
 
   public func validateApplying(to document: NoteDocument) throws {
-    guard version == Self.currentVersion else { throw RemoteNoteEditError.invalidEnvelope }
     try Self.validate(operations: operations, applyingTo: document)
   }
 

@@ -25,7 +25,7 @@ const cases = [
 
 const message = (c) => {
   const bodySHA256 = crypto.createHash('sha256').update(Buffer.from(c.body, 'utf8')).digest('hex');
-  return { bodySHA256, text: ['woven-member-v2', c.audience ?? audience, c.method, c.target, String(c.time), c.nonce, bodySHA256].join('\n') };
+  return { bodySHA256, text: ['woven-member', c.audience ?? audience, c.method, c.target, String(c.time), c.nonce, bodySHA256].join('\n') };
 };
 
 const signed = cases.map((c) => {
@@ -65,7 +65,7 @@ process.stdout.write(JSON.stringify({
     + 'Signatures are deterministic RFC 8032 Ed25519 over the UTF-8 message; Node regenerates them byte for byte. '
     + 'CryptoKit signatures are randomized, so Swift checks the message bytes and verification. '
     + 'Each reject reuses the named case\'s signature with one field changed and must be refused. '
-    + 'The message is woven-member-v2, audience, method, canonical target, time, nonce and body SHA-256, joined by newlines; '
+    + 'The message is woven-member, audience, method, canonical target, time, nonce and body SHA-256, joined by newlines; '
     + 'a verifier whose own device ID is not the audience refuses the request before checking the signature.',
   privateKeySeedHex: seed.toString('hex'),
   publicKeyBase64: Buffer.from(pub).toString('base64'),

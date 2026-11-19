@@ -1,9 +1,7 @@
 import Foundation
 
-/// The library API version every member serves. Execution features are negotiated through workspace capabilities.
+/// Payload bounds every library member applies. Optional features are named workspace capabilities.
 public enum LibraryProtocol {
-  // Version 3 adds workspace management, Library, Calendar and session settings.
-  public static let version = 3
   public static let maximumNoteBytes = 4 * 1_024 * 1_024
   public static let maximumChangePage = 200
   public static let maximumReplayChanges = 10_000
