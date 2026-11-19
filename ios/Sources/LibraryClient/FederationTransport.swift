@@ -44,7 +44,6 @@ extension MobileSyncEngine {
     let identity: LibraryIdentity
     do { identity = try await transport.libraryIdentity() }
     catch MobileConnectionError.http(404, _) { return } // A Linux host has no federation routes; a Mac takes this lane.
-    guard identity.protocolVersion == FederationProtocol.version else { throw MobileConnectionError.versionMismatch }
     try await store.verifyWorkspace(identity.libraryID)
     try await store.journal.bind(libraryID: identity.libraryID)
     let deviceID = await store.snapshot().deviceID

@@ -72,7 +72,6 @@ public enum MobileRequestSigning {
   static func failure(status: Int, data: Data, signed: Bool, fallback: String) -> MobileConnectionError {
     let error = try? JSONDecoder().decode(LibraryAPIError.self, from: data)
     let code = error?.code ?? (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
-    if code == "update_required" { return .updateRequired(error?.message ?? "Update Woven Matter on every device.") }
     switch status {
     case 401, 403:
       guard signed else { return .revoked }
@@ -83,7 +82,6 @@ public enum MobileRequestSigning {
       if code == "clock_skew" { return .http(status, error?.message ?? "This device's clock is more than five minutes off.") }
       if code == "wrong_device" || code == "wrong_workspace" { return .http(status, error?.message ?? fallback) }
       return .memberUnknown
-    case 426: return .versionMismatch
     default: return .http(status, error?.message ?? fallback)
     }
   }
@@ -128,7 +126,6 @@ public struct MobileLibrarySyncStatus: Codable, Equatable, Sendable {
   public var peers: [Peer]
   public var conflicts: Int
   public var quarantined: Int
-  public var updateRequired: Bool { peers.contains { $0.state == "updateRequired" } }
   public init(deviceID: String, version: String, schema: String, peers: [Peer], conflicts: Int = 0, quarantined: Int = 0) {
     self.deviceID = deviceID; self.version = version; self.schema = schema; self.peers = peers
     self.conflicts = conflicts; self.quarantined = quarantined

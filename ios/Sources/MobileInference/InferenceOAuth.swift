@@ -300,7 +300,7 @@ struct InferenceOAuthClient: Sendable {
     try Task.checkCancellation()
     var request = URLRequest(url: URL(string: endpoint)!)
     request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.setValue("WovenMatter/1 iOS", forHTTPHeaderField: "User-Agent")
+    request.setValue("WovenMatter iOS", forHTTPHeaderField: "User-Agent")
     request.setValue(json ? "application/json" : "application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
     if json { request.httpBody = try JSONSerialization.data(withJSONObject: fields) }
     else {

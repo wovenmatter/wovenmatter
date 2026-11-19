@@ -9,24 +9,20 @@ enum PersistedFieldRenames {
                       "centralDeletedConversationIDs": "libraryDeletedConversationIDs"]
   static let journal = ["centralCursor": "libraryCursor", "centralWorkspaceRevisions": "libraryWorkspaceRevisions"]
 
-  /// `data` with each old key renamed, inside a saved envelope's `state` or at
-  /// the top level of an earlier unwrapped file. Returned unchanged, byte for
-  /// byte, when no old key is present.
+  /// `data` with each old key renamed inside the saved index's `state`.
+  /// Returned unchanged, byte for byte, when no old key is present or `data`
+  /// is not a saved index (an object holding a `state` object).
   static func upgrade(_ data: Data, renaming keys: [String: String]) -> Data {
     guard keys.keys.contains(where: { data.range(of: Data("\"\($0)\"".utf8)) != nil }),
-          var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
-    func rename(_ object: inout [String: Any]) -> Bool {
-      var changed = false
-      for (old, new) in keys {
-        guard let value = object.removeValue(forKey: old) else { continue }
-        if object[new] == nil { object[new] = value }
-        changed = true
-      }
-      return changed
+          var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          var state = root["state"] as? [String: Any] else { return data }
+    var changed = false
+    for (old, new) in keys {
+      guard let value = state.removeValue(forKey: old) else { continue }
+      if state[new] == nil { state[new] = value }
+      changed = true
     }
-    let changed: Bool
-    if root["version"] != nil, var state = root["state"] as? [String: Any] { changed = rename(&state); root["state"] = state }
-    else { changed = rename(&root) }
+    root["state"] = state
     guard changed, let upgraded = try? JSONSerialization.data(withJSONObject: root) else { return data }
     return upgraded
   }

@@ -135,7 +135,7 @@ final class MobileModelTests: XCTestCase {
   @MainActor func testWorkspaceGroupingMatchesPrefixedFolderBindingsWithoutChangingRoute() {
     let model = MobileModel()
     let registryID = UUID().uuidString.lowercased()
-    let mac = ExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: registryID, kind: .mac, name: "Mac", capabilities: ["history.library.v1"], executionDeviceID: registryID)
+    let mac = ExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: registryID, kind: .mac, name: "Mac", capabilities: ["history.library"], executionDeviceID: registryID)
     model.executionWorkspaces = [mac]; model.workspaceReachable[registryID] = true
     model.syncLibrary(with: registryID)
     let folder = LibraryFolder(id: "project", name: "Project", execution: .init(workspaceID: "device:" + registryID.uppercased(), rootPath: "/project"))
@@ -157,7 +157,7 @@ final class MobileModelTests: XCTestCase {
     let registryID = UUID().uuidString.lowercased(), hostDeviceID = UUID().uuidString.lowercased()
     let folderOwner = "device:" + UUID().uuidString.lowercased()
     var mac = ExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: hostDeviceID, kind: .mac, name: "Mac Mini",
-                                          capabilities: ["history.library.v1"], executionDeviceID: hostDeviceID)
+                                          capabilities: ["history.library"], executionDeviceID: hostDeviceID)
     let folder = LibraryFolder(id: "launch", name: "Launch research", execution: .init(workspaceID: folderOwner, rootPath: "/tmp/Launch"))
     let note = LibraryNote(id: "pilot", folderID: folder.id, title: "Pilot checklist", content: "")
     model.state.folders[folder.id] = folder; model.state.notes[note.id] = note
@@ -185,7 +185,7 @@ final class MobileModelTests: XCTestCase {
     let model = MobileModel()
     let macID = UUID().uuidString.lowercased(), linuxID = UUID().uuidString.lowercased()
     let mac = ExecutionWorkspace(id: macID, libraryID: "library", ownerDeviceID: macID, kind: .mac, name: "James's MacBook Air",
-                                          capabilities: ["history.library.v1"], executionDeviceID: macID)
+                                          capabilities: ["history.library"], executionDeviceID: macID)
     let linux = ExecutionWorkspace(id: linuxID, libraryID: "library", ownerDeviceID: macID, kind: .linux, name: "Build server")
     model.executionWorkspaces = [mac, linux]
     model.syncLibrary(with: macID)
@@ -234,7 +234,7 @@ final class MobileModelTests: XCTestCase {
     // A copied snapshot owner is history only, even when its copied endpoint answers.
     let copiedID = UUID().uuidString.lowercased()
     var copied = ExecutionWorkspace(id: copiedID, libraryID: "library", ownerDeviceID: copiedID, kind: .mac, name: "James's MacBook Air",
-                                             capabilities: ["history.library.v1"], executionDeviceID: copiedID)
+                                             capabilities: ["history.library"], executionDeviceID: copiedID)
     copied.retainedHistory = true
     var copiedPhone = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
     copiedPhone.retainedHistory = true

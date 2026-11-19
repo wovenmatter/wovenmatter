@@ -147,7 +147,6 @@ public actor MobileSyncEngine {
           learnedAt = Date()
           await hosts.learn(from: connection, host: host)
           status.libraryHost = await hosts.snapshot().currentHost ?? host
-          status.updateRequired = await Self.updateMessage(hosts.snapshot().syncStatus)
         }
       } else {
         identity = try await transport.workspaceIdentity()
@@ -156,7 +155,6 @@ public actor MobileSyncEngine {
       }
       verifiedThisPass = true
     } catch {
-      if case MobileConnectionError.updateRequired(let message) = error { status.updateRequired = message }
       await store.analytics.disconnect()
       if case MobileConnectionError.http = error { status.hostReachable = true; status.lastContactAt = Date() }
       else if !(error is MobileStore.Failure) { status.hostReachable = false }
@@ -219,13 +217,6 @@ public actor MobileSyncEngine {
     try await store.dictations.rebindLibrary(to: libraryID)
     try await store.artifacts.rebindLibrary(to: libraryID)
     try await store.rebindLibrary(to: snapshot, bodies: bodies)
-  }
-  static func updateMessage(_ status: MobileLibrarySyncStatus?) -> String? {
-    guard let status else { return nil }
-    let names = status.peers.filter { $0.state == "updateRequired" }.map(\.name)
-    guard !names.isEmpty else { return nil }
-    return names.sorted().joined(separator: ", ") + (names.count == 1 ? " runs" : " run")
-      + " a different version of Woven Matter. On a Mac, open Settings → Updates and update everything."
   }
   private func synchronizeLibrary() async throws {
     var errors: [any Error] = []

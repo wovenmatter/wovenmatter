@@ -33,7 +33,7 @@ final class MemberReachTests: XCTestCase {
 
   func testSignedLibraryRequestsCarryNoBearerAndVerifyAgainstTheMemberKey() async throws {
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
-    let hello = try JSONEncoder().encode(LibraryHello(workspaceID: "library-b", hostName: "Box", capabilities: []))
+    let hello = try JSONEncoder().encode(LibraryHello(workspaceID: "library-b", hostName: "Box"))
     let http = RecordingHTTP { _ in (200, hello) }
     let box = UUID().uuidString.lowercased()
     let transport = try HTTPSLibraryTransport(host: URL(string: "https://box.tail1.ts.net/wovenmatter")!, hostDeviceID: box, identity: identity, performer: http)
@@ -89,14 +89,13 @@ final class MemberReachTests: XCTestCase {
     XCTAssertEqual(http.requests.count, 2, "One read per expansion; no transcript read when the route answers")
   }
 
-  func testSignedFailuresDistinguishUnknownNotReadyAndUpdateRequired() {
+  func testSignedFailuresDistinguishUnknownAndNotReady() {
     func body(_ code: String, _ message: String) -> Data { try! JSONEncoder().encode(LibraryAPIError(code: code, message: message)) }
     // A host that has not loaded its member list yet is not ready; it does not mean "pair again".
     guard case .http(401, _) = MobileRequestSigning.failure(status: 401, data: body("unauthorized", "This device does not accept member requests yet."), signed: true, fallback: "") else { return XCTFail() }
     guard case .http(401, _) = MobileRequestSigning.failure(status: 401, data: Data(#"{"error":"member_auth_unavailable"}"#.utf8), signed: true, fallback: "") else { return XCTFail() }
     guard case .memberUnknown = MobileRequestSigning.failure(status: 401, data: body("unauthorized", "This device is not a member, or it was removed."), signed: true, fallback: "") else { return XCTFail() }
     guard case .revoked = MobileRequestSigning.failure(status: 401, data: Data(), signed: false, fallback: "") else { return XCTFail() }
-    guard case .updateRequired = MobileRequestSigning.failure(status: 409, data: body("update_required", "Mac Mini runs version 2."), signed: true, fallback: "") else { return XCTFail() }
   }
 
   func testHostCandidatesStayOnTheTailnetAndPreferTheLastHostThenMacsThenLinux() {
@@ -155,7 +154,7 @@ final class MemberReachTests: XCTestCase {
   func testConnectFailsOverToTheNextOnlineHostAndRemembersIt() async throws {
     var state = MobileMembershipState(deviceID: phoneID, pairedEndpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!)
     state.members = [.init(deviceID: "a0000000-0000-0000-0000-000000000003", kind: "linux", name: "Box", endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter/")!])]
-    let hello = try JSONEncoder().encode(LibraryHello(workspaceID: "library-box", hostName: "Box", capabilities: []))
+    let hello = try JSONEncoder().encode(LibraryHello(workspaceID: "library-box", hostName: "Box"))
     let http = RecordingHTTP { request in
       guard request.url?.host == "box.tail1.ts.net" else { throw URLError(.cannotConnectToHost) }
       return (200, hello)

@@ -147,7 +147,7 @@ import MobileInference
   /// made, and on the app's explicit refreshes. Never on a timer.
   var workspaceReadTasks: [String: Task<Void, Never>] = [:]
   var workspaceClients: [String: WorkspaceClient] = [:]
-  /// Live streams to `stream.v1` workspaces, foreground only.
+  /// Live streams to `stream` workspaces, foreground only.
   @ObservationIgnored var workspaceStreams: [String: MobileWorkspaceStream] = [:]
   /// Streams that are connected and serve their `workspace` subscription.
   @ObservationIgnored var liveStreamIDs: Set<String> = []
@@ -289,7 +289,7 @@ import MobileInference
   func run() async {
     guard !isolatedTestHost else { return }
     DictationSession.shared.saveHistory = { [weak self] record in
-      guard let store = self?.store else { throw MobileStore.Failure.incompatibleStore }
+      guard let store = self?.store else { throw MobileStore.Failure.unreadableStore }
       try await store.dictations.save(record)
     }
     DictationSession.shared.retrySavingHistory()
@@ -1013,7 +1013,7 @@ import MobileInference
       if scenario == "workspace-organization" || scenario == "remote-folders-empty" {
         let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
         executionWorkspaces = [
-          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.library.v1"]),
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: [ExecutionWorkspace.libraryHistoryCapability]),
           .init(id: linux, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Linux workspace"),
           .init(id: ipad, libraryID: "fixture", ownerDeviceID: ipad, kind: .ios, name: "Travel iPad", capabilities: ["quick-chat", "notes"])
         ]
@@ -1046,11 +1046,11 @@ import MobileInference
         let mac = "aaaaaaaa-7777-4777-8777-777777777777", stale = "bbbbbbbb-8888-4888-8888-888888888888", linux = "cccccccc-9999-4999-8999-999999999999"
         let copied = "dddddddd-0000-4000-8000-000000000000"
         executionWorkspaces = [
-          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Office Mac", capabilities: ["history.library.v1"]),
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Office Mac", capabilities: [ExecutionWorkspace.libraryHistoryCapability]),
           .init(id: stale, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Old Linux box"),
           .init(id: linux, libraryID: "fixture", ownerDeviceID: linux, kind: .linux, name: "Build server"),
           // A library copied from another Mac keeps that Mac's row as history only.
-          .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: ["history.library.v1"], retainedHistory: true)
+          .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: [ExecutionWorkspace.libraryHistoryCapability], retainedHistory: true)
         ]
         func agent(_ id: String, _ name: String, ready: Bool) -> HarnessCapabilities { .init(id: id, runtimeKind: id, displayName: name, available: ready, canStart: ready) }
         let cached = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false), agent("claude_code", "Claude Code", ready: false),

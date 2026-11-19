@@ -199,7 +199,7 @@ final class MobileStoreBackupTests: XCTestCase {
     let transcript = LibraryTranscript(conversationID: "quick-chat", messages: [.init(id: "m", conversationID: "quick-chat", role: "user", content: "Asked on this phone")])
     try await store.adoptExecution(conversation: .init(id: "quick-chat", title: "Quick Chat"), transcript: transcript)
     XCTAssertFalse(try excluded(body("Asked on this phone", in: file)), "Phone Quick Chat history has no library copy yet")
-    try await store.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: "pi-durable.entry.v1", data: Data("native".utf8))
+    try await store.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: NativeRecordFormat.piDurableEntry.name, data: Data("native".utf8))
     XCTAssertFalse(try excluded(file.appendingPathExtension("execution")))
     _ = try await store.calendar.save(expectedRevision: nil, draft: .init(title: "Offline event", startsAt: Date()))
     XCTAssertFalse(try excluded(file.appendingPathExtension("calendar")))
@@ -239,7 +239,7 @@ final class MobileStoreBackupTests: XCTestCase {
     let device = await store!.snapshot().deviceID
     let transcript = LibraryTranscript(conversationID: "quick-chat", messages: [.init(id: "m", conversationID: "quick-chat", role: "user", content: "Asked before upgrading")])
     try await store!.adoptExecution(conversation: .init(id: "quick-chat", title: "Quick Chat"), transcript: transcript)
-    try await store!.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: "pi-durable.entry.v1", data: Data("native before upgrading".utf8))
+    try await store!.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: NativeRecordFormat.piDurableEntry.name, data: Data("native before upgrading".utf8))
     let event = try await store!.calendar.save(expectedRevision: nil, draft: .init(title: "Offline event", startsAt: Date(timeIntervalSince1970: 1_800_000_000)))
     let saved = try await store!.artifacts.save(data: Data("scanned before upgrading".utf8), workspaceID: device, title: "Scan", mediaType: "text/plain")
     store = nil

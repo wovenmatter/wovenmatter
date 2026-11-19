@@ -34,7 +34,7 @@ final class AgentLauncherTests: XCTestCase {
 
   func testLibraryHostMacAppearsOnceByItsNameAndEmptyLinuxWorkspaceRemainsVisible() {
     let mac = ExecutionWorkspace(id: "mac", libraryID: "library", ownerDeviceID: "host", kind: .mac,
-      name: "James’s MacBook Air", capabilities: ["history.library.v1"])
+      name: "James’s MacBook Air", capabilities: ["history.library"])
     let local = HarnessCapabilities(id: "local:pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
     let codex = HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)
     let empty = ExecutionWorkspace(id: workspaceID, libraryID: "library", ownerDeviceID: "host", kind: .linux, name: "Test")
@@ -55,7 +55,7 @@ final class AgentLauncherTests: XCTestCase {
   /// library host only, so each Mac is listed once, under its own name, with
   /// its own agents, and Quick Chat leads.
   func testMemberMacsEachAppearOnceUnderTheirOwnNames() {
-    let capabilities = ["execution.v1", "history.library.v1"]
+    let capabilities = ["history.library"]
     let air = ExecutionWorkspace(id: "0446435c-8e64-440e-b9eb-3c5dadb27e04", libraryID: "air-library",
       ownerDeviceID: "e775f2b2-1e79-4bc2-b723-39b3fab2d9c5", kind: .mac, name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02",
       endpoint: URL(string: "https://air.example.ts.net/wovenmatter"), capabilities: capabilities)
@@ -91,9 +91,9 @@ final class AgentLauncherTests: XCTestCase {
   func testCopiedSnapshotOwnerNeverNamesOrBecomesTheLibraryHost() {
     // A snapshot keeps its source Mac's workspace as retained history, with the same capability.
     let copied = ExecutionWorkspace(id: "copied", libraryID: "library", ownerDeviceID: "source", kind: .mac,
-      name: "Mac Mini (Dev) · source", capabilities: ["history.library.v1"], retainedHistory: true)
+      name: "Mac Mini (Dev) · source", capabilities: ["history.library"], retainedHistory: true)
     let live = ExecutionWorkspace(id: "live", libraryID: "library", ownerDeviceID: "host", kind: .mac,
-      name: "Mac Mini (Dev) · e2e", capabilities: ["history.library.v1"])
+      name: "Mac Mini (Dev) · e2e", capabilities: ["history.library"])
     let local = HarnessCapabilities(id: "local:pi", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
     for order in [[copied, live], [live, copied]] {
       XCTAssertNil(ExecutionWorkspace.liveLibraryMac(in: order, id: copied.id), "A copy is never the library host")

@@ -120,7 +120,7 @@ extension MobileModel {
   private func canConfigureDeviceChat(_ id: String?) -> Bool {
     guard !sending, !startingChat, !fixture else { return false }
     guard let id else { return true }
-    guard let record = executionRecords[id], record.quickChatVersion == 1 else { return false }
+    guard let record = executionRecords[id], !record.savedHistoryOnly else { return false }
     return !configuringDeviceSessions.contains(id) && localRunTokens[id] == nil && !["running", "stopping", "interrupted"].contains(record.status)
   }
 

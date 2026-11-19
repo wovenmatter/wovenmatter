@@ -5,19 +5,19 @@ import WovenMatterShared
 /// The journal's index is atomic, while immutable bodies are written once. Native
 /// history stays outside the disposable transcript cache and is never evicted.
 enum WorkspaceJournalPersistence {
-  private struct Envelope: Codable { var version: Int; var state: WorkspaceJournalState }
+  /// The saved index: an object holding the journal's `state`. An index an
+  /// earlier build saved also holds a number beside it, which is not read.
+  private struct Envelope: Codable { var state: WorkspaceJournalState }
   static func load(at file: URL) throws -> WorkspaceJournalState {
     let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.journal)
-    let envelope = try JSONDecoder().decode(Envelope.self, from: data)
-    guard envelope.version == 2 else { throw WorkspaceJournal.Failure.incompatibleStore }
-    var state = envelope.state
+    var state = try JSONDecoder().decode(Envelope.self, from: data).state
     var loaded: [String: Data] = [:]
     try transform(&state) { encodedReference in
       guard let reference = String(data: encodedReference, encoding: .utf8), reference.count == 64,
-        reference.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { throw WorkspaceJournal.Failure.incompatibleStore }
+        reference.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { throw WorkspaceJournal.Failure.unreadableStore }
       if let data = loaded[reference] { return data }
       let data = try Data(contentsOf: directory(file).appendingPathComponent(reference))
-      guard digest(data) == reference else { throw WorkspaceJournal.Failure.incompatibleStore }
+      guard digest(data) == reference else { throw WorkspaceJournal.Failure.unreadableStore }
       loaded[reference] = data; return data
     }
     // Earlier builds excluded the journal. History may have no other copy until
@@ -36,7 +36,7 @@ enum WorkspaceJournalPersistence {
       guard bytes <= 256 * 1_024 * 1_024 else { throw WorkspaceJournal.Failure.storageFull }
       return Data(reference.utf8)
     }
-    let index = try JSONEncoder().encode(Envelope(version: 2, state: state))
+    let index = try JSONEncoder().encode(Envelope(state: state))
     guard index.count <= 256 * 1_024 * 1_024 - bytes else { throw WorkspaceJournal.Failure.storageFull }
     for (reference, data) in pending {
       let blob = directory(file).appendingPathComponent(reference)
@@ -52,7 +52,7 @@ enum WorkspaceJournalPersistence {
   private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   private static func transform(_ state: inout WorkspaceJournalState, _ body: (Data) throws -> Data) throws {
     func text(_ value: String) throws -> String {
-      guard let result = String(data: try body(Data(value.utf8)), encoding: .utf8) else { throw WorkspaceJournal.Failure.incompatibleStore }
+      guard let result = String(data: try body(Data(value.utf8)), encoding: .utf8) else { throw WorkspaceJournal.Failure.unreadableStore }
       return result
     }
     func transcript(_ value: inout LibraryTranscript) throws {

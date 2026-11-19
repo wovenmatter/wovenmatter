@@ -145,9 +145,9 @@ final class HostRouteStreamTests: XCTestCase {
                              deviceID: model.state.deviceID, token: "synthetic-test-token")
     let studio = ExecutionWorkspace(id: "11111111-1111-4111-8111-111111111111", libraryID: "library-a", ownerDeviceID: hostDevice, kind: .mac,
       name: "Studio", endpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: hostDevice)
+      capabilities: ["history.library", StreamProtocol.capability], executionDeviceID: hostDevice)
     let mini = ExecutionWorkspace(id: "22222222-2222-4222-8222-222222222222", libraryID: "library-a", ownerDeviceID: miniDevice, kind: .mac,
-      name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.library.v1"],
+      name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["history.library"],
       executionDeviceID: miniDevice)
     try await store.journal.bind(libraryID: "library-a")
     try await store.journal.upsertWorkspace(studio, pending: false, trustedRegistry: true)

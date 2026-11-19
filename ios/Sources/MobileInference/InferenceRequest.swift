@@ -99,7 +99,7 @@ struct InferenceRequestBuilder {
     request.httpMethod = "POST"; request.httpBody = try JSONSerialization.data(withJSONObject: body)
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-    request.setValue("WovenMatter/1 iOS", forHTTPHeaderField: "User-Agent")
+    request.setValue("WovenMatter iOS", forHTTPHeaderField: "User-Agent")
     if model.api == "anthropic-messages" {
       request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
       if connection.provider == "claude-subscription" {

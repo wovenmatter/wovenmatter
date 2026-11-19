@@ -15,21 +15,21 @@ public enum MobileBackup: Sendable { case include, exclude }
 /// edit never rewrites the rest of the library. Blobs are durable before the index
 /// commits; old blobs are collected only after a successful index replacement.
 enum MobileStorePersistence {
-  private struct Envelope: Codable { var version: Int; var state: MobileStoreState }
+  /// The saved index: an object holding the store's `state`. An index an
+  /// earlier build saved also holds a number beside it, which is not read.
+  private struct Envelope: Codable { var state: MobileStoreState }
   /// Where a body comes from. Cached bodies may be absent after a restore and are fetched again.
   enum BodyRole: Hashable { case local, cachedNote(String), cachedBase(String), cachedTranscript(String) }
   static func load(from file: URL) throws -> MobileStoreState {
     let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.store)
-    let envelope = try JSONDecoder().decode(Envelope.self, from: data)
-    guard envelope.version == 2 else { throw MobileStore.Failure.incompatibleStore }
-    var state = envelope.state
+    var state = try JSONDecoder().decode(Envelope.self, from: data).state
     var missing = Set<BodyRole>(), roles: [String: MobileBackup] = [:]
     try transform(&state) { reference, role in
-      guard reference.count == 64, reference.allSatisfy({ $0.isHexDigit }) else { throw MobileStore.Failure.incompatibleStore }
+      guard reference.count == 64, reference.allSatisfy({ $0.isHexDigit }) else { throw MobileStore.Failure.unreadableStore }
       let blob = blobDirectory(file).appendingPathComponent(reference)
       guard FileManager.default.fileExists(atPath: blob.path) || role == .local else { missing.insert(role); return "" }
       let data = try Data(contentsOf: blob)
-      guard digest(data) == reference, let content = String(data: data, encoding: .utf8) else { throw MobileStore.Failure.incompatibleStore }
+      guard digest(data) == reference, let content = String(data: data, encoding: .utf8) else { throw MobileStore.Failure.unreadableStore }
       roles[reference] = role == .local ? .include : roles[reference] ?? .exclude
       return content
     }
@@ -74,7 +74,7 @@ enum MobileStorePersistence {
     // place: the system can apply an in-place exclusion late, even to a file later
     // written at the same path. New cache bodies are excluded only as they are written.
     for (reference, backup) in references where backup == .include { try applyBackupIfChanged(.include, at: directory.appendingPathComponent(reference)) }
-    let encoded = try JSONEncoder().encode(Envelope(version: 2, state: state))
+    let encoded = try JSONEncoder().encode(Envelope(state: state))
     try writeDurably(encoded, at: file, backup: .include); bytesWritten += encoded.count
     // Cleanup is best effort and occurs after the index commits. A crash can leave
     // an orphan, but can never evict a referenced draft, conflict or retry payload.

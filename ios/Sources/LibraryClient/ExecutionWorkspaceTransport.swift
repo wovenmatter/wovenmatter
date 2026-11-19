@@ -163,7 +163,6 @@ final class TailnetJSONClient: @unchecked Sendable {
     components.queryItems = query.isEmpty ? nil : query
     var request = URLRequest(url: components.url!); request.httpMethod = method; request.httpBody = body
     request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
     try MobileRequestSigning.sign(&request, with: signer, audience: audience)

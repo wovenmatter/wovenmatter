@@ -36,7 +36,7 @@ private final class MacHTTP: MobileHTTPPerforming, @unchecked Sendable {
     let workspace = lock.withLock { recorded.append((request.httpMethod ?? "GET") + " " + host + path); return workspaces[host] }
     let body: Data
     switch path {
-    case "/wovenmatter/v1/hello": body = try JSONEncoder().encode(LibraryHello(workspaceID: "library-a", hostName: "Dev", capabilities: []))
+    case "/wovenmatter/v1/hello": body = try JSONEncoder().encode(LibraryHello(workspaceID: "library-a", hostName: "Dev"))
     case "/wovenmatter/v1/execution": body = try JSONEncoder().encode(workspace)
     case "/wovenmatter/v1/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace?.libraryID ?? "", cursor: 0))
     case "/wovenmatter/v1/execution/providers":
@@ -131,7 +131,7 @@ final class LibraryHostCommandTests: XCTestCase {
   private let productionDevice = "c0000000-0000-4000-8000-00000000000c"
   private let olderDevice = "d0000000-0000-4000-8000-00000000000d"
   private let miniDevice = "b0000000-0000-4000-8000-00000000000b"
-  private let streamed = ["execution.v1", "history.library.v1", StreamProtocol.capability]
+  private let streamed = ["history.library", StreamProtocol.capability]
 
   private struct Fixture {
     let model: MobileModel
@@ -159,7 +159,7 @@ final class LibraryHostCommandTests: XCTestCase {
     let copied = ExecutionWorkspace(id: "33333333-3333-4333-8333-333333333333", libraryID: "library-a", ownerDeviceID: productionDevice, kind: .mac,
       name: "Studio", capabilities: streamed, executionDeviceID: productionDevice, retainedHistory: true)
     let older = ExecutionWorkspace(id: "44444444-4444-4444-8444-444444444444", libraryID: "library-a", ownerDeviceID: olderDevice, kind: .mac,
-      name: "Studio", capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: olderDevice, retainedHistory: true)
+      name: "Studio", capabilities: ["history.library"], executionDeviceID: olderDevice, retainedHistory: true)
     let dev = ExecutionWorkspace(id: "11111111-1111-4111-8111-111111111111", libraryID: "library-a", ownerDeviceID: hostDevice, kind: .mac,
       name: "Studio (Dev)", endpoint: devEndpoint, capabilities: streamed, executionDeviceID: hostDevice, developmentInstance: "snapshot")
     // Another Mac keeps its own library namespace.

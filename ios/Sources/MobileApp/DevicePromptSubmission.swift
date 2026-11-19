@@ -14,7 +14,7 @@ extension MobileModel {
   /// changes the user's open chat or draft.
   private func startDeviceToolSubmission(_ job: MobileToolSubmission) async throws {
     try Task.checkCancellation()
-    guard let store, let record = executionRecords[job.sessionID], record.quickChatVersion == 1, record.isTrashed != true else { throw WorkspaceToolError.notFound("The Quick Chat is no longer available.") }
+    guard let store, let record = executionRecords[job.sessionID], !record.savedHistoryOnly, record.isTrashed != true else { throw WorkspaceToolError.notFound("The Quick Chat is no longer available.") }
     let id = job.sessionID
     guard !DeviceToolSubmissionTasks.starting.contains(id), !localStopping.contains(id), !localInterrupting.contains(id), !configuringDeviceSessions.contains(id) else { return }
     if let runID = record.runID, runID != job.id { return }
@@ -63,7 +63,7 @@ extension MobileModel {
     await refreshDeviceToolSubmissions()
     for job in await store.toolSubmissions() where job.state == "queued" {
       guard !Task.isCancelled else { return }
-      guard executionRecords[job.sessionID]?.quickChatVersion == 1 else { continue }
+      guard executionRecords[job.sessionID]?.savedHistoryOnly == false else { continue }
       do { try await startDeviceToolSubmission(job) }
       catch { /* durable inbox retains the pending request for explicit resume */ }
     }

@@ -17,7 +17,6 @@ public struct MobileLibraryHost: Codable, Equatable, Sendable, Identifiable {
 /// list it last learned (from whichever host it synced with), which host it
 /// last used, and whether that host accepted member signatures.
 public struct MobileMembershipState: Codable, Equatable, Sendable {
-  public var formatVersion = 1
   public var deviceID: String
   /// The Mac the phone paired with. Only a starting point: it is never required.
   public var pairedEndpoint: URL
@@ -199,7 +198,6 @@ public actor MobileLibraryHosts {
 
   /// The error that best explains why no host answered.
   static func summary(_ failures: [any Error]) -> any Error {
-    if let update = failures.first(where: { if case MobileConnectionError.updateRequired = $0 { true } else { false } }) { return update }
     if !failures.isEmpty, failures.allSatisfy({ if case MobileConnectionError.memberUnknown = $0 { true } else { false } }) {
       return MobileConnectionError.memberUnknown
     }

@@ -18,8 +18,7 @@ public enum RichDocumentEditing {
 
   public static func document(_ content: String) -> NoteDocument? {
     guard let data = content.data(using: .utf8),
-          let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          (raw["version"] as? Int) == NoteDocument.currentVersion,
+          let raw = try? JSONSerialization.jsonObject(with: data), NoteDocument.isStructured(raw),
           let decoded = try? JSONDecoder().decode(NoteDocument.self, from: data) else { return nil }
     return decoded
   }

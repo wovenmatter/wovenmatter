@@ -20,7 +20,6 @@ public struct MobileCommandRecord: Codable, Equatable, Identifiable, Sendable {
   public var receipt: LibraryCommandReceipt?
 }
 public struct MobileStoreState: Codable, Equatable, Sendable {
-  public var formatVersion = 1
   public var deviceID = UUID().uuidString.lowercased()
   public var workspaceID: String?
   public var detachedWorkspaceID: String?
@@ -44,7 +43,7 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var localRevisionParents: [String: [String: Int64]] = [:]
   public var deletedNotes: Set<String> = []
   public var uncachedNoteIDs: Set<String> = []
-  /// Optional for backward decoding of existing format-1 libraries.
+  /// Optional: a store saved before these were added has none of them.
   public var executionConversationIDs: Set<String>?
   public var libraryDeletedConversationIDs: Set<String>?
   public var libraryConversationIDs: Set<String>?
@@ -65,10 +64,10 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
 
 public actor MobileStore {
   public enum Failure: Error, LocalizedError {
-    case incompatibleStore, wrongWorkspace, missingNote, conflictingNote, noteTooLarge, malformedAcknowledgement
+    case unreadableStore, wrongWorkspace, missingNote, conflictingNote, noteTooLarge, malformedAcknowledgement
     public var errorDescription: String? {
       switch self {
-      case .incompatibleStore: "This local library needs a newer version of Woven Matter."
+      case .unreadableStore: "This device’s saved library is damaged or incomplete."
       case .wrongWorkspace: "This device belongs to a different workspace. Its local writing has been kept."
       case .missingNote: "The note is no longer available."
       case .conflictingNote: "Resolve this note’s saved conflict before sending it to an agent."
@@ -96,7 +95,6 @@ public actor MobileStore {
     artifacts = try SavedArtifactStore(directory: file.appendingPathExtension("artifacts"))
     if FileManager.default.fileExists(atPath: file.path) {
       state = try MobileStorePersistence.load(from: file)
-      guard state.formatVersion == 1 else { throw Failure.incompatibleStore }
     } else {
       state = MobileStoreState()
       _ = try MobileStorePersistence.persist(state, at: file)

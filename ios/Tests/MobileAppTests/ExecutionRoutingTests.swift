@@ -106,13 +106,14 @@ final class ExecutionRoutingTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Earlier agent", enabledTools: ["execute_command", "woven_executor"], connectionID: "old", modelJSON: "{}", runID: "old-run", status: "running", updatedAt: "")
-    record.quickChatVersion = nil
+    let record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Earlier agent", enabledTools: ["execute_command", "woven_executor"], connectionID: "old", modelJSON: "{}", runID: "old-run", status: "running", updatedAt: "")
     model.executionRecords[record.id] = record
     try model.persistExecutionConfiguration()
+    // The earliest records say nothing about Quick Chat at all.
+    try Self.saveRecords(in: model.executionDirectory, asEarlier: [record.id: nil])
     try await model.loadExecutionConfiguration()
     model.selectedConversationID = record.id
-    XCTAssertEqual(model.executionRecords[record.id]?.quickChatVersion, 0)
+    XCTAssertEqual(model.executionRecords[record.id]?.savedHistoryOnly, true)
     XCTAssertEqual(model.executionRecords[record.id]?.status, "retained")
     XCTAssertFalse(model.canResumeLocalRun)
     XCTAssertTrue(model.localRuntimes.isEmpty)
@@ -131,9 +132,8 @@ final class ExecutionRoutingTests: XCTestCase {
     let own = InferenceConnection(id: "own", name: "OpenCode Go", provider: "opencode-go", modelID: "m")
     let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", accountID: "mac-account", route: .adapter,
       baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
-    var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted chat", connectionID: hosted.id, connection: hosted,
+    let record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted chat", connectionID: hosted.id, connection: hosted,
       modelJSON: "{}", status: "ready", updatedAt: "")
-    record.quickChatVersion = 1
     let preferences = DeviceExecutionPreferences(connections: [own, hosted], selectedConnectionID: hosted.id,
       conversations: [record.id: record], chatSettings: .init(connection: hosted))
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -187,9 +187,8 @@ final class ExecutionRoutingTests: XCTestCase {
       baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
     var records: [String: DeviceConversationRecord] = [:]
     for status in ["running", "interrupted", "stopping"] {
-      var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted " + status, connectionID: hosted.id, connection: hosted,
+      let record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted " + status, connectionID: hosted.id, connection: hosted,
         modelJSON: Self.offlineModelJSON, runID: "run-" + status, submissionID: 3, pendingInput: "Saved input", status: status, updatedAt: "")
-      record.quickChatVersion = 1
       records[record.id] = record
     }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -224,9 +223,8 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionDirectory = root.appendingPathComponent("execution")
     await model.reload()
     let removed = InferenceConnection(id: "removed", name: "ChatGPT", provider: "openai-codex", modelID: "m")
-    var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Interrupted", connectionID: removed.id, connection: removed,
+    let record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Interrupted", connectionID: removed.id, connection: removed,
       modelJSON: Self.offlineModelJSON, runID: "interrupted-run", submissionID: 4, status: "interrupted", updatedAt: "")
-    record.quickChatVersion = 1
     model.executionRecords[record.id] = record
     try model.persistExecutionConfiguration()
     try await model.stopDeviceConversation(record.id)
@@ -253,7 +251,6 @@ final class ExecutionRoutingTests: XCTestCase {
       let hosted = InferenceConnection(id: "hosted", name: "Mac account", provider: "openai", route: .adapter, baseURL: "https://mac.example.ts.net/wovenmatter", modelID: "m")
       var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Hosted", connectionID: hosted.id, connection: hosted,
         modelJSON: Self.offlineModelJSON, runID: "hosted-run", submissionID: 2, pendingInput: "Saved input", status: "interrupted", updatedAt: "")
-      record.quickChatVersion = 1
       var ledger = WorkspaceGoalLedger(); ledger.runIDs = ["hosted-run"]; record.goalLedger = ledger
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       try JSONEncoder().encode(DeviceExecutionPreferences(connections: [own, hosted], selectedConnectionID: own.id, conversations: [record.id: record]))
@@ -316,6 +313,26 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.inferenceConnectionID, "own")
   }
 
+  /// Rewrites saved Quick Chat records as an earlier build saved them. In place
+  /// of today's flag that build wrote a number under `quickChatVersion` (1 for
+  /// a Quick Chat, 0 for saved history); the earliest wrote neither (nil here).
+  /// `permissionModes` adds the permission mode earlier builds also saved.
+  private static func saveRecords(in directory: URL?, asEarlier numbers: [String: Int?], permissionModes: [String: String] = [:]) throws {
+    let file = try XCTUnwrap(directory).appendingPathComponent("preferences.json")
+    var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    var conversations = try XCTUnwrap(saved["conversations"] as? [String: Any])
+    for (id, number) in numbers {
+      var value = try XCTUnwrap(conversations[id] as? [String: Any])
+      XCTAssertNotNil(value.removeValue(forKey: "savedHistoryOnly"), "Today's flag is always saved")
+      if let number { value["quickChatVersion"] = number }
+      if let mode = permissionModes[id] { value["permissionMode"] = mode }
+      conversations[id] = value
+    }
+    saved["conversations"] = conversations
+    if !permissionModes.isEmpty { saved["chatSettings"] = ["permissionMode": "ask"] }
+    try JSONSerialization.data(withJSONObject: saved).write(to: file)
+  }
+
   private static let offlineModelJSON = """
   {"id":"offline-test","name":"Offline test","api":"openai-responses","provider":"controlled","baseUrl":"https://invalid.test","reasoning":false,"input":["text"],"contextWindow":4096,"maxTokens":1024,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
   """
@@ -342,7 +359,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.state = await store.snapshot()
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
-      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.library.v1"])
+      ownerDeviceID: "owner", kind: .mac, name: "Mac", capabilities: ["history.library"])
     try await store.journal.bind(libraryID: "library")
     try await store.journal.upsertWorkspace(workspace, pending: false)
     let direct = ExecutionTestWorkspace(workspace)
@@ -380,7 +397,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let model = MobileModel(store: store, transport: ExecutionTestLibrary())
     model.state = await store.snapshot()
     let hostMac = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
-      ownerDeviceID: "host-owner", kind: .mac, name: "Studio", capabilities: ["history.library.v1"])
+      ownerDeviceID: "host-owner", kind: .mac, name: "Studio", capabilities: ["history.library"])
     let other = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library",
       ownerDeviceID: "other-owner", kind: .mac, name: "Another Mac")
     try await store.journal.bind(libraryID: "library")
@@ -795,8 +812,8 @@ final class ExecutionRoutingTests: XCTestCase {
   }
 
   /// Quick Chat has only Full Access: a chat saved with the former Ask for Approval
-  /// mode reopens in Full Access, and a chat from an earlier on-device agent (no
-  /// Quick Chat version) stays retained history.
+  /// mode reopens in Full Access, and a chat from an earlier on-device agent
+  /// stays retained history.
   @MainActor func testEarlierAskChatsReopenInFullAccessAndEarlierChatsStayRetained() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -809,32 +826,39 @@ final class ExecutionRoutingTests: XCTestCase {
     func record(_ id: String) -> DeviceConversationRecord {
       DeviceConversationRecord(id: id, title: id, connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
     }
-    model.executionRecords = ["full": record("full"), "ask": record("ask"), "legacy": record("legacy")]
+    var history = record("history"); history.status = "retained"
+    model.executionRecords = ["full": record("full"), "ask": record("ask"), "legacy": record("legacy"), "history": history]
     try model.persistExecutionConfiguration()
-    // Earlier builds saved a permission mode, and the earliest wrote no Quick Chat version.
-    let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
-    var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-    var conversations = try XCTUnwrap(saved["conversations"] as? [String: Any])
-    for (id, mode) in [("full", "full"), ("ask", "ask"), ("legacy", "full")] {
-      var value = try XCTUnwrap(conversations[id] as? [String: Any]); value["permissionMode"] = mode
-      if id == "legacy" { value.removeValue(forKey: "quickChatVersion") }
-      conversations[id] = value
-    }
-    saved["conversations"] = conversations
-    saved["chatSettings"] = ["permissionMode": "ask"]
-    try JSONSerialization.data(withJSONObject: saved).write(to: file)
+    // Earlier builds saved a permission mode, and a number in place of today's
+    // flag: 1 for a Quick Chat, 0 for saved history, and the earliest none at all.
+    try Self.saveRecords(in: model.executionDirectory, asEarlier: ["full": 1, "ask": 1, "legacy": nil, "history": 0],
+                         permissionModes: ["full": "full", "ask": "ask", "legacy": "full", "history": "full"])
 
     let reopened = MobileModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
     try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(Set(reopened.executionRecords.keys), ["full", "ask", "legacy"], "A saved Ask mode never drops a chat")
+    XCTAssertEqual(Set(reopened.executionRecords.keys), ["full", "ask", "legacy", "history"], "A saved Ask mode never drops a chat")
     for id in ["full", "ask"] {
       guard case .session(let settings) = try await reopened.readDeviceWorkspace(.session(id: id)) else { return XCTFail("Missing settings") }
       XCTAssertEqual(settings.permission, "full", id)
       XCTAssertEqual(settings.permissions.map(\.id), ["full"], id)
+      XCTAssertEqual(reopened.executionRecords[id]?.savedHistoryOnly, false, id)
+      XCTAssertEqual(reopened.executionRecords[id]?.status, "ready", id)
     }
+    XCTAssertEqual(reopened.executionRecords["history"]?.savedHistoryOnly, true)
+    XCTAssertEqual(reopened.executionRecords["history"]?.status, "retained")
+    // Loading saves the records again: under today's flag, without the earlier number.
+    let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
+    let rewritten = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    let conversations = try XCTUnwrap(rewritten["conversations"] as? [String: [String: Any]])
+    XCTAssertEqual(conversations.mapValues { $0["savedHistoryOnly"] as? Bool }, ["full": false, "ask": false, "legacy": true, "history": true])
+    XCTAssertTrue(conversations.values.allSatisfy { $0["quickChatVersion"] == nil })
+    let readBack = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file)).conversations
+    XCTAssertEqual(readBack.mapValues(\.savedHistoryOnly), ["full": false, "ask": false, "legacy": true, "history": true],
+                   "Records saved under today's flag read back the same")
+    XCTAssertEqual(readBack.mapValues(\.status), ["full": "ready", "ask": "ready", "legacy": "retained", "history": "retained"])
     let retained = try XCTUnwrap(reopened.executionRecords["legacy"])
-    XCTAssertEqual(retained.quickChatVersion, 0)
+    XCTAssertTrue(retained.savedHistoryOnly)
     XCTAssertEqual(retained.status, "retained")
     reopened.selectedConversationID = "legacy"
     XCTAssertFalse(reopened.canResumeLocalRun, "Earlier chats are history and never run tools")

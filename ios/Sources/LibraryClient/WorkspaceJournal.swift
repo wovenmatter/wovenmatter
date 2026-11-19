@@ -3,7 +3,6 @@ import CryptoKit
 import WovenMatterShared
 
 public struct WorkspaceJournalState: Codable, Equatable, Sendable {
-  public var formatVersion = 1
   public var libraryID: String?
   public var libraryCursor: Int64 = 0
   public var workspaces: [String: ExecutionWorkspace] = [:]
@@ -33,10 +32,10 @@ public struct WorkspaceJournalState: Codable, Equatable, Sendable {
 /// origin records survive process death and lost library acknowledgements.
 public actor WorkspaceJournal {
   public enum Failure: Error, LocalizedError {
-    case incompatibleStore, wrongLibrary, replayGap, reusedIdentity, invalidAcknowledgement, storageFull, deletedWorkspace, recordTooLarge
+    case unreadableStore, wrongLibrary, replayGap, reusedIdentity, invalidAcknowledgement, storageFull, deletedWorkspace, recordTooLarge
     public var errorDescription: String? {
       switch self {
-      case .incompatibleStore: "This workspace journal requires a newer application."
+      case .unreadableStore: "This device’s saved workspace history is damaged or incomplete."
       case .wrongLibrary: "This workspace belongs to another library. Saved work has been retained."
       case .replayGap: "Workspace history has a missing or out-of-order record. Synchronization stopped without advancing its cursor."
       case .reusedIdentity: "A workspace reused a durable record identity with different contents."
@@ -53,7 +52,6 @@ public actor WorkspaceJournal {
     self.file = file
     if FileManager.default.fileExists(atPath: file.path) {
       state = try WorkspaceJournalPersistence.load(at: file)
-      guard state.formatVersion == 1 else { throw Failure.incompatibleStore }
     } else { state = .init() }
     if state.conversationOwners == nil { state.conversationOwners = state.conversationWorkspaceIDs }
   }
@@ -99,9 +97,15 @@ public actor WorkspaceJournal {
       // A publisher may retry immutable chunks under new journal event IDs
       // after a crash. Match the library store's (recordID, partIndex) identity:
       // identical bytes and manifests are idempotent; conflicting reuse is not.
+      // A retry after an update may carry today's name for the format of a
+      // chunk stored under its earlier tag; that is still the same chunk.
       var uniqueParts: [Int: NativeRecordPart] = [:]
       for part in entries.compactMap(\.nativeRecord) {
-        if let existing = uniqueParts[part.partIndex], existing != part { throw LibraryActivityDetails.invalid }
+        if let existing = uniqueParts[part.partIndex] {
+          var retried = part; retried.format = existing.format
+          guard retried == existing, NativeRecordFormat.isSame(part.format, existing.format) else { throw LibraryActivityDetails.invalid }
+          continue
+        }
         uniqueParts[part.partIndex] = part
       }
       let parts = uniqueParts.values.sorted { $0.partIndex < $1.partIndex }
@@ -109,7 +113,7 @@ public actor WorkspaceJournal {
       guard first.partCount > 0, first.partCount <= 65_536, first.byteCount >= 0,
         first.byteCount <= LibraryActivityDetails.maximumBytes,
         parts.allSatisfy({ $0.partCount == first.partCount && $0.byteCount == first.byteCount &&
-          $0.sha256 == first.sha256 && $0.format == first.format && $0.partIndex >= 0 && $0.partIndex < first.partCount }) else {
+          $0.sha256 == first.sha256 && NativeRecordFormat.isSame($0.format, first.format) && $0.partIndex >= 0 && $0.partIndex < first.partCount }) else {
         throw LibraryActivityDetails.invalid
       }
       guard parts.count <= first.partCount else { throw LibraryActivityDetails.invalid }
@@ -218,7 +222,7 @@ public actor WorkspaceJournal {
         // transcript remains small enough for sync and a collapsed UI preview.
         if !state.entries.values.contains(where: { $0.workspaceID == workspaceID && $0.nativeRecord?.recordID == recordID }) {
           recorded += try appendNativeRecord(workspaceID: workspaceID, conversationID: preparedTranscript.conversationID,
-            runID: row.runID, recordID: recordID, format: "wovenmatter.activity.v1", data: data)
+            runID: row.runID, recordID: recordID, format: NativeRecordFormat.activity.name, data: data)
         }
         var compact = LibraryTranscriptCompaction.activity(row)
         compact.detailsRecordID = recordID
@@ -339,12 +343,15 @@ public actor WorkspaceJournal {
   /// Preserve complete native history, without truncating it to a UI transcript.
   /// A recordID identifies one immutable native record in the workspace. The
   /// checksum verifies bytes; it must not serve as identity for distinct records.
+  /// A record already stored keeps the tag it was written with: the same record
+  /// offered again under the name written from now on is that record.
   @discardableResult public func appendNativeRecord(workspaceID: String, conversationID: String, runID: String? = nil,
     recordID: String, format: String, data: Data) throws -> [ExecutionJournalEntry] {
     let sha = SHA256.hash(data: data).hexString
     let existing = state.entries.values.filter { $0.workspaceID == workspaceID && $0.nativeRecord?.recordID == recordID }
     if !existing.isEmpty {
-      guard existing.allSatisfy({ $0.conversationID == conversationID && $0.runID == runID && $0.nativeRecord?.sha256 == sha && $0.nativeRecord?.format == format }) else { throw Failure.reusedIdentity }
+      guard existing.allSatisfy({ $0.conversationID == conversationID && $0.runID == runID && $0.nativeRecord?.sha256 == sha
+        && ($0.nativeRecord?.format).map { NativeRecordFormat.isSame($0, format) } == true }) else { throw Failure.reusedIdentity }
       return existing.sorted { $0.originSequence < $1.originSequence }
     }
     let partBytes = 64 * 1_024, count = max(1, (data.count + partBytes - 1) / partBytes)
@@ -577,7 +584,7 @@ public actor WorkspaceClient {
   private func verify() async throws {
     let workspace = try await transport.identity()
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
-    servesLibraryHistory = workspace.capabilities.contains("history.library.v1")
+    servesLibraryHistory = workspace.capabilities.contains(ExecutionWorkspace.libraryHistoryCapability)
     if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID {
       guard let registered = await store.journal.snapshot().workspaces[workspaceID],
             registered.libraryID == workspace.libraryID, registered.ownerDeviceID == workspace.ownerDeviceID,
@@ -681,5 +688,15 @@ public actor WorkspaceClient {
     let value = try await transport.transcript(id)
     guard value.conversationID == id else { throw MobileConnectionError.invalidResponse }
     try await store.cache(value); return value
+  }
+}
+
+extension NativeRecordFormat {
+  private static let all: [NativeRecordFormat] = [.activity, .chainedActivity, .piDurableEntry, .nativeUpdate,
+                                                  .fileManifest, .fileChunk, .recordReference, .textFragment]
+  /// Whether two tags name one format. Records already stored keep the tag
+  /// they were written with, so a stored tag and today's name can both appear.
+  static func isSame(_ first: String, _ second: String) -> Bool {
+    first == second || all.contains { $0.matches(first) && $0.matches(second) }
   }
 }

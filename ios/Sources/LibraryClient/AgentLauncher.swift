@@ -99,12 +99,14 @@ public struct LaunchableAgent: Identifiable, Equatable, Sendable {
 }
 
 extension ExecutionWorkspace {
-  /// A live Mac member whose own sessions' history is the library's
-  /// (`history.library.v1`). Every Mac advertises it, so several are live; a
-  /// copied snapshot owner (`retainedHistory`) keeps the capability for its
-  /// history but is not live.
+  /// The registry capability of a workspace whose own sessions' history is
+  /// the library's: members read it from the library, not from that workspace.
+  public static let libraryHistoryCapability = "history.library"
+  /// A live Mac member whose own sessions' history is the library's. Every
+  /// Mac advertises the capability, so several are live; a copied snapshot
+  /// owner (`retainedHistory`) keeps it for its history but is not live.
   public var isLiveLibraryMac: Bool {
-    kind == .mac && capabilities.contains("history.library.v1") && !deleted && retainedHistory != true
+    kind == .mac && capabilities.contains(Self.libraryHistoryCapability) && !deleted && retainedHistory != true
   }
   /// The workspace `id` of the library host the phone syncs with, when that
   /// host is a live Mac. Nil while the host is a Linux machine or unknown.

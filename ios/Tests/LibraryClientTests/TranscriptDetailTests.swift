@@ -146,6 +146,34 @@ final class TranscriptDetailTests: XCTestCase {
     }
   }
 
+  /// Records already stored keep the tag they were written with. A publisher
+  /// that retries a stored chunk after it updates sends today's name for the
+  /// same format: still that chunk, while another format is a conflict.
+  func testAStoredPartRetriedUnderTodaysNameIsTheSamePart() async throws {
+    let journal = try WorkspaceJournal(file: file())
+    var sequence: Int64 = 1
+    try await journal.record(.init(workspaceID: "owner", originSequence: sequence, conversationID: "chat", runID: "run",
+      kind: .transcript, transcript: .init(conversationID: "chat", activities: [
+        .init(id: "trace", runID: "run", title: "Thinking", status: "completed", detailsRecordID: "head")
+      ])))
+    func record(_ part: NativeRecordPart) async throws {
+      sequence += 1
+      try await journal.record(.init(workspaceID: "owner", originSequence: sequence, conversationID: "chat",
+        runID: "run", kind: .nativeRecord, nativeRecord: part))
+    }
+    let current = try parts("head", "Stored before the update", title: "Thinking")
+    for var part in current { part.format = "wovenmatter.activity.v2"; try await record(part) }
+    for part in current { try await record(part) }
+    let detail = try await journal.activityDetails(conversationID: "chat", activityID: "trace")
+    XCTAssertEqual(detail?.projectionJSON?.contains("Stored before the update"), true)
+    var other = current[0]; other.format = NativeRecordFormat.activity.name
+    try await record(other)
+    do {
+      _ = try await journal.activityDetails(conversationID: "chat", activityID: "trace")
+      XCTFail("A part retried as another format was accepted")
+    } catch let error as LibraryAPIError { XCTAssertEqual(error.code, "invalid_activity_details") }
+  }
+
   private func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
 }
 
@@ -159,7 +187,7 @@ private func parts(_ recordID: String, _ text: String, previous: String? = nil, 
   let bytes = try JSONSerialization.data(withJSONObject: envelope), chunk = 131_072
   let count = (bytes.count + chunk - 1) / chunk
   let digest = SHA256.hash(data: bytes).hexString
-  return (0..<count).map { .init(recordID: recordID, format: "wovenmatter.activity.v2", partIndex: $0,
+  return (0..<count).map { .init(recordID: recordID, format: NativeRecordFormat.chainedActivity.name, partIndex: $0,
     partCount: count, byteCount: Int64(bytes.count), sha256: digest,
     data: bytes.subdata(in: $0 * chunk..<min(bytes.count, ($0 + 1) * chunk))) }
 }

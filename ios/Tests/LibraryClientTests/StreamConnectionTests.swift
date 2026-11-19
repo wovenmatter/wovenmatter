@@ -589,8 +589,6 @@ final class StreamConnectionTests: XCTestCase {
     let stale = Data(#"{"code":"member_time_stale","message":"Clock","serverTime":1762905600000}"#.utf8)
     XCTAssertEqual(StreamConnectionError.refusal(status: 401, body: stale), .memberTimeStale(serverTime: 1_762_905_600_000))
     XCTAssertEqual(StreamConnectionError.refusal(status: 401, body: Data(#"{"code":"unauthorized","message":"No"}"#.utf8)), .unauthorized)
-    XCTAssertEqual(StreamConnectionError.refusal(status: 426, body: Data(#"{"code":"protocol_unsupported","supported":[1]}"#.utf8)),
-                   .protocolUnsupported(supported: [1]))
     // URLSessionWebSocketTask exposes headers but not the body.
     let now = Date(timeIntervalSince1970: 1_762_905_600)
     XCTAssertEqual(StreamConnectionError.refusal(status: 401, headers: ["date": "Wed, 12 Nov 2025 00:10:00 GMT"], now: now),
@@ -602,7 +600,7 @@ final class StreamConnectionTests: XCTestCase {
 
   func testRefusedUpgradeResponsesAreReadFromXWovenErrorFirst() throws {
     let now = Date(timeIntervalSince1970: 1_762_905_600)
-    let url = URL(string: "https://studio.example.ts.net:8443/wovenmatter/v1/stream?protocol=1")!
+    let url = URL(string: "https://studio.example.ts.net:8443/wovenmatter/v1/stream")!
     func response(_ status: Int, _ headers: [String: String]) -> HTTPURLResponse {
       HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
     }
@@ -610,8 +608,6 @@ final class StreamConnectionTests: XCTestCase {
     // The header names the refusal; the Date header carries the server's clock.
     XCTAssertEqual(StreamConnectionError.refusal(response(401, ["X-Woven-Error": "member_time_stale", "Date": date]), now: now),
                    .memberTimeStale(serverTime: 1_762_905_630_000))
-    XCTAssertEqual(StreamConnectionError.refusal(response(426, ["X-Woven-Error": "protocol_unsupported", "Date": date]), now: now),
-                   .protocolUnsupported(supported: []))
     XCTAssertEqual(StreamConnectionError.refusal(response(401, ["X-Woven-Error": "unauthorized", "Date": date]), now: now), .unauthorized)
     XCTAssertEqual(StreamConnectionError.refusal(response(403, ["x-woven-error": "unauthorized", "Date": date]), now: now), .unauthorized)
     guard case .refused(503, "unavailable"?, let message?)? = StreamConnectionError.refusal(response(503, ["X-Woven-Error": "unavailable", "Date": date]), now: now) else {
@@ -639,9 +635,9 @@ final class StreamConnectionTests: XCTestCase {
     let signer = MemberRequestSigner(deviceID: "6F1C2A8E-58A4-4D0E-9B6B-1B2E3C4D5E6F", key: key)
     let audience = "4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d"
     let mac = try StreamEndpoint.url(for: URL(string: "https://studio.example.ts.net:8443/wovenmatter")!)
-    XCTAssertEqual(mac.absoluteString, "wss://studio.example.ts.net:8443/wovenmatter/v1/stream?protocol=1")
+    XCTAssertEqual(mac.absoluteString, "wss://studio.example.ts.net:8443/wovenmatter/v1/stream")
     let linux = try StreamEndpoint.url(for: URL(string: "https://server.example.ts.net/wovenmatter-execution/abc/")!)
-    XCTAssertEqual(linux.absoluteString, "wss://server.example.ts.net/wovenmatter-execution/abc/v1/stream?protocol=1")
+    XCTAssertEqual(linux.absoluteString, "wss://server.example.ts.net/wovenmatter-execution/abc/v1/stream")
     XCTAssertThrowsError(try StreamEndpoint.url(for: URL(string: "https://example.com/wovenmatter")!))
     XCTAssertThrowsError(try StreamEndpoint.url(for: URL(string: "http://studio.example.ts.net/wovenmatter")!))
 
@@ -654,10 +650,10 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(first.value(forHTTPHeaderField: "X-Woven-Workspace"), "mac")
     XCTAssertEqual(first.value(forHTTPHeaderField: MemberRequestSignature.audienceHeader), audience)
     XCTAssertNil(first.value(forHTTPHeaderField: "Authorization"))
-    XCTAssertEqual(StreamEndpoint.target(of: mac), "/wovenmatter/v1/stream?protocol=1")
-    // The signature covers GET, the target with its query and an empty body.
+    XCTAssertEqual(StreamEndpoint.target(of: mac), "/wovenmatter/v1/stream")
+    // The signature covers GET, the target (it has no query) and an empty body.
     let time = Int64(first.value(forHTTPHeaderField: MemberRequestSignature.timeHeader)!)!
-    let message = MemberRequestSignature.message(audience: audience, method: "GET", target: "/wovenmatter/v1/stream?protocol=1",
+    let message = MemberRequestSignature.message(audience: audience, method: "GET", target: "/wovenmatter/v1/stream",
       time: time, nonce: first.value(forHTTPHeaderField: nonce)!, bodySHA256: MemberRequestSignature.bodyHash(Data()))
     let signature = MemberRequestSignature.decodeBase64URL(first.value(forHTTPHeaderField: MemberRequestSignature.signatureHeader)!)!
     XCTAssertTrue(key.publicKey.isValidSignature(signature, for: message))

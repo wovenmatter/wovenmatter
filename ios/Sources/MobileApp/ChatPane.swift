@@ -256,7 +256,7 @@ struct ChatPane: View {
           Text("Add a web search key for answers from the web").font(.callout).frame(maxWidth: .infinity, alignment: .leading)
         }.buttonStyle(.plain).foregroundStyle(WovenPalette.success).accessibilityIdentifier("quick-chat-web-search-setup")
       }
-      if let id = model.selectedConversationID, model.executionRecords[id]?.quickChatVersion == 0 {
+      if let id = model.selectedConversationID, model.executionRecords[id]?.savedHistoryOnly == true {
         Text("Earlier on-device agent chat · saved history").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
       }
 

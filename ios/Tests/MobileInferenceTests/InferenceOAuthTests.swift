@@ -301,7 +301,7 @@ final class InferenceOAuthTests: XCTestCase {
       let request = try XCTUnwrap(requests.first), body = try json(request)
       XCTAssertEqual(request.url?.absoluteString, provider == "openai-codex" ? "https://chatgpt.com/backend-api/codex/responses" : provider == "claude-subscription" ? "https://api.anthropic.com/v1/messages" : "https://api.x.ai/v1/responses")
       XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + saved.access)
-      XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "WovenMatter/1 iOS")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "WovenMatter iOS")
       XCTAssertNil(request.value(forHTTPHeaderField: "x-app")); XCTAssertNil(request.value(forHTTPHeaderField: "x-api-key"))
       let text = String(decoding: request.httpBody!, as: UTF8.self)
       XCTAssertFalse(text.contains(saved.refresh)); XCTAssertFalse(text.contains(saved.access)); XCTAssertFalse(text.contains("Claude Code"))

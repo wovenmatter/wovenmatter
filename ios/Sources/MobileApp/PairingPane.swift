@@ -69,7 +69,6 @@ struct PairingPane: View {
     if member.deviceID == model.libraryHostDeviceID, model.online { return "Syncing" }
     switch model.membership?.syncStatus?.peers.first(where: { $0.deviceID == member.deviceID })?.state {
     case "online": return "Online"
-    case "updateRequired": return "Update needed"
     case "failing": return "Not syncing"
     case "offline": return "Offline"
     default:

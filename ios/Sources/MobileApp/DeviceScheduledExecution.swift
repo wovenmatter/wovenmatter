@@ -25,7 +25,7 @@ extension MobileModel {
   }
 
   var quickChatSessionIDs: Set<String> {
-    Set(executionRecords.values.filter { $0.quickChatVersion == 1 && $0.isTrashed != true }.map(\.id))
+    Set(executionRecords.values.filter { !$0.savedHistoryOnly && $0.isTrashed != true }.map(\.id))
   }
 
   func processDeviceSchedule() async {

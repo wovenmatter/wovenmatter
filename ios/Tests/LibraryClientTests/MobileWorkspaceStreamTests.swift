@@ -142,7 +142,7 @@ final class MobileWorkspaceStreamTests: XCTestCase {
   func testTheLibraryHostsStreamCarriesHostChatsWithTheLibrarysIdentity() async throws {
     let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
     let host = ExecutionWorkspace(id: "studio", libraryID: "library", ownerDeviceID: "mac", kind: .mac, name: "Studio",
-                                  capabilities: ["history.library.v1", StreamProtocol.capability])
+                                  capabilities: ["history.library", StreamProtocol.capability])
     try await store.journal.upsertWorkspace(host, pending: false)
     try await store.apply(LibrarySnapshot(workspaceID: "library", cursor: 1, folders: [], notes: [], conversations: [
       .init(id: "host-chat", title: "Plan", providerID: "local:codex", runtimeKind: "codex"),

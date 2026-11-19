@@ -36,12 +36,11 @@ extension MobileModel {
       $0.isLiveLibraryMac && ($0.ownerDeviceID.lowercased() == host || $0.executionDeviceID?.lowercased() == host)
     }
   }
-  /// "Update everything" and re-pairing notices for Settings and the sync status.
+  /// Re-pairing notices for Settings and the sync status.
   var membershipNotice: String? {
     if membership?.memberRejected == true {
       return "Pair again: \(membership?.pairedName ?? "your Mac") did not accept \(deviceWorkspaceInSentence)'s key, so it doesn't sync. In that Mac's device list remove \(deviceWorkspaceInSentence) if it is listed, then pair again."
     }
-    if let message = synchronizationStatus.updateRequired { return message }
     if needsMemberPairing {
       return "Pair again with any Mac so \(deviceWorkspaceInSentence) connects directly to every Mac and Linux machine. Your notes and chats stay on \(deviceWorkspaceInSentence)."
     }

@@ -33,7 +33,7 @@ struct MobileToolTests {
     let date = try MobileToolSupport.date("2026-10-10T12:00:00Z")
     let raw: [String: Any] = ["id": 42, "conversationId": 7, "kind": "pi.assistant", "model": [["role": "assistant", "timestamp": date.timeIntervalSince1970 * 1_000, "content": String(repeating: "history detail ", count: 10_000)]]]
     let data = try JSONSerialization.data(withJSONObject: raw, options: [.sortedKeys])
-    let events = try await store.journal.appendNativeRecord(workspaceID: scope.workspaceID, conversationID: scope.sessionID, recordID: "native-record", format: "pi-durable.entry.v1", data: data)
+    let events = try await store.journal.appendNativeRecord(workspaceID: scope.workspaceID, conversationID: scope.sessionID, recordID: "native-record", format: NativeRecordFormat.piDurableEntry.name, data: data)
     #expect(events.count > 1)
     #expect(await store.snapshot().transcripts.isEmpty)
     let search = await call(store, ["history", "search", "history detail", "--kind", "pi.assistant", "--native-conversation-id", "7", "--since", "2026-10-10T11:00:00Z", "--until", "2026-10-10T13:00:00Z"], context: scope)

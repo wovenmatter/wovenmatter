@@ -82,7 +82,7 @@ public actor MobileWorkspaceStream {
   public init(workspace: ExecutionWorkspace, store: MobileStore, connection: StreamConnection,
               update: @escaping @Sendable (Update) async -> Void) {
     workspaceID = workspace.id; libraryID = workspace.libraryID
-    servesLibraryHistory = workspace.capabilities.contains("history.library.v1")
+    servesLibraryHistory = workspace.capabilities.contains(ExecutionWorkspace.libraryHistoryCapability)
     self.store = store; self.connection = connection; self.update = update
   }
 

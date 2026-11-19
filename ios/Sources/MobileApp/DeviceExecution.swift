@@ -15,7 +15,9 @@ enum DevicePermission {
 
 struct DeviceConversationRecord: Codable, Equatable {
   var id: String
-  var quickChatVersion: Int? = 1
+  /// True for a chat of the on-device agent that came before Quick Chat. Its
+  /// history is kept and shown; nothing resumes it or runs its saved tools.
+  var savedHistoryOnly = false
   var goalLedger: WorkspaceGoalLedger?
   var goalUsageBaseline: Int64?
   var title: String
@@ -38,6 +40,49 @@ struct DeviceConversationRecord: Codable, Equatable {
   var sourceDraft: MobileChatDraft?
   var status: String
   var updatedAt: String
+}
+
+extension DeviceConversationRecord {
+  /// Names stored data only: records saved before `savedHistoryOnly` hold this
+  /// number instead, 1 for a Quick Chat and 0 for saved history. It is read
+  /// once here and never written.
+  private enum EarlierKeys: String, CodingKey { case quickChatVersion }
+
+  init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    id = try values.decode(String.self, forKey: .id)
+    goalLedger = try values.decodeIfPresent(WorkspaceGoalLedger.self, forKey: .goalLedger)
+    goalUsageBaseline = try values.decodeIfPresent(Int64.self, forKey: .goalUsageBaseline)
+    title = try values.decode(String.self, forKey: .title)
+    folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
+    isPinned = try values.decodeIfPresent(Bool.self, forKey: .isPinned)
+    isTrashed = try values.decodeIfPresent(Bool.self, forKey: .isTrashed)
+    enabledTools = try values.decodeIfPresent([String].self, forKey: .enabledTools)
+    thinkingLevel = try values.decodeIfPresent(String.self, forKey: .thinkingLevel)
+    executionPolicy = try values.decodeIfPresent(PiExecutionPolicy.self, forKey: .executionPolicy)
+    additionalInstructions = try values.decodeIfPresent(String.self, forKey: .additionalInstructions)
+    connectionID = try values.decode(String.self, forKey: .connectionID)
+    connection = try values.decodeIfPresent(InferenceConnection.self, forKey: .connection)
+    modelJSON = try values.decode(String.self, forKey: .modelJSON)
+    runID = try values.decodeIfPresent(String.self, forKey: .runID)
+    submissionID = try values.decodeIfPresent(Int.self, forKey: .submissionID)
+    pendingInput = try values.decodeIfPresent(String.self, forKey: .pendingInput)
+    inputAssetID = try values.decodeIfPresent(String.self, forKey: .inputAssetID)
+    sourceDraftKey = try values.decodeIfPresent(String.self, forKey: .sourceDraftKey)
+    sourceDraft = try values.decodeIfPresent(MobileChatDraft.self, forKey: .sourceDraft)
+    status = try values.decode(String.self, forKey: .status)
+    updatedAt = try values.decode(String.self, forKey: .updatedAt)
+    if let saved = try values.decodeIfPresent(Bool.self, forKey: .savedHistoryOnly) {
+      savedHistoryOnly = saved
+    } else if let number = try decoder.container(keyedBy: EarlierKeys.self).decodeIfPresent(Int.self, forKey: .quickChatVersion) {
+      savedHistoryOnly = number != 1
+    } else {
+      // The earliest records, saved before Quick Chat, hold neither key: their
+      // history is retained without resuming saved code, tools, timers or goals.
+      savedHistoryOnly = true
+      status = "retained"
+    }
+  }
 }
 
 struct DeviceAgentDefaults: Codable, Equatable {
@@ -182,7 +227,7 @@ extension MobileModel {
   func launchAgent(_ launcher: LaunchableAgent) async {
     guard let current = launcherAgents.first(where: { $0.id == launcher.id }), current.isAvailable else { return }
     selectedFolderID = nil; folderContentsPresented = false
-    let resumable = conversations.filter { current.workspaceID != "local" || executionRecords[$0.id]?.quickChatVersion == 1 }
+    let resumable = conversations.filter { current.workspaceID != "local" || executionRecords[$0.id]?.savedHistoryOnly == false }
     if let latest = current.latestConversation(in: resumable, owner: { executionOwner(of: $0) }) {
       await selectConversation(latest.id, workspaceID: current.workspaceID)
     } else {
@@ -313,7 +358,7 @@ extension MobileModel {
   }
   var deviceProvider: HarnessCapabilities {
     .init(id: "pi-durable-device", runtimeKind: "default_agent", displayName: "Quick Chat", routeName: deviceWorkspaceName,
-          available: selectedInferenceConnection != nil && executionOnline && selectedConversationID.flatMap { executionRecords[$0]?.quickChatVersion } != 0, canStart: true, canResume: true,
+          available: selectedInferenceConnection != nil && executionOnline && selectedConversationID.flatMap { executionRecords[$0]?.savedHistoryOnly } != true, canStart: true, canResume: true,
           canSteer: false, canStop: true, supportsApprovals: true, supportsQuestions: true,
           unavailableReason: selectedInferenceConnection == nil ? "Add an inference connection in Settings." : nil)
   }
@@ -324,7 +369,7 @@ extension MobileModel {
   }
   var canResumeLocalRun: Bool {
     guard let id = selectedConversationID else { return false }
-    return executionRecords[id]?.quickChatVersion == 1 && executionRecords[id]?.status == "interrupted" && localRunTasks[id] == nil && !localStopping.contains(id) && !localInterrupting.contains(id)
+    return executionRecords[id]?.savedHistoryOnly == false && executionRecords[id]?.status == "interrupted" && localRunTasks[id] == nil && !localStopping.contains(id) && !localInterrupting.contains(id)
   }
 
   func loadExecutionConfiguration() async throws {
@@ -348,12 +393,6 @@ extension MobileModel {
       deviceAgentDefaults = saved.agentDefaults ?? .init()
       draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
       for (id, record) in executionRecords {
-        if record.quickChatVersion == nil {
-          // Retain history without resuming saved code, tools, timers or goals.
-          executionRecords[id]?.quickChatVersion = 0
-          executionRecords[id]?.status = "retained"
-          executionRecords[id]?.goalLedger?.recover()
-        }
         executionRecords[id]?.enabledTools = MobileToolSupport.migratedMCPSelection(record.enabledTools)
       }
       deviceAgentDefaults.enabledTools = MobileToolSupport.migratedMCPSelection(deviceAgentDefaults.enabledTools)
@@ -365,7 +404,7 @@ extension MobileModel {
       // A run whose connection is gone (one a Mac hosted before v0.4.6) can never
       // continue. It is stopped, so the chat can take a device connection or go to Trash.
       orphaned = executionRecords.values.filter { record in
-        record.quickChatVersion == 1 && ["interrupted", "stopping"].contains(record.status) && usableDeviceConnection(record) == nil
+        !record.savedHistoryOnly && ["interrupted", "stopping"].contains(record.status) && usableDeviceConnection(record) == nil
       }.map(\.id)
       for id in orphaned { executionRecords[id]?.status = "stopped" }
       // Persist the retained connections before removing old device-only secrets.
@@ -535,7 +574,7 @@ extension MobileModel {
     guard let record = executionRecords[id], let root = executionDirectory else { throw InferenceError.missingCredential }
     let connection = usableDeviceConnection(record)
     guard connection != nil || cancelling else { throw InferenceError.missingCredential }
-    guard record.quickChatVersion == 1 else { throw DeviceExecutionError.unavailable("This earlier on-device agent chat is saved as history. Start a new Quick Chat to continue.") }
+    guard !record.savedHistoryOnly else { throw DeviceExecutionError.unavailable("This earlier on-device agent chat is saved as history. Start a new Quick Chat to continue.") }
     let pinned = try JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8))
     let service = connection.map { MobileInferenceService(connection: $0, credentials: executionCredentialStore, model: pinned) }
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
@@ -562,7 +601,7 @@ extension MobileModel {
     return runtime
   }
   func openDeviceConversation(_ id: String) async {
-    guard !fixture, !localInterrupting.contains(id), executionRecords[id]?.quickChatVersion == 1 else { return }
+    guard !fixture, !localInterrupting.contains(id), executionRecords[id]?.savedHistoryOnly == false else { return }
     do { _ = try await deviceRuntime(id); await refreshDeviceTranscript(id); await exportDeviceNativeHistory(id) }
     catch { errorMessage = error.localizedDescription }
   }
@@ -753,7 +792,7 @@ extension MobileModel {
             let data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
             let digest = SHA256.hash(data: data).hexString
             try await store.journal.appendNativeRecord(workspaceID: deviceWorkspaceID, conversationID: id,
-              recordID: "pi-\(id)-\(nativeID)-\(entry["id"] as? Int ?? 0)-\(digest)", format: "pi-durable.entry.v1", data: data)
+              recordID: "pi-\(id)-\(nativeID)-\(entry["id"] as? Int ?? 0)-\(digest)", format: NativeRecordFormat.piDurableEntry.name, data: data)
           }
           cursor = try page["next"].flatMap { $0 is NSNull ? nil : String(decoding: try JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed, .sortedKeys]), as: UTF8.self) }
         } while cursor != nil

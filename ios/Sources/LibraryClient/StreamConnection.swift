@@ -37,8 +37,6 @@ public enum StreamConnectionError: Error, Equatable, Sendable, LocalizedError {
   case memberRemoved
   /// 401 `member_time_stale`: this device's clock is outside the signature window.
   case memberTimeStale(serverTime: Int64?)
-  /// 426 `protocol_unsupported`.
-  case protocolUnsupported(supported: [Int])
   /// 401 `unauthorized`: the server does not list this device yet.
   case unauthorized
   /// Any other refusal before the upgrade.
@@ -58,7 +56,6 @@ public enum StreamConnectionError: Error, Equatable, Sendable, LocalizedError {
     case .timedOut: "The reply took too long."
     case .memberRemoved: "This device was removed from the library on that machine."
     case .memberTimeStale: "This device's clock is wrong. Set the date and time automatically, then try again."
-    case .protocolUnsupported: "Update Woven Matter on every device."
     case .unauthorized: "That machine does not recognize this device yet. It does once the two synchronize their member list."
     case .refused(let status, _, let message): message ?? "The connection was refused (\(status))."
     case .remote(let error): error.message
@@ -73,7 +70,7 @@ public enum StreamConnectionError: Error, Equatable, Sendable, LocalizedError {
   /// `Date` is outside the signature window is still reported as a stale clock.
   public static func refusal(status: Int, body: Data? = nil, headers: [String: String] = [:],
                              now: Date = Date()) -> StreamConnectionError {
-    struct Reply: Decodable { var code: String?; var error: String?; var message: String?; var serverTime: Int64?; var supported: [Int]? }
+    struct Reply: Decodable { var code: String?; var error: String?; var message: String?; var serverTime: Int64? }
     let reply = body.flatMap { try? JSONDecoder().decode(Reply.self, from: $0) }
     let header = { (name: String) in headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value }
     let code = header("X-Woven-Error").map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
@@ -81,7 +78,6 @@ public enum StreamConnectionError: Error, Equatable, Sendable, LocalizedError {
     let serverDate = header("Date").flatMap(Self.httpDate)
     switch code.flatMap(StreamProtocol.ErrorCode.init(rawValue:)) {
     case .memberTimeStale?: return .memberTimeStale(serverTime: reply?.serverTime ?? serverDate.map(Self.milliseconds))
-    case .protocolUnsupported?: return .protocolUnsupported(supported: reply?.supported ?? [])
     case .unauthorized?: return .unauthorized
     case .unavailable?:
       return .refused(status: status, code: StreamProtocol.ErrorCode.unavailable.rawValue,
@@ -89,7 +85,6 @@ public enum StreamConnectionError: Error, Equatable, Sendable, LocalizedError {
     default: break
     }
     switch status {
-    case 426: return .protocolUnsupported(supported: reply?.supported ?? [])
     case 401:
       if code == nil, let date = serverDate,
          abs(Self.milliseconds(date) - Self.milliseconds(now)) > MemberRequestSignature.windowMilliseconds {
@@ -441,11 +436,6 @@ public actor StreamConnection {
     guard greeted else {
       guard case .hello(let value) = frame else {
         await lost(StreamConnectionError.refused(status: 101, code: "invalid", message: "The server did not say hello."), generation: current)
-        return
-      }
-      guard StreamProtocol.supportedVersions.contains(value.protocol) else {
-        await socket.close(.protocolViolation)
-        await lost(StreamConnectionError.protocolUnsupported(supported: [value.protocol]), generation: current)
         return
       }
       greeted = true; hello = value

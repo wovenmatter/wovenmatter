@@ -76,10 +76,10 @@ final class MembershipTests: XCTestCase {
     XCTAssertNotNil(model.membershipNotice, "A paired phone that is not a member is asked to pair again")
 
     let mini = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library-b", ownerDeviceID: "b0000000-0000-0000-0000-00000000000b",
-      kind: .mac, name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["execution.v1", "history.library.v1"],
+      kind: .mac, name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: ["history.library"],
       executionDeviceID: "b0000000-0000-0000-0000-00000000000b")
     let studio = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library-a", ownerDeviceID: "a0000000-0000-0000-0000-00000000000a",
-      kind: .mac, name: "Studio", endpoint: nil, capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: "a0000000-0000-0000-0000-00000000000a")
+      kind: .mac, name: "Studio", endpoint: nil, capabilities: ["history.library"], executionDeviceID: "a0000000-0000-0000-0000-00000000000a")
     // As a synchronization does, bind the journal to the host's library first.
     try await store.journal.bind(libraryID: "library-a")
     try await store.journal.upsertWorkspace(mini, pending: false, trustedRegistry: true)

@@ -21,7 +21,7 @@ extension MobileModel {
   func performDeviceTool(_ request: String) async throws -> String {
     let object = try Self.executionObject(request)
     guard let name = object["name"] as? String, let conversationID = object["conversationID"] as? String,
-          executionRecords[conversationID]?.quickChatVersion == 1 else { throw DeviceExecutionError.unavailable("The tool request has no valid execution owner.") }
+          executionRecords[conversationID]?.savedHistoryOnly == false else { throw DeviceExecutionError.unavailable("The tool request has no valid execution owner.") }
     if !Self.deviceToolEnabled(name, selection: executionRecords[conversationID]?.enabledTools) { throw DeviceExecutionError.unavailable("This tool is disabled for this conversation.") }
     let arguments = object["arguments"] as? [String: Any] ?? [:]
     func string(_ key: String) throws -> String {

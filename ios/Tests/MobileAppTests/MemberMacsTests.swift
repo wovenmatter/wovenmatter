@@ -68,12 +68,12 @@ final class MemberMacsTests: XCTestCase {
   private var air: ExecutionWorkspace {
     .init(id: "0446435c-8e64-440e-b9eb-3c5dadb27e04", libraryID: "library-a", ownerDeviceID: airHost, kind: .mac,
           name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02", endpoint: URL(string: "https://air.tail1.ts.net/wovenmatter"),
-          capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: airHost)
+          capabilities: ["history.library"], executionDeviceID: airHost)
   }
   private var mini: ExecutionWorkspace {
     .init(id: "b03923c3-89d1-4f29-910a-b7e3ce7b586c", libraryID: "library-b", ownerDeviceID: miniHost, kind: .mac,
           name: "James’s Mac Mini (Dev) · woven-everywhere", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter"),
-          capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: miniHost)
+          capabilities: ["history.library"], executionDeviceID: miniHost)
   }
 
   /// Both Dev Macs advertise library history. The host list is the
@@ -84,7 +84,7 @@ final class MemberMacsTests: XCTestCase {
   @MainActor func testEachMacOnceUnderItsNameAndLinuxOnceReachable() {
     let model = MobileModel()
     let linux = ExecutionWorkspace(id: "0fa3b77c-1819-411f-804f-b183d86e2dcd", libraryID: "library-a", ownerDeviceID: airHost,
-      kind: .linux, name: "Workstation (Dev)", capabilities: ["execution.v1"])
+      kind: .linux, name: "Workstation (Dev)", capabilities: [])
     model.executionWorkspaces = [mini, air, linux]
     var membership = MobileMembershipState(deviceID: model.state.deviceID, pairedEndpoint: air.endpoint!, pairedHostDeviceID: airHost)
     membership.currentHost = .init(deviceID: airHost, kind: "mac", name: air.name, endpoint: air.endpoint!)

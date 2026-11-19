@@ -206,4 +206,25 @@ final class RichDocumentParagraphTests: XCTestCase {
     XCTAssertEqual(try json(before[0]), try json(after[0]), "The table keeps its exact data")
     XCTAssertTrue(RichDocumentEditing.canEdit(continued.content))
   }
+
+  /// Notes an earlier build stored hold a number under `version`. A document
+  /// is recognised by its blocks: editing works with or without that key, and
+  /// a document without it never gains one.
+  func testEditingNeitherNeedsNorAddsTheKeyEarlierNotesHold() throws {
+    let current = try NoteDocument(blocks: [.richText(.init(id: "b", text: "Text"))]).encoded()
+    XCTAssertNil(try raw(current)["version"])
+    let end = NSRange(location: 4, length: 0)
+    let edited = try RichDocumentEditing.editing(current, blockID: "b", range: end, replacement: "!\nNext", newBlockID: ids())
+    XCTAssertNil(try raw(edited.content)["version"])
+    XCTAssertEqual(try blocks(edited.content).map(\.plainText), ["Text!", "Next"])
+
+    var stored = try raw(current); stored["version"] = 2
+    let earlier = try json(stored)
+    XCTAssertTrue(RichDocumentEditing.canEdit(earlier))
+    let changed = try RichDocumentEditing.replacingText(in: earlier, blockID: "b", range: end, replacement: "!")
+    XCTAssertEqual(try blocks(changed).map(\.plainText), ["Text!"])
+
+    XCTAssertNil(RichDocumentEditing.document("Plain text from before structured notes"))
+    XCTAssertNil(RichDocumentEditing.document(#"{"title":"An object without blocks"}"#))
+  }
 }

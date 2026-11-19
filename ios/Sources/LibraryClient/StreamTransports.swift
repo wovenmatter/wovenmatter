@@ -4,7 +4,7 @@ import WovenMatterShared
 import FoundationNetworking
 #endif
 
-/// Where a member's stream is: `GET <endpoint>/v1/stream?protocol=1`, upgraded.
+/// Where a member's stream is: `GET <endpoint>/v1/stream`, upgraded.
 public enum StreamEndpoint {
   /// The WebSocket URL under a member's endpoint (a Mac's
   /// `https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, a Linux host's
@@ -14,7 +14,7 @@ public enum StreamEndpoint {
           endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
           !endpoint.pathComponents.contains("..") else { throw StreamConnectionError.insecureEndpoint }
     let base = endpoint.absoluteString.hasSuffix("/") ? endpoint : endpoint.appendingPathComponent("")
-    guard let url = URL(string: StreamProtocol.path + "?" + StreamProtocol.query, relativeTo: base)?.absoluteURL,
+    guard let url = URL(string: StreamProtocol.path, relativeTo: base)?.absoluteURL,
           var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw StreamConnectionError.insecureEndpoint }
     components.scheme = "wss"
     guard let socket = components.url else { throw StreamConnectionError.insecureEndpoint }

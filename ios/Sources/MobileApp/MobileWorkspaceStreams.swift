@@ -2,11 +2,11 @@ import Foundation
 import LibraryClient
 import WovenMatterShared
 
-/// Live streams to every listed Mac and Linux workspace that serves `stream.v1`
+/// Live streams to every listed Mac and Linux workspace that serves `stream`
 /// while the app is in the foreground: `workspace` on each, `conversation`
 /// only for the open chat. The library host's stream also carries the host
 /// route (its own sessions). A route without a connected stream (no
-/// `stream.v1`, or its stream down or ended) is read when its client is made,
+/// `stream`, or its stream down or ended) is read when its client is made,
 /// when a chat opens, after a command, and for the open chat and its
 /// questions on the 15 s foreground tick (`refreshLiveViewsWithoutStream`).
 extension MobileModel {
@@ -81,7 +81,7 @@ extension MobileModel {
     for workspace in wanted.values where workspaceStreams[workspace.id] == nil {
       guard let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
             let connect = streamConnector?(workspace) ?? (try? WebSocketStreamTransport.connector(endpoint: endpoint, signer: memberIdentity.signer, audience: audience, headers: [
-              "X-Woven-Protocol": String(LibraryProtocol.version), "X-Woven-Library": workspace.libraryID,
+              "X-Woven-Library": workspace.libraryID,
               "X-Woven-Workspace": workspace.id, "X-Woven-Device": memberIdentity.deviceID
             ])) else { continue }
       let id = workspace.id
@@ -208,7 +208,7 @@ extension MobileModel {
   /// The 15 s foreground tick for a live view no connected stream carries:
   /// the host route's questions (and the open host chat) while the library
   /// host's stream is not connected, and the open chat of a workspace whose
-  /// stream is not (no `stream.v1`, down, or ended), with its questions.
+  /// stream is not (no `stream`, down, or ended), with its questions.
   /// Nothing is read for a route whose stream is connected.
   var liveViewFallbackNeeded: Bool {
     guard !fixture, connectionForeground else { return false }
@@ -265,7 +265,6 @@ extension MobileModel {
     case .memberTimeStale: return "This device's clock is wrong. Turn on Set Automatically in Settings › General › Date & Time."
     case .unauthorized: return "\(name) doesn’t recognize this device yet. It will once your devices synchronize."
     case .memberRemoved: return "\(name) no longer lists this device as a member."
-    case .protocolUnsupported: return "Update Woven Matter on every device."
     case .refused(_, .some(StreamProtocol.ErrorCode.unavailable.rawValue), _): return "\(name) isn’t ready yet. Woven Matter reconnects automatically."
     case nil, .disconnected, .timedOut, .notConnected: return "\(name) isn’t connected. Woven Matter reconnects automatically."
     case let error?: return error.localizedDescription

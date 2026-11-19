@@ -61,7 +61,7 @@ covers it.
 - `MobileInference`: provider connections, credentials and streaming.
 - `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
 - `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
-- `../shared`: portable note types and versioned wire contracts.
+- `../shared`: portable note types and wire contracts.
 
 Both apps compile the desktop's `WovenStyle.swift` and bundle the same
 `SharedAssets.xcassets`. Follow [the style guide](../docs/STYLE_GUIDE.md).

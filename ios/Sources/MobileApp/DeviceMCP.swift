@@ -18,7 +18,7 @@ extension MobileModel {
     }
   }
   func deviceToolContext(conversationID: String) throws -> MobileToolContext {
-    guard let record = executionRecords[conversationID], record.quickChatVersion == 1 else {
+    guard let record = executionRecords[conversationID], !record.savedHistoryOnly else {
       throw DeviceExecutionError.unavailable("This tool request has no Quick Chat owner.")
     }
     let enabled = Set(Self.deviceToolGroups.filter { Self.deviceToolEnabled(Self.deviceToolSelectionID($0), selection: record.enabledTools) })

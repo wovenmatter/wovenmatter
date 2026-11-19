@@ -54,22 +54,18 @@ public extension LibraryTransport {
 }
 
 public enum MobileConnectionError: Error, LocalizedError {
-  case http(Int, String), revoked, versionMismatch, invalidResponse, responseTooLarge, insecureEndpoint, offline
+  case http(Int, String), revoked, invalidResponse, responseTooLarge, insecureEndpoint, offline
   /// Signed: this host does not list this phone as a member (yet, or any more).
   case memberUnknown
-  /// Devices disagree on versions; every device shows "Update everything".
-  case updateRequired(String)
   public var errorDescription: String? {
     switch self {
     case .http(_, let message): message
     case .revoked: "This device’s access was revoked or expired. Pair again with any of your Macs. Local notes remain available."
-    case .versionMismatch: "These devices need compatible versions of Woven Matter. Local notes remain available."
     case .invalidResponse: "The connected workspace returned an unreadable response."
     case .responseTooLarge: "This response exceeds the client download limit."
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
     case .memberUnknown: "The device you reached doesn’t recognize this one yet. It learns about it after it syncs with a Mac you paired with."
-    case .updateRequired(let message): message + " On a Mac, open Settings → Updates and update everything."
     }
   }
 }
@@ -152,14 +148,14 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
                           performer: (any MobileHTTPPerforming)? = nil) async throws -> MobileCredential {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
     let transport = try HTTPSLibraryTransport(credential: provisional, metadata: metadata, performer: performer)
-    var request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: true)
+    var request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: true)
     // The Mac signs an `ios` member entry for this key; the phone then signs
     // its requests to every Mac and Linux member, whichever is online.
     request.memberPublicKey = memberPublicKey
     let result: PairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
-    guard result.protocolVersion == LibraryProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
-    guard expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
-      result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
+    // The Mac answers for this device and library, and adds the device only once it confirms.
+    guard result.deviceID == deviceID, expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
+      result.confirmationRequired == true else { throw MobileConnectionError.invalidResponse }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
       token: result.credential, confirmationPending: result.confirmationRequired,
       hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil },
@@ -175,12 +171,12 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     let negotiated = try await mcpConnections.connect(conversationID) { [self] in
       let initialize: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()),
         "method": .string("initialize"), "params": .object(["protocolVersion": .string(WovenMCPServer.protocolVersion),
-          "capabilities": .object([:]), "clientInfo": .object(["name": .string("woven-ios"), "version": .string("1.0.0")])])])
+          "capabilities": .object([:]), "clientInfo": .object(["name": .string("woven-ios"), "version": .string(WovenMCPServer.releaseVersion)])])])
       let (bytes, response) = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialize),
         maximumBytes: 1_048_576, timeout: 30, headers: initializationHeaders)
       let reply = try JSONDecoder().decode(JSONValue.self, from: bytes)
       guard let version = reply.objectValue?["result"]?.objectValue?["protocolVersion"]?.stringValue,
-            WovenMCPServer.supportedProtocolVersions.contains(version) else { throw MobileConnectionError.versionMismatch }
+            WovenMCPServer.supportedProtocolVersions.contains(version) else { throw MobileConnectionError.invalidResponse }
       let sessionID = response.value(forHTTPHeaderField: "MCP-Session-Id")
       if let sessionID, sessionID.count > 512 || sessionID.contains("\r") || sessionID.contains("\n") { throw MobileConnectionError.invalidResponse }
       var notificationHeaders = initializationHeaders
@@ -200,20 +196,17 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
   public func readWorkspace(_ value: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {
     let hello: LibraryHello = try await request("v1/hello")
-    guard hello.protocolVersion == LibraryProtocol.version else { throw MobileConnectionError.versionMismatch }
     // A signed host connection reports its own library ID; the store binds or rebinds.
     guard (signer != nil && credential.workspaceID.isEmpty) || hello.workspaceID == credential.workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     return hello.workspaceID
   }
   /// Members with endpoints, as this host resolves them.
   public func members() async throws -> MobileLibraryMemberList { try await request("v1/members", timeout: 15) }
-  /// Every peer's synchronization state on this host, for "Update everything".
+  /// Every peer's synchronization state on this host, shown beside each device.
   public func syncStatus() async throws -> MobileLibrarySyncStatus { try await request("v1/sync/status", timeout: 15) }
   /// A short reachability and identity probe used when choosing a library host.
   public func probe(timeout: TimeInterval = 8) async throws -> LibraryHello {
-    let hello: LibraryHello = try await request("v1/hello", timeout: timeout)
-    guard hello.protocolVersion == LibraryProtocol.version else { throw MobileConnectionError.versionMismatch }
-    return hello
+    try await request("v1/hello", timeout: timeout)
   }
   public func snapshot() async throws -> LibrarySnapshot { try await request("v1/snapshot") }
   public func changes(after: Int64) async throws -> LibraryChangePage { try await request("v1/changes", query: [.init(name: "after", value: String(after)), .init(name: "limit", value: "200")]) }
@@ -251,7 +244,6 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     var request = URLRequest(url: components.url!)
     if let timeout { request.timeoutInterval = timeout }
     request.httpMethod = method; request.httpBody = body
-    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     if let deviceMetadata {
       request.setValue(deviceMetadata.kind.rawValue, forHTTPHeaderField: "X-Woven-Device-Kind")

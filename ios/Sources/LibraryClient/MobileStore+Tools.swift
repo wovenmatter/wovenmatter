@@ -7,7 +7,7 @@ extension MobileStore {
   public func executeLocalTool(_ request: WovenMatterToolRequest, context: MobileToolContext) async -> WovenMatterToolResponse {
     do {
       try Task.checkCancellation()
-      guard request.schemaVersion == 1, let uuid = UUID(uuidString: request.requestID) else { throw WorkspaceToolError.invalid("Unsupported tool request.") }
+      guard let uuid = UUID(uuidString: request.requestID) else { throw WorkspaceToolError.invalid("Unsupported tool request.") }
       let command = try WovenMatterToolCommand(request.arguments)
       if let id = command.options["request-id"], UUID(uuidString: id) != uuid { throw WorkspaceToolError.invalid("--request-id must match the request envelope.") }
       try context.authorize(command)

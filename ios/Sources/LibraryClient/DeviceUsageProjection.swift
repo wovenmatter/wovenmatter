@@ -7,7 +7,7 @@ import WovenMatterShared
 public enum DeviceUsageProjection {
   public static func samples(in journal: WorkspaceJournalState, workspaceID: String, from: Date, to: Date) throws -> [LibraryUsageSample] {
     let entries = journal.entries.values.filter {
-      $0.workspaceID == workspaceID && $0.kind == .nativeRecord && $0.nativeRecord?.format == "pi-durable.entry.v1"
+      $0.workspaceID == workspaceID && $0.kind == .nativeRecord && ($0.nativeRecord?.format).map(NativeRecordFormat.piDurableEntry.matches) == true
     }
     let records = Dictionary(grouping: entries, by: { $0.nativeRecord!.recordID })
     var latest: [String: (sequence: Int64, conversation: String, record: [String: Any])] = [:]
