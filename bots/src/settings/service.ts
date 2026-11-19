@@ -50,6 +50,8 @@ export type SettingsOptions = {
   /** The search provider selected in Woven settings. */
   readonly searchProvider?: () => Promise<SearchProviderId | undefined>;
   readonly modelLimit?: (ref: string) => LimitEntry | undefined;
+  /** Load Pi's live model catalog before a model list is read (never throws). */
+  readonly refreshModels?: () => Promise<void>;
 };
 
 /**
@@ -121,6 +123,7 @@ export class SettingsService {
     reasoningLevels: readonly string[];
   }> {
     const models = this.#options.models;
+    await this.#options.refreshModels?.();
     const available = await models.getAvailable();
     const byProvider = new Map<string, ProviderModels>();
     for (const model of available) {

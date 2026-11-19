@@ -1640,7 +1640,9 @@ Changed:
   model (`main: ""` on the wire) and no title model (titles then use the default
   profile's main model). `onboarding.status` reports `needed` until Admin Bot's
   profile has a signed-in main model; the app's chooser lists every connected
-  model, newest first, and saves the user's pick with `onboarding.setMainModel`,
+  model (Pi's live catalog, read as `DISTRIBUTED_CLIENT_ARCHITECTURE.md`
+  "Provider model metadata" describes, with the list pi-ai ships only as the
+  fallback), newest first, and saves the user's pick with `onboarding.setMainModel`,
   which then starts Admin Bot's greeting once (a hidden input, only while its
   main channel is empty). A bot whose profile has no main model refuses
   `message.send`. Bot messages may link to `wovenmatter://settings/accounts` and

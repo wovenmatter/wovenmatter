@@ -150,9 +150,15 @@ shard directly, avoiding the service’s version-normalization redirect while re
 representation; both loaders explicitly retain only supported chat APIs. Native
 API-key xAI connections retain the `xai-api` identity while fetching the `xai` shard. Device Claude subscriptions retain `claude-subscription` while fetching the `anthropic` shard.
 
-The native cache and the shared desktop/remote cache store bounded provider files
+The bots runtime reads the same shards for the providers its bots use, through
+pi-ai's own model refresh hook: the list pi-ai ships is only what a bot host has
+before its first catalog arrives, or while it is offline.
+
+The native cache, the shared desktop/remote cache and the bots runtime's cache
+(`provider-models/` in its data folder) store bounded provider files
 with ETag, Last-Modified and a four-hour freshness window. They perform no launch
-fetch or polling. Refresh happens only while browsing a provider or resolving an
+fetch or polling. Refresh happens only while browsing a provider (for bots: whenever a model list
+is read, in first-run setup, Settings or by Admin Bot) or resolving an
 uncached selected descriptor; cached selections remain usable during catalog
 outages. Refresh/retry is explicit after a first-load failure. Public metadata
 requests contain no credentials, cookies, account/device IDs or inference input,
