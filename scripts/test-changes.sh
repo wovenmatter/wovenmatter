@@ -19,8 +19,18 @@ for path in sys.argv[1:]:
   echo 'Static checks passed.'
 }
 
+# Sync, sessions and server-to-server tests for protocol/, library/ and
+# server/. They use a stand-in runtime and stand-in tailnet.
+run_foundation_tests() {
+  swift test --package-path server
+}
+
 case "${1:---all}" in
-  --ci|--all) run_static_checks ;;
+  --ci) run_static_checks ;;
+  --all)
+    run_static_checks
+    run_foundation_tests
+    ;;
   *)
     echo 'usage: scripts/test-changes.sh [--all|--ci]' >&2
     exit 64
