@@ -28,7 +28,7 @@ in your installed version.
 
 ### Your devices
 
-- [Apple devices](guide/apple-devices.md): pair Macs, keep the library in sync, and the iPhone app (beta).
+- [Apple devices](guide/apple-devices.md): your Macs and the library they share.
 - [Remote workspaces](guide/remote-workspaces.md): add a Linux host and run agents there.
 - [Bots](guide/bots.md): long-running agents, each in its own container.
 - [Updates](guide/updates.md): versions and updates for every device and harness in one place.
@@ -36,56 +36,19 @@ in your installed version.
 
 ## Architecture
 
-- [Woven everywhere](architecture/WOVEN_EVERYWHERE.md): devices, membership, library sync, streaming, and bots.
-- [Paired libraries and execution workspaces](DISTRIBUTED_CLIENT_ARCHITECTURE.md): the storage, execution, and sync contract.
-- [Paired Mac libraries](PAIRED_MAC_LIBRARIES.md): pairing, sync, upgrade, and recovery between Macs.
-- [Conversation streaming](CONVERSATION_STREAMING.md): how live sessions reach every window and device.
-- [Background execution](architecture/BACKGROUND_EXECUTION.md): the background server and work that continues while the window is closed.
-- [Project roots and managed data](WORKSPACE_DATA_MODEL.md): folders, roots, and managed datasets.
-- [Session creation](SESSION_CREATION.md): how a new chat captures its defaults.
-- [Active-run steering](architecture/active-run-steering.md): sending to a session while it is working.
-- [Pi Durable execution storage](architecture/PI_DURABLE_STORAGE.md)
-- [Default agent credentials](architecture/DEFAULT_AGENT_CREDENTIALS.md)
-- [GitHub key and git identity](architecture/GITHUB_IDENTITY.md): Settings → GitHub on every machine, session and bot.
-- [Internal database concurrency](architecture/ASYNC_DATABASE.md)
-- [Chat HTML rendering](architecture/CHAT_HTML_RENDERING.md)
+- [Architecture](ARCHITECTURE.md): the library, the background server and the UI, and the rules they keep.
 - [Shared workspace browser](design/embedded-browser.md)
 
 ## References
 
-### Agents and tools
-
-- [Woven MCP agent tools](AGENT_TOOLS.md): tools, access, outside agents, and bot keys.
-- [Native Woven instructions](NATIVE_INSTRUCTIONS.md)
-- [Program status](program-status.md): the session status vocabulary.
 - [Mac access and credentials](MAC_ACCESS.md): Permissions & Access, Keychain, and browser credentials.
-- [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
-- [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
-- [Pages](PAGES.md): components, agent editing, and how concurrent edits merge.
 - [Chat and note menu actions](CHAT_MENU_ACTIONS.md)
 - [Document preview tabs](DOCUMENT_PREVIEWS.md)
-- [Finding and setting up Macs](APPLE_DEVICE_SETUP.md)
-
-### Linux hosts
-
-- [Native Linux hosts](reference/REMOTE_HOSTS.md): install, layout, permissions, and lifecycle.
-- [Linux host validation](reference/REMOTE_HOST_VALIDATION.md)
-- [Remote browser performance](reference/REMOTE_BROWSER_PERFORMANCE.md)
-- [Remote database limits](reference/REMOTE_DATABASES.md)
-
-### iPhone app (beta)
-
-- [iOS app](../ios/README.md): building, TestFlight, and structure.
-- [Quick Chat lifecycle](IOS_CONTINUED_EXECUTION.md)
-- [iOS Pi Durable runtime](../ios/Runtime/README.md)
-- [Embedded execution test package](IOS_EMBEDDED_EXECUTION.md)
 
 ## Build and contribute
 
 - [Contributing](../CONTRIBUTING.md), including documentation style
-- [Maintainer workflow](MAINTAINER_WORKFLOW.md)
 - [Dependency policy](DEPENDENCIES.md)
 - [Desktop updates](DESKTOP_UPDATES.md)
-- [Distributed client acceptance](DISTRIBUTED_CLIENT_TESTING.md)
 - [UI style guide](STYLE_GUIDE.md) and [app icons](app-icons/README.md)
 - [Product analytics](analytics/README.md)
