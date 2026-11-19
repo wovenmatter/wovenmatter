@@ -145,11 +145,13 @@ def copy_assets(source, target, content_addressed=False):
         raise ValueError(f"Unsupported snapshot asset: {source}")
 
 
-# A library from before the versioned schema (v0.4.2 and the builds after
-# it) used these names. The app renames them in place on open
+# A library v0.4.2 or an earlier release wrote used these names. The app
+# renames them in place on open
 # (app/Sources/WovenMatterLibraryStore/LibrarySchemaUpgrade.swift) and
 # converts the columns; a snapshot of such a library is renamed the same way
-# first, so its isolation below sees current table names.
+# first, so its isolation below sees current table names. The app still
+# recognises the renamed copy as unconverted by its columns
+# (`hasEarlierShapeUnlocked`) and converts it when it opens.
 LEGACY_TABLES = {
     "dashboard_agents": "agents", "dashboard_conversations": "conversations", "dashboard_messages": "messages",
     "dashboard_message_attachments": "message_attachments", "dashboard_message_references": "message_references",

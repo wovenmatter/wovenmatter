@@ -66,10 +66,11 @@ import WovenMatterCore
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
     #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
-    // Neither has a table under an earlier name left, which is what a later
-    // open looks for: the conversion does not run again. No number says so.
+    // Neither has a table name or a column of v0.4.2 left, which is what a
+    // later open looks for: the conversion does not run again. No number
+    // says so.
     for database in [library, current] {
-      #expect(try await !database.read { try $0.hasEarlierTableNamesUnlocked() })
+      #expect(try await !database.read { try $0.hasEarlierShapeUnlocked() })
     }
     // Opening it again changes nothing.
     let reopened = try await schema(WorkspaceDatabase(url: upgraded.databaseURL))
@@ -395,22 +396,22 @@ import WovenMatterCore
   /// and a number an earlier release left there is neither read nor changed:
   /// what a library needs is told from its shape alone.
   @Test func theLibraryNeitherWritesNorReadsAVersionNumber() async throws {
-    let fresh = try PersistenceFixture(), stamped = try PersistenceFixture(), converted = try v042Library()
-    defer { fresh.remove(); stamped.remove(); converted.remove() }
-    for library in [fresh, stamped, converted] {
+    let fresh = try PersistenceFixture(), numbered = try PersistenceFixture(), converted = try v042Library()
+    defer { fresh.remove(); numbered.remove(); converted.remove() }
+    for library in [fresh, numbered, converted] {
       _ = try UsageStore(databaseURL: library.databaseURL)
       do { _ = try await WorkspaceDatabase(url: library.databaseURL) }
       #expect(try scalar(library.databaseURL, "PRAGMA user_version") == 0)
     }
     // Whatever number a file carries, it opens the same way, in every role, and keeps it.
-    try PersistenceSQL(url: stamped.databaseURL).execute("PRAGMA busy_timeout=30000; PRAGMA user_version=3;")
-    let objects = try scalar(stamped.databaseURL, "SELECT count(*) FROM sqlite_master")
+    try PersistenceSQL(url: numbered.databaseURL).execute("PRAGMA busy_timeout=30000; PRAGMA user_version=3;")
+    let objects = try scalar(numbered.databaseURL, "SELECT count(*) FROM sqlite_master")
     for readOnly in [false, true] {
-      _ = try UsageStore(databaseURL: stamped.databaseURL, readOnly: readOnly)
-      do { _ = try await WorkspaceDatabase(url: stamped.databaseURL, readOnlyProjection: readOnly) }
+      _ = try UsageStore(databaseURL: numbered.databaseURL, readOnly: readOnly)
+      do { _ = try await WorkspaceDatabase(url: numbered.databaseURL, readOnlyProjection: readOnly) }
     }
-    #expect(try scalar(stamped.databaseURL, "PRAGMA user_version") == 3)
-    #expect(try scalar(stamped.databaseURL, "SELECT count(*) FROM sqlite_master") == objects)
+    #expect(try scalar(numbered.databaseURL, "PRAGMA user_version") == 3)
+    #expect(try scalar(numbered.databaseURL, "SELECT count(*) FROM sqlite_master") == objects)
   }
 
   /// Opening a library that needs a rewriting upgrade publishes how far it
@@ -453,13 +454,18 @@ import WovenMatterCore
   @Test func theConversionCopiesTheLibraryFirstAndTheCopyExpires() async throws {
     let upgraded = try v042Library(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
     let copies = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
-    let copy = copies.appending(path: WorkspaceDatabaseConnection.libraryBackupName)
+    func made() throws -> [URL] {
+      try FileManager.default.contentsOfDirectory(at: copies, includingPropertiesForKeys: nil)
+        .filter { $0.lastPathComponent.hasPrefix("before-library-conversion-") && $0.pathExtension == "sqlite" }.sorted { $0.path < $1.path }
+    }
     do {
       // The usage index is open, as in the app, while the library converts.
       let usage = try UsageStore(databaseURL: upgraded.databaseURL); _ = try UsageStore(databaseURL: fresh.databaseURL)
       _ = try await WorkspaceDatabase(url: upgraded.databaseURL); _ = try await WorkspaceDatabase(url: fresh.databaseURL)
       withExtendedLifetime(usage) {}
     }
+    #expect(try made().count == 1)
+    let copy = try #require(try made().first)
     // The copy is the library as v0.4.2 left it.
     #expect(try scalar(copy, "SELECT count(*) FROM sqlite_master WHERE name='dashboard_conversations'") == 1)
     #expect(try scalar(copy, "SELECT count(*) FROM dashboard_runs") == 5)
@@ -472,11 +478,112 @@ import WovenMatterCore
     let earlier = copies.appending(path: "before-library-version-2.sqlite")
     try FileManager.default.copyItem(at: copy, to: earlier)
     do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
+    // A converted library opening again converts nothing, so it copies nothing.
+    #expect(try made() == [copy])
     #expect(FileManager.default.fileExists(atPath: copy.path) && FileManager.default.fileExists(atPath: earlier.path))
     let old = Date().addingTimeInterval(-WorkspaceDatabaseConnection.libraryBackupRetention - 60)
     for file in [copy, earlier] { try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file.path) }
     do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
     #expect(!FileManager.default.fileExists(atPath: copy.path) && !FileManager.default.fileExists(atPath: earlier.path))
+
+    // An earlier release that runs on the converted library writes its own
+    // tables again. The conversion then runs once more, and makes its own
+    // copy first: what that release wrote is in it.
+    try PersistenceSQL(url: upgraded.databaseURL).execute("""
+      PRAGMA busy_timeout=30000;
+      CREATE TABLE dashboard_conversations(id TEXT PRIMARY KEY, title TEXT);
+      INSERT INTO dashboard_conversations VALUES('written-by-the-earlier-release','Kept in the copy');
+      """)
+    do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
+    let again = try made()
+    #expect(again.count == 1)
+    #expect(try scalar(try #require(again.first), "SELECT count(*) FROM dashboard_conversations WHERE id='written-by-the-earlier-release'") == 1)
+    #expect(try scalar(upgraded.databaseURL, "SELECT count(*) FROM sqlite_master WHERE name='dashboard_conversations'") == 0)
+    do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
+    #expect(try made() == again)
+  }
+
+  /// A Dev snapshot renames the tables of the library it copies before the
+  /// app opens it (`scripts/dev-build.py`), so a copy of a v0.4.2 library
+  /// arrives with current table names and v0.4.2's columns. It is still
+  /// recognised, converted once, and ends with a new library's schema.
+  @Test func aV042LibraryWhoseTablesWereAlreadyRenamedIsStillConverted() async throws {
+    let renamed = try v042Library(), fresh = try PersistenceFixture(); defer { renamed.remove(); fresh.remove() }
+    let existing = try PersistenceSQL(url: renamed.databaseURL)
+    var statements = ["PRAGMA busy_timeout=30000", "PRAGMA foreign_keys=OFF", "PRAGMA legacy_alter_table=OFF"]
+    let held = try names(renamed.databaseURL, "SELECT name FROM sqlite_master WHERE type='table'")
+    for trigger in try names(renamed.databaseURL, "SELECT name FROM sqlite_master WHERE type='trigger'") {
+      statements.append("DROP TRIGGER \"\(trigger)\"")
+    }
+    for (old, new) in WorkspaceDatabaseConnection.renamedLibraryTables where held.contains(old) {
+      statements.append(held.contains(new) ? "DROP TABLE \"\(old)\"" : "ALTER TABLE \"\(old)\" RENAME TO \"\(new)\"")
+    }
+    try existing.execute(statements.joined(separator: ";\n") + ";")
+    let now = try names(renamed.databaseURL, "SELECT name FROM sqlite_master WHERE type='table'")
+    #expect(WorkspaceDatabaseConnection.renamedLibraryTables.allSatisfy { !now.contains($0.old) })
+    #expect(now.contains("conversations"))
+
+    final class Stages: @unchecked Sendable {
+      let lock = NSLock(); var values: [LibraryUpgradeProgress.Stage] = []
+      func add(_ value: LibraryUpgradeProgress?) { lock.withLock { if let value { values.append(value.stage) } } }
+      var all: [LibraryUpgradeProgress.Stage] { lock.withLock { values } }
+    }
+    let stages = Stages()
+    LibraryUpgradeMonitor.observe(renamed.databaseURL) { stages.add($0) }
+    defer { LibraryUpgradeMonitor.observe(renamed.databaseURL, nil) }
+    // Open both the way the app does: the usage index first, then the library.
+    _ = try UsageStore(databaseURL: renamed.databaseURL)
+    _ = try UsageStore(databaseURL: fresh.databaseURL)
+    let library = try await WorkspaceDatabase(url: renamed.databaseURL)
+    let current = try await WorkspaceDatabase(url: fresh.databaseURL)
+    #expect(stages.all.contains(.converting))
+    #expect(try await !library.read { try $0.hasEarlierShapeUnlocked() })
+    let expected = try await schema(current), actual = try await schema(library)
+    #expect(actual.keys.sorted() == expected.keys.sorted())
+    for key in expected.keys.sorted() where actual[key] != expected[key] {
+      Issue.record("\(key) differs:\nconverted: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
+    }
+    #expect(try await row(library, "SELECT count(*) AS n FROM runs")["n"]?.intValue == 5)
+    // Once: the next open reports nothing.
+    let reported = stages.all.count
+    do { _ = try await WorkspaceDatabase(url: renamed.databaseURL) }
+    #expect(stages.all.count == reported)
+  }
+
+  /// A file with a table under an earlier name but no chats table holds no
+  /// library to convert, so its first open only creates the current tables.
+  /// From then on it is a library with an earlier table in it: the next open
+  /// converts it once, after copying it, and the stray table (whose current
+  /// name now exists) goes. No release ever wrote such a file.
+  @Test func aStrayEarlierTableGoesOnceTheLibraryExists() async throws {
+    let odd = try PersistenceFixture(); defer { odd.remove() }
+    try PersistenceSQL(url: odd.databaseURL).execute("""
+      CREATE TABLE dashboard_agents(id TEXT PRIMARY KEY, name TEXT);
+      INSERT INTO dashboard_agents VALUES('a','Stray');
+      """)
+    final class Seen: @unchecked Sendable {
+      let lock = NSLock(); var count = 0
+      func add() { lock.withLock { count += 1 } }
+      var total: Int { lock.withLock { count } }
+    }
+    let seen = Seen()
+    LibraryUpgradeMonitor.observe(odd.databaseURL) { _ in seen.add() }
+    defer { LibraryUpgradeMonitor.observe(odd.databaseURL, nil) }
+    let copies = WorkspaceDatabaseConnection.libraryBackupDirectory(for: odd.databaseURL)
+    do { _ = try await WorkspaceDatabase(url: odd.databaseURL) }
+    #expect(seen.total == 0 && !FileManager.default.fileExists(atPath: copies.path))
+    #expect(try scalar(odd.databaseURL, "SELECT count(*) FROM dashboard_agents WHERE id='a'") == 1)
+    do { _ = try await WorkspaceDatabase(url: odd.databaseURL) }
+    #expect(seen.total > 0)
+    let made = try FileManager.default.contentsOfDirectory(at: copies, includingPropertiesForKeys: nil).filter { $0.pathExtension == "sqlite" }
+    #expect(made.count == 1)
+    #expect(try scalar(try #require(made.first), "SELECT count(*) FROM dashboard_agents WHERE id='a'") == 1)
+    #expect(try scalar(odd.databaseURL, "SELECT count(*) FROM sqlite_master WHERE name='dashboard_agents'") == 0)
+    // Once: the third open reports nothing and copies nothing.
+    let reported = seen.total
+    do { _ = try await WorkspaceDatabase(url: odd.databaseURL) }
+    #expect(seen.total == reported)
+    #expect(try FileManager.default.contentsOfDirectory(at: copies, includingPropertiesForKeys: nil).filter { $0.pathExtension == "sqlite" }.count == 1)
   }
 
   @Test func aLongLivedV042LibraryLosesWhatOlderReleasesLeftBehind() async throws {
@@ -661,6 +768,20 @@ import WovenMatterCore
     defer { sqlite3_finalize(statement) }
     guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.step(String(cString: sqlite3_errmsg(connection))) }
     return Int(sqlite3_column_int64(statement, 0))
+  }
+
+  /// The text in the first column of every row of `sql`, read through a plain connection.
+  private func names(_ url: URL, _ sql: String) throws -> Set<String> {
+    var connection: OpaquePointer?
+    guard sqlite3_open_v2(url.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let connection else { throw WorkspaceDatabaseError.open(url.path) }
+    defer { sqlite3_close(connection) }
+    sqlite3_busy_timeout(connection, 5_000)
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK, let statement else { throw WorkspaceDatabaseError.prepare(sql) }
+    defer { sqlite3_finalize(statement) }
+    var values = Set<String>()
+    while sqlite3_step(statement) == SQLITE_ROW { if let text = sqlite3_column_text(statement, 0) { values.insert(String(cString: text)) } }
+    return values
   }
 
   private func schema(_ database: WorkspaceDatabase) async throws -> [String: String] {

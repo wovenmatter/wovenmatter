@@ -31,8 +31,9 @@ import WovenMatterCore
 /// rewrite runs over one entry per version that still matters.
 ///
 /// It runs on open, before anything else creates schema, for a library that
-/// still has a table under a name v0.4.2 used (`hasEarlierTableNamesUnlocked`),
-/// in one transaction that leaves none, so it runs once. Every trigger is
+/// still has a table under a name v0.4.2 used or a column v0.4.2 had
+/// (`hasEarlierShapeUnlocked`), in one transaction that leaves neither, so
+/// it runs once. Every trigger is
 /// dropped first, and every index of a renamed table and every index in
 /// `droppedLibraryIndexes` is dropped: the regular schema creation that
 /// follows recreates both under their current names. Each part checks what is
@@ -81,7 +82,7 @@ extension WorkspaceDatabaseConnection {
   func convertEarlierLibraryUnlocked(file: URL) throws -> Bool {
     // v0.4.2 and earlier: the names of the codebase the library came from.
     // The library is copied first, since this rewrites it.
-    let rewrites = try hasEarlierTableNamesUnlocked()
+    let rewrites = try hasEarlierShapeUnlocked()
     if rewrites {
       upgradeReporter = LibraryUpgradeReporter(file: file)
       backUpLibraryUnlocked(file)
@@ -100,17 +101,32 @@ extension WorkspaceDatabaseConnection {
   }
 
   /// Whether this is a library v0.4.2 or an earlier release wrote and that
-  /// has not been converted: one that still has a table under a name the
-  /// conversion renames (`renamedLibraryTables`). Every such release kept
-  /// its chats in `dashboard_conversations`, and the conversion leaves no
-  /// table under any of those names, so this is true exactly until it has
-  /// run. A file with no library yet (new, or holding only the usage index)
-  /// has none.
-  func hasEarlierTableNamesUnlocked() throws -> Bool {
-    let names = String(decoding: try JSONEncoder().encode(Self.renamedLibraryTables.map(\.old)), as: UTF8.self)
-    return try historyRowsUnlocked(
+  /// has not been converted. It is one if it holds chats at all (every
+  /// release kept them in `dashboard_conversations`, now `conversations`;
+  /// a file with neither, new or holding only the usage index, has no
+  /// library yet) and still has either of the two things the conversion
+  /// removes everywhere:
+  /// - a table under a name the conversion renames (`renamedLibraryTables`);
+  /// - a column the conversion renames or drops (`renamedLibraryColumns`,
+  ///   `droppedLibraryColumns`). A Dev snapshot renames the tables of the
+  ///   library it copies before the app opens it (`scripts/dev-build.py`),
+  ///   so its tables have current names and v0.4.2's columns.
+  /// The conversion leaves no such table and no such column, and no current
+  /// declaration creates one, so this is true exactly until it has run.
+  func hasEarlierShapeUnlocked() throws -> Bool {
+    func json<T: Encodable>(_ value: T) throws -> String { String(decoding: try JSONEncoder().encode(value), as: UTF8.self) }
+    guard try historyRowsUnlocked("""
+      SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name IN ('conversations','dashboard_conversations') LIMIT 1
+      """, values: []).isEmpty == false else { return false }
+    if try historyRowsUnlocked(
       "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name IN (SELECT value FROM json_each(?)) LIMIT 1",
-      values: [names]).isEmpty == false
+      values: [try json(Self.renamedLibraryTables.map(\.old))]).isEmpty == false { return true }
+    let columns = Self.renamedLibraryColumns.map { [$0.table, $0.old] }
+      + Self.droppedLibraryColumns.flatMap { entry in entry.columns.map { [entry.table, $0] } }
+    return try historyRowsUnlocked("""
+      SELECT 1 AS present FROM json_each(?) pair, pragma_table_info(json_extract(pair.value,'$[0]')) held
+      WHERE held.name=json_extract(pair.value,'$[1]') LIMIT 1
+      """, values: [try json(columns)]).isEmpty == false
   }
 
   /// One change to what a library holds: foreign keys off while tables are
@@ -129,8 +145,11 @@ extension WorkspaceDatabaseConnection {
   static let libraryBackupRetention: TimeInterval = 30 * 24 * 60 * 60
 
   /// Copies the library as it is before the conversion rewrites it
-  /// (`Library Backups/before-library-conversion.sqlite`). When the library
-  /// folds completely into its main file,
+  /// (`Library Backups/before-library-conversion-<time>.sqlite`: each
+  /// conversion makes its own copy, so one that runs again, as after an
+  /// earlier release wrote to the library in between, never passes for
+  /// the copy of the first). When the library folds completely into its
+  /// main file,
   /// that file is copied while a read transaction here keeps any other
   /// connection from checkpointing into it; on a Mac that copy is a clone
   /// that takes no time or space until the conversion changes the original. When
@@ -141,12 +160,12 @@ extension WorkspaceDatabaseConnection {
   /// `libraryBackupRetention` are removed on a later open.
   private func backUpLibraryUnlocked(_ file: URL) {
     let directory = Self.libraryBackupDirectory(for: file)
-    let copy = directory.appending(path: Self.libraryBackupName)
-    guard !FileManager.default.fileExists(atPath: copy.path) else { return }
+    let copy = directory.appending(path: Self.libraryBackupName(at: Date()))
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
       let partial = directory.appending(path: copy.lastPathComponent + ".partial")
       for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: partial.path + suffix) }
+      try? FileManager.default.removeItem(at: copy)
       let folded = try historyRowsUnlocked("PRAGMA wal_checkpoint(TRUNCATE)", values: []).first?.objectValue?["busy"]?.intValue == 0
       if folded {
         // The read transaction pins this connection to the main file as it
@@ -165,8 +184,14 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// The copy's name. Earlier releases named theirs `before-library-…` too.
-  static let libraryBackupName = "before-library-conversion.sqlite"
+  /// The name of a copy made at `time`, to the second (UTC). Earlier
+  /// releases named theirs `before-library-…` too.
+  static func libraryBackupName(at time: Date) -> String {
+    let format = DateFormatter()
+    format.locale = Locale(identifier: "en_US_POSIX"); format.timeZone = TimeZone(identifier: "UTC")
+    format.dateFormat = "yyyyMMdd-HHmmss"
+    return "before-library-conversion-\(format.string(from: time)).sqlite"
+  }
 
   /// Removes copies made before earlier conversions once they are old enough.
   static func removeExpiredLibraryBackups(for file: URL, now: Date = Date()) {
@@ -447,21 +472,26 @@ extension WorkspaceDatabaseConnection {
       for index in Self.droppedLibraryIndexes { try executeUnlocked("DROP INDEX IF EXISTS \(Self.peerQuote(index))") }
 
       var moved: [String: String] = [:]
-      for (old, new) in Self.renamedLibraryTables where tables.contains(old) {
-        // A table under its new name only exists if a partial conversion or
-        // a fresh creation already made it; it then holds the current state.
-        if tables.contains(new) {
-          try executeUnlocked("DROP TABLE \(Self.peerQuote(old))")
-          try dropPeerRecordsUnlocked(old, bookkeeping: bookkeeping)
-        } else {
-          try executeUnlocked("ALTER TABLE \(Self.peerQuote(old)) RENAME TO \(Self.peerQuote(new))")
-          for index in try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
-                                               values: [new]).compactMap({ $0.objectValue?["name"]?.stringValue }) {
-            try executeUnlocked("DROP INDEX \(Self.peerQuote(index))")
+      for (old, new) in Self.renamedLibraryTables where tables.contains(old) || tables.contains(new) {
+        if tables.contains(old) {
+          // A table under its new name only exists if a partial conversion or
+          // a fresh creation already made it; it then holds the current state.
+          if tables.contains(new) {
+            try executeUnlocked("DROP TABLE \(Self.peerQuote(old))")
+            try dropPeerRecordsUnlocked(old, bookkeeping: bookkeeping)
+          } else {
+            try executeUnlocked("ALTER TABLE \(Self.peerQuote(old)) RENAME TO \(Self.peerQuote(new))")
+            moved[old] = new
           }
-          moved[old] = new
+          tables.remove(old); tables.insert(new)
         }
-        tables.remove(old); tables.insert(new)
+        // Its indexes go whichever way it got its name (a Dev snapshot
+        // renames the tables before the app opens the copy, and its indexes
+        // keep v0.4.2's names): the regular creation recreates the current ones.
+        for index in try historyRowsUnlocked("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                                             values: [new]).compactMap({ $0.objectValue?["name"]?.stringValue }) {
+          try executeUnlocked("DROP INDEX \(Self.peerQuote(index))")
+        }
       }
       // One pass over each bookkeeping table renames every moved table, in
       // its key column and in the records it holds.
