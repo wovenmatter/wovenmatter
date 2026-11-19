@@ -1452,14 +1452,6 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
     }
 
-    func revokeExecutionDevice(configuration: RemoteWorkspaceConfiguration, deviceID: String) async throws {
-        let identity = try requestIdentity(configuration)
-        let client = try await serviceClient(for: configuration)
-        try requireCurrent(identity)
-        try await client.revokeExecutionDevice(deviceID: deviceID)
-        try requireCurrent(identity)
-    }
-
     private func refreshService(
         _ configuration: RemoteWorkspaceConfiguration, checkLatest: Bool = false
     ) async {

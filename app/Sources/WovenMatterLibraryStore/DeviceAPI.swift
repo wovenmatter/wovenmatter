@@ -36,7 +36,7 @@ private extension DeviceAPI {
               let rawGroups = request.headers["x-woven-enabled-groups"], rawGroups.utf8.count <= 512 else {
             throw LibraryAPIError(code: "invalid_request", message: "MCP requires a native conversation binding and current tool selection.")
         }
-        let groups = WorkspaceToolGroup.selected(rawGroups.split(separator: ",").map(String.init))
+        let groups = try WorkspaceToolGroup.selected(rawGroups.split(separator: ",").map(String.init))
         let message: JSONValue
         do { message = try JSONDecoder().decode(JSONValue.self, from: request.body) }
         catch { throw MCPMalformedJSON() }

@@ -219,12 +219,13 @@ import WovenMatterCore
             decodes += 1
             return NoteDocument.decode(source)
         }
-        let first = cache.value(noteID: "first", source: "Plain text note")
+        let written = try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "A note"))]).encoded()
+        let first = cache.value(noteID: "first", source: written)
         for _ in 0..<100 {
-            #expect(cache.value(noteID: "first", source: "Plain text note") == first,
+            #expect(cache.value(noteID: "first", source: written) == first,
                 "Repeated reads must preserve block identity")
-            #expect(cache.isEditable(noteID: "first", source: "Plain text note"),
-                "A plain text note should remain editable")
+            #expect(cache.isEditable(noteID: "first", source: written),
+                "A note should remain editable")
         }
         #expect(decodes == 1, "Unchanged binding reads decoded the document again")
         #expect(validations == 1, "Unchanged binding reads validated the document again")

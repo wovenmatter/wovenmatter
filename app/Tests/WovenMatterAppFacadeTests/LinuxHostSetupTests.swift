@@ -92,7 +92,6 @@ struct LinuxHostSetupTests {
         let enrolled = try await host.registerLinuxEnrollment(answer, configuration: f.remote, registered: published)
         #expect(enrolled.name == published.name && enrolled.revision == published.revision + 1)
         #expect(enrolled.endpoint == endpoint && enrolled.executionDeviceID == answer.workspace.executionDeviceID)
-        #expect(enrolled.journalDeviceIDs == [identity.hostDeviceID])
         #expect(try await row() == enrolled)
 
         let head = try await f.database.peerSyncHead()

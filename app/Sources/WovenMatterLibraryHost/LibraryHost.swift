@@ -407,7 +407,7 @@ public final class LibraryHost: @unchecked Sendable {
     guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
     guard request.body.count <= 16_384 else { return .error("too_large", "The caller registration is too large.", status: 413) }
     let registration = try JSONDecoder().decode(CallerRegistration.self, from: request.body)
-    let groups = WorkspaceToolGroup.selected(registration.enabledGroups ?? [])
+    let groups = try WorkspaceToolGroup.selected(registration.enabledGroups ?? [])
     let id = try await ensureCaller(registration.conversationID, groups: groups, title: registration.title,
       runtimeKind: registration.runtimeKind, workingDirectory: registration.workingDirectory)
     return try .json(["conversationID": id, "enabledGroups": groups.map(\.rawValue).sorted().joined(separator: ",")])
@@ -456,7 +456,7 @@ public final class LibraryHost: @unchecked Sendable {
           request.headers["x-woven-conversation-id"] != nil || request.headers["x-woven-caller"] != nil else {
       return .error("invalid_request", "MCP requires a conversation binding (or a bot caller) and its current tool selection.", status: 400)
     }
-    let groups = WorkspaceToolGroup.selected(rawGroups.split(separator: ",").map(String.init))
+    let groups = try WorkspaceToolGroup.selected(rawGroups.split(separator: ",").map(String.init))
     let message: JSONValue
     do { message = try JSONDecoder().decode(JSONValue.self, from: request.body) }
     catch { return try .json(WovenMCPServer.error(code: -32700, message: "The MCP request could not be decoded.")) }

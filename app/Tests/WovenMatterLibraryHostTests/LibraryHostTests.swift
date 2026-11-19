@@ -234,12 +234,15 @@ struct LibraryHostTests {
     // A caller without the group is refused by the shared executor's policy check.
     let narrowed = try fixture.mcp(caller, groups: "history", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
     #expect(narrowed.objectValue?["error"] != nil)
-    // A newer caller's group this build does not have is ignored: the known
-    // groups still work, and the unknown name grants nothing.
-    let newer = try fixture.mcp(caller, groups: "notes,holograms", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
-    #expect(newer.objectValue?["result"]?.objectValue?["structuredContent"]?.objectValue?["success"] == .bool(true), "\(newer)")
-    let unknownOnly = try fixture.mcp(caller, groups: "holograms", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
-    #expect(unknownOnly.objectValue?["error"] != nil)
+    // A selection that names something that is no tool group is refused, not narrowed to the groups it does name.
+    let message: JSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+                                      "params": .object(["name": .string("woven_notes_list"), "arguments": .object([:])])])
+    for groups in ["notes,holograms", "holograms"] {
+      let refused = try send("POST", "/mcp", unix: fixture.socket, headers: [
+        "Authorization": "Bearer " + fixture.token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": groups,
+        "MCP-Protocol-Version": "2025-06-18"], body: try JSONEncoder().encode(message))
+      #expect(refused.status == 400 && refused.json?.objectValue?["code"] == .string("invalid_request"), "\(groups)")
+    }
   }
 
   @Test func historyCursorsStayExactThroughJSON() async throws {

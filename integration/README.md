@@ -15,8 +15,8 @@ replies after commits and cancels an actual URLSession request while accepted
 Mac work is suspended. This suite needs permission to bind a loopback socket.
 
 It verifies offline rich note/folder capture and restart; lost mutation receipts;
-base/local/remote conflict preservation; deletion and recovery identity; workspace,
-protocol and revocation checks before outbox delivery; fresh note revisions before
+base/local/remote conflict preservation; deletion and recovery identity; workspace
+and revocation checks before outbox delivery; fresh note revisions before
 agent commands; new-session creation plus the first selected-note prompt with
 lost acknowledgements and restarts between both phases; GET-only command receipt
 recovery without automatic unsent execution; and stopped-host rejection of

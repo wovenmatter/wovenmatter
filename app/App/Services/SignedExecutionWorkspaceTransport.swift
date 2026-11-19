@@ -55,13 +55,8 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
         guard value.id == workspace.id, value.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
         return value
     }
-    /// A list the workspace answers with. An element a newer workspace wrote
-    /// and this build cannot read is dropped; the rest of the list still arrives.
-    private func list<Element: Decodable>(_ path: String) async throws -> [Element] {
-        (try await call(path) as LossyArray<Element>).wrappedValue
-    }
-    func providers() async throws -> [HarnessCapabilities] { try await list("execution/providers") }
-    func pending() async throws -> [PendingInteraction] { try await list("execution/interactions") }
+    func providers() async throws -> [HarnessCapabilities] { try await call("execution/providers") }
+    func pending() async throws -> [PendingInteraction] { try await call("execution/interactions") }
     func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
         guard command.deviceID == deviceID else { throw MobileConnectionError.revoked }
         var value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(command)) as? [String: Any] ?? [:]
@@ -75,7 +70,7 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, Exec
     func events(after: Int64) async throws -> ExecutionJournalPage {
         try await call("execution/events", query: [.init(name: "after", value: String(after))])
     }
-    func conversations() async throws -> [LibraryConversation] { try await list("execution/conversations") }
+    func conversations() async throws -> [LibraryConversation] { try await call("execution/conversations") }
     func transcript(_ id: String) async throws -> LibraryTranscript {
         try await call("execution/conversations/" + Self.safeID(id) + "/transcript")
     }

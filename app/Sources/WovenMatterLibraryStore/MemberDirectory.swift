@@ -102,7 +102,7 @@ public actor MemberDirectory {
   public func audience(for workspace: ExecutionWorkspace) async -> String? {
     guard let list = try? await list() else { return nil }
     return MemberAudience.serving(workspace, members: list.members.map {
-      .init(deviceID: $0.deviceID, kind: $0.kind, endpoints: $0.endpoints, revoked: $0.revoked)
+      .init(deviceID: $0.deviceID, kind: $0.kind, revoked: $0.revoked)
     })
   }
 

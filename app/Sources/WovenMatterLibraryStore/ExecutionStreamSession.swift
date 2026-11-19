@@ -194,8 +194,8 @@ actor StreamSession {
         drop(subscription: cancel.id)
         Task { await released(subscription) }
       }
-    // Frames a server sends, and frames this build does not know, are ignored.
-    case .hello, .response, .item, .end, .unknown: break
+    // Frames only a server sends are ignored.
+    case .hello, .response, .item, .end: break
     }
   }
 
@@ -317,8 +317,10 @@ actor StreamSession {
   }
 
   private func subscribe(_ request: StreamSubscribe) {
-    guard subscriptions[request.id] == nil else {
-      enqueue(.end(.init(id: request.id, error: .init(.invalid, "This subscription ID is already in use on this socket."))))
+    // An `end` names only an ID, so it ends the subscription that holds
+    // it: nothing more is sent under that ID, as on Linux.
+    if let existing = subscriptions[request.id] {
+      end(existing, error: .init(.invalid, "This subscription ID is already in use on this socket."))
       return
     }
     guard subscriptions.count < configuration.maximumSubscriptions else {

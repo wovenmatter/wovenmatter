@@ -731,19 +731,6 @@ final class UsageStore {
         detail TEXT NOT NULL
       );
       """)
-    // Usage rows no longer carry an account label. The usage index often opens
-    // the file before the library does (which drops it too,
-    // `convertEarlierLibraryUnlocked`), so it drops the column itself before
-    // writing rows without it.
-    if try usageEventsHaveAccountLabel() {
-      try execute("ALTER TABLE usage_events DROP COLUMN account_label")
-    }
-  }
-
-  private func usageEventsHaveAccountLabel() throws -> Bool {
-    let statement = try prepare("SELECT 1 FROM pragma_table_info('usage_events') WHERE name = 'account_label'")
-    defer { sqlite3_finalize(statement) }
-    return sqlite3_step(statement) == SQLITE_ROW
   }
 
   private func execute(_ sql: String) throws {

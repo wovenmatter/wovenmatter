@@ -1,10 +1,10 @@
 import Foundation
 
 /// How far opening a library is in converting what the previous release
-/// left in it (`convertEarlierLibraryUnlocked`). A conversion can take a
-/// while on a library of a few gigabytes, so whoever waits on the open (the
-/// background service's readiness reply) can say what is happening instead
-/// of timing out.
+/// left in it (`convertEarlierLibraryUnlocked`). A conversion changes a
+/// bounded part of the library and takes about a second; on a slow disk it
+/// can take longer, so whoever waits on the open (the background service's
+/// readiness reply) can say what is happening instead of timing out.
 public struct LibraryUpgradeProgress: Sendable, Equatable, Codable {
   public enum Stage: String, Sendable, Codable {
     /// Copying the library before the conversion rewrites it.

@@ -12,6 +12,11 @@ import CSQLite
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
+  /// A complete native record's search entry in `history_events`: its kind,
+  /// and the table its manifest says the record is kept in.
+  static let nativeRecordManifestKind = "native.federated.record"
+  static let nativeRecordStorage = "execution_native_history"
+
   func archiveLibraryNativeRecordUnlocked(_ part: NativeRecordPart, entry: ExecutionJournalEntry) throws {
     guard !part.recordID.isEmpty, part.recordID.utf8.count <= 256, !part.format.isEmpty, part.format.utf8.count <= 120,
           part.partCount > 0, part.partCount <= 65_536, part.partIndex >= 0, part.partIndex < part.partCount,
@@ -87,11 +92,11 @@ extension WorkspaceDatabaseConnection {
     // The canonical searchable archive points at the complete chunked record.
     // Only its search excerpt is bounded; retrieval uses the verified manifest.
     let manifest: [String: String] = ["workspaceID": entry.workspaceID, "recordID": part.recordID, "format": part.format,
-      "partCount": String(part.partCount), "byteCount": String(part.byteCount), "sha256": part.sha256, "storage": "execution_native_history"]
+      "partCount": String(part.partCount), "byteCount": String(part.byteCount), "sha256": part.sha256, "storage": Self.nativeRecordStorage]
     let payload = String(decoding: try JSONEncoder().encode(manifest), as: UTF8.self)
     let runtime = try federationConversationUnlocked(entry.conversationID)?.runtimeKind ?? "unknown"
     try recordHistoryUnlocked(.init(id: "federation:" + entry.workspaceID + ":" + part.recordID,
-      conversationID: entry.conversationID, runID: entry.runID, harness: runtime, kind: "native.federated.record",
+      conversationID: entry.conversationID, runID: entry.runID, harness: runtime, kind: Self.nativeRecordManifestKind,
       payload: payload, completeness: "complete", nativeSessionID: entry.conversationID, sourceConnectionID: entry.workspaceID,
       sourceID: "federation:" + entry.workspaceID, nativeRecordID: part.recordID, nativeRevisionID: part.sha256,
       contentMode: "snapshot", textContent: String(decoding: searchBytes, as: UTF8.self)))

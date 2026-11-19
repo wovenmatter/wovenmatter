@@ -55,7 +55,6 @@ final class LibraryHostController {
     private(set) var pendingPairingRequests: [PendingPairingRequest] = []
     private(set) var executionWorkspaces: [ExecutionWorkspace] = []
     private(set) var isDiscovering = false
-    private(set) var pendingDeviceRevocations: [String: [String]] = [:]
     @ObservationIgnored lazy var peerSync = PairedMacSyncController(host: self, storage: peerStorage)
     /// Device-only secrets for paired Macs.
     let peerStorage: PairedMacDeviceStorage
@@ -102,8 +101,7 @@ final class LibraryHostController {
         var describe: @MainActor (String) async throws -> Void = { _ in }
     }
     @ObservationIgnored var linuxHostSetupSteps: LinuxHostSetupSteps?
-    private var revocationRetryInProgress = false
-    private static let pendingRevocationsKey = "library.execution.pending-revocations"
+    private var installerRotationRetryInProgress = false
     private static let pendingInstallerRotationsKey = "library.execution.pending-installer-rotations"
     nonisolated static let appliedPeerRevocationsKey = "library.peers.applied-revocations"
     /// Followed by the library ID.
@@ -183,7 +181,7 @@ final class LibraryHostController {
                         throw LibraryAPIError(code: "revocation_pending", message: "This device's pairing could not yet be cancelled.")
                     }
                 },
-                discovery: { [weak self] in self?.discoveryIdentity.map { .init(identity: $0, capabilities: [PairedMacSyncController.capability]) } },
+                discovery: { [weak self] in self?.discoveryIdentity.map { .init(identity: $0) } },
                 onPair: { [weak self] in await self?.didPair() },
                 onMutation: { [weak model] in Task { await model?.refreshWorkspace() } },
                 onRequest: { [weak self] in self?.lastSeenAt = Date() },
@@ -280,7 +278,7 @@ final class LibraryHostController {
                     do { try await self.refreshExecutionRegistry() }
                     catch { self.errorMessage = error.localizedDescription }
                     await self.peerSync.synchronize()
-                    await self.retryPendingRevocations()
+                    await self.retryInstallerRotations()
                     await self.refreshStatus()
                     if let expiry = self.pairingExpiresAt, expiry <= Date() {
                         self.pairingPayload = nil; self.pairingExpiresAt = nil
@@ -441,19 +439,6 @@ final class LibraryHostController {
                 throw LibraryAPIError(code: "signing_unavailable",
                     message: "This Mac’s pairing key is unavailable, so nothing was unpaired. Make sure this Mac is unlocked, then try again.")
             }
-            // Persist the remote work list before revoking local access. An offline
-            // workspace remains explicitly pending until its token is removed.
-            if let database = model?.libraryStore?.database {
-                let descriptors = try await database.libraryExecutionWorkspaces()
-                var pending = pendingRevocations
-                let identity = try await database.libraryIdentity()
-                let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
-                let targets = descriptors.filter { $0.kind != .ios && $0.id != localID && $0.libraryID == identity.libraryID && $0.journalDeviceIDs.contains(deviceID) }.map(\.id)
-                let workspaceIDs = Array(Set((pending[deviceID] ?? []) + targets)).sorted()
-                if workspaceIDs.isEmpty { pending.removeValue(forKey: deviceID) }
-                else { pending[deviceID] = workspaceIDs }
-                pendingRevocations = pending
-            }
             try beforeLocalRevocation?(deviceID)
             if let signer {
                 await authentication?.useIdentity(signer)
@@ -467,8 +452,7 @@ final class LibraryHostController {
             try peerSync.revoke(deviceID)
             pairedDevices = await authentication?.devices() ?? []
             pairingPayload = nil; pairingExpiresAt = nil; lastSeenAt = nil; errorMessage = nil
-            try await removeJournalGrants(deviceID: deviceID)
-            await retryPendingRevocations()
+            await retryInstallerRotations()
         }
     }
     /// Linux hosts the removed Mac added hold that Mac's installer bearer;
@@ -482,27 +466,29 @@ final class LibraryHostController {
     }
 
     private func retryInstallerRotations() async {
-        guard let database = model?.libraryStore?.database, !pendingInstallerRotations.isEmpty else { return }
-        let workspaces = (try? await database.libraryExecutionWorkspaces()) ?? []
-        for id in pendingInstallerRotations {
-            guard let workspace = workspaces.first(where: { $0.id == id }), !workspace.deleted else {
-                pendingInstallerRotations.removeAll { $0 == id }; continue
+        guard !installerRotationRetryInProgress, let database = model?.libraryStore?.database else { return }
+        installerRotationRetryInProgress = true
+        defer { installerRotationRetryInProgress = false }
+        if !pendingInstallerRotations.isEmpty {
+            let workspaces = (try? await database.libraryExecutionWorkspaces()) ?? []
+            for id in pendingInstallerRotations {
+                guard let workspace = workspaces.first(where: { $0.id == id }), !workspace.deleted else {
+                    pendingInstallerRotations.removeAll { $0 == id }; continue
+                }
+                do {
+                    try await hostAdministration(for: workspace).rotateInstallerBearer()
+                    pendingInstallerRotations.removeAll { $0 == id }
+                } catch { /* Retained until the host answers. */ }
             }
-            do {
-                try await hostAdministration(for: workspace).rotateInstallerBearer()
-                pendingInstallerRotations.removeAll { $0 == id }
-            } catch { /* Retained until the host answers. */ }
         }
+        let pendingMessage = "Device access changes are pending on workspaces that have not reconnected yet."
+        if !pendingInstallerRotations.isEmpty { errorMessage = pendingMessage }
+        else if errorMessage == pendingMessage { errorMessage = nil }
     }
 
     private var pendingInstallerRotations: [String] {
         get { defaults.stringArray(forKey: Self.pendingInstallerRotationsKey) ?? [] }
         set { defaults.set(newValue, forKey: Self.pendingInstallerRotationsKey) }
-    }
-
-    private var pendingRevocations: [String: [String]] {
-        get { defaults.dictionary(forKey: Self.pendingRevocationsKey) as? [String: [String]] ?? [:] }
-        set { defaults.set(newValue, forKey: Self.pendingRevocationsKey) }
     }
 
     /// Test seam: carries signed requests to Linux hosts in process.
@@ -585,7 +571,6 @@ final class LibraryHostController {
             guard generation == expectedGeneration, !Task.isCancelled else { return }
             let prior = existing.first { $0.id == workspace.id }
             guard prior?.deleted != true else { continue }
-            workspace.journalDeviceIDs = prior?.journalDeviceIDs ?? []
             workspace.revision = prior?.revision ?? 0
             _ = try await database.registerExecutionWorkspace(
                 .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
@@ -739,7 +724,6 @@ final class LibraryHostController {
         guard let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) else {
             throw LibraryAPIError(code: "unavailable", message: "Only the Mac that added this Linux host enrolls its workspace.")
         }
-        try await completePendingRevocation(workspaceID: id, deviceID: identity.hostDeviceID)
         var credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
             libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
             deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
@@ -775,7 +759,6 @@ final class LibraryHostController {
         }
         let prior = try await database.libraryExecutionWorkspaces().first { $0.id == id }
         workspace.name = try await database.executionWorkspaceNames()[id] ?? configuration.name
-        workspace.journalDeviceIDs = Array(Set((prior?.journalDeviceIDs ?? []) + [identity.hostDeviceID])).sorted()
         workspace.revision = prior?.revision ?? 0
         return try await database.registerExecutionWorkspace(
             .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
@@ -803,55 +786,12 @@ final class LibraryHostController {
         executionWorkspaces = try await database.libraryConnectionWorkspaces(activeDeviceIDs: active)
     }
 
-    private func removeJournalGrants(deviceID: String) async throws {
-        guard let database = model?.libraryStore?.database else { return }
-        let identity = try await database.libraryIdentity()
-        for var workspace in try await database.libraryExecutionWorkspaces() where !workspace.deleted && workspace.libraryID == identity.libraryID && workspace.journalDeviceIDs.contains(deviceID) {
-            let revision = workspace.revision
-            workspace.journalDeviceIDs.removeAll { $0 == deviceID }
-            _ = try await database.registerExecutionWorkspace(.init(workspace: workspace, expectedRevision: revision), deviceID: identity.hostDeviceID)
-        }
-    }
-
-    /// Called only while holding the workspace operation guard. A replacement
-    /// enrollment cannot race an old revocation or inherit its pending entry.
-    private func completePendingRevocation(workspaceID: String, deviceID: String) async throws {
-        guard pendingRevocations[deviceID]?.contains(workspaceID) == true, let model else { return }
-        if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspaceID }) {
-            try await model.remoteWorkspaces.revokeExecutionDevice(configuration: configuration, deviceID: deviceID)
-        } else {
-            throw LibraryAPIError(code: "revocation_pending", message: "Reconnect this workspace before enrolling this device again.")
-        }
-        var pending = pendingRevocations
-        pending[deviceID]?.removeAll { $0 == workspaceID }
-        if pending[deviceID]?.isEmpty == true { pending.removeValue(forKey: deviceID) }
-        pendingRevocations = pending
-    }
-
-    func retryPendingRevocations() async {
-        guard !revocationRetryInProgress, model != nil else { return }
-        revocationRetryInProgress = true
-        defer { revocationRetryInProgress = false }
-        for (deviceID, ids) in pendingRevocations {
-            for id in ids where !enrollingWorkspaceIDs.contains(id) {
-                enrollingWorkspaceIDs.insert(id)
-                do { try await completePendingRevocation(workspaceID: id, deviceID: deviceID) }
-                catch { /* Retain the durable entry until its workspace acknowledges. */ }
-                enrollingWorkspaceIDs.remove(id)
-            }
-        }
-        await retryInstallerRotations()
-        let pendingMessage = "Device access changes are pending on workspaces that have not reconnected yet."
-        if !pendingRevocations.isEmpty || !pendingInstallerRotations.isEmpty { errorMessage = pendingMessage }
-        else if errorMessage == pendingMessage { errorMessage = nil }
-    }
-
     var snapshot: LibraryHostSnapshot {
         .init(isEnabled: isEnabled, isStarting: isStarting, endpoint: endpoint, status: status,
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, showsPairingResetNotice: showsPairingResetNotice, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
+              showsPairingResetNotice: showsPairingResetNotice, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
               librarySync: peerSync.syncStatus)
     }
 
@@ -860,7 +800,6 @@ final class LibraryHostController {
         do {
             try await loadAuthentication()
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
-            pendingDeviceRevocations = pendingRevocations
             if let database = model?.libraryStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
         } catch { errorMessage = error.localizedDescription }
     }
@@ -894,7 +833,6 @@ final class LibraryHostController {
             pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
-            pendingDeviceRevocations = value.pendingDeviceRevocations
             showsPairingResetNotice = value.showsPairingResetNotice
             peerPairingStatus = value.peerPairingStatus ?? ""; peerPairingError = value.peerPairingError
             projectedPeerRoutes = value.peerRoutes ?? []; discoveryIdentity = value.peerIdentity
@@ -1079,13 +1017,12 @@ struct LibraryHostSnapshot: Codable, Sendable {
     let pendingPairingRequests: [PendingPairingRequest]
     let isDiscovering: Bool
     let executionWorkspaces: [ExecutionWorkspace]
-    let pendingDeviceRevocations: [String: [String]]
     let showsPairingResetNotice: Bool
     var peerPairingStatus: String? = nil
     var peerPairingError: String? = nil
     var peerSyncErrors: [String: String]? = nil
     var peerRoutes: [PairedMacRoute]? = nil
     var peerIdentity: PairingDeviceIdentity? = nil
-    /// Every peer's synchronization state, including "update required".
+    /// Every peer's synchronization state.
     var librarySync: LibrarySyncStatus? = nil
 }

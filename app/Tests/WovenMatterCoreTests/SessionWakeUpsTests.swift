@@ -184,6 +184,48 @@ struct SessionWakeUpsTests {
     #expect(f.delivered.first?.id != f.refused.first?.id && f.delivered.first?.text == f.refused.first?.text)
   }
 
+  /// A Mac and a Linux host give one wake-up the same ID: the first sixteen
+  /// bytes of SHA-256 over `woven-session-wake-up`, a zero byte and the seed,
+  /// as a UUID of version 5 whose variant bits are `10`. The Linux server's
+  /// remote/test/session-watch.test.mjs pins the same three seeds and IDs.
+  @Test func aWakeUpHasTheSameIDOnAMacAndALinuxHost() async throws {
+    for (seed, id) in [
+      ("0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8:6f1c2a8e-58a4-4d0e-9b6b-1b2e3c4d5e6f:finished:1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b:0",
+       "102c5694-e1f8-5daf-8d78-b6afcc972008"),
+      ("woven:bot:research:6f1c2a8e-58a4-4d0e-9b6b-1b2e3c4d5e6f:needsInput:7c6b5a4f-3e2d-4c1b-9a0f-8e7d6c5b4a3f",
+       "10ad8fd9-ff95-57df-9960-5bcfd63783a8"),
+      // Hashed as UTF-8, each accented letter one scalar.
+      ("sesi\u{F3}n:\u{FC}berpr\u{FC}fung:finished:unknown:3", "1c73af16-60a8-50cb-b458-812a8a9fd766"),
+    ] {
+      #expect(SessionWakeUps.stableID(seed) == id, "\(seed)")
+    }
+
+    // The seed, as on Linux: caller, session and key, and for a conversation its attempt.
+    let f = try await Fixture(); defer { f.remove() }
+    let caller = UUID().uuidString.lowercased(), session = UUID().uuidString.lowercased()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    try await f.remember(session, caller: caller)
+    await f.observe(caller, session, "running", runID: "r1")
+    f.refuseNext = true
+    await f.emit(session, "idle")
+    f.callers[caller] = .conversation(idle: false, wokenRunsInARow: 0)
+    await f.wakeUps.deliverPending()
+    f.callers[caller] = .conversation(idle: true, wokenRunsInARow: 0)
+    await f.wakeUps.deliverPending()
+    let refused = try #require(f.refused.first), sent = try #require(f.delivered.first)
+    #expect(refused.id == SessionWakeUps.stableID("\(caller):\(session):\(refused.key):0"))
+    #expect(sent.id == SessionWakeUps.stableID("\(caller):\(session):\(sent.key):1"))
+
+    let bot = WovenMCPCaller.bot(machineID: UUID().uuidString.lowercased(), botID: UUID().uuidString.lowercased())
+    let botSession = UUID().uuidString.lowercased()
+    f.callers[bot] = .bot
+    try await f.remember(botSession, caller: bot)
+    await f.observe(bot, botSession, "running", runID: "r1")
+    await f.emit(botSession, "idle")
+    let handed = try #require(f.bots.first)
+    #expect(handed.id == SessionWakeUps.stableID("\(bot):\(botSession):\(handed.key)"))
+  }
+
   @Test func aWakeUpItsCallerCanNoLongerReceiveIsRecordedOnceAndNotTriedAgain() async throws {
     let f = try await Fixture(retryInterval: .milliseconds(20)); defer { f.remove() }
     let database = f.database

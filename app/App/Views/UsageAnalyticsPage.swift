@@ -422,7 +422,6 @@ private extension UsageDeviceSyncState {
         case .thisDevice, .synced: nil
         case .scanning: "Reading history"
         case .waiting: "Waiting to connect"
-        case .updateRequired: "Needs an update"
         case .unavailable: "Not reachable"
         }
     }
@@ -437,10 +436,6 @@ private extension UsageDeviceSummary {
         case .synced: break
         case .scanning: parts.append("This device is still reading its usage history.")
         case .waiting: parts.append("Usage from this device hasn't arrived yet.")
-        case .updateRequired:
-            parts.append(identity.kind == .linux
-                ? "Update this workspace's service in Settings to include its usage."
-                : "Update Woven Matter on this device to include its usage.")
         case .unavailable: parts.append(detail ?? "This device couldn't be reached.")
         }
         if let syncedAt {

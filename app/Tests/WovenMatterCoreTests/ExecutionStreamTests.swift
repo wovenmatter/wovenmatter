@@ -271,8 +271,7 @@ struct ExecutionStreamTests {
     guard case .conversations(let removed) = removal.payload else { return }
     #expect(removed.deletedConversationIDs == [conversation] && !removed.snapshot)
 
-    // Unknown frames are ignored, a cancelled subscription goes quiet, and the socket stays open.
-    client.sendRaw(#"{"t":"futureFrame","id":"x"}"#)
+    // A cancelled subscription goes quiet, and the socket stays open.
     client.send(.cancel(.init(id: "c")))
     client.send(.request(try .init(id: "r6", method: .executionReceipt, params: StreamReceiptParams(commandID: UUID().uuidString.lowercased()))))
     #expect(try await client.response("r6").error == nil)
@@ -607,6 +606,43 @@ struct ExecutionStreamTests {
     // One byte more closes the socket with 1009 (message too big).
     client.sendRaw(receipt("over", bytes: limit + 1))
     #expect(try await client.closed() == 1009)
+  }
+
+  @Test func aFrameTheProtocolDoesNotDefineClosesTheSocketWith4400() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let phone = try await mac.member(.ios)
+    // A type that is no frame, a frame without a key it requires, and text that is not JSON.
+    for text in [#"{"t":"later","id":"x"}"#, #"{"t":"sub","id":"s","stream":"workspace"}"#, "later"] {
+      let client = try await mac.connect(phone)
+      guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+      client.sendRaw(text)
+      #expect(try await client.closed() == 4400, "\(text)")
+    }
+  }
+
+  @Test func aSubscriptionIDAlreadyInUseEndsTheSubscriptionThatHoldsIt() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    let conversation = try await mac.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Twice", ownerDeviceID: UUID())
+    let phone = try await mac.member(.ios)
+    let client = try await mac.connect(phone)
+    guard case .hello = try await client.next() else { Issue.record("no hello"); return }
+    let subscribe = StreamFrame.subscribe(.init(id: "c", stream: .conversation, params: .init(conversationID: conversation)))
+    client.send(subscribe)
+    #expect(try await client.item("c") { $0.payload == .synchronized }.payload == .synchronized)
+
+    client.send(subscribe)
+    guard case .end(let end) = try await client.next(where: { if case .end = $0 { return true }; return false }) else { Issue.record("no end"); return }
+    #expect(end.id == "c" && end.error?.code == StreamProtocol.ErrorCode.invalid.rawValue)
+    // Nothing more is sent under the ID: a change to the chat reaches no one.
+    await mac.commands.setModel("gpt-5.5-mini")
+    mac.stream.liveStateChanged(conversationIDs: [conversation])
+    await #expect(throws: StreamTestError.self) {
+      _ = try await client.next(timeout: .milliseconds(400)) { if case .item(let item) = $0 { return item.id == "c" }; return false }
+    }
+    // The ID is free for a new subscription.
+    client.send(subscribe)
+    #expect(try await client.session("c").model == "gpt-5.5-mini")
+    client.close()
   }
 
   @Test func everySharedFixtureRoundTripsThroughTheServersEncoder() throws {

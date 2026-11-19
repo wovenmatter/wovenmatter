@@ -364,8 +364,8 @@ extension PairedLibraryTests {
     #expect(published.status == 200)
     // The managing Mac is offline; the host's library copy syncs with another Mac as the Linux member it is.
     let sender = PairedLibrarySender(deviceID: linux.id, kind: .linux, members: [
-      .init(deviceID: manager.id, kind: .mac, endpoints: [], revoked: false),
-      .init(deviceID: linux.id, kind: .linux, endpoints: [], revoked: false)])
+      .init(deviceID: manager.id, kind: .mac, revoked: false),
+      .init(deviceID: linux.id, kind: .linux, revoked: false)])
     var cursor = try await observer.database.peerSyncCursors(linux.id).pulled
     for _ in 0..<1000 {
       let page = try await linux.database.pairedLibraryPage(after: cursor)
@@ -1175,7 +1175,7 @@ extension PairedLibraryTests {
       let record = PairedLibraryRecord(table: "conversation_owners", key: "[\"\(conversation)\"]", row: [
         "id": .init(type: "text", value: conversation), "device_id": .init(type: "text", value: victim),
         "note": .init(type: "text", value: "from a later release")], deleted: false, clock: 5, origin: linux, vector: [linux: 5])
-      let sender = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, endpoints: [], revoked: false)])
+      let sender = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, revoked: false)])
       let schema = try await mac.database.pairedLibrarySchema()
       try await mac.database.receivePairedLibrary(.init(schema: schema, entries: [record], cursor: 0, hasMore: true), from: linux, sender: sender)
       #expect(try await mac.database.peerSyncWaitingForUpdate() == 1)
@@ -1188,7 +1188,7 @@ extension PairedLibraryTests {
     func owners(_ mac: Mac, _ conversation: String) async throws -> Int {
       try await mac.database.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM conversation_owners WHERE id=?", values: [conversation]).count }
     }
-    let member = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, endpoints: [], revoked: false)])
+    let member = PairedLibrarySender(deviceID: linux, kind: .linux, members: [.init(deviceID: linux, kind: .linux, revoked: false)])
     let mac = try await Mac(); defer { mac.remove() }
     let conversation = UUID().uuidString.lowercased()
     try await held(mac, conversation: conversation)
@@ -1525,7 +1525,7 @@ extension PairedLibraryTests {
     // A Linux host holds and relays the table but cannot write it.
     try await linux.database.setExecutionWorkspaceName(workspaceID: workspace.id, name: "Forged by a host")
     let sender = PairedLibrarySender(deviceID: linux.id, kind: .linux, members: [
-      .init(deviceID: a.id, kind: .mac, endpoints: [], revoked: false), .init(deviceID: linux.id, kind: .linux, endpoints: [], revoked: false)])
+      .init(deviceID: a.id, kind: .mac, revoked: false), .init(deviceID: linux.id, kind: .linux, revoked: false)])
     var cursor: Int64 = 0, relayed = false
     for _ in 0..<1000 {
       let page = try await linux.database.pairedLibraryPage(after: cursor)

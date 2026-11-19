@@ -571,8 +571,6 @@ public actor LocalUsageService {
         }
       }
       return .init(identity: identity, state: .synced, syncedAt: now)
-    } catch let error as UsageDeviceCollectionError where error == .updateRequired {
-      return .init(identity: identity, state: .updateRequired, syncedAt: previous ?? nil)
     } catch {
       return .init(identity: identity, state: .unavailable, syncedAt: previous ?? nil, detail: error.localizedDescription)
     }

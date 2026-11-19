@@ -30,8 +30,6 @@ public struct ExecutionWorkspace: Codable, Equatable, Identifiable, Sendable {
   public var name: String
   public var endpoint: URL?
   public var capabilities: [String]
-  /// Legacy observer enrollment metadata. Never grants origin-publication authority.
-  public var journalDeviceIDs: [String]
   public var revision: Int64
   public var deleted: Bool
   /// Development routes are temporary; a missing endpoint withdraws their presence.
@@ -48,10 +46,10 @@ public struct ExecutionWorkspace: Codable, Equatable, Identifiable, Sendable {
     !deleted && retainedHistory != true && (developmentInstance == nil || endpoint != nil)
   }
   public init(id: String, libraryID: String, ownerDeviceID: String, kind: Kind, name: String,
-              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil, macAccess: MacAccessStatus? = nil, folderOwnerID: String? = nil) {
+              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil, macAccess: MacAccessStatus? = nil, folderOwnerID: String? = nil) {
     self.id = id; self.libraryID = libraryID; self.ownerDeviceID = ownerDeviceID; self.kind = kind; self.name = name
     self.executionDeviceID = executionDeviceID
-    self.endpoint = endpoint; self.capabilities = capabilities; self.journalDeviceIDs = journalDeviceIDs
+    self.endpoint = endpoint; self.capabilities = capabilities
     self.revision = revision; self.deleted = deleted
     self.developmentInstance = developmentInstance; self.retainedHistory = retainedHistory
     self.macAccess = macAccess

@@ -23,7 +23,7 @@ struct PagePeerSyncTests {
     func remove() { persistence.remove() }
     func send(to other: Replica, members: [Replica]) async throws {
       let sender = isLinux ? PairedLibrarySender(deviceID: id, kind: .linux,
-        members: members.map { .init(deviceID: $0.id, kind: $0.isLinux ? .linux : .mac, endpoints: [], revoked: false) }) : nil
+        members: members.map { .init(deviceID: $0.id, kind: $0.isLinux ? .linux : .mac, revoked: false) }) : nil
       var cursor = try await other.database.peerSyncCursors(id).pulled
       for _ in 0..<1000 {
         let page = try await database.pairedLibraryPage(after: cursor)

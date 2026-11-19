@@ -324,7 +324,7 @@ private enum HostFixtureError: Error { case timeout }
         requested.append(endpoint.absoluteString + " " + path)
         if path == "discovery" && !overHTTP {
             let identity = try #require(fixture.host.peerIdentity)
-            return try JSONEncoder().encode(DiscoveryAdvertisement(identity: identity, capabilities: [PairedMacSyncController.capability]))
+            return try JSONEncoder().encode(DiscoveryAdvertisement(identity: identity))
         }
         if overHTTP || ["pair/preview", "pair", "pair/confirm"].contains(path) {
             var request = URLRequest(url: try fixture.loopbackURL(path: path))

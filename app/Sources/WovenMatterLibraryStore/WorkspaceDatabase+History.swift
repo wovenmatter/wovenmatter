@@ -9,6 +9,13 @@ import WovenMatterClient
 
 // MARK: - User-owned history (same workspace.sqlite; independent of UI projections)
 extension WorkspaceDatabaseConnection {
+  /// The text of the event `row` names that the search index holds. The
+  /// index keeps no text of its own (`content=''`), so an entry is removed
+  /// only by giving it exactly this text again.
+  static func historySearchText(_ row: String) -> String {
+    "\(row).payload||' '||coalesce(\(row).text_content,'')||' '||coalesce(\(row).projection_json,'')"
+  }
+
   func migrateWorkspaceHistory() throws {
     try transaction {
       try executeUnlocked(
@@ -47,12 +54,12 @@ extension WorkspaceDatabaseConnection {
         CREATE TRIGGER IF NOT EXISTS history_events_search_insert AFTER INSERT ON history_events
           WHEN new.kind NOT LIKE 'cli.%' BEGIN
           INSERT INTO history_search(rowid,payload)
-            VALUES(new.sequence,new.payload||' '||coalesce(new.text_content,'')||' '||coalesce(new.projection_json,''));
+            VALUES(new.sequence,\(Self.historySearchText("new")));
         END;
         CREATE TRIGGER IF NOT EXISTS history_events_search_delete AFTER DELETE ON history_events
           WHEN old.kind NOT LIKE 'cli.%' BEGIN
           INSERT INTO history_search(history_search,rowid,payload)
-            VALUES('delete',old.sequence,old.payload||' '||coalesce(old.text_content,'')||' '||coalesce(old.projection_json,''));
+            VALUES('delete',old.sequence,\(Self.historySearchText("old")));
         END;
         CREATE TABLE IF NOT EXISTS note_asset_versions(
           sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,

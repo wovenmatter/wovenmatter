@@ -265,11 +265,10 @@ struct LibraryPublisherTests {
     #expect(PairingPayload.isValidExecutionEndpoint(URL(string: "https://mac.tail.ts.net:8443/wovenmatter")!, linux: false))
   }
 
-  /// Peer sync stores a newer member's rows as they are. A reader skips
-  /// the ones it cannot read: the registry still lists every other workspace,
-  /// and a journal page names the unread record's position and moves past
-  /// it, so a reader never asks for the same page again.
-  @Test func rowsANewerMemberWroteAreSkippedAndTheJournalCursorStillAdvances() async throws {
+  /// Every device runs the same build, so a row this one cannot read is
+  /// damaged. It is neither left out nor passed over: the registry fails to
+  /// list, and the journal page that reaches the entry fails.
+  @Test func aRowThisBuildCannotReadFailsTheRegistryAndItsJournalPage() async throws {
     let f = try await Fixture(); defer { f.remove() }
     func conversation(_ sequence: Int64) -> ExecutionJournalEntry {
       let id = UUID().uuidString.lowercased()
@@ -278,7 +277,6 @@ struct LibraryPublisherTests {
     }
     let entries = (1...4).map { conversation(Int64($0)) }
     _ = try await f.database.ingestExecutionJournal(.init(libraryID: f.identity.libraryID, entries: entries), deviceID: f.workspace.executionDeviceID!)
-    let registry = try await f.database.libraryExecutionWorkspaces().map(\.id)
     let future = UUID().uuidString.lowercased()
     var row = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(f.workspace)) as? [String: Any])
     row["id"] = future; row["kind"] = "visionos"
@@ -290,29 +288,24 @@ struct LibraryPublisherTests {
                                   [future, f.identity.hostDeviceID, payload])
     }
 
-    // The registry and the connections list keep every workspace this build can read.
-    #expect(try await f.database.libraryExecutionWorkspaces().map(\.id) == registry)
-    #expect(try await f.database.libraryConnectionWorkspaces(activeDeviceIDs: []).map(\.id) == registry)
-    // A lookup that decides a write does not take the unread row for a missing one.
+    await #expect(throws: DecodingError.self) { _ = try await f.database.libraryExecutionWorkspaces() }
+    await #expect(throws: DecodingError.self) { _ = try await f.database.libraryConnectionWorkspaces(activeDeviceIDs: []) }
+    // Nor is the unread row taken for a missing one and replaced.
     await #expect(throws: DecodingError.self) { _ = try await f.database.read { try $0.federationWorkspaceUnlocked(future) } }
     var replacement = f.workspace; replacement.id = future
     await #expect(throws: DecodingError.self) {
       _ = try await f.database.registerExecutionWorkspace(.init(workspace: replacement), deviceID: f.identity.hostDeviceID)
     }
 
-    let page = try await f.database.executionJournal(after: 0)
-    #expect(page.entries.map(\.eventID) == [entries[0].eventID, entries[2].eventID])
-    #expect(page.skipped == [.init(workspaceID: f.workspace.id, originSequence: 2), .init(workspaceID: f.workspace.id, originSequence: 4)])
-    #expect(page.cursor == 4 && !page.hasMore)
-    // One row at a time: a page that holds only an unread record still advances.
-    var cursor: Int64 = 0, read: [Int64] = [], skipped: [Int64] = []
-    for _ in 0..<4 {
-      let next = try await f.database.executionJournal(after: cursor, limit: 1)
-      #expect(next.cursor == cursor + 1 && next.hasMore == (next.cursor < 4))
-      cursor = next.cursor
-      read += next.entries.map(\.originSequence); skipped += (next.skipped ?? []).map(\.originSequence)
+    // The entry before the unreadable one is served; the page that reaches it fails.
+    let first = try await f.database.executionJournal(after: 0, limit: 1)
+    #expect(first.entries.map(\.eventID) == [entries[0].eventID] && first.cursor == 1 && first.hasMore)
+    for cursor: Int64 in [0, 1] {
+      do {
+        _ = try await f.database.executionJournal(after: cursor)
+        Issue.record("A page with an unreadable entry was served.")
+      } catch let error as LibraryAPIError { #expect(error.code == "unreadable_entry") }
     }
-    #expect(read == [1, 3] && skipped == [2, 4])
     #expect(try await f.database.executionJournal(after: 4) == .init(libraryID: f.identity.libraryID, cursor: 4))
   }
 
@@ -342,12 +335,15 @@ struct LibraryPublisherTests {
     #expect(try await f.database.libraryExecutionOriginCursor(workspaceID: f.workspace.id) == 2)
   }
 
-  /// A newer caller may select a tool group this build does not have. The
-  /// name is ignored and the groups both builds know still apply.
-  @Test func anUnknownToolGroupNameIsIgnoredNotRefused() {
-    #expect(WorkspaceToolGroup.selected(["notes", " calendar ", "holograms", ""]) == [.notes, .calendar])
-    #expect(WorkspaceToolGroup.selected(["holograms"]).isEmpty)
-    #expect(WorkspaceToolGroup.selected([]).isEmpty)
+  /// A tool selection names tool groups. A name that is none is refused,
+  /// not left out.
+  @Test func aToolSelectionThatNamesNoToolGroupIsRefused() throws {
+    #expect(try WorkspaceToolGroup.selected(["notes", " calendar ", ""]) == [.notes, .calendar])
+    #expect(try WorkspaceToolGroup.selected(WorkspaceToolGroup.allCases.map(\.rawValue)) == Set(WorkspaceToolGroup.allCases))
+    #expect(try WorkspaceToolGroup.selected([]).isEmpty)
+    for names in [["holograms"], ["notes", "holograms"], ["Notes"]] {
+      #expect(throws: LibraryAPIError.self) { try WorkspaceToolGroup.selected(names) }
+    }
   }
 
   private struct Fixture {
@@ -357,7 +353,7 @@ struct LibraryPublisherTests {
       database = try await persistence.openDatabase()
       identity = try await database.libraryIdentity()
       workspace = try await database.registerExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
-        ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
+        ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
     }
     func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> LibraryHTTPRequest {

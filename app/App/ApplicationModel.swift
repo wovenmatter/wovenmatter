@@ -730,6 +730,7 @@ final class ApplicationModel {
             let journal = NoteDraftJournal(
                 fileURL: supportDirectory.appending(path: "note-draft-journal.ndjson")
             )
+            try journal.convertEarlierDocuments()
             let recoveredEntries = try journal.latestEntries()
             let writeBehind = makeNoteWriteBehind(journal: journal, database: libraryStore.database)
             noteWriteBehind = writeBehind
@@ -2092,6 +2093,7 @@ final class ApplicationModel {
 
     func configureFrontendNoteWriteBehind(store: LibraryStore, supportDirectory: URL) async throws {
         let journal = NoteDraftJournal(fileURL: supportDirectory.appending(path: "note-draft-journal.ndjson"))
+        try journal.convertEarlierDocuments()
         let recovered = try journal.latestEntries()
         let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: supportDirectory))
         let writer = NoteWriteBehind(journal: journal, update: { entry in

@@ -62,7 +62,7 @@ struct LibraryTranscriptMigrationTests {
         ["id": 1, "model": [["role": "user", "content": "Tool: this is actual user text", "timestamp": 1_000]]],
         ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "files", "name": "list_files", "arguments": [:]]], "timestamp": 2_000]]],
         ["id": 3, "model": [["role": "toolResult", "toolCallId": "files", "content": [["type": "text", "text": "[]"]], "timestamp": 3_000]]]
-      ]], conversationID: conversationID)
+      ]], conversationID: conversationID, storedRuns: .init())
     }
     func remove() { persistence.remove() }
   }

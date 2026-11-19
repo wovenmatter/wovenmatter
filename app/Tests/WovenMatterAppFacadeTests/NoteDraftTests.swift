@@ -25,6 +25,44 @@ private final class DraftFixtureStore: @unchecked Sendable {
 private enum DraftTestFailure: Error, Equatable { case conflict }
 
 struct NoteDraftTests {
+    /// Unsaved writing the 0.4.6 release left in the journal holds documents
+    /// as it wrote them. They are converted once, when the app starts, to
+    /// documents this build saves; nothing else about an entry changes, and
+    /// a journal without such an entry is not rewritten.
+    @Test func unsavedWritingThePreviousReleaseLeftIsConvertedOnce() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "woven-draft-tests-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "drafts.ndjson")
+        let current = try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Unsaved"))]).encoded()
+        let base = try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Saved"))]).encoded()
+        func earlier(_ document: String) -> String { String(document.dropLast()) + #","version":2}"# }
+        // The bytes 0.4.6 wrote: one entry a line.
+        func line(_ mutation: String, content: String, base: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["writerSessionID": "writer", "mutationID": mutation, "noteID": "note", "title": "Title",
+                "content": content, "revision": 3, "expectedRevision": "7", "baseContent": base, "baseTitle": "Title"], options: [.sortedKeys]) + Data([0x0A])
+        }
+        try (line("m1", content: earlier(current), base: earlier(base)) + line("m2", content: current, base: base)).write(to: file)
+        #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: earlier(current)) }
+
+        let journal = NoteDraftJournal(fileURL: file)
+        try journal.convertEarlierDocuments()
+        let entries = try journal.entries()
+        #expect(entries.map(\.content) == [current, current] && entries.map(\.baseContent) == [base, base])
+        #expect(entries.map(\.mutationID) == ["m1", "m2"] && entries.allSatisfy { $0.writerSessionID == "writer" && $0.expectedRevision == "7" && $0.revision == 3 })
+        #expect(try NoteDocument.editableDocument(from: entries[0].content).plainText == "Unsaved")
+        // Nothing is left to convert: the journal is not written again.
+        let converted = try Data(contentsOf: file)
+        let written = try #require(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date)
+        try journal.convertEarlierDocuments()
+        #expect(try Data(contentsOf: file) == converted)
+        #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date == written)
+        // No journal at all is nothing to convert, and none is created.
+        let none = NoteDraftJournal(fileURL: directory.appending(path: "none.ndjson"))
+        try none.convertEarlierDocuments()
+        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "none.ndjson").path))
+    }
+
     @Test func ownChainCASDelayedConflictRestartDurabilityRecoveryCopiesAndCanonicalRevision() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "woven-draft-tests-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

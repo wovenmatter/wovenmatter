@@ -58,7 +58,7 @@ struct LibraryRunControlTests {
         })
         let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-fake-provider"), arguments: [])
         let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
-        let noteID = try await database.createNote(folderID: nil, title: "Offline idea", content: "Capture once")
+        let noteID = try await database.createNote(folderID: nil, title: "Offline idea", content: try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Capture once"))]).encoded())
         let note = try #require(try await database.libraryNote(id: noteID))
         let reference = AgentMessageReferenceDraft(kind: .note, resourceID: noteID,
             titleSnapshot: note.title, contentSnapshot: note.content, revisionSnapshot: String(note.revision))

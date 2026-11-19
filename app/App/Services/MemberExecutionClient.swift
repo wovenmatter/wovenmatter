@@ -797,7 +797,7 @@ extension MemberExecutionClient {
             onLive(previous.union(value.interactions.map(\.conversationID)))
         // `journal` items come only to a subscriber that asks with `after`;
         // this Mac takes history from library sync and never asks.
-        case .journal, .conversations, .transcript, .capabilities, .session, .owner, .library, .synchronized, .serverState, .unknown:
+        case .journal, .conversations, .transcript, .capabilities, .session, .owner, .library, .synchronized, .serverState:
             break
         }
         return .accepted
@@ -835,7 +835,7 @@ extension MemberExecutionClient {
             case .synchronized:
                 stream.synchronizedConversations.insert(conversationID)
                 stream.release(conversationID)
-            case .conversations, .pending, .journal, .owner, .library, .serverState, .unknown:
+            case .conversations, .pending, .journal, .owner, .library, .serverState:
                 return .accepted
             }
         }

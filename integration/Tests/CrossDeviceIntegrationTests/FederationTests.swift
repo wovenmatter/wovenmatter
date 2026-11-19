@@ -15,10 +15,10 @@ struct FederationTests {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }
-  func register(_ db: WorkspaceDatabase, grants: [String] = []) async throws -> ExecutionWorkspace {
+  func register(_ db: WorkspaceDatabase) async throws -> ExecutionWorkspace {
     let library = try await db.libraryIdentity()
     return try await db.registerExecutionWorkspace(.init(workspace: .init(id: uuid(), libraryID: library.libraryID,
-      ownerDeviceID: owner, kind: .ios, name: "Phone", executionDeviceID: owner, journalDeviceIDs: grants)), deviceID: owner)
+      ownerDeviceID: owner, kind: .ios, name: "Phone", executionDeviceID: owner)), deviceID: owner)
   }
   func creation(_ workspace: ExecutionWorkspace, id: String? = nil, sequence: Int64 = 1) -> ExecutionJournalEntry {
     let id = id ?? uuid()
@@ -31,7 +31,7 @@ struct FederationTests {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("workspace.sqlite")
     let db = try await WorkspaceDatabase(url: url)
-    let note = try await db.createNote(folderID: nil, title: "Kept", content: "Offline writing")
+    let note = try await db.createNote(folderID: nil, title: "Kept", content: try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Offline writing"))]).encoded())
     let before = try await db.libraryNote(id: note)
     let identity = try await db.libraryIdentity()
     #expect(identity.libraryID == (try await db.libraryID()))
@@ -40,7 +40,7 @@ struct FederationTests {
     #expect(try await restarted.libraryNote(id: note) == before)
   }
 
-  @Test("registration CAS preserves owner, explicit grants and tombstones")
+  @Test("registration CAS preserves owner and tombstones")
   func registry() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -50,7 +50,6 @@ struct FederationTests {
     var changed = workspace; changed.name = "Renamed"
     await #expect(throws: LibraryAPIError.self) { try await db.registerExecutionWorkspace(.init(workspace: changed), deviceID: owner) }
     await #expect(throws: LibraryAPIError.self) { try await db.registerExecutionWorkspace(.init(workspace: changed, expectedRevision: 1), deviceID: observer) }
-    changed.journalDeviceIDs = [observer]
     let updated = try await db.registerExecutionWorkspace(.init(workspace: changed, expectedRevision: 1), deviceID: owner)
     #expect(updated.revision == 2)
     var deleted = updated; deleted.deleted = true
@@ -63,7 +62,7 @@ struct FederationTests {
   func replay() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appendingPathComponent("workspace.sqlite"); let db = try await WorkspaceDatabase(url: url)
-    let workspace = try await register(db, grants: [observer]); let event = creation(workspace)
+    let workspace = try await register(db); let event = creation(workspace)
     let batch = ExecutionJournalBatch(libraryID: workspace.libraryID, entries: [event])
     await #expect(throws: LibraryAPIError.self) { try await db.ingestExecutionJournal(batch, deviceID: observer) }
     let result = try await db.ingestExecutionJournal(batch, deviceID: owner)
@@ -121,8 +120,8 @@ struct FederationTests {
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     let bytes = Data(repeating: 42, count: 800_000); let hash = digest(bytes); let record = uuid()
-    let one = NativeRecordPart(recordID: record, format: "pi.message.v1", partIndex: 0, partCount: 2, byteCount: Int64(bytes.count), sha256: hash, data: bytes.prefix(400_000))
-    let two = NativeRecordPart(recordID: record, format: "pi.message.v1", partIndex: 1, partCount: 2, byteCount: Int64(bytes.count), sha256: hash, data: bytes.suffix(400_000))
+    let one = NativeRecordPart(recordID: record, format: NativeRecordFormat.piDurableEntry.name, partIndex: 0, partCount: 2, byteCount: Int64(bytes.count), sha256: hash, data: bytes.prefix(400_000))
+    let two = NativeRecordPart(recordID: record, format: NativeRecordFormat.piDurableEntry.name, partIndex: 1, partCount: 2, byteCount: Int64(bytes.count), sha256: hash, data: bytes.suffix(400_000))
     let e1 = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 2, conversationID: first.conversationID, kind: .nativeRecord, nativeRecord: one)
     let e2 = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 3, conversationID: first.conversationID, kind: .nativeRecord, nativeRecord: two)
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first, e1]), deviceID: owner)
@@ -139,7 +138,7 @@ struct FederationTests {
     let workspace = try await register(db), first = creation(workspace)
     var entries = [first]
     let marker = "reasoningsearchisolation"
-    let formats = ["woven-native-update-v1", "wovenmatter.activity.v1"] + Array(repeating: "wovenmatter.activity.v2", count: 12)
+    let formats = [NativeRecordFormat.nativeUpdate, .activity].map(\.name) + Array(repeating: NativeRecordFormat.chainedActivity.name, count: 12)
     var parts: [NativeRecordPart] = []
     for (index, format) in formats.enumerated() {
       let bytes = Data("{\"text\":\"\(marker)\",\"revision\":\(index)}".utf8)
@@ -160,75 +159,26 @@ struct FederationTests {
     }
   }
 
-  @Test("only the trusted host can transfer an idle configured remote session and its existing run identities")
-  func adoption() async throws {
-    let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
-    let identity = try await db.libraryIdentity(); let remoteID = UUID()
-    let descriptor = ExecutionWorkspace(id: remoteID.uuidString.lowercased(), libraryID: identity.libraryID,
-      ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Remote", executionDeviceID: uuid())
-    _ = try await db.registerExecutionWorkspace(.init(workspace: descriptor), deviceID: identity.hostDeviceID)
-    let conversationID = try await db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remoteID,
-      remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID(),
-      executionRoot: .init(folderID: nil, location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace"))
-    try await db.updateLocalACPSessionID(conversationID: conversationID, sessionID: "native-existing")
-    let run = try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Preserve this history"))
-    await #expect(throws: LibraryAPIError.self) {
-      try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
-    }
-    #expect(try await db.libraryExecutionOwner(conversationID: conversationID) == nil)
-    try await db.completeLocalACPRun(runID: run.runID)
-    await #expect(throws: LibraryAPIError.self) {
-      try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: owner)
-    }
-    let transfer = try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
-    #expect(transfer.nativeSessionID == "native-existing" && transfer.knownRunIDs == [run.runID])
-    #expect(transfer.nativeWorkingDirectory == "/workspace/projects/existing")
-    #expect(try await db.libraryExecutionOwner(conversationID: conversationID) == descriptor.id)
-    await #expect(throws: LibraryAPIError.self) {
-      try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Legacy execution must stay fenced"))
-    }
-    #expect(try await db.libraryFederatedTranscript(conversationID: conversationID)?.messages.contains(where: { $0.content == "Preserve this history" }) == true)
-    #expect(try await db.localACPSession(conversationID: conversationID).nativeSessionID == "native-existing")
-    let repeated = try await db.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
-    #expect(repeated.knownRunIDs == transfer.knownRunIDs)
-    let event = ExecutionJournalEntry(workspaceID: descriptor.id, originSequence: 1, conversationID: conversationID,
-      runID: run.runID, kind: .conversation, conversation: transfer.conversation)
-    await #expect(throws: LibraryAPIError.self) {
-      try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: identity.hostDeviceID)
-    }
-    _ = try await db.ingestExecutionJournal(.init(libraryID: identity.libraryID, entries: [event]), deviceID: try #require(descriptor.executionDeviceID))
-    #expect(try await db.libraryExecutionOriginCursor(workspaceID: descriptor.id) == 1)
-    try await db.write { connection in
-      try connection.transaction {
-        try connection.toolsExecuteUnlocked("UPDATE runs SET status='running' WHERE id=?", [run.runID])
-      }
-    }
-    let reopened = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
-    let resumed = try await reopened.prepareExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
-    #expect(resumed == transfer)
-  }
-
-  @Test("adopted legacy transcript pages advance for a single oversized message")
-  func oversizedLegacyTranscript() async throws {
+  @Test("a transcript page advances for a single oversized message")
+  func oversizedTranscript() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
     let workspace = try await register(db); let first = creation(workspace)
     _ = try await db.ingestExecutionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
-    // A message this Mac wrote before the conversation moved to its owner.
-    let legacy = LibraryTranscript(conversationID: first.conversationID, messages: [
+    // A message of the chat that is a row of this library.
+    let stored = LibraryTranscript(conversationID: first.conversationID, messages: [
       .init(id: uuid(), conversationID: first.conversationID, role: "assistant", content: String(repeating: "x", count: 5 * 1_024 * 1_024),
         status: "completed", createdAt: "2026-01-02T03:04:05.000Z")
     ])
     try await db.write { connection in
       try connection.transaction {
-        let message = legacy.messages[0]
+        let message = stored.messages[0]
         try connection.toolsExecuteUnlocked("INSERT INTO messages(id,conversation_id,role,content,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
           [message.id, first.conversationID, message.role, message.content, message.status, message.createdAt, message.createdAt])
       }
     }
     let page = try #require(try await db.libraryFederatedTranscript(conversationID: first.conversationID))
-    #expect(page.messages == legacy.messages && page.olderCursor == nil)
+    #expect(page.messages == stored.messages && page.olderCursor == nil)
   }
 
   @Test("library metadata and deletion remain authoritative until explicit restore")

@@ -40,6 +40,8 @@ import WovenMatterCore
     static let macRun = "f0000000-0000-4000-8000-000000000003"
     static let event = "9e000000-0000-4000-8000-000000000001", note = "70000000-0000-4000-8000-000000000001"
     static let artifact = "5a000000-0000-4000-8000-000000000001", macArtifact = "5a000000-0000-4000-8000-000000000002"
+    static let document = "70000000-0000-4000-8000-000000000002", otherMac = "a0000000-0000-4000-8000-000000000002"
+    static let manifest = "federation:\(currentWorkspace):rec-usage"
     static func journal(_ number: Int) -> String { String(format: "1e000000-0000-4000-8000-%012d", number) }
   }
 
@@ -49,6 +51,20 @@ import WovenMatterCore
     ("rec-activity", "wovenmatter.activity.v1", [Data(#"{"id":"a1","kind":"too"#.utf8), Data(#"l","title":"Read file"}"#.utf8)]),
     ("rec-chained", "wovenmatter.activity.v2", [Data(#"{"activity":{"id":"a1","contentIsDelta":false}}"#.utf8)]),
   ]
+
+  /// A note document as this build writes it and, with `earlier`, as the
+  /// 0.4.6 release stored it: a number under a last `version` key, before
+  /// the clocks a library host keeps after the document.
+  private static func note(_ text: String, earlier: Bool = false, clocked: Bool = false) -> String {
+    let document = #"{"blocks":[{"type":"richText","value":{"id":"b1","runs":[{"bold":false,"italic":false,"text":""# + text
+      + #"","underline":false}],"style":"paragraph"}}],"html":"","kind":"note""#
+    return document + (earlier ? #","version":2"# : "") + (clocked ? #","~sync":{"title":{"n":4,"r":"mac"}}"# : "") + "}"
+  }
+  /// A native record's search entry as an earlier build wrote it, and as this one does.
+  private static func manifest(earlier: Bool) -> String {
+    #"{"recordID":"rec-usage","storage":""# + (earlier ? "companion_native_history" : "execution_native_history")
+      + #"","format":""# + (earlier ? "pi-durable.entry.v1" : "pi-durable.entry") + #"","partCount":"1","byteCount":"38"}"#
+  }
 
   private static func sha(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
   private static func blob(_ data: Data) -> String { "X'" + data.map { String(format: "%02X", $0) }.joined() + "'" }
@@ -262,6 +278,41 @@ import WovenMatterCore
         '\(Self.sha(Data("{}".utf8)))',1);
 
       """
+    // What 0.4.6 wrote in every library: note documents with their number,
+    // in a note, a kept version of it, a version of it that waits for its
+    // bytes and one that lost a conflict; a native record's search entry
+    // under the names an earlier build gave; and bookkeeping for a table
+    // only that release declared. The triggers 0.4.6 had record the note,
+    // its version and the entry as it would have, and index the entry.
+    let large = Self.note(String(repeating: "Long. ", count: 50_000), earlier: true)
+    func version(_ table: String, _ id: String, _ content: PairedLibraryValue, bytes: Int? = nil) throws -> String {
+      var row = ["id": PairedLibraryValue(type: "text", value: id), "content": content]
+      if let bytes { row["bytes"] = .init(type: "integer", value: String(bytes)) }
+      return Self.quoted(String(decoding: try Self.json(PairedLibraryRecord(table: table, key: "[\"\(id)\"]", row: row, deleted: false, clock: 7,
+                                                                         origin: ID.otherMac, vector: [ID.otherMac: 7])), as: UTF8.self))
+    }
+    rows += """
+      INSERT INTO notes(id,title,content,created_at,updated_at)
+        VALUES('\(ID.document)','Document',\(Self.quoted(Self.note("Kept", earlier: true, clocked: true))),'1','1');
+      INSERT INTO note_asset_versions(id,note_id,title,content,revision,source,bytes,created_at)
+        VALUES('version-1','\(ID.document)','Document',\(Self.quoted(Self.note("Before", earlier: true))),'1','editor',
+          \("Document".utf8.count + Self.note("Before", earlier: true).utf8.count),'2026-11-01T00:00:00.000Z');
+      INSERT INTO peer_sync_versions(table_name,record_key,origin,clock,pending_peer,payload)
+        VALUES('notes','["\(ID.document)"]','\(ID.otherMac)',7,'\(ID.otherMac)',
+          \(try version("notes", ID.document, .init(type: "reference:text", value: Self.sha(Data(large.utf8))))));
+      INSERT INTO peer_sync_conflicts(id,table_name,record_key,origin,clock,payload)
+        VALUES('conflict-1','note_asset_versions','["version-2"]','\(ID.otherMac)',7,
+          \(try version("note_asset_versions", "version-2", .init(type: "text", value: Self.note("Theirs", earlier: true)), bytes: 500)));
+      INSERT INTO history_events(id,conversation_id,harness,kind,payload,completeness,native_record_id,text_content)
+        VALUES('\(ID.manifest)','\(ID.phoneChat)','pi','native.federated.record',\(Self.quoted(Self.manifest(earlier: true))),'complete',
+          'rec-usage','quokka wombat');
+      INSERT INTO peer_sync_seeded VALUES('execution_adoptions');
+      INSERT INTO peer_sync_versions(table_name,record_key,origin,clock,payload)
+        VALUES('execution_adoptions','["\(ID.linuxChat)"]','\(ID.otherMac)',3,'{}');
+
+      """
+    try FileManager.default.createDirectory(at: library.directory.appending(path: "paired-records"), withIntermediateDirectories: true)
+    try Data(large.utf8).write(to: library.directory.appending(path: "paired-records/" + Self.sha(Data(large.utf8))))
     let current = Self.currentEntry(sequence: 1, format: "woven-native-update-v1"), waiting = Self.currentEntry(sequence: 2, format: "woven-native-update-v1")
     rows += try Self.journalRow("execution_journal", current)
     let record = PairedLibraryRecord(table: "execution_journal", key: "[\"\(waiting.eventID)\"]", row: [
@@ -450,7 +501,7 @@ import WovenMatterCore
     for (table, kept) in [("execution_receipts", 1), ("message_provenance", 1), ("device_mutation_receipts", 1), ("device_command_receipts", 1),
                           ("device_tool_receipts", 1), ("device_calendar_receipts", 1), ("device_draft_receipts", 1),
                           ("calendar_task_executors", 1), ("calendar_run_publishers", 1), ("calendar_published_runs", 1),
-                          ("execution_adoptions", 0), ("execution_retained_settlements", 0), ("device_scheduled_mcp_callers", 0)] {
+                          ("execution_retained_settlements", 0), ("device_scheduled_mcp_callers", 0)] {
       #expect(try await rows(library, "SELECT * FROM \(table)").count == kept, "\(table)")
     }
     #expect(try await string(library, "SELECT typeof(response)||':'||response AS v FROM device_mutation_receipts") == "text:{}")
@@ -513,6 +564,73 @@ import WovenMatterCore
       #expect(record.row["fingerprint"]?.value == Data(SHA256.hash(data: try Self.json(expected, sorted: true))).map { String(format: "%02X", $0) }.joined())
     }
     #expect(try await string(library, "SELECT json_extract(payload,'$.row.format.value') AS v FROM peer_sync_versions WHERE table_name='execution_native_history'") == "woven-native-update")
+  }
+
+  @Test func whatThePreviousReleaseWroteInEveryLibraryIsConvertedAndWhatOnlyItDeclaredIsDropped() async throws {
+    let earlier = try earlierLibrary(); defer { earlier.remove() }
+    // As 0.4.6 left it: a document it stored cannot be edited, and the search index finds the entry by its earlier names.
+    #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: Self.note("Kept", earlier: true, clocked: true)) }
+    #expect(try scalar(earlier.databaseURL, "SELECT count(*) FROM history_search WHERE history_search MATCH 'companion_native_history'") == 1)
+    let recordedBefore = try scalar(earlier.databaseURL, "SELECT count(*) FROM peer_sync_versions WHERE table_name IN ('notes','note_asset_versions','history_events')")
+    let head = try scalar(earlier.databaseURL, "SELECT max(cursor) FROM peer_sync_versions")
+
+    let library = try await open(earlier)
+    // Every note document is one this build edits, clocks and all, and counts the bytes it now has.
+    for table in ["notes", "note_asset_versions"] {
+      #expect(try await rows(library, "SELECT id FROM \(table) WHERE json_valid(content) AND json_type(content,'$.version') IS NOT NULL").isEmpty, "\(table)")
+    }
+    #expect(try await string(library, "SELECT content AS v FROM notes WHERE id=?", ID.document) == Self.note("Kept", clocked: true))
+    #expect(try await string(library, "SELECT content AS v FROM notes WHERE id=?", ID.note) == "Draft")
+    #expect(try NoteDocument.editableDocument(from: Self.note("Kept", clocked: true)).encoded() == Self.note("Kept"))
+    #expect(try await rows(library, "SELECT content,bytes FROM note_asset_versions WHERE id='version-1'").first
+      == ["content": .string(Self.note("Before")), "bytes": .number(Double("Document".utf8.count + Self.note("Before").utf8.count))])
+    // So is each recorded version of them: the one this Mac applied, the one that waits for its bytes, the one that lost.
+    func recorded(_ table: String, _ source: String, _ key: String) async throws -> PairedLibraryRecord {
+      let payload = try #require(try await string(library, "SELECT payload AS v FROM \(source) WHERE table_name=? AND record_key=? ORDER BY rowid", table, "[\"\(key)\"]"))
+      return try JSONDecoder().decode(PairedLibraryRecord.self, from: Data(payload.utf8))
+    }
+    #expect(try await string(library, "SELECT json_extract(payload,'$.row.content.value') AS v FROM peer_sync_versions WHERE table_name='notes' AND record_key=? AND pending_peer IS NULL",
+                             "[\"\(ID.document)\"]") == Self.note("Kept", clocked: true))
+    let version = try await recorded("note_asset_versions", "peer_sync_versions", "version-1")
+    #expect(version.row["content"] == .init(type: "text", value: Self.note("Before")))
+    #expect(version.row["bytes"]?.value == String("Document".utf8.count + Self.note("Before").utf8.count))
+    let large = Self.note(String(repeating: "Long. ", count: 50_000))
+    let waiting = try #require(try await string(library, "SELECT payload AS v FROM peer_sync_versions WHERE table_name='notes' AND pending_peer IS NOT NULL"))
+    #expect(try JSONDecoder().decode(PairedLibraryRecord.self, from: Data(waiting.utf8)).row["content"]
+      == .init(type: "reference:text", value: Self.sha(Data(large.utf8))))
+    #expect(try String(contentsOf: earlier.directory.appending(path: "paired-records/" + Self.sha(Data(large.utf8))), encoding: .utf8) == large)
+    let lost = try await recorded("note_asset_versions", "peer_sync_conflicts", "version-2")
+    #expect(lost.row["content"]?.value == Self.note("Theirs"))
+    #expect(lost.row["bytes"]?.value == String(500 - #","version":2"#.utf8.count))
+    // None of it is a new version for peers.
+    #expect(try await rows(library, "SELECT cursor FROM peer_sync_versions WHERE table_name IN ('notes','note_asset_versions','history_events')").count == recordedBefore)
+    #expect(try await rows(library, "SELECT cursor FROM peer_sync_versions WHERE cursor>? AND table_name IN ('notes','note_asset_versions','history_events')", String(head)).isEmpty)
+
+    // The record's search entry gives the names this build writes, where it was and with every other byte as it was.
+    #expect(try await string(library, "SELECT payload AS v FROM history_events WHERE id=?", ID.manifest) == Self.manifest(earlier: false))
+    #expect(try await string(library, "SELECT json_extract(payload,'$.row.payload.value') AS v FROM peer_sync_versions WHERE table_name='history_events' AND record_key=?",
+                             "[\"\(ID.manifest)\"]") == Self.manifest(earlier: false))
+    // The search index holds its new text and none of its earlier text.
+    func found(_ words: String) async throws -> Int {
+      try await rows(library, "SELECT rowid FROM history_search WHERE history_search MATCH ? AND rowid=(SELECT sequence FROM history_events WHERE id=?)",
+                     "\"" + words + "\"", ID.manifest).count
+    }
+    for (words, hits) in [("companion_native_history", 0), ("pi-durable.entry.v1", 0), ("execution_native_history", 1), ("pi-durable.entry", 1), ("quokka wombat", 1)] {
+      #expect(try await found(words) == hits, "\(words)")
+    }
+    try await library.write { try $0.executeUnlocked("INSERT INTO history_search(history_search) VALUES('integrity-check')") }
+    // Removing the event, as the app does, removes exactly what the index holds for it.
+    try await library.write { try $0.toolsExecuteUnlocked("DELETE FROM history_events WHERE id=?", [ID.manifest]) }
+    #expect(try await rows(library, "SELECT rowid FROM history_search WHERE history_search MATCH 'quokka OR wombat OR execution_native_history OR recordID'").isEmpty)
+    try await library.write { try $0.executeUnlocked("INSERT INTO history_search(history_search) VALUES('integrity-check')") }
+
+    // What only that release declared is gone, with what peer bookkeeping named it.
+    #expect(try await rows(library, """
+      SELECT name FROM sqlite_master WHERE name='execution_adoptions' OR tbl_name='execution_adoptions' OR name LIKE '%\\_request\\_case' ESCAPE '\\'
+      """).isEmpty)
+    for table in ["peer_sync_seeded", "peer_sync_versions"] {
+      #expect(try await rows(library, "SELECT table_name FROM \(table) WHERE table_name='execution_adoptions'").isEmpty, "\(table)")
+    }
   }
 
   // MARK: Reading a library

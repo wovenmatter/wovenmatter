@@ -53,16 +53,15 @@ struct CrossDeviceFlowTests {
       var request = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + path)!)
       request.httpMethod = method; request.httpBody = body
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
       request.setValue(target, forHTTPHeaderField: "X-Woven-Workspace")
       if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
       let (data, response) = try await URLSession.shared.data(for: request)
       return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
-    let (previewData, previewStatus) = try await send("/v1/pair/preview", body: JSONEncoder().encode(pair))
+    let (previewData, previewStatus) = try await send("/pair/preview", body: JSONEncoder().encode(pair))
     #expect(previewStatus == 200)
     #expect(try JSONDecoder().decode(PairingPreview.self, from: previewData).workspaceID == target)
-    let (pairData, pairStatus) = try await send("/v1/pair", body: JSONEncoder().encode(pair))
+    let (pairData, pairStatus) = try await send("/pair", body: JSONEncoder().encode(pair))
     #expect(pairStatus == 200)
     let response = try JSONDecoder().decode(PairResponse.self, from: pairData)
     #expect(response.confirmationRequired == true)
@@ -70,12 +69,12 @@ struct CrossDeviceFlowTests {
     let pending = MobileCredential(endpoint: fixture.credential.endpoint, workspaceID: target, deviceID: device,
       token: response.credential, confirmationPending: response.confirmationRequired)
     #expect(await fixture.authentication.devices().count == 1)
-    let (_, unauthorized) = try await send("/v1/snapshot", method: "GET", token: pending.token)
+    let (_, unauthorized) = try await send("/snapshot", method: "GET", token: pending.token)
     #expect(unauthorized == 401)
     do {
       _ = try await MobilePairingCommit.complete(pending, store: phone, allowingLibraryChange: true,
         saveCredential: { saved = $0 }, confirm: {
-          let (_, status) = try await send("/v1/pair/confirm", token: pending.token)
+          let (_, status) = try await send("/pair/confirm", token: pending.token)
           #expect(status == 200)
           throw MobileConnectionError.offline // Server committed; reply was lost.
         })
@@ -85,24 +84,24 @@ struct CrossDeviceFlowTests {
     let restarted = try MobileStore(file: phoneURL)
     let committed = try await MobilePairingCommit.complete(try #require(saved), store: restarted, allowingLibraryChange: true,
       saveCredential: { saved = $0 }, confirm: {
-        let (_, status) = try await send("/v1/pair/confirm", token: pending.token)
+        let (_, status) = try await send("/pair/confirm", token: pending.token)
         #expect(status == 200)
       })
     #expect(saved?.confirmationPending == nil)
     #expect(await fixture.authentication.devices().count == 2)
     // Confirmation added the phone's member key; the bearer reads nothing.
     #expect(await fixture.members.member(device)?.kind == .ios)
-    let (_, bearerRead) = try await send("/v1/snapshot", method: "GET", token: committed.token)
+    let (_, bearerRead) = try await send("/snapshot", method: "GET", token: committed.token)
     #expect(bearerRead == 401)
     let transport = APITransport(serverURL: fixture.http.endpoint, credential: committed, member: repaired, audience: fixture.members.identity.deviceID)
     try await MobileSyncEngine(store: restarted, transport: transport).synchronize()
     #expect(try await fixture.database.libraryNote(id: note.id)?.content == note.content)
     #expect(try await fixture.database.libraryNote(id: existing) != nil)
     #expect(await restarted.snapshot().outbox.isEmpty)
-    let (_, unpairStatus) = try await send("/v1/pair/unpair", token: committed.token)
+    let (_, unpairStatus) = try await send("/pair/unpair", token: committed.token)
     #expect(unpairStatus == 200)
     #expect(await fixture.authentication.devices().count == 1)
-    let (_, revoked) = try await send("/v1/pair/confirm", token: committed.token)
+    let (_, revoked) = try await send("/pair/confirm", token: committed.token)
     #expect(revoked == 401)
   }
 
@@ -128,25 +127,24 @@ struct CrossDeviceFlowTests {
     func get(_ path: String) async throws -> (Data, Int) {
       var request = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + path)!)
       for (name, value) in try fixture.signed("GET", path) { request.setValue(value, forHTTPHeaderField: name) }
-      request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
       request.setValue(fixture.credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
       let (data, response) = try await URLSession.shared.data(for: request)
       return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
-    let (bytes, status) = try await get("/v1/assets/\(id)/linked-data?path=/etc/passwd&sql=DELETE")
+    let (bytes, status) = try await get("/assets/\(id)/linked-data?path=/etc/passwd&sql=DELETE")
     #expect(status == 200)
     let live = try JSONDecoder().decode(LinkedDataPreview.self, from: bytes)
     #expect(live.noteRevision == before.revision && live.noteID == id)
     #expect(live.rows == [["Current"]] && readLinks == [link])
-    let (_, tableStatus) = try await get("/v1/assets/\(id)/linked-data?tableID=\(table.id)")
+    let (_, tableStatus) = try await get("/assets/\(id)/linked-data?tableID=\(table.id)")
     #expect(tableStatus == 200 && readLinks == [link, tableLink])
-    let (_, missingStatus) = try await get("/v1/assets/\(id)/linked-data?tableID=unknown")
+    let (_, missingStatus) = try await get("/assets/\(id)/linked-data?tableID=unknown")
     #expect(missingStatus == 404 && readLinks.count == 2)
     #expect(try await fixture.database.libraryNote(id: id) == before)
     var remote = document
     remote.databaseLink?.sourceID = "unavailable-remote"
     let remoteID = try await fixture.database.createNote(folderID: nil, content: remote.encoded())
-    let (errorBytes, remoteStatus) = try await get("/v1/assets/\(remoteID)/linked-data")
+    let (errorBytes, remoteStatus) = try await get("/assets/\(remoteID)/linked-data")
     #expect(remoteStatus == 400)
     #expect(try JSONDecoder().decode(LibraryAPIError.self, from: errorBytes).code == "linked_data_unavailable")
   }
@@ -174,7 +172,7 @@ struct CrossDeviceFlowTests {
     let cached = try #require(await secondRestart.snapshot().notes[note.id])
     #expect(cached.revision == canonical.notes[0].revision && cached.content == content)
     #expect(try NoteDocument.editableDocument(from: cached.content).blocks.count == 2)
-    #expect(await fixture.transport.count("POST /v1/mutations") == 3)
+    #expect(await fixture.transport.count("POST /mutations") == 3)
   }
 
   @Test("desktop conflict and offline deletion retain base/local/remote writing with distinct recovery identity")
@@ -228,12 +226,11 @@ struct CrossDeviceFlowTests {
     #expect(await restarted.snapshot().conflicts[note.id]?.remote?.content == remote)
   }
 
-  @Test("workspace, protocol and revocation failures happen before offline outbox dispatch")
+  @Test("workspace and revocation failures happen before offline outbox dispatch")
   func identityBeforeMutation() async throws {
     let fixture = try await FlowFixture(); defer { fixture.remove() }
     let unauthenticatedSession = URLSession(configuration: .ephemeral)
-    var unauthenticated = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + "/v1/hello")!)
-    unauthenticated.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+    var unauthenticated = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + "/hello")!)
     unauthenticated.setValue(fixture.credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
     let (deniedBody, deniedResponse) = try await unauthenticatedSession.data(for: unauthenticated)
     unauthenticatedSession.finishTasksAndInvalidate()
@@ -254,17 +251,9 @@ struct CrossDeviceFlowTests {
     let wrongTransport = APITransport(serverURL: wrongServer.endpoint, credential: fixture.credential, member: fixture.member, audience: fixture.members.identity.deviceID)
     do { try await MobileSyncEngine(store: fixture.mobile, transport: wrongTransport).synchronize(); Issue.record("Expected workspace mismatch") }
     catch MobileConnectionError.http(409, _) {}
-    #expect(await wrongTransport.count("POST /v1/mutations") == 0)
+    #expect(await wrongTransport.count("POST /mutations") == 0)
     #expect(try await wrongDB.librarySnapshot().notes.isEmpty)
     #expect(await fixture.mobile.snapshot().outbox.count == 1)
-    for version in [1, 99] {
-      let incompatible = APITransport(serverURL: fixture.http.endpoint, credential: fixture.credential, member: fixture.member,
-        audience: fixture.members.identity.deviceID, protocolVersion: version)
-      do { try await MobileSyncEngine(store: fixture.mobile, transport: incompatible).synchronize(); Issue.record("Expected incompatible protocol") }
-      catch MobileConnectionError.http(426, _) {}
-      #expect(await incompatible.count("POST /v1/mutations") == 0)
-      #expect(await fixture.mobile.snapshot().outbox.count == 1)
-    }
     try await fixture.removeMember()
     do { try await engine.synchronize(); Issue.record("Expected revoked access") }
     catch MobileConnectionError.http(401, _) {}
@@ -301,7 +290,7 @@ struct CrossDeviceFlowTests {
     let recoveredCreate = try #require(await restarted.snapshot().launches.first)
     #expect(recoveredCreate.createReceipt?.status == .completed)
     #expect(!recoveredCreate.sendPrepared && recoveredCreate.sendReceipt == nil)
-    #expect(await fixture.transport.count("POST /v1/commands") == 1)
+    #expect(await fixture.transport.count("POST /commands") == 1)
     // Receipt recovery must not automatically send the first prompt. The user
     // can keep writing and explicitly continue with the same durable launch.
     let displayed = try #require(await restarted.snapshot().notes[note.id])
@@ -320,19 +309,19 @@ struct CrossDeviceFlowTests {
     try await finalEngine.recoverCommandReceipts()
     let recovered = try #require(await finalRestart.snapshot().launches.first)
     #expect(recovered.accepted && recovered.sendReceipt?.status == .completed)
-    #expect(await fixture.transport.count("POST /v1/commands") == 2)
+    #expect(await fixture.transport.count("POST /commands") == 2)
     let explicitRepeat = try await finalEngine.startConversation(launch)
     #expect(explicitRepeat.accepted)
-    #expect(await fixture.transport.count("POST /v1/commands") == 2)
+    #expect(await fixture.transport.count("POST /commands") == 2)
     let content = try await fixture.database.conversationContent(id: conversationID)
     #expect(content.runs.count == 1)
     #expect(content.messages.filter { $0.role == "user" }.map(\.content) == [launch.initialSend.text!])
     #expect(try await fixture.database.librarySnapshot().conversations.count == 1)
     let requests = await fixture.http.observations.requests()
-    #expect(requests.contains("POST /wovenmatter/v1/pair"))
-    #expect(requests.contains("GET /wovenmatter/v1/command-receipts/" + launch.create.commandID))
-    #expect(requests.contains("GET /wovenmatter/v1/command-receipts/" + launch.initialSend.commandID))
-    #expect(requests.allSatisfy { $0.contains(" /wovenmatter/v1/") })
+    #expect(requests.contains("POST /wovenmatter/pair"))
+    #expect(requests.contains("GET /wovenmatter/command-receipts/" + launch.create.commandID))
+    #expect(requests.contains("GET /wovenmatter/command-receipts/" + launch.initialSend.commandID))
+    #expect(requests.allSatisfy { $0.contains(" /wovenmatter/") })
   }
 
   @Test("note-bound command flushes latest note and mobile restart only GETs a lost command receipt")
@@ -353,8 +342,8 @@ struct CrossDeviceFlowTests {
     #expect(fixture.commands.boundNoteContents == [canonical.content])
     let restarted = try MobileStore(file: fixture.mobileURL)
     try await MobileSyncEngine(store: restarted, transport: fixture.transport).recoverCommandReceipts()
-    #expect(await fixture.transport.count("POST /v1/commands") == 1)
-    #expect(await fixture.transport.count("GET /v1/command-receipts/" + command.commandID) == 1)
+    #expect(await fixture.transport.count("POST /commands") == 1)
+    #expect(await fixture.transport.count("GET /command-receipts/" + command.commandID) == 1)
     #expect(await restarted.snapshot().commands.first?.receipt?.status == .completed)
     #expect(fixture.commands.received.count == 1)
   }
@@ -442,9 +431,9 @@ private final class FlowFixture {
     var pair = PairRequest(token: offer.payload.token, deviceID: member.deviceID, deviceName: "Fixture iPhone", metadata: .init(kind: .iPhone),
                            requiresConfirmation: true)
     pair.memberPublicKey = member.publicKey
-    let result = try JSONDecoder().decode(PairResponse.self, from: try await Self.post(http.endpoint, "/v1/pair", body: JSONEncoder().encode(pair)))
+    let result = try JSONDecoder().decode(PairResponse.self, from: try await Self.post(http.endpoint, "/pair", body: JSONEncoder().encode(pair)))
     // The pairing bearer only confirms; every later request is signed.
-    _ = try await Self.post(http.endpoint, "/v1/pair/confirm", body: Data("{}".utf8), bearer: result.credential, workspaceID: result.workspaceID)
+    _ = try await Self.post(http.endpoint, "/pair/confirm", body: Data("{}".utf8), bearer: result.credential, workspaceID: result.workspaceID)
     credential = MobileCredential(endpoint: endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID, token: result.credential)
     transport = APITransport(serverURL: http.endpoint, credential: credential, member: member, audience: host.hostDeviceID)
   }
@@ -452,7 +441,6 @@ private final class FlowFixture {
     var request = URLRequest(url: URL(string: server.absoluteString + path)!)
     request.httpMethod = "POST"; request.httpBody = body
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(String(LibraryProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
     if let workspaceID { request.setValue(workspaceID, forHTTPHeaderField: "X-Woven-Workspace") }
     let session = URLSession(configuration: .ephemeral)
@@ -500,9 +488,9 @@ private final class FlowHTTPServer: Sendable {
 private actor APITransport: LibraryTransport, LibraryDictationTransport {
   var dropDictation = false
   func dropNextDictationAcknowledgement() { dropDictation = true }
-  func dictationChanges(after: Int64) async throws -> DictationHistoryPage { try await request("/v1/dictations?after=\(after)") }
+  func dictationChanges(after: Int64) async throws -> DictationHistoryPage { try await request("/dictations?after=\(after)") }
   func publishDictation(_ record: DictationRecord) async throws -> DictationRecord {
-    let saved: DictationRecord = try await request("/v1/dictations", method: "POST", body: JSONEncoder().encode(record))
+    let saved: DictationRecord = try await request("/dictations", method: "POST", body: JSONEncoder().encode(record))
     if dropDictation { dropDictation = false; throw MobileConnectionError.offline }
     return saved
   }
@@ -511,15 +499,14 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
   let credential: MobileCredential
   let member: MemberIdentity
   let audience: String
-  let protocolVersion: Int
   var calls: [String: Int] = [:]
   var dropMutationResource: String?
   var dropCommand = false
   var dropCommandID: String?
-  init(serverURL: URL, credential: MobileCredential, member: MemberIdentity, audience: String, protocolVersion: Int = LibraryProtocol.version) {
+  init(serverURL: URL, credential: MobileCredential, member: MemberIdentity, audience: String) {
     precondition(serverURL.scheme == "http" && serverURL.host == "127.0.0.1" && serverURL.path == "/wovenmatter")
     precondition(PairingPayload.isValidEndpoint(credential.endpoint))
-    self.serverURL = serverURL; self.credential = credential; self.protocolVersion = protocolVersion
+    self.serverURL = serverURL; self.credential = credential
     self.member = member; self.audience = audience
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
@@ -532,25 +519,25 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
   func dropNextCommandAcknowledgement(commandID: String? = nil) {
     if let commandID { dropCommandID = commandID } else { dropCommand = true }
   }
-  func workspaceIdentity() async throws -> String { let value: LibraryHello = try await request("/v1/hello"); return value.workspaceID }
-  func snapshot() async throws -> LibrarySnapshot { try await request("/v1/snapshot") }
-  func changes(after: Int64) async throws -> LibraryChangePage { try await request("/v1/changes?after=\(after)&limit=200") }
+  func workspaceIdentity() async throws -> String { let value: LibraryHello = try await request("/hello"); return value.workspaceID }
+  func snapshot() async throws -> LibrarySnapshot { try await request("/snapshot") }
+  func changes(after: Int64) async throws -> LibraryChangePage { try await request("/changes?after=\(after)&limit=200") }
   func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult {
-    let result: LibraryMutationResult = try await request("/v1/mutations", method: "POST", body: JSONEncoder().encode(mutation))
+    let result: LibraryMutationResult = try await request("/mutations", method: "POST", body: JSONEncoder().encode(mutation))
     if dropMutationResource == mutation.resourceID { dropMutationResource = nil; throw MobileConnectionError.offline }
     return result
   }
-  func note(_ id: String) async throws -> LibraryNote { try await request("/v1/notes/\(id)") }
-  func providers() async throws -> [HarnessCapabilities] { try await request("/v1/providers") }
-  func pending() async throws -> [PendingInteraction] { try await request("/v1/pending") }
-  func transcript(_ id: String) async throws -> LibraryTranscript { try await request("/v1/sessions/\(id)/transcript") }
+  func note(_ id: String) async throws -> LibraryNote { try await request("/notes/\(id)") }
+  func providers() async throws -> [HarnessCapabilities] { try await request("/providers") }
+  func pending() async throws -> [PendingInteraction] { try await request("/pending") }
+  func transcript(_ id: String) async throws -> LibraryTranscript { try await request("/sessions/\(id)/transcript") }
   func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
-    let result: LibraryCommandReceipt = try await request("/v1/commands", method: "POST", body: JSONEncoder().encode(command))
+    let result: LibraryCommandReceipt = try await request("/commands", method: "POST", body: JSONEncoder().encode(command))
     if dropCommand || dropCommandID == command.commandID { dropCommand = false; dropCommandID = nil; throw MobileConnectionError.offline }
     return result
   }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
-    do { return try await request("/v1/command-receipts/\(id)") }
+    do { return try await request("/command-receipts/\(id)") }
     catch MobileConnectionError.http(404, _) { return nil }
   }
   private func request<Value: Decodable & Sendable>(_ path: String, method: String = "GET", body: Data = Data()) async throws -> Value {
@@ -562,7 +549,6 @@ private actor APITransport: LibraryTransport, LibraryDictationTransport {
       request.setValue(value, forHTTPHeaderField: name)
     }
     request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
-    request.setValue(String(protocolVersion), forHTTPHeaderField: "X-Woven-Protocol")
     let (bytes, response) = try await session.data(for: request)
     guard let response = response as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
     guard response.statusCode == 200 else {

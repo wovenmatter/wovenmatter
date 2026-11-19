@@ -211,10 +211,10 @@ import WovenMatterCore
 
     @Test func aFailedInputStillFlushesAnUnrelatedNote() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
-        let id = try await f.database.createNote(folderID: nil, title: "Writing", content: "Before")
+        let id = try await f.database.createNote(folderID: nil, title: "Writing", content: try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Before"))]).encoded())
         await f.model.refreshWorkspace()
         let note = try #require(f.model.workspaceOverview?.notes.first { $0.id == id })
-        f.model.updateNoteDraft(note: note, content: "Saved despite the unrelated input error")
+        f.model.updateNoteDraft(note: note, content: try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Saved despite the unrelated input error"))]).encoded())
         let failure = Task<ArtifactStateWriteResult, any Error> { throw ArtifactInputError.saveFailed }
         let key = UUID()
         f.model.artifactInputWrites[key] = failure

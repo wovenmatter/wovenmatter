@@ -448,7 +448,7 @@ extension WorkspaceDatabaseConnection {
                                 cursor: Int64?, senders: [String: PairedLibrarySender]?) throws {
     let tables = Dictionary(uniqueKeysWithValues: try peerTables().map { ($0.name, $0) })
     let sender = senders.map { $0[peer.lowercased()] ?? PairedLibrarySender(deviceID: peer, kind: .linux,
-      members: [.init(deviceID: peer.lowercased(), kind: .linux, endpoints: [], revoked: true)]) }
+      members: [.init(deviceID: peer.lowercased(), kind: .linux, revoked: true)]) }
     // Foreign references can arrive in the next bounded page. Preserve them;
     // do not let a transient missing parent discard an offline child edit.
     try executeUnlocked("PRAGMA foreign_keys=OFF")

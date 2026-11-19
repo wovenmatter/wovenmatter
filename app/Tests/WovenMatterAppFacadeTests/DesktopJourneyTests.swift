@@ -106,13 +106,14 @@ struct DesktopJourneyTests {
 
     @Test func noteActionsRespectFailedDraftBarrierThenRecoverAndRejectStaleWriter() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
-        let id = try await f.database.createNote(folderID: nil, title: "Draft", content: "Original")
+        let id = try await f.database.createNote(folderID: nil, title: "Draft", content: try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Original"))]).encoded())
         await f.model.refreshWorkspace()
         let note = try #require(f.model.workspaceOverview?.notes.first { $0.id == id })
         let originalRevision = try await f.database.noteActionRevision(id: id)
         try sql(f, "CREATE TRIGGER reject_note BEFORE UPDATE ON notes BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END")
         defer { try? sql(f, "DROP TRIGGER IF EXISTS reject_note") }
-        let content = "Acknowledged résumé 🧵\nsecond line"
+        let text = "Acknowledged résumé 🧵"
+        let content = try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: text))]).encoded()
         f.model.updateNoteDraft(note: note, content: content)
         await #expect(throws: ApplicationModelError.noteDraftSaveFailed) { try await f.model.mutateNote(id: id, mutation: .rename("Renamed")) }
         await #expect(throws: ApplicationModelError.noteDraftSaveFailed) { _ = try await f.model.exportNote(id: id) }
@@ -132,12 +133,12 @@ struct DesktopJourneyTests {
             let export = try await f.model.exportNote(id: id)
             defer { try? FileManager.default.removeItem(at: export.url) }
             let exported = try String(contentsOf: export.url, encoding: .utf8)
-            #expect(Data(exported.utf8) == Data(("# Renamed\n\n" + content + "\n").utf8))
+            #expect(Data(exported.utf8) == Data(("# Renamed\n\n" + text + "\n").utf8))
         } catch {
             #expect(sessionIsLocked(), "The export failed in an unlocked session: \(error)")
         }
         await #expect(throws: (any Error).self) {
-            _ = try await f.database.persistNoteDraft(id: id, title: "Stale", content: "Lost edit", expectedRevision: originalRevision)
+            _ = try await f.database.persistNoteDraft(id: id, title: "Stale", content: try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Lost edit"))]).encoded(), expectedRevision: originalRevision)
         }
         try await f.model.mutateNote(id: id, mutation: .moveToTrash)
         #expect(try await f.model.trashedNotes().map(\.id) == [id])

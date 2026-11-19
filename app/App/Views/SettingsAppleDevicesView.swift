@@ -22,7 +22,6 @@ struct SettingsAppleDevicesView: View {
             }
             if !host.pendingPairingRequests.isEmpty { pairingRequests }
             if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
-            if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             pairSection
             if !host.peerSyncErrors.isEmpty {
                 SettingsSection(title: "Synchronization needs attention", detail: "Local writing is saved while synchronization retries.") {
@@ -140,22 +139,6 @@ struct SettingsAppleDevicesView: View {
                         .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("devices.revoke")
                 }
                 .frame(minHeight: SettingsMetrics.rowHeight)
-            }
-        }
-    }
-
-    private var pendingRevocations: some View {
-        SettingsSection(title: "Pending revocations") {
-            ForEach(host.pendingDeviceRevocations.keys.sorted(), id: \.self) { id in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(host.pairedDevices.first { $0.id == id }?.displayName ?? "Disconnected device")
-                        .font(.settingsRow)
-                    let names = (host.pendingDeviceRevocations[id] ?? []).map { workspaceID in
-                        host.executionWorkspaces.first { $0.id == workspaceID }?.name ?? "Unavailable workspace"
-                    }
-                    Text("Waiting for " + names.joined(separator: ", "))
-                        .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
-                }
             }
         }
     }

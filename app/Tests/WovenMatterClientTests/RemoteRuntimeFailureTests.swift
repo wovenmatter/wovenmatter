@@ -21,7 +21,7 @@ struct RemoteRuntimeFailureTests {
         }
     }
 
-    @Test func unknownCodesStayReadableAndOlderMessagesPassThrough() {
+    @Test func unknownCodesStayReadableAndASentenceIsShownAsItIs() {
         #expect(!RemoteRuntimeFailure.isKnown("source_digest_required"))
         #expect(RemoteRuntimeFailure.describe("source_digest_required") == "It didn't finish (source digest required).")
         #expect(RemoteRuntimeFailure.describe("Update exited 1. network down") == "Update exited 1. network down")

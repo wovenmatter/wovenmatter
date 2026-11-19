@@ -53,6 +53,8 @@ extension WorkspaceDatabaseConnection {
           convert: { try $0.rebuildEarlierDeclarationsUnlocked() }),
     .init(name: "earlier record format names", applies: { try $0.holdsEarlierRecordFormatsUnlocked() },
           convert: { try $0.renameEarlierRecordFormatsUnlocked() }),
+    .init(name: "what the previous release wrote and declared", applies: { try $0.holdsPreviousReleaseDeclarationsUnlocked() },
+          convert: { try $0.convertPreviousReleaseContentUnlocked() }),
   ]
 
   /// Converts what the previous release left in this library, on open and

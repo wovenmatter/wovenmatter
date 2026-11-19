@@ -111,8 +111,8 @@ struct UsageDeviceCollectionTests {
   @Test("devices that can't report yet say why, instead of reading as zero")
   func reportsState() async throws {
     try await withService { service in
-      let old = await service.collectDeviceUsage(from: endpoint { _ in throw UsageDeviceCollectionError.updateRequired }, now: Self.now)
-      #expect(old.state == .updateRequired)
+      let refused = await service.collectDeviceUsage(from: endpoint { _ in throw URLError(.cannotConnectToHost) }, now: Self.now)
+      #expect(refused.state == .unavailable && refused.detail != nil)
       let scanning = await service.collectDeviceUsage(from: endpoint(Self.host) { _ in
         .init(state: .scanning, generatedAt: 0, records: [], hasMore: false, nextOffset: 0)
       }, now: Self.now)
@@ -377,7 +377,7 @@ struct UsageDeviceCollectionTests {
   @Test("out-of-bounds values from another device are dropped")
   func rejectsBadRecords() throws {
     let json = #"""
-      {"id":"a","timestamp":1790000000,"provider":"codex","sessionID":"s","accountLabel":"Unknown","model":"m",
+      {"id":"a","timestamp":1790000000,"provider":"codex","sessionID":"s","model":"m",
        "billingProvider":"p","billingRoute":"r","harness":"h","application":"a","inputTokens":-1,"cachedInputTokens":0,
        "cacheCreationTokens":0,"outputTokens":0,"reasoningTokens":0,"totalTokens":0,"requestCount":1}
       """#
@@ -389,7 +389,7 @@ struct UsageDeviceCollectionTests {
   func decodesRemotePage() throws {
     let json = #"""
       {"state":"ready","generatedAt":1790000000.5,"hasMore":false,"nextOffset":1,"records":[
-       {"id":"abc","timestamp":1790000000,"provider":"claude","sessionID":"s","accountLabel":"Unknown","model":"claude-opus-4-8",
+       {"id":"abc","timestamp":1790000000,"provider":"claude","sessionID":"s","model":"claude-opus-4-8",
         "billingProvider":"Anthropic","billingRoute":"Claude account","reasoningLevel":null,"harness":"Claude Code",
         "application":"Claude Code","agent":null,"workspace":"app","inputTokens":5,"cachedInputTokens":7,"cacheCreationTokens":2,
         "outputTokens":3,"reasoningTokens":0,"totalTokens":17,"requestCount":2,"costUSD":null,"dedupeKey":null}]}

@@ -511,7 +511,7 @@ public actor LibraryPeerSync {
 
   private func sender(_ member: LibraryMember) async throws -> PairedLibrarySender {
     .init(deviceID: member.deviceID, kind: member.kind, members: try await directory.list().members.map {
-      .init(deviceID: $0.deviceID, kind: $0.kind, endpoints: $0.endpoints, revoked: $0.revoked)
+      .init(deviceID: $0.deviceID, kind: $0.kind, revoked: $0.revoked)
     })
   }
 

@@ -28,7 +28,6 @@ public enum UsageDeviceSyncState: String, Codable, Sendable {
   case synced
   case scanning
   case waiting
-  case updateRequired
   case unavailable
 }
 
@@ -127,7 +126,6 @@ public extension UsageSample {
 
 public enum UsageDeviceCollectionError: Error, Equatable {
   case invalidPage
-  case updateRequired
 }
 
 public struct UsageDeviceExportRequest: Codable, Equatable, Sendable {

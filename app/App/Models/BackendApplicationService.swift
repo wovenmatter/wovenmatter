@@ -106,10 +106,11 @@ struct BackendApplicationReadiness: Codable, Sendable {
     static let windowStreamCapability = "window.stream"
 }
 
-/// Long startup work the background service reports while it is not ready.
-/// The first open after an update can upgrade the library, which takes
-/// minutes for a library of a few gigabytes; a window keeps waiting while
-/// the service reports it, and shows it.
+/// Startup work the background service reports while it is not ready. The
+/// first open after an update converts what the previous release left in
+/// the library. That takes about a second for a library of a gigabyte, more
+/// on a slow disk; a window keeps waiting while the service reports it, and
+/// shows it.
 struct BackendStartupProgress: Codable, Sendable, Equatable {
     let title: String
     let detail: String
@@ -126,7 +127,7 @@ struct BackendStartupProgress: Codable, Sendable, Equatable {
         let size = ByteCountFormatter.string(fromByteCount: upgrade.libraryBytes, countStyle: .file)
         let detail = switch upgrade.stage {
         case .backingUp: "Saving a copy of your library before the upgrade changes it."
-        case .converting: "This update stores your \(size) library in a new format. It happens once and can take a few minutes."
+        case .converting: "This update converts your \(size) library. It happens once and takes a moment."
         }
         self.init(title: "Upgrading your library", detail: detail, fraction: min(max(upgrade.fraction, 0), 1))
     }

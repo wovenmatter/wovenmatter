@@ -29,10 +29,10 @@ import WovenMatterCore
 ///
 /// A record's own bytes are left as they are: its parts are files named by
 /// their digests, and nothing inside them names a format. So is the text of
-/// history events (`history_events.payload`): the events native files were
-/// captured as are identified by a digest of that text, a record's search
-/// entry is in a search index that can only remove exactly the text it
-/// indexed, and nothing reads a format out of either.
+/// the history events native files were captured as
+/// (`history_events.payload`): each is identified by a digest of that text,
+/// and nothing reads a format out of it. A record's search entry does take
+/// the current name (`renameEarlierRecordManifestsUnlocked`).
 extension WorkspaceDatabaseConnection {
   /// A format's name as the previous release wrote it, and its name now.
   static let earlierRecordFormats: [(earlier: String, current: String)] = [
@@ -79,6 +79,7 @@ extension WorkspaceDatabaseConnection {
         WHERE table_name='execution_native_history' AND json_valid(payload) AND \(format) IN (\(Self.earlierRecordFormatList))
         """)
     }
+    try renameEarlierRecordManifestsUnlocked()
     guard tables.contains("execution_journal") else { return }
 
     // Each journal entry of a record, as this build writes an entry: its

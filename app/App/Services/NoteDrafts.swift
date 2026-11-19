@@ -41,6 +41,14 @@ struct NoteJournalEntry: Codable, Equatable, Sendable {
         self.baseTitle = baseTitle
     }
 
+    private init(storedWriterSessionID: String?, storedMutationID: String?, noteID: String, title: String, content: String, revision: UInt64,
+                 folderID: String?, createdAt: String?, expectedRevision: String?, baseContent: String?, baseTitle: String?) {
+        writerSessionID = storedWriterSessionID; mutationID = storedMutationID
+        self.noteID = noteID; self.title = title; self.content = content; self.revision = revision
+        self.folderID = folderID; self.createdAt = createdAt; self.expectedRevision = expectedRevision
+        self.baseContent = baseContent; self.baseTitle = baseTitle
+    }
+
     func rebased(revision: String, content: String, title: String) -> NoteJournalEntry {
         NoteJournalEntry(
             writerSessionID: writerSessionID, mutationID: mutationID ?? UUID().uuidString.lowercased(),
@@ -48,6 +56,13 @@ struct NoteJournalEntry: Codable, Equatable, Sendable {
             folderID: folderID, createdAt: createdAt,
             expectedRevision: revision, baseContent: content, baseTitle: title
         )
+    }
+
+    /// The same entry, mutation and writer included, with other documents.
+    func replacing(content: String, baseContent: String?) -> NoteJournalEntry {
+        NoteJournalEntry(storedWriterSessionID: writerSessionID, storedMutationID: mutationID, noteID: noteID, title: title, content: content,
+                         revision: revision, folderID: folderID, createdAt: createdAt, expectedRevision: expectedRevision,
+                         baseContent: baseContent, baseTitle: baseTitle)
     }
 
     func identified(by writerSessionID: String) -> NoteJournalEntry {
@@ -103,6 +118,33 @@ final class NoteDraftJournal: @unchecked Sendable {
 
     func entries() throws -> [NoteJournalEntry] {
         try withExclusiveLock { try entriesUnlocked() }
+    }
+
+    /// Writing the previous release had not saved when it stopped holds note
+    /// documents as that release wrote them, with a member a document does
+    /// not have and that would keep the writing from being saved. Each entry
+    /// loses it once, by the function every stored note is converted with
+    /// (`EarlierNoteContent`); the journal is rewritten only when an entry
+    /// changes. It is read when the app starts, before the entries are, and
+    /// the journal is empty unless the app stopped with unsaved writing.
+    func convertEarlierDocuments() throws {
+        try withExclusiveLock {
+            var changed = false
+            let entries = try entriesUnlocked().map { entry -> NoteJournalEntry in
+                let content = EarlierNoteContent.removingVersionMember(entry.content)
+                let base = entry.baseContent.flatMap(EarlierNoteContent.removingVersionMember)
+                guard content != nil || base != nil else { return entry }
+                changed = true
+                return entry.replacing(content: content ?? entry.content, baseContent: base ?? entry.baseContent)
+            }
+            guard changed else { return }
+            var data = Data()
+            for entry in entries {
+                data.append(try encoder.encode(entry))
+                data.append(0x0A)
+            }
+            try writeCompactedUnlocked(data)
+        }
     }
 
     func latestEntries() throws -> [NoteJournalEntry] {

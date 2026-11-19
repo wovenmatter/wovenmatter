@@ -110,8 +110,7 @@ struct FederatedExecutionFlowTests {
       ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux",
       // Deliberately collide with a paired client's ID: only the workspace's
       // own library host may publish Linux history, even in this case.
-      executionDeviceID: mac.credential.deviceID,
-      journalDeviceIDs: [phone.credential.deviceID, mac.credential.deviceID])
+      executionDeviceID: mac.credential.deviceID)
     workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
     let conversationID = UUID().uuidString.lowercased()
     let conversation = LibraryConversation(id: conversationID, title: "One execution owner", workspaceID: workspace.id)
@@ -144,7 +143,7 @@ struct FederatedExecutionFlowTests {
 
     // No observing client participates: the workspace publishes into its library
     // host's local socket. Replaying its lost acknowledgement is idempotent.
-    let path = "/v1/publisher/journal"
+    let path = "/publisher/journal"
     let request = LibraryHTTPRequest(method: "POST", target: path, headers: ["x-woven-workspace": fixture.libraryID],
       body: try JSONEncoder().encode(batch))
     let published = try await DevicePublisherAPI.handleLocal(request, path: path, database: fixture.database)
@@ -237,13 +236,12 @@ private final class FederationFlowFixture {
     let member = MemberIdentity(deviceID: await store.snapshot().deviceID, kind: .ios, key: .init())
     var request = PairRequest(token: offer.payload.token, deviceID: member.deviceID, deviceName: name, metadata: .init(kind: .iPhone), requiresConfirmation: true)
     request.memberPublicKey = member.publicKey
-    let response = await api.handle(.init(method: "POST", target: "/wovenmatter/v1/pair", headers: [:], body: try JSONEncoder().encode(request)))
+    let response = await api.handle(.init(method: "POST", target: "/wovenmatter/pair", headers: [:], body: try JSONEncoder().encode(request)))
     #expect(response.status == 200)
     let paired = try JSONDecoder().decode(PairResponse.self, from: response.body)
     // The pairing bearer only confirms; every later request is signed.
-    let confirmed = await api.handle(.init(method: "POST", target: "/wovenmatter/v1/pair/confirm", headers: [
-      "authorization": "Bearer " + paired.credential, "x-woven-workspace": paired.workspaceID,
-      "x-woven-protocol": String(LibraryProtocol.version)], body: Data("{}".utf8)))
+    let confirmed = await api.handle(.init(method: "POST", target: "/wovenmatter/pair/confirm", headers: [
+      "authorization": "Bearer " + paired.credential, "x-woven-workspace": paired.workspaceID], body: Data("{}".utf8)))
     #expect(confirmed.status == 200)
     let credential = MobileCredential(endpoint: endpoint, workspaceID: paired.workspaceID, deviceID: paired.deviceID, token: paired.credential)
     try await store.apply(LibrarySnapshot(workspaceID: libraryID, cursor: 0))
@@ -271,7 +269,6 @@ private final class FederationAPITransport: LibraryTransport, FederationTranspor
     let target = "/wovenmatter" + path
     var headers = try member.signer.headers(method: method, target: target, body: body, audience: audience)
     headers["X-Woven-Workspace"] = credential.workspaceID
-    headers["X-Woven-Protocol"] = String(LibraryProtocol.version)
     let response = await api.handle(.init(method: method, target: target,
       headers: Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) }), body: body))
     guard response.status == 200 else {
@@ -280,36 +277,36 @@ private final class FederationAPITransport: LibraryTransport, FederationTranspor
     }
     return try JSONDecoder().decode(T.self, from: response.body)
   }
-  func workspaceIdentity() async throws -> String { let hello: LibraryHello = try await request("/v1/hello"); return hello.workspaceID }
-  func snapshot() async throws -> LibrarySnapshot { try await request("/v1/snapshot") }
-  func changes(after: Int64) async throws -> LibraryChangePage { try await request("/v1/changes?after=\(after)") }
-  func mutate(_ value: LibraryMutation) async throws -> LibraryMutationResult { try await request("/v1/mutations", method: "POST", body: JSONEncoder().encode(value)) }
-  func note(_ id: String) async throws -> LibraryNote { try await request("/v1/notes/\(id)") }
-  func providers() async throws -> [HarnessCapabilities] { try await request("/v1/providers") }
-  func pending() async throws -> [PendingInteraction] { try await request("/v1/pending") }
-  func transcript(_ id: String) async throws -> LibraryTranscript { try await request("/v1/sessions/\(id)/transcript") }
-  func command(_ value: LibraryCommand) async throws -> LibraryCommandReceipt { try await request("/v1/commands", method: "POST", body: JSONEncoder().encode(value)) }
+  func workspaceIdentity() async throws -> String { let hello: LibraryHello = try await request("/hello"); return hello.workspaceID }
+  func snapshot() async throws -> LibrarySnapshot { try await request("/snapshot") }
+  func changes(after: Int64) async throws -> LibraryChangePage { try await request("/changes?after=\(after)") }
+  func mutate(_ value: LibraryMutation) async throws -> LibraryMutationResult { try await request("/mutations", method: "POST", body: JSONEncoder().encode(value)) }
+  func note(_ id: String) async throws -> LibraryNote { try await request("/notes/\(id)") }
+  func providers() async throws -> [HarnessCapabilities] { try await request("/providers") }
+  func pending() async throws -> [PendingInteraction] { try await request("/pending") }
+  func transcript(_ id: String) async throws -> LibraryTranscript { try await request("/sessions/\(id)/transcript") }
+  func command(_ value: LibraryCommand) async throws -> LibraryCommandReceipt { try await request("/commands", method: "POST", body: JSONEncoder().encode(value)) }
   func receipt(_ id: String) async throws -> LibraryCommandReceipt? { throw MobileConnectionError.offline }
-  func libraryIdentity() async throws -> LibraryIdentity { try await request("/v1/federation/identity") }
-  func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await request("/v1/federation/workspaces") }
-  func registerWorkspace(_ value: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace { try await request("/v1/federation/workspaces", method: "POST", body: JSONEncoder().encode(value)) }
-  func journal(after: Int64) async throws -> ExecutionJournalPage { try await request("/v1/federation/journal?after=\(after)") }
+  func libraryIdentity() async throws -> LibraryIdentity { try await request("/federation/identity") }
+  func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await request("/federation/workspaces") }
+  func registerWorkspace(_ value: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace { try await request("/federation/workspaces", method: "POST", body: JSONEncoder().encode(value)) }
+  func journal(after: Int64) async throws -> ExecutionJournalPage { try await request("/federation/journal?after=\(after)") }
   func importJournal(_ value: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult {
     journalImports += 1
-    let result: ExecutionJournalBatchResult = try await request("/v1/federation/journal", method: "POST", body: JSONEncoder().encode(value))
+    let result: ExecutionJournalBatchResult = try await request("/federation/journal", method: "POST", body: JSONEncoder().encode(value))
     if dropNextJournalAcknowledgement { dropNextJournalAcknowledgement = false; throw MobileConnectionError.offline }
     return result
   }
-  func artifactManifests() async throws -> [LibraryArtifactManifest] { try await request("/v1/federation/artifacts") }
-  func registerArtifact(_ value: LibraryArtifactRegistration) async throws -> LibraryArtifactTransfer { try await request("/v1/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(value)) }
-  func artifactStatus(_ id: String) async throws -> LibraryArtifactTransfer { try await request("/v1/federation/artifacts/\(id)") }
+  func artifactManifests() async throws -> [LibraryArtifactManifest] { try await request("/federation/artifacts") }
+  func registerArtifact(_ value: LibraryArtifactRegistration) async throws -> LibraryArtifactTransfer { try await request("/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(value)) }
+  func artifactStatus(_ id: String) async throws -> LibraryArtifactTransfer { try await request("/federation/artifacts/\(id)") }
   func uploadArtifactChunk(_ value: LibraryArtifactChunk) async throws -> LibraryArtifactTransfer {
-    let result: LibraryArtifactTransfer = try await request("/v1/federation/artifacts/chunk", method: "POST", body: JSONEncoder().encode(value))
+    let result: LibraryArtifactTransfer = try await request("/federation/artifacts/chunk", method: "POST", body: JSONEncoder().encode(value))
     if dropNextArtifactChunkAcknowledgement { dropNextArtifactChunkAcknowledgement = false; throw MobileConnectionError.offline }
     return result
   }
-  func commitArtifact(_ value: LibraryArtifactCommit) async throws -> LibraryArtifactManifest { try await request("/v1/federation/artifacts/commit", method: "POST", body: JSONEncoder().encode(value)) }
-  func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) async throws -> LibraryArtifactChunk { try await request("/v1/federation/artifacts/\(id)/chunk?revision=\(revision)&offset=\(offset)") }
+  func commitArtifact(_ value: LibraryArtifactCommit) async throws -> LibraryArtifactManifest { try await request("/federation/artifacts/commit", method: "POST", body: JSONEncoder().encode(value)) }
+  func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) async throws -> LibraryArtifactChunk { try await request("/federation/artifacts/\(id)/chunk?revision=\(revision)&offset=\(offset)") }
 }
 
 private actor RecordedExecutionSource: ExecutionWorkspaceTransport {

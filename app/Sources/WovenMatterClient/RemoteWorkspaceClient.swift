@@ -1289,7 +1289,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             if path.hasPrefix("browser/") {
                 let message: String
                 switch (response as? HTTPURLResponse)?.statusCode {
-                case 404: message = "Update this workspace service in Settings to view its browser."
                 case 410: message = "This tab has closed. Waiting for the workspace’s current tabs."
                 case 409: message = "The page changed or another input is finishing. Check the refreshed page and try again."
                 default: message = "The remote browser is unavailable. Reconnect to the workspace and try again."
@@ -1297,9 +1296,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 throw RemoteWorkspaceClientError.invalidResponse(message)
             }
             if path == "default-agent/sdks" {
-                if (response as? HTTPURLResponse)?.statusCode == 404 {
-                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
-                }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
             }
@@ -1309,26 +1305,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 throw RemoteWorkspaceClientError.invalidResponse(RemoteRuntimeFailure.describe(code))
             }
             if path.hasPrefix("harnesses/"), path.hasSuffix("/sign-out") {
-                throw RemoteWorkspaceClientError.invalidResponse(
-                    (response as? HTTPURLResponse)?.statusCode == 404
-                    ? "Update this workspace in Settings → Workspaces to remove accounts from here."
-                    : "The account couldn't be removed. Reconnect to the workspace and try again."
-                )
-            }
-            if path == "usage/export", (response as? HTTPURLResponse)?.statusCode == 404 {
-                throw UsageDeviceCollectionError.updateRequired
+                throw RemoteWorkspaceClientError.invalidResponse("The account couldn't be removed. Reconnect to the workspace and try again.")
             }
             if path.hasPrefix("task-gateway") {
-                throw RemoteWorkspaceClientError.invalidResponse(
-                    (response as? HTTPURLResponse)?.statusCode == 404
-                    ? "Update this workspace service in Settings to use background execution."
-                    : "The remote task gateway could not complete this request. Reconnect and try again."
-                )
+                throw RemoteWorkspaceClientError.invalidResponse("The remote task gateway could not complete this request. Reconnect and try again.")
             }
             if path.hasPrefix("databases") {
-                if (response as? HTTPURLResponse)?.statusCode == 404 {
-                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")
-                }
                 let detail = (try? JSONDecoder().decode(RemoteDatabaseFailure.self, from: data))?.error
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "Remote databases are unavailable.")
             }

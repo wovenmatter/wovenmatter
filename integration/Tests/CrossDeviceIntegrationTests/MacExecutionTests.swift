@@ -23,7 +23,7 @@ struct MacExecutionTests {
 
   func signed(_ member: MemberIdentity, audience: String, workspace: ExecutionWorkspace, method: String, target: String, body: Data = Data()) throws -> LibraryHTTPRequest {
     var headers = try member.signer.headers(method: method, target: target, body: body, audience: audience)
-    headers["X-Woven-Protocol"] = String(LibraryProtocol.version); headers["X-Woven-Workspace"] = workspace.id
+    headers["X-Woven-Workspace"] = workspace.id
     return .init(method: method, target: target, headers: Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) }), body: body)
   }
 
@@ -40,13 +40,12 @@ struct MacExecutionTests {
     let api = MacExecutionAPI(database: db, commands: commands, descriptor: workspace, isActive: { true }, members: members)
     let command = LibraryCommand(deviceID: phone.deviceID, kind: .createSession, providerID: "local:default_agent", libraryID: identity.libraryID, workspaceID: workspace.id)
     let body = try JSONEncoder().encode(command)
-    let accepted = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/v1/execution/commands", body: body))
+    let accepted = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/execution/commands", body: body))
     #expect(accepted.status == 200 && commands.accepted == [command])
-    let bearer = await api.handle(.init(method: "POST", target: "/v1/execution/commands", headers: ["authorization": "Bearer " + String(repeating: "a", count: 43),
-      "x-woven-protocol": String(LibraryProtocol.version), "x-woven-workspace": workspace.id], body: body))
+    let bearer = await api.handle(.init(method: "POST", target: "/execution/commands", headers: ["authorization": "Bearer " + String(repeating: "a", count: 43), "x-woven-workspace": workspace.id], body: body))
     #expect(bearer.status == 401 && commands.accepted == [command])
     _ = try await members.remove(phone.deviceID)
-    let removed = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/v1/execution/commands", body: body))
+    let removed = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/execution/commands", body: body))
     #expect(removed.status == 401 && commands.accepted == [command])
   }
 
@@ -57,21 +56,21 @@ struct MacExecutionTests {
     let identity = try await db.libraryIdentity()
     let (members, phone, host) = try await members(db)
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
-      ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac", capabilities: ["history.library.v1"], executionDeviceID: identity.hostDeviceID)
+      ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac", capabilities: [ExecutionWorkspace.libraryHistoryCapability], executionDeviceID: identity.hostDeviceID)
     let commands = ScopedCommands()
     let api = MacExecutionAPI(database: db, commands: commands, descriptor: workspace, isActive: { true }, members: members)
-    let providersResponse = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "GET", target: "/wovenmatter/v1/execution/providers"))
+    let providersResponse = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "GET", target: "/wovenmatter/execution/providers"))
     let providers = try JSONDecoder().decode([HarnessCapabilities].self, from: providersResponse.body)
     #expect(providers.map(\.id) == ["local:default_agent"])
     let remote = LibraryCommand(deviceID: phone.deviceID, kind: .createSession, providerID: "remote:other:default_agent", libraryID: identity.libraryID, workspaceID: workspace.id)
-    let rejected = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/v1/execution/commands", body: try JSONEncoder().encode(remote)))
+    let rejected = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/execution/commands", body: try JSONEncoder().encode(remote)))
     #expect(rejected.status == 403 && commands.accepted.isEmpty)
     let local = LibraryCommand(deviceID: phone.deviceID, kind: .createSession, providerID: "local:default_agent", libraryID: identity.libraryID, workspaceID: workspace.id)
-    let accepted = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/v1/execution/commands", body: try JSONEncoder().encode(local)))
+    let accepted = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/execution/commands", body: try JSONEncoder().encode(local)))
     #expect(accepted.status == 200 && commands.accepted == [local])
     // Another device's command identity is never dispatched under this member's signature.
     let crossed = LibraryCommand(deviceID: UUID().uuidString.lowercased(), kind: .createSession, providerID: "local:default_agent", libraryID: identity.libraryID, workspaceID: workspace.id)
-    let refused = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/v1/execution/commands", body: try JSONEncoder().encode(crossed)))
+    let refused = await api.handle(try signed(phone, audience: host, workspace: workspace, method: "POST", target: "/execution/commands", body: try JSONEncoder().encode(crossed)))
     #expect(refused.status == 403 && commands.accepted == [local])
   }
 }

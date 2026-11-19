@@ -367,7 +367,7 @@ struct MemberSyncTests {
     try await insert(forged, into: linux1)
     // Its own workspace's registration goes through.
     let own = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .linux,
-      name: "Linux 1", endpoint: URL(string: "https://linux1.test.ts.net/wovenmatter-execution/one"), executionDeviceID: UUID().uuidString.lowercased(), revision: 1)
+      name: "Linux 1", endpoint: URL(string: "https://linux1.test.ts.net/wovenmatter-execution/one"), executionDeviceID: linux1.id, revision: 1)
     try await insert(own, into: linux1)
     #expect(try await Self.settle([mac2]) { (try? await $0.database.libraryExecutionWorkspaces().contains { $0.id == own.id }) == true })
     let seen = try #require(try await mac2.database.libraryExecutionWorkspaces().first { $0.id == macWorkspace.id })

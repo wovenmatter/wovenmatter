@@ -96,7 +96,6 @@ final class PairedMacSyncController {
         guard let self else { throw CancellationError() }
         try await self.acceptPairing(endpoint: endpoint, response: response)
     }, loadClaim: storage.loadClaim, saveClaim: storage.saveClaim)
-    nonisolated static let capability = "library.peers"
 
     /// This Mac's signing identity. The key is created once and persisted in
     /// device-only storage before it signs anything.
@@ -285,8 +284,8 @@ final class PairedMacSyncController {
         let payload = try PairingPayload.parseURL(url)
         let own = try await host.peerRoute()
         let advertisement: DiscoveryAdvertisement = try await network.request(payload.endpoint, path: "discovery")
-        guard advertisement.capabilities?.contains(Self.capability) == true, advertisement.identity.deviceID != own.deviceID else {
-            throw LibraryAPIError(code: "update_required", message: "Use a pairing link from another Mac that supports paired Mac synchronization.")
+        guard advertisement.identity.deviceID != own.deviceID else {
+            throw LibraryAPIError(code: "invalid_pairing", message: "This pairing link is this Mac's own. Paste a link from the other Mac.")
         }
         let preview: PairingPreview = try await network.request(payload.endpoint, path: "pair/preview",
             body: JSONEncoder().encode(PairRequest(token: payload.token, deviceID: own.deviceID,
@@ -306,9 +305,6 @@ final class PairedMacSyncController {
         let own = try await host.peerRoute()
         guard response.deviceID == own.deviceID else { throw LibraryAPIError(code: "wrong_device", message: "Pairing did not preserve this Mac's identity.") }
         let advertisement: DiscoveryAdvertisement = try await network.request(endpoint, path: "discovery")
-        guard advertisement.capabilities?.contains(Self.capability) == true else {
-            throw LibraryAPIError(code: "update_required", message: "Update both Macs to a version that supports paired Mac synchronization.")
-        }
         let route = PairedMacRoute(deviceID: advertisement.identity.deviceID, libraryID: response.workspaceID,
             endpoint: endpoint, name: advertisement.identity.deviceName)
         try route.validate()
@@ -394,12 +390,8 @@ final class PairedMacSyncController {
         guard let credential = try loadCredentials().first(where: { $0.route.deviceID == route.deviceID && $0.isCompleted }) else {
             throw LibraryAPIError(code: "unauthorized", message: "\(route.name) has no completed pairing with this Mac.")
         }
-        do {
-            return try await network.request(route.endpoint, path: "peers/usage", token: credential.token,
-                body: JSONEncoder().encode(request))
-        } catch let error as LibraryAPIError where error.code == "not_found" {
-            throw UsageDeviceCollectionError.updateRequired
-        }
+        return try await network.request(route.endpoint, path: "peers/usage", token: credential.token,
+            body: JSONEncoder().encode(request))
     }
 
     func handle(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse? {
