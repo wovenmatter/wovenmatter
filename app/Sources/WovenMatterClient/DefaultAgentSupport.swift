@@ -2,6 +2,11 @@ import Foundation
 #if canImport(Security)
 import Security
 #endif
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 import WovenMatterCore
 
 public enum DefaultAgentSupport {
@@ -92,14 +97,12 @@ public enum DefaultAgentSupport {
     }
     static func snapshot(workspace: String, settings scope: DefaultAgentSettingsScope,
                          keychain: KeychainAccess, servers: [LocalModelServer] = []) throws -> DefaultAgentPayload {
-        // Credentials are workspace-owned, with shared accounts as a fallback,
-        // regardless of whether chat preferences inherit shared settings.
-        let keyScope = workspace
+        // Sign-ins are this device's own (`deviceScope`), whatever workspace's chat
+        // settings the payload carries. Other devices keep and renew their own.
+        let keyScope = ProviderConnectionAccounts.deviceScope
         var credentials: [String: DefaultAgentCredential] = [:]
         for id in ["openai", "openrouter", "opencode-go", "anthropic", "xai-api"] + ProviderConnectionID.searchProviders.map(\.rawValue) {
-            if let key = try key(id, scope: keyScope, keychain: keychain) ?? (keyScope == "global" ? nil : key(id, scope: "global", keychain: keychain)),
-                !key.isEmpty
-            {
+            if let key = try key(id, scope: keyScope, keychain: keychain), !key.isEmpty {
                 credentials[id] = .init(type: "api_key", key: key)
             }
         }
@@ -107,23 +110,27 @@ public enum DefaultAgentSupport {
             if let key = try key(server.id, keychain: keychain), !key.isEmpty { credentials[server.id] = .init(type: "api_key", key: key) }
         }
         for id in ["openai-codex", "xai"] {
-            if let value = try oauth(id, scope: keyScope, keychain: keychain) ?? (keyScope == "global" ? nil : oauth(id, keychain: keychain)) {
-                credentials[id] = value.borrowing()
-            }
+            if let value = try oauth(id, scope: keyScope, keychain: keychain) { credentials[id] = value.borrowing() }
         }
         var config = workspace == "global" ? scope.global : scope.resolved(workspace)
         config.customServers = servers
         var payload = DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
         var accounts: [String: [DefaultAgentCredentialAccount]] = [:]
         for id in ProviderConnectionID.allCases.map(\.rawValue) {
-            var entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope, keychain: keychain)
-            if entries.isEmpty && keyScope != "global" { entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, keychain: keychain) }
+            let entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope, keychain: keychain)
             if !entries.isEmpty {
                 accounts[id] = entries
                 payload.credentials[id] = entries[0].credential
             }
         }
         payload.credentialAccounts = accounts
+        return payload
+    }
+    /// Chat settings for another device's workspace: no credentials. That device
+    /// keeps its own sign-ins; only these non-secret settings are synchronized.
+    public static func configurationPayload(workspace: String, settings scope: DefaultAgentSettingsScope = settings) throws -> DefaultAgentPayload {
+        var payload = DefaultAgentPayload(config: workspace == "global" ? scope.global : scope.resolved(workspace), credentials: [:], workspace: workspace)
+        payload.revision = SHA256.hash(data: try payload.data()).hexString
         return payload
     }
     public static func oauth(_ provider: String, scope: String = "global", keychain: KeychainAccess = .init()) throws
@@ -150,18 +157,6 @@ public enum DefaultAgentSupport {
             try saveOAuth(credential, provider: provider, scope: scope, notify: false, keychain: keychain)
             return true
         }
-    }
-    public static func workspaceKey(_ workspace: String) throws -> String {
-        credentialLock.lock()
-        defer { credentialLock.unlock() }
-        if let existing = try key("encryption-key", scope: workspace) { return existing }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw DefaultAgentError.message("Could not generate the workspace encryption key.")
-        }
-        let value = Data(bytes).base64EncodedString()
-        try saveKey(value, provider: "encryption-key", scope: workspace, notify: false)
-        return value
     }
     public static func migrateLocalOAuth() throws {
         let path = FileManager.default.homeDirectoryForCurrentUser.appending(

@@ -321,6 +321,8 @@ final class LibraryHostController {
             } catch { return .error("unauthorized", error.localizedDescription, status: 401) }
             return await model.memberMaintenance(request, path: botsPath)
         }
+        // Another Mac's Settings → Subscriptions & API Keys: this Mac's own sign-ins.
+        if ApplicationModel.servesMemberSignIns(botsPath) { return await memberSignIns(request, path: botsPath) }
         if botsPath.hasPrefix("/v1/bots/") {
             guard let authorizeBots, let host = model?.botsHost else { return .error("unavailable", "Bots on this Mac are starting.", status: 503) }
             do { try await authorizeBots(request) }
@@ -847,6 +849,20 @@ final class LibraryHostController {
     /// example the bots WebSocket upgrade) and returns the member.
     func authenticateMember(_ request: LibraryHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
         try await peerSync.members().authenticate(request, allowing: kinds)
+    }
+
+    /// `/v1/connections/*`: only a signed Mac member reaches this Mac's sign-ins;
+    /// a phone, a Linux host, bots and unsigned requests are refused.
+    func memberSignIns(_ request: LibraryHTTPRequest, path: String) async -> LibraryHTTPResponse {
+        guard let model else { return .error("unavailable", "This Mac is starting.", status: 503) }
+        let member: LibraryMember
+        do {
+            guard MemberRequestVerifier.isSigned(request.headers) else {
+                throw LibraryAPIError(code: "unauthorized", message: "Sign this request with a member device key.")
+            }
+            member = try await authenticateMember(request, allowing: [.mac])
+        } catch { return .error("unauthorized", error.localizedDescription, status: 401) }
+        return await model.memberSignIns(request, path: path, memberID: member.deviceID)
     }
 
     func applyPeerRevocations() async throws {

@@ -22,6 +22,8 @@ public struct DefaultAgentSDKStatus: Codable, Equatable, Sendable {
     public let sdks: [SDK]
     public let generation: String?
     public let notice: String?
+    /// An update made a new SDK copy active on that machine, for Pi Durable and its bots.
+    public var activated: Bool? = nil
 }
 
 public struct DefaultAgentSDKRequest: Codable, Equatable, Sendable {
@@ -37,6 +39,10 @@ public struct DefaultAgentSDKRequest: Codable, Equatable, Sendable {
 
 /// SDK maintenance never loads account credentials or starts an agent session.
 public enum DefaultAgentSDKControl {
+    /// Posted after an update made a new Pi Durable SDK copy active on this Mac. This Mac's
+    /// bots run that same copy, so their runtime restarts onto it.
+    public static let sdkActivated = Notification.Name("wovenmatter.default-agent.sdk-activated")
+
     public static func run(_ request: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
         guard let root = DefaultAgentSupport.resources else {
             throw DefaultAgentError.message("The bundled Pi Durable helper is unavailable.")
@@ -47,8 +53,17 @@ public enum DefaultAgentSDKControl {
     }
 
     // Injectable only for local process-lifecycle fixtures. This starts no account/runtime session.
-    static func run(_ request: DefaultAgentSDKRequest, executable: URL,
-                    arguments: [String], timeout: TimeInterval) async throws -> DefaultAgentSDKStatus {
+    static func run(_ request: DefaultAgentSDKRequest, executable: URL, arguments: [String], timeout: TimeInterval,
+                    notifications: NotificationCenter = .default) async throws -> DefaultAgentSDKStatus {
+        let status = try await perform(request, executable: executable, arguments: arguments, timeout: timeout)
+        if request.action == .update, status.activated == true {
+            notifications.post(name: sdkActivated, object: nil)
+        }
+        return status
+    }
+
+    private static func perform(_ request: DefaultAgentSDKRequest, executable: URL,
+                                arguments: [String], timeout: TimeInterval) async throws -> DefaultAgentSDKStatus {
         let cancellation = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in

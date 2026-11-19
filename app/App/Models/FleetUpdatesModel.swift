@@ -19,6 +19,8 @@ enum FleetUpdateScope: String, Codable, Sendable {
 
 /// One harness, or a workspace's Pi Durable SDKs, on one device.
 struct FleetHarness: Identifiable, Equatable, Sendable {
+    /// A machine's Pi Durable SDKs, which its bots run too: one item, one update for both.
+    static let piDurableSDKName = "Pi Durable and bots"
     enum Location: Hashable, Sendable {
         case thisMac
         /// A Linux workspace this Mac added.
@@ -369,7 +371,7 @@ final class FleetUpdatesModel {
                 }
             if let status = inventory.sdks, !status.sdks.isEmpty {
                 let job = job("pi-durable-sdk")
-                rows.insert(FleetHarness(location: location, kind: .piDurableSDK, name: "Pi Durable SDK",
+                rows.insert(FleetHarness(location: location, kind: .piDurableSDK, name: FleetHarness.piDurableSDKName,
                                          versions: Self.sdkVersions(status),
                                          updateAvailable: status.sdks.contains { $0.updateAvailable || $0.consistent == false },
                                          checking: loadingMembers.contains(machineID.lowercased()), updating: job?.running == true,
@@ -413,7 +415,7 @@ final class FleetUpdatesModel {
         guard let model else { return nil }
         let state = model.connections.sdks.state(for: key)
         guard let status = state.status, !status.sdks.isEmpty else { return nil }
-        return FleetHarness(location: location, kind: .piDurableSDK, name: "Pi Durable SDK", versions: Self.sdkVersions(status),
+        return FleetHarness(location: location, kind: .piDurableSDK, name: FleetHarness.piDurableSDKName, versions: Self.sdkVersions(status),
                             updateAvailable: status.sdks.contains { $0.updateAvailable || $0.consistent == false },
                             checking: state.busy && state.operation?.action != .update,
                             updating: state.operation?.action == .update, error: state.error)

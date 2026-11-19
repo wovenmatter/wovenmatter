@@ -33,16 +33,6 @@ case "$arch" in
   *) printf 'Unsupported bots architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 
-# The runtime runs Anthropic's Claude binary from the default agent (runtime config
-# `claude.executable`), so both lockfiles must select the same Claude Agent SDK.
-sdk_version() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["packages"]["node_modules/@anthropic-ai/claude-agent-sdk"]["version"])' "$1"; }
-bots_sdk="$(sdk_version "$source_root/package-lock.json")"
-agent_sdk="$(sdk_version "$repo_root/default-agent/package-lock.json")"
-if [ "$bots_sdk" != "$agent_sdk" ]; then
-  printf 'bots/ selects Claude Agent SDK %s but default-agent/ selects %s; refresh them together.\n' "$bots_sdk" "$agent_sdk" >&2
-  exit 1
-fi
-
 node_version="$("$node" --version)"
 lock_hash="$(shasum -a 256 "$source_root/package-lock.json" | cut -d ' ' -f1)-node-$node_version-darwin-$node_arch"
 # Keep installed dependencies outside a possibly cloud-synced checkout, keyed by
@@ -65,12 +55,13 @@ mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 find "$output/node_modules" -type f -name '*.map' -delete
 
-# Anthropic's signed Claude runtime ships once, unmodified and never re-signed, in the
-# default agent; the bots runtime is pointed at that copy, so its own platform packages
-# are dropped here. Nothing under Resources/bots is signed by the build, so no native
-# code may remain; a new native dependency has to be removed or signed explicitly
-# before it can ship (validate-release-code.py checks every image).
-rm -rf "$output/node_modules/@anthropic-ai/claude-agent-sdk-"*
+# Bots load the Pi Durable SDK copy the default agent runs (its active SDK update, or
+# Resources/default-agent), with that copy's signed Claude binary (bots/src/pi-durable-sdk.ts).
+# Their own copy of those packages, and what only they depend on, is dropped here, so the
+# runtime cannot load a different one. Nothing under Resources/bots is signed by the
+# build, so no native code may remain; a new native dependency has to be removed or
+# signed explicitly before it can ship (validate-release-code.py checks every image).
+python3 -I "$repo_root/remote/host/prune-bots-sdk.py" "$output"
 shared_claude="$agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$shared_claude"
 codesign --verify --strict "$shared_claude"

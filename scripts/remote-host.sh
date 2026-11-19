@@ -785,10 +785,9 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         # bots later needs no new install; a bots role requires it.
         if (release/'bots/package-lock.json').is_file():
             run([node_root/'bin/node',npm_cli,'ci','--prefix',release/'bots','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
-            # Bots run the default agent's Claude binary (runtime config
-            # claude.executable), so their own copy is not kept.
-            for native in (release/'bots/node_modules/@anthropic-ai').glob('claude-agent-sdk-*'):
-                if native.is_dir() and not native.is_symlink(): shutil.rmtree(native)
+            # Bots load the SDK copy the default agent runs, and its Claude
+            # binary (bots/src/pi-durable-sdk.ts), so their own copy is not kept.
+            run([sys.executable,'-I',release/'host/prune-bots-sdk.py',release/'bots'],check=True,timeout=120,env=environment)
         elif roles['bots']: fail('bots_runtime_missing','This release does not include the bots runtime.',78)
         playwright_version=versions['playwrightVersion']
         if not re.fullmatch(r'\d+\.\d+\.\d+',playwright_version): fail('invalid_runtime_record','Invalid pinned Playwright version.',78)
@@ -825,7 +824,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
             'WOVENMATTER_BROWSER_PROFILES':str(ROOT/'browser-profiles'),'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'browsers/current'),
             'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,
             'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_RELEASE_VERSION':release_version(manifest),'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()]),
-            'WOVEN_DEFAULT_AGENT_DIRECTORY':str(ROOT/'workspace/.wovenmatter/default-agent'),
+            'WOVEN_DEFAULT_AGENT_DIRECTORY':str(ROOT/'default-agent'),
             'WOVENMATTER_DATA_ROOT':str(ROOT),'WOVENMATTER_WORKSPACE_ENABLED':'1' if roles['workspace'] else '0',
             'WOVENMATTER_BOTS_ENABLED':'1' if roles['bots'] else '0','WOVENMATTER_BOTS_INSTANCE':BOTS_INSTANCE,'WOVENMATTER_BOTS_DATA':str(ROOT/'bots'),
             'PATH':':'.join([str(HOME/'.opencode/bin'),str(HOME/'.grok/bin'),str(HOME/'.local/bin'),str(HOME/'.npm-global/bin'),str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()])}

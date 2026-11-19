@@ -1,10 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CredentialVault } from '../src/vault.mjs';
-import { createDefaultAgentService } from '../src/service.mjs';
+import { SignInStore } from '../src/sign-in-store.mjs';
 import { signInStatuses } from '../src/sign-in-status.mjs';
 
 async function temporary(t) {
@@ -12,42 +10,6 @@ async function temporary(t) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
-
-test('tampering fails closed and repeated writes never reuse the GCM nonce', async t => {
-  const directory = await temporary(t), vault = new CredentialVault(directory);
-  await vault.unlock('fixture', randomBytes(32).toString('base64'));
-  const initial = JSON.parse(await readFile(vault.path, 'utf8'));
-  await vault.modify(async value => ({ ...value, shared: { exa: { type: 'api_key', key: 'still-usable' } } }));
-  const rejected = assert.rejects(vault.unlock('fixture', randomBytes(32).toString('base64')), /decrypted/);
-  for (let i = 0; i < 20; i++) assert.equal((await vault.read()).shared.exa.key, 'still-usable');
-  await rejected;
-  assert.equal((await vault.read()).shared.exa.key, 'still-usable');
-  const next = JSON.parse(await readFile(vault.path, 'utf8'));
-  assert.notEqual(next.nonce, initial.nonce);
-  next.tag = Buffer.alloc(16).toString('base64');
-  await writeFile(vault.path, JSON.stringify(next));
-  await assert.rejects(vault.read(), /decrypted/);
-});
-
-test('expired borrowed auth waits between model requests and resumes without replaying a turn', async t => {
-  const directory = await temporary(t), service = createDefaultAgentService({ cwd: directory, directory });
-  const base = { workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {} };
-  await service.configure({ ...base, revision: 'old', credentials: { xai: { type: 'oauth', access: 'expired', expires: 0 } } });
-  const engine = await service.engine();
-  let settled = false;
-  const statuses = [], record = { runID: 'fixture-run', emit: update => statuses.push(update) };
-  const auth = engine.programStatusContext.run({ record, scope: record }, () =>
-    engine.runtime.getAuth('xai', { signal: AbortSignal.timeout(5000) })).then(value => { settled = true; return value; });
-  await new Promise(resolve => setTimeout(resolve, 30));
-  assert.equal(settled, false);
-  await service.configure({ ...base, revision: 'new', credentials: { xai: { type: 'oauth', access: 'renewed', expires: Date.now() + 3600000 } } });
-  assert.equal((await auth).auth.apiKey, 'renewed');
-  // No model calls or tools are submitted by credential recovery.
-  assert.equal(engine.sessions.size, 0);
-  assert.deepEqual(statuses.map(update => update.status.state), ['blocked', 'working']);
-  assert.equal(statuses[0].status.kind, 'auth');
-  assert.ok(statuses.every(update => update._meta.wovenRunID === record.runID));
-});
 
 test('status checks never start login and do not equate a timeout with sign-out', async () => {
   const calls = [];
@@ -74,44 +36,13 @@ test('status checks never start login and do not equate a timeout with sign-out'
   assert.ok(!calls.some(args => args.includes('prompt')));
 });
 
-test('active sessions survive credential and settings updates and use the latest search key', async t => {
-  const directory = await temporary(t), key = randomBytes(32).toString('base64');
-  const service = createDefaultAgentService({ cwd: directory, directory });
-  assert.equal((await service.status()).locked, true);
-  const base = { workspace: 'fixture', unlockKey: key, config: { providers: ['openai', 'xai'] } };
-  await service.configure({ ...base, revision: 'first', credentials: { exa: { type: 'api_key', key: 'old-search-secret' } } });
-  const engine = await service.engine(), record = await engine.create();
-  record.busy = true;
-  const receipt = await service.configure({ ...base, revision: 'second', credentials: {
-    exa: { type: 'api_key', key: 'new-search-secret' },
-    xai: { type: 'oauth', access: 'borrowed-access', refresh: 'must-never-copy', refreshToken: 'also-never-copy', expires: Date.now() + 10000 },
-  } });
-  assert.equal(receipt.revision, 'second');
-  assert.equal(await service.engine(), engine);
-  assert.equal(engine.sessions.get(record.session.sessionId), record);
-  assert.equal((await engine.credentials.read('exa')).key, 'new-search-secret');
-  assert.equal((await engine.credentials.read('xai')).refresh, '');
-  assert.equal((await engine.credentials.read('xai')).borrowed, true);
-  assert.equal((await engine.credentials.read('xai')).refreshToken, undefined);
-  const settings = await readFile(join(directory, 'configuration.json'), 'utf8');
-  assert.ok(!settings.includes('secret') && !settings.includes('credentials'));
-  const disk = await readFile(join(directory, 'credentials.enc.json'), 'utf8');
-  assert.ok(!disk.includes('new-search-secret') && !disk.includes('must-never-copy'));
-  const restarted = createDefaultAgentService({ cwd: directory, directory });
-  await assert.rejects(restarted.engine(), /locked/);
-});
-
 for (const provider of ['openai-codex', 'claude-subscription', 'xai']) {
   test(`${provider} exposes one account and never falls back from workspace-owned auth`, async t => {
     const { Credentials } = await import('../src/credentials.mjs');
-    const { sharedAccounts } = await import('../src/vault.mjs');
     const credential = id => provider === 'claude-subscription'
       ? { type: 'native', accountId: id } : { type: 'oauth', access: id, expires: 9000000000000 };
     const entries = ['preferred', 'backup'].map(id => ({ id, label: id, credential: credential(id) }));
-    assert.deepEqual(sharedAccounts({ [provider]: entries })[provider].map(a => a.id), ['preferred']);
-    const directory = await temporary(t), vault = new CredentialVault(directory);
-    await vault.unlock('fixture', randomBytes(32).toString('base64'));
-    // Simulate an encrypted store from a version that still allowed backups.
+    const directory = await temporary(t), vault = await new SignInStore(directory).open();
     await vault.modify(async value => ({ ...value, accounts: { [provider]: entries } }));
     const credentials = await new Credentials({}, vault).initialize();
     assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['preferred']);

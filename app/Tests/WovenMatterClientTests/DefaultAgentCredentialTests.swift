@@ -283,15 +283,16 @@ extension DefaultAgentCredentialTests {
 extension DefaultAgentCredentialTests {
     @Test func chatSettingsInheritanceDoesNotChooseCredentials() throws {
         let keychain = DefaultAgentKeychainFixture().access
-        let shared = try ProviderConnectionAccounts.addKey("shared-key", provider: "openai", label: "Shared", keychain: keychain)
-        let owned = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
+        let device = try ProviderConnectionAccounts.addKey("device-key", provider: "openai", label: "Device", keychain: keychain)
+        // A legacy per-workspace account is never read: sign-ins are the device's own.
+        _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
         let fallback = try ProviderConnectionAccounts.addKey("router-key", provider: "openrouter", label: "Router", keychain: keychain)
         var settings = DefaultAgentSettingsScope()
         settings.global.models = ["openai/shared-model"]
         let inherited = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
         #expect(inherited.config.models == settings.global.models)
-        #expect(inherited.credentialAccounts?["openai"]?.first?.id == owned.id)
-        #expect(inherited.credentials["openai"]?.key == "workspace-key")
+        #expect(inherited.credentialAccounts?["openai"]?.map(\.id) == [device.id])
+        #expect(inherited.credentials["openai"]?.key == "device-key")
         settings.workspaces["local"] = settings.global
         settings.workspaces["local"]?.models = ["openai/local-model"]
         let independent = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
@@ -299,12 +300,29 @@ extension DefaultAgentCredentialTests {
         #expect(independent.credentials == inherited.credentials)
         #expect(independent.credentialAccounts == inherited.credentialAccounts)
         #expect(independent.credentialAccounts?["openrouter"]?.first?.id == fallback.id)
-        let remote = try DefaultAgentSupport.snapshot(workspace: "remote-fixture", settings: settings, keychain: keychain)
-        #expect(remote.credentialAccounts?["openai"]?.first?.id == shared.id)
-        try ProviderConnectionAccounts.remove(owned.id, provider: "openai", scope: "local", keychain: keychain)
-        let reverted = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
-        #expect(reverted.credentialAccounts?["openai"]?.first?.id == shared.id)
-        #expect(reverted.config.models == independent.config.models)
     }
+
+    @Test func anotherDevicesWorkspaceGetsItsChatSettingsWithoutCredentials() throws {
+        var settings = DefaultAgentSettingsScope()
+        settings.global.models = ["openai/shared-model"]
+        let payload = try DefaultAgentSupport.configurationPayload(workspace: "fixture-remote", settings: settings)
+        #expect(payload.config.models == ["openai/shared-model"])
+        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
+        #expect(payload.revision?.count == 64)
+        let body = String(decoding: try payload.data(), as: UTF8.self)
+        #expect(!body.contains("credentialAccounts"))
+    }
+
+    @Test func noHostPayloadEverCarriesCredentials() throws {
+        let fixture = DefaultAgentKeychainFixture(), keychain = fixture.access
+        let scope = "0f0e0d0c-0b0a-4908-8706-050403020100"
+        _ = try ProviderConnectionAccounts.addKey("device-key", provider: "anthropic", keychain: keychain)
+        _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: scope, keychain: keychain)
+        let payload = try DefaultAgentSupport.configurationPayload(workspace: scope, settings: .init())
+        #expect(payload.credentials.isEmpty && payload.credentialAccounts == nil)
+        let body = String(decoding: try payload.data(), as: UTF8.self)
+        #expect(!body.contains("device-key") && !body.contains("workspace-key"))
+    }
+
 }
 #endif

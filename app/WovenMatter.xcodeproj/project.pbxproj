@@ -48,6 +48,7 @@
 		8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A44EB04E09581B6A85026F /* DictationControls.swift */; };
 		DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000003 /* SettingsDefaultAgentView.swift */; };
 		DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */; };
+		DA2000000000000000000102 /* SignInDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000101 /* SignInDevices.swift */; };
 		B8607A0B3831298FB2D72777 /* GitHubSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06B8B610524048CCBE1F85C7 /* GitHubSettingsModel.swift */; };
 		D472AB9160464F1FAB826C52 /* WorkspaceNoteRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */; };
 		D472AB9160464F1FAB826C42 /* WorkspaceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */; };
@@ -252,6 +253,7 @@
 		E8A44EB04E09581B6A85026F /* DictationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationControls.swift; sourceTree = "<group>"; };
 		DA2000000000000000000003 /* SettingsDefaultAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentView.swift; sourceTree = "<group>"; };
 		DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSettingsModel.swift; sourceTree = "<group>"; };
+		DA2000000000000000000101 /* SignInDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInDevices.swift; sourceTree = "<group>"; };
 		06B8B610524048CCBE1F85C7 /* GitHubSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitHubSettingsModel.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceNoteRecovery.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionManagement.swift"; sourceTree = "<group>"; };
@@ -496,6 +498,7 @@
 				CFFD1CC4C80237464F98A612 /* ApplicationModel+Automation.swift */,
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
+				DA2000000000000000000101 /* SignInDevices.swift */,
 				06B8B610524048CCBE1F85C7 /* GitHubSettingsModel.swift */,
 				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
@@ -878,6 +881,7 @@
 				DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */,
 				DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */,
 				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
+				DA2000000000000000000102 /* SignInDevices.swift in Sources */,
 				B8607A0B3831298FB2D72777 /* GitHubSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,

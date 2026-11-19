@@ -171,11 +171,17 @@ final class BotsHostController {
     @ObservationIgnored private(set) var jobTasks: [String: Task<Void, Never>] = [:]
     /// Other machines answer slowly; a status refresh reuses a recent probe.
     @ObservationIgnored private var remoteCache: (at: Date, machines: [BotMachine])?
+    @ObservationIgnored private var sdkObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private let sdkNotifications: NotificationCenter
+    /// Set once the server shuts bots down; nothing brings them back up after that.
+    @ObservationIgnored private var shuttingDown = false
     static let remoteCacheLifetime: TimeInterval = 20
 
     init(directory: URL, engine: any BotEngineHost, bundle: BotsRuntimeBundle? = BotsRuntimeBundle.locate(),
-         dependencies: BotsHostDependencies, supervisor: BotsRuntimeSupervisor? = nil) {
+         dependencies: BotsHostDependencies, supervisor: BotsRuntimeSupervisor? = nil,
+         sdkNotifications: NotificationCenter = .default) {
         self.directory = directory
+        self.sdkNotifications = sdkNotifications
         self.engine = engine
         self.bundle = bundle
         self.dependencies = dependencies
@@ -193,6 +199,33 @@ final class BotsHostController {
             self.engineStatus = status
             self.changed()
         }
+        // One update covers Pi Durable and bots: a new SDK copy restarts the runtime onto it.
+        sdkObserver = sdkNotifications.addObserver(forName: DefaultAgentSDKControl.sdkActivated, object: nil,
+                                                   queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.piDurableSDKActivated() }
+        }
+    }
+
+    isolated deinit {
+        if let sdkObserver { sdkNotifications.removeObserver(sdkObserver) }
+    }
+
+    /// Pi Durable's SDK update made a new copy active, and deleted the one bots were running:
+    /// a running runtime restarts now (each start resolves the copy afresh). Bots that are
+    /// off, or still coming up, pick it up when they start.
+    func piDurableSDKActivated() {
+        guard persisted.enabled, !shuttingDown, let supervisor, supervisor.config != nil else { return }
+        Task { [weak self] in
+            await supervisor.stop()
+            self?.restartIfStillOn()
+        }
+    }
+
+    /// After a restart's stop: bots come back only if they are still on and the server is
+    /// not shutting down (either can change while the runtime stops).
+    private func restartIfStillOn() {
+        guard persisted.enabled, !shuttingDown else { return }
+        bringUp()
     }
 
     var isEnabled: Bool { persisted.enabled }
@@ -205,6 +238,7 @@ final class BotsHostController {
     }
 
     func shutdown() async {
+        shuttingDown = true
         bringUpTask?.cancel()
         await previews.removeAll()
         if let notifier { await notifier.invalidate() }
@@ -215,6 +249,7 @@ final class BotsHostController {
     }
 
     func terminateImmediately() {
+        shuttingDown = true
         supervisor?.terminateImmediately()
         hostServer?.stop(); hostServer = nil
     }
@@ -286,7 +321,7 @@ final class BotsHostController {
             if try await isThisMac(machineID) { try startEngineUpdate() }
             else { try await dependencies.updateRemoteEngine(machineID) }
         case .restartRuntime:
-            if persisted.enabled { await supervisor?.stop(); bringUp() }
+            if persisted.enabled, !shuttingDown { await supervisor?.stop(); restartIfStillOn() }
         case let .updateMemberHarness(machineID, kind, sourceSHA256, packageSpec, force):
             let update = dependencies.updateMemberHarness
             try startJob(.updateHarness, target: machineID.lowercased() + "/" + kind.rawValue, progress: "Starting the update…") { progress in
@@ -294,7 +329,7 @@ final class BotsHostController {
             }
         case .updateMemberSDKs(let machineID):
             let update = dependencies.updateMemberSDKs
-            try startJob(.updateHarness, target: machineID.lowercased() + "/pi-durable-sdk", progress: "Updating Pi Durable SDK…") { _ in
+            try startJob(.updateHarness, target: machineID.lowercased() + "/pi-durable-sdk", progress: "Updating \(FleetHarness.piDurableSDKName)…") { _ in
                 try await update(machineID)
             }
         case .signSocket, .memberInventory, .memberInstallerPreview: break
@@ -485,7 +520,7 @@ final class BotsHostController {
             limits: .init(botMemoryBytes: resources.perBotBytes),
             host: .init(url: "http://127.0.0.1:\(hostPort)/", token: persisted.hostToken),
             machine: .init(deviceID: identity.deviceID, name: identity.name),
-            claude: bundle.claudeExecutable.map { .init(executable: $0.path) })
+            piDurable: bundle.piDurable)
         try supervisor.run(config)
     }
 

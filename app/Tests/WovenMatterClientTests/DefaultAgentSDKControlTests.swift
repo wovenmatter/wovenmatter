@@ -15,6 +15,30 @@ import Testing
 struct DefaultAgentSDKControlTests {
 
 
+    @Test func anUpdateThatActivatesANewCopyTellsThisMacsBotsAndOthersDoNot() async throws {
+        final class Count: @unchecked Sendable { var value = 0; let lock = NSLock() }
+        let count = Count()
+        // Its own center: the app-wide one reaches every bots host other tests have alive.
+        let notifications = NotificationCenter()
+        let observer = notifications.addObserver(forName: DefaultAgentSDKControl.sdkActivated, object: nil, queue: nil) { _ in
+            count.lock.withLock { count.value += 1 }
+        }
+        defer { notifications.removeObserver(observer) }
+        func reply(_ activated: Bool) -> [String] {
+            ["-c", #"cat >/dev/null; echo '{"result":{"sdks":[],"generation":"g","notice":null"# + (activated ? #","activated":true"# : "") + #"}}'"#]
+        }
+        let shell = URL(fileURLWithPath: "/bin/sh")
+        let status = try await DefaultAgentSDKControl.run(.init(action: .update), executable: shell, arguments: reply(true), timeout: 10,
+                                                      notifications: notifications)
+        #expect(status.activated == true)
+        #expect(count.lock.withLock { count.value } == 1)
+        _ = try await DefaultAgentSDKControl.run(.init(action: .update), executable: shell, arguments: reply(false), timeout: 10,
+                                                 notifications: notifications)
+        _ = try await DefaultAgentSDKControl.run(.init(action: .check), executable: shell, arguments: reply(true), timeout: 10,
+                                                 notifications: notifications)
+        #expect(count.lock.withLock { count.value } == 1)
+    }
+
     private func directory() throws -> URL {
         let value = FileManager.default.temporaryDirectory.appending(path: "woven-sdk-control-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: value, withIntermediateDirectories: true)

@@ -50,8 +50,7 @@ occurrence from the series.
 Local tasks run in the background server on this Mac, which you can check in
 **Settings → Background Server**.
 Remote workspaces run their own tasks with background execution enabled by
-default; the remote host and workspace service must remain running. Pi Durable may
-wait for the Mac to reconnect and unlock credentials after a remote restart.
+default; the remote host and workspace service must remain running.
 When execution resumes, every overdue independent task runs, while each recurring
 task catches up once.
 Tasks wait when their session is busy or the running-session limit is reached;

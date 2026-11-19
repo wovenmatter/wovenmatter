@@ -25,7 +25,7 @@ enum ProviderLimitCollector {
 
   static func collect(
     enabledProviders: Set<ProviderKind>,
-    sharedCredentials: [String: DefaultAgentCredential],
+    deviceCredentials: [String: DefaultAgentCredential],
     selectedConnections: [ProviderKind: UsageConnectionChoice] = [:],
     claudeStatus: BuiltInClaudeSignIn.Status? = nil,
     now: Date
@@ -39,18 +39,18 @@ enum ProviderLimitCollector {
         group.addTask {
           let choice = selectedConnections[provider]
           if let choice, ["openai", "anthropic", "xai-api"].contains(choice.connectionID) {
-            return apiKeyAccount(provider, choice: choice, present: sharedCredentials[choice.connectionID]?.key != nil, now: now)
+            return apiKeyAccount(provider, choice: choice, present: deviceCredentials[choice.connectionID]?.key != nil, now: now)
           }
           if provider == .claude {
             return UsageLimitAccount(provider: .claude, accountScopeID: choice.map { "wovenmatter.shared." + $0.id }, accountLabel: claudeStatus?.account ?? choice?.label ?? "Claude subscription",
               status: claudeStatus?.connected == true ? .signedIn
-                : (claudeStatus?.state == "sign_in_required" || choice == nil && sharedCredentials["claude-subscription"] == nil ? .needsCredential : .unavailable),
+                : (claudeStatus?.state == "sign_in_required" || choice == nil && deviceCredentials["claude-subscription"] == nil ? .needsCredential : .unavailable),
               source: "Pi Durable · Claude SDK", detail: claudeStatus?.connected == true
                 ? "Claude manages this sign-in. Check subscription limits and extra usage in your Claude account. API keys are billed separately."
                 : "Manage Claude subscription sign-in and API keys in Settings → Subscriptions & API Keys.", observedAt: now,
               dashboardURL: ProviderDashboardURL.claude)
           }
-          return await sharedAccount(provider, credentials: sharedCredentials, now: now, choice: choice)
+          return await sharedAccount(provider, credentials: deviceCredentials, now: now, choice: choice)
         }
       }
       var accounts: [UsageLimitAccount] = []
@@ -82,7 +82,7 @@ enum ProviderLimitCollector {
     case .grok: id = "xai"
     case .openCodeGo: id = "opencode-go"
     case .openRouter: id = "openrouter"
-    default: return unavailable(provider, detail: "This provider has no shared connection.", now: now)
+    default: return unavailable(provider, detail: "Usage is unavailable.", now: now)
     }
     guard let credential = credentials[id], let token = credential.access ?? credential.key else {
       return UsageLimitAccount(provider: provider, accountScopeID: choice.map { "wovenmatter.shared." + $0.id },
@@ -109,7 +109,7 @@ enum ProviderLimitCollector {
       return UsageLimitAccount(provider: account.provider, accountScopeID: "wovenmatter.shared.\(choice?.id ?? id)",
         accountLabel: choice?.label ?? credential.accountLabel ?? account.accountLabel, status: account.status,
         quotaWindows: account.quotaWindows, balance: account.balance, providerBudget: account.providerBudget,
-        details: account.details, history: account.history, source: "Woven Matter shared connection · \(account.source)",
+        details: account.details, history: account.history, source: "Woven Matter connection · \(account.source)",
         detail: account.detail, observedAt: account.observedAt, dashboardURL: account.dashboardURL)
     } catch {
       let rejected = (error as? SharedAccountHTTPError)?.status == 401

@@ -4,6 +4,8 @@ const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', i
 const defaultAgentSource = existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)
 const { createManagedDefaultAgentService } = await import(defaultAgentSource.href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
+const { SignInStore } = await import(new URL('./sign-in-store.mjs', defaultAgentSource).href)
+const { changeSignIns, listSignIns } = await import(new URL('./device-sign-ins.mjs', defaultAgentSource).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createProject, deleteProject, ensureScratchDirectory, linkHostProject, listHostDirectories } from './projects.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
@@ -67,7 +69,17 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
 // Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
-const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent'), environment: nonInteractiveSessionEnvironment(process.env, configuration) })
+// This host stores and renews its own sign-ins (`sign-ins.json`), and the
+// bundled Claude runtime keeps its logins, in this host's own private folder,
+// outside the workspace; no other device relays credentials to it.
+// Pi Durable's SDK workspace too; this machine's bots load the SDK copy it selects.
+const defaultAgentDirectory = configuration.defaultAgentDirectory
+const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: defaultAgentDirectory, environment: { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' } })
+const deviceSignIns = new SignInStore(defaultAgentDirectory)
+const openDeviceSignIns = () => deviceSignIns.open()
+// Subscriptions renew here whether or not anything used them.
+const signInRenewal = setInterval(() => { defaultAgent.renewSignIns().catch(() => {}) }, 60_000)
+signInRenewal.unref()
 const authenticationSessions = new Map()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
@@ -168,7 +180,7 @@ const defaultAgentControl = createDefaultAgentControl({
   command: () => ({ command: process.execPath, arguments: [fileURLToPath(new URL('./main.mjs', defaultAgentSource)), '--control'] }),
   cwd: () => workspaceRoot,
   environment: () => {
-    const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: resolve(workspaceRoot, '.wovenmatter/default-agent') }
+    const environment = { ...nonInteractiveSessionEnvironment(process.env, configuration), WOVEN_DEFAULT_AGENT_DIRECTORY: defaultAgentDirectory, WOVEN_DEFAULT_AGENT_DEVICE_VAULT: '1' }
     delete environment.WOVENMATTER_API_TOKEN
     return environment
   },
@@ -217,7 +229,7 @@ const timers = library && clientExecution ? createLibraryTimers({ library,
 
 const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   directory:resolve(workspaceRoot,'.wovenmatter/retained-execution'),
-  defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,execution:clientExecution,
+  defaultDirectory:defaultAgentDirectory,taskGateway,execution:clientExecution,
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
@@ -236,7 +248,7 @@ const github = library ? createGitHubService({ directory: githubDirectory(config
   fetchCopy: () => library.client.json('GET', '/v1/github', { timeout: 10_000 }),
   log: message => process.stderr.write(message + '\n') }) : null
 const bots = nativeLinuxHost ? createBotsService({
-  configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
+  configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, defaultAgentDirectory, serverPort: () => server.address()?.port ?? listenPort,
   libraryHost: library, memberIdentity, registry: memberSockets, installerBearer, github,
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
@@ -253,7 +265,7 @@ const workspaceRoutes = ['/v1/execution/commands', '/v1/execution/attachments', 
   '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
 // Usage on this machine: its harnesses, its Pi Durable agent and its bots.
-const usageScanner = createUsageScanner({ workspaceRoot, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
+const usageScanner = createUsageScanner({ workspaceRoot, defaultAgentDirectory, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
@@ -317,10 +329,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution'], memberKind: member.kind, administrator: member.kind === 'mac' }
       : clientExecution?.principal(request.headers.authorization, 'execution')
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
-    if (device && !member) {
-      const material = clientExecution.unlockMaterial(request.headers.authorization)
-      if (material) await defaultAgent.unlockForClient(material)
-    }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
     if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
@@ -497,31 +505,29 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         id: h.id, name: h.displayName, executable: await commandLocation(h.cliCommand),
       })));
       const statuses = await signInStatuses(entries, undefined, environment);
-      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Pi Durable', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
-        : agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name }))));
+      statuses.unshift(...agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name })));
       return json(response, 200, { statuses });
     }
     if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
-      return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent))
+      return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent, { onActivated: () => bots?.piDurableSDKUpdated() }))
     }
     if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
       const payload = await readJSON(request)
-      const result = await defaultAgent.configure(payload)
-      clientExecution.rememberUnlockMaterial(payload)
-      return json(response, 200, result)
+      // Chat settings only: this host keeps its own sign-ins.
+      return json(response, 200, await defaultAgent.configure(payload))
     }
     if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
-    // A Mac's key for this workspace's Pi Durable vault, without its
-    // credentials: the provider accounts already in the host's encrypted
-    // vault become usable again (after a restart, for every member). The key
-    // is held in memory only, as a configuration's is.
-    if (url.pathname === '/v1/default-agent/unlock' && request.method === 'POST') {
-      const body = await readJSON(request, 4096)
-      if (typeof body.workspace !== 'string' || typeof body.unlockKey !== 'string' || Object.keys(body).some(key => !['workspace', 'unlockKey'].includes(key))) return json(response, 400, { error: 'invalid_unlock' })
-      try { await defaultAgent.unlockForClient(body) } catch { return json(response, 403, { error: 'unlock_refused' }) }
-      clientExecution.rememberUnlockMaterial(body)
-      const status = await defaultAgent.status()
-      return json(response, 200, { unlocked: !status.locked, ...(status.epoch ? { epoch: status.epoch } : {}) })
+    // This host's own sign-ins, for a signed Mac's Settings → Subscriptions &
+    // API Keys. A key arrives once in the request and is stored only here.
+    if (url.pathname === '/v1/sign-ins' && request.method === 'GET') {
+      await openDeviceSignIns()
+      return json(response, 200, listSignIns(await deviceSignIns.read()))
+    }
+    if (url.pathname === '/v1/sign-ins' && request.method === 'POST') {
+      await openDeviceSignIns()
+      const result = await changeSignIns(deviceSignIns, await readJSON(request, 65_536))
+      await defaultAgent.reloadSignIns().catch(() => {})
+      return json(response, 200, result)
     }
     // Pi Durable settings: sign-in status, the model catalog, sign-in and
     // sign-out, as `wm-exec default-agent --control` answered them over SSH.
@@ -1420,7 +1426,8 @@ async function readJSON(request, maximumBytes = 1_048_576) {
 
 // Status reads package metadata only. Registry access and installation are always
 // explicit requests, and installation belongs to this workspace's service owner.
-export async function defaultAgentSDKRequest(request, response, service) {
+// One update covers Pi Durable and this machine's bots: a new SDK copy restarts them too.
+export async function defaultAgentSDKRequest(request, response, service, { onActivated = async () => {} } = {}) {
   if (request.method === 'GET') return service.sdkStatus()
   const body = await readJSON(request, 4_096)
   if (!body || typeof body !== 'object' || Array.isArray(body)
@@ -1441,9 +1448,15 @@ export async function defaultAgentSDKRequest(request, response, service) {
   if (request.aborted || response.destroyed) abort()
   try {
     controller.signal.throwIfAborted()
-    return body.action === 'check'
-      ? await service.checkSDKUpdates({ id: body.id ?? undefined, signal: controller.signal })
-      : await service.updateSDK({ id: body.id ?? undefined, version: body.version ?? undefined, signal: controller.signal })
+    if (body.action === 'check') return await service.checkSDKUpdates({ id: body.id ?? undefined, signal: controller.signal })
+    const result = await service.updateSDK({ id: body.id ?? undefined, version: body.version ?? undefined, signal: controller.signal })
+    // The update already committed; a failed bots restart retries on its own.
+    if (result?.activated) await Promise.resolve().then(onActivated).catch(() => {})
+    return result
+  } catch (error) {
+    // A rejected candidate answers with its readable message, not internal_error.
+    if (error?.constructor?.name === 'SDKMaintenanceError' && !error.statusCode) throw Object.assign(new Error(error.message), { statusCode: 409 })
+    throw error
   } finally {
     clearTimeout(timeout)
     request.removeListener('aborted', abort)

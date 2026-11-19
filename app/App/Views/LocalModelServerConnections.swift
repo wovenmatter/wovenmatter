@@ -9,7 +9,7 @@ struct LocalModelServerConnections: View {
     @State private var adding = false
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SettingsNote("Shared across workspaces. OpenAI Responses-compatible servers on this Mac or your Tailscale network.")
+            SettingsNote("OpenAI Responses-compatible servers on this Mac or your Tailscale network.")
             ForEach(servers) { server in
                 SettingsSummaryRow(server.name, value: server.models.count == 1 ? "1 model" : "\(server.models.count) models") {
                     LocalModelServerConnectionRow(agent: agent, server: server, changed: reload)

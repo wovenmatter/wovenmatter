@@ -90,13 +90,11 @@ test('inference streaming crosses worker IPC and cancellation reaches only that 
           }
           onEvent({ type: 'done', message: { text: request.input } });
         },
-        unlockForClient: async value => ({ unlocked: value.workspace === 'fixture' }),
         cancelActive: async () => {}, prepareRetirement: async () => ({ attachmentState: {} }),
       };
     }
   `);
   assert.equal((await f.service.inferenceCatalog()).accounts[0].id, 'second');
-  assert.equal((await f.service.unlockForClient({ workspace: 'fixture', unlockKey: 'fixture' })).unlocked, true);
   const controller = new AbortController(), received = [];
   await assert.rejects(f.service.inferenceStream({ wait: true }, { principalID: 'phone', signal: controller.signal, onEvent: event => {
     received.push(event); controller.abort();

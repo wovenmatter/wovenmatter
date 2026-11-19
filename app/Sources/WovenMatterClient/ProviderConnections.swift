@@ -53,19 +53,19 @@ extension DefaultAgentCredential {
 }
 
 extension ProviderAccountCoordinator {
-    /// App-wide consumers always resolve global connections, independently of
-    /// Pi Durable model enablement or a remote workspace's overrides.
+    /// App-wide consumers (usage limits, bots) read this device's own sign-ins.
     public func appCredentials() async throws -> [String: DefaultAgentCredential] {
-        try await prepare("global").credentials
+        try await prepare(ProviderConnectionAccounts.deviceScope).credentials
     }
-
-
 }
 
 /// Account secrets and their ordering live together in Keychain. The canonical
 /// slot remains compatible with Usage, including OpenRouter's
 /// existing shared key. Nothing here writes credentials to preferences or disk.
 public enum ProviderConnectionAccounts {
+    /// This device's sign-ins (the Keychain's `global` prefix). Each device stores
+    /// and renews its own; nothing is relayed.
+    public static let deviceScope = "global"
     public static let limit = 4
     public static func limit(for provider: String) -> Int {
         ProviderConnectionID(rawValue: provider)?.isSubscription == true ? 1 : limit
@@ -75,6 +75,9 @@ public enum ProviderConnectionAccounts {
         public var label: String
         public let createdAt: Date?
         public var isSelected: Bool
+        public init(id: String, label: String, createdAt: Date? = nil, isSelected: Bool) {
+            self.id = id; self.label = label; self.createdAt = createdAt; self.isSelected = isSelected
+        }
     }
     private struct Entry: Codable {
         var account: Account
@@ -97,7 +100,13 @@ public enum ProviderConnectionAccounts {
     private static func persist(_ store: Store, provider: String, scope: String, keychain: KeychainAccess) throws {
         try DefaultAgentSupport.saveKey(String(decoding: JSONEncoder().encode(store), as: UTF8.self), provider: "accounts." + provider, scope: scope, notify: false, keychain: keychain)
     }
+    /// Only real provider connections have accounts: a caller's provider string
+    /// never reads or writes another Keychain item (`encryption-key`, `oauth.*`).
+    private static func requireProvider(_ provider: String) throws {
+        guard ProviderConnectionID(rawValue: provider) != nil else { throw DefaultAgentError.message("Choose a provider connection.") }
+    }
     private static func load(_ provider: String, scope: String, keychain: KeychainAccess) throws -> Store {
+        try requireProvider(provider)
         let encoded = try DefaultAgentSupport.key("accounts." + provider, scope: scope, keychain: keychain)
         var store = try encoded.map { try JSONDecoder().decode(Store.self, from: Data($0.utf8)) } ?? Store()
         let current = try canonical(provider, scope: scope, keychain: keychain)

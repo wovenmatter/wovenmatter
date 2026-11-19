@@ -74,11 +74,11 @@ struct UsageLimitsRequest: Sendable {
   let now: Date
   var selectedConnections: [ProviderKind: UsageConnectionChoice] = [:]
 
-  func collect(sharedCredentials: [String: DefaultAgentCredential] = [:],
+  func collect(deviceCredentials: [String: DefaultAgentCredential] = [:],
                claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
     await ProviderLimitCollector.collect(
       enabledProviders: enabledProviders,
-      sharedCredentials: sharedCredentials,
+      deviceCredentials: deviceCredentials,
       selectedConnections: selectedConnections,
       claudeStatus: claudeStatus,
       now: now
@@ -133,16 +133,7 @@ public actor LocalUsageService {
     credentialStore = UsageCredentialStore(service: credentialService)
     importPreparationWorker = nil
     sharedConnectionRevision = { DefaultAgentSupport.revision }
-    sharedConnectionChoices = { providers in
-      try ProviderKind.supportedAccounts.filter { providers.contains($0) }.flatMap { provider in
-        try UsageConnectionChoice.connectionTypes(for: provider).flatMap { type, title in
-          try ProviderConnectionAccounts.list(provider: type, scope: "global").map { account in
-            UsageConnectionChoice(provider: provider, connectionID: type, accountID: account.id,
-              label: "\(title) · \(account.label)", preferred: account.isSelected)
-          }
-        }
-      }
-    }
+    sharedConnectionChoices = { try LocalUsageService.deviceConnectionChoices($0) }
     limitCollector = { request in
       guard request.allowCredentialAccess else {
         return request.enabledProviders.map { provider in
@@ -154,7 +145,7 @@ public actor LocalUsageService {
       var credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
       if request.allowCredentialAccess {
         for choice in request.selectedConnections.values {
-          if let credential = try? ProviderConnectionAccounts.credential(choice.accountID, provider: choice.connectionID, scope: "global") {
+          if let credential = try? ProviderConnectionAccounts.credential(choice.accountID, provider: choice.connectionID, scope: ProviderConnectionAccounts.deviceScope) {
             credentials[choice.connectionID] = credential.borrowing()
           } else {
             credentials.removeValue(forKey: choice.connectionID)
@@ -164,7 +155,7 @@ public actor LocalUsageService {
       let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
         && credentials["claude-subscription"] != nil
         ? try? await BuiltInClaudeSignIn.status(profile: credentials["claude-subscription"]?.accountId) : nil
-      return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
+      return await request.collect(deviceCredentials: credentials, claudeStatus: claudeStatus)
     }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"
@@ -191,6 +182,18 @@ public actor LocalUsageService {
     self.sharedConnectionChoices = sharedConnectionChoices
     self.limitCollector = limitCollector
     databaseURL = usageDatabaseURL
+  }
+
+  /// Usage limits read the accounts signed in on this device, and only those.
+  public static func deviceConnectionChoices(_ providers: Set<ProviderKind>, keychain: KeychainAccess = .init()) throws -> [UsageConnectionChoice] {
+    try ProviderKind.supportedAccounts.filter { providers.contains($0) }.flatMap { provider in
+      try UsageConnectionChoice.connectionTypes(for: provider).flatMap { type, title in
+        try ProviderConnectionAccounts.list(provider: type, scope: ProviderConnectionAccounts.deviceScope, keychain: keychain).map { account in
+          UsageConnectionChoice(provider: provider, connectionID: type, accountID: account.id,
+            label: "\(title) · \(account.label)", preferred: account.isSelected)
+        }
+      }
+    }
   }
 
   public func snapshot(

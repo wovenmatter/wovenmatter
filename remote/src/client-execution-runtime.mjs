@@ -11,10 +11,6 @@ import { promptBlocks, textWithFiles } from './execution-attachments.mjs'
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve,milliseconds))
 const fail = message => Object.assign(new Error(message), { statusCode: 409 })
-// Pi Durable's vault opens only with a Mac's unlock key. The code lets a
-// caller unlock it (`POST /v1/default-agent/unlock`) and retry.
-const locked = message => Object.assign(new Error(message), { statusCode: 423, code: 'default_agent_locked' })
-const lockedMessage = 'Pi Durable is locked. A Mac unlocks it with its key for this workspace, then retry.'
 const deferred = () => { let resolve,reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); promise.catch(()=>{}); return {promise,resolve,reject} }
 
 // Match the desktop's ACP usage contract. Missing counts stay unknown.
@@ -178,7 +174,6 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(!requestedDirectory)await ensureScratchDirectory(workspaceRoot,nativeWorkingDirectory)
     if(runtimeKind==='default_agent') {
       const status=await defaultAgent.status()
-      if(status.locked)throw locked(lockedMessage)
       const opened=await defaultAgent.invoke({method:'session/new',attachmentProtocol:1,params:{cwd:nativeWorkingDirectory,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
       const native = {nativeWorkingDirectory,sessionID:opened.result.sessionId,attachmentToken:opened.result._meta?.attachmentToken,epoch:status.epoch,configuration:opened.result}
       await applyWorkspacePolicy(native, runtimeKind, (method, params) => invoke(native, method, params), { permission: requestedPermission })
@@ -206,7 +201,6 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(typeof native?.sessionID!=='string'||!native.sessionID||native.sessionID.length>4096)throw fail('A native session identity is required.')
     if(runtimeKind==='default_agent') {
       const status=await defaultAgent.status()
-      if(status.locked)throw locked(lockedMessage)
       const opened=await defaultAgent.invoke({method:'woven/adopt',attachmentProtocol:1,params:{sessionId:native.sessionID}})
       if(opened.result.sessionId!==native.sessionID)throw fail('Native session identity changed.')
       const adopted = {nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,epoch:status.epoch,attachmentToken:opened.result._meta?.attachmentToken,configuration:opened.result}
@@ -364,7 +358,6 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   }
   async function ensureBuiltIn(native,mcpConnection) {
     const status=await defaultAgent.status()
-    if(status.locked)throw locked(lockedMessage)
     if(native.epoch===status.epoch)return
     const opened=await defaultAgent.invoke({method:'session/load',attachmentProtocol:1,params:{cwd:native.nativeWorkingDirectory??workspaceRoot,sessionId:native.sessionID,_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
     if(opened.result.sessionId!==native.sessionID)throw fail('Pi Durable reopened a different native session.')
@@ -417,8 +410,6 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     }
     if(runtimeKind==='opencode')return nativeSessions.perform(runtimeKind,{nativeWorkingDirectory:cwd},'options',{model})
     if(runtimeKind==='default_agent') {
-      const status=await defaultAgent.status()
-      if(status.locked)throw locked(lockedMessage)
       const opened=await defaultAgent.invoke({method:'session/new',attachmentProtocol:1,params:{cwd,_meta:{}}})
       const native={sessionID:opened.result.sessionId,attachmentToken:opened.result._meta?.attachmentToken}
       return project(runtimeKind,await chosen({...opened.result,sessionId:native.sessionID},(method,params)=>invoke(native,method,params)))
@@ -445,10 +436,8 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     await applyTaskConfiguration(call,native.sessionID,native.configuration??{},{runtimeKind,...options})
   }
   async function providers() {
-    const agent=await defaultAgent.status()
     const statuses=await Promise.all([...catalog.values()].map(harnessStatus))
-    // `locked` says a Mac must unlock Pi Durable (`POST /v1/default-agent/unlock`).
-    return [{id:'default_agent',runtimeKind:'default_agent',displayName:'Pi Durable',routeName:'This workspace',available:!agent.locked,canStart:!agent.locked,canResume:true,canSteer:true,canStop:true,supportsApprovals:false,supportsQuestions:false,activeInputMode:'steer',...(agent.locked?{locked:true,unavailableReason:lockedMessage}:{})},
+    return [{id:'default_agent',runtimeKind:'default_agent',displayName:'Pi Durable',routeName:'This workspace',available:true,canStart:true,canResume:true,canSteer:true,canStop:true,supportsApprovals:false,supportsQuestions:false,activeInputMode:'steer'},
       ...statuses.map(status=>({id:status.id,runtimeKind:status.id,displayName:status.displayName,routeName:'This workspace',available:status.state==='ready',canStart:status.state==='ready',canResume:true,canSteer:true,canStop:true,supportsApprovals:true,supportsQuestions:status.id==='claude_code',activeInputMode:'steer'}))]
   }
   return {create,adopt,run,stop,steer,respond,providers,settings,configure,sessionOptions,

@@ -1,9 +1,9 @@
-import { unlink } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DefaultAgentError, operationErrorMessage } from './config.mjs';
-import { CredentialVault, sharedCredentials } from './vault.mjs';
+import { SignInStore, deviceSignInsEnabled } from './sign-in-store.mjs';
+import { deviceConfig } from './device-sign-ins.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
 import { createSignInPrompt } from './sign-in-interaction.mjs';
@@ -38,7 +38,7 @@ async function invoke(message) {
     // Passive catalog loading and connection status own cancellable children.
     // Other commands retain their existing shutdown behavior; installing a
     // SIGTERM listener for an operation that ignores this signal would strand it.
-    if (!['probe-server', 'reset', 'logout', 'login', 'sign-in-status', 'refresh'].includes(message.action)) {
+    if (!['probe-server', 'logout', 'login', 'sign-in-status', 'refresh'].includes(message.action)) {
       const abort = () => controlController.abort();
       process.once('SIGTERM', abort);
       // EOF is a valid one-shot request boundary for DefaultAgentControl.run.
@@ -48,10 +48,12 @@ async function invoke(message) {
       catch (error) { return { url: '', models: [], error: error.message }; }
     }
     payload = message;
-    if (payload.unlockKey) {
-      vault = new CredentialVault(directory);
-      if (message.action === 'reset') await unlink(vault.path).catch(e => { if (e.code !== 'ENOENT') throw e; });
-      await vault.unlock(payload.workspace, payload.unlockKey);
+    // A host's own sign-ins: this helper signs in and saves here, and its result
+    // never carries the credential back to the device that asked.
+    if (deviceSignInsEnabled()) {
+      vault = new SignInStore(directory);
+      await vault.open();
+      payload = { ...message, credentials: {}, credentialAccounts: undefined, config: deviceConfig(message.config, await vault.read()) };
     }
     const e = await engine();
     controlController.signal.throwIfAborted();
@@ -60,13 +62,12 @@ async function invoke(message) {
       return { models: await e.browse(provider, { signal: controlController.signal, force: message.force === true }) };
     }
     if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId, { signal: controlController.signal });
-    if (message.action === 'reset') {
-      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));
-      return { reset: true };
-    }
     if (message.action === 'logout') {
-      if (message.provider === 'claude-subscription') await e.claude.signOut(message.profile);
-      else await e.credentials.delete(message.provider);
+      if (message.provider === 'claude-subscription') {
+        const profile = message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId;
+        await e.claude.signOut(profile);
+        if (vault) await e.credentials.delete('claude-subscription');
+      } else await e.credentials.delete(message.provider);
       return { disconnected: true };
     }
     if (message.action === 'login') {
@@ -78,8 +79,14 @@ async function invoke(message) {
       const prompt = createSignInPrompt({ provider: message.provider, signal: controller.signal, pending: pendingPrompts, send });
       try {
       if (message.provider === 'claude-subscription') {
-        const status = await inlineClaudeLogin(e.claude, message.profile, { signal: controller.signal, notify: notification => send({ notification }), prompt });
-        return { ...status, provider: message.provider, nativeProfile: message.profile };
+        const profile = message.profile ?? (deviceSignInsEnabled() ? (await e.credentials.read('claude-subscription'))?.accountId ?? 'default' : undefined);
+        const status = await inlineClaudeLogin(e.claude, profile, { signal: controller.signal, notify: notification => send({ notification }), prompt });
+        // The device records which native profile it signed in; Claude keeps its own tokens.
+        if (deviceSignInsEnabled() && status.connected) {
+          await vault.modify(async stored => ({ ...stored, owned: { ...stored.owned, 'claude-subscription': { type: 'native', accountId: profile,
+            ...(typeof status.account === 'string' && status.account ? { displayName: status.account.slice(0, 256) } : {}) } } }));
+        }
+        return { ...status, provider: message.provider, nativeProfile: profile };
       }
       e.credentials.signingIn = true;
       let credential = await e.runtime.login(message.provider, 'oauth', { signal: controller.signal,

@@ -77,7 +77,14 @@ public struct KeychainAccess: Sendable {
   private let policy: KeychainInteractionPolicy
   private var operations: KeychainOperations { policy.operations }
 
-  public init() { policy = Self.systemPolicy }
+  /// Test processes bind isolated in-memory operations here so a code path that
+  /// uses the default Keychain (`KeychainAccess()`) never reaches the user's.
+  /// Bound per task, so concurrent tests each keep their own store.
+  @TaskLocal public static var testOperations: KeychainOperations?
+
+  public init() {
+    policy = Self.testOperations.map { KeychainInteractionPolicy(operations: $0) } ?? Self.systemPolicy
+  }
   public init(operations: KeychainOperations) {
     policy = KeychainInteractionPolicy(operations: operations)
   }

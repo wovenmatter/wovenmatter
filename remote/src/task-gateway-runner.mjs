@@ -168,7 +168,6 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
   if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
   let sessionID,attachmentToken,accepted=false
   try {
-    if((await defaultAgent.status()).locked) throw Object.assign(before('Waiting for Woven Matter to reconnect and unlock Pi Durable.'),{deferred:true})
     const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentProtocol:1,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
     const session=opened.result
     attachmentToken=session?._meta?.attachmentToken ?? opened.attachmentToken

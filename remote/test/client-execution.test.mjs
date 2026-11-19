@@ -55,30 +55,23 @@ test('per-device bearer grants never expose administration or another device rec
 })
 
 test('grants and workspaces enrolled with the old inference scope keep working for execution only',async t=>{
-  const f=fixture(t),material={workspace:'private-workspace-scope',unlockKey:'test-only-very-private-unlock-material'}
-  f.service.rememberUnlockMaterial(material)
+  const f=fixture(t)
   // An older Mac still asks for `inference`; it is dropped and execution is granted.
   const legacy={...f.enrollment,deviceID:randomUUID(),scopes:['execution','inference']},grant=f.service.provision(legacy)
   assert.deepEqual(f.service.principal('Bearer '+grant.token,'execution').scopes,['execution'])
   assert.equal(f.service.principal('Bearer '+grant.token,'inference'),null)
-  assert.deepEqual(f.service.unlockMaterial('Bearer '+grant.token),material)
   assert.equal(grant.workspace.capabilities.includes('inference'),false)
   assert.throws(()=>f.service.provision({...f.enrollment,deviceID:randomUUID(),scopes:['inference']}),{statusCode:400})
   // A grant and workspace stored before the upgrade, with both scopes.
-  const {DatabaseSync}=await import('node:sqlite'),{createCipheriv,createHash,randomBytes}=await import('node:crypto')
+  const {DatabaseSync}=await import('node:sqlite'),{createHash,randomBytes}=await import('node:crypto')
   const db=new DatabaseSync(join(f.directory,'execution.sqlite'))
-  const token=randomBytes(32).toString('base64url'),id=randomUUID(),scopes=['execution','inference'],iv=randomBytes(12)
-  const cipher=createCipheriv('aes-256-gcm',createHash('sha256').update('wovenmatter-client-unlock-v1\0'+token).digest(),iv)
-  cipher.setAAD(Buffer.from(JSON.stringify([f.enrollment.libraryID,f.enrollment.workspaceID,id,[...scopes].sort()])))
-  const ciphertext=Buffer.concat([cipher.update(JSON.stringify(material),'utf8'),cipher.final()])
-  db.prepare('INSERT INTO devices VALUES (?,?,?)').run(id,createHash('sha256').update(token).digest('hex'),JSON.stringify({id,name:'Older Mac',scopes,createdAt:new Date().toISOString(),
-    unlockEnvelope:{iv:iv.toString('base64'),ciphertext:ciphertext.toString('base64'),tag:cipher.getAuthTag().toString('base64')}}))
+  const token=randomBytes(32).toString('base64url'),id=randomUUID(),scopes=['execution','inference']
+  db.prepare('INSERT INTO devices VALUES (?,?,?)').run(id,createHash('sha256').update(token).digest('hex'),JSON.stringify({id,name:'Older Mac',scopes,createdAt:new Date().toISOString()}))
   const identity=JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get().body)
   db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify({...identity,capabilities:[...identity.capabilities,'inference']}))
   db.close()
   await f.restart()
   assert.equal(f.service.principal('Bearer '+token,'execution').id,id)
-  assert.deepEqual(f.service.unlockMaterial('Bearer '+token),material)
   assert.equal(f.service.descriptor().capabilities.includes('inference'),false)
   assert.ok(f.service.descriptor().capabilities.includes('execution'))
 })
@@ -147,28 +140,15 @@ test('restart fences accepted unfinished commands without executing them again',
   assert.equal(f.service.transcript(opened.conversationID).activeRunID,undefined)
 })
 
-test('device vault grants survive restart encrypted and remain token and identity bound',async t=>{
-  const f=fixture(t),material={workspace:'private-workspace-scope',unlockKey:'test-only-very-private-unlock-material'}
-  f.service.rememberUnlockMaterial(material)
-  const grant=f.service.provision(f.enrollment)
-  assert.deepEqual(f.service.unlockMaterial('Bearer '+grant.token),material)
-  assert.equal(f.service.unlockMaterial('Bearer wrong'),null)
+test('device grants survive restart without their token on disk',async t=>{
+  const f=fixture(t),grant=f.service.provision(f.enrollment)
   await f.restart()
-  assert.deepEqual(f.service.unlockMaterial('Bearer '+grant.token),material)
-  const {DatabaseSync}=await import('node:sqlite')
-  const db=new DatabaseSync(join(f.directory,'execution.sqlite'))
-  const row=db.prepare('SELECT body FROM devices WHERE id=?').get(f.enrollment.deviceID)
-  const body=JSON.parse(row.body)
-  assert.equal(row.body.includes(material.unlockKey),false)
-  body.unlockEnvelope.tag=Buffer.alloc(16).toString('base64')
-  db.prepare('UPDATE devices SET body=? WHERE id=?').run(JSON.stringify(body),f.enrollment.deviceID)
-  assert.throws(()=>f.service.unlockMaterial('Bearer '+grant.token),{statusCode:403})
-  db.close()
+  assert.equal(f.service.principal('Bearer '+grant.token,'execution').id,f.enrollment.deviceID)
+  assert.equal(f.service.principal('Bearer wrong','execution'),null)
   f.service.revoke(f.enrollment.deviceID)
-  assert.equal(f.service.unlockMaterial('Bearer '+grant.token),null)
+  assert.equal(f.service.principal('Bearer '+grant.token,'execution'),null)
   for(const suffix of ['', '-wal']) {
     let bytes;try{bytes=readFileSync(join(f.directory,'execution.sqlite'+suffix))}catch{continue}
-    assert.equal(bytes.includes(Buffer.from(material.unlockKey)),false)
     assert.equal(bytes.includes(Buffer.from(grant.token)),false)
   }
 })

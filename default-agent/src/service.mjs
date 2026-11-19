@@ -1,5 +1,5 @@
-import { timingSafeEqual } from 'node:crypto';
-import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
+import { SignInStore } from './sign-in-store.mjs';
+import { deviceConfig } from './device-sign-ins.mjs';
 import { join } from 'node:path';
 import { DefaultAgentError, canonicalHash, operationErrorMessage, providers as botProviders, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { openNativeJournal } from './native-journal.mjs';
@@ -16,7 +16,10 @@ function verifyRetry(stored, fingerprint) {
 // persistence; an accepted transport ID is never redispatched after restart.
 export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON, attachmentState }) {
   let enginePromise, inferenceAdapter;
-  const vault = new CredentialVault(directory), epoch = crypto.randomUUID();
+  const vault = new SignInStore(directory), epoch = crypto.randomUUID();
+  // This host's own sign-ins: its folder is always made private first.
+  let deviceOpening;
+  const openDevice = () => deviceOpening ??= vault.open().catch(error => { deviceOpening = undefined; throw error; });
   let configurationQueue = Promise.resolve(), generation = 0;
   const operations = new Map(), admissions = new Map(), admissionQueues = new Map();
   const attachmentTokens = new Map(attachmentState?.tokens);
@@ -33,45 +36,59 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   async function engine() {
     if (!enginePromise) enginePromise = (async () => {
       if (engineFactory) return engineFactory();
-      await vault.read();
+      await openDevice();
+      const stored = await vault.read();
       const { DefaultAgentEngine } = await import('./engine.mjs');
       const value = await readJSON(join(directory, 'configuration.json'));
-      return new DefaultAgentEngine({ cwd, directory, config: value.config, vault }).initialize();
+      return new DefaultAgentEngine({ cwd, directory, config: deviceConfig(value.config, stored), vault }).initialize();
     })().catch(error => { enginePromise = undefined; throw error; });
     return enginePromise;
   }
   function configure(value) {
     const pending = configurationQueue.then(async () => {
-      await vault.unlock(value.workspace, value.unlockKey);
-      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), accounts: sharedAccounts(value.credentialAccounts), revision: value.revision }));
+      // Only chat settings arrive from another device; this host keeps its own sign-ins.
+      await openDevice();
       const config = validateConfig(value.config);
       await writePrivateJSON(join(directory, 'configuration.json'), { config });
-      if (enginePromise) await (await enginePromise).apply({ config });
+      if (enginePromise) await (await enginePromise).apply({ config: deviceConfig(config, await vault.read()) });
       generation++;
       return { saved: true, revision: value.revision, epoch, generation };
     });
     configurationQueue = pending.catch(() => {});
     return pending;
   }
-  function unlockForClient({ workspace, unlockKey }) {
+  // After another device changed this host's sign-ins (`v1/sign-ins`): the
+  // sign-ins file is read on use; local model servers are registered again.
+  function reloadSignIns() {
     const pending = configurationQueue.then(async () => {
-      const candidate = typeof unlockKey === 'string' ? Buffer.from(unlockKey, 'base64') : Buffer.alloc(0);
-      try {
-        if (vault.unlocked && vault.workspace === workspace && candidate.length === vault.key.length && timingSafeEqual(candidate, vault.key)) return { unlocked: true };
-        await vault.unlock(workspace, unlockKey);
-        return { unlocked: true };
-      } finally { candidate.fill(0); }
+      if (!enginePromise) return { reloaded: false };
+      const value = await readJSON(join(directory, 'configuration.json'));
+      const current = await enginePromise;
+      await current.apply({ config: deviceConfig(value.config ?? current.config, await vault.read()) });
+      generation++;
+      return { reloaded: true };
     });
     configurationQueue = pending.catch(() => {});
     return pending;
   }
+  // This host renews its own subscriptions, used or not, before they expire.
+  async function renewSignIns({ window = 5 * 60_000 } = {}) {
+    await openDevice();
+    const owned = (await vault.read()).owned ?? {};
+    const due = ['openai-codex', 'xai'].filter(id => owned[id]?.type === 'oauth' && !owned[id].borrowed && !(owned[id].expires > Date.now() + window));
+    if (!due.length) return { renewed: [] };
+    const current = await engine(), renewed = [];
+    for (const provider of due) {
+      try { await current.runtime.getAuth(provider, { signal: AbortSignal.timeout(30_000), allowWait: false }); renewed.push(provider); }
+      catch { /* Renewal retries on the next check; an expired sign-in is reported as such. */ }
+    }
+    return { renewed };
+  }
   async function inferenceCatalog(options) {
-    if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
     inferenceAdapter ??= createInferenceAdapter(await engine());
     return inferenceAdapter.catalog(options);
   }
   async function inferenceStream(request, options) {
-    if (!vault.unlocked && !engineFactory) throw new DefaultAgentError('Unlock this workspace before using its inference connections.');
     inferenceAdapter ??= createInferenceAdapter(await engine());
     return inferenceAdapter.stream(request, options);
   }
@@ -80,7 +97,6 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   // tokens stay in this store. A Claude subscription is the machine's native
   // Claude runtime directories, never token material. `null`: not connected.
   async function botCredentials({ provider } = {}) {
-    if (!vault.unlocked && !engineFactory) throw Object.assign(new DefaultAgentError('Unlock this workspace before bots use its provider connections.'), { statusCode: 423 });
     const search = ['exa', 'brave', 'firecrawl'];
     if (typeof provider !== 'string' || ![...botProviders, ...search, 'web-search'].includes(provider)) throw Object.assign(new DefaultAgentError('Choose a Woven provider connection.'), { statusCode: 400 });
     const current = await engine();
@@ -95,7 +111,12 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       const environment = await current.claude.environment(undefined, profile);
       return { credential: { type: 'native', configDir: environment.CLAUDE_CONFIG_DIR, secureStorageDir: environment.CLAUDE_SECURESTORAGE_CONFIG_DIR } };
     }
-    const credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    let credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    // A device's own subscription is renewed here before bots are refused it.
+    if (credential?.type === 'oauth' && !credential.borrowed && !(credential.expires > Date.now() + 60_000)) {
+      try { await current.runtime.getAuth(provider, { signal: AbortSignal.timeout(30_000), allowWait: false }); } catch { /* Answer with what is stored. */ }
+      credential = (await current.credentials.candidates(provider)).find(value => value.credential)?.credential;
+    }
     if (credential?.type === 'api_key' && typeof credential.key === 'string') return { credential: { type: 'api_key', key: credential.key } };
     if (credential?.type === 'oauth' && typeof credential.access === 'string' && credential.expires > Date.now()) {
       return { credential: { type: 'oauth', access: credential.access, expires: credential.expires, ...(typeof credential.accountId === 'string' ? { accountId: credential.accountId } : {}) } };
@@ -103,8 +124,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     return { credential: null };
   }
   async function status() {
-    if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
-    return { ...(await (await engine()).status()), locked: false, epoch };
+    return { ...(await (await engine()).status()), epoch };
   }
   async function invoke(message) {
     const id = message.operationID;
@@ -225,5 +245,5 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     }
     return items.slice(0,1000);
   }
-  return { engine, inspection, unlockForClient: tracked(unlockForClient), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), botCredentials: tracked(botCredentials), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
+  return { engine, inspection, reloadSignIns: tracked(reloadSignIns), renewSignIns: tracked(renewSignIns), inferenceCatalog: tracked(inferenceCatalog), inferenceStream: tracked(inferenceStream), botCredentials: tracked(botCredentials), configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
 }

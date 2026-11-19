@@ -39,6 +39,21 @@ async function ownedDirectory(path) {
   const info = await lstat(path);
   return info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid();
 }
+// The Claude binary a copy carries for this machine, which Pi Durable and bots both run
+// (`bots/src/pi-durable-sdk.ts` accepts the glibc package or the musl one).
+async function claudeBinary(root) {
+  for (const name of [`claude-agent-sdk-${process.platform}-${process.arch}`, `claude-agent-sdk-${process.platform}-${process.arch}-musl`]) {
+    const path = join(root, 'node_modules/@anthropic-ai', name, 'claude');
+    try { await access(path, constants.X_OK); return path; } catch {}
+  }
+  return null;
+}
+// Bots on this machine run on Pi Durable's SDK copy: `Resources/bots` beside
+// `Resources/default-agent` in the app, `<release>/bots` on a Linux host, `bots/` in a checkout.
+async function botsRuntime() {
+  const root = resolve(bundledRoot, '../bots');
+  try { await access(join(root, 'src/cli.ts')); return root; } catch { return null; }
+}
 const packageVersion = async (root, name) => (await readJSON(join(root, 'node_modules', name, 'package.json')))?.version ?? null;
 async function privateDirectory(path) {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -96,7 +111,9 @@ export async function sdkStatus({ directory }) {
   const sdks = await Promise.all(definitions.map(async definition => {
     const versions = await Promise.all(definition.packages.map(name => packageVersion(runtime.root, name).catch(() => null)));
     const installedVersion = versions[0];
-    const consistent = versions.every(version => version === installedVersion) && stableVersion(installedVersion);
+    // A copy missing a package or its Claude binary cannot run bots; reinstalling repairs it.
+    const consistent = versions.every(version => version === installedVersion) && stableVersion(installedVersion)
+      && (definition.id !== 'claude' || Boolean(await claudeBinary(runtime.root)));
     const current = cached?.base === runtime.base;
     const latestVersion = current ? cached?.versions?.[definition.id] ?? null : null;
     const blocked = current ? cached?.newer?.[definition.id] ?? null : null;
@@ -105,7 +122,7 @@ export async function sdkStatus({ directory }) {
       : newerVersion ? `${definition.name} ${newerVersion} needs a Woven Matter update. ${latestVersion} is the newest compatible release.` : undefined;
     return { id: definition.id, name: definition.name, installedVersion, latestVersion, newerVersion, consistent,
       ...(notice ? { notice } : {}),
-      updateAvailable: stableVersion(latestVersion) && stableVersion(installedVersion) && (newer(latestVersion, installedVersion) || !consistent) };
+      updateAvailable: stableVersion(latestVersion) && (!consistent || (stableVersion(installedVersion) && newer(latestVersion, installedVersion))) };
   }));
   return { sdks, generation: runtime.generation, checkedAt: cached?.base === runtime.base ? cached.checkedAt ?? null : null };
 }
@@ -267,10 +284,16 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     // model discovery, account checks, or inference.
     await run(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage,
       env: { ...env, WOVENMATTER_INSTRUCTIONS_FILE: fileURLToPath(new URL('../../harnesses/woven-instructions.txt', import.meta.url)) }, signal });
-    const claude = join(stage, 'node_modules', `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`, 'claude');
+    // The same glibc or musl package status and bots accept.
+    const claude = await claudeBinary(stage);
+    if (!claude) throw fail('The Claude SDK runtime could not be verified. The previous SDKs were kept.');
     if (process.platform === 'darwin') await run('/usr/bin/codesign', ['--verify', '--strict', claude], { cwd: stage, env, signal });
     const engineVersion = await run(claude, ['--version'], { cwd: stage, env, signal });
     if (!/\d+\.\d+\.\d+/.test(engineVersion)) throw fail('The Claude SDK runtime could not be verified. The previous SDKs were kept.');
+    // Bots run on this copy too once it is active, so load their whole runtime and container
+    // helper from it first, the way they start; a copy bots cannot run is discarded here.
+    const bots = await botsRuntime();
+    if (bots) await run(process.execPath, [join(bots, 'src/cli.ts'), 'verify-sdk', stage], { cwd: bots, env, timeout: 120000, signal });
     await atomicJSON(join(stage, 'woven-sdk-generation.json'), { base: before.base, generation });
     for (const name of ['.installer-home', '.installer-tmp', '.npm-cache', '.user-npmrc', '.global-npmrc']) await rm(join(stage, name), { recursive: true, force: true });
     aborted(signal);
@@ -278,11 +301,15 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
     await rename(stage, completed); stage = undefined;
     aborted(signal);
     // Atomic activation is the only mutation visible to new helper processes.
-    // Existing generations are intentionally retained for live conversations.
-    const installed = { ...checked, generation, sdks: checked.sdks.map(sdk => updates.some(value => value.id === sdk.id)
+    // `activated` tells the machine's Woven server to restart bots onto it too.
+    const installed = { ...checked, generation, activated: true, sdks: checked.sdks.map(sdk => updates.some(value => value.id === sdk.id)
       ? { ...sdk, installedVersion: sdk.latestVersion, consistent: true, updateAvailable: false, notice: undefined }
-      : sdk), notice: 'SDK updated. Running turns finish with their current SDK; new turns use the update.' };
+      : sdk), notice: 'SDK updated.' };
     await atomicJSON(p.active, { base: before.base, generation });
+    // The verified update replaces the copy it was installed over: delete that
+    // generation now, even if a running conversation still uses it. The bundled
+    // copy is part of Woven Matter and stays. No other copy is cleaned up here.
+    if (before.root !== bundledRoot) await rm(before.root, { recursive: true, force: true }).catch(() => {});
     // No fallible metadata reads after activation: a late cancellation/error
     // must never claim that the previous generation was kept after this commit.
     return installed;

@@ -33,10 +33,18 @@ private final class FakeEngine: BotEngineHost {
 
 @MainActor
 private final class FakeChild: BotsRuntimeChild {
-    var isRunning = true
+    private var running = true
+    private var terminated = false
+    /// How many times it still reports running after `terminate()`: a runtime slow to exit
+    /// (the supervisor polls every 100 ms), so a stop really waits.
+    var lingers = 0
+    var isRunning: Bool {
+        if running, terminated, lingers > 0 { lingers -= 1; return true }
+        return running && !terminated
+    }
     let processIdentifier: Int32 = 4242
-    func terminate() { isRunning = false }
-    func kill() { isRunning = false }
+    func terminate() { terminated = true }
+    func kill() { running = false }
 }
 
 @MainActor
@@ -44,6 +52,11 @@ private final class HostFixture {
     let directory: URL
     let engine: FakeEngine
     var launches: [[String]] = []
+    /// The runtime children launched so far, newest last.
+    var children: [FakeChild] = []
+    /// This fixture's own channel for Pi Durable's SDK activations, so tests running
+    /// alongside never see another test's notification.
+    let notifications = NotificationCenter()
     var issued: [(String, String, String)] = []
     var revoked: [(String, Bool)] = []
     var recorded: [(String, BotConversationMirror)] = []
@@ -51,19 +64,22 @@ private final class HostFixture {
     let host: BotsHostController
     let supervisor: BotsRuntimeSupervisor
 
-    init(configure: (inout BotsHostDependencies) -> Void = { _ in }) throws {
+    init(defaultAgent: URL? = nil, configure: (inout BotsHostDependencies) -> Void = { _ in }) throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "bots-host-\(UUID().uuidString)")
         let bundleRoot = directory.appending(path: "bundle")
         try FileManager.default.createDirectory(at: bundleRoot.appending(path: "src"), withIntermediateDirectories: true)
         try Data("export {}".utf8).write(to: bundleRoot.appending(path: "src/cli.ts"))
         try Data(#"{"name":"bots","version":"0.3.1"}"#.utf8).write(to: bundleRoot.appending(path: "package.json"))
-        let bundle = BotsRuntimeBundle(node: URL(fileURLWithPath: "/usr/bin/true"), root: bundleRoot)
+        let bundle = BotsRuntimeBundle(node: URL(fileURLWithPath: "/usr/bin/true"), root: bundleRoot, defaultAgent: defaultAgent)
         engine = FakeEngine(socket: directory.appending(path: "docker.sock").path)
         let state = directory.appending(path: "Bots")
         var launches: [[String]] = []
+        var children: [FakeChild] = []
         supervisor = BotsRuntimeSupervisor(directory: state, bundle: bundle, launch: { _, arguments, _, _, _ in
             launches.append(arguments)
-            return FakeChild()
+            let child = FakeChild()
+            children.append(child)
+            return child
         }, probe: { _, _ in true })
         var issued: [(String, String, String)] = []
         var revoked: [(String, Bool)] = []
@@ -87,11 +103,13 @@ private final class HostFixture {
             },
             capacity: { _ in BotMachineCapacity(memoryBytes: 16 * gib, diskTotalBytes: 500 * gib, diskFreeBytes: 200 * gib) })
         configure(&dependencies)
-        host = BotsHostController(directory: state, engine: engine, bundle: bundle, dependencies: dependencies, supervisor: supervisor)
+        host = BotsHostController(directory: state, engine: engine, bundle: bundle, dependencies: dependencies, supervisor: supervisor,
+                                  sdkNotifications: notifications)
         // Closures above write through these boxes; mirror them after each step.
         self.launches = launches; self.issued = issued; self.revoked = revoked; self.recorded = recorded
         sync = { [unowned self] in
-            self.launches = launches; self.issued = issued; self.revoked = revoked; self.recorded = recorded; self.deleted = deleted
+            self.launches = launches; self.children = children
+            self.issued = issued; self.revoked = revoked; self.recorded = recorded; self.deleted = deleted
         }
     }
     var sync: () -> Void = {}
@@ -166,6 +184,84 @@ struct BotsHostTests {
         _ = try await fixture.host.perform(.setEnabled(false))
         #expect(fixture.engine.stopped == 1 && fixture.supervisor.phase == .stopped)
         #expect(await fixture.host.snapshot().machines.first?.state == .off)
+    }
+
+    @Test func botsRunThisMacsPiDurableSDKAndRestartOntoItsUpdate() async throws {
+        let defaultAgent = URL(fileURLWithPath: "/Applications/Woven Matter.app/Contents/Resources/default-agent")
+        let fixture = try HostFixture(defaultAgent: defaultAgent); defer { fixture.remove() }
+        // An update while bots are off restarts nothing; they resolve the copy when they start.
+        fixture.notifications.post(name: DefaultAgentSDKControl.sdkActivated, object: nil)
+        _ = try await fixture.host.perform(.setEnabled(true))
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        fixture.sync()
+        #expect(fixture.launches.count == 1)
+        // The runtime is told where Pi Durable is, and takes its Claude binary from that copy.
+        let config = try fixture.config()
+        let piDurable = try #require(config["piDurable"] as? [String: Any])
+        #expect(piDurable["bundle"] as? String == defaultAgent.path)
+        #expect(piDurable["directory"] as? String == BotsRuntimeBundle.piDurableDirectory().path)
+        #expect(config["claude"] == nil)
+
+        fixture.notifications.post(name: DefaultAgentSDKControl.sdkActivated, object: nil)
+        try await waitFor("restart") { fixture.sync(); return fixture.launches.count == 2 }
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        _ = try await fixture.host.perform(.setEnabled(false))
+    }
+
+    /// Bots running, with a runtime that takes a few polls to exit once told to stop.
+    private func runningBots() async throws -> HostFixture {
+        let fixture = try HostFixture()
+        _ = try await fixture.host.perform(.setEnabled(true))
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        fixture.sync()
+        #expect(fixture.launches.count == 1)
+        let child = try #require(fixture.children.last)
+        child.lingers = 3
+        return fixture
+    }
+
+    /// Long enough for a restart that was waiting on the stop to have brought bots up.
+    private func settle(_ fixture: HostFixture) async throws {
+        try await Task.sleep(for: .milliseconds(800))
+        fixture.sync()
+    }
+
+    @Test func anSDKUpdateNeverTurnsBotsBackOnAfterTheyAreTurnedOff() async throws {
+        let fixture = try await runningBots(); defer { fixture.remove() }
+        fixture.notifications.post(name: DefaultAgentSDKControl.sdkActivated, object: nil)
+        // Turned off while the restart waits for the old runtime to exit.
+        _ = try await fixture.host.perform(.setEnabled(false))
+        try await settle(fixture)
+        #expect(fixture.launches.count == 1)
+        #expect(fixture.supervisor.phase == .stopped)
+        #expect(!fixture.host.isEnabled)
+    }
+
+    @Test func anSDKUpdateNeverStartsBotsWhileTheServerShutsDown() async throws {
+        let fixture = try await runningBots(); defer { fixture.remove() }
+        fixture.notifications.post(name: DefaultAgentSDKControl.sdkActivated, object: nil)
+        await fixture.host.shutdown()
+        try await settle(fixture)
+        #expect(fixture.launches.count == 1)
+        #expect(fixture.supervisor.phase == .stopped)
+    }
+
+    @Test func aRuntimeRestartNeverTurnsBotsBackOnAfterTheyAreTurnedOff() async throws {
+        let fixture = try await runningBots(); defer { fixture.remove() }
+        let restart = Task { try await fixture.host.perform(.restartRuntime) }
+        // The restart is now waiting for the old runtime to exit.
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try await fixture.host.perform(.setEnabled(false))
+        _ = try await restart.value
+        try await settle(fixture)
+        #expect(fixture.launches.count == 1)
+        #expect(fixture.supervisor.phase == .stopped)
+    }
+
+    @Test func piDurablesSDKDirectoryIsTheOneItsHelpersUse() {
+        #expect(BotsRuntimeBundle.piDurableDirectory(environment: ["WOVEN_DEFAULT_AGENT_DIRECTORY": "/w/agent", "HOME": "/h"]).path == "/w/agent")
+        #expect(BotsRuntimeBundle.piDurableDirectory(environment: ["HOME": "/h"]).path == "/h/.wovenmatter/default-agent")
+        #expect(BotsRuntimeBundle(node: URL(fileURLWithPath: "/n"), root: URL(fileURLWithPath: "/b")).piDurable == nil)
     }
 
     @Test func botsMoveBetweenMachinesThroughOneCommand() async throws {

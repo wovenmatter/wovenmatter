@@ -86,7 +86,7 @@ test('direct clients run an actual fixture ACP process, answer approvals and rep
   });`)
   const harness={id:'fixture',displayName:'Fixture',transport:'acp',command:process.execPath,arguments:[executable]},catalog=new Map([['fixture',harness]])
   const relay=createDurableACP({catalog,workspaceRoot,environment:()=>process.env})
-  const runtime=createClientExecutionRuntime({defaultAgent:{status:async()=>({locked:true}),cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,harnessStatus:async()=>({...harness,state:'ready'}),environment:()=>process.env})
+  const runtime=createClientExecutionRuntime({defaultAgent:{status:async()=>({}),cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,harnessStatus:async()=>({...harness,state:'ready'}),environment:()=>process.env})
   let service=createClientExecution({directory:join(workspaceRoot,'store'),runtime})
   t.after(async()=>{await service.close();rmSync(workspaceRoot,{recursive:true,force:true})})
   const {enrollment:ids,principal}=enroll(service)

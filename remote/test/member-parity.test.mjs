@@ -284,7 +284,7 @@ test('a harness lists its options before a session exists, with permission descr
   const workspaceRoot = temporary(t, 'wm-options-')
   const fixture = acpFixture(workspaceRoot)
   const catalog = new Map([['codex', { ...fixture.harness, id: 'codex' }]])
-  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, durableACP: { stopAll: async () => {} }, catalog, workspaceRoot,
+  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({}), cancelActive: async () => {} }, durableACP: { stopAll: async () => {} }, catalog, workspaceRoot,
     harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }), environment: () => process.env,
     // Run the fixture itself, not inside the Woven MCP adapter Codex uses.
     spawnProcess: (command, args, options) => spawn(fixture.harness.command, fixture.harness.arguments, options) })
@@ -296,10 +296,6 @@ test('a harness lists its options before a session exists, with permission descr
   assert.equal(options.permissions[1].description, 'Only ask for actions detected as potentially unsafe.')
   assert.deepEqual(fixture.requests().find(item => item.method === 'session/new').params.mcpServers, [])
   await assert.rejects(runtime.sessionOptions({ runtimeKind: 'codex', model: 'missing' }), /available model/)
-  // Pi Durable answers from its own session configuration, and says when it is locked.
-  await assert.rejects(runtime.sessionOptions({ runtimeKind: 'default_agent' }), error => error.code === 'default_agent_locked')
-  const providers = await runtime.providers()
-  assert.equal(providers[0].locked, true)
   // The service adds tool groups and returns the SessionSettings shape.
   const service = createClientExecution({ directory: join(workspaceRoot, 'store'), workspaceRoot, runtime })
   t.after(() => service.close())
@@ -308,7 +304,6 @@ test('a harness lists its options before a session exists, with permission descr
   assert.equal(settings.conversationID, '')
   assert.ok(settings.availableTools.some(item => item.id === 'notes'))
   assert.equal(settings.canConfigure, true)
-  await assert.rejects(service.sessionOptions('default_agent'), { statusCode: 423 })
   await assert.rejects(service.sessionOptions('unknown'), { statusCode: 404 })
 })
 
@@ -352,7 +347,7 @@ test('member sessions run, and their channels survive, with background execution
   const catalog = new Map([['fixture', fixture.harness]])
   // The server no longer gates these channels on the task gateway.
   const relay = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
-  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
+  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({}), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
     harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }) })
   const service = createClientExecution({ directory: join(workspaceRoot, 'store'), workspaceRoot, runtime })
   t.after(async () => { await service.close(); await relay.stopAll(); rmSync(workspaceRoot, { recursive: true, force: true }) })
@@ -378,7 +373,7 @@ test('adoption reopens a stopped or missing durable channel and never leaves a f
   const fixture = acpFixture(workspaceRoot, { loadable: ['native-known', 'native-second'], reply: 'after adoption' })
   const catalog = new Map([['fixture', fixture.harness]])
   const relay = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
-  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
+  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({}), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
     harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }) })
   const service = createClientExecution({ directory: join(workspaceRoot, 'store'), workspaceRoot, runtime })
   t.after(async () => { await service.close(); await relay.stopAll(); rmSync(workspaceRoot, { recursive: true, force: true }) })
@@ -437,7 +432,7 @@ test('adoption reopens a durable channel its owner left interrupted, never one a
   const path = join(workspaceRoot, '.wovenmatter/durable-acp', channelID + '.jsonl')
   writeFileSync(path, readFileSync(path, 'utf8').split('\n').filter(line => line && JSON.parse(line).type !== 'stopped').map(line => line + '\n').join(''))
   const relay = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
-  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
+  const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({}), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
     harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }) })
   const service = createClientExecution({ directory: join(workspaceRoot, 'store'), workspaceRoot, runtime })
   t.after(async () => { await service.close(); await relay.stopAll(); rmSync(workspaceRoot, { recursive: true, force: true }) })
@@ -456,7 +451,7 @@ test('adoption reopens a durable channel its owner left interrupted, never one a
   // A channel whose process still runs is never released.
   await assert.rejects(relay.release(channelID), /still running/)
   let released = false
-  const held = createClientExecutionRuntime({ defaultAgent: { status: async () => ({ locked: true }), cancelActive: async () => {} }, catalog, workspaceRoot,
+  const held = createClientExecutionRuntime({ defaultAgent: { status: async () => ({}), cancelActive: async () => {} }, catalog, workspaceRoot,
     durableACP: { peek: async () => ({ state: 'interrupted', live: true, sessionID: 'native-held', busy: false, pendingRequests: 0 }), release: async () => { released = true }, stopAll: async () => {} },
     harnessStatus: async harness => ({ id: harness.id, displayName: harness.displayName, state: 'ready' }) })
   t.after(() => held.close?.())
@@ -501,13 +496,6 @@ test('workspace files are read for Library retention only inside the session roo
   assert.equal(read.sha256, sha(Buffer.from('# Report')))
   assert.equal(attachmentFileName(''), 'attachment')
   assert.equal(attachmentFileName('a\u0001b/c'), 'a_b_c')
-})
-
-test('Pi Durable lock refusals carry a code a Mac acts on', async t => {
-  const f = directService(t, { runtime: { providers: async () => [{ id: 'default_agent', runtimeKind: 'default_agent', available: false, canStart: false, locked: true, unavailableReason: 'Pi Durable is locked.' }] } })
-  const receipt = await f.service.command(f.command('createSession', { providerID: 'default_agent' }), f.principal)
-  assert.equal(receipt.status, 'rejected')
-  assert.equal(receipt.code, 'default_agent_locked')
 })
 
 test('a member sets a goal on a session that has none', async t => {

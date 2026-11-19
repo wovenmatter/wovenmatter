@@ -25,3 +25,33 @@ test('remote combined update forwards no SDK filter and rejects invalid selectio
   assert.equal(calls, 1);
   assert.equal(response.listenerCount('close'), 0);
 });
+
+test('an update that activates a new SDK copy restarts bots onto it; a no-op or failed restart does not fail it', async () => {
+  const response = new EventEmitter();
+  let restarts = 0;
+  const onActivated = async () => { restarts++; };
+  const updated = { updateSDK: async () => ({ sdks: [], generation: 'new', activated: true }) };
+  assert.equal((await defaultAgentSDKRequest(request({ action: 'update' }), response, updated, { onActivated })).generation, 'new');
+  assert.equal(restarts, 1);
+  const current = { updateSDK: async () => ({ sdks: [], generation: 'same' }) };
+  await defaultAgentSDKRequest(request({ action: 'update' }), response, current, { onActivated });
+  assert.equal(restarts, 1);
+  const failing = async () => { throw new Error('restart failed'); };
+  assert.equal((await defaultAgentSDKRequest(request({ action: 'update' }), response, updated, { onActivated: failing })).activated, true);
+  const checked = { checkSDKUpdates: async () => ({ sdks: [], activated: true }) };
+  await defaultAgentSDKRequest(request({ action: 'check' }), response, checked, { onActivated });
+  assert.equal(restarts, 1);
+});
+
+test('a rejected SDK candidate answers with its readable failure, not internal_error', async () => {
+  class SDKMaintenanceError extends Error {}
+  const response = new EventEmitter();
+  for (const action of ['update', 'check']) {
+    const service = { [action === 'update' ? 'updateSDK' : 'checkSDKUpdates']: async () => { throw new SDKMaintenanceError('SDK installation or verification failed. The previous SDKs were kept.'); } };
+    await assert.rejects(defaultAgentSDKRequest(request({ action }), response, service),
+      error => error.statusCode === 409 && error.message === 'SDK installation or verification failed. The previous SDKs were kept.');
+  }
+  // Anything else still answers as before.
+  await assert.rejects(defaultAgentSDKRequest(request({ action: 'update' }), response, { updateSDK: async () => { throw new Error('/private/path detail'); } }),
+    error => error.statusCode === undefined);
+});

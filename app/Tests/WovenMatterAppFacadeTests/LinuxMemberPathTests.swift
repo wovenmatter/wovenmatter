@@ -144,33 +144,6 @@ struct LinuxMemberPathTests {
         #expect(try JSONSerialization.jsonObject(with: failed.lines(after: 0)[0]) as? [String: String] == ["error": "Choose an enabled provider."])
     }
 
-    @Test func aLockedPiIsUnlockedWithThisMacsKeyAndRetried() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let (workspace, fake) = try await enrolled(fixture)
-        await fake.lockPi()
-        let client = try #require(fixture.model.federatedExecutionClient)
-        let id = UUID().uuidString.lowercased()
-        _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: id, folderID: nil)
-        #expect(await fake.unlocks.map(\.unlockKey) == ["fixture-key"])
-        #expect(await fake.unlocks.map(\.workspace) == [workspace.id])
-        #expect(await fake.commands.filter { $0.kind == .createSession }.map(\.providerID) == ["default_agent"])
-
-        // A send refused as locked is unlocked and sent again as a new command.
-        await fake.refuseNextSendAsLocked()
-        let receipt = try await client.send(to: workspace, conversationID: id, text: "Hello")
-        #expect(receipt.status == .accepted)
-        let sends = await fake.commands.filter { $0.kind == .send }
-        #expect(sends.count == 2 && sends[0].commandID != sends[1].commandID && sends.allSatisfy { $0.text == "Hello" })
-        #expect(await fake.unlocks.count == 2)
-
-        // A refused key, or none, configures the host as the SSH relay did.
-        await fake.refuseKeys()
-        await fake.lockPi()
-        _ = try await client.createSession(workspace: workspace, runtimeKind: .defaultAgent, conversationID: UUID().uuidString.lowercased(), folderID: nil)
-        let configured = try #require(await fake.configurations.last)
-        #expect(try JSONDecoder().decode(DefaultAgentPayload.self, from: configured).workspace == workspace.id)
-    }
-
     @Test func optionsWithoutASessionCarryTheirDescriptions() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (_, fake) = try await enrolled(fixture)
@@ -361,10 +334,6 @@ extension FacadeFixture {
         let client = try MemberExecutionClient(database: database,
             commandJournalURL: directory.appending(path: "member-commands-\(UUID()).json"),
             makeSignedTransport: { _ in fake })
-        client.unlockDefaultAgentHandler = { workspace, routes in
-            try await DefaultAgentHostUnlock.unlock(scope: workspace.id, routes: routes, existingKey: { _ in "fixture-key" },
-                prepare: { scope in DefaultAgentPayload(config: .init(), credentials: [:], workspace: scope) })
-        }
         model.federatedExecutionClient = client
         return (workspace, fake)
     }
@@ -379,25 +348,19 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     struct Upload: Sendable { var data: Data; var sha256: String; var name: String; var mimeType: String }
     struct OptionRequest: Sendable { var providerID: String; var workingDirectory: String?; var model: String? }
     struct FileRequest: Sendable { var conversationID: String?; var path: String }
-    struct Unlock: Sendable { var workspace: String; var unlockKey: String }
     let workspace: ExecutionWorkspace
     private(set) var commands: [LibraryCommand] = []
     private(set) var uploads: [Upload] = []
     private(set) var optionRequests: [OptionRequest] = []
     private(set) var fileRequests: [FileRequest] = []
     private(set) var adoptions: [Data] = []
-    private(set) var unlocks: [Unlock] = []
-    private(set) var configurations: [Data] = []
     private var receipts: [String: LibraryCommandReceipt] = [:]
-    private var piLocked = false, keysRefused = false, lockedSend = false, directoriesRefused = false
+    private var directoriesRefused = false
     private var file = Data(), knowsConversations = true, damaged = false, adoptionsRefused = false
     /// Adoptions fail with this until cleared, as an unreachable or busy host does.
     private var adoptionFailure: (any Error)?
 
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
-    func lockPi() { piLocked = true }
-    func refuseKeys() { keysRefused = true }
-    func refuseNextSendAsLocked() { lockedSend = true }
     func refuseDirectories() { directoriesRefused = true }
     func serve(file: Data) { self.file = file }
     func forgetConversations() { knowsConversations = false }
@@ -409,7 +372,7 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     func providers() -> [HarnessCapabilities] {
         [.init(id: "codex", runtimeKind: "codex", displayName: "Codex", routeName: "This workspace", available: true, canSteer: true),
          .init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "This workspace",
-               available: !piLocked, canStart: !piLocked, canSteer: true, locked: piLocked ? true : nil)]
+               available: true, canSteer: true)]
     }
     func pending() -> [PendingInteraction] { [] }
     func receipt(_ id: String) -> LibraryCommandReceipt? { receipts[id] }
@@ -420,14 +383,9 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     func command(_ command: LibraryCommand) -> LibraryCommandReceipt {
         if let saved = receipts[command.commandID] { return saved }
         commands.append(command)
-        var receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
+        let receipt = LibraryCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
             status: command.kind == .send ? .accepted : .completed, conversationID: command.conversationID,
             runID: command.kind == .send ? UUID().uuidString.lowercased() : nil, workspaceID: workspace.id)
-        if command.kind == .send, lockedSend {
-            lockedSend = false
-            receipt = .init(commandID: command.commandID, deviceID: command.deviceID, status: .rejected, conversationID: command.conversationID,
-                message: "Pi Durable is locked.", workspaceID: workspace.id, code: "default_agent_locked")
-        }
         receipts[command.commandID] = receipt
         return receipt
     }
@@ -461,18 +419,10 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
         if let adoptionFailure { throw adoptionFailure }
         adoptions.append(body)
     }
-    func unlockDefaultAgent(workspace: String, unlockKey: String) -> Bool {
-        unlocks.append(.init(workspace: workspace, unlockKey: unlockKey))
-        if keysRefused { return false }
-        piLocked = false
-        return true
-    }
-    func configureDefaultAgent(_ payload: Data) throws -> DefaultAgentSyncReceipt {
-        configurations.append(payload); piLocked = false
-        return try JSONDecoder().decode(DefaultAgentSyncReceipt.self, from: Data(#"{"saved":true,"revision":"r","epoch":"e"}"#.utf8))
-    }
     func startDefaultAgentControl(_ request: Data) throws -> DefaultAgentControlSession { throw LibraryAPIError(code: "unavailable", message: "") }
     func defaultAgentControl(id: String) throws -> DefaultAgentControlSession { throw LibraryAPIError(code: "unavailable", message: "") }
     func answerDefaultAgentControl(id: String, answerTo: String, answer: String) throws -> DefaultAgentControlSession { throw LibraryAPIError(code: "unavailable", message: "") }
     func cancelDefaultAgentControl(id: String) {}
+    func signIns() throws -> DeviceSignIns { throw LibraryAPIError(code: "unavailable", message: "") }
+    func changeSignIns(_ change: DeviceSignInChange) throws -> DeviceSignIns { throw LibraryAPIError(code: "unavailable", message: "") }
 }

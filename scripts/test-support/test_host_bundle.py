@@ -114,7 +114,7 @@ class ExecTests(unittest.TestCase):
         self.assertNotIn('UNTRUSTED_SETTING',value['env']); self.assertNotIn('WOVENMATTER_UNEXPECTED',value['env'])
         self.assertNotIn(self.settings['WOVENMATTER_API_TOKEN'],' '.join(value['argv']))
         self.assertEqual(value['input'],'protocol\n'); self.assertEqual(value['cwd'],str(self.root/'workspace'))
-        self.assertEqual(value['env']['WOVEN_DEFAULT_AGENT_DIRECTORY'],str(self.root/'workspace/.wovenmatter/default-agent'))
+        self.assertEqual(value['env']['WOVEN_DEFAULT_AGENT_DIRECTORY'],str(self.root/'default-agent'))
     def test_sessions_get_noninteractive_credential_prompts(self):
         code='import os,json; print(json.dumps({k:os.environ.get(k) for k in ("PATH","GIT_TERMINAL_PROMPT","SSH_ASKPASS","SSH_ASKPASS_REQUIRE","SUDO_ASKPASS")}))'
         result=self.execute('exec',sys.executable,'-c',code)
@@ -154,5 +154,30 @@ class ExecTests(unittest.TestCase):
         self.assertEqual(self.execute('exec','true').returncode,78)
         target=self.environment.with_name('target'); self.environment.rename(target); self.environment.symlink_to(target)
         self.assertEqual(self.execute('exec','true').returncode,78)
+
+class PruneBotsSDKTests(unittest.TestCase):
+    """Bots load Pi Durable's SDK copy, so their own copy is removed after npm ci."""
+    def test_only_what_bots_other_dependencies_reach_is_kept(self):
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('prune_bots_sdk',ROOT/'remote/host/prune-bots-sdk.py')
+        prune=importlib.util.module_from_spec(spec); spec.loader.exec_module(prune)
+        with tempfile.TemporaryDirectory() as temp:
+            bots=Path(temp)
+            packages={'':{'dependencies':{'@earendil-works/pi-ai':'>=1','@anthropic-ai/claude-agent-sdk':'>=0','zod':'>=4','ws':'>=8'}},
+                'node_modules/@earendil-works/pi-ai':{'dependencies':{'openai':'*','ws':'*','typebox':'*'}},
+                'node_modules/@anthropic-ai/claude-agent-sdk':{'optionalDependencies':{'@anthropic-ai/claude-agent-sdk-linux-x64':'*'},'peerDependencies':{'zod':'*'}},
+                'node_modules/@anthropic-ai/claude-agent-sdk-linux-x64':{},'node_modules/openai':{},'node_modules/typebox':{},
+                'node_modules/ws':{},'node_modules/zod':{'dependencies':{'shared':'*'}},
+                # zod's nested copy is kept; pi-ai's nested one and the top-level one only it reaches go.
+                'node_modules/zod/node_modules/shared':{},'node_modules/@earendil-works/pi-ai/node_modules/shared':{},'node_modules/shared':{},
+                'node_modules/vitest':{'dev':True}}
+            (bots/'package-lock.json').write_text(json.dumps({'lockfileVersion':3,'packages':packages}))
+            for key in packages:
+                if key and not packages[key].get('dev'): (bots/key).mkdir(parents=True,exist_ok=True); (bots/key/'package.json').write_text('{}')
+            (bots/'node_modules/.bin').mkdir(); (bots/'node_modules/.bin/openai').symlink_to('../openai/cli.js')
+            prune.prune(bots)
+            left=sorted(p.relative_to(bots).as_posix() for p in bots.rglob('package.json') if p.parent!=bots)
+            self.assertEqual(left,['node_modules/ws/package.json','node_modules/zod/node_modules/shared/package.json','node_modules/zod/package.json'])
+            self.assertFalse((bots/'node_modules/@anthropic-ai').exists()); self.assertFalse((bots/'node_modules/.bin/openai').is_symlink())
 
 if __name__=='__main__': unittest.main()

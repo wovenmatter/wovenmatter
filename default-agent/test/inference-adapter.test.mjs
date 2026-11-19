@@ -79,30 +79,6 @@ test('cancellation reaches provider and preserves uncertain receipt', async t =>
   assert.equal(cancellation.aborted, true);
 });
 
-test('client vault unlock after restart preserves accounts and rejects an incorrect grant key', async t => {
-  const { createDefaultAgentService } = await import('../src/service.mjs');
-  const { randomBytes } = await import('node:crypto');
-  const { readFile } = await import('node:fs/promises');
-  const directory = await mkdtemp(join(tmpdir(), 'woven-inference-unlock-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const key = randomBytes(32).toString('base64');
-  const original = createDefaultAgentService({ cwd: directory, directory });
-  await original.configure({ workspace: 'fixture', unlockKey: key, config: { providers: ['openai'] },
-    credentials: { openai: { type: 'api_key', key: 'fixture-only-key' } }, credentialAccounts: {}, revision: 'fixture' });
-  const before = await readFile(join(directory, 'configuration.json'), 'utf8');
-  const restarted = createDefaultAgentService({ cwd: directory, directory });
-  assert.equal((await restarted.status()).locked, true);
-  await assert.rejects(restarted.unlockForClient({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64') }), /could not be decrypted/);
-  assert.equal((await restarted.status()).locked, true);
-  assert.deepEqual(await restarted.unlockForClient({ workspace: 'fixture', unlockKey: key }), { unlocked: true });
-  assert.equal(await readFile(join(directory, 'configuration.json'), 'utf8'), before);
-  assert.deepEqual(await restarted.unlockForClient({ workspace: 'fixture', unlockKey: key }), { unlocked: true });
-  // Read the encrypted vault directly; do not initialize an actual provider runtime for this storage test.
-  const { CredentialVault } = await import('../src/vault.mjs');
-  const vault = new CredentialVault(directory); await vault.unlock('fixture', key);
-  assert.equal((await vault.read()).shared.openai.key, 'fixture-only-key');
-});
-
 test('owner inference proxy requests visible summaries for reasoning-enabled device turns',async t=>{
   const fixture=await setup(t);
   await fixture.adapter.stream(request(),{principalID:'device'});

@@ -19,17 +19,14 @@ const OPEN = 1
 const relayCloseCode = code => (code >= 3000 && code <= 4999) || [1000, 1001, 1002, 1003, 1007, 1008, 1009, 1011, 1012, 1013, 1014].includes(code) ? code : 1000
 
 /**
- * The default agent's Claude binary in this release, which the bots runtime runs
- * (`claude.executable`) instead of shipping a second copy: the glibc package, or
- * the musl one where that is what npm installed.
+ * Pi Durable as this release bundles it. The bots runtime asks its code which SDK
+ * copy Pi Durable runs here (the active SDK update, or this bundle) and loads that
+ * copy and its Claude binary (`bots/src/pi-durable-sdk.ts`), never one of its own.
  */
-export function defaultAgentClaude(serviceRoot, { platform = process.platform, arch = process.arch, exists = existsSync } = {}) {
+export function defaultAgentBundle(serviceRoot, { exists = existsSync } = {}) {
   // A host release ships default-agent/ beside src/; a checkout has it beside remote/.
   for (const root of [join(serviceRoot, 'default-agent'), join(serviceRoot, '..', 'default-agent')]) {
-    for (const name of [`claude-agent-sdk-${platform}-${arch}`, `claude-agent-sdk-${platform}-${arch}-musl`]) {
-      const binary = join(root, 'node_modules/@anthropic-ai', name, 'claude')
-      if (exists(binary)) return binary
-    }
+    if (exists(join(root, 'src/sdk-management.mjs'))) return root
   }
   return null
 }
@@ -47,14 +44,15 @@ async function writePrivateJSON(path, value) {
  * runtime, serves the runtime host API on /v1/bots-host/* with its own bearer,
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
-export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
+export function createBotsService({ configuration, mcp, defaultAgent, defaultAgentDirectory = null, serverPort, library, libraryHost, engine, runtime, previews,
   authorizeClient, registry = null, installerBearer = null, machine, memberIdentity, release, github = null, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
   const hostToken = randomBytes(32).toString('base64url'), hostDigest = digest(hostToken)
   const packageRoot = botsPackageRoot(configuration.serviceRoot)
-  const claudeExecutable = configuration.claudeExecutable ?? defaultAgentClaude(configuration.serviceRoot)
+  const piDurableBundle = defaultAgentBundle(configuration.serviceRoot)
+  const piDurable = piDurableBundle && defaultAgentDirectory ? { bundle: piDurableBundle, directory: defaultAgentDirectory } : null
   engine ??= createBotEngine({ instance: configuration.botsInstance })
   // With this machine's library host, batches go into its library copy; the
   // outbox keeps them while it is down and is drained when it is ready.
@@ -88,7 +86,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       limits: { botMemoryBytes: (await settings()).botMemoryBytes ?? null },
       host: { url: `http://127.0.0.1:${serverPort()}/`, token: hostToken },
       machine: await machineInfo(),
-      ...(claudeExecutable ? { claude: { executable: claudeExecutable } } : {}),
+      ...(piDurable ? { piDurable } : {}),
     }
   }
   runtime ??= packageRoot ? createBotsRuntime({ packageRoot, configPath: join(stateDirectory, 'runtime.json'), configuration: runtimeConfiguration, log }) : null
@@ -381,6 +379,12 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     })
   }
 
-  return { start, close, status, handleHost, deliver, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
+  // After Pi Durable's SDK update: a running runtime restarts onto the new copy (each
+  // start resolves it afresh); one waiting to start or restart picks it up then.
+  async function piDurableSDKUpdated() {
+    if (runtime?.status().running) await runtime.restart()
+  }
+
+  return { start, close, status, handleHost, piDurableSDKUpdated, deliver, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
     drainLibrary: () => libraryAdapter.drain?.() ?? Promise.resolve(0) }
 }

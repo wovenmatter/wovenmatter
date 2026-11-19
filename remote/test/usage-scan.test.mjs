@@ -187,7 +187,7 @@ test('a host scan counts archived Codex chats once, Pi sessions, Pi Durable in e
       JSON.stringify({ type: 'message', timestamp: '2026-10-01T10:01:00Z', message: { role: 'assistant', id: 'r1', content: 'private', usage: { input: 10, output: 4, cacheRead: 6, totalTokens: 20 } } }),
     ].join('\n') + '\n')
 
-    const workspace = join(home, '.woven-matter'), agent = join(workspace, '.wovenmatter/default-agent')
+    const workspace = join(home, '.woven-matter'), agent = join(home, '.local/share/wovenmatter/default-agent')
     const migrated = 1_790_000_000_000
     // A session that moved into SQLite keeps its commit log as a backup: one reply, counted once.
     mkdirSync(join(agent, 'durable/session-1/native'), { recursive: true })
@@ -203,6 +203,7 @@ test('a host scan counts archived Codex chats once, Pi sessions, Pi Durable in e
       JSON.stringify({ type: 'session', id: 'session-old', cwd: '/home/me' }),
       JSON.stringify({ type: 'message', timestamp: '2026-09-22T10:00:00Z', message: { role: 'assistant', provider: 'xai', model: 'grok-5', usage: { input: 7, output: 1, totalTokens: 8 } } }),
     ].join('\n') + '\n')
+    mkdirSync(join(workspace, '.wovenmatter'), { recursive: true })
     await piDurableDatabase(join(workspace, '.wovenmatter/workspace.sqlite'), { stores: [
       { session: 'session-1', prefix: 'wm_pi_' + 'a'.repeat(32) + '_', entries: [piEntry(2, 1, piReply(migrated, 100))] },
     ] })
@@ -216,7 +217,7 @@ test('a host scan counts archived Codex chats once, Pi sessions, Pi Durable in e
       { id: 'bot-2', name: 'Odd', prefix: 'pibot_x_', entries: [piEntry(1, 1, piReply(migrated, 999))] },
     ] })
 
-    const scanner = createUsageScanner({ env: {}, home, workspaceRoot: workspace, botsDatabase })
+    const scanner = createUsageScanner({ env: {}, home, workspaceRoot: workspace, defaultAgentDirectory: agent, botsDatabase })
     const page = await settle(scanner)
     const total = records => records.reduce((sum, record) => sum + record.totalTokens, 0)
     const codex = page.records.filter(record => record.harness === 'Codex')

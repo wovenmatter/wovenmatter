@@ -284,12 +284,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   patterns. Retain it until Pi excludes earlier versions; bounded child-process
   fixtures verify normal expansion, nesting and literal fallback for over-budget
   input.
-- **Bots runtime** (`bots/`) consumes the same Pi family, Chord, Claude Agent
+- **Bots runtime** (`bots/`) declares the same Pi family, Chord, Claude Agent
   SDK, typebox and ws selections as `default-agent`, with the same
   consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
-  ranges. Its in-container helper ships the runtime's own locked Pi Durable,
-  Chord and Pi telemetry packages (copied from `bots/node_modules` into the
-  shared volume), so they never drift from the runtime. The bot base image and
+  ranges, for its type check and tests. At run time it never loads its own
+  copy of the SDK packages: the machine's Woven server tells it where Pi
+  Durable is, it asks Pi Durable's `resolveSDKRuntime` which copy Pi Durable
+  runs there (the active Settings SDK update, or the bundled
+  `default-agent`), and it resolves `@earendil-works/pi-durable`, `pi-ai`,
+  `pi-coding-agent`, `chord` and `@anthropic-ai/claude-agent-sdk` from that
+  copy, with that copy's Claude binary (`bots/src/pi-durable-sdk.ts`). A
+  resolution outside the copy fails. App and host packaging remove bots' own
+  copy of those packages and what only they depend on
+  (`remote/host/prune-bots-sdk.py`). One SDK update covers both: the server
+  restarts a running bots runtime once a new copy is active. Its in-container
+  helper ships the packages its imports load from that copy, as Node resolves
+  them there (nested ones included), into the shared volume; they reach
+  existing containers on their next Update. The bot base image and
   toolchain image build through the Engine API from `bots/image` and
   `bots/image/toolchain` under content-hash tags. A changed toolchain reaches
   bots in place on their next Update; a changed base image moves them to a new
@@ -317,8 +328,15 @@ The Settings SDK updater (`default-agent/src/sdk-management.mjs`) reads the
 newer stable release, including a new major. It selects the newest nondeprecated
 publication; an older npm `latest` tag does not hide a newer stable release.
 It installs into a new generation, verifies the APIs it uses, and activates it
-atomically. Running sessions keep their generation, and unrelated packages stay
-at their installed versions. A failed or cancelled candidate is discarded.
+atomically. It then deletes the generation it replaced, even if a running
+session still uses it; unrelated packages stay at their installed versions. A
+failed or cancelled candidate is discarded and leaves the working copy active.
+The machine's bots run the same copy and restart onto the update, so where the
+bots runtime is installed the candidate must also pass `bots/src/cli.ts
+verify-sdk`: bots' whole module graph, the Claude Agent SDK and binary, and the
+in-container helper, loaded from the staged copy as bots start. The SDK status
+reports a copy missing a package or its Claude binary as inconsistent, and the
+update reinstalls it.
 These checks catch missing APIs, but cannot guarantee that every future upstream
 behavior remains compatible; integration fixes and release validation remain
 part of maintenance.

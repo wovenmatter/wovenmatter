@@ -37,7 +37,10 @@ mkdir -p "$work/bots/src/host" && cp "$root/bots/src/host/git.ts" "$work/bots/sr
 rm -rf "$work/app/.build" "$work/shared/.build" "$work/ios/.build"
 
 # Darwin pipes never raise SIGPIPE; Linux hosts ignore it process-wide
-# (PortablePOSIX.ignoreBrokenPipes), and test runners inherit the same.
+# (PortablePOSIX.ignoreBrokenPipes). `swift test` does not pass an ignored
+# SIGPIPE on to its test runners, so each Linux-run test target links
+# LinuxTestProcess, which ignores it when the runner starts. This trap covers
+# only the build and test tools themselves.
 trap '' PIPE
 swift test --package-path "$work/shared" --scratch-path "$cache/shared"
 swift build --package-path "$work/app" --scratch-path "$cache/app" --force-resolved-versions --build-tests

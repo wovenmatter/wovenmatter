@@ -105,24 +105,15 @@ in the conversation. See [Executor apps](executor.md).
 
 ## Credential storage
 
-App-managed Pi Durable credentials on the Mac, including OAuth refresh tokens, are
-stored in macOS Keychain. Each remote workspace has one encrypted credential
-store using AES-256-GCM. Its separate random key is kept in the Keychain of
-the Mac that added the workspace and delivered to the host's server in a
-request signed with that Mac's device key (over the installer's SSH link only before the host is enrolled). The host
-keeps the key in memory; after it restarts, the next action from that Mac
-unlocks it again. Updates do not restart active sessions.
-
-If the Mac's workspace key is lost, open **Settings → Subscriptions & API Keys**,
-set **Accounts for** to that workspace, and use **Account recovery → Reset
-workspace credentials**. This removes independent ChatGPT/Grok sign-ins and
-restores shared connections. Claude’s native sign-in is separate; use its
-**Remove** button to disconnect that account. Files and conversations remain.
-Existing Pi Durable plaintext stores migrate after secure storage succeeds;
-older backups may still contain previous plaintext copies.
-
-Encryption protects stored credential files and disk backups. It does not
-protect credentials from an administrator controlling an unlocked machine.
+Each device keeps its own sign-ins. On a Mac, Pi Durable credentials, including
+OAuth refresh tokens, are stored in macOS Keychain. On a Linux host they are
+one private file in the host's own folder outside the workspace
+(`~/.local/share/wovenmatter/default-agent/sign-ins.json`), readable only by
+that user, like the Claude Code and Codex CLIs' own logins.
+Sign in on a host from **Settings → Subscriptions & API Keys → Sign in on**;
+nothing is copied from another device. Updates do not restart active sessions.
+Claude’s native sign-in is separate; use its **Remove** button to disconnect
+that account.
 Crash dumps are disabled for managed helpers; host swap and memory
 snapshots remain host responsibilities. Removing stored credentials does not
 revoke copies already obtained elsewhere; revoke those through the provider.

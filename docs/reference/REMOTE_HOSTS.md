@@ -106,6 +106,8 @@ All paths below belong to the SSH account. Managed private directories use
   databases/                    managed SQLite dataset files
   library/                      this host's library copy (workspace.sqlite)
   secrets/member-signing.key    this host's member signing key (0600)
+  default-agent/                Pi Durable: sign-ins.json (0600) and the
+                                bundled Claude runtime's logins
   run/                          runtime maintenance lock, browser result,
                                 library socket and its local token
     library/                    member identity, library host and Serve state
@@ -231,7 +233,7 @@ installation and each configured host; choosing one workspace limits the list
 to that workspace.
 
 `GET /v1/default-agent/sdks` returns installed package metadata without
-initializing an agent, unlocking credentials, or checking the network. `POST`
+initializing an agent or checking the network. `POST`
 to the same endpoint accepts `{"action":"check","id":"claude"}` for an explicit
 registry check, or `{"action":"update","id":"claude","version":"x.y.z"}` for an
 update. The SDK identifier is `pi` or `claude`; omit it from a check or update
@@ -244,9 +246,11 @@ before activation; an already activated installation remains installed.
 
 Updates run as the host's service account and persist in its managed data
 directory. They do not modify the separately installed agent CLIs. Package
-installation stages an immutable generation and verifies it before activation.
-Running conversations retain their generation; the service only replaces an
-idle worker. Scheduled tasks hold a runtime lease from session setup through
+installation stages an immutable generation and verifies it before activation,
+then deletes the generation it replaced, even if a running conversation still
+uses it; the service only replaces an idle worker. The host's bots load the
+same copy, so a running bots runtime restarts onto the update, and an
+activating update's response carries `activated: true`. Scheduled tasks hold a runtime lease from session setup through
 completion so an update cannot split their model, permission, and prompt setup
 between workers. Opening SDK settings does not update or start a host.
 

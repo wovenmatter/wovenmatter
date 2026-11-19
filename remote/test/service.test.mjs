@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -254,30 +254,52 @@ async function temporaryFixture(context, prefix) {
   return directory
 }
 
-test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
+test('a Linux host keeps its own sign-ins: configuration carries no credentials and keys are saved only here', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
-  const home = resolve(root, 'home'); await mkdir(home);
-  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
+  const home = resolve(root, 'home'), workspace = resolve(root, 'workspace'); await mkdir(home); await mkdir(workspace);
+  const token = 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  // The host's own private folder, outside the workspace, like the CLIs' own logins.
+  const directory = resolve(home, '.local/share/wovenmatter/default-agent');
+  let service = await startService({ workspace, home, catalog: catalogPath, token });
   context.after(() => stopService(service.child));
-  const request = (path, body, token = 'credential-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url + path, {
-    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+  const request = (path, body, bearer = token) => fetch(service.url + path, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
-  assert.equal((await (await request('/v1/default-agent/status')).json()).locked, true);
+  assert.equal((await request('/v1/sign-ins', undefined, 'wrong')).status, 401);
+  let status = await (await request('/v1/default-agent/status')).json();
+  assert.ok(Array.isArray(status.providers));
   // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
   assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 404);
-  const unlockKey = randomBytes(32).toString('base64');
-  const body = { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
-    credentials: { openrouter: { type: 'api_key', key: 'fixture-provider-secret' } } };
-  const receipt = await (await request('/v1/default-agent/configuration', body)).json();
+  // Chat settings arrive alone; credentials in a request are never stored.
+  const receipt = await (await request('/v1/default-agent/configuration', { workspace: 'fixture-workspace', revision: 'fixture-revision', config: { providers: ['openrouter'] },
+    credentials: { openrouter: { type: 'api_key', key: 'relayed-provider-secret' } } })).json();
   assert.equal(receipt.revision, 'fixture-revision');
-  const status = await (await request('/v1/default-agent/status')).json();
-  assert.equal(status.locked, false);
+  status = await (await request('/v1/default-agent/status')).json();
+  assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'sign_in_required');
+  // A key typed on another device arrives once and is saved here.
+  const saved = await (await request('/v1/sign-ins', { action: 'saveKey', provider: 'openrouter', key: 'fixture-provider-secret', label: 'Router' })).json();
+  assert.deepEqual(saved.accounts.openrouter.map(a => [a.label, a.isSelected]), [['Router', true]]);
+  assert.ok(!JSON.stringify(saved).includes('fixture-provider-secret'));
+  assert.equal((await request('/v1/sign-ins', { action: 'saveKey', provider: 'shell', key: 'x' })).status, 400);
+  status = await (await request('/v1/default-agent/status')).json();
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'credentials_present');
   assert.ok(!JSON.stringify(status).includes('fixture-provider-secret'));
-  const disk = await readFile(resolve(root, '.wovenmatter/default-agent/credentials.enc.json'), 'utf8');
-  assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
+  // A plain private file (0600) in a private folder (0700); nothing relayed is in it.
+  const disk = await readFile(resolve(directory, 'sign-ins.json'), 'utf8');
+  assert.ok(disk.includes('fixture-provider-secret') && !disk.includes('relayed-provider-secret'));
+  assert.equal((await stat(resolve(directory, 'sign-ins.json'))).mode & 0o777, 0o600);
+  assert.equal((await stat(directory)).mode & 0o777, 0o700);
+  // Nothing that holds a credential is created in the workspace.
+  const inWorkspace = await readdir(workspace, { recursive: true });
+  assert.ok(!inWorkspace.some(name => /default-agent|sign-ins|credentials|claude-runtime|claude-keychain/.test(name)), inWorkspace.join(', '));
+  // It survives a restart.
+  await stopService(service.child);
+  service = await startService({ workspace, home, catalog: catalogPath, token });
+  const listed = await (await request('/v1/sign-ins')).json();
+  assert.deepEqual(listed.accounts.openrouter.map(a => a.label), ['Router']);
+  assert.equal((await (await request('/v1/default-agent/status')).json()).providers.find(p => p.id === 'openrouter').state, 'credentials_present');
 });
 
 async function stopService(child) {
@@ -562,7 +584,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
 })
 
-test('members reach sessions with background execution off: attachments, options, Library files and Pi unlock routes', { timeout: 30000 }, async context => {
+test('members reach sessions with background execution off: attachments, options and Library files', { timeout: 30000 }, async context => {
   const root = await temporaryFixture(context, 'wovenmatter-member-routes-')
   const bin = resolve(root, '.local/bin')
   await mkdir(bin, { recursive: true })
@@ -664,10 +686,6 @@ createInterface({ input: process.stdin }).on('line', line => {
   assert.equal((await request('/v1/execution/library-file', 'POST', { path: 'result.txt' }, headers)).status, 403)
   const file = await (await request('/v1/execution/library-file', 'POST', { path: 'result.txt' })).json()
   assert.equal(Buffer.from(file.data, 'base64').toString(), 'agent output')
-  // Pi Durable unlock takes only the workspace and its key.
-  assert.equal((await request('/v1/default-agent/unlock', 'POST', { workspace: 'w' })).status, 400)
-  assert.equal((await request('/v1/default-agent/unlock', 'POST', { workspace: 'w', unlockKey: 'k', credentials: {} })).status, 400)
-  assert.equal((await request('/v1/default-agent/unlock', 'POST', { workspace: 'w', unlockKey: 'k' }, headers)).status, 403)
   assert.equal((await request('/v1/default-agent/control', 'POST', { action: 'shell' })).status, 400)
 })
 

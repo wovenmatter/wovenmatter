@@ -13,7 +13,7 @@ import { createLocalLibraryTools } from './library-tools.mjs'
 import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.mjs'
 import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
 import { databaseOperation } from './database-catalog.mjs'
-import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { ordered, sha256 as digest } from './durable-json.mjs'
 import { createMemberMacDelegate } from './member-client.mjs'
 import { createMemberSessions } from './member-sessions.mjs'
@@ -126,7 +126,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   let identity = JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get()?.body ?? 'null')
   const jobs = new Map(), queues = new Map(), dirty = new Map()
   let flushTimer
-  let closed = false, unlockMaterial
+  let closed = false
   let goalsTickRunning = false
   // Live streams (stream-server.mjs) watch changes in process, as they happen:
   // `record` when a conversation is saved, `journal` once an entry is
@@ -250,14 +250,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       || !scopes.length || scopes.some(scope => scope !== 'execution')) throw fail(400, 'Invalid device enrollment.')
     if (identity && (identity.id !== body.workspaceID || identity.libraryID !== body.libraryID)) throw fail(409, 'This workspace already belongs to a different library.')
     const token = randomBytes(32).toString('base64url')
-    let unlockEnvelope
-    if (unlockMaterial) {
-      const iv = randomBytes(12), key = createHash('sha256').update('wovenmatter-client-unlock-v1\0'+token).digest()
-      const cipher = createCipheriv('aes-256-gcm',key,iv)
-      cipher.setAAD(Buffer.from(JSON.stringify([body.libraryID,body.workspaceID,body.deviceID,[...scopes].sort()])))
-      const ciphertext = Buffer.concat([cipher.update(JSON.stringify(unlockMaterial),'utf8'),cipher.final()])
-      unlockEnvelope = {iv:iv.toString('base64'),ciphertext:ciphertext.toString('base64'),tag:cipher.getAuthTag().toString('base64')}
-    }
     let nextIdentity
     transaction(() => {
       nextIdentity = identity ? copy(identity) : { id: body.workspaceID, libraryID: body.libraryID, ownerDeviceID: body.ownerDeviceID, executionDeviceID: identifier(executionDeviceID) ? executionDeviceID : randomUUID(),
@@ -268,7 +260,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if (endpoint.protocol !== 'https:' || !endpoint.hostname.endsWith('.ts.net') || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw fail(400, 'Use a private Tailscale HTTPS endpoint.')
         nextIdentity.endpoint = endpoint.href.replace(/\/$/, '')
       }
-      const device = { id: body.deviceID, name: String(body.name ?? 'Client').slice(0,256), scopes, createdAt: date(), ...(unlockEnvelope ? {unlockEnvelope} : {}) }
+      const device = { id: body.deviceID, name: String(body.name ?? 'Client').slice(0,256), scopes, createdAt: date() }
       db.prepare('INSERT OR REPLACE INTO devices VALUES (?,?,?)').run(device.id, digest(token), JSON.stringify(device))
       // Observing devices may control/read this workspace but never publish its origin history.
       nextIdentity.journalDeviceIDs = []
@@ -286,22 +278,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (timingSafeEqual(supplied, Buffer.from(row.digest, 'hex')) && device.scopes.includes(scope)) return device
     }
     return null
-  }
-  function rememberUnlockMaterial(value) {
-    if (typeof value?.workspace !== 'string' || typeof value?.unlockKey !== 'string' || !value.unlockKey) throw fail(400,'Invalid workspace unlock material.')
-    unlockMaterial = {workspace:value.workspace,unlockKey:value.unlockKey}
-  }
-  function clientUnlockMaterial(authorization) {
-    const device = principal(authorization,'execution')
-    if (!device?.unlockEnvelope) return null
-    try {
-      const {iv,tag,ciphertext} = device.unlockEnvelope
-      const key = createHash('sha256').update('wovenmatter-client-unlock-v1\0'+authorization.slice(7)).digest()
-      const decipher = createDecipheriv('aes-256-gcm',key,Buffer.from(iv,'base64'))
-      decipher.setAAD(Buffer.from(JSON.stringify([identity.libraryID,identity.id,device.id,[...device.scopes].sort()]))); decipher.setAuthTag(Buffer.from(tag,'base64'))
-      const value = JSON.parse(Buffer.concat([decipher.update(Buffer.from(ciphertext,'base64')),decipher.final()]).toString('utf8'))
-      rememberUnlockMaterial(value); return value
-    } catch { throw fail(403,'Enroll this device again from one of your Macs before using stored model accounts.') }
   }
   function revoke(id) {
     transaction(() => {
@@ -475,7 +451,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const providers = await runtime.providers()
       const route = command.providerID ?? command.routeID ?? command.runtimeKind ?? 'default_agent'
       const provider = providers.find(item => item.id === route)
-      if (provider?.locked) throw Object.assign(fail(423, provider.unavailableReason ?? 'Pi Durable is locked.'), { code: 'default_agent_locked' })
       if (!provider?.available || provider.canStart === false || (command.runtimeKind && command.runtimeKind !== provider.runtimeKind)) throw fail(409, 'The selected agent route is unavailable or does not match its runtime.')
       const selected = provider.runtimeKind
       // The frozen intent of a session an agent creates here
@@ -1097,7 +1072,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
     async cancelActive(){await runtime.cancelActive?.();await Promise.allSettled([...jobs.values()].map(job=>job.completion))},
-    rememberUnlockMaterial, unlockMaterial: clientUnlockMaterial, command, receipt: getReceipt, events,
+    command, receipt: getReceipt, events,
     conversations: () => db.prepare('SELECT body FROM conversations').all().map(row => JSON.parse(row.body).conversation),
     // The latest `limit` messages and activities before `before`.
     transcript: (id, before, {limit = 40} = {}) => {
@@ -1172,7 +1147,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       assertIdentity()
       const provider = (await runtime.providers()).find(item => item.id === providerID || item.runtimeKind === providerID)
       if (!provider) throw fail(404, 'This agent is not on this workspace.')
-      if (provider.locked) throw Object.assign(fail(423, provider.unavailableReason ?? 'Pi Durable is locked.'), { code: 'default_agent_locked' })
       if (provider.available === false) throw fail(409, provider.unavailableReason ?? 'This agent is not ready on this workspace.')
       if (!runtime.sessionOptions) throw fail(501, 'This workspace cannot list options without a session.')
       const directory = workingDirectory ? await existingDirectory(workingDirectory) : undefined
@@ -1203,7 +1177,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     // What the session watch holds: pending wake-ups (all, or one caller's),
     // watched sessions, and how many waits follow live changes.
     sessionWakeUps:callerID=>sessionWatch.pending(callerID),sessionWatched:()=>sessionWatch.watched(),sessionWaits:()=>sessionWatch.waiting(),
-    async close() { closed=true;sessionWatch.close();clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
+    async close() { closed=true;sessionWatch.close();clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
   // What was watched or pending before a restart (its interrupted runs are idle now).
   setImmediate(()=>{if(!closed)sessionWatch.start()})
