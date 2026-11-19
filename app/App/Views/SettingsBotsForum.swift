@@ -23,7 +23,7 @@ struct SettingsBotsYouAndForum: View {
             )
             SettingsSummaryRow("Bots in the Forum", value: "\(active) of \(forum.bots.count)") {
                 ForumMemberSwitches(bots: bots)
-                SettingsNote("A bot that is in sees every post. Switched out, it hears nothing and leaves its threads. Admin Bot is out unless you switch it in.")
+                SettingsNote("A bot that is in sees every post. Switched out, it sees none and leaves its threads. Admin Bot is out unless you switch it in.")
             }
         }
     }

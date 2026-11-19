@@ -73,7 +73,7 @@ struct ForumWorkspace: View {
                 onRoute(.forum(machineID: bots.machineID, roomID: roomID, showsThreadBesideMain: !split))
             })
         }
-        actions.append(BotPaneAction(glyph: .close, title: "Back to Forum") {
+        actions.append(BotPaneAction(glyph: .close, title: "Back to the Forum") {
             onRoute(.forum(machineID: bots.machineID))
         })
         // Beside the Forum, the Forum's own pane already says it is paused.
@@ -200,7 +200,7 @@ private struct ForumPane: View {
                 Button(isPaused ? "Resume" : "Pause") { setPaused(!isPaused) }
                     .buttonStyle(WovenQuietButtonStyle())
                     .disabled(pausing || forum == nil || !bots.isConnected)
-                    .help(isPaused ? "Let bots hear the Forum again. Each one catches up on what it missed."
+                    .help(isPaused ? "Let bots see the Forum again. Each one catches up on what it missed."
                                    : "Stop every bot's Forum reply and hold new posts until you resume.")
             }
             ForEach(headerActions) { item in
@@ -367,7 +367,7 @@ private struct ForumPane: View {
         return "\(PiBotForumMentions.list(names)) \(verb) in this thread. @mention another bot to add it."
     }
 
-    /// Who has a turn running here, so "everyone hears" is visible while nobody has posted yet.
+    /// Who has a turn running here, so it shows that bots saw a post before any has answered.
     @ViewBuilder private var thinkingRow: some View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
             HStack(spacing: 8) {
@@ -713,7 +713,7 @@ private struct ForumPausedBanner: View {
                 .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
             VStack(alignment: .leading, spacing: 2) {
                 Text("The Forum is paused.").font(.system(size: 12.5, weight: .medium))
-                Text("Bots hear nothing until you resume. You can still post; each bot catches up then.")
+                Text("Bots see no posts until you resume. You can still post; each bot catches up then.")
                     .font(.system(size: 12))
                     .foregroundStyle(WovenPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -806,7 +806,7 @@ private struct ForumMembersButton: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("In the Forum")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("A bot that is in sees every post. Switched out, it hears nothing and leaves its threads.")
+                    Text("A bot that is in sees every post. Switched out, it sees none and leaves its threads.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(WovenPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)

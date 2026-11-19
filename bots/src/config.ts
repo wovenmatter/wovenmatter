@@ -248,7 +248,7 @@ export type Profile = {
   readonly name: string;
   /** `provider/model-id` of the main channel and every thread; unset until the user picks one. */
   readonly main?: string;
-  /** Ordered main-model fallbacks for usage limits (0–5); none: the bot pauses at a limit. */
+  /** Ordered main-model fallbacks for usage limits (0–5); none: the bot is out of usage at a limit. */
   readonly fallbacks?: readonly string[];
   /** Memory extraction model. Unset: the main model the bot runs at that moment. */
   readonly memoryModel?: string;

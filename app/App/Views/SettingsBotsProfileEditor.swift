@@ -56,7 +56,7 @@ struct BotSettingsProfileEditor: View {
     }
 
     private var fallbacks: some View {
-        BotSettingsEditorSection(title: "Fallbacks", summary: draft.fallbackModels.isEmpty ? "None, the bot pauses" : draft.fallbackModels.joined(separator: " → "), problem: draft.fallbackProblem) {
+        BotSettingsEditorSection(title: "Fallbacks", summary: draft.fallbackModels.isEmpty ? "None: out of usage at a limit" : draft.fallbackModels.joined(separator: " → "), problem: draft.fallbackProblem) {
             SettingsNote("Up to 5, tried in order when the main model hits a usage limit or runs out of credits. The bot switches back once it resets.")
             ForEach(Array(draft.fallbacks.enumerated()), id: \.element.id) { index, entry in
                 HStack(spacing: 6) {

@@ -496,7 +496,8 @@ export type BotManagerOptions = {
 
 /**
  * A bot's main-model status, for the chat banner. `fallback`: the profile's main model (and maybe
- * earlier fallbacks) is out and `active` runs instead; `paused`: every model in the chain is out;
+ * earlier fallbacks) is out and `active` runs instead; `paused`: every model in the chain is out
+ * (the wire's word; the app says "out of usage", and "paused" only of the Forum);
  * `returned`: back on the main model after a fallback or pause (shown briefly).
  */
 export type ModelStatus = {
@@ -759,7 +760,7 @@ export class BotManager {
     if (kind === "returned" && previous?.kind === "returned") return;
     this.#status.set(bot.id, next);
     this.#options.log?.(
-      `bot "${bot.record.name}": ${kind === "paused" ? `paused (${profile.main} and every fallback are out)` : kind === "fallback" ? `on fallback ${effective.model} (${profile.main} is out)` : `back on ${profile.main}`}`,
+      `bot "${bot.record.name}": ${kind === "paused" ? `out of usage (${profile.main} and every fallback are out)` : kind === "fallback" ? `on fallback ${effective.model} (${profile.main} is out)` : `back on ${profile.main}`}`,
     );
     this.#options.onModelStatus?.(bot.id, next);
   }

@@ -223,12 +223,12 @@ struct PiBotTeamsTests {
         let other = Status.Limit(model: "p/b", account: "OpenRouter key", kind: "credits", retryAt: at)
         let paused = PiBotModelStatusText(status: Status(kind: "paused", primary: "p/a", active: "p/a", limits: [primary, other]), botName: "Ada", timeZone: utc)
         #expect(paused.tone == .error)
-        #expect(paused.lines[1] == "Fallback p/b: your OpenRouter key ran out of credits. Reset time not reported; Pi Bot tries again around Sun, 3:33 AM GMT.")
-        #expect(paused.lines[2] == "Ada is paused: every fallback is out too.")
+        #expect(paused.lines[1] == "Fallback p/b: your OpenRouter key ran out of credits. Reset time not reported; Woven Matter tries again around Sun, 3:33 AM GMT.")
+        #expect(paused.lines[2] == "Ada is out of usage: every fallback is out too.")
 
         let alone = PiBotModelStatusText(status: Status(kind: "paused", primary: "p/a", active: "p/a", limits: []), botName: "Ada", timeZone: utc)
         #expect(alone.title == "p/a is unavailable.")
-        #expect(alone.lines == ["Ada is paused: this profile has no fallback. Add one under Settings → Bots → Profiles."])
+        #expect(alone.lines == ["Ada is out of usage: this profile has no fallback. Add one under Settings → Bots → Profiles."])
 
         let back = PiBotModelStatusText(status: Status(kind: "returned", primary: "p/a", active: "p/a"), botName: "Ada", timeZone: utc)
         #expect(back.tone == .success)

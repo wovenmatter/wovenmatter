@@ -314,7 +314,7 @@ struct SettingsBotsMCPAccessSection: View {
             }
             // The pause switch is gone; a pause set before then can still be lifted.
             if bots.thisMachine?.paused == true {
-                SettingsRow(title: "Bots on this Mac are paused", detail: "They can't use Woven MCP until resumed.") {
+                SettingsRow(title: "Woven MCP is paused for bots on this Mac", detail: "Their Woven MCP calls are refused until you resume. The bots themselves keep running.") {
                     Button("Resume") { Task { await bots.attempt(.setPaused(false)) } }
                         .buttonStyle(SettingsQuietButtonStyle())
                         .disabled(bots.busy)
@@ -379,7 +379,7 @@ enum BotMachineText {
         switch machine.state {
         case .off: "Off"
         case .starting: "Starting"
-        case .ready: machine.paused ? "Paused" : "Running"
+        case .ready: machine.paused ? "Woven MCP paused" : "Running"
         case .unreachable: "Unavailable"
         case .needsUpdate: "Needs update"
         case .failed: "Failed"

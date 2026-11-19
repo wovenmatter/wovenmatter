@@ -190,7 +190,7 @@ public actor PiBotClient {
             continuation.resume(returning: object["data"] ?? .null)
         case "error":
             guard let id = object["id"]?.intValue, let continuation = pending.removeValue(forKey: id) else { return }
-            continuation.resume(throwing: RemoteError(message: object["message"]?.stringValue ?? "Pi Bot returned an error."))
+            continuation.resume(throwing: RemoteError(message: object["message"]?.stringValue ?? "The bots returned an error."))
         case "bots.changed": onEvent(.botsChanged)
         case "groups.changed": onEvent(.groupsChanged)
         case "threads.changed":
@@ -233,7 +233,7 @@ public actor PiBotClient {
 
     private func call(_ type: String, _ fields: [String: JSONValue] = [:]) async throws -> JSONValue {
         let timeout = Self.timeout(for: type)
-        guard let socket = task, state == .open else { throw RemoteError(message: "Pi Bot is not connected.") }
+        guard let socket = task, state == .open else { throw RemoteError(message: "Bots are not connected.") }
         let id = nextID
         nextID += 1
         var body = fields
