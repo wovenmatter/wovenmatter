@@ -67,9 +67,9 @@ Each Mac publishes its status as `MacAccessStatus` inside its
 `ready`/`needsAttention`/`unknown` plus the app name, with no credentials, paths
 or timestamps, so only a real change bumps the record. Each Mac includes it in
 its own workspace record during its five-second registry refresh, and library
-sync carries the changed record to every other member. The fields are transport-agnostic Codable values;
-unknown items and states from newer Macs decode as unknown, and older Macs that
-never checked report nothing. The background server combines prompt-free probes
+sync carries the changed record to every other member. The fields are transport-agnostic Codable values:
+an item a Mac has not checked is `unknown`, and a Mac that never checked
+reports nothing. The background server combines prompt-free probes
 with the last Keychain and Automation results saved by Settings
 (`wovenmatter.mac-access` in the app's defaults).
 

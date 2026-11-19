@@ -19,7 +19,7 @@ CLIs' own logins (`~/.claude/.credentials.json`, `~/.codex/auth.json`):
 (`~/.local/share/wovenmatter/default-agent`, 0700), outside the workspace,
 readable only by that user. The bundled Claude runtime keeps its logins in the
 same folder. The host renews its own subscriptions. A Mac sends a host chat
-settings only, and changes the host's sign-ins through its signed `v1/sign-ins`
+settings only, and changes the host's sign-ins through its signed `sign-ins`
 route.
 
 Configuration, operation journals and wire histories do not contain credential

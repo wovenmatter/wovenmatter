@@ -4,10 +4,10 @@ Host workspaces run Woven Matter directly on a Linux machine in the user's
 Tailnet. The Mac that adds a host discovers, inspects and installs the service
 through a verified Tailscale SSH transport. It keeps that SSH tunnel, with the
 installer's API token, for the host's runtime inventory and maintenance, its
-**View browser** window, updating a host too old for signed updates, and
+**View browser** window, updating the host from its own Workspaces page, and
 repair. Everything else, from every Mac, goes to the host's own server over
 Tailscale HTTPS, signed with the Mac's device key: sessions and their live
-stream (`GET /v1/stream`), files, Pi Durable settings, logs,
+stream (`GET /stream`), files, Pi Durable settings, logs,
 restarts and updates. Each host is a library member with its own full library
 copy; session history reaches other devices by library sync.
 Docker is not required.
@@ -127,11 +127,12 @@ directory as its data root.
 The port is chosen once, beginning at the requested loopback port, and retained
 on updates. A second workspace identity cannot replace an existing native
 installation. The Mac obtains actual workspace, attachment and database paths
-from inspection/status/health instead of assuming container paths.
+from inspection, status and health instead of assuming them.
 
-`service.env` records runtime kind, access mode, workspace/data/state/profile
+`service.env` records the access mode, workspace/data/state/profile
 directories, the managed browser cache, loopback address and port, API token,
-service fingerprint, discovered harness PATH, managed agent directory and PATH.
+service fingerprint and release version, roles, discovered harness PATH,
+managed agent directory and PATH.
 Values use literal quoted encoding. `wm-exec` parses them without executing
 shell text and exports only its explicit service/harness allowlist. Tokens
 travel on stdin and in the private environment file, never command arguments.
@@ -149,10 +150,8 @@ folders (`~/.local/bin`, `~/.grok/bin`, `~/.opencode/bin`), mise/asdf shims, nvm
 installations and system locations without sourcing login shells. Woven uses the
 CLIs already there: a harness CLI in the user's home is their native install, which
 Woven updates with the vendor's own command, so a terminal on the host and Woven
-share one CLI with the same sign-ins, skills and sessions. A CLI that an older Woven
-installed with npm (inside a `node_modules` tree) is reported as an npm copy; Install
-or Update replaces it with the official installer rather than updating it through
-npm. CLIs outside the home are reported as system installs and are not updated. A
+share one CLI with the same sign-ins, skills and sessions. CLIs outside the
+home are reported as system installs and are not updated. A
 harness is never updated while its own sign-in runs, and sign-in waits for that
 harness's install or update; other harnesses are unaffected.
 
@@ -169,8 +168,7 @@ Host browsing uses native headless Chromium with its sandbox explicitly
 enabled. No display server or Docker container is used. Each browser profile
 has its own private persistent directory; IDs contain 1–32 lowercase letters,
 digits or hyphens. `default` is implicit. Browser APIs and the `woven_browser_use`
-MCP tool accept an optional `profile`. Existing single-profile browser data is
-retained as `default`. The Mac shows a profile selector when multiple profiles
+MCP tool accept an optional `profile`. The Mac shows a profile selector when multiple profiles
 exist.
 
 Installation and updates must pass `browser-selftest.mjs --json`. The test
@@ -179,7 +177,7 @@ browser/renderer PIDs through CDP and checks renderer ancestry, separate user
 and PID namespaces, seccomp filtering, no-new-privileges and non-root identity.
 Unreadable or inconclusive evidence fails the check. Missing libraries and
 AppArmor/user-namespace failures have explicit reasons and repair hints.
-Administrators can rerun the same check through `/v1/browser/selftest`.
+Administrators can rerun the same check through `/browser/selftest`.
 
 CDP stays on host loopback. Chromium's renderer sandbox does not contain agent
 shell commands or promise protection from every browser vulnerability. Browser
@@ -232,7 +230,7 @@ beneath expandable workspace rows. **All workspaces** lists the local
 installation and each configured host; choosing one workspace limits the list
 to that workspace.
 
-`GET /v1/default-agent/sdks` returns installed package metadata without
+`GET /default-agent/sdks` returns installed package metadata without
 initializing an agent or checking the network. `POST`
 to the same endpoint accepts `{"action":"check","id":"claude"}` for an explicit
 registry check, or `{"action":"update","id":"claude","version":"x.y.z"}` for an

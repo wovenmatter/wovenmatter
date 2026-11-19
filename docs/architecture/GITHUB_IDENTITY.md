@@ -95,19 +95,18 @@ forwards `github.snapshot` and `github.command` (`generate`, `importKey`,
 `removeKey`, `saveIdentity`, `setPlace`, `setNewPlaces`) over the private backend
 transport. After any change, here or from another Mac, the service rewrites
 the files and the agent's key (`GitHubSettingsModel.refreshAgent`); it checks
-every minute that the agent's socket is still there. An item this build cannot
-decode counts as nothing set, so Settings can replace it; it never blocks Pi
+every minute that the agent's socket is still there. An item that cannot be
+decoded counts as nothing set, so Settings can replace it; it never blocks Pi
 Durable's other credentials.
 
 ## Sharing between machines
 
-Two paired-library tables carry the setting; every member's library holds them
-(a library from v0.4.3 gains them when it next opens; a device still on v0.4.3
-keeps their records waiting until it updates):
+Two paired-library tables carry the setting; every member's library holds
+them:
 
 - `github_identity_recipients(device_id, payload)`: each Mac's and Linux host's
   X25519 sealing key, `{device, key, signature}`, signed with its member key
-  over the canonical encoding with domain `woven.github.recipient.v1`. The
+  over the canonical encoding with domain `woven.github.recipient`. The
   private half is Keychain item `global.github-sealing` on a Mac and the same
   item in the library host's secret store on Linux. A phone's row is ignored.
 - `github_identity(singleton, payload)`: `{revision, author, identity,
@@ -115,14 +114,18 @@ keeps their records waiting until it updates):
   recipient, ephemeral, box}], signature}`. Each sealed copy is the key's JSON
   in ChaCha20-Poly1305 under HKDF-SHA256 of an ephemeral X25519 agreement with
   that machine's sealing key (salt: both public keys; info and associated data:
-  `woven.github.identity.v1|<device>|<key fingerprint>`, so a copy stays valid
+  `woven.github.identity|<device>|<key fingerprint>`, so a copy stays valid
   when only the list or the identity changes). The author signs the
   sorted-key JSON without `signature`, after the domain
-  `woven.github.identity.v1` and a zero byte.
+  `woven.github.identity` and a zero byte.
 
-The record carries no format number. A record an earlier release wrote has a
-`version` key inside its signed bytes; it is carried only so that record
-still verifies. Nothing reads it, and new records do not have it.
+A record or recipient row that does not verify is not converted. A pairing
+reset ([Woven everywhere](WOVEN_EVERYWHERE.md), "Pairing reset") deletes the
+record and every recipient row from the device's library, without sending a
+deletion, and keeps the device's own copy of the key and its sealing key.
+Once devices are paired again each publishes its sealing key, and the Mac
+that holds the key writes the record again through the reconcile below, so
+the other machines get their copies with no step in Settings.
 
 A recipient row counts only under the
 device its signed payload names, and only for a current Mac or Linux member. A
@@ -138,8 +141,9 @@ reconciles:
    itself a copy), and otherwise drops its older key and keeps its older
    revision, so the newer key is adopted once a copy arrives; Settings then says
    the key arrives when the other Mac is online.
-3. A newer local copy (changed offline, or first shared after an update) is
-   written as the record, sealed to every verified Mac and Linux host.
+3. A local copy newer than the record, or with no record to compare (changed
+   offline, or after a pairing reset removed the record), is written as the
+   record, sealed to every verified Mac and Linux host.
 4. A Mac holding the current key seals copies for machines that have none, or
    whose sealing key changed (a reinstalled machine), and signs the record
    again.
@@ -157,7 +161,7 @@ winner on its next reconcile.
 ## Linux hosts
 
 The library host publishes the host's sealing key and opens its copy on request
-(`GET /v1/github` on its local socket, `GitHubIdentitySync.hostCopy`):
+(`GET /github` on its local socket, `GitHubIdentitySync.hostCopy`):
 `{deviceID, sshKey: {privateKey, publicKey} | null, identity, access, revision}`.
 The key is null until a Mac has sealed a copy to this host. The Woven server
 asks every 5 seconds and when the library starts (`createGitHubService`), holds
@@ -168,7 +172,7 @@ too.
 
 ## Bots
 
-`POST /v1/bots-host/git` with `{botID}` returns `{publicKey, identity}`: the
+`POST /bots-host/git` with `{botID}` returns `{publicKey, identity}`: the
 public key while the bot's machine and the bot are on, otherwise null. The
 runtime asks at most once a minute per bot, keeps the bot's last answer if the
 host is briefly unreachable, and writes the files into the bot's container as
@@ -182,11 +186,10 @@ the public key, so the container keeps the user's own SSH settings and HTTPS
 remotes as they are; a relay that stops is started again before the bot's next
 command (a failed start is retried after a minute). The relay passes each
 request over its stdio to the runtime, which sends it to
-`POST /v1/bots-host/ssh-agent` (`{botID, message}` → `{message}`, base64
+`POST /bots-host/ssh-agent` (`{botID, message}` → `{message}`, base64
 agent messages). The machine's agent answers it, checking the machine and the
 bot each time. The key never enters the container. The files live in the
 container's `/dev/shm`, so they never reach its disk or an update's snapshot.
 Until they are written, the container's `GIT_SSH_COMMAND` runs plain ssh rather
-than failing on a missing file. A container whose helper predates the relay has
-none until an Update points it at a newer helper. The relay is not counted as work when a bot
+than failing on a missing file. The relay is not counted as work when a bot
 is checked for idleness.

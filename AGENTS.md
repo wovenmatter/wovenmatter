@@ -27,14 +27,16 @@
   permissions (same bundle ID); prefer it over a new name for a clean start.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Internal items never carry version numbers: no schema, format, protocol or
-  state number in a store, file, record or message, and no `.v1`-style suffix on
-  a capability, key or name. Tell builds and data apart by a named capability,
-  the shape of the data, or an existing content hash; when what a store holds
-  changes, recognise the earlier shape and convert it in place. Older builds
-  are not kept working: change both sides and update every device together.
-  Fixed labels inside stored signatures and derived IDs stay as they are. Not
-  covered: the product release version, third-party versions, and data
-  revisions (row revisions, clocks, cursors).
+  state number in a store, file, record or message, and no numbered suffix on a
+  route, capability, label, key or name. Each has one shape; tell things apart
+  by what they are (a named capability, the shape of the data, a content hash).
+  There is no backwards compatibility: change every side together, and update
+  and re-pair every device together, with no fallback, dual name, tolerance for
+  another build's values, or "legacy" path. Data the current release wrote is
+  converted once in place, recognised by its shape, and the earlier name
+  appears only in that conversion. Not covered: the product release version,
+  third-party versions and protocols, and data revisions (row revisions,
+  clocks, cursors).
 - Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
   Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;
   native/mobile/image workflows run only when explicitly requested.

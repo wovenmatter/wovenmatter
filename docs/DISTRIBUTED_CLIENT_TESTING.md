@@ -41,6 +41,12 @@ and fixtures do not prove UI, Tailscale, or real-account acceptance.
    device's requests as soon as they sync; a device that was offline must apply
    the revocation when it returns. Ordinary network loss must not remove anyone.
    Re-pairing must add the device again with its current key.
+6. Update from the previous release with devices paired. Each Mac must show
+   **Pairing was reset by this update** once and list no paired devices; the
+   phone must show **Pair again**; chats, notes, folders and workspaces must
+   be unchanged. Pair the Macs and the phone again without unpairing first.
+   The Linux host must rejoin with no action, the GitHub key must reach every
+   machine again, and a second launch must reset nothing.
 
 ## Library sync
 
@@ -53,10 +59,11 @@ and fixtures do not prove UI, Tailscale, or real-account acceptance.
   block other changes.
 - Save an artifact, interrupt its transfer, reconnect, and verify exact bytes.
   Workspace files and runtime checkpoints stay with their owner.
-- Leave one device on an earlier release. The others must show which device
-  needs updating and link to Settings → Updates, whose **Update everything**
-  brings every device up to date. A change the earlier device cannot apply
-  must wait there, not be lost or cut down, and appear once it is updated.
+- Update one Mac to a build that adds a shared table or column before the
+  other. The others must show which device needs updating and link to
+  Settings → Updates, whose **Update everything** brings every device up to
+  date. A change the second Mac cannot apply yet must wait there, not be lost
+  or cut down, and appear once it is updated.
 - With the iPhone's paired Mac offline, the phone must sync with another Mac or
   the Linux host. Nothing on the phone should wait for its paired Mac.
 

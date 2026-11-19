@@ -33,8 +33,8 @@ recurring agent work. Each timer:
    submitted through the durable inbox and the agent acts then. iOS does not run
    the agent in the background.
 
-The phone never runs calendar tasks. Earlier phone-owned scheduled tasks stay
-visible; saving one with a Mac or Linux agent retires it and creates a replacement
+The phone never runs calendar tasks. A phone-owned scheduled task stays
+visible; saving it with a Mac or Linux agent retires it and creates a replacement
 without a device owner, keeping deleted and already-run occurrences out of it.
 
 ## Backgrounding
@@ -44,9 +44,8 @@ interrupt an in-flight response. Saved request identities and receipts survive
 reopening. Resume is explicit and cannot race interruption cleanup. There is no
 continued-processing task registration or background agent promise.
 
-Earlier device-agent conversations are retained as history. Their saved runtime
-checkpoints are not opened or resumed as Quick Chat; their saved files stay
-readable and exportable. Other devices see a phone's Quick Chats as read-only
+A device-agent conversation kept as saved history only is not opened or
+resumed as Quick Chat; its saved files stay readable and exportable. Other devices see a phone's Quick Chats as read-only
 synced history and cannot run or steer them.
 
 ## Validation

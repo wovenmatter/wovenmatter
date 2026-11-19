@@ -48,8 +48,8 @@ change, change this document in the same commit.
     the paired sync table set; local, unsynced `library_member_anchors`. Entry
     and revocation signatures are Ed25519 over the length-prefixed canonical
     encoding used by `PairedMacIdentity.swift`, domains
-    `woven.member.entry.v1` (`device, kind, name, key, endpoints, added_by,
-    added_at`) and `woven.member.revocation.v1` (`event, device, revoked_by,
+    `woven.member.entry` (`device, kind, name, key, endpoints, added_by,
+    added_at`) and `woven.member.revocation` (`event, device, revoked_by,
     revoked_at`).
   - Resolution (`LibraryMemberResolver`): trust starts at local anchors and
     flows only through entries signed by Macs that still stand; see "Trust
@@ -66,27 +66,30 @@ change, change this document in the same commit.
     records the other Mac on both sides. A phone that includes
     `memberPublicKey` (raw 32 bytes) in `PairRequest` gets an `ios`
     entry from the Mac it pairs with, signed when the phone confirms the
-    pairing (`POST /v1/pair/confirm`), before its grant is issued; a pairing
-    that is never confirmed adds no member. `POST /v1/pair` first checks that
+    pairing (`POST /pair/confirm`), before its grant is issued; a pairing
+    that is never confirmed adds no member. `POST /pair` first checks that
     the Mac can add that key (`MemberDirectory.checkAdd`) and otherwise answers
     409 with the reason (`member_key_changed`) before the code is spent; it
     also returns `PairResponse.libraryIDs` (the libraries in its
     registry). Pairing a phone again on a Mac replaces its key
     (`add(…, replacingKey: true)`: a removal of the old key, then the new
     entry), as for a phone restored from a backup, whose Keychain key is this
-    device only; a Mac's key never changes. Phones without a member key keep
-    their bearer grant. A Linux host: the Mac that adds it reads `memberIdentity` from
-    `GET /v1/host/status`, signs its entry (endpoint: `libraryEndpoint`, else
-    `https://<host>/wovenmatter/`) and sends `POST /v1/host/members/adopt` with
+    device only; a Mac's key never changes. A phone's pairing credential
+    only confirms and ends its pairing; every other request it makes is
+    signed. A Linux host: the Mac that adds it reads `memberIdentity` from
+    `GET /host/status`, signs its entry (endpoint: `libraryEndpoint`, else
+    `https://<host>/wovenmatter/`) and sends `POST /host/members/adopt` with
     a `LibraryMemberAdoption` `{anchor: {deviceID, kind: "mac", publicKey},
     entries, revocations}` through the administrative link, signed and with
     the installer's bearer. The Linux server accepts the installer's API bearer
-    only while the host has never been adopted (`GET /v1/members` reports
-    `adopted: false`; anchors are never removed, so this stays true even once
-    every Mac is removed); after that it needs a signed `mac` member request.
+    only while the host has no adopter (`GET /members` reports
+    `adopted: false`: it holds no Mac anchor). Removing Macs never removes an
+    anchor, so a host stays adopted even once every Mac is removed; only a
+    pairing reset (below) clears it. After that it needs a signed `mac` member
+    request.
     A request whose signature does not verify but that carries the
     installer's bearer is handled as the bearer alone. The body reaches the
-    library socket's `POST /v1/members/adopt` byte for byte. The first
+    library socket's `POST /members/adopt` byte for byte. The first
     adoption anchors its Mac, which must have signed this host's current key.
     A later adoption only carries entries and removals (which also arrive by
     sync): its anchor must already be a standing Mac with the key this host
@@ -97,16 +100,61 @@ change, change this document in the same commit.
     bots-only host, and again on each launch (`LibraryHostController.setUpLinuxHost`).
     Setup is the adoption above, then, for a host with a workspace, exposing
     and enrolling it (Tailscale Serve for its execution API, then
-    `POST /v1/execution/devices`, which registers the row's `endpoint` and
-    `executionDeviceID`). Neither step waits for the other or
-    for an earlier enrollment. A step that fails (the host's library still
-    starting, the host offline) is retried after 5 seconds, doubling to at
-    most 10 minutes, until both succeed; a bots-only host is only adopted.
-    The trust rules above are unchanged: the installer's bearer still adopts
-    only a host that was never adopted.
-  - Upgrade: Macs paired before members existed (a key pinned by a signed
-    join) are converted into members on launch. Phones and Linux hosts pair
-    again. Library content is never touched.
+    `POST /execution/devices` with scopes exactly `["execution"]`, which
+    registers the row's `endpoint` and `executionDeviceID`), then replacing
+    the row's `capabilities` with what the host answers at `GET execution`
+    (`recordLinuxCapabilities`), so the row never keeps a capability the host
+    stopped serving or lacks one it gained. A step that fails (the host's
+    library still starting, the host offline) is retried after 5 seconds,
+    doubling to at most 10 minutes, until all succeed; a bots-only host is
+    only adopted. The trust rules above are unchanged: the installer's bearer
+    adopts only a host that has no adopter.
+  - **Pairing reset.** Pairing made by a build that signed these records
+    differently cannot be verified, and it is not converted: the device
+    clears it once and every device is paired again. A Mac's background
+    server and a Linux library host check before they serve anything: this
+    device's own member entry, read by its key, does not verify under the key
+    it names (`WorkspaceDatabase.holdsUnverifiablePairing`). The device then
+    clears all of its pairing and starts unpaired:
+    - the paired-device file (`library-devices.json`): every grant, pending
+      pairing and approval, pin, admission and unpair event
+      (`DeviceAuthentication.clearPairing`);
+    - on a Mac, the credentials other Macs issued it, an unfinished join and
+      a pending pairing request in Keychain, and its record of the unpairs it
+      already applied;
+    - last, in one transaction, the library's member entries, removals,
+      anchors and pin candidates and the shared GitHub record with its
+      recipients (`clearPairingRecords`). The rows go without a recorded
+      deletion, together with every version, conflict and rejected record
+      kept of them, so nothing is sent to a peer.
+
+    The library is what the check reads, so a reset that stops before the
+    last step starts again at the next open, and each step is harmless to
+    repeat. Afterwards `ensureSelf` writes an own entry that verifies, so the
+    check finds nothing a second time; a peer cannot store an own entry here
+    that does not verify (`peerRecordAllowed` quarantines it).
+    - Kept: the device's own signing key, GitHub key and sealing key; every
+      chat, agent, folder, note and registry row, other machines' included;
+      other Macs' addresses (`mac_routes`); sync cursors; the Linux hosts a
+      Mac set up and its enrollment on them; installer rotations still owed.
+      No effect of an unpair runs: no workspace becomes copied history and no
+      installer bearer is rotated.
+    - A Mac lists no paired devices and shows one notice in Settings → Apple
+      Devices, "Pairing was reset by this update" ("Pair your other Macs,
+      iPhone, and iPad with this Mac again. Your chats, notes, and workspaces
+      are unchanged."), until it is dismissed or a device is paired; a Mac
+      that held no pairing shows nothing. Other machines' workspaces stay in
+      the sidebar and say "<name> does not recognize this Mac. If the two are
+      paired, it connects once they synchronize. Otherwise pair this Mac with
+      it, or with the Mac that manages it, in Settings → Apple Devices."
+    - The phone shows "Pair again" ("iPhone reach").
+    - A Linux host has no adopter again, so the Mac that manages it adopts it
+      on its next setup attempt with the installer's bearer, as it first did,
+      with no user action.
+    - The Mac that holds the GitHub key shares it again once devices are
+      paired (`GITHUB_IDENTITY.md`).
+
+    Pairing again needs no unpair on either side.
 - **Authentication between members: signed requests.** Every request from
   one member to another is signed with the caller's device key. Nothing is
   issued, cached or renewed, and nothing expires on a timer. Revoking a member
@@ -126,8 +174,8 @@ change, change this document in the same commit.
     hashes the empty string. A WebSocket upgrade signs its
     `GET` request. The path is the request target exactly as the client
     sends it, except that a leading `/wovenmatter` mount is dropped
-    (`MemberRequestSignature.canonicalTarget`: `/wovenmatter/v1/x?y` and
-    `/v1/x?y` sign alike, `/wovenmatter?y` signs as `/?y`), because Tailscale
+    (`MemberRequestSignature.canonicalTarget`: `/wovenmatter/x?y` and
+    `/x?y` sign alike, `/wovenmatter?y` signs as `/?y`), because Tailscale
     Serve strips it before a Linux host sees the request while a Mac receives
     it intact. Any other prefix is signed as sent: a Swift client calling the
     Linux Node server through `/wovenmatter-execution/<id>/…` signs that full
@@ -154,17 +202,14 @@ change, change this document in the same commit.
     (shared Swift; Node `createMemberTransport().audienceFor`): the
     registry's `executionDeviceID` when that is an active member, or a Mac
     workspace's (a Mac's execution device is its member ID). A Linux host
-    registers a new workspace with its member device ID as `executionDeviceID`
+    registers its workspace with its member device ID as `executionDeviceID`
     too (`clientExecution.provision`, given the library host's identity), so
-    the registry alone names its audience. Only for an older Linux record,
-    whose Node server named its own random execution device ID, the audience
-    falls back to the one active `linux` member whose advertised endpoints
-    share the workspace endpoint's `.ts.net` host. Two members claiming one
-    host: nobody. A Mac accepts a Linux host's
-    `/mcp/workspace` call from that serving member as well as from the
-    execution device. The installing Mac addresses its first adoption to the
+    the registry alone names its audience; a workspace whose row names no
+    member is not addressed. A Mac accepts a Linux host's `/mcp/workspace`
+    call only from the member its registry row names as execution device.
+    The installing Mac addresses its first adoption to the
     `memberIdentity.deviceID` it read over SSH. A phone learns the pairing
-    Mac's ID from `PairResponse.hostDeviceID`. `GET /v1/identity`
+    Mac's ID from `PairResponse.hostDeviceID`. `GET /identity`
     is used only by the Mac that is about to sign that host's entry. A
     workspace or host without a known device ID is not signed for
     (`member_audience_unknown`); the caller treats it as not reachable yet.
@@ -174,19 +219,19 @@ change, change this document in the same commit.
     checked by Swift (CryptoKit, and swift-crypto through
     `MemberSyncTests`) and by Node (`remote/test/member-auth.test.mjs`),
     including an `audience-changed` reject.
-- Pairing a new device still uses the existing pairing link and confirmation
-  UI on a Mac. Its result is a signed member entry instead of a bearer grant.
+- Pairing a new device uses the pairing link and confirmation UI on a Mac.
+  Its result is a signed member entry.
 - The Linux Node server verifies member signatures itself. It reads the member
-  list from its local library host (`GET /v1/members` on the library socket),
+  list from its local library host (`GET /members` on the library socket),
   which returns each member's `deviceID`, `kind`, `name`, `publicKey`
   (base64), `endpoints` and `revoked`, plus a `revision`.
   The list is cached by `revision`, reloaded every 15 seconds and, at most
   every 2 seconds, when an unknown device signs.
 - On the Linux server (`remote/src/server.mjs`, `member-auth.mjs`), a signed
   request from any member gets what a device grant has: execution
-  routes, `GET /v1/bots/status|resources` and `GET /v1/bots/ws`. A
+  routes, `GET /bots/status|resources` and `GET /bots/ws`. A
   `mac` member is also an administrator, like the installing Mac's bearer:
-  every administrator route, the bots changes and `/v1/host/*`. The bearers
+  every administrator route, the bots changes and `/host/*`. The bearers
   it still accepts are listed under "Bearers that remain".
 - Swift (`shared/…/MemberRequestSignature.swift`): `MemberRequestSigner`
   (`headers(method:target:body:audience:)`, or `bodySHA256:` for a hashed
@@ -199,9 +244,9 @@ change, change this document in the same commit.
   bots WebSocket upgrade uses it through
   `LibraryHostController.authenticateMember`). On a Mac, signed requests are
   accepted on peer sync (`mac`, `linux`), the mobile API and `/mcp` (`ios`,
-  `mac`), `/v1/execution/*` (`mac`, `ios`, `linux`; no execution grant
+  `mac`), `/execution/*` (`mac`, `ios`, `linux`; no execution grant
   needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux` only; see
-  "Sessions across devices") and `/v1/bots/*` (`mac`, `ios`; signed only, no
+  "Sessions across devices") and `/bots/*` (`mac`, `ios`; signed only, no
   grant).
 - Swift clients sign with `MemberSignedHTTPClient(endpoint:signer:audience:)`
   (`app/Sources/WovenMatterClient`): the target is the exact path sent, so a
@@ -210,18 +255,19 @@ change, change this document in the same commit.
   (`…/wovenmatter-execution/<id>/`) signs its full path. The Mac app's
   `SignedExecutionWorkspaceTransport` signs every request to another Mac or
   Linux workspace with a known `executionDeviceID`; a signed
-  refusal is final ("does not recognize this Mac yet" until the member lists
-  synchronize). Nothing is provisioned or saved: a workspace this Mac cannot
+  refusal is final and says the machine does not recognize this Mac (it does
+  once the member lists synchronize, or once the two are paired). Nothing is
+  provisioned or saved: a workspace this Mac cannot
   sign for (its serving member is unknown) is not reachable yet.
-- Node signs through its library host: `POST /v1/members/sign` on the
+- Node signs through its library host: `POST /members/sign` on the
   library socket returns the headers for one request, so the Linux private
   key never leaves `wovenmatter-library` (`remote/src/member-client.mjs`).
   Node signs only for tailnet HTTPS endpoints (`https://*.ts.net`). The
   library host signs only the requests Node makes
   (`LibraryHost.signableAudiences`): the execution API (`GET
-  /v1/execution/{providers,conversations,interactions}`, `GET
-  /v1/execution/conversations/<uuid>/{transcript[?before=…],capabilities}`,
-  `POST /v1/execution/commands`) to an active `mac` or `linux` member, and
+  /execution/{providers,conversations,interactions}`, `GET
+  /execution/conversations/<uuid>/{transcript[?before=…],capabilities}`,
+  `POST /execution/commands`) to an active `mac` or `linux` member, and
   `POST /mcp/workspace[/prepare]` to an active `mac` member, under a
   `/wovenmatter` or `/wovenmatter-execution/<id>` base; anything else is 403
   `not_signable`. The whole local socket answers only the Node server that
@@ -236,13 +282,13 @@ change, change this document in the same commit.
   agents would remove that, which their full-access contract rules out.
 - Remote host administration (status, logs, restart, update) is available to
   every Mac member, as signed requests to the Linux server:
-  `GET /v1/host/status` (remote-host.sh `status` plus `library` and
-  `memberIdentity`), `GET /v1/host/logs?lines=N`, `POST /v1/host/restart`
-  (202), `POST /v1/host/bots-configure {poolBytes, diskBytes}` (bytes or
-  `null`), and `POST /v1/host/update?fingerprint=<sha256>[&roles=…]` whose body
-  is the host bundle (202; `GET /v1/host/update` reports `running`,
+  `GET /host/status` (remote-host.sh `status` plus `library` and
+  `memberIdentity`), `GET /host/logs?lines=N`, `POST /host/restart`
+  (202), `POST /host/bots-configure {poolBytes, diskBytes}` (bytes or
+  `null`), and `POST /host/update?fingerprint=<sha256>[&roles=…]` whose body
+  is the host bundle (202; `GET /host/update` reports `running`,
   `succeeded` with the status, or `failed` with the error), plus `POST
-  /v1/host/members/adopt` (above). A signed upload is received (streamed to
+  /host/members/adopt` (above). A signed upload is received (streamed to
   `<state>/host-update/bundle-*.stream`) only when the claimed member is a
   Mac or the installer's bearer comes with it, so other members get 403
   before any of it is written; the file is removed on every outcome except a
@@ -254,7 +300,7 @@ change, change this document in the same commit.
   devices") and manages it with these signed routes
   (`RemoteHostAdministrationClient`): status, logs, restart, bots-configure
   and update, which uploads this Mac's host bundle and polls `GET
-  /v1/host/update`. Nothing says which Mac added a host. "Update everything"
+  /host/update`. Nothing says which Mac added a host. "Update everything"
   (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
   this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
   the fallback for a host this Mac added. A Linux host's sessions use any
@@ -275,22 +321,22 @@ change, change this document in the same commit.
     `X-Forwarded-Proto`, `Forwarded`, `Via`, `Tailscale-User-*`,
     `Tailscale-Headers-Info`, `Tailscale-App-Capabilities`) is never the
     installer (`remote/src/installer-bearer.mjs`). `POST
-    /v1/host/installer-bearer` (a signed Mac member, or the installer itself)
+    /host/installer-bearer` (a signed Mac member, or the installer itself)
     rotates it: `remote-host.sh rotate-token ID` writes a new
     `WOVENMATTER_API_TOKEN` to `service.env` and the running server switches
     to it at once, closing (`4401`) every bots relay the old bearer opened;
     the reply is `{rotated: true}`, plus `bearer` only for the
     installer on its own tunnel. A Mac that removes another Mac queues a
-    rotation (durably, retried with pending revocations,
+    rotation (durably, retried until the host answers,
     user-defaults key `library.execution.pending-installer-rotations`) on every Linux host in
     the registry whose `ownerDeviceID` is the removed Mac.
   - Outside-client and session MCP bearers (`/mcp`, agent tool sessions),
     bot MCP keys (bots are not members), the runtime host API
-    (`/v1/bots-host/*`) and runtime token, and the library socket's local
+    (`/bots-host/*`) and runtime token, and the library socket's local
     bearer: none of these is a call between members.
-  - The phone's pairing credential, which confirms (`POST /v1/pair/confirm`)
-    and ends (`/v1/pair/unpair`) a pairing. Every other request the phone
-    makes is signed. Unpairing on the phone sends a signed `/v1/pair/unpair`
+  - The phone's pairing credential, which confirms (`POST /pair/confirm`)
+    and ends (`/pair/unpair`) a pairing. Every other request the phone
+    makes is signed. Unpairing on the phone sends a signed `/pair/unpair`
     to a Mac, which removes the phone as Apple Devices' Unpair device does.
 
 ### Trust model
@@ -345,18 +391,16 @@ among Macs that still stand; they never decide who wins a dispute.
   - the mobile library API that the iPhone uses (the Mac's `DeviceAPI` and
     `FederationAPI`), so a phone can sync with any Mac or Linux machine;
   - the library-backed Woven MCP tool groups (notes, history, calendar,
-    library, artifacts) for the local Node server, in place of the earlier
-    relay to one Mac's `/mcp/workspace`.
+    library, artifacts) for the local Node server.
   The peer and mobile routes are published with Tailscale Serve on the host,
   under the same path layout a Mac uses (`/wovenmatter`).
-- **Sync** is peer-to-peer among every online member, using the existing
-  row-level replication (`PairedLibraryStore`: one versions table paged by
+- **Sync** is peer-to-peer among every online member, using row-level
+  replication (`PairedLibraryStore`: one versions table paged by
   cursor, version vectors, per-peer cursors, conflict copies). A local change is announced to online
   peers once and batched; a device that comes online catches up once. There is
-  no constant polling: exchange is change-driven, with a slow presence check
-  in place of the earlier 5-second loop.
+  no constant polling: exchange is change-driven, with a slow presence check.
   - `LibraryPeerSync` (store package) runs it on Macs and Linux hosts, between
-    `mac` and `linux` members only, all signed: `POST /v1/peers/sync`
+    `mac` and `linux` members only, all signed: `POST /peers/sync`
     (`LibraryPeerExchange {deviceID, after, page, version, attachment?}`: push
     this device's page after its last pushed cursor, receive the peer's after
     `after`; repeated until neither has more; `version` is the caller's Woven
@@ -365,10 +409,10 @@ among Macs that still stand; they never decide who wins a dispute.
     device also records it as what that caller holds (its pushed cursor for
     the caller becomes the larger of the two, never past its own last cursor)
     and its own later pushes start there. At most the last page of an exchange
-    is sent back once, as an idempotent echo. `POST /v1/peers/notify
+    is sent back once, as an idempotent echo. `POST /peers/notify
     {deviceID, cursor}` (the receiver pulls when `cursor` is past what it has),
-    `POST /v1/peers/files` and `POST /v1/peers/file` (content-addressed files,
-    as before). A device sends only to advertised endpoints that are tailnet
+    `POST /peers/files` and `POST /peers/file` (content-addressed files).
+    A device sends only to advertised endpoints that are tailnet
     HTTPS (`LibraryPeerSync.isTailnetEndpoint`: `https://<name>.ts.net`, no
     credentials, query or fragment), as Node and the phone do.
   - Only a real change records a version: an update that leaves every
@@ -409,8 +453,8 @@ among Macs that still stand; they never decide who wins a dispute.
     complete request is answered within 60 s, and a reply being written may
     take up to 15 minutes while it moves. An 8 MiB page or a 64 MiB upload
     over a slow relayed path therefore completes.
-  - A Mac also carries its bearer-era pairing roster (`PeerMembership`) in
-    `attachment` until phones pair as members; Linux hosts send none.
+  - A Mac also carries its pairing roster (`PeerMembership`: Mac admissions,
+    device names and signed unpairs) in `attachment`; Linux hosts send none.
 - Linux session history is written into the machine's own library copy, which
   then syncs everywhere. That replaces the per-Mac publisher outbox.
 - **iPhone sync set.** Full copies of notes, Quick Chats with their
@@ -418,57 +462,65 @@ among Macs that still stand; they never decide who wins a dispute.
   on every device, with title and status. Transcripts for very recent
   sessions (updated in the last 3 days, or running), plus any session the
   user opens or keeps offline. Large files are fetched when opened.
-- **No version numbers.** Nothing the devices store or exchange carries a
-  version number of its own: no schema, format or protocol number, and no
-  numbered capability name. The numbers that remain are the Woven Matter
-  release (which Settings → Updates shows and compares), other vendors'
-  versions, and the revisions of data (a row's version, a clock, a cursor).
-  Every device updates together ("Updates"), and there is no compatibility
-  layer for an older build: a change to something both sides use changes
-  both sides. A build tells what it faces from three things:
-  - **A named capability.** A machine that takes a request another build
-    might not lists a name for it: `stream`, `history.library` and
-    `folders.create` in its registry row's `capabilities`, `library.peers`
-    in a Mac's discovery advertisement. A sender looks for the name before
-    it relies on the feature: a Mac whose row lacks `folders.create` is sent
-    no folder request, and the requester names the Mac to update.
-  - **The shape of the data.** A reader recognises what it holds by the
-    tables, columns and keys that are there, and ignores a key it does not
-    use. A change to what a store already holds (a rename, a retype, a
-    removal) is recognised by the earlier shape and converted in place, in
-    one transaction that leaves none of that shape, so it runs once
-    (`convertEarlierLibraryUnlocked` for the library, under "Storage names"
-    below). A conversion of something shared rewrites the recorded versions
-    with it, so devices that update together keep their versions and
-    cursors. A name written into stored data has no number either: where
-    stored rows carry an earlier name (a native record's format tag), one
-    mapping reads them and the rows are not rewritten.
+- **One shape, no version numbers.** Nothing the devices store or exchange
+  carries a version number of its own: no schema, format or protocol number,
+  and no numbered suffix on a capability, label, key or route. The numbers
+  that remain are the Woven Matter release (which Settings → Updates shows
+  and compares), other vendors' versions and protocols, and the revisions of
+  data (a row's version, a clock, a cursor). Nothing is kept for another
+  build: a change to something two sides use changes every side, and every
+  device updates, and where pairing is affected pairs again, together.
+  - **One shape on the wire.** Every list, reply, frame and record has the
+    one shape this build defines. A value a receiver does not define (a
+    frame type, an item or entry kind, a record tag, an enum case) is an
+    error, never skipped: a page or request fails whole and
+    takes nothing, the journal read stops at an entry it cannot read
+    (`unreadable_entry`), and a stream closes with `4400` ("Frames"). There
+    is no tolerant decoding, no dual name and no fallback route.
+  - **Capabilities say what a machine serves**, not which build it runs. A
+    workspace's registry row lists them: a Mac `history.library` and
+    `stream`; a Linux host exactly what its server answers (`execution`,
+    `historyReplay`, `idempotentCommands`, `stream`), written again by the
+    Mac that manages it each time it sets the host up. A client opens a
+    stream only to a workspace that lists `stream`.
+  - **Stored data is converted once.** What the previous release left in a
+    store is recognised by its shape, converted in place in one transaction
+    that leaves nothing to find a second time, and the earlier name appears
+    only in that conversion. Readers and writers know only the current
+    shape. The library's conversions are under "Storage names" below; the
+    phone converts its store index, journal index and preferences when it
+    opens them (`EarlierPhoneFiles`), and a Linux host its execution store's
+    record tags, its retained-history state files and its default browser
+    profile folder at start. Pairing is not converted ("Pairing reset").
   - **The shared-schema hash.** The shared tables are hashed (`schema`: per
     table, its column names with their declared types, sorted by name, and
     its key columns in key order; physical column order is not part of it,
-    so a library converted over many releases and a freshly created one
-    report the same). Peers report the hash; a difference means one of them
-    has additions the other keeps waiting, and
-    `LibrarySyncStatus.waitingForUpdate` counts them.
+    so a converted library and a freshly created one report the same). Peers
+    report the hash. A Mac shows "Versions don't match" with "Update
+    everything" for a machine whose Woven Matter release, host release
+    fingerprint or library schema hash differs from its own
+    (`BotsRemoteStatus.mismatch`, `BotVersionReport`).
 
-  A release that only adds a shared table or column needs nothing more:
-  - A device that does not know a record's table or one of its columns keeps
-    the record exactly as received (a waiting entry of `peer_sync_versions`,
-    marked `waits_for_update`),
-    relays it to its own peers, keeps synchronizing everything else, and
-    tries it again when its own schema hash changes, which is when it has
-    updated; the record is checked then against the member that sent it. It
-    never applies a cut-down row: a later
-    local edit would send the cut-down row back and lose the new column on
-    every device. A local edit made while such a version waits is concurrent
-    with it, as with a version waiting for its bytes.
-  - A device that knows more columns than a record carries applies the ones
-    it has. When such a version wins, each column it lacks is taken from the
-    highest-ranked concurrent version that carries it, so every device
-    arrives at the same row whatever order the versions came in; a column no
-    concurrent version carries keeps its local value, or its default in a
-    new row. A new shared column is therefore nullable or has a default, and
-    adding it leaves recorded versions as they are.
+  Two Macs are never updated at the same instant, so one thing spans the
+  minutes between: a synced record that names a table or column the
+  receiving build does not have yet waits there. It is how a change survives
+  until the second Mac is updated, not support for an older build.
+  - The device keeps the record exactly as received (a waiting entry of
+    `peer_sync_versions`, marked `waits_for_update`), relays it to its own
+    peers, keeps synchronizing everything else, and tries it again when its
+    own schema hash changes, which is when it has updated; the record is
+    checked then against the member that sent it. It never applies a
+    cut-down row: a later local edit would send the cut-down row back and
+    lose the new column on every device. A local edit made while such a
+    version waits is concurrent with it, as with a version waiting for its
+    bytes. `LibrarySyncStatus.waitingForUpdate` counts them.
+  - A device that has more columns than a record carries applies the ones
+    the record has. When such a version wins, each column it lacks is taken
+    from the highest-ranked concurrent version that carries it, so every
+    device arrives at the same row whatever order the versions came in; a
+    column no concurrent version carries keeps its local value, or its
+    default in a new row. A new shared column is therefore nullable or has a
+    default, and adding it leaves recorded versions as they are.
   - File sync skips a file store this build does not keep.
 
   `LibrarySyncStatus` (`{deviceID, version, schema, peers: [{deviceID, name,
@@ -476,48 +528,26 @@ among Macs that still stand; they never decide who wins a dispute.
   lastContact, error}], conflicts, quarantined, waitingForUpdate}`; each
   `version` is that device's Woven Matter release, for display) is on the
   Mac's `LibraryHostSnapshot.librarySync`, the library socket's
-  `GET /v1/sync/status` and, for phones, the mobile API's signed
-  `GET /v1/sync/status` on every Mac and Linux host. A Mac shows "Versions
-  don't match" with "Update everything" for a machine whose Woven Matter
-  release, host release fingerprint or library schema hash differs from its
-  own (`BotsRemoteStatus.mismatch`, `BotVersionReport`).
-- **Values a newer build wrote.** Until every device has updated, a row or
-  reply may hold a value a build does not know yet (a new workspace kind,
-  journal entry kind, note kind, goal state). The rule has two halves:
-  - **Reading skips.** A list read from another device, or from a replicated
-    table, keeps the elements this build can decode and drops the rest
-    (`LossyArray`): the library snapshot and change pages, the workspace
-    registry, pending questions, conversation and provider lists, saved
-    artifact manifests. A change page's `cursor` covers a dropped change. A
-    snapshot list that lost an element is marked incomplete, and the phone
-    then takes nothing absent from it as deleted (and does not move to that
-    host). A detail inside a value that must survive reads as absent
-    (`LossyOptional`): a note's `kind` (its `content` is untouched, and a
-    document this build cannot decode is read-only), a session's `goal`. A
-    journal has no gaps, so an entry that cannot be read is not dropped
-    silently: `ExecutionJournalPage.skipped` names its workspace and sequence
-    (written by a serving member that cannot read its own replicated row,
-    added by a reader that cannot decode an entry), and the reader moves that
-    one position forward. A gap nothing names still stops the reader.
-  - **Writing refuses.** A request a device must not lose is decoded whole or
-    refused: a journal batch (`POST v1/federation/journal`,
-    `/v1/publisher/journal`) with an entry the host cannot read answers 400
-    `invalid_request` and takes nothing, so the sender keeps it and retries
-    after the host updates. Registrations, mutations and commands are the
-    same, and a lookup that decides a write never takes an unreadable row for
-    a missing one.
+  `GET /sync/status` and, for phones, the mobile API's signed
+  `GET /sync/status` on every Mac and Linux host.
 
 - **Storage names.** Table names say what a table holds:
   - The core library: `conversations`, their `messages`, `message_attachments` and `message_references`, the `runs` that answered them with each run's `run_activities` (tool calls, thoughts and other activity rows), `run_visible_notes` (the note a run could see) and `run_program_statuses`, plus `agents`, `folders`, `notes`, `calendar_items`, `conversation_titles` (a title set by the user, which wins over the harness's) and `session_imports`. `harness_sessions` is the native session of every harness, local or on a remote workspace (`native_session_id`); `opencode_sessions`, `opencode_submissions` and `opencode_hidden_messages` are OpenCode's. `workspace_revision`, `activity_revision`, `activity_summaries` and `message_revisions` are the change counters and caches the window reads; `workspace_revision` also advances when an agent's owner record, a registry row, a workspace name, or the workspace or trash flag of an execution projection changes, since those place agents and chats and arrive apart from them. An agent's `owner_device_id` is the device ID of the Mac that added it (its `device-id` file, not its library host ID), or of the workspace owner of a remote harness; the member that runs it is its `agent_owners` row, and a Mac lists as its own only the agents that row assigns to it (`AgentPlacements`). Who runs a conversation is its `conversation_owners` row, or its `execution_conversations` projection for a session another member executes.
   - `library_identity` holds this replica's device ID (`host_device_id`) and the library's ID (`library_id`), which every paired device names.
   - `peer_sync_*` is peer sync between Macs and Linux hosts. `peer_sync_versions` holds each shared row's versions that still matter (the winner, concurrent versions, and versions waiting for their bytes, `pending_peer`), each under the cursor of one AUTOINCREMENT sequence that a new or newly kept version advances; a version it supersedes is deleted, so paging after a cursor returns each row's current versions once, and a deletion keeps only the row's key and authority columns (`conversation_id`, `workspace_id`, `device_id`, `owner_device_id`). `peer_sync_clock` is the Lamport clock and vector, `peer_sync_cursors` and `peer_sync_file_cursors` what each peer was sent and sent, `peer_sync_conflicts` losing versions while they stay concurrent (and every losing `library_items` version, whose bytes are kept), `peer_sync_quarantine` rejected records until a version covers them, and `peer_sync_state`, `peer_sync_seeded` and `peer_sync_reassert` the bookkeeping of the scan position, seeded tables and owner republishing. `agent_owners`, `conversation_owners` and `calendar_item_owners` name the member that runs each agent, conversation and calendar item (a Mac claims the unowned ones it has local evidence of having run each time it opens its library, `PAIRED_MAC_LIBRARIES.md`); `mac_routes` is each Mac's address, `remote_workspace_configurations` the Linux hosts each Mac set up, and `execution_workspace_names` the name someone chose for a workspace, by registry ID.
   - A session's settings and relationships: `session_tools`, `session_executor_profiles`, `session_goals` (with `goal_runs` and `goal_usage`), `session_relationships`, `session_grants`, `session_timers`, `session_deliveries` and `session_creations`; `tool_settings` and `tool_mutations` are the agent tools' settings and receipts, `mcp_callers` and `mcp_bot_machines` their callers, `coordination_*` and `automation_*` coordination and automation requests, and `input_contexts` and `opencode_input_contexts` the note and text each delivered input carried. `history_events` (searched through `history_search`) is native harness history; `calendar_runs`, `calendar_task_sessions`, `calendar_remote_ownership` and `calendar_remote_receipts` are scheduled runs and their sessions.
-  - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, adoptions, receipts, settlements, native history, and their scheduled MCP callers. Most of it is peer-synced library content (`PairedLibraryTables`).
+  - `execution_*` is execution workspaces, this Mac's own included, with their journals, conversations, runs, receipts, settlements, native history, and their scheduled MCP callers. Most of it is peer-synced library content (`PairedLibraryTables`).
   - `calendar_task_executors` names the device that runs each scheduled item; `calendar_item_owners` names the Mac that owns the row. `calendar_run_publishers` and `calendar_published_runs` are who may report runs and the runs they reported.
   - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts and scheduled MCP callers. Saved files are `saved_artifacts`, with uploads in progress in `artifact_uploads` and `artifact_chunks` (each chunk's bytes are a file in `library-chunks/` that the row names by SHA-256); `message_provenance` is the session that sent an agent's message.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The library carries no schema version: nothing writes a number into the file and nothing reads one, and a number an earlier release left there is ignored. What a library needs is told from its shape (`convertEarlierLibraryUnlocked`). The conversion runs for a library that still has a table under a name v0.4.2 used or a column v0.4.2 had (`hasEarlierShapeUnlocked`; a Dev snapshot renames the tables of the library it copies before the app opens it, so its columns say what it is), in one transaction that leaves neither, so it runs once; a later change to what a library already holds is detected the same way, by the earlier shape it looks for (the usage rows' account label, which was never collected reliably, is dropped where the column is found). A table that is only added, like Settings → GitHub's two shared tables (`GITHUB_IDENTITY.md`) or the shared table of workspace names `execution_workspace_names`, needs no conversion: its declaration creates it at the next open, so a library from any earlier release ends with exactly the schema of a new one. Each conversion copies the library first (`Library Backups/before-library-conversion-<time>.sqlite` beside it; a clone on a Mac, removed after 30 days). While it runs, the opening process publishes its stage and fraction (`LibraryUpgradeMonitor`); the background service puts them in its readiness reply, so a window shows the upgrade and keeps waiting instead of timing out. Nothing in the library stops an earlier release from opening one a later release has changed: devices update together, and a record that names a table or column a build does not have waits there until that build is updated ("No version numbers"). New and converted libraries use incremental auto-vacuum. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
+  **Conversions.** The library carries no schema version: nothing writes a number or a marker into the file and nothing reads one. A new library is created by the declarations in each `migrate*` (`CREATE … IF NOT EXISTS`), and the same declarations add a new table, index or trigger to an existing library at its next open, so an addition needs nothing more. A change to what a library already holds is a `LibraryConversion` in `libraryConversions` (`LibrarySchemaUpgrade.swift`): `applies` recognises the earlier shape with a lookup in the schema or through an index, never a scan, and `convert` makes the change and leaves nothing `applies` would find. The conversions take a library as the previous release (0.4.6) leaves it; nothing is kept for a library older than that. Opening a library that needs any of them copies it first (`Library Backups/before-library-conversion-<time>.sqlite` beside it; a clone on a Mac, removed after 30 days), then runs them in one transaction with foreign keys off and every trigger of the library's own tables dropped, so a failure leaves the library exactly as it was; the regular creation that follows recreates each trigger. A library with nothing to convert is neither touched nor copied. While it runs, the opening process publishes its stage and fraction (`LibraryUpgradeMonitor`), and the background service puts them in its readiness reply, so a window shows the upgrade and keeps waiting instead of timing out. A conversion that changes rows peers share changes every recorded version of them the same way (`peer_sync_versions`, conflicts and rejected records), so each device that converts the same library agrees. The four, in order:
+  - **Leftover device tables** (`LibraryConversionLeftoverTables.swift`, recognised by a table named `companion_*`): what the library held for other devices under earlier table names, which the previous release left beside the current tables and never read. What a phone or tablet published is adopted into the current tables (its workspace, the chats that run on it, their runs, its journal, its native history with its parts, saved files and receipts), so the phone's journal continues where it stopped when it pairs again. Everything else there is dropped with the tables: the earlier library ID and change feed, and Mac and Linux workspaces, which register themselves again.
+  - **Earlier table declarations** (`LibraryConversionDeclarations.swift`, recognised by a table's columns and foreign keys): the agent-tool tables that referenced `conversations` where they now name any caller (`mcp_callers`; every conversation becomes a caller), `session_timers` without `outside_mcp`, and `harness_sessions` and `calendar_items` with a column out of order are rebuilt from the declaration a new library uses, keeping their rows.
+  - **Record format names** (`LibraryConversionRecordFormats.swift`, recognised through the index `execution_native_history_format`): a native history record's format, and the same name inside each journal entry that carried a part of it (with the entry's fingerprint computed again), take the names this build writes. A record's own bytes, which are files named by their digests, are left as they are.
+  - **What the previous release wrote and declared** (`LibraryConversionPreviousRelease.swift`, recognised by the table `execution_adoptions` or one of four request-case indexes, which that release declared in every library and this build does not): the number under a top-level key of every note document is removed from each note, each kept version and each recorded version of those rows (`EarlierNoteContent.removingVersionMember`, the function the phone uses on its own copies, so every device ends with the same bytes); the search entry of each native history record takes the current names; and that table and those indexes are dropped last.
+
+  To change what a library holds: change the declaration, add a conversion that recognises the earlier shape cheaply (declare an index when the shape is a value in rows), give `LibrarySchemaUpgradeTests` a library of the earlier shape, which must end with exactly the schema of a new one and change nothing when opened again, and remove the conversion in the release after every device has taken it. Outside the library, a Mac moves the settings the previous release saved under numbered keys to their current keys once at launch (`WindowPreferenceUpgrade`).
 
 ### Library host (`wovenmatter-library`)
 
@@ -548,7 +578,7 @@ wovenmatter-library --version
   entry (name, base URLs such as `https://host.tailnet.ts.net/wovenmatter/`).
 - `--identity`: print `{deviceID, kind, name, publicKey, endpoints}` and exit.
 - `--adopt-members FILE|-`: apply a `LibraryMemberAdoption`, print the member
-  list and exit (the same as the socket's `POST /v1/members/adopt`).
+  list and exit (the same as the socket's `POST /members/adopt`).
 - When both listeners are ready it prints one line to stdout and writes the
   same object to `DIR/run/library.json` (0600):
   `{"event":"ready","pid":N,"port":N,"socket":"…","schema":"<hex>"}`,
@@ -572,17 +602,17 @@ owned by the running user.
 **Loopback routes** (published with Tailscale Serve under `/wovenmatter`,
 which the host strips):
 
-- `GET /v1/health` → `{"status":"ok","service":"wovenmatter-library","deviceID":"…","uptimeSeconds":N}`,
+- `GET /health` → `{"status":"ok","service":"wovenmatter-library","deviceID":"…","uptimeSeconds":N}`,
   or 503 when the database is unavailable. Unauthenticated; it reveals only
   the device ID, which is the member device ID.
-- `GET /v1/identity` → `{deviceID, kind: "linux", name, publicKey, endpoints}`.
+- `GET /identity` → `{deviceID, kind: "linux", name, publicKey, endpoints}`.
   Unauthenticated: the adding Mac signs this key.
-- Peer sync (`/v1/peers/sync`, `notify`, `files`, `file`; signed by a `mac` or
+- Peer sync (`/peers/sync`, `notify`, `files`, `file`; signed by a `mac` or
   `linux` member) and the mobile library API (`LibraryHost.mobilePrefixes`:
-  `/v1/hello`, `/v1/snapshot`, `/v1/changes`, `/v1/mutations`, `/v1/commands`,
-  `/v1/federation/…`, `/v1/calendar…`, `/v1/dictations`, `/v1/notes/…`,
-  `/v1/assets/…`, `/v1/sessions/…`, `/v1/devices`, `/v1/providers`,
-  `/v1/pending`, `/v1/workspace-read`, `/v1/sync/status`, `/v1/members`, `/mcp`; signed by an `ios` or `mac`
+  `/hello`, `/snapshot`, `/changes`, `/mutations`, `/commands`,
+  `/federation/…`, `/calendar…`, `/dictations`, `/notes/…`,
+  `/assets/…`, `/sessions/…`, `/devices`, `/providers`,
+  `/pending`, `/workspace-read`, `/sync/status`, `/members`, `/mcp`; signed by an `ios` or `mac`
   member only, no bearer) are mounted with `LibraryHost.mount(prefix:_:)`.
   Sessions are not started through it (`unsupported`). Other paths return 404.
   Sync starts once both listeners are ready.
@@ -591,20 +621,19 @@ which the host strips):
 carries `Authorization: Bearer <token file contents>`. Requests are HTTP/1.1,
 one per connection, with `Host`; POST bodies are `application/json`.
 
-- `GET /v1/health`: as above.
-- `POST /v1/callers` registers a conversation as a local session so tool
+- `GET /health`: as above.
+- `POST /callers` registers a conversation as a local session so tool
   effects (notes, receipts, versions, mutation history) are attributed to it:
   `{"conversationID":"<uuid>","title":"…","runtimeKind":"default_agent","workingDirectory":"/home/…","enabledGroups":["notes","calendar"]}`
   (only `conversationID` is required) →
   `{"conversationID":"<uuid>","enabledGroups":"calendar,notes"}`.
-- `POST /v1/mcp`: stateless MCP JSON-RPC (`initialize`, `ping`, `tools/list`,
+- `POST /mcp`: stateless MCP JSON-RPC (`initialize`, `ping`, `tools/list`,
   `tools/call`), the same messages the Node server sends to a Mac's
   `/mcp/workspace`. Headers: `X-Woven-Conversation-ID` (the caller, a
   UUID; registered on first use), `X-Woven-Enabled-Groups` (comma-separated,
   the caller's current selection; the Node server is the authority for its own
-  sessions' tool policy; a group name the host does not know is ignored, here
-  and on a Mac's `/mcp` and `/mcp/workspace`, so a newer caller keeps the
-  tools both builds know), optional `X-Woven-Context-ID` and
+  sessions' tool policy; a group the host does not serve is ignored, here
+  and on a Mac's `/mcp` and `/mcp/workspace`), optional `X-Woven-Context-ID` and
   `MCP-Protocol-Version`. Served groups: `notes` (including spreadsheet and
   HTML note artifacts), `history`, `calendar`, `library` and `timers` (see
   "Timers on a library host"), plus
@@ -621,9 +650,9 @@ one per connection, with `Host`; POST bodies are `application/json`.
   tool results carry numbers as Double and JavaScript callers parse them as
   one; a larger `after` is refused rather than rounded.
 
-- Bot callers on `POST /v1/mcp`: instead of `X-Woven-Conversation-ID`, send
+- Bot callers on `POST /mcp`: instead of `X-Woven-Conversation-ID`, send
   `X-Woven-Caller: woven:bot:<machine-device-id>:<bot-id>` (use this host's
-  member device ID from `/v1/identity`), `X-Woven-Bot-ID: <bot-id>` (must
+  member device ID from `/identity`), `X-Woven-Bot-ID: <bot-id>` (must
   match), `X-Woven-Bot-Name` (percent-encoded) and `X-Woven-Enabled-Groups`.
   The bot is an app-wide caller (`WovenMCPCaller.isAppWide`), registered on
   first use; its tools are this library's `botMCP` groups (synced Woven
@@ -633,17 +662,18 @@ one per connection, with `Host`; POST bodies are `application/json`.
 Membership, publishing and bot routes on the local API
 (`remote/src/library-host.mjs` calls them):
 
-- `GET /v1/identity`: as on loopback.
-- `GET /v1/members` → `{revision, adopted, members: [{deviceID, kind, name, publicKey
+- `GET /identity`: as on loopback.
+- `GET /members` → `{revision, adopted, members: [{deviceID, kind, name, publicKey
   (base64), endpoints, addedBy, revoked}]}` (see "Membership"). `revision` is
   an opaque string that changes whenever the resolved list changes; `adopted`
-  is true once this host anchored a Mac, and stays true.
-- `POST /v1/members/adopt` (`LibraryMemberAdoption`) → the member list, or 400
+  is true while this host holds a Mac anchor, which only a pairing reset
+  removes.
+- `POST /members/adopt` (`LibraryMemberAdoption`) → the member list, or 400
   `invalid_member` or `already_adopted` (see "Adding").
-- `POST /v1/members/self {name?, endpoints}` updates this machine's own
+- `POST /members/self {name?, endpoints}` updates this machine's own
   entry; the server sends it (`{name: hostname, endpoints: [<published
   library route>]}`) after each Serve publish so peers use that address.
-- `POST /v1/members/sign {method, target, bodySHA256, audience}` →
+- `POST /members/sign {method, target, bodySHA256, audience}` →
   `{headers: {X-Woven-Member-Device, X-Woven-Member-Audience,
   X-Woven-Member-Time, X-Woven-Member-Nonce, X-Woven-Member-Signature}}`:
   signs one outgoing request of the Node server with this machine's member
@@ -653,19 +683,19 @@ Membership, publishing and bot routes on the local API
   (not this machine's, an active member of the kind the route is for); only
   the method and route pairs listed under "Node signs through its library
   host" are signed, anything else is 403 `not_signable`. Only
-  the socket serves it: on loopback every `/v1/members/…` path is 404, and
+  the socket serves it: on loopback every `/members/…` path is 404, and
   mounts match whole path segments. `remote/src/member-client.mjs` requires
   `audience` on every request (`macs()` entries and registry rows carry it).
-- `GET /v1/workspaces` → `{workspaces: [ExecutionWorkspace]}`: the
+- `GET /workspaces` → `{workspaces: [ExecutionWorkspace]}`: the
   synced execution workspace registry (every Mac, Linux and iPhone
   workspace this library knows, deleted ones left out), which the server
   routes cross-workspace sessions with.
-- `GET /v1/sync/status` → `LibrarySyncStatus`.
-- `POST /v1/timers/due` (`{}`) → `{occurrences: [{timerID, deliveryID, target,
+- `GET /sync/status` → `LibrarySyncStatus`.
+- `POST /timers/due` (`{}`) → `{occurrences: [{timerID, deliveryID, target,
   kind: "session"|"bot", botID?, text}], nextFireAt?}` and `POST
-  /v1/timers/settle {timerID, deliveryID, outcome: "accepted"|"retry"|"cancelled",
+  /timers/settle {timerID, deliveryID, outcome: "accepted"|"retry"|"cancelled",
   reason?}` (`LibraryHostTimers`); see "Timers on a library host".
-- `POST /v1/publisher/{journal,retained/settle,association,artifacts/register,artifacts/chunk,artifacts/commit}`:
+- `POST /publisher/{journal,retained/settle,association,artifacts/register,artifacts/chunk,artifacts/commit}`:
   this machine's execution history and saved artifacts, written into this
   library copy (the only way a Linux host publishes history). The workspace is the one the entries (or the artifact
   manifest, or `association`'s body `workspaceID` / `X-Woven-Workspace-ID`)
@@ -674,11 +704,11 @@ Membership, publishing and bot routes on the local API
   `wrong_owner`), and history is attributed to its execution device. A batch
   may carry this library's ID or the workspace's (the adding Mac's) library
   ID; the reply keeps the caller's.
-- `POST /v1/bots/{botID}/entries`: a runtime conversation batch (`{bot,
+- `POST /bots/{botID}/entries`: a runtime conversation batch (`{bot,
   conversations, entries}`, see "Runtime host API"), recorded with
   `WorkspaceDatabase.recordBotConversation(machineID:_:)` under this host's
   member device ID → `{conversations, entries, added}`.
-- `DELETE /v1/bots/{botID}/conversations`: the bot was deleted; marks its
+- `DELETE /bots/{botID}/conversations`: the bot was deleted; marks its
   conversations deleted with `WorkspaceDatabase.deleteBotConversations(machineID:botID:)`
   under this host's member device ID (entries stay) → `{deleted: true}`.
 
@@ -698,7 +728,7 @@ Funnel; recorded in `<state>/library/serve.json`, removed by uninstall), and
 writes `<state>/library/identity.json` (`{deviceID, kind, name, publicKey,
 endpoints, libraryEndpoint, updatedAt}`, 0600), which `remote-host.sh inspect`
 and `status` return as `memberIdentity` for the Mac that creates this
-machine's member entry; `/v1/health` reports it too. `remote-host.sh
+machine's member entry; `/health` reports it too. `remote-host.sh
 install|update` runs `--migrate-only` after stopping the old service and
 before switching releases. **Host updates** then commit in two steps. The new
 service first starts with `WOVENMATTER_LIBRARY=0` for the health check and
@@ -717,13 +747,13 @@ with the new version left installed. Isolated tests use
 `WOVENMATTER_LIBRARY=0` turns it off.
 
 The server sends a session's notes, history, calendar, library and timer tools to
-`POST /v1/mcp` (registering it with `POST /v1/callers` first), so they work
+`POST /mcp` (registering it with `POST /callers` first), so they work
 with every Mac offline. History the caller may
 read only through its managed sessions, and all history while the library host
 is down, comes from the Node journal. Databases, `woven_context` and
 `woven_html_render` stay in Node, and so do sessions on other workspaces
-("Sessions across devices"). `woven_sessions_folders` goes to `/v1/mcp`.
-Bot callers' library tools go to `/v1/mcp` as app-wide callers (above), with
+("Sessions across devices"). `woven_sessions_folders` goes to `/mcp`.
+Bot callers' library tools go to `/mcp` as app-wide callers (above), with
 `X-Woven-Caller` built from this host's member device ID.
 
 Tools that only a Mac serves (usage, which is the Mac's own provider usage
@@ -735,9 +765,8 @@ proof) with `X-Woven-Workspace-ID: <this workspace>`,
 `MCP-Protocol-Version`, and no bearer (`createMemberMacDelegate`). Macs are
 tried in sync-status order, online first; another Mac is tried only when the
 request never reached one or was refused before any effect (401, 403, 404,
-503). The Mac accepts the call when the signer serves that non-deleted
-Linux workspace (its execution device, or the member `MemberAudience.serving`
-names) and the conversation belongs to it. A scheduled task's caller record
+503). The Mac accepts the call when the signer is the execution device of
+that non-deleted Linux workspace and the conversation belongs to it. A scheduled task's caller record
 (`device_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
 synced, so another Mac refuses the task's calls until the session's own row
 reaches it. The Node delegate therefore sends a task's calls to the Mac that
@@ -750,22 +779,22 @@ session tools run on this server. A Mac accepts `/mcp/workspace` only as a
 signed request from a Linux member; no Mac issues a library MCP or publisher
 grant. Without a running library host nothing is published and Mac-only tools
 are unavailable. Session history is published to the local publisher routes,
-and bot conversation batches go to `/v1/bots/{botID}/entries`, waiting in the
+and bot conversation batches go to `/bots/{botID}/entries`, waiting in the
 outbox while the host is down.
 
 **Timers on a library host.** Timers (`session_timers`) are not in
 the paired sync table set: each lives in the library copy of the machine that
 fires it, so a Linux session's or bot's timers keep firing with every Mac off.
-The timers group is served by `POST /v1/mcp` like the other library groups.
+The timers group is served by `POST /mcp` like the other library groups.
 A bot without `session` (Node catalog) or `sessionID` (an app-wide caller on a
 Mac or the library host, `WovenMCPServer.handle(botCaller:)`) sets its own
 timers, whose target is its principal `woven:bot:<machine>:<bot>`; no caller
 may set another bot's. `woven_timers_list` without a session lists the bot's
 own schedule, which its idle check reads. The table has no foreign key to
-conversations (migrated in place); timers of a missing conversation are never
+conversations; timers of a missing conversation are never
 listed or fired, and a paused, revoked or disabled bot's are skipped.
 - Firing (`remote/src/library-timers.mjs`, started by `server.mjs`): the Node
-  server asks `POST /v1/timers/due`, which reserves and claims each due
+  server asks `POST /timers/due`, which reserves and claims each due
   occurrence as a `timer` delivery whose ID is stable across retries, and
   returns the occurrences of this machine's sessions and of bots whose
   principal names this host's member device ID. A session occurrence becomes
@@ -779,14 +808,14 @@ listed or fired, and a paused, revoked or disabled bot's are skipped.
   command) ends that occurrence. It sleeps until `nextFireAt` (at most 60 s,
   30 s after a failure) and is woken by every timer change made through Woven
   MCP and whenever the library host becomes ready. There is no other polling.
-- On a Mac the app's agent tool tick fires the Mac's own timers as before and
-  now also delivers a bot's own timers to it (`deliverBotNotification` accepts
+- On a Mac the app's agent tool tick fires the Mac's own timers and
+  delivers a bot's own timers to it (`deliverBotNotification` accepts
   `timer` deliveries). Its UI shows a bot's timers in that bot's conversation
   header, by the bot's name (`WorkspaceAgentToolsModel.timers(forBot:on:)`);
   session views never list them.
 
 Tool execution is `WorkspaceToolExecutor` in `WovenMatterLibraryStore`, the
-same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
+same code the Mac app's `WorkspaceAgentToolsModel` delegates to. Note edits
 go to `WorkspaceDatabase.readNoteForEditing` / `applyNoteEdits`, so a Linux
 edit stores the same `NoteDocument` bytes a Mac stores for the same edit.
 
@@ -822,7 +851,7 @@ hands them to the macOS job, which checks them with
   runs only its own Quick Chats.
 - Workspaces are named explicitly by ID (or an unambiguous name) from the
   synced execution workspace registry. `local` (and, on Linux, `current`)
-  is no longer accepted as a destination; the error lists the valid IDs.
+  is not a destination; the error lists the valid IDs.
   Omitting `workspace` means the caller's own workspace.
 - `woven_sessions_harnesses` lists this workspace's harnesses with its real
   ID and name first, then every other Mac and Linux workspace's (`harness`,
@@ -830,12 +859,11 @@ hands them to the macOS job, which checks them with
   workspace that does not answer is one row with `online: false`.
 - A session on another workspace is created directly on that workspace's
   execution API with signed requests, so it works with every other Mac
-  offline: `GET <endpoint>/v1/execution/providers`, then `POST
-  <endpoint>/v1/execution/commands` with `createSession` (the destination's
+  offline: `GET <endpoint>/execution/providers`, then `POST
+  <endpoint>/execution/commands` with `createSession` (the destination's
   saved defaults apply; its `title`, trimmed to 256 characters, names the
   session as it is created and is kept by the first message), a `workspace`
-  rename to the same title (for destinations older than `title`), and
-  `send`. A session created on its own Mac (Woven MCP or the backend RPC
+  rename to the same title, and `send`. A session created on its own Mac (Woven MCP or the backend RPC
   `createSession`) takes its `title` the same way; without one it is
   "New <harness> chat" until its first message. `deviceID` is the caller's member device ID,
   and `libraryID`/`workspaceID` are the destination's. Command IDs derive
@@ -858,8 +886,8 @@ hands them to the macOS job, which checks them with
   through this Mac's member execution client (`SignedExecutionWorkspaceTransport`); a
   session on that Mac stays local; a Linux host's sessions, the adding Mac's
   included, are reached with signed calls to that host. Each is one or more signed calls to the destination's
-  execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
-  `…/capabilities`, `GET v1/execution/interactions`, `POST v1/execution/commands`):
+  execution API (`GET execution/conversations`, `…/conversations/<id>/transcript`,
+  `…/capabilities`, `GET execution/interactions`, `POST execution/commands`):
   - `woven_sessions_status {id, workspace?, before?}` → `{session: {id, title,
     harness, workspace, workspaceName, workspaceKind, state:
     running|idle|needsInput, runID?}, pending: [{id, kind, title, detail?,
@@ -904,10 +932,8 @@ hands them to the macOS job, which checks them with
   that names it as `folderOwnerID`
   (`ExecutionWorkspace.displayOwner(of:in:)`). This is display and
   routing-choice grouping only; stored folder bindings are never rewritten, so
-  existing folders appear under their Mac once it republishes its row (each
-  registry refresh). A row without the field (an older Mac) leaves its
-  folders out of that Mac's section on the iPhone; they stay in All
-  Workspaces and Recents.
+  folders appear under their Mac once it publishes its row (each registry
+  refresh). A folder no live row claims stays in All Workspaces and Recents.
 - **New folders on another machine.** Only the owner knows its disk, so a
   Mac never writes a folder bound to another Mac. A Mac creates a folder on
   a registry workspace that is live (not deleted, not `retainedHistory`) with
@@ -915,16 +941,16 @@ hands them to the macOS job, which checks them with
   background server (`BackendWorkspaceMutation.createFolderOnWorkspace`):
   - Another Mac: the workspace command
     `LibraryWorkspaceAction.createFolder {id, name}` (`execution.command`, or
-    `POST v1/execution/commands` without a stream), with no conversation.
+    `POST execution/commands` without a stream), with no conversation.
     `id` is a lowercase UUID the requester picks, and it is the command ID
     too.
     - Who may send it. On a Mac's execution API only a Mac member: the same
       action signed by an iPhone or a Linux host is refused with
       `wrong_device` (403 over HTTP, the error of the call on the stream),
-      as a Linux host's `POST v1/projects` admits only Macs. It is the one
+      as a Linux host's `POST projects` admits only Macs. It is the one
       workspace action that API accepts that names no session; note,
       calendar and Library changes still only synchronize. Separately, the
-      library host route `POST /v1/commands`, which an iPhone or Mac member
+      library host route `POST /commands`, which an iPhone or Mac member
       signs to the Mac it synchronizes with, runs the action on that Mac,
       which creates the folder on itself; the iPhone app does not send it.
     - The owning Mac applies a local "Create New": a blank
@@ -960,20 +986,17 @@ hands them to the macOS job, which checks them with
       writes them itself: it asks that Mac for an exchange at once and waits
       up to 5 s for them, and a new folder still on its way was created all
       the same.
-    - A Mac that accepts the command lists `folders.create`
-      (`LibraryWorkspaceAction.createFolderCapability`) in its registry
-      row's `capabilities`. A Mac whose row lacks it is sent nothing, since
-      it could not decode the action, and the requester says "Update Woven
-      Matter on <name> to create folders there.", where `<name>` here and in
-      the messages above is the workspace's title on the desktop. The
-      desktop's New folder form shows that reason, or that the workspace has
-      no address, with Create disabled (`RemoteFolderCreation.problem`).
-  - A Linux host: `POST v1/projects {name, reuseExisting: false}` creates a
+    - `<name>` in the messages above is the workspace's title on the
+      desktop. For a workspace with no address the desktop's New folder form
+      says "Connect this workspace before creating a folder.", with Create
+      disabled (`RemoteFolderCreation.problem`).
+  - A Linux host: `POST projects {name, reuseExisting: false}` creates a
     blank directory in the host's managed workspace root and answers `201
     {path}`; a name that is already there answers `409` with a message, an
     invalid one `400`. A directory the host could not make (no space, no
-    permission, no workspace root) is a bare `500`, which the Mac reports
-    without naming a cause, or in the host's own words when it sent any. It
+    permission, no workspace root) is a `500`, which the Mac reports in the
+    host's own words when it sent any, and otherwise as "The host could not
+    create this directory. Check its free space and permissions." It
     is an administrator route, so any Mac member's signature reaches it,
     and no other member's: the Mac that set the host up uses its own
     connection, and every other Mac signs the request at the workspace's
@@ -1034,7 +1057,7 @@ hands them to the macOS job, which checks them with
   up later is a new row under a new ID. Every
   Mac member advertises `history.library` (it serves its own sessions' history from the library
   change feed), so the host route's agent list ("This Mac", from
-  `GET /v1/providers` on the mobile API) belongs only to the registry row of
+  `GET /providers` on the mobile API) belongs only to the registry row of
   the library host the phone currently syncs with, matched by its device ID;
   any other Mac lists its own agents from its own endpoint. A library host's
   agent that the host route reports as not ready is offered through its own
@@ -1063,10 +1086,10 @@ hands them to the macOS job, which checks them with
   `com.wovenmatter.wovenmatter.member`, this device only), bound to its library
   device ID, and sends it as `PairRequest.memberPublicKey`. A re-pair
   presents the same key. The Mac adds the phone when the pairing is
-  confirmed, so the phone probes it (a signed `GET /v1/hello`) only after
+  confirmed, so the phone probes it (a signed `GET /hello`) only after
   confirming: a signed 401 then means the Mac did not add it (`rejected`,
-  never taken as acceptance), and the phone keeps its grant and shows "Pair
-  again" (`MobileMembershipState.memberRejected`). A backup restored onto
+  never taken as acceptance), and the phone keeps its pairing credential and
+  shows "Pair again" (`MobileMembershipState.memberRejected`). A backup restored onto
   another device brings `membership.json` but not the this-device-only key;
   finding the key missing, the phone marks that membership refused instead of
   signing with a key no Mac knows, and pairing again replaces the key on the
@@ -1076,15 +1099,28 @@ hands them to the macOS job, which checks them with
   `HTTPSExecutionWorkspaceTransport(workspace:identity:)` sign every request
   (`MobileRequestSigning`: the target is the percent-encoded path and query as
   sent, `/wovenmatter` included) and send no bearer. A signed 401 means "this
-  host does not know this phone yet" (`memberUnknown`, skipped like an offline
-  host); a host that has not loaded its member list yet answers that it does
-  not accept member requests, which is retried like any other failure. A
-  phone that is not a member
-  (the Mac refused its key) syncs nothing and asks to pair again.
-- **Members.** The mobile API serves `GET /v1/members` (the resolved member
+  host does not list this phone" (`memberUnknown`); a host that has not
+  loaded its member list yet answers that it does not accept member requests,
+  which is retried like any other failure. A host that never accepted the
+  phone may only not have learned of it yet, and is skipped like an offline
+  one.
+- **No longer paired.** When no host accepts the phone and one that accepted
+  it before (the Mac it paired with, or the host it last synchronized with)
+  answers that it does not list it, the pairing is over
+  (`MobileMembershipState.memberRejected`; a pairing reset on the Macs ends
+  it this way). The phone stops its sync engine, streams and workspace
+  clients and asks no machine again. Home shows a "Pair again" row and
+  Device Connections the same notice with the pairing controls first:
+  "<device> is no longer paired, so it isn't syncing with your Macs and Linux
+  machines. Pair again with any Mac. Your notes and chats stay on <device>."
+  Nothing is shown as syncing, and everything stored is kept. Pairing again
+  needs no unpair: with a Mac of the same library set the replica rebinds and
+  nothing moves. "Forget this pairing" detaches the phone so that it works on
+  its own.
+- **Members.** The mobile API serves `GET /members` (the resolved member
   list, as on the library socket) on every Mac and Linux host. The phone
   learns it from whichever host it syncs with, when the host changes and at
-  most every five minutes, with `GET /v1/sync/status` alongside. It is kept in
+  most every five minutes, with `GET /sync/status` alongside. It is kept in
   `membership.json` beside the phone's library (`MobileMembershipState`).
   Endpoints are used only when they are HTTPS on the paired endpoint's
   tailnet (`<tailnet>.ts.net`), normalized to `/wovenmatter`; a Mac without a
@@ -1092,7 +1128,7 @@ hands them to the macOS job, which checks them with
   address (the same server).
 - **Host choice and failover.** Each synchronization tries hosts in order (the
   last one that worked, the paired Mac, other Macs, then Linux hosts) with one
-  short signed `GET /v1/hello` each, and syncs every lane with the first that
+  short signed `GET /hello` each, and syncs every lane with the first that
   answers. There is no extra timer: the existing foreground, change-driven
   cadence is unchanged.
 - **Moving to another host.** Each host has its own library ID, revisions and
@@ -1115,20 +1151,18 @@ hands them to the macOS job, which checks them with
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client. No execution grant is issued, stored or presented.
 - **Inference.** Quick Chat uses only the sign-ins and keys saved on that
-  phone; no Mac or Linux host serves inference for it (a Linux host refuses
-  `/v1/inference/*` with `403 inference_not_served`). A connection a Mac
-  hosted before v0.4.6 is dropped when the phone loads its preferences, and a
-  Quick Chat that was mid-run on one is stopped.
+  phone; no Mac or Linux host serves inference for it. A Quick Chat that
+  was mid-run on a connection that is gone when the phone loads its
+  preferences (a replaced sign-in) is stopped.
 - **Analytics.** Only Macs record product analytics (a Linux host answers
   `unsupported`). Each synchronization picks the analytics connection again
   (`MobileLibraryHosts.analyticsTransport`): the current host when it is a
   Mac, otherwise the preferred Mac from `candidates` (the paired Mac, then
   other Macs). Pairing and host changes therefore re-bind it without a
   relaunch, and an unpaired phone has no analytics connection at all.
-- **Migration.** Existing phone data stays. A phone that is not a member
-  shows "Pair again with any Mac"; pairing with a Mac of the same
-  library set (its registry holds the phone's previous library) keeps the
-  replica and rebinds on the next sync instead of the destructive library
+- **Pairing again.** Existing phone data stays. Pairing with a Mac of the
+  same library set (its registry holds the phone's previous library) keeps
+  the replica and rebinds on the next sync instead of the destructive library
   change.
 
 ## iPhone Quick Chat
@@ -1191,21 +1225,21 @@ whose stream is connected; the iPhone's no-stream fallback is under "Clients".
 - **What moves where.** History moves only by library sync. The live view of a
   session (its transcript as it is written, run state, questions and
   approvals, capabilities) and commands move on the stream. Older history
-  pages, attachments (`GET v1/execution/attachments/<sha256>`), the browser screencast, bots and library sync
+  pages, attachments (`GET execution/attachments/<sha256>`), the browser screencast, bots and library sync
   stay on their signed HTTP routes.
 
 ### Endpoint and authentication
 
-- `GET /v1/stream`, with no query string, upgraded to a WebSocket. A Mac
+- `GET /stream`, with no query string, upgraded to a WebSocket. A Mac
   serves it under its `/wovenmatter` mount; a Linux host under its execution
-  endpoint (`…/wovenmatter-execution/<id>/v1/stream`). The workspace
+  endpoint (`…/wovenmatter-execution/<id>/stream`). The workspace
   descriptor's `capabilities` includes `stream`.
 - The upgrade `GET` is member-signed exactly like any other member request
   (headers only, empty body, a target with no query). It is the whole
   credential: no ticket, bearer or grant.
-  Allowed member kinds are those of `/v1/execution/*`: `mac`, `ios`, `linux`.
+  Allowed member kinds are those of `/execution/*`: `mac`, `ios`, `linux`.
   A Mac window has no key; it asks its own server to sign each attempt
-  (`BotsCommand.signSocket`, widened to `/v1/stream`). Every reconnect signs
+  (`BotsCommand.signSocket`, widened to `/stream`). Every reconnect signs
   afresh.
 - Refusals happen before the upgrade, as JSON HTTP errors: `400`
   `bad_request` when the request carries any query string; `401`
@@ -1227,10 +1261,10 @@ whose stream is connected; the iPhone's no-stream fallback is under "Clients".
   frame (or after 2 s on a Mac, 5 s on Linux), so nothing the client wrote meanwhile meets a closed
   socket whose reset could cost it the code. A client does not retry after
   `4401` until its own member list changes. The same registry closes the
-  `/v1/bots/ws` relays on both Mac and Linux. The Linux bots upgrade accepts
+  `/bots/ws` relays on both Mac and Linux. The Linux bots upgrade accepts
   signed members, and the installer bearer only on the installing Mac's SSH
   tunnel (how it reaches a bots-only host that is not in the registry); device
-  grants no longer open it, and the bearer never works through Tailscale Serve.
+  grants do not open it, and the bearer never works through Tailscale Serve.
   The Linux relay sends `4401` to a removed member's bots socket; the Mac relay
   carries raw bytes, so it closes the connection and that client sees an
   abnormal close (`1006`), after which its signed upgrade is refused. A Mac's
@@ -1243,7 +1277,7 @@ JSON text frames, one message per frame, at most 8 MiB (normal frames are far
 smaller); a server refuses client frames over 1 MiB (close `1009`). Liveness
 uses WebSocket ping and pong control frames: both sides ping every 25 s and
 answer the other's pings, and the server closes a socket (`1001`) after 60 s
-in which it heard nothing from it, neither a pong nor any frame. Binary frames and invalid JSON close the socket with `4400`. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
+in which it heard nothing from it, neither a pong nor any frame. Binary frames and invalid JSON close the socket with `4400`; a client closes on a frame over the limit with `1009`. The Swift types live in `shared/Sources/WovenMatterShared/StreamProtocol.swift`;
 `shared/Tests/WovenMatterSharedTests/StreamProtocolFixtures.json` holds one
 example of every frame and item, and the Swift and Node test suites both
 decode and re-encode every fixture.
@@ -1258,10 +1292,15 @@ decode and re-encode every fixture.
 | server | `{t:"end", id, error?}` | The server closed a subscription. |
 | client | `{t:"cancel", id}` | Close a subscription or abandon a call. |
 
-Unknown frame types and unknown item kinds are ignored. So is an item of a
-known kind whose `data` a client cannot decode (a newer server's value): it
-is valid JSON, so it does not close the socket, and its `seq` still advances.
-A subscription the
+The frames, streams and item kinds listed here are the whole set. A frame
+type or item kind the receiver does not define, a frame without a member its
+type requires, or an item whose `data` the client cannot decode is a protocol
+violation: the receiver closes the socket with `4400` and uses nothing later
+on it. A client closes the same way when the first frame is not `hello`. IDs
+are not reused while they are live: a `sub` whose `id` already names an open
+subscription ends that subscription with a non-retryable `invalid` (an `end`
+names only an ID, so nothing more is sent under it), and a `req` whose `id`
+is still in progress is answered `invalid`. A subscription the
 client cancels gets no `end`. A socket holds at most 64 subscriptions and 64
 calls in progress (a cancelled call no longer counts); another is refused with
 a retryable `unavailable` `end` or `res`. Error codes:
@@ -1270,7 +1309,7 @@ a retryable `unavailable` `end` or `res`. Error codes:
 ended by a store or server error, not a refusal, ends with a retryable
 `unavailable` on both servers, so its client subscribes again after the
 backoff. Close codes: `1000`
-normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
+normal, `1001` server stopping or sleeping, `1009` frame over the limit,
 `4400` protocol violation, `4401` member removed.
 
 ### Streams
@@ -1284,17 +1323,15 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   - `journal` `{entry: ExecutionJournalEntry}`, `seq` = its `originSequence`:
     only from a server with an execution journal (a Linux host), only when the client passed `after`. The server replays every entry
     after `after`, then sends new entries as they are written; a sequence jump
-    means a gap and the client subscribes again with its last cursor. An entry
-    the client cannot decode keeps its place: the client moves its cursor past
-    that `seq` without the record. A Mac
+    means a gap and the client subscribes again with its last cursor. A Mac
     never asks for it: history reaches a Mac only by library sync (a Linux host
-    writes its sessions into its own library copy through `/v1/publisher/*`).
+    writes its sessions into its own library copy through `/publisher/*`).
     The iPhone feeds it to its `WorkspaceJournal`, a run of consecutive
     entries as one write and one projection restore (up to 256 entries, at
     most 50 ms after the first, or when any other item arrives). A write that
     fails subscribes again from the cursor it holds.
   - `library` `{cursor}`: the server's mobile library change cursor
-    (`device_sync_changes`, what `GET v1/changes` pages), on subscribe and then
+    (`device_sync_changes`, what `GET changes` pages), on subscribe and then
     whenever a change a phone syncs commits, at most every 300 ms
     (`LibraryChangeAnnouncer`). Calendar, dictation, registry
     (`execution_workspaces`) and saved-artifact rows add wake-only entries,
@@ -1324,8 +1361,8 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
     `assistant` activity at its position. Runs carry `startedAt`,
     `completedAt`, `userMessageID` and `assistantMessageID`; a Linux host keeps
     its latest 32. The full projection is read when its disclosure opens:
-    `GET v1/execution/conversations/<id>/activity?id=<activity>&run=<run>`
-    (Mac and Linux; a library host also answers `GET v1/sessions/<id>/activity`)
+    `GET execution/conversations/<id>/activity?id=<activity>&run=<run>`
+    (Mac and Linux; a library host also answers `GET sessions/<id>/activity`)
     returns a `LibraryActivity` with the complete projection. A Linux host
     journals a settled activity's full projection as a
     `wovenmatter.activity.chained` native record named in `detailsRecordID`, so
@@ -1333,7 +1370,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
     they change.
   - `session` `{settings: SessionSettings}`: exactly what the `session`
-    workspace read (`POST v1/execution/workspace-read` `.session`) returns:
+    workspace read (`POST execution/workspace-read` `.session`) returns:
     model, thinking, permission, enabled tools, goal and `canConfigure`. Sent
     on subscribe, before `synchronized`, and whenever it changes; an unchanged
     value is not sent again. A client of a workspace that lists `stream` does not read
@@ -1369,13 +1406,13 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
 ### Methods
 
 - `execution.command` `{command: LibraryCommand}` → `LibraryCommandReceipt`.
-  The same handler as `POST v1/execution/commands`, with the same idempotent
+  The same handler as `POST execution/commands`, with the same idempotent
   command IDs. Commands are never replayed automatically: a command whose
   `res` was lost becomes `outcomeUnknown` in the client's command journal and
   is resolved with `execution.receipt` after reconnecting.
 - `execution.receipt` `{commandID}` → `LibraryCommandReceipt` or `null`.
-- `POST v1/execution/commands` and the read routes stay for server-to-server
-  calls and Woven MCP. `POST v1/execution/commands` also serves a workspace
+- `POST execution/commands` and the read routes stay for server-to-server
+  calls and Woven MCP. `POST execution/commands` also serves a workspace
   without `stream`, one request per command.
 
 ### Clients
@@ -1429,9 +1466,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
     activity's details from the background command `federatedActivityDetails`
     (once per `detailVersion`). The background server keeps every chat a window
     holds subscribed, and at most 8 chats read for other reasons, closing the
-    least recently viewed first; viewing one subscribes it again. A chat that
-    ran over SSH and could not move is read-only history: the window learns
-    why with its session metadata (`readOnlyReason`) and shows no composer.
+    least recently viewed first; viewing one subscribes it again.
 - **iPhone.** Connects to every listed server while the app is in the
   foreground: `workspace` on each, `conversation` only for the open chat. It
   closes cleanly when the app goes to the background and resumes on return.
@@ -1441,7 +1476,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   `pending` is the host route's questions and approvals, and `conversation`
   follows an open chat on that route. The phone reads no transcript,
   questions, capabilities or session settings of the host route over HTTP;
-  its commands stay on the mobile API's `POST v1/commands`. A chat whose subscription the server ends
+  its commands stay on the mobile API's `POST commands`. A chat whose subscription the server ends
   is read once and not resubscribed on that connection. A `workspace`
   subscription the server ends for good is not asked for again on that
   connection either; the next connection subscribes again, and meanwhile the
@@ -1452,8 +1487,8 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   syncs with carries `library` items, the phone has no library timer: an item
   whose cursor differs from the one it holds synchronizes at once (ahead: a
   change; behind: the host's library was restored or reset), and a refresh asked for during one
-  runs once more afterwards. Without that stream (an older host, the stream
-  down, another host) the 15 s foreground timer runs. It also syncs once on
+  runs once more afterwards. Without that stream (the stream down, another
+  host) the 15 s foreground timer runs. It also syncs once on
   foreground, network return and connection.
   A route counts as streamed only while its stream is connected and serves
   `workspace`, not because the workspace advertises `stream`. For a route
@@ -1497,7 +1532,10 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   Sessions tool) is recorded once and not tried again.
   Bots get theirs through the bots runtime, and a bot's count restarts
   when it creates a session. IDs derive from caller, session and state, so each
-  is delivered once; watched sessions and pending wake-ups survive a restart
+  is delivered once: the ID is the first 16 bytes of the SHA-256 of
+  `woven-session-wake-up`, a zero byte and that value, as a UUID with version
+  5 and the variant bits `10`, the hash's other bits kept, identical on a Mac
+  (`SessionWakeUps.stableID`) and on Linux (`wakeUpID`). Watched sessions and pending wake-ups survive a restart
   (Linux: `remote/src/session-watch.mjs`). On Linux a wake-up refused every
   time backs off and is dropped after 20 attempts (one refused as invalid or
   not found at once), and sessions on a workspace gone from the registry stop
@@ -1523,7 +1561,10 @@ no stdio relay.
 - **Creating.** `createSession` takes `sessionOptions {workingDirectory,
   model, thinking, permission, enabledTools}`; unset values use the
   destination's saved defaults, and a model or thinking level the harness does
-  not offer keeps its native value. A `folderID` bound to this workspace
+  not offer keeps its native value. The permission is Full access or the
+  harness's auto mode; any other mode is refused with `409` ("This permission
+  mode is not offered."), for a session and for a scheduled task alike. A
+  `folderID` bound to this workspace
   (`remote:<workspace id>`, from the host's library copy) runs in its root and
   `workingDirectory` must match it; a folder bound elsewhere is refused; an
   unbound or not-yet-synchronized folder only groups. Without a folder the
@@ -1531,7 +1572,7 @@ no stdio relay.
   directory: a Mac any directory, other members one inside the workspace.
   `initialConfiguration` stays internal to agent-to-agent creation.
 - **Messages.** Files are uploaded first (`PUT
-  v1/execution/attachments/<sha256>?name=&mimeType=`, 25 MiB each, stored under
+  execution/attachments/<sha256>?name=&mimeType=`, 25 MiB each, stored under
   `.wovenmatter/attachments/<sha256>/<name>`), then named in `send` or `steer`
   `attachments` (8 files, 50 MiB) and checked again before delivery. The
   store has no lifetime cap; an upload that would leave the host with less
@@ -1541,7 +1582,7 @@ no stdio relay.
   past that, are linked and listed by path. `promptContext` (visible notes and
   pages, references) follows the message to the harness and is not in the
   transcript; `noteID` is the note shown when sending, which `woven_context`
-  returns. `GET v1/execution/attachments/<sha256>?name=` returns the bytes
+  returns. `GET execution/attachments/<sha256>?name=` returns the bytes
   with their type, under the execution reads' authorization, up to 25 MiB,
   only for a regular file directly in `.wovenmatter/attachments/<sha256>/`,
   reached without a link and still matching its digest (otherwise 403, 404 or
@@ -1553,43 +1594,35 @@ no stdio relay.
   and timers run with it off.
 - **Pi Durable.** The host keeps and renews its own sign-ins in its own
   private file outside the workspace (`<data root>/default-agent/sign-ins.json`,
-  0600; `GET`/`POST v1/sign-ins`); a Mac sends only chat settings
-  (`v1/default-agent/configuration`).
-  Settings, sign-in and the model catalog use `POST v1/default-agent/control`
-  and `v1/default-agent/control-sessions`, which run the control helper on the
+  0600; `GET`/`POST sign-ins`); a Mac sends only chat settings
+  (`default-agent/configuration`).
+  Settings, sign-in and the model catalog use `POST default-agent/control`
+  and `default-agent/control-sessions`, which run the control helper on the
   host.
-- **Without a session.** `GET v1/execution/providers/<id>/options` returns
+- **Without a session.** `GET execution/providers/<id>/options` returns
   `SessionSettings` (empty `conversationID`) from a short-lived native session
   with no Woven tools.
 - **Titles.** The host titles a chat from its first message with its own
   Codex (the Mac's instructions); a failure keeps the first-message title, and
   a rename wins.
 - **Library files.** A Mac retains an agent's file with `POST
-  v1/execution/library-file {conversationID, path}`: inside the session root,
+  execution/library-file {conversationID, path}`: inside the session root,
   `/tmp` or `/mnt/data`, no final symlink, 25 MiB.
-- **Adoption.** A chat that ran over SSH before moves to its host's server
-  when this Mac first opens, refreshes or sends to it. Runs it left unsettled
-  are interrupted, each with its assistant message, saying the run was on
-  that host and the update interrupted it (a run still running or uncertain
-  when the Mac starts is settled the same way); the adoption is fenced in the
-  library (`execution_adoptions`), and `POST v1/execution/adopt` carries
-  `transcript`: the newest messages and activities that fit in 6 MiB, at
-  most 10,000 of each (the host's limits); an entry left running, queued,
-  uncertain or streaming arrives interrupted. The host reopens a stopped or
-  missing durable channel with `session/load` and leaves no process behind
-  when that fails. A channel left interrupted by an ungraceful exit, which no
-  process of the host's server holds, is recorded stopped and reopened the
-  same way; one whose process still runs is refused. A retry resends the
-  same adoption. A chat that
-  cannot move (its host is no longer set up or not yet enrolled, it never
-  started a native session, or the host refuses) stays in the library as
-  read-only history, and sending to it says why.
+- **Scheduled and retained runs.** A session the host recorded from a
+  scheduled task's run or its retained history is not attached to a live
+  native session yet (`needsAdopt`). The first command sent to it has the
+  host's runtime open that native session again under the same identity
+  (`runtime.adopt`: Pi Durable's `woven/adopt`, the other harnesses by
+  loading their own session), after which it is an ordinary session. A
+  session whose native identity has changed is refused. A chat in a Mac's
+  library that names a Linux workspace but that the host has not published
+  to the library cannot be sent to from that Mac; it stays readable.
 - **The adding Mac** creates its chats on the host with `createSession`
   (`sessionOptions`, `folderID`, `title`), sends files and context as every
   member does, applies later choices with `workspace` `configureSession`,
-  reaches OpenCode through the signed `/v1/workspace-instances/opencode/api/*`
+  reaches OpenCode through the signed `/workspace-instances/opencode/api/*`
   proxy, and pushes Pi Durable credentials with
-  `v1/default-agent/configuration`, signed once the host is enrolled.
+  `default-agent/configuration`, signed once the host is enrolled.
 
 ## Bots
 
@@ -1602,7 +1635,7 @@ no stdio relay.
 - The Woven server on the bot machine supervises it as a child process. It
   listens only on a loopback port and serves the Pi Bot protocol, with
   additions, over WebSocket at `/ws`. Woven apps reach a remote machine's bots
-  through that machine's Woven server at `/v1/bots/ws`, authenticated as a
+  through that machine's Woven server at `/bots/ws`, authenticated as a
   member, which then proxies to the loopback socket.
 - Each bot's agent loop runs in the runtime on the host, and its tools run
   inside its container through the in-container helper (`bots/helper/`: Pi
@@ -1710,14 +1743,14 @@ reply body. Replies are at most 1 MiB.
 
 | Request | Body | Reply |
 | --- | --- | --- |
-| `POST /v1/bots-host/mcp-keys` | `{botID, botName}` | `{endpoint, token}`: the bot's Woven MCP key, principal `woven:bot:<machine.deviceID>:<botID>`. The same bot may ask again (after a restart, or a 401 from MCP); the host returns its current key or rotates it. |
-| `DELETE /v1/bots-host/mcp-keys/{botID}` | none | 2xx. Sent when the user purges a bot. The host drops the key and marks the bot's library conversations deleted. |
-| `POST /v1/bots-host/previews` | `{botID, port, containerPort}` | `{url}`. `port` is the runtime's loopback activity proxy; the host publishes `http://127.0.0.1:<port>` with Tailscale Serve (its own HTTPS port, inbound only, never Funnel). Idempotent for the same `(botID, port)`; sent again after a runtime restart. |
-| `DELETE /v1/bots-host/previews/{botID}/{port}` | none | 2xx. |
-| `POST /v1/bots-host/inference-credentials` | `{provider}` | `{credential}`, where `credential` is `null` (not connected), `{type: "api_key", key}`, `{type: "oauth", access, expires, accountId?}` (access only; `expires` epoch ms; the host renews, the runtime asks again a minute before expiry), or `{type: "native", configDir, secureStorageDir?}` (Claude subscription: the machine's native Claude runtime directories, which the default agent uses, passed to the Claude Agent SDK as `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`; no token material). `provider` is a Woven connection id: `openai-codex`, `openai`, `openrouter`, `opencode-go`, `xai`, `xai-api`, `claude-subscription`, `anthropic`, `exa`, `brave`, `firecrawl`, or `web-search`, which also returns `searchProvider` (`exa`, `brave` or `firecrawl`, the selected web search provider) with that provider's key. |
-| `POST /v1/bots-host/git` | `{botID}` | `{publicKey \| null, identity: {name, email} \| null}`: Settings → GitHub for that bot, the public key only while the machine and the bot are on (`docs/architecture/GITHUB_IDENTITY.md`). The runtime asks at most once a minute per bot and writes the files into the bot's container. |
-| `POST /v1/bots-host/ssh-agent` | `{botID, message}` | `{message}`: one SSH agent request from the bot's relay and the machine's signing agent's reply (base64, without the length prefix). The agent signs only while the machine and the bot are on; the key never enters the container. |
-| `POST /v1/bots-host/conversations/{botID}/entries` | `{bot: {id, name}, conversations: [{conversationId, kind: "main"\|"thread", parentConversationId?, forkedAt?, title?, pinned?, createdAt?}], entries: [{id, conversationId, role: "user"\|"assistant", text, error?, stopped?, createdAt}]}` | 2xx. The host writes them into its library copy, upserting entries by `(botID, id)` and conversations by `(botID, conversationId)`. Entry ids are unique per bot and never reused. `id`, `conversationId`, `parentConversationId` and `forkedAt` are non-negative integers (the runtime's own ids; the library host decodes them as integers), and the server refuses a batch with any other type. `conversations` always lists the bot's main channel and every thread; a batch may have no entries when only metadata (a title, a pin, a rename) changed. Batches hold at most 200 entries, in id order; the runtime resends after a failure. |
+| `POST /bots-host/mcp-keys` | `{botID, botName}` | `{endpoint, token}`: the bot's Woven MCP key, principal `woven:bot:<machine.deviceID>:<botID>`. The same bot may ask again (after a restart, or a 401 from MCP); the host returns its current key or rotates it. |
+| `DELETE /bots-host/mcp-keys/{botID}` | none | 2xx. Sent when the user purges a bot. The host drops the key and marks the bot's library conversations deleted. |
+| `POST /bots-host/previews` | `{botID, port, containerPort}` | `{url}`. `port` is the runtime's loopback activity proxy; the host publishes `http://127.0.0.1:<port>` with Tailscale Serve (its own HTTPS port, inbound only, never Funnel). Idempotent for the same `(botID, port)`; sent again after a runtime restart. |
+| `DELETE /bots-host/previews/{botID}/{port}` | none | 2xx. |
+| `POST /bots-host/inference-credentials` | `{provider}` | `{credential}`, where `credential` is `null` (not connected), `{type: "api_key", key}`, `{type: "oauth", access, expires, accountId?}` (access only; `expires` epoch ms; the host renews, the runtime asks again a minute before expiry), or `{type: "native", configDir, secureStorageDir?}` (Claude subscription: the machine's native Claude runtime directories, which the default agent uses, passed to the Claude Agent SDK as `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`; no token material). `provider` is a Woven connection id: `openai-codex`, `openai`, `openrouter`, `opencode-go`, `xai`, `xai-api`, `claude-subscription`, `anthropic`, `exa`, `brave`, `firecrawl`, or `web-search`, which also returns `searchProvider` (`exa`, `brave` or `firecrawl`, the selected web search provider) with that provider's key. |
+| `POST /bots-host/git` | `{botID}` | `{publicKey \| null, identity: {name, email} \| null}`: Settings → GitHub for that bot, the public key only while the machine and the bot are on (`docs/architecture/GITHUB_IDENTITY.md`). The runtime asks at most once a minute per bot and writes the files into the bot's container. |
+| `POST /bots-host/ssh-agent` | `{botID, message}` | `{message}`: one SSH agent request from the bot's relay and the machine's signing agent's reply (base64, without the length prefix). The agent signs only while the machine and the bot are on; the key never enters the container. |
+| `POST /bots-host/conversations/{botID}/entries` | `{bot: {id, name}, conversations: [{conversationId, kind: "main"\|"thread", parentConversationId?, forkedAt?, title?, pinned?, createdAt?}], entries: [{id, conversationId, role: "user"\|"assistant", text, error?, stopped?, createdAt}]}` | 2xx. The host writes them into its library copy, upserting entries by `(botID, id)` and conversations by `(botID, conversationId)`. Entry ids are unique per bot and never reused. `id`, `conversationId`, `parentConversationId` and `forkedAt` are non-negative integers (the runtime's own ids; the library host decodes them as integers), and the server refuses a batch with any other type. `conversations` always lists the bot's main channel and every thread; a batch may have no entries when only metadata (a title, a pin, a rename) changed. Batches hold at most 200 entries, in id order; the runtime resends after a failure. |
 
 The runtime caches credentials in memory only (keys 60 s, "not connected"
 15 s) and never stores them. A credential change in Woven settings takes
@@ -1744,7 +1777,7 @@ Kept from Pi Bot, with their wire shapes: `bots.list`, `bots.create`,
 `account.setNotes`, `conversation.open`, `conversation.close`,
 `conversation.abort`, `message.send` (with `context` and `deliveryId`),
 `thread.fork`, `thread.setPinned`, `threads.list`, `models.catalog`,
-`models.setRoles` (now live: `restartRequired` is always `false`).
+`models.setRoles` (applied live: `restartRequired` is always `false`).
 
 Changed:
 
@@ -1787,7 +1820,7 @@ Added requests:
 | `previews.list {botId?}` | `{previews: [{botId, port, url}]}` for one bot or all (`port` is the container port). |
 | `previews.stop {botId, port}` | `{stopped: boolean}`. |
 | `runtime.update {botIds?}` | `{started: true}` at once; the update runs for all bots (or the listed ones), one at a time. |
-| `runtime.status` | `{environment, bots}`. |
+| `runtime.status` | `{environment, bots, image?}`: `bots` is their number; `image` names the bot image's tag and the tools every bot container gets, with `staleBots` (bots an update moves to a new base image) and `outdatedBots` (bots an update changes at all). |
 
 Added pushes:
 
@@ -1891,7 +1924,7 @@ login until `stop()`.
   fault if there was one. The helper then reboots the VM once and lets
   provisioning resume, since it runs on every boot until it succeeds. A
   second failure leaves the VM `failed` with the reason, still running for
-  `GET /v1/diagnostics`. Measured on a MacBook Air (M4, macOS 27.2): in the
+  `GET /diagnostics`. Measured on a MacBook Air (M4, macOS 27.2): in the
   first incident, a slab fault in the guest kernel (Ubuntu 7.0.0-38) while
   loading `overlay` wedged every later module load, so containerd never
   started. The guest reported the failure within three minutes, but the
@@ -2018,13 +2051,13 @@ guest disk use, and `restartPending`.
 
 **Control API** for other processes: HTTP/1.1, JSON,
 one request per connection on `control.sock` (e.g.
-`curl --unix-socket <control.sock> http://vm/v1/status`):
-`GET /v1/status`; `GET /v1/diagnostics` (up to a minute while the guest
-answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
-`POST /v1/forwards` with `{"container": "<name or id>", "port": 3000}` (or
+`curl --unix-socket <control.sock> http://vm/status`):
+`GET /status`; `GET /diagnostics` (up to a minute while the guest
+answers); `PUT /resources`; (optional forwards) `GET /forwards`;
+`POST /forwards` with `{"container": "<name or id>", "port": 3000}` (or
 `"address"` instead of `"container"`, optional `"hostPort"`) returning
-`{"id", "hostPort", ...}` with 201; `DELETE /v1/forwards/<id>`;
-`POST /v1/update`, `/v1/restart`, `/v1/stop` (202). Errors are
+`{"id", "hostPort", ...}` with 201; `DELETE /forwards/<id>`;
+`POST /update`, `/restart`, `/stop` (202). Errors are
 `{"error": "..."}`.
 
 - **Image:** Ubuntu LTS with Chromium and Playwright, git, Node, Python,
@@ -2063,8 +2096,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   dockerd hands containers addresses from the bridge's own network, so the
   recorded `subnet` and every rule that names it (the drop of bridge traffic
   from any other source, the masquerade, and the `WOVENMATTER-BOTS` accept)
-  use that /24; an engine whose record still says /16 is filtered as its /24
-  and rewritten on the next install or update. dockerd runs with
+  use that /24. dockerd runs with
   `iptables`/`ip6tables`/`ip-forward` off and never touches the user's chains. The Woven nftables table `inet
   wovenmatter_bots`, replaced atomically on every engine start and after
   `nftables.service` reloads, drops all IPv6, all traffic from the bridge to
@@ -2134,7 +2166,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   library host's member identity, or, without a library host,
   `WOVENMATTER_DEVICE_ID` or `<data root>/identity/device-id` (0600, created
   once).
-- It implements the runtime host API under `/v1/bots-host/` with that bearer.
+- It implements the runtime host API under `/bots-host/` with that bearer.
   Previews publish `http://127.0.0.1:<port>` (the runtime's proxy) with
   `tailscale serve --bg --https=<17000–17999>`, never Funnel, verify the
   route, and remove only routes they recorded (`<state>/bots/previews.json`).
@@ -2145,33 +2177,33 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 - Conversation batches go through `library.writeBotEntries(botID, {bot,
   conversations, entries})` (`remote/src/bots-library.mjs`). Adapters upsert
   by entry and conversation id. The library adapter posts each batch to the
-  library host's `POST /v1/bots/{botID}/entries`; while the host is down or
+  library host's `POST /bots/{botID}/entries`; while the host is down or
   refuses, it appends the batch as one JSON line to
   `<data root>/bots/library-outbox/<botID>.jsonl` (0600) and replays that
   outbox, in order, when the host is ready again.
-- App-facing routes, authenticated as a member (or, during the transition,
-  administrator bearer or device grant; `authorizeClient` in
-  `remote/src/bots-service.mjs`):
-  `GET /v1/bots/status`, `GET /v1/bots/resources` (`memory {totalBytes,
+- App-facing routes (`handleClient` in `remote/src/bots-service.mjs`),
+  authenticated as a member, or with the installer's bearer or an enrolled
+  device's grant:
+  `GET /bots/status`, `GET /bots/resources` (`memory {totalBytes,
   poolBytes, botBytes, usedBytes}`, `disk {path, totalBytes, freeBytes,
-  capBytes, imageBytes, usedBytes}`, `warnings`), and `GET /v1/bots/ws`
+  capBytes, imageBytes, usedBytes}`, `warnings`), and `GET /bots/ws`
   (WebSocket, proxied to the runtime's `/ws` with the runtime token; any
   `Origin` header is refused, since only native apps connect: the Mac's
   `URLSessionWebSocketTask` sends none, which `PiBotHandshakeTests` checks).
-  Administrator only: `POST /v1/bots/enabled {enabled}`, `POST /v1/bots/resources {resources: {poolBytes?,
+  Administrator only: `POST /bots/enabled {enabled}`, `POST /bots/resources {resources: {poolBytes?,
   perBotBytes?, diskBytes?}}` (a missing field stays; a pool below per-bot
-  RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` (the `GET`
-  adds `revoked: [{botID, revokedAt}]`), `DELETE /v1/bots/mcp/keys/{botID}`
-  and `POST /v1/bots/mcp/keys/{botID}/reinstate`. That DELETE is the user's
+  RAM lowers it), `GET|POST /bots/mcp {isEnabled?, groups?}` (the `GET`
+  adds `revoked: [{botID, revokedAt}]`), `DELETE /bots/mcp/keys/{botID}`
+  and `POST /bots/mcp/keys/{botID}/reinstate`. That DELETE is the user's
   revoke and sticks, as on a Mac (`WovenMCPHost`): the bot is recorded in
-  `mcp_bot_revocations`, and the runtime's `POST /v1/bots-host/mcp-keys`
+  `mcp_bot_revocations`, and the runtime's `POST /bots-host/mcp-keys`
   for it answers `403 {error: "revoked"}` until reinstated. The runtime's
-  own `DELETE /v1/bots-host/mcp-keys/{botID}` (a bot it deleted) drops the
+  own `DELETE /bots-host/mcp-keys/{botID}` (a bot it deleted) drops the
   key without that record and, as on a Mac, marks the bot's library
   conversations deleted: `library.deleteBot(botID)` calls the library host's
-  `DELETE /v1/bots/{botID}/conversations` after the bot's outbox has drained,
+  `DELETE /bots/{botID}/conversations` after the bot's outbox has drained,
   or appends `{"deleteBot": true}` to the outbox while the host is down, so a
-  replayed batch cannot bring them back. `GET /v1/bots/status` and the
+  replayed batch cannot bring them back. `GET /bots/status` and the
   resources reply use the shape in "Woven server routes for bots" below,
   plus `workspaceEnabled`, `runtimeAvailable`, `engine`, `runtime` and
   `settings`. On Linux `versions.app` is the Woven Matter version that shipped
@@ -2182,11 +2214,11 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   schema hash once its ready line carries `schema` (`null` until then),
   `runtimeInstalled` is whether the release ships the bots runtime package
   and `paused` is `botMCP.isEnabled == false`.
-  `GET /v1/health` carries the same as `release {version, fingerprint,
+  `GET /health` carries the same as `release {version, fingerprint,
   librarySchema}`. A Mac treats a Linux host whose fingerprint differs from the
   host release it would install (`RemoteWorkspaceSSHClient.bundledHostFingerprint()`)
   as `needsUpdate`, whatever version it names.
-  `/v1/execution/mcp-settings` also carries `botMCP {isEnabled, groups}`.
+  `/execution/mcp-settings` also carries `botMCP {isEnabled, groups}`.
 
 ### Resources
 
@@ -2262,17 +2294,17 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   harness. Bots have no version of their own; they follow the machine's
   Woven Matter version. A development build never updates itself.
 - Harnesses on other machines are read and updated with the member signature.
-  Every Mac serves `GET /v1/runtime-maintenance`, `POST
-  /v1/runtime-maintenance/check`, `POST /v1/runtime-maintenance/:id/check|update`
-  `GET|POST /v1/default-agent/sdks` and `GET /v1/operations/:id` to signed Mac
+  Every Mac serves `GET /runtime-maintenance`, `POST
+  /runtime-maintenance/check`, `POST /runtime-maintenance/:id/check|update`
+  `GET|POST /default-agent/sdks` and `GET /operations/:id` to signed Mac
   members, in the shapes a Linux host serves. An update answers at once (202)
-  with a running operation, which the caller polls at `/v1/operations/:id`
+  with a running operation, which the caller polls at `/operations/:id`
   until it finishes, so nothing waits past the Mac server's 60-second response
   limit; a check answers with what it has after 15 seconds. `force: true` stops
   the chats using its harnesses first, and without it a busy harness's
   operation fails with `runtime_active_stop_conversations_or_server_first`.
   The window asks through bots commands (`memberInventory`,
-  `memberInstallerPreview`, `updateMemberHarness`, `updateMemberSDKs`); updates
+  `updateMemberHarness`, `updateMemberSDKs`); updates
   run as `updateHarness` jobs in the process that owns execution.
 - Clicking Update stops running work immediately. Woven snapshots each bot
   (container filesystem and storage), updates it in place, runs a health
@@ -2300,7 +2332,7 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   - a Linux machine with no server, or whose server has no bots: install bots
     (sudo once). A Woven server is not a bots host until it says so: for a host
     this Mac added the state is `remote-host.sh inspect`'s `bots.state`
-    (`bots_ready` is ready), for one another Mac added its `GET /v1/bots/status`
+    (`bots_ready` is ready), for one another Mac added its `GET /bots/status`
     `enabled`. A check that fails shows its error, with Install bots to retry;
   - a Mac without the app: "Install Woven Matter on this Mac first", with the
     steps (download, open, pair in Apple Devices, finish the setup card);
@@ -2338,7 +2370,7 @@ API on its own loopback port. Previews are published from the runtime's loopback
 proxy port with Tailscale Serve, path `/`, on their own HTTPS port. Inference
 credentials are the coordinator snapshot Pi Durable gets; `claude-subscription`
 returns the default agent's native directories (`~/.wovenmatter/default-agent/claude-runtime`
-and `claude-keychain`) once they exist. `DELETE /v1/bots-host/mcp-keys/{botID}` also
+and `claude-keychain`) once they exist. `DELETE /bots-host/mcp-keys/{botID}` also
 marks that bot's library conversations deleted.
 
 **Bot conversations in the library** are two paired-library tables, not chats:
@@ -2358,24 +2390,24 @@ under `/wovenmatter` when reached through Tailscale Serve:
 
 | Route | Reply |
 | --- | --- |
-| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, fingerprint?, librarySchema? }, runtimeInstalled, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`versions.app` is the machine's Woven Matter release; `runtimeInstalled` is true where its Woven Matter includes the bots runtime, and Settings → Updates shows Bots only on a machine where it is; `updating` and `engineUpdateFailure`: a Mac's VM update) |
-| `POST /v1/bots/engine/update` (Macs) | starts the Mac's VM update and returns the status at once; follow `updating`, then `engineUpdateFailure` |
-| `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
-| `POST /v1/bots/enabled` `{ enabled }` | turns bots on or off on this machine and returns the status. Bots run on one machine: choosing one in Settings → Bots turns them off everywhere else. Bots, their files and conversations stay. A Linux host saves `botsOff` with its bots settings and refuses `enabled: true` until bots are installed |
-| `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
+| `GET /bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, fingerprint?, librarySchema? }, runtimeInstalled, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`versions.app` is the machine's Woven Matter release; `runtimeInstalled` is true where its Woven Matter includes the bots runtime, and Settings → Updates shows Bots only on a machine where it is; `updating` and `engineUpdateFailure`: a Mac's VM update) |
+| `POST /bots/engine/update` (Macs) | starts the Mac's VM update and returns the status at once; follow `updating`, then `engineUpdateFailure` |
+| `POST /bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
+| `POST /bots/enabled` `{ enabled }` | turns bots on or off on this machine and returns the status. Bots run on one machine: choosing one in Settings → Bots turns them off everywhere else. Bots, their files and conversations stay. A Linux host saves `botsOff` with its bots settings and refuses `enabled: true` until bots are installed |
+| `GET /bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
 A Mac reaches every other member's bots with signed requests
 (`ApplicationModel.botsClient(for:)`, a `MemberSignedHTTPClient` addressed to the
 workspace's `executionDeviceID`): every Mac and Linux workspace in the synced
-registry, whichever Mac added it, at `<endpoint>/v1/bots/*` (a Linux host's execution
+registry, whichever Mac added it, at `<endpoint>/bots/*` (a Linux host's execution
 endpoint `…/wovenmatter-execution/<id>/`, a Mac's `…/wovenmatter`). The status reply
 must name that device. The socket is `BotSocketEndpoint.signed(url, audience:)`: the
 window asks the process that holds the member key for fresh upgrade headers before
 every connection attempt (`BotsCommand.signSocket(url:audience:)`, which signs only a
-member's `…/v1/bots/ws` on a `.ts.net` address), and `PiBotClient(authorize:)` sends
+member's `…/bots/ws` on a `.ts.net` address), and `PiBotClient(authorize:)` sends
 them instead of a bearer. A Linux host this Mac added that is not in the registry (a
 bots-only server) is still reached through its SSH tunnel with the installer's
-bearer. A Mac's server accepts only signed members on `/v1/bots/*`.
+bearer. A Mac's server accepts only signed members on `/bots/*`.
 
 **Linux bots-only install.** The Mac runs `remote-host.sh prepare AUTHORIZED
 <access-mode> bots`, then `remote-host.sh install <workspace-id> <port> <access-mode>

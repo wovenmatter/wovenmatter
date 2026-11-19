@@ -22,9 +22,8 @@ Devices** and use one of the options under **Pair a device**.
    them.
 2. Choose the action the row offers:
    - **Pair** when Woven Matter is installed.
-   - **Download & pair** when it isn't installed, or **Update & pair** when it
-     is too old. Woven Matter downloads and verifies the current release on that
-     Mac first.
+   - **Download & pair** when it isn't installed. Woven Matter downloads and
+     verifies the current release on that Mac first.
    - **Update to** a version number to install a newer release on that Mac.
 3. Woven Matter opens on the other Mac and sends a pairing request. Approve it
    under **Pairing requests** on this Mac.
@@ -53,18 +52,35 @@ workspaces** in the sidebar, with its agents and folders; see
 ## Remove a device
 
 Under **Paired devices**, choose **Unpair device**. Removal is signed by this
-Mac, and every device applies it as soon as it synchronizes. Until every
-workspace has received it, the device stays under **Pending revocations** with
-the workspaces it is **Waiting for**. Unpairing on an iPhone or iPad removes
-it the same way, through any of your Macs it can reach.
+Mac, and every device applies it as soon as it synchronizes. Unpairing on an
+iPhone or iPad removes it the same way, through any of your Macs it can reach.
+
+## After an update resets pairing
+
+Some updates change how devices recognize each other. After one, each device
+forgets its pairings and you pair them again. Nothing else changes: your
+chats, notes, folders, and workspaces stay where they are.
+
+- **On each Mac**, Settings → Apple Devices shows **Pairing was reset by this
+  update** and lists no paired devices. Update every Mac first, then pair them
+  again from either one, as in [Pair a Mac](#pair-a-mac). You don't need to
+  unpair anything. Until two Macs are paired again, each still lists the
+  other's workspace in the sidebar, marked as not recognizing this Mac.
+- **On iPhone and iPad**, Home shows **Pair again**. Scan a new code from any
+  Mac. Everything on the device is kept.
+- **Linux hosts** need nothing from you. The Mac that set a host up connects
+  it again once both are updated.
+- **Your GitHub key** is shared again by the Mac that holds it once your
+  devices are paired.
 
 ## Keep your library in sync
 
-Keep every paired device on the same version of Woven Matter. When a device
-falls behind, **Apple Devices** shows **Versions don't match**. Changes the
-older device can't use yet are kept and appear on it once it is updated;
-**Synchronization needs attention** says how many are waiting. Nothing is
-lost, and your own writing is saved meanwhile.
+Keep every paired device on the same version of Woven Matter, and update them
+together. While one device is still waiting for its update, **Apple Devices**
+shows **Versions don't match**, and changes that device can't use yet are
+kept and appear on it once it is updated; **Synchronization needs attention**
+says how many are waiting. Nothing is lost, and your own writing is saved
+meanwhile.
 
 Choose **Versions don't match** to open Settings → Updates, then **Update
 everything**. It updates this Mac first when a newer release is out, then each

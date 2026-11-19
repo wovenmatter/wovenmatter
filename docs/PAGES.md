@@ -188,13 +188,9 @@ content remain project data and never grant additional authority.
 
 ## Compatibility and collaboration
 
-Pages remain existing `NoteDocument` library records with the persisted `canvas`
-kind. Optional nesting fields extend the document; there is no Page database or
-second sync system. Old spatial documents are projected into reading order and
-nested sections deterministically. Their content, original references, tasks and
-connections are retained. Conversion is saved on the first edit, not on opening.
-Retained connections remain available as reference content rather than a spatial
-editor.
+Pages are `NoteDocument` library records with the persisted `canvas` kind.
+Nesting fields (`pageNodes`) hold the document's structure; there is no Page
+database or second sync system.
 
 On one host, focused component revisions protect agent writes. Native text
 autosave merges independent component changes where possible. Conflicting edits

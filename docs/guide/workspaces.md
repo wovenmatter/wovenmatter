@@ -16,8 +16,7 @@ workspace root: `~/.woven-matter` on your Mac while a native Linux host uses
 
 A folder for another paired Mac is created by that Mac, in its own
 `~/.woven-matter`, and appears on every device as soon as they synchronize.
-That Mac must be on and reachable; if it runs an older version, the form says
-to update Woven Matter on it and **Create** stays off until it has. If the connection drops before that Mac
+That Mac must be on and reachable. If the connection drops before that Mac
 confirms, create the folder again: one it already made is not made twice. Any
 of your Macs can create a folder on a Linux host, whichever Mac set the host
 up. These folders are always created new: **Link Existing** is offered for this
@@ -86,8 +85,7 @@ have an execution workspace and directory when they are created. A disconnected
 workspace keeps that ownership; choosing another agent never assigns or changes
 it. Folderless chats remain in All Workspaces with their own execution workspace.
 Folders created on any device keep their workspace and root when they
-synchronize; a device running an older version must update before it can
-create folders. An unsent draft can still choose a project folder before its first message. Sessions
+synchronize. An unsent draft can still choose a project folder before its first message. Sessions
 from the former workspace layout remain readable as archived history and cannot
 be resumed; start a new chat for further work. Their existing files remain in
 place.

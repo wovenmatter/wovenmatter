@@ -20,7 +20,7 @@ The remote ACP relay admits same-run inputs, shares their transcript accumulator
 | Grok Build | `_x.ai/interject`; existing concurrent ACP prompt path for attachments or an unavailable extension | Native receipt or prompt completion, without cancellation. |
 | OpenCode | `delivery: steer` on ordinary prompts and commands | Native session events/history. Delivery intent is explicit even before the activity snapshot refreshes. |
 
-Codex and Claude require an advertised capability. Woven Matter does not assume that an older adapter accepts concurrent prompts. Both connectors use the stable ACP v1 session API, which retains steering and lifecycle extensions. Native command support and attachment restrictions remain the harness's responsibility. Codex ACP does not return a separate prompt response for detached continuations; Woven Matter observes the lifecycle it exposes. Provider errors that the adapter exposes only as text remain transcript text rather than a structured failure result.
+Codex and Claude require an advertised capability. Woven Matter does not assume that an adapter accepts concurrent prompts. Both connectors use the stable ACP v1 session API, which retains steering and lifecycle extensions. Native command support and attachment restrictions remain the harness's responsibility. Codex ACP does not return a separate prompt response for detached continuations; Woven Matter observes the lifecycle it exposes. Provider errors that the adapter exposes only as text remain transcript text rather than a structured failure result.
 
 ## Validation and acceptance
 
@@ -54,8 +54,7 @@ session identity in one transaction before dispatch. Unknown initial prompts or
 continuations retain `uncertain` run/assistant status and their original input
 identities. They continue to count as active work, block another initial prompt,
 and remain visible even without tool activity. The Trash guard includes
-this status. Local Built-in and foreground SSH runs keep their existing local
-process lifecycle.
+this status. Local Built-in runs keep their local process lifecycle.
 
 Recovery requires a fresh attachment that fences older admissions. The durable
 ACP service rotates an attachment token on its serialized admission queue;
@@ -64,8 +63,7 @@ uses a separate setup queue per native session, with prompt execution outside
 that queue. Prompt/steering/configuration/Stop and approval replies validate
 their attachment; trusted workspace shutdown has a separate cancellation path.
 Stop also invalidates pending setup before it can start native execution.
-Read-only polling remains available. New adapters fail closed with an update
-message if an old service cannot issue the attachment capability.
+Read-only polling remains available.
 
 Only an explicit fenced idle result for the same workspace and native session
 can reconcile uncertain rows. Exact terminal snapshots restore their content;
@@ -76,9 +74,6 @@ Reopening the conversation's session configuration reattaches without resending
 the input. Successful scoped recovery also clears the matching failed native
 Stop identity; the outer Stop barrier still requires explicit retry.
 
-The route marker is additive. Startup preserves marked durable runs as
-uncertain and backfills older remote Built-in runs only when their saved native
-identity matches the run. Older non-Built-in remote rows do not reveal whether
-they used foreground SSH or the durable relay, so they retain the prior startup
-policy. Do not treat upgrading an already detached, unmarked remote run as proof
-of its native outcome.
+At startup a Mac settles as failed only the runs it was running itself. A run
+on a Linux workspace belongs to that host's server and is never settled from
+a Mac.

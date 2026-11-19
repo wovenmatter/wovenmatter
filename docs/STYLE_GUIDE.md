@@ -112,8 +112,7 @@ when an intentional design change is accepted.
   - **Plain copy:** subtitles are full sentences saying what the row updates.
     No "How it works" section; the rows explain themselves.
   - **No update counts:** each row says "Update available" itself.
-  Work an update would stop is named in one alert before anything starts; Linux
-  harness downloads are reviewed in one confirmation per update. Other pages
+  Work an update would stop is named in one alert before anything starts. Other pages
   show only a "Versions don't match" link here.
 - **General:** the Woven Matter version first (no heading), as one whole-row link
   that highlights on hover and opens Updates, with one line saying updates live
@@ -297,7 +296,10 @@ when an intentional design change is accepted.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
 - **Apple devices:** show this Mac, pairing requests, and paired devices, then Pair a
-  device with its three methods closed until needed. Pairing grants access to all
+  device with its three methods closed until needed. After an update reset
+  pairing, one row above This Mac says "Pairing was reset by this update" with
+  a quiet **Dismiss**; it goes away when dismissed or when a device is paired,
+  and no stale device is listed as paired. Pairing grants access to all
   available workspaces; do not add per-device workspace permissions or
   execution-sharing switches.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
@@ -313,8 +315,8 @@ when an intentional design change is accepted.
   alone ("Codex"); the heading says where. Each harness is one row, and the
   same agent stands for it in the sidebar, in New Chat and as the row a chat
   highlights. Its New folder creates the folder on that machine; when that
-  machine cannot take one, the form says why with Create disabled
-  ("Update Woven Matter on … to create folders there."). Its heading's menu has
+  machine cannot be asked, the form says why with Create disabled
+  ("Connect this workspace before creating a folder."). Its heading's menu has
   Rename…, which names the workspace on every paired device, and offers the
   same action to VoiceOver. A heading is one line: a long name is cut at its
   end with the full name in its tooltip. New Chat groups remote agents under their workspace's

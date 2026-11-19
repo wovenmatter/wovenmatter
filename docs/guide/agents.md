@@ -12,8 +12,8 @@ A **harness** is the software that runs the agent. Settings also calls it a
 
 1. Open **Settings → Agents** and choose the harness. For a remote workspace, choose
    it under **Applies to**, or open it from **Settings → Workspaces**.
-2. If the harness is missing, select **Install** and review the installer before
-   confirming.
+2. If the harness is missing, select **Install**. Woven Matter runs the
+   vendor's official installer.
 3. Installed harnesses appear in the sidebar automatically. Choose **Sign in** on the harness's agent page if its account is not connected. A link and one-time code appear right there; Claude Code opens its sign-in in your browser. **Remove account** signs the harness out.
 4. Choose **New chat** and select the agent in that workspace.
 

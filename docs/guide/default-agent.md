@@ -49,8 +49,7 @@ Collapsing a workspace hides its SDK details without discarding update progress.
 
 SDK installations belong to each location, independently of inherited provider
 preferences. Updating the local SDK does not update remote workspaces or the
-separately installed Pi and Claude Code CLIs. Older remote workspace services
-need a workspace software update before they can expose SDK management.
+separately installed Pi and Claude Code CLIs.
 
 ChatGPT, Claude, and Grok each support one subscription account per workspace.
 API keys still support up to four accounts per connection type. Existing subscription

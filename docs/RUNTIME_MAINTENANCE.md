@@ -13,7 +13,7 @@ Claude's browser sign-in, with a field for the page's code, appear under the acc
 The account shows its name or email with **Remove account**, which runs the harness's
 own logout. OpenCode adds keys with its own picker in Terminal and removes each saved
 key individually (`opencode auth logout <integration> <label>`). Remote workspaces use
-the same panel with each harness's headless sign-in and a `/v1/harnesses/:id/sign-out`
+the same panel with each harness's headless sign-in and a `/harnesses/:id/sign-out`
 route.
 Opening settings refreshes the inventory and available versions, without a
 repeating timer. **Settings → Agents → Set up harnesses** reopens the first-launch
@@ -33,8 +33,8 @@ command output, account data, paths, or credentials.
 Each harness on this Mac is the person's own native CLI, in the place its vendor's
 official installer puts it, so the terminal and Woven Matter run the same CLI with
 the same sign-ins, skills and sessions. Woven Matter finds that install before any
-other copy on the search path, and never uses a CLI left in its own `Node Tools/bin`
-by an older Woven Matter (that folder holds only the ACP adapters). Each CLI is
+other copy on the search path; its own `Node Tools/bin` holds only the ACP
+adapters. Each CLI is
 compared with the release channel its vendor's installer and update command read.
 
 | Harness | Native CLI (official installer) | Woven Matter connects through | Update |
@@ -84,8 +84,7 @@ mutually gated during a local runtime operation. No operation cancels an active 
 Each Linux host has its own inventory, preferences, latest checks and verified
 maintenance actions, served by the host's service. The Mac that installed the
 host reaches them through an SSH tunnel with the host's API token. Installers
-execute on the selected host. Remote services
-must include these endpoints before the controls are available.
+execute on the selected host.
 Local package presence never verifies a remote
 installation or a linked gateway's runtime.
 
@@ -123,9 +122,8 @@ replaces v1's. When a host has OpenCode v1 and no v2, its inventory reports
 `opencode_v1_replacement_confirmation_required` until the app sends
 `replaceOpenCodeV1: true` after the user agrees. Their data is kept.
 
-`GET /v1/harnesses/<id>/install-preview` remains for older apps: it describes the
-official installer with `sha256` and `packageSpec` set to `null`. Install and update
-take `{ "confirmed": true }`; `sourceSHA256` and `packageSpec` are ignored.
+Install and update take `{ "confirmed": true }` and start at once; nothing is
+previewed first.
 
 ## Service controls
 

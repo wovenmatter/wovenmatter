@@ -66,8 +66,9 @@ Preparation runs on the executing Mac or remote host, never on a Mac merely
 observing a remote caller. Ordinary tool
 requests keep their existing limits; HTML requests and the underlying bounded
 RPC/library transports accommodate prepared pages. The same canonical catalog
-is generated for remote workspaces. Visual replies remain available with older
-saved tool selections; explicitly limited outside-client grants still apply.
+is generated for remote workspaces. Visual replies are not a configurable tool
+group, so they are available whatever tool selection is saved; explicitly
+limited outside-client grants still apply.
 Publication is marked non-idempotent so adapters never automatically replay it
 after an uncertain transport failure.
 
@@ -80,8 +81,8 @@ activity-details API. Pages inherit the conversation/run's retention and sync
 behavior without separate files or orphaned attachments. HTML never becomes an
 assistant-text segment or a hidden generic tool result.
 
-Chats from earlier on-device iPhone agents, which could publish pages, still
-reconstruct a page from the successful native HTML call/result pair, retaining
+A phone chat whose native history holds a successful `woven_html_render`
+call and result reconstructs its page from that pair, retaining
 its full detail in the native journal and its small reference in transcript
 summaries. Reopening and replicating that journal preserve the page. References
 are deduplicated when the native projection and the library's published

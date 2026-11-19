@@ -2,8 +2,8 @@
 
 Background execution moves execution ownership out of the macOS window process.
 Every production Mac hosts its own full library and always executes in its
-background server. Its visible app is a client; legacy off preferences no longer
-select a foreground execution owner.
+background server. Its visible app is a client; no preference selects a
+foreground execution owner.
 Development profiles use isolated background servers and never install login jobs.
 Remote workspaces retain their own independent execution preferences.
 Snapshot and live Dev profiles run the same library host server that every

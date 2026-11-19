@@ -41,9 +41,8 @@ Other Macs retain their own execution identity and use their paired-library
 adapters. Linux execution workspaces serve MCP themselves. They handle local
 execution and managed data locally, run notes, history, calendar, library and
 session folders against their own library copy, and send the tools only a Mac
-serves (timers, usage, HTML preview) to any reachable Mac member with a signed
-request. No single Mac's grant is needed; one saved from an earlier version is
-only a fallback. A publisher credential is not a tool grant. An unavailable
+serves (usage, HTML preview, a scheduled task's tool policy) to any reachable
+Mac member with a signed request. No Mac issues a grant for this. An unavailable
 library or Mac returns an explicit unavailable result; the workspace never
 adopts another device's execution or turns its replica into a replacement
 library.
@@ -97,7 +96,7 @@ replies remain included with exposure, matching Woven's always-available tools.
 
 Each bot has its own Woven MCP key, issued by the Woven server on the machine that
 runs it (`WorkspaceAgentToolsModel.issueBotKey(machineID:botID:botName:)` on a Mac,
-reached by the bots runtime through `POST /v1/bots-host/mcp-keys`). The principal is
+reached by the bots runtime through `POST /bots-host/mcp-keys`). The principal is
 `woven:bot:<machine-device-id>:<bot-id>`; the key alone names the bot, so request
 headers never choose or change the caller. Issuing a key replaces the bot's previous
 one, and Woven stores only its SHA-256 digest in `mcp-access.json`. No conversation is
@@ -189,9 +188,7 @@ everything in it. Moving keeps content and revisions, and removing a link never
 deletes the original. Changes made at the same time on other Macs, Linux hosts,
 iPhones or iPads merge component by component when they sync; a component two
 writers changed keeps the other version beside it as a `conflict-` component
-marked for review. Page text never grants authorization. An older spatial Board
-migrates to a Page on its first write; its sections become nested sections, and its
-connections stay readable through `includeLayout`. Agent tools cannot edit layout,
+marked for review. Page text never grants authorization. Agent tools cannot edit layout,
 and `woven_notes_apply` refuses Page component operations; use `woven_pages_*`.
 See [Pages workflows, tools, and sharing limits](PAGES.md).
 

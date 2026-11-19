@@ -13,8 +13,8 @@ Expand a provider to see its subscription, with API keys folded below it. OpenAI
 Grok/xAI, OpenRouter, and OpenCode connections power Pi Durable.
 
 Save up to four connections per type. Saved rows show account identity or a key
-label and date added, never the secret. Older connections show “Existing
-connection” when their original date is unknown. Choose **Use first**, then
+label and date added, never the secret. A connection with no recorded date shows “Existing
+connection”. Choose **Use first**, then
 arrange the remaining accounts as backups. Pi Durable tries these before the next
 configured fallback model when authentication fails or allowance is exhausted.
 It does not switch for ordinary throttling or replay after output/tools begin.

@@ -22,7 +22,7 @@ workspace administrator capabilities remain local. Conversation, agent and
 calendar ownership are shared records of their own, separate from edit origin,
 so editing a chat or schedule from another Mac does not move its executor.
 The execution owner's native rows are its truth: while a Mac currently executes
-a chat natively (not adopted into another workspace and without retained or
+a chat natively (it is not another workspace's session and has no retained or
 independent execution history), an observed version of that chat or its runs
 never replaces agent binding, authority, folder or run and message state there.
 Rename and pin are shared edits from any Mac; a rename stored as a title override
@@ -30,17 +30,15 @@ applies whichever row arrives last. Trash, restore and draft folder moves change
 runtime state, so the app sends them for another Mac's chat to that Mac, which
 applies its own checks and effects; with that Mac unreachable they fail rather
 than apply locally. A new folder on another Mac is asked of that Mac the same
-way (`createFolder`, from a Mac only, for a Mac that lists `folders.create`):
-it creates the directory in its own managed workspace root and its own folder
+way (`createFolder`, from a Mac only): it creates the directory in its own managed workspace root and its own folder
 rows, which synchronize to every device; the asking Mac writes none of them.
 No Mac writes a folder bound to another Mac's
 disk, resolves another Mac's path on its own, or offers to delete another
 Mac's directory. The chat actions need positive authority on the Mac applying
 them: it runs the chat natively, or the chat belongs to a known independent Linux
-or iOS workspace. A chat adopted into such a workspace keeps the projection
-semantics it already had: trash and restore apply to this library's projection
-and are never routed to its earlier Mac or dispatched to the Linux workspace,
-and draft folder moves for it are not supported. A chat whose owner record has not arrived yet
+or iOS workspace. For a chat such a workspace runs, trash and restore apply
+to this library's projection and are not dispatched to that workspace, and
+draft folder moves are not supported. A chat whose owner record has not arrived yet
 is unavailable for them. A trash request that still arrives through synchronization
 is accepted only when the owner is idle, with the owner's goal pause and
 delivery cancellation, and is otherwise declined. The owner republishes its
@@ -70,17 +68,15 @@ namespace when another Mac receives it. There is no managing Mac: every Mac
 reaches every other Mac's and Linux host's execution API, and administers
 every Linux host, with requests signed by its own member key (see
 [Woven everywhere](architecture/WOVEN_EVERYWHERE.md)). Nothing is enrolled for
-a Mac. A phone that still uses a bearer gets its grant for a Linux workspace
-from that host, requested by any Mac; for another Mac's own workspace, from
-that Mac. Remote workspace definitions appear in the shared inventory; SSH
+a Mac or a phone, and no execution grant is issued to either. Remote
+workspace definitions appear in the shared inventory; SSH
 credentials stay on the Mac that installed the host and do not become shared
 configuration.
 
 Any Mac can name any workspace. The name is a shared row keyed
 by the workspace's registry ID, so it reaches every paired Mac; a Linux host
 relays the row and can never write it. The workspace's owner also publishes
-the name as its registry name, which is what the iPhone, agents and devices
-that have not updated show. Without a chosen name a Mac's workspace is titled
+the name as its registry name, which is what the iPhone and agents show. Without a chosen name a Mac's workspace is titled
 on the desktop with its tailnet machine name (the first label of its
 `*.ts.net` address; a Dev instance adds `(Dev) · <instance>`, since it shares
 the machine). The address is the registry row's, and when the row has none,
@@ -131,7 +127,7 @@ ID.
 Another machine's chats arrive in this library by synchronization like any
 other history; there is no separate per-Mac cache of them. While one is open,
 this Mac's background server follows it live on that machine's member-signed
-stream (`GET /v1/stream`) and sends its commands there; nothing
+stream (`GET /stream`) and sends its commands there; nothing
 polls the other machine. When it is unreachable, the chat shows the
 synchronized history and says the machine is offline.
 
@@ -202,8 +198,8 @@ secret-bound claim flow, marked as a Mac pairing; only that explicit purpose can
 produce a paired-Mac grant, and device metadata never chooses a grant's role.
 Macs can also paste a pairing link from the other Mac. The join is the one
 Mac-to-Mac step that still uses bearers: with the grant it was issued, the
-requester calls `POST /v1/peers/join/prepare` at the paired endpoint to learn
-the revocation context the other Mac holds for it, then `POST /v1/peers/join`,
+requester calls `POST /peers/join/prepare` at the paired endpoint to learn
+the revocation context the other Mac holds for it, then `POST /peers/join`,
 proving its key for exactly that context and supplying the bearer it issued for
 the other Mac; the reply proves the other Mac's key for that reciprocal grant.
 Each Mac pins the other's key by device UUID in its local credential store,
@@ -220,21 +216,36 @@ endpoint says about itself. Any Mac member can add a device. A Mac that one Mac
 added is trusted by every other member through that signed entry, with no grant
 or handshake of its own, so Macs keep synchronizing when the Mac that introduced
 them is offline or later removed. A Mac this device has trusted continuously for
-24 hours is pinned as a local anchor. Macs paired before members existed are
-converted into members on launch from their pinned keys; library content is
-never touched.
+24 hours is pinned as a local anchor.
+
+**Pairing reset.** Pairing made by a build that signed these records
+differently is not converted. Each Mac and Linux host checks, before it serves
+anything, whether its own member entry still verifies under the key it names.
+When it does not, the device clears every pairing it holds (its grants, pins,
+admissions and unpair events, the credentials other Macs issued it, and the
+library's member entries, removals, anchors and shared GitHub record) and
+starts unpaired. Nothing is sent to a peer, no unpair effect runs, and every
+chat, note, agent, folder and workspace stays as it is; other machines'
+workspaces stay listed and say they do not recognize this Mac until the two
+are paired again. Settings → Apple Devices shows "Pairing was reset by this
+update" until it is dismissed or a device is paired. Pair the Macs again from
+either side; no unpair is needed first. A Linux host is adopted again by the
+Mac that manages it, a phone shows "Pair again", and the Mac that holds the
+GitHub key shares it again. The mechanism is in
+[Woven everywhere](architecture/WOVEN_EVERYWHERE.md) ("Pairing reset").
 
 **Signed synchronization.** Library exchange runs in `LibraryPeerSync` between
 every `mac` and `linux` member, with each request signed by the caller's device
-key: `POST /v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
-`/v1/peers/file`. A local commit is announced once, debounced, to online peers,
+key: `POST /peers/sync`, `/peers/notify`, `/peers/files` and
+`/peers/file`. A local commit is announced once, debounced, to online peers,
 and each pulls with one exchange; a peer that reappears is caught up once; a
 60-second presence check, backing off to 15 minutes for an offline peer,
 replaces constant polling. The exchange carries no format or version number,
-and every device updates together. When a release adds a shared table or
-column, a device that has not updated yet keeps the records it cannot apply,
-relays them, and applies them once it updates; nothing is partially applied
-([Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "No version numbers").
+and every device updates together. Between updating one Mac and the next, a
+record that names a table or column the receiving Mac does not have yet waits
+there, is relayed, and applies once that Mac is updated; nothing is partially
+applied ([Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "One shape, no
+version numbers").
 Requests go only to tailnet HTTPS endpoints (`https://*.ts.net`) taken from
 signed member entries; there is no public directory, redirects and cookies are
 disabled, and merely appearing on the tailnet grants nothing. Once membership
@@ -247,21 +258,21 @@ Removing a Mac voids everything it signed; the removing Mac first re-signs the
 entries it holds from the removed Mac, so the devices it added stay (review the
 device list afterwards). It also queues a rotation of the installer bearer on
 every Linux host the removed Mac added. A removed device retains its local data
-but cannot resume syncing. Unreachable execution owners apply queued revocations
-on reconnection; a revocation is recorded as applied only after this Mac's own
-access is revoked. Recovering from a lost signing key needs that Mac to be
-removed everywhere and paired again.
+but cannot resume syncing. A Mac that was offline applies the unpairs other
+Macs signed when it next synchronizes; one is recorded as applied only after
+this Mac's own grant for that device is revoked. Recovering from a lost
+signing key needs that Mac to be removed everywhere and paired again.
 
 **Bearers that remain.** Each Mac authenticates only bearers it issued itself,
 so a bearer a Mac minted or holds for another Mac is useless anywhere else.
 Besides the join, paired-Mac bearers serve only:
 
-- `/v1/peers/usage`, read with the grant from pairing with that Mac (see
+- `/peers/usage`, read with the grant from pairing with that Mac (see
   "Usage across devices");
-- the bearer-era roster (phone names, Mac introductions and signed unpair
-  events), which rides along each signed exchange as an attachment so that
-  grants issued before members are revoked with their device. It authenticates
-  nothing, and pins are never replaced by it.
+- the pairing roster (phone names, Mac admissions and signed unpair events),
+  which rides along each signed exchange as an attachment so that a grant is
+  revoked with its device. It authenticates nothing, and pins are never
+  replaced by it.
 
 **Phones.** A phone that pairs with a member key gets an `ios` entry signed by
 the Mac it pairs with, added when the phone confirms the pairing. It signs its
@@ -270,20 +281,12 @@ trying the last one that worked first; the Mac it paired with is only a starting
 point, and other members never need it. Pairing a phone again replaces its key,
 as after restoring a backup. Phones are not full desktop replicas.
 
-A phone without a member key, or one whose Mac answers that it does not list
-its key, keeps its bearer grant at the Mac it paired with. When that Mac enrolls
-such a phone in another Mac's workspace, it asks that Mac directly, and that Mac
-records the requesting Mac as the grant's provenance; a Linux host issues the
-grant to any Mac's signed request. A replacement is staged: earlier provenance
-is retired only once the replacement is actually issued, so a failed or offline
-replacement never hides a grant from cleanup. Execution requests served by a
-Mac are authorized live by their grant's provenance, so removing the requesting
-Mac ends grants derived through it immediately. A Linux host authorizes by
-token, so its grants end when the queued cleanup reaches it, which is eventual
-while it is offline. A phone whose grant is rejected clears that workspace's
-credential and requests a new one on its next workspace refresh. Grants cover
-execution only: no Mac or Linux host serves inference to a phone, which uses
-only its own sign-ins.
+A phone's pairing credential only confirms its pairing and ends it; every
+other request it makes is signed with its member key, and no execution grant
+is issued to it. When no Mac or Linux host lists it any more it stops
+synchronizing, keeps everything it holds and offers "Pair again"; pairing
+again with any Mac needs no unpair first. No Mac or Linux host serves
+inference to a phone, which uses only its own sign-ins.
 
 ## Upgrade and recovery
 
@@ -311,9 +314,8 @@ unowned rows it has local evidence of having run, and nothing else.
   never synchronizes and is written only where the chat was created) and no
   independent execution: no projection onto a Linux host's or an iPhone's
   workspace. A projection onto a Mac's workspace is only paired-Mac routing
-  and does not prevent the claim; one left by an earlier build, which guessed
-  owners from who edited a chat, is removed when the Mac that owns the chat
-  opens its library.
+  and does not prevent the claim: it is rebuilt from the owner record, and
+  removed from a chat this Mac owns.
 - A schedule with a run this Mac reserved for itself or sent (`calendar_runs`
   and the run's delivery, both local), unless its executor record assigns it
   to another device. A run a Linux host reported to the Mac that manages it
@@ -376,7 +378,7 @@ real-account execution require Trey's hands-on acceptance before merging.
 ## Usage across devices
 
 Usage is not a shared library table: each Mac keeps its own index and reads other
-Macs over `/v1/peers/usage` with the bearer grant from pairing with that Mac. A Mac reports
+Macs over `/peers/usage` with the bearer grant from pairing with that Mac. A Mac reports
 its own usage plus the Linux machines it reads, as hourly counts and labels with
 folder names only, never transcript content or paths. A Linux machine's rows keep
 the host's own IDs when passed on, so a Mac that also reads that host directly keeps

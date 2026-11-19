@@ -24,8 +24,9 @@ app, preserve their existing libraries, and synchronize shared data after approv
 on the other Mac. Pairing does not change a database role or restart into a node
 interface. An already paired Mac can add another Mac or an iPhone/iPad; its new
 connections and remote workspace inventory propagate to the other paired Macs.
-Both Macs must advertise the `library.peers` capability; a Mac that does not
-has to be updated before it can pair.
+A Mac whose pairing was reset by an update (Settings → Apple Devices shows
+"Pairing was reset by this update") is paired again the same way; neither Mac
+needs to unpair first, and chats, notes and workspaces are unchanged.
 
 Remote setup uses a short-lived, nonsecret intent in the SSH user's app preferences.
 The receiving GUI consumes it after startup; pairing credentials stay in the
@@ -53,10 +54,11 @@ credential copying, public sharing, or forced process termination is used.
 An owned process lock serializes installations. Signal handlers clean up interrupted
 attempts and release the lock; a stale process lock can be reclaimed on retry.
 
-New versions prepare their own shutdown using the same write-flushing and backend
-handoff used for desktop updates. Legacy apps receive an ordinary Quit request;
-if an old background server remains running, the row asks the user to stop it on
-that Mac and retry. Setup requires that the SSH user is also the signed-in console
+A running app prepares its own shutdown using the same write-flushing and
+backend handoff used for desktop updates. If it is still running a minute
+later, the row says to finish its active work and approvals, or stop the
+background server on that Mac, and retry; no process is force-stopped.
+Setup requires that the SSH user is also the signed-in console
 user so the app can open in the correct desktop session.
 
 ## Validation

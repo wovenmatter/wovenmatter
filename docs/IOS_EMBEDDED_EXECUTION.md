@@ -93,7 +93,6 @@ using `Promise.all`; the SDK retains validation, hooks, task ownership, cancella
 and recovery. Model tool rounds retain the SDK's native parallel/sequential policy.
 Existing serialization for whole-conversation code checkpoints and per-workspace
 file publication protects shared state; it is not a global tool concurrency cap.
-Old saved `concurrentTools` values are ignored and are no longer written.
 
 The JavaScript code worker has a **120-second responsiveness watchdog**. Its timer
 resets on worker heartbeats; waiting for native tools, approvals, or inference is

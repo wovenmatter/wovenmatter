@@ -25,8 +25,7 @@ click it to open the page.
     OpenCode, and Executor) with its versions and its own **Update**. Bots run
     the SDKs of Pi Durable on their device, so one update covers both.
 
-  A device that is offline shows the last version it reported. A device running
-  an older Woven Matter shows its harnesses once it's updated.
+  A device that is offline shows the last version it reported.
 
 ## Update all your devices at once
 
@@ -57,10 +56,6 @@ with this Mac's Woven Matter. So when a newer release is out, this Mac updates
 first. Install it in the window that opens. After Woven Matter restarts, the
 update carries on with your other devices and harnesses. This Mac restarts
 only after every other update has finished.
-
-Before a Linux workspace runs a harness installer, Woven Matter lists every
-download in that update with its source and checksum. You confirm them once.
-Each host downloads its source again and refuses to run it if it changed.
 
 ## When something is running
 

@@ -114,10 +114,12 @@ The ledger retains at most 4,096 conversations and client/conversation pairs and
 never evicts Stop history; overflow fails closed. Conversation IDs use the same
 exact string identity as backend lookup. Backend restart invalidates old frames;
 frontends discard their old Stop sequences and ignore superseded state replies.
-Reconnect within one backend lifetime preserves sequences. Updated frontends
-require the `session.dispatch-epochs` readiness capability. Legacy sends are
-rejected with reconnect guidance; legacy Stop still cancels current work and
-invalidates older versioned sends. No uncertain send is automatically replayed.
+Reconnect within one backend lifetime preserves sequences. A frontend
+requires the `session.dispatch-epochs` readiness capability of its backend. A
+send that carries no dispatch fence is rejected with reconnect guidance. A
+Stop without one, which the window sends when it could not get a dispatch
+admission, still cancels current work and invalidates the sends sequenced
+before it. No uncertain send is automatically replayed.
 
 The worker's `metrics` expose only `pending` (queued and running jobs) and
 `rejected` (admissions refused at capacity). They contain no SQL, document text,
