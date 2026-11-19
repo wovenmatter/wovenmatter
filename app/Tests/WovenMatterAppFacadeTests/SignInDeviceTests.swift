@@ -138,7 +138,7 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
     func uploadAttachment(_ data: Data, sha256: String, name: String, mimeType: String) throws -> LibraryAttachmentReference { throw LibraryAPIError(code: "unavailable", message: "") }
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) throws -> SessionSettings { throw LibraryAPIError(code: "unavailable", message: "") }
     func libraryFile(conversationID: String?, path: String) throws -> MemberLibraryFile { throw LibraryAPIError(code: "unavailable", message: "") }
-    func adopt(_ body: Data) throws {}
+    func descriptor() throws -> ExecutionWorkspace { throw LibraryAPIError(code: "unavailable", message: "") }
 }
 
 @MainActor
@@ -749,7 +749,7 @@ struct SignInDeviceTests {
         let keychain = SignInKeychainFixture()
         let access = KeychainAccess(operations: keychain.operations)
         _ = try ProviderConnectionAccounts.addKey("device-key", provider: "openai", label: "Device", keychain: access)
-        _ = try ProviderConnectionAccounts.addKey("legacy-key", provider: "openai", scope: "local", label: "Legacy", keychain: access)
+        _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Workspace", keychain: access)
         _ = try ProviderConnectionAccounts.addKey("remote-key", provider: "openrouter", scope: UUID().uuidString.lowercased(), keychain: access)
         let choices = try LocalUsageService.deviceConnectionChoices([.codex, .openRouter], keychain: access)
         #expect(choices.map(\.label) == ["API key · Device"])

@@ -20,7 +20,7 @@ extension WorkspaceDatabaseConnection {
   public func replayCalendarRequest(callerID: String, requestID: String, input: String) throws -> String? {
     try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
-      let requestID = try persistedToolRequestID(requestID, in: .mutations, sourceID: callerID)
+      let requestID = try canonicalToolRequestID(requestID)
       guard let row = try historyRowsUnlocked("SELECT operation,input_digest,result_json FROM tool_mutations WHERE source_id=? AND request_id=?",
         values: [callerID, requestID]).first?.objectValue else { return nil }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -373,17 +373,11 @@ extension WorkspaceDatabaseConnection {
       values += [String(limit), String(offset)]
     }
     let rows = try historyRowsUnlocked(sql, values: values)
-    return try rows.compactMap { value in
+    return try rows.map { value in
       guard let r = value.objectValue, let id = r["id"]?.stringValue, let eventID = r["event_id"]?.stringValue,
             let scheduled = r["scheduled_at"]?.stringValue.flatMap(Self.date), let json = r["task_json"]?.stringValue,
             let sessionID = r["session_id"]?.stringValue else { throw WorkspaceDatabaseError.corruptRow }
-      // A run an older build scheduled for a harness Woven no longer runs
-      // stays in its session's history; it is not listed as a calendar run.
-      let task: WorkspaceCalendarTask
-      do { task = try JSONDecoder().decode(WorkspaceCalendarTask.self, from: Data(json.utf8)) } catch {
-        NSLog("Ignoring calendar run %@ with an unsupported task: %@", id, String(describing: error))
-        return nil
-      }
+      let task = try JSONDecoder().decode(WorkspaceCalendarTask.self, from: Data(json.utf8))
       return WorkspaceCalendarRun(id: id, eventID: eventID, occurrenceIndex: r["occurrence_index"]?.intValue ?? 0,
         scheduledAt: scheduled, sessionID: sessionID, task: task,
         status: r["delivery_status"]?.stringValue ?? "pending", error: r["error"]?.stringValue,

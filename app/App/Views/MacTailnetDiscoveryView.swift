@@ -47,7 +47,6 @@ struct MacTailnetDiscoveryView: View {
             Text(item.message(version: devices.release?.version, snapshot: DevelopmentLaunch.isSnapshot))
         }
     }
-    private func rowError(_ row: MacDeviceRow) { row.error = "Update both Macs to a version that supports paired Mac synchronization." }
     private func peer(for row: MacDeviceRow) -> DiscoveredPeer? {
         host.discoveredPeers.first { $0.endpoint.host == row.mac.dnsName }
     }
@@ -57,10 +56,7 @@ struct MacTailnetDiscoveryView: View {
     }
     private func perform(_ item: DeviceSetupConfirmation) async {
         confirmation = nil
-        if item.action == .pair, let peer = peer(for: item.row) {
-            if peer.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true { await host.pairWithPeer(peer); return }
-            rowError(item.row); return
-        }
+        if item.action == .pair, let peer = peer(for: item.row) { await host.pairWithPeer(peer); return }
         guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this Mac’s library to become available before pairing."; return }
         await devices.perform(item.action, row: item.row, endpoint: host.endpoint)
     }
@@ -99,7 +95,7 @@ private struct MacTailnetDeviceRow: View {
     var onInspect: () -> Void
     @State private var showConnection = false
     private var installedVersion: String? { row.installation?.version ?? peer?.advertisement.identity.metadata.appVersion }
-    private var canUseService: Bool { peer?.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true }
+    private var canUseService: Bool { peer != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

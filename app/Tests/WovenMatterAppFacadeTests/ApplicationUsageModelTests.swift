@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Observation
 import Testing
@@ -10,7 +11,7 @@ import WovenMatterLibraryStore
 // provider data, accesses credentials or starts a provider CLI.
 @MainActor struct ApplicationUsageModelTests {
     @Test func preferenceRestorationObservableConsentAndIdempotentConsent() async throws {
-        let suite = "wovenmatter-usage-model-tests.\(UUID().uuidString)"
+        let suite = TestDefaults.suiteName("usage-model-tests")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         UsageProviderPreferences(defaults: defaults).save([.codex])

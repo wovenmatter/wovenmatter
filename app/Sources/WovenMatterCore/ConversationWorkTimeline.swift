@@ -75,8 +75,8 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
     }
     return order.compactMap { id in
       guard !cleared.contains(id), let value = values[id] else { return nil }
-      // A legacy activity can comprise several trace records. Corrections or
-      // deletion of any contributor must invalidate its cached full detail.
+      // An activity can comprise several records. Corrections or deletion
+      // of any contributor must invalidate its cached full detail.
       let version = versions[id] ?? Hasher()
       return value.merging(AgentRunActivity(
         id: id, kind: value.kind, detailVersion: Int64(version.finalize())

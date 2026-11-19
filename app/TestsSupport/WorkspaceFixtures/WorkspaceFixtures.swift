@@ -146,3 +146,15 @@ extension DeviceAuthentication {
     return response
   }
 }
+
+/// Names for the defaults suites tests make. A suite named by a path keeps its
+/// file there, so a test's suite lives in the temporary directory and leaves
+/// nothing in ~/Library/Preferences (where `removePersistentDomain` leaves an
+/// empty file behind for every suite name ever used).
+public enum TestDefaults {
+  public static func suiteName(_ label: String) -> String {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-test-defaults", directoryHint: .isDirectory)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder.appending(path: label + "-" + UUID().uuidString.lowercased()).path
+  }
+}

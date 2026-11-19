@@ -156,20 +156,14 @@ extension WorkspaceDatabaseConnection {
         try createWorkspaceRevisionTriggersUnlocked(table)
       }
       try createWorkspaceRevisionTriggersUnlocked("execution_conversations", operations: ["INSERT", "DELETE"])
-      // SQLite stores the statement as written, without its semicolon. A
-      // trigger an earlier build wrote for other columns is replaced.
-      let projectionUpdate = """
-        CREATE TRIGGER execution_conversations_workspace_revision_update
+      try executeUnlocked("""
+        CREATE TRIGGER IF NOT EXISTS execution_conversations_workspace_revision_update
         AFTER UPDATE OF workspace_id,deleted ON execution_conversations
         WHEN OLD.workspace_id IS NOT NEW.workspace_id OR OLD.deleted IS NOT NEW.deleted
         BEGIN
           UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
-        END
-        """
-      if try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='execution_conversations_workspace_revision_update'", values: [])
-        .first?.objectValue?["sql"]?.stringValue != projectionUpdate {
-        try executeUnlocked("DROP TRIGGER IF EXISTS execution_conversations_workspace_revision_update;\n" + projectionUpdate + ";")
-      }
+        END;
+        """)
       // Replaying observed rows must not manufacture fresh native history or
       // derived library work. FTS indexing still runs on the original, stable
       // incoming event IDs.
@@ -490,10 +484,9 @@ extension WorkspaceDatabaseConnection {
             try executeUnlocked("RELEASE peer_record")
             continue
           }
-          // A record carries its identity and any of the table's columns: all
-          // of them from a build with this schema, fewer from an older one
-          // (the rest keep their local values), and a deletion its tombstone
-          // columns.
+          // A record carries its identity and any of the table's columns (a
+          // column it does not carry keeps its local value), and a deletion
+          // its tombstone columns.
           guard known.keys.allSatisfy({ received.row[$0] != nil }) else {
             throw PeerRecordRejected(message: "Invalid shared record in " + received.table + ".")
           }
@@ -859,13 +852,12 @@ extension WorkspaceDatabaseConnection {
   private static let sharedConversationColumns: Set<String> = ["title", "is_pinned", "unread", "updated_at"]
 
   /// True when this Mac currently executes the chat natively: its owner record
-  /// names this Mac and no adoption, retained history or independent execution
+  /// names this Mac and no retained history or independent execution
   /// projection has taken it over. A synthetic paired-Mac projection does not
   /// veto, so stale routing can still be repaired.
   private func executesNativelyUnlocked(_ conversation: String, local: String) throws -> Bool {
     try historyRowsUnlocked("""
       SELECT 1 AS owned FROM conversation_owners o WHERE o.id=?1 AND o.device_id=?2
-        AND NOT EXISTS(SELECT 1 FROM execution_adoptions a WHERE a.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM retained_execution_history r WHERE r.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM execution_conversations x WHERE x.id=?1
           AND NOT \(PairedLibraryOwnership.macWorkspace("x.workspace_id")))
@@ -1014,9 +1006,8 @@ extension WorkspaceDatabaseConnection {
       WHERE id IN (SELECT value FROM json_each(?)) OR device_id IN (SELECT value FROM json_each(?))
       """, values: [try peerJSON(scope.conversations.sorted()), try peerJSON(scope.owners.sorted())])
     // A projection onto a Mac workspace is synthetic paired-Mac routing and is
-    // rebuilt from the authoritative owner record, which also repairs routing an
-    // earlier build guessed from an edit's origin. Independent Linux and iOS
-    // execution projections are never replaced.
+    // rebuilt from the authoritative owner record, whatever it said before.
+    // Independent Linux and iOS execution projections are never replaced.
     let macWorkspaces = Set(workspaces.filter { $0.kind == .mac }.map(\.id))
     for row in rows {
       guard let id = row.objectValue?["id"]?.stringValue, let owner = row.objectValue?["device_id"]?.stringValue else { continue }

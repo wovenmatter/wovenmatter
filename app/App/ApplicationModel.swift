@@ -358,16 +358,7 @@ final class ApplicationModel {
     /// A Dev snapshot's copied conversations are read-only history; its own
     /// sessions run. Test seam: fixtures exercise the snapshot rule.
     @ObservationIgnored var readsCopiedHistoryOnly = DevelopmentLaunch.isSnapshot
-    @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
-    @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
-    /// Chats that ran over SSH and could not move to their Linux host's server:
-    /// read-only history, with the reason (`LegacyRemoteChatError`).
-    var legacyRemoteChatReasons: [String: String] = [:]
-    /// Chats that ran over SSH whose move to their host did not finish this
-    /// time (`RemoteChatMoveDeferredError`): not read-only; tried again on the
-    /// next open or send. Their snapshots show this reason, offline.
-    @ObservationIgnored var remoteChatMoveRetries: [String: String] = [:]
     /// A window's one live connection to its background server and what it follows.
     @ObservationIgnored let windowLive = WindowLiveState()
     /// Chats another machine runs, as the conversation view renders them.
@@ -2614,10 +2605,12 @@ final class ApplicationModel {
 
         if try await dispatchFederatedMessage(conversationID: conversation.id, input: input, note: note,
             expectedRunID: expectedRunID, requiresIdle: requiresIdle, dispatchFence: dispatchFence) { return (true, nil) }
-        // A Linux host's chats run only on its server; one that did not move there is history.
+        // A Linux host's chats run only on its server. One its host has not
+        // published to this library yet (a scheduled run's result) waits for that.
         if let workspaceID = conversation.remoteWorkspaceID {
-            throw LegacyRemoteChatError(workspace: remoteWorkspaces.configuration(id: workspaceID)?.name ?? "its Linux workspace",
-                reason: conversation.isArchived ? "It is archived" : "It has not moved to the host's server yet")
+            let name = remoteWorkspaces.configuration(id: workspaceID)?.name ?? "its Linux workspace"
+            throw LibraryAPIError(code: "workspace_unavailable",
+                message: "This chat ran on \(name). It continues there once \(name) has published it to this library.")
         }
         let goalPrompt = input.historyDeliveryID == nil && WorkspaceGoal.supports(conversation.localRuntimeKind)
             ? WorkspaceGoalCommand(input.text)?.agentPrompt : nil
@@ -2895,44 +2888,21 @@ final class ApplicationModel {
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
-        var moveDeferred: String?
-        if !isBackendFrontend {
-            do {
-                try await adoptRegisteredRemoteConversationIfNeeded(conversation)
-                legacyRemoteChatReasons.removeValue(forKey: conversation.id)
-            } catch let error as LegacyRemoteChatError {
-                // Read-only history: the conversation view says why and offers no composer.
-                legacyRemoteChatReasons[conversation.id] = error.localizedDescription; return
-            } catch let error as RemoteChatMoveDeferredError {
-                // Not read-only: the composer stays, and reopening or sending tries the move again.
-                legacyRemoteChatReasons.removeValue(forKey: conversation.id)
-                moveDeferred = error.localizedDescription
-            } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
-        }
         let owned = (try? await libraryStore?.database.libraryExecutionOwner(conversationID: conversation.id)) != nil
-        if let moveDeferred, !owned {
-            ensureConversationState(id: conversation.id).setError(moveDeferred); return
-        }
-        if isBackendFrontend, owned, conversation.remoteWorkspaceID != nil {
-            // Only the background server knows whether a chat that ran over SSH moved to its host.
-            if let result = try? await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)) {
-                legacyRemoteChatReasons[conversation.id] = result.readOnlyReason
-            }
-            if legacyRemoteChatReasons[conversation.id] != nil { return }
-        }
         if owned {
             await refreshFederatedConversation(conversation.id); return
         }
         if isBackendFrontend {
             do {
                 let result = try await sendBackendCommand(.sessionMetadata(conversationID: conversation.id))
-                legacyRemoteChatReasons[conversation.id] = result.readOnlyReason
                 if let metadata = result.metadata {
                     localACPSessionMetadata[conversation.id] = metadata
                 }
             } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
             return
         }
+        // A Linux host's chat it has not published here yet: nothing of this Mac's runs it.
+        guard conversation.remoteWorkspaceID == nil else { return }
 
         if conversation.localRuntimeKind == .opencode {
             if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {

@@ -194,8 +194,8 @@ actor UsageTranscriptImporter {
 
     let agent = homeDirectory.appending(path: ".wovenmatter/default-agent", directoryHint: .isDirectory)
     var failures = 0
-    // The default agent's sessions from before Pi Durable used Pi's session files.
-    let presessions = try await importTranscriptFiles(
+    // The default agent's `sessions` folder holds Pi session files.
+    let sessionFiles = try await importTranscriptFiles(
       root: agent.appending(path: "sessions", directoryHint: .isDirectory),
       prefix: "pi-durable:file:",
       sourceName: "Pi Durable session",
@@ -207,12 +207,12 @@ actor UsageTranscriptImporter {
       now: now,
       predicate: { $0.pathExtension == "jsonl" }
     ) { url, check in
-      try Self.piSessionSamples(url, harness: "Pi", check: check).map(PiDurableUsageRecords.adopting).filter(enabled)
+      try Self.piSessionSamples(url, harness: "Pi", check: check).map(PiDurableUsageRecords.sessionFileReply).filter(enabled)
     }
-    failures += presessions.failures
-    // Later sessions kept one commit log per session, which stays as a backup once
-    // the session moves into SQLite.
-    let commitLogs = try await importTranscriptFiles(
+    failures += sessionFiles.failures
+    // Its `durable` folder holds one log per session, which stays as a backup of
+    // a session that is in SQLite.
+    let sessionLogs = try await importTranscriptFiles(
       root: agent.appending(path: "durable", directoryHint: .isDirectory),
       prefix: "pi-durable:file:",
       sourceName: "Pi Durable session",
@@ -226,11 +226,11 @@ actor UsageTranscriptImporter {
     ) { url, check in
       let session = url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
       return PiDurableUsageRecords.samples(
-        entries: try PiDurableUsageRecords.legacyEntries(in: url, check: check),
+        entries: try PiDurableUsageRecords.sessionLogEntries(in: url, check: check),
         session: .init(id: session, sourceID: "pi-durable:file:" + url.path)
       ).filter(enabled)
     }
-    failures += commitLogs.failures
+    failures += sessionLogs.failures
     // SQLite stores: the library database (Woven's own runs), the default agent's own
     // database, and the bots runtime's.
     var databases = [agent.appending(path: "workspace.sqlite")]
@@ -276,12 +276,12 @@ actor UsageTranscriptImporter {
   nonisolated private static func piSessionSamples(
     _ url: URL, harness: String, check: @escaping @Sendable () throws -> Void
   ) throws -> [UsageSample] {
-    var state = HarnessUsageScanState()
+    var state = PiSessionUsageScanState()
     var records: [UsageSample] = []
     let markers = ["\"usage\"", "\"model_change\"", "\"thinking_level_change\"", "\"session\""].map { Data($0.utf8) }
     try Self.forEachLineData(in: url, check: check) { data, lineNumber in
       guard markers.contains(where: { data.range(of: $0) != nil }) else { return }
-      if let parsed = LocalUsageTranscriptParser.parseHarness(
+      if let parsed = LocalUsageTranscriptParser.parsePiSession(
         line: String(decoding: data, as: UTF8.self),
         lineNumber: lineNumber,
         harness: harness,
@@ -488,11 +488,10 @@ actor UsageTranscriptImporter {
     }
   }
 
-  /// A source is read again when its size or modification time changed. A
-  /// stored fingerprint in any other form (an earlier build put a label in
-  /// front) differs too, and replacing a source's events is idempotent
-  /// (`UsageStore.replace` deletes them first), so that source is read once
-  /// more the next time its file is looked at.
+  /// A source is read again when its size or modification time changed, or
+  /// when its stored fingerprint is anything else. Replacing a source's events
+  /// is idempotent (`UsageStore.replace` deletes them first), so reading one
+  /// again never counts it twice.
   nonisolated private static func fileFingerprint(_ url: URL) throws -> String {
     let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
     return [

@@ -66,8 +66,9 @@ extension ApplicationModel {
         let selections = SessionSelections(model: configuration.model, thinking: configuration.thinking,
             permission: configuration.permission, tools: configuration.tools.enabled.map(\.rawValue).sorted())
         if alreadyConfigured {
-            // Old reservations may predate preference snapshots; do not replay
-            // their already-confirmed configuration over a later user change.
+            // A reservation that was already configured is recorded as it
+            // stands: its confirmed configuration is never replayed over a
+            // later user change.
             sessionSelectionPreferences.captureExistingConversation(id: id,
                 harness: configuration.runtimeKind.rawValue, workspace: scope, selections: selections)
         } else {

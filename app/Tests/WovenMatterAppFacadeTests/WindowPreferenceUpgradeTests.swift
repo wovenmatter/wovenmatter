@@ -1,4 +1,5 @@
 import Foundation
+import WorkspaceFixtures
 import Testing
 import WovenMatterClient
 @testable import WovenMatterAppFacade
@@ -7,7 +8,7 @@ struct WindowPreferenceUpgradeTests {
     /// The Linux hosts saved under the earlier key are still there after the
     /// move, and the model reads them.
     @MainActor @Test func linuxHostsSavedUnderTheEarlierNameMove() throws {
-        let suite = "wovenmatter.tests.window-preferences." + UUID().uuidString
+        let suite = TestDefaults.suiteName("window-preferences")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let host = RemoteWorkspaceConfiguration(name: "Fixture host", workspaceID: "fixture", hostName: "fixture.example.ts.net")
@@ -31,7 +32,7 @@ struct WindowPreferenceUpgradeTests {
     }
 
     @Test func aValueUnderTheCurrentNameWinsAndTheEarlierOneIsRemoved() throws {
-        let suite = "wovenmatter.tests.window-preferences." + UUID().uuidString
+        let suite = TestDefaults.suiteName("window-preferences")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let earlier = Data("[\"earlier\"]".utf8), current = Data("[\"current\"]".utf8)
@@ -45,7 +46,7 @@ struct WindowPreferenceUpgradeTests {
     }
 
     @Test func nothingSavedMovesNothing() throws {
-        let suite = "wovenmatter.tests.window-preferences." + UUID().uuidString
+        let suite = TestDefaults.suiteName("window-preferences")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -60,7 +61,7 @@ struct WindowPreferenceUpgradeTests {
     /// Every setting that was saved under a name ending in a number moves,
     /// and the cache saved under one is deleted, not moved.
     @Test func everyNumberedNameMovesAndTheNumberedCacheIsDeleted() throws {
-        let suite = "wovenmatter.tests.window-preferences." + UUID().uuidString
+        let suite = TestDefaults.suiteName("window-preferences")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let numbered = [

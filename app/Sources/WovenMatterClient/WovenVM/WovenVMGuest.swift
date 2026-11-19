@@ -176,13 +176,10 @@ public struct WovenVMProvisionWatch: Sendable {
                       done: done, provisioned: provisioned)
         }
 
-        /// The record unless an earlier boot wrote it. An older guest's
-        /// records carry no boot ID and always count.
+        /// The record, when this boot wrote it.
         private static func current(_ record: Any?, _ status: [String: Any]) -> [String: Any]? {
-            guard let record = record as? [String: Any] else { return nil }
-            if let written = record["boot_id"] as? String, let boot = status["boot_id"] as? String, written != boot {
-                return nil
-            }
+            guard let record = record as? [String: Any], let boot = status["boot_id"] as? String,
+                  record["boot_id"] as? String == boot else { return nil }
             return record
         }
     }
@@ -197,8 +194,6 @@ public struct WovenVMProvisionWatch: Sendable {
     public static let startingLimit: TimeInterval = 600
     /// A provisioned guest's Docker Engine must answer within this.
     public static let engineLimit: TimeInterval = 300
-    /// A step from an older guest that reports no limit.
-    public static let unknownStepLimit: TimeInterval = 1800
     /// The guest's own limit fires first and reports the clearer reason.
     public static let grace: TimeInterval = 120
     /// The agent answered before and then stopped answering for this long.
@@ -236,12 +231,11 @@ public struct WovenVMProvisionWatch: Sendable {
             (current, limit, extra) = (Self.engineStep, Self.engineLimit, 0)
         } else if report.phase == "failed" {
             return .failed(report.error ?? "\(report.step ?? "Provisioning") failed.")
-        } else if report.phase == nil {
-            (current, limit, extra) = (Self.startingStep, Self.startingLimit, 0)
-        } else if let stated = report.limit {
+        } else if report.phase != nil, let stated = report.limit {
             (current, limit, extra) = (report.step ?? Self.startingStep, stated, Self.grace)
         } else {
-            (current, limit, extra) = (report.step ?? Self.startingStep, Self.unknownStepLimit, 0)
+            // No step of this boot is running yet.
+            (current, limit, extra) = (Self.startingStep, Self.startingLimit, 0)
         }
         if current != step {
             step = current
@@ -282,13 +276,13 @@ public enum WovenVMGuestDiagnostics {
 public struct WovenVMGuestMemory: Sendable, Equatable {
     public var total: UInt64
     public var available: UInt64
-    /// What the balloon holds now (from the guest's balloon counters). nil from
-    /// an older guest agent: the target in effect stands in for it.
+    /// What the balloon holds now (from the guest's balloon counters). nil when
+    /// its kernel keeps none: the target in effect stands in for it.
     public var balloon: UInt64?
     /// Page cache waiting to be written, which the guest cannot drop yet.
     public var dirty: UInt64
     /// Cumulative time tasks stalled on memory (`/proc/pressure/memory`
-    /// `some total`, microseconds). nil from an older guest agent.
+    /// `some total`, microseconds). nil when its kernel does not account pressure.
     public var stallMicroseconds: UInt64?
     /// Cumulative bytes of evicted page cache read back in
     /// (`workingset_refault_file`): the cache is too small for the work.

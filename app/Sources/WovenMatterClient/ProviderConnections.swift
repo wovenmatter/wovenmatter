@@ -59,9 +59,10 @@ extension ProviderAccountCoordinator {
     }
 }
 
-/// Account secrets and their ordering live together in Keychain. The canonical
-/// slot remains compatible with Usage, including OpenRouter's
-/// existing shared key. Nothing here writes credentials to preferences or disk.
+/// Account secrets and their ordering live together in Keychain. The selected
+/// account's secret is also the provider's own item (the canonical slot), which
+/// Usage reads and writes for OpenRouter. Nothing here writes credentials to
+/// preferences or disk.
 public enum ProviderConnectionAccounts {
     /// This device's sign-ins (the Keychain's `global` prefix). Each device stores
     /// and renews its own; nothing is relayed.
@@ -129,17 +130,8 @@ public enum ProviderConnectionAccounts {
         } else if let current {
             store.entries.insert(Entry(account: Account(id: UUID().uuidString.lowercased(), label: current.accountLabel ?? "Existing connection", createdAt: nil, isSelected: true), credential: current), at: 0)
         }
-        // Keep the canonical account; legacy backups must never become eligible
-        // again after sign-out, a failed refresh, or a remote synchronization.
-        if limit(for: provider) == 1 {
-            let retained = current == nil ? [] : store.entries.filter { $0.account.isSelected }
-            if retained.count != store.entries.count {
-                store.entries = retained
-                try persist(store, provider: provider, scope: scope, keychain: keychain)
-            }
-        }
-        // Save only the account index during migration; never replace the old
-        // canonical key, so existing installations keep their working connection.
+        // A canonical secret with no index yet (a key saved from Usage) gets
+        // its index; the canonical item itself is never rewritten here.
         if encoded == nil && !store.entries.isEmpty { try persist(store, provider: provider, scope: scope, keychain: keychain) }
         return store
     }

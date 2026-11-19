@@ -34,7 +34,7 @@ import WovenMatterShared
     }
     private func fixture(focusedWindow: @escaping () -> NSWindow? = { NSApp.keyWindow }) -> (DictationModel, SpeechFixture) {
         let speech = SpeechFixture()
-        let session = DictationSession(preferences: UserDefaults(suiteName: "native-dictation-test-\(UUID())")!,
+        let session = DictationSession(preferences: UserDefaults(suiteName: TestDefaults.suiteName("native-dictation-test"))!,
             permission: { true }, makeEngine: { speech })
         return (DictationModel(session: session, focusedWindow: focusedWindow), speech)
     }

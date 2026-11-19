@@ -15,8 +15,8 @@ protocol MemberExecutionRoutes: Sendable {
     func sessionOptions(providerID: String, workingDirectory: String?, model: String?) async throws -> SessionSettings
     /// `POST execution/library-file`.
     func libraryFile(conversationID: String?, path: String) async throws -> MemberLibraryFile
-    /// `POST execution/adopt`, with the transcript this Mac already shows.
-    func adopt(_ body: Data) async throws
+    /// `GET execution`: the workspace as its host describes it now.
+    func descriptor() async throws -> ExecutionWorkspace
     /// `POST default-agent/control-sessions` and its `GET`, `DELETE` and `answer`.
     func startDefaultAgentControl(_ request: Data) async throws -> DefaultAgentControlSession
     func defaultAgentControl(id: String) async throws -> DefaultAgentControlSession
@@ -130,8 +130,8 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
             body: JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), timeout: 120)
     }
 
-    func adopt(_ body: Data) async throws {
-        let _: JSONValue = try await member("execution/adopt", method: "POST", body: body, timeout: 120)
+    func descriptor() async throws -> ExecutionWorkspace {
+        try await member("execution")
     }
 
     func startDefaultAgentControl(_ request: Data) async throws -> DefaultAgentControlSession {

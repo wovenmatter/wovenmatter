@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterShared
@@ -24,7 +25,7 @@ struct MacAccessSetupModelTests {
     }
 
     private func makeModel(_ mac: FakeMac) -> MacAccessSetupModel {
-        let defaults = UserDefaults(suiteName: "MacAccessSetupModelTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: TestDefaults.suiteName("mac-access-setup"))!
         let model = MacAccessSetupModel(defaults: defaults, probe: { mac.probe($0) },
                                         automationProbe: { _ in nil }, request: { await mac.request($0) },
                                         pollInterval: .milliseconds(5))

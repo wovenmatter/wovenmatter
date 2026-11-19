@@ -189,9 +189,9 @@ struct BotsHostAPI: Sendable {
     /// (default-agent/src/claude-runtime.mjs). Absent until the user signs in there.
     static func nativeClaude(home: URL = FileManager.default.homeDirectoryForCurrentUser, profile: String? = nil) -> Credential? {
         var root = home.appending(path: ".wovenmatter/default-agent")
-        // Per-account profiles live in claude-accounts/<profile> (claude-runtime.mjs
-        // profileDirectory); "legacy" and no profile use the original directories.
-        if let profile, profile != "legacy" {
+        // A profile lives in claude-accounts/<profile> (claude-runtime.mjs
+        // profileDirectory); no profile is the folder itself.
+        if let profile {
             guard (1...64).contains(profile.count), profile.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else { return nil }
             root = root.appending(path: "claude-accounts").appending(path: profile)
         }

@@ -27,8 +27,7 @@ struct LibraryRunControlTests {
     }
 
 
-    // OpenCode v2 owns its native HTTP session lifecycle; legacy ACP transcripts
-    // are read-only. Its acceptance/disconnect recovery is covered by
+    // OpenCode v2 owns its native HTTP session lifecycle. Its acceptance/disconnect recovery is covered by
     // OpenCodeIntegrationTests rather than this injected ACP driver matrix.
     @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode }, [true, false])
     func acceptedRunSurvivesCallerDisconnectAndControlsAreRunTargeted(runtime: AgentRuntimeKind, steeringAdvertised: Bool) async throws {

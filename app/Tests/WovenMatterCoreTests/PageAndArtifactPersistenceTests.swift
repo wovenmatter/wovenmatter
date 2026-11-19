@@ -10,52 +10,10 @@ struct PageAndArtifactPersistenceTests {
   private func set(_ key: String, _ value: JSONValue, expected: Int? = nil) -> ArtifactStateEdit {
     .init(action: .set, key: key, value: value, expectedVersion: expected)
   }
-  private func legacyBoard() -> NoteDocument {
-    var titled = CanvasCardPlacement(x: 0, y: 0); titled.title = "Heading"
-    var grouped = CanvasCardPlacement(x: 0, y: 200); grouped.sectionID = "s"
-    return NoteDocument(kind: .canvas, blocks: [text("a", "In section"), text("b", "")],
-      canvas: ["a": grouped, "b": titled], canvasSections: [.init(id: "s", title: "Research", x: 0, y: 100)],
-      canvasConnections: [.init(id: "c", from: "a", to: "b", label: "supports")], boardPurpose: "Plan",
-      boardItems: ["b": .init(task: .init(status: .todo))])
-  }
   private func page(_ blocks: [NoteBlock], nodes: [String: PageNode] = [:]) -> NoteDocument {
     NoteDocument(kind: .canvas, blocks: blocks, pageNodes: nodes)
   }
   private func document(_ response: NoteEditingResponse) throws -> NoteDocument { try #require(response.document) }
-
-  // MARK: Migration
-
-  @Test func anOlderBoardMigratesOnlyOnItsFirstWrite() async throws {
-    let fixture = try PersistenceFixture(); defer { fixture.remove() }
-    let db = try await fixture.openDatabase()
-    let id = try await db.createNote(folderID: nil, title: "Old", content: legacyBoard().encoded(), kind: .canvas)
-    let opened = try await db.readNoteForEditing(id: id)
-    #expect(try document(opened).pageNodes == nil)
-
-    // Gating and repeating change nothing, so nobody else's revision goes stale.
-    let gate = try await db.applyNoteEdits(.init(command: .apply, noteID: id, operations: [.page(.init(action: .requirePage))]))
-    #expect(gate.revision == opened.revision)
-    #expect(try await db.readNoteForEditing(id: id).document?.pageNodes == nil)
-    let projected = try document(opened).materializedPage()
-    let noop = try await db.applyNoteEdits(.init(command: .apply, noteID: id, operations: [.page(.init(action: .unlinkSession, id: "b", sessionID: "none"))]))
-    #expect(noop.revision == opened.revision)
-
-    // The token read from the projection is good for the write that migrates.
-    let written = try await db.applyNoteEdits(.init(command: .apply, noteID: id, operations: [
-      .page(.init(action: .update, id: "b", expectedRevision: projected.boardItemRevision(for: "b"), patch: .init(status: .doing)))]))
-    let saved = try document(written)
-    #expect(written.revision != opened.revision)
-    #expect(saved.blocks.map(\.id) == ["b", "page-section:s", "a"])
-    #expect(saved.blocks[0].plainText == "Heading")
-    #expect(saved.pageParentID(for: "a") == "page-section:s")
-    #expect(saved.canvasConnections == legacyBoard().canvasConnections)
-    #expect(saved.canvasSections == legacyBoard().canvasSections)
-    // Migration is attributed to nobody. Only the edit is stamped.
-    #expect(saved.boardItems?["b"]?.updatedBy == BoardActor(kind: .user))
-    #expect(saved.boardItems?["page-section:s"] == nil)
-    #expect(saved.boardItems?["a"] == nil)
-    #expect(try await db.readNoteForEditing(id: id).document == saved)
-  }
 
   // MARK: Nesting
 

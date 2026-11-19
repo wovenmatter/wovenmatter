@@ -26,13 +26,6 @@ extension ApplicationModel {
             }
             return (stored, resolved, result.usesSharedDefaults ?? stored.isEmpty)
         }
-        if runtime == .defaultAgent {
-            let legacy = sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace)
-            if let id = legacy.model {
-                updatePiDefault(id, workspace: workspace)
-                sessionSelectionPreferences.removeDefault(.model, harness: runtime.rawValue, workspace: workspace)
-            }
-        }
         let workspaceID = workspace.flatMap { Self.remoteWorkspaceID(sourceID: $0) }
         return (sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace),
             selectionsApplyingWorkspaceAccess(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace), runtime: runtime, workspaceID: workspaceID),
@@ -53,7 +46,6 @@ extension ApplicationModel {
         if field == .tools, let tools = selections.tools { _ = try WorkspaceSessionTools(identifiers: tools) }
         if runtime == .defaultAgent, field == .model {
             updatePiDefault(selections.model, workspace: workspace)
-            sessionSelectionPreferences.removeDefault(.model, harness: runtime.rawValue, workspace: workspace)
         } else {
             sessionSelectionPreferences.saveDefault(field, from: selections, harness: runtime.rawValue, workspace: workspace)
         }

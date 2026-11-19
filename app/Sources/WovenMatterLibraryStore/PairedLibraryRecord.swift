@@ -120,7 +120,7 @@ enum PairedLibraryTables {
     "session_grants", "session_goals", "goal_runs", "goal_usage",
     "calendar_item_owners", "calendar_items", "calendar_task_executors", "calendar_run_publishers", "calendar_published_runs",
     "execution_workspaces", "execution_journal", "execution_retained_settlements",
-    "execution_conversations", "execution_adoptions", "message_provenance",
+    "execution_conversations", "message_provenance",
     "execution_runs", "execution_native_history", "execution_native_history_parts",
     "saved_artifacts", "artifact_uploads", "artifact_chunks",
     "library_messages", "library_items", "library_locations", "mac_routes", "remote_workspace_configurations",

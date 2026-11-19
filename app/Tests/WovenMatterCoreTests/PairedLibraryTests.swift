@@ -788,7 +788,7 @@ extension PairedLibraryTests {
     #expect(try await a.database.localACPSession(conversationID: session).title == "Renamed on B")
   }
 
-  @Test func aChatAdoptedIntoAnotherWorkspaceAcceptsItsNewExecutorsUpdates() async throws {
+  @Test func aChatThatMovedToALinuxWorkspaceAcceptsItsNewExecutorsUpdates() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Moved to Linux", ownerDeviceID: UUID())
     let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Before adoption"))
@@ -796,9 +796,8 @@ extension PairedLibraryTests {
       ownerDeviceID: a.id, kind: .linux, name: "Linux", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter")!,
       capabilities: [], executionDeviceID: UUID().uuidString.lowercased())
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
-    // The chat is adopted into the Linux workspace on A.
+    // The chat's execution moves to the Linux workspace on A.
     try await a.database.write { connection in
-      try connection.toolsExecuteUnlocked("INSERT INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,'{}')", [session, linux.id])
       try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [session, linux.id])
     }
     try await a.send(to: b)
@@ -847,11 +846,10 @@ extension PairedLibraryTests {
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
     try await a.send(to: b)
     await #expect(throws: WorkspaceConversationActionError.ownedByAnotherMac) { try await b.database.mutateConversation(id: session, mutation: .moveToTrash) }
-    // The chat is adopted into the Linux workspace; B's copy follows it there.
+    // The chat's execution moves to the Linux workspace; B's copy follows it there.
     try await b.database.write { connection in
       try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
       try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [session, linux.id])
-      try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO execution_adoptions(conversation_id,workspace_id,payload) VALUES(?,?,'{}')", [session, linux.id])
       try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
     }
     // Routing resolves to the independent Linux workspace, never the old Mac,
@@ -1257,8 +1255,8 @@ extension PairedLibraryTests {
   }
 
   /// The registry refresh saves remote workspace configurations every few
-  /// seconds. An unchanged one is not rewritten, whatever key order an
-  /// earlier build stored it in, so it never becomes a new shared change.
+  /// seconds. An unchanged one is not rewritten, so it never becomes a new
+  /// shared change.
   @Test func anUnchangedRemoteWorkspaceConfigurationIsNotRewritten() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let remote = RemoteWorkspaceConfiguration(name: "Linux host", workspaceID: "fixture", hostName: "linux.example.ts.net", dataRoot: "/srv/woven")
@@ -1274,23 +1272,11 @@ extension PairedLibraryTests {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     let sorted = String(decoding: try encoder.encode(remote), as: UTF8.self)
     #expect(try await stored(a.database) == sorted)
-    // The same value in another key order, as an earlier build wrote it.
-    let object = try #require(try JSONSerialization.jsonObject(with: Data(sorted.utf8)) as? [String: Any])
-    let reversed = "{" + (try object.keys.sorted(by: >).map { key in
-      "\"\(key)\":" + String(decoding: try JSONSerialization.data(withJSONObject: object[key]!, options: [.fragmentsAllowed]), as: UTF8.self)
-    }).joined(separator: ",") + "}"
-    #expect(reversed != sorted)
-    #expect(try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: Data(reversed.utf8)) == remote)
-    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE remote_workspace_configurations SET configuration=? WHERE id=?", [reversed, id]) }
-    let reordered = try await lastChange(a.database)
-    try await a.database.saveRemoteWorkspaceConfigurations([remote])
-    #expect(try await lastChange(a.database) == reordered)
-    #expect(try await stored(a.database) == reversed)
 
     // A real change is written once, in sorted form, and reaches peers.
     var renamed = remote; renamed.name = "Renamed host"
     try await a.database.saveRemoteWorkspaceConfigurations([renamed])
-    #expect(try await lastChange(a.database) > reordered)
+    #expect(try await lastChange(a.database) > saved)
     #expect(try await stored(a.database) == String(decoding: try encoder.encode(renamed), as: UTF8.self))
     try await a.send(to: b)
     let received = try #require(try await stored(b.database))
@@ -1299,12 +1285,11 @@ extension PairedLibraryTests {
 }
 
 
-/// Libraries older than the owner tables hold rows no owner record names,
-/// and paired ones already hold each other's. Each Mac claims, on every
-/// open, exactly what it has local evidence of having run.
+/// A library can hold rows no owner record names, and paired ones hold each
+/// other's. Each Mac claims, on every open, exactly what it has local
+/// evidence of having run.
 extension PairedLibraryTests {
-  /// Leaves `mac`'s rows as a library from before the owner tables had them:
-  /// no owner record, and no version of one to send.
+  /// Leaves `mac`'s rows unowned: no owner record, and no version of one to send.
   private func forgetOwners(_ mac: Mac) async throws {
     try await mac.database.write { connection in
       try connection.executeUnlocked("""
@@ -1350,7 +1335,7 @@ extension PairedLibraryTests {
     #expect(try await mac.database.agentPlacements() == .init())
 
     let reopened = try await WorkspaceDatabase(url: mac.database.fileURL)
-    // Its chat has a native session here; its schedule predates any peer.
+    // Its chat has a native session here; its schedule was made before any peer.
     #expect(try await reopened.read { try $0.locallyOwnsConversationUnlocked(chat) })
     #expect(try await owner(reopened, "calendar_item_owners", item) == mac.id)
     #expect(try await reopened.dueCalendarRuns().map(\.eventID) == [item])
@@ -1609,44 +1594,6 @@ extension PairedLibraryTests {
     #expect(try await changed("a removed projection", "DELETE FROM execution_conversations WHERE id=?", [chat]))
   }
 
-  /// A library an earlier build opened has the projection's change-counter
-  /// trigger for its workspace alone. Opening it replaces that trigger.
-  @Test func aProjectionTriggerAnEarlierBuildWroteIsReplacedWhenTheLibraryOpens() async throws {
-    let mac = try await Mac(); defer { mac.remove() }
-    let name = "execution_conversations_workspace_revision_update"
-    func stored(_ database: WorkspaceDatabase) async throws -> String? {
-      try await database.read { try $0.historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", values: [name]).first?.objectValue?["sql"]?.stringValue }
-    }
-    let current = try #require(try await stored(mac.database))
-    #expect(current.contains("UPDATE OF workspace_id,deleted"))
-    try await mac.database.write { connection in
-      try connection.executeUnlocked("""
-        DROP TRIGGER \(name);
-        CREATE TRIGGER \(name)
-        AFTER UPDATE OF workspace_id ON execution_conversations WHEN OLD.workspace_id IS NOT NEW.workspace_id
-        BEGIN
-          UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
-        END;
-        """)
-    }
-    let chat = UUID().uuidString.lowercased()
-    func trashing(_ database: WorkspaceDatabase, _ deleted: String) async throws -> Bool {
-      let before = try await database.workspaceRevision()
-      try await database.write { connection in
-        try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
-        try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET deleted=CAST(? AS INTEGER) WHERE id=?", [deleted, chat])
-        try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
-      }
-      return try await database.workspaceRevision() != before
-    }
-    try await mac.database.write { try $0.toolsExecuteUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [chat, UUID().uuidString.lowercased()]) }
-    #expect(try await !trashing(mac.database, "1"))
-    let reopened = try await WorkspaceDatabase(url: mac.database.fileURL)
-    #expect(try await stored(reopened) == current)
-    #expect(try await trashing(reopened, "0"))
-    let again = try await WorkspaceDatabase(url: mac.database.fileURL)
-    #expect(try await stored(again) == current)
-  }
 }
 
 
@@ -1668,11 +1615,10 @@ extension PairedLibraryTests {
       [chat, workspace, String(decoding: try JSONEncoder().encode(conversation), as: UTF8.self)])
   }
 
-  /// Earlier builds guessed a chat's owner from who edited it and routed it
-  /// there. Mac A's own chat, routed to Mac B with no owner record anywhere:
+  /// Mac A's own chat, routed to Mac B with no owner record anywhere:
   /// B has no native session and never claims it, so A must, and A's stale
   /// routing goes with the claim, since no receive follows a local claim.
-  @Test func aMacClaimsItsOwnChatThatAnEarlierBuildRoutedToAnotherMac() async throws {
+  @Test func aMacClaimsItsOwnUnownedChatThatIsRoutedToAnotherMac() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let chat = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Routed away", ownerDeviceID: UUID())
     let workspaceA = try await registerMacWorkspace(a), workspaceB = try await registerMacWorkspace(b)

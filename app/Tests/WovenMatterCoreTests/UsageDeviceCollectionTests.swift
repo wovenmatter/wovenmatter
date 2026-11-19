@@ -402,19 +402,6 @@ struct UsageDeviceCollectionTests {
     #expect(sample.usageDeviceID == "host-1")
   }
 
-  @Test("records without an account label decode, and older releases still find the key")
-  func accountLabelIsOnlyAPlaceholder() throws {
-    let json = #"""
-      {"id":"a","timestamp":1790000000,"provider":"codex","sessionID":"s","model":"m","billingProvider":"p",
-       "billingRoute":"r","harness":"h","application":"a","inputTokens":1,"cachedInputTokens":0,
-       "cacheCreationTokens":0,"outputTokens":0,"reasoningTokens":0,"totalTokens":1,"requestCount":1}
-      """#
-    let decoded = try JSONDecoder().decode(UsageDeviceRecord.self, from: Data(json.utf8))
-    #expect(decoded.sample(deviceID: "x")?.tokens.totalTokens == 1)
-    let wire = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(record("b"))) as? [String: Any])
-    #expect(wire["accountLabel"] as? String == "Unknown")
-  }
-
   @Test("iPhone and iPad records become usage, keeping the newest revision of a message")
   func readsPiDurableRecords() throws {
     func stored(_ id: String, input: Int) throws -> StoredNativeRecord {

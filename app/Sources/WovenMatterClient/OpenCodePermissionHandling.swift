@@ -11,8 +11,8 @@ public enum OpenCodePermissionHandling {
         return suffix.hasPrefix("/form/")
     }
 
-    /// OpenCode's native wildcard effects. Ask and Deny remain recognizable so
-    /// an older session's rule can be replaced, but only Full access is offered.
+    /// OpenCode's native wildcard effects. Ask and Deny are recognized so a
+    /// session's own rule is shown and can be replaced; only Full access is offered.
     static let nativeEffects = ["ask", "allow", "deny"]
     public static let options = AgentRuntimeKind.opencode.orderedPermissionOptions(nativeEffects)
     public static let metadata: [String: SessionOptionMetadata] = [
@@ -27,8 +27,8 @@ public enum OpenCodePermissionHandling {
     }
 
     /// The last wildcard rule defines this projection. Keep arbitrary native
-    /// rules unchanged and unknown rather than claiming an invented mode. An
-    /// older session may still report Ask or Deny here.
+    /// rules unchanged and unknown rather than claiming an invented mode. A
+    /// session set to Ask or Deny in OpenCode itself reports that here.
     public static func nativeMode(session: OpenCodeValue) -> String? {
         guard let rule = session["permissions"].array.last,
               rule["action"].string == "*", rule["resource"].string == "*",

@@ -118,7 +118,7 @@ struct NativeHarnessTests {
     @Test func hostFailureCodesReadPlainly() {
         #expect(RemoteRuntimeFailure.describe("update_timed_out") == "Its update command took too long and was stopped.")
         #expect(RemoteRuntimeFailure.describe("opencode_service_restart_failed").contains("didn't restart"))
-        #expect(RemoteRuntimeFailure.describe("Something an older host said.") == "Something an older host said.")
+        #expect(RemoteRuntimeFailure.describe("Something a host said.") == "Something a host said.")
     }
 }
 

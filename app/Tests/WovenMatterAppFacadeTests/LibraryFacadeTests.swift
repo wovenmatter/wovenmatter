@@ -76,7 +76,7 @@ struct LibraryFacadeTests {
     init() async throws {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appending(path: "library-facade-\(UUID())")
-        suite = "library.facade.\(UUID())"
+        suite = TestDefaults.suiteName("library-facade")
         defaults = UserDefaults(suiteName: suite)!
         let recorder = recorder
         store = try await LibraryStore(supportDirectory: directory, runControls: .init(
@@ -110,8 +110,8 @@ struct LibraryFacadeTests {
         model.remoteWorkspaces.configureFacadeFixture(remote, status: status, harnesses: harnesses, maintenance: maintenance)
         try await model.configureFacadeFixture(directory: directory)
     }
-    /// A chat on the fixture's Linux host as an older version recorded it,
-    /// when it ran over SSH: history this Mac keeps until the host adopts it.
+    /// A chat that ran on the fixture's Linux host and that the host has not
+    /// published to this library (a scheduled run's imported result).
     func createConversation() async throws -> String {
         return try await database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remote.id,
             remoteWorkspaceName: remote.name, title: "Remote", ownerDeviceID: UUID(),

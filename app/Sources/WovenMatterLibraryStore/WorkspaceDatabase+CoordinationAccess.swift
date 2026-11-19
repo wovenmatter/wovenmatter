@@ -11,7 +11,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
       let notifications = sourceID != WovenMCPCaller.outside && notifications
-      let requestID = try persistedToolRequestID(requestID, in: .coordination)
+      let requestID = try canonicalToolRequestID(requestID)
       guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             purpose.utf8.count <= 65_536 else { throw WorkspaceToolError.invalid("A valid request ID and management purpose are required.") }
       if let existing = try coordinationAccessRequestUnlocked(requestID) {
@@ -53,7 +53,7 @@ extension WorkspaceDatabaseConnection {
   /// repeated inside the same transaction as acquiring coordination.
   public func resolveCoordinationAccess(requestID: String, allowed: Bool) throws -> WorkspaceCoordinationAccessRequest {
     try transaction {
-      let requestID = try persistedToolRequestID(requestID, in: .coordination)
+      let requestID = try canonicalToolRequestID(requestID)
       guard let request = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("The access request is unavailable.") }
       guard request.state == "pending" else { return request }
       var state = "rejected"

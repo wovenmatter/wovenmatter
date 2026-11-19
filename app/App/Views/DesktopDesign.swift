@@ -217,16 +217,11 @@ struct RemoteWorkspaceAgentChoice: Equatable, Identifiable {
 enum RemoteFolderCreation {
     /// Nil when the workspace can be asked. Only for a workspace whose owner
     /// creates the folder: another Mac, or a Linux host this Mac did not set
-    /// up. A Mac takes a folder request only when its registry row lists the
-    /// capability (`LibraryWorkspaceAction.createFolderCapability`); the
-    /// client refuses the same way if asked anyway
-    /// (`MemberExecutionClient.createFolder`). A Linux host needs only
-    /// an address: any member administers it by signed request.
+    /// up. Either needs only an address: a Mac takes the request
+    /// (`MemberExecutionClient.createFolder`), and any member administers a
+    /// Linux host by signed request.
     static func problem(for link: RemoteWorkspaceSidebarLink) -> String? {
         guard link.configuration == nil else { return nil }
-        if link.kind == .mac, link.workspace?.capabilities.contains(LibraryWorkspaceAction.createFolderCapability) != true {
-            return "Update Woven Matter on \(link.title) to create folders there."
-        }
         return link.workspace?.endpoint == nil ? "Connect this workspace before creating a folder." : nil
     }
 }

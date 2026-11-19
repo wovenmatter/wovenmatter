@@ -74,9 +74,9 @@ enum PiDurableUsageRecords {
     return result
   }
 
-  /// A reply from the default agent's pre-Pi Durable session files, given the shared
-  /// reply identity and the Pi Durable harness.
-  static func adopting(_ sample: UsageSample) -> UsageSample {
+  /// A reply read from one of the default agent's Pi session files, given the
+  /// shared reply identity and the Pi Durable harness.
+  static func sessionFileReply(_ sample: UsageSample) -> UsageSample {
     let milliseconds = Int64((sample.timestamp.timeIntervalSince1970 * 1_000).rounded())
     let identity = "\(sample.sessionID):\(milliseconds):\(sample.model):\(sample.tokens.totalTokens)"
     return UsageSample(
@@ -98,11 +98,11 @@ enum PiDurableUsageRecords {
     .sorted { $0.timestamp < $1.timestamp }
   }
 
-  /// Entries of the default agent's session files from before its SQLite store:
-  /// `durable/<session>/native/main.jsonl`, one commit of writes per line. A session
-  /// that later moved into SQLite keeps this file as a backup, which the shared
-  /// reply identity keeps from counting twice.
-  static func legacyEntries(in url: URL, check: () throws -> Void) throws -> [Data] {
+  /// Entries of one of the default agent's session logs:
+  /// `durable/<session>/native/main.jsonl`, one set of writes per line. A session
+  /// that is also in SQLite keeps this file as a backup, which the shared reply
+  /// identity keeps from counting twice.
+  static func sessionLogEntries(in url: URL, check: () throws -> Void) throws -> [Data] {
     let data = try Data(contentsOf: url, options: [.mappedIfSafe, .uncached])
     var entries: [Data] = []
     for line in data.split(separator: 0x0A) where line.range(of: Data("\"usage\"".utf8)) != nil {

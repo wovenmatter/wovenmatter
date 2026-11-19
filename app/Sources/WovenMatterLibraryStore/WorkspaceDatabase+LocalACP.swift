@@ -1244,19 +1244,10 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(recoveredAt)
-      // A run of a chat that ran over SSH ran on its Linux host, not here.
-      // Nothing launches or reattaches one any more, so a run left running
-      // or uncertain before the update is settled as interrupted by it.
-      for conversationID in try libraryIDsUnlocked("""
-        SELECT DISTINCT r.conversation_id FROM runs r
-        JOIN harness_sessions s ON s.conversation_id=r.conversation_id AND s.remote_workspace_id IS NOT NULL
-        WHERE r.status IN ('running','uncertain')
-          AND r.conversation_id NOT IN (SELECT conversation_id FROM opencode_sessions)
-          AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
-        """, bindings: []) {
-        try interruptLegacyRemoteRunsUnlocked(conversationID: conversationID)
-      }
-      // Losing this process ends every local CLI it ran.
+      // Losing this process ends every local CLI it ran. A Linux host's run
+      // is its host's to settle, whether or not the host has published the
+      // chat to this library yet.
+      let remote = "(SELECT conversation_id FROM harness_sessions WHERE remote_workspace_id IS NOT NULL)"
       let message = try prepareUnlocked("""
         UPDATE messages
         SET content = CASE
@@ -1268,6 +1259,7 @@ extension WorkspaceDatabaseConnection {
           FROM runs
           WHERE status = 'running'
             AND conversation_id NOT IN (SELECT conversation_id FROM opencode_sessions)
+            AND conversation_id NOT IN \(remote)
             AND \(PairedLibraryOwnership.localConversation("runs.conversation_id"))
         )
         """)
@@ -1282,6 +1274,7 @@ extension WorkspaceDatabaseConnection {
           completed_at = ?, updated_at = ?
         WHERE status = 'running'
           AND conversation_id NOT IN (SELECT conversation_id FROM opencode_sessions)
+          AND conversation_id NOT IN \(remote)
           AND \(PairedLibraryOwnership.localConversation("runs.conversation_id"))
         """)
       defer { sqlite3_finalize(run) }

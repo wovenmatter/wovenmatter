@@ -90,7 +90,7 @@ extension WorkspaceDatabaseConnection {
       return .init(libraryID: library, acceptedEventIDs: batch.entries.map(\.eventID), cursor: 0)
     }
   }
-  /// Only an authenticated origin may claim its exact recorded legacy session,
+  /// Only an authenticated origin may claim its exact recorded session,
   /// after any other live run has settled. Preflight does not relax this fence.
   func acceptRetainedExecutionIdentityUnlocked(_ entry: ExecutionJournalEntry, workspace: ExecutionWorkspace) throws {
     let proof = try validatedRetainedProofUnlocked(entry, workspace: workspace)

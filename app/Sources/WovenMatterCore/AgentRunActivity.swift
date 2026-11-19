@@ -15,7 +15,7 @@ public struct AgentRunFileChange: Codable, Equatable, Identifiable, Sendable {
   public let oldText: String?
   public let newText: String
   public let unifiedDiff: String?
-  /// Materialized by the compact projection; absent in older/canonical records.
+  /// Materialized by the compact projection; absent in canonical records.
   public let additionCount: Int?
   public let deletionCount: Int?
 
@@ -156,7 +156,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   /// `true` when `content` is a stream delta to append to the prior activity
   /// with the same ID; `false` marks an authoritative snapshot.
   public let contentIsDelta: Bool?
-  /// Owning reply for a frozen commentary segment; absent in older records.
+  /// Owning reply for a frozen commentary segment.
   public let assistantMessageID: String?
   public let assistantCheckpoint: AssistantTextCheckpoint?
   /// Canonical native part order when the provider supplies an ordered snapshot.

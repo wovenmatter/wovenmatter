@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import WorkspaceFixtures
 import Testing
 import WovenMatterClient
 import WovenMatterCore
@@ -109,7 +110,7 @@ struct MacManagementTests {
         catch { #expect(error.localizedDescription == "The download checksum did not match.") }
     }
     @Test @MainActor func completingAnOldIntentCannotRemoveANewerOne() throws {
-        let suite = "device-intent-fixture-\(UUID())", old = try MacSetupRequest(action: .update).json()
+        let suite = TestDefaults.suiteName("device-intent-fixture"), old = try MacSetupRequest(action: .update).json()
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let fresh = try MacSetupRequest(action: .update).json()

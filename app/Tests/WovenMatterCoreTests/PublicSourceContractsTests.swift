@@ -1,4 +1,5 @@
 import Foundation
+import WorkspaceFixtures
 import Testing
 import WovenMatterCore
 @testable import WovenMatterLibraryStore
@@ -69,7 +70,7 @@ struct PublicSourceContractsTests {
 
   @Test("usage providers default disabled and persist exact choices")
   func usageProviderPreferences() throws {
-    let suiteName = "wovenmatter-usage-provider-preferences-\(UUID().uuidString)"
+    let suiteName = TestDefaults.suiteName("usage-provider-preferences")
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let preferences = UsageProviderPreferences(defaults: defaults)

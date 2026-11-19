@@ -73,8 +73,8 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
     supportedPermissions.contains(id)
   }
 
-  /// A saved choice the product still offers, or nil for a mode it no longer
-  /// does. Nil lets the product default (Full access) apply instead.
+  /// The choice when the product offers it, else nil, which lets the product
+  /// default (Full access) apply instead.
   public func supportedPermission(_ id: String?) -> String? {
     id.flatMap { supportsPermission($0) ? $0 : nil }
   }

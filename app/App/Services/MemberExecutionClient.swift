@@ -384,8 +384,8 @@ final class MemberExecutionClient {
     /// folder: when the owner answers it as done and no rows arrive, the folder
     /// it made is gone since, and the request goes out once more as a new one.
     func createFolder(name: String, on workspace: ExecutionWorkspace, arrived: @MainActor (String) async -> Bool) async throws -> String {
-        guard workspace.kind == .mac, workspace.capabilities.contains(LibraryWorkspaceAction.createFolderCapability) else {
-            throw LibraryAPIError(code: "update_required", message: "Update Woven Matter on \(workspaceTitle(workspace)) to create folders there.")
+        guard workspace.kind == .mac else {
+            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspaceTitle(workspace)) does not take a folder request.")
         }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = UnansweredFolderRequest.Key(workspaceID: workspace.id, name: name)

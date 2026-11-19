@@ -78,14 +78,14 @@ extension WorkspaceDatabaseConnection {
       // An entry upserts rows; the transcript is built from them on read.
       let previousActiveRunID = try libraryIDsUnlocked("SELECT active_run_id FROM execution_conversations WHERE id=? AND active_run_id IS NOT NULL",
                                                        bindings: [entry.conversationID]).first
-      // Delete exact legacy tool-only rows that structured activities
-      // replace. The immutable native journal stays intact. User input cannot
-      // be hidden by structured-tool migration.
+      // Delete the exact tool-only messages the owner names as replaced by
+      // structured activities. The immutable native journal stays intact.
+      // User input can never be removed this way.
       let removed = Set(incoming.removedMessageIDs ?? [])
       for id in removed.sorted() {
         guard try federationScalarUnlocked("SELECT COUNT(*) FROM messages WHERE id=? AND conversation_id=? AND role='user'",
                                            bindings: [id, entry.conversationID]) == 0 else {
-          throw federationError("invalid_event", "Structured-tool migration cannot hide user messages.")
+          throw federationError("invalid_event", "A transcript record cannot remove user messages.")
         }
         try toolsExecuteUnlocked("DELETE FROM messages WHERE id=? AND conversation_id=?", [id, entry.conversationID])
       }

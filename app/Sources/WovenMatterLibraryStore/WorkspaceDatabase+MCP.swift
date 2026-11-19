@@ -45,14 +45,12 @@ extension WorkspaceDatabaseConnection {
     try toolsExecuteUnlocked("UPDATE session_deliveries SET status='cancelled' WHERE status IN ('queued','sending') AND (source_id IN (" + callers + ") OR target_id IN (" + callers + "))", values + values)
   }
 
-  /// A retained transcript is not a live MCP principal. Moving execution to a
-  /// different owner also retires credentials issued by its previous owner.
+  /// A retained transcript is not a live MCP principal.
   func requireMCPCaller(_ sessionID: String) throws {
     try withLock {
       _ = try availableSessionExecutionRoot(id: sessionID)
-      guard !(try historyRowsUnlocked("SELECT id FROM conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0", values: [sessionID])).isEmpty,
-            (try historyRowsUnlocked("SELECT conversation_id FROM execution_adoptions WHERE conversation_id=?", values: [sessionID])).isEmpty else {
-        throw WorkspaceToolError.invalid("This MCP caller was archived, removed, or moved to another execution owner.")
+      guard !(try historyRowsUnlocked("SELECT id FROM conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0", values: [sessionID])).isEmpty else {
+        throw WorkspaceToolError.invalid("This MCP caller was archived or removed.")
       }
     }
   }

@@ -49,8 +49,8 @@ extension WorkspaceDatabaseConnection {
 
   /// Claims for this Mac the rows that have no owner record, on every
   /// read-write open, from evidence only this Mac can hold. The insert triggers claim
-  /// what a Mac creates; this covers rows older than the owner tables, on a
-  /// library that may already hold other Macs' rows without owner records.
+  /// what a Mac creates; this covers rows no owner record names, in a
+  /// library that may also hold other Macs' rows without owner records.
   /// There is no one-time marker: an owner record that exists or was received
   /// always wins, a row without evidence stays unclaimed (read-only), and a
   /// version's origin is never evidence, because any Mac may edit a row.
@@ -59,9 +59,9 @@ extension WorkspaceDatabaseConnection {
   ///   chat was created (never for a paired placeholder), and emptied in a
   ///   Dev snapshot, so two Macs claim disjoint sets and a snapshot claims
   ///   nothing. A projection onto a Mac's workspace does not veto, as it
-  ///   does not for `executesNativelyUnlocked`: earlier builds guessed
-  ///   owners from an edit's origin and routed a Mac's own chats to another
-  ///   Mac, which has no native session and so never claims them.
+  ///   does not for `executesNativelyUnlocked`: it is derived routing, and
+  ///   an unowned chat may be routed to a Mac that has no native session
+  ///   for it and so never claims it.
   /// - A calendar item one of whose runs this Mac reserved for itself or
   ///   sent, that no executor record assigns to another device.
   ///   `calendar_runs` is local, but it also holds the runs a Linux host

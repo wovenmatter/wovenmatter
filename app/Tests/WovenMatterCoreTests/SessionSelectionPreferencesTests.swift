@@ -1,4 +1,5 @@
 import Foundation
+import WorkspaceFixtures
 import Testing
 import WovenMatterCore
 import WovenMatterLibraryStore
@@ -73,7 +74,7 @@ struct SessionSelectionPreferencesTests {
   private func withPreferences(
     _ body: (SessionSelectionPreferences, UserDefaults) throws -> Void
   ) throws {
-    let suiteName = "SessionSelectionPreferencesTests.\(UUID().uuidString)"
+    let suiteName = TestDefaults.suiteName("session-selection-preferences")
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
     try body(SessionSelectionPreferences(defaults: defaults), defaults)

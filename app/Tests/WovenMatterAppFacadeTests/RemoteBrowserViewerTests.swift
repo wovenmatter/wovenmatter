@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import AppKit
 import SwiftUI
 import Testing
@@ -26,7 +27,7 @@ import WovenMatterClient
 
 
     @Test func lateBackendFrameCannotRestoreRemovedWorkspace() async throws {
-        let suite = "remote-browser-tests-" + UUID().uuidString
+        let suite = TestDefaults.suiteName("remote-browser-tests")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let configuration = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")

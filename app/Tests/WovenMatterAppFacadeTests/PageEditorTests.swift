@@ -103,16 +103,16 @@ import WovenMatterCore
         #expect(saved().boardItems?["task"]?.task?.assignee == "Trey")
     }
 
-    @Test func legacyMultilineContentKeepsOneStableComponentWhileTyping() throws {
-        let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "legacy", text: "First line\nSecond line"))],
-            boardItems: ["legacy": .init(task: .init(outcome: "Existing outcome"))])
+    @Test func multilineContentKeepsOneStableComponentWhileTyping() throws {
+        let original = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "lines", text: "First line\nSecond line"))],
+            boardItems: ["lines": .init(task: .init(outcome: "Existing outcome"))])
         let (coordinator, view, saved) = editor(original)
         view.textStorage!.replaceCharacters(in: NSRange(location: 0, length: 5), with: "Updated")
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view))
         #expect(saved().blocks.count == 1)
-        #expect(saved().blocks[0].id == "legacy")
+        #expect(saved().blocks[0].id == "lines")
         #expect(saved().blocks[0].plainText == "Updated line\nSecond line")
-        #expect(saved().boardItems?["legacy"]?.task?.outcome == "Existing outcome")
+        #expect(saved().boardItems?["lines"]?.task?.outcome == "Existing outcome")
     }
 
     @Test func flowingTextPreservesStyledRunsListsAndTables() throws {

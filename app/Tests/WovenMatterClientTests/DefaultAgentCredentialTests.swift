@@ -87,51 +87,22 @@ struct DefaultAgentCredentialTests {
         #expect(await fixture.count() == 3)
     }
 
-    @Test func accountMigrationSelectionOrderingAndRemovalPreserveCanonicalKey() throws {
+    /// The OpenRouter key Usage saved is the first account.
+    @Test func aKeySavedFromUsageIsTheFirstAccountThroughSelectionOrderingAndRemoval() throws {
         let keychain = DefaultAgentKeychainFixture().access
-        try DefaultAgentSupport.saveKey("legacy", provider: "openrouter", keychain: keychain)
-        let legacy = try #require(ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first)
-        #expect(legacy.createdAt == nil)
-        #expect(legacy.isSelected)
+        try DefaultAgentSupport.saveKey("usage", provider: "openrouter", keychain: keychain)
+        let first = try #require(ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first)
+        #expect(first.createdAt == nil)
+        #expect(first.isSelected)
         let second = try ProviderConnectionAccounts.addKey("second", provider: "openrouter", keychain: keychain)
-        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "usage")
         try ProviderConnectionAccounts.select(second.id, provider: "openrouter", keychain: keychain)
         #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "second")
-        #expect(try ProviderConnectionAccounts.credential(legacy.id, provider: "openrouter", keychain: keychain)?.key == "legacy")
+        #expect(try ProviderConnectionAccounts.credential(first.id, provider: "openrouter", keychain: keychain)?.key == "usage")
         try ProviderConnectionAccounts.move(second.id, offset: -1, provider: "openrouter", keychain: keychain)
         #expect(try ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first?.id == second.id)
         try ProviderConnectionAccounts.remove(second.id, provider: "openrouter", keychain: keychain)
-        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
-    }
-
-    @Test(arguments: ["openai-codex", "claude-subscription", "xai"])
-    func subscriptionsKeepCanonicalAccountAndDiscardLegacyBackups(provider: String) throws {
-        let keychain = DefaultAgentKeychainFixture().access
-        func credential(_ id: String) -> DefaultAgentCredential {
-            var value = DefaultAgentCredential(type: provider == "claude-subscription" ? "native" : "oauth")
-            value.accountId = id; value.access = id; value.expires = 9000000000000
-            return value
-        }
-        let first = credential("first"), selected = credential("selected")
-        try DefaultAgentSupport.saveOAuth(selected, provider: provider, scope: "global", keychain: keychain)
-        let entries: [[String: Any]] = try [("first", first, false), ("selected", selected, true)].map { id, value, chosen in
-            ["account": ["id": id, "label": id, "isSelected": chosen],
-             "credential": try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))]
-        }
-        try DefaultAgentSupport.saveKey(String(decoding: JSONSerialization.data(withJSONObject: ["entries": entries]), as: UTF8.self),
-            provider: "accounts." + provider, keychain: keychain)
-        #expect(try ProviderConnectionAccounts.list(provider: provider, keychain: keychain).map(\.id) == ["selected"])
-        #expect(try DefaultAgentSupport.oauth(provider, keychain: keychain) == selected)
-        let stored = try #require(try DefaultAgentSupport.key("accounts." + provider, keychain: keychain))
-        #expect(!stored.contains("first"))
-        if provider != "claude-subscription" {
-            #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addOAuth(first, provider: provider, keychain: keychain) }
-        } else {
-            #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addNative(profile: "first", provider: provider, keychain: keychain) }
-        }
-        try ProviderConnectionAccounts.remove("selected", provider: provider, keychain: keychain)
-        #expect(try ProviderConnectionAccounts.borrowedAccounts(provider: provider, keychain: keychain).isEmpty)
-        #expect(try DefaultAgentSupport.oauth(provider, keychain: keychain) == nil)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "usage")
     }
 
     @Test func accountsEnforceCapAndBorrowWithoutRefreshTokens() throws {
@@ -284,9 +255,7 @@ extension DefaultAgentCredentialTests {
     @Test func chatSettingsInheritanceDoesNotChooseCredentials() throws {
         let keychain = DefaultAgentKeychainFixture().access
         let device = try ProviderConnectionAccounts.addKey("device-key", provider: "openai", label: "Device", keychain: keychain)
-        // A legacy per-workspace account is never read: sign-ins are the device's own.
-        _ = try ProviderConnectionAccounts.addKey("workspace-key", provider: "openai", scope: "local", label: "Local", keychain: keychain)
-        let fallback = try ProviderConnectionAccounts.addKey("router-key", provider: "openrouter", label: "Router", keychain: keychain)
+        let router = try ProviderConnectionAccounts.addKey("router-key", provider: "openrouter", label: "Router", keychain: keychain)
         var settings = DefaultAgentSettingsScope()
         settings.global.models = ["openai/shared-model"]
         let inherited = try DefaultAgentSupport.snapshot(workspace: "local", settings: settings, keychain: keychain)
@@ -299,7 +268,7 @@ extension DefaultAgentCredentialTests {
         #expect(independent.config.models == ["openai/local-model"])
         #expect(independent.credentials == inherited.credentials)
         #expect(independent.credentialAccounts == inherited.credentialAccounts)
-        #expect(independent.credentialAccounts?["openrouter"]?.first?.id == fallback.id)
+        #expect(independent.credentialAccounts?["openrouter"]?.first?.id == router.id)
     }
 
     @Test func anotherDevicesWorkspaceGetsItsChatSettingsWithoutCredentials() throws {

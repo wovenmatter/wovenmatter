@@ -83,7 +83,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
     }
 
     private func makeModel(_ fixture: HostInspectionFixture) -> RemoteWorkspacesModel {
-        let defaults = UserDefaults(suiteName: "host-setup-test-" + UUID().uuidString)!
+        let defaults = UserDefaults(suiteName: TestDefaults.suiteName("host-setup-test"))!
         return RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
     }
 
@@ -122,7 +122,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
 
         // Through the create flow: the placeholder is found instead of refusing a second host workspace.
         let fixture = HostInspectionFixture(); fixture.setReady(true)
-        let suite = "native-host-bots-placeholder-" + UUID().uuidString
+        let suite = TestDefaults.suiteName("native-host-bots-placeholder")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(try JSONEncoder().encode([placeholder]), forKey: RemoteWorkspacesModel.storageKey)
@@ -137,7 +137,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
 
     @Test func nativeWorkspaceCannotBeConfiguredTwiceForTheSameHostAndUser() async throws {
         let fixture = HostInspectionFixture(); fixture.setReady(true)
-        let suite = "native-host-duplicate-" + UUID().uuidString
+        let suite = TestDefaults.suiteName("native-host-duplicate")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = RemoteWorkspaceConfiguration(name: "Native", workspaceID: "native", hostName: "native.invalid", userName: "trey", accessMode: .fullRoot)
@@ -182,7 +182,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
 
     @Test func startupChecksConnectionWithoutStartingStoppedWorkspace() async throws {
         let fixture = HostInspectionFixture()
-        let suite = "remote-startup-test-" + UUID().uuidString
+        let suite = TestDefaults.suiteName("remote-startup-test")
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
@@ -201,7 +201,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
     /// `bots.state` decides, and an update with the `bots` role turns them on.
     @Test func installingBotsOnAWorkspaceHostAddsTheBotsRoleToItsServer() async throws {
         let root = try BotsHostFixture.deploymentRoot(); defer { try? FileManager.default.removeItem(at: root) }
-        let suite = "native-host-add-bots-" + UUID().uuidString
+        let suite = TestDefaults.suiteName("native-host-add-bots")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = RemoteWorkspaceConfiguration(name: "Studio", workspaceID: "studio", hostName: "studio.invalid", userName: "trey",

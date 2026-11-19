@@ -204,9 +204,9 @@ extension WorkspaceDatabaseConnection {
       var messageStart = end.messages; var activityStart = end.activities; var bytes = 0
       while messageStart > messageOffset {
         let size = try JSONEncoder().encode(messages[messageStart - 1 - messageOffset]).count
-        // Legacy native sessions may already contain an oversized individual
-        // message. Always make progress for one item rather than returning an
-        // unchanged cursor forever; normal incoming events are bounded at 1 MiB.
+        // One stored message can exceed the page budget on its own. Always
+        // make progress for one item rather than returning an unchanged
+        // cursor forever; incoming events are bounded at 1 MiB.
         if bytes + size > 4 * 1_024 * 1_024, messageStart < end.messages { break }
         bytes += size; messageStart -= 1
       }

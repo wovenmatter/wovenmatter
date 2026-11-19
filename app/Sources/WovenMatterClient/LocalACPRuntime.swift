@@ -267,11 +267,6 @@ public struct LocalACPRuntimeResolver: Sendable {
         }
     }
 
-    static var privateToolDirectories: Set<String> {
-        [LocalACPManagedRuntimePaths.nodeToolsBinDirectory.path,
-         LocalACPManagedRuntimePaths.applicationSupportDirectory.appending(path: "ACP Adapters/bin").path]
-    }
-
     static func nativeExecutable(named name: String) -> URL? {
         nativeLocation(named: name).flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
     }
@@ -399,10 +394,7 @@ public struct LocalACPRuntimeResolver: Sendable {
         named name: String,
         searchDirectories: [String]
     ) -> URL? {
-        // Woven Matter's own folder holds only the ACP adapters. A vendor CLI found there is
-        // a private copy left by an older Woven Matter and is never used.
-        let privateFolders = nativeLocation(named: name) == nil ? [] : privateToolDirectories
-        for directory in searchDirectories where !privateFolders.contains(directory) {
+        for directory in searchDirectories {
             let candidate = URL(fileURLWithPath: directory, isDirectory: true).appending(path: name)
             if FileManager.default.isExecutableFile(atPath: candidate.path) {
                 return candidate

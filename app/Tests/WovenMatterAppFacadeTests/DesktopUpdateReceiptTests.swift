@@ -10,7 +10,7 @@ struct DesktopUpdateReceiptTests {
     @Test("installation preparation saves before termination and respects opt-out")
     @MainActor func savesBeforeTermination() async throws {
         let persistence = try PersistenceFixture()
-        let suite = "wovenmatter.receipt-test." + UUID().uuidString
+        let suite = TestDefaults.suiteName("receipt-test")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer {
             defaults.removePersistentDomain(forName: suite)

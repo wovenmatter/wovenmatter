@@ -128,7 +128,6 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
     public var port: Int? = nil
     public var fingerprint: String? = nil
     public var linger: Bool? = nil
-    public var requiredPrivilegedActions: [String]? = nil
     /// The Woven server this SSH account already runs there (native hosts).
     public var installation: Installation? = nil
     /// Whether that server hosts bots (native hosts).
@@ -162,7 +161,6 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
 
 public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
     public let id: String
-    public let name: String
     public let state: String
     public let running: Bool
     public let health: String?
@@ -173,7 +171,6 @@ public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
     public let hostStorageLow: Bool
     public let storageWarning: String?
     public var accessMode: RemoteWorkspaceAccessMode? = nil
-    public var serviceFingerprint: String? = nil
     public var fingerprint: String? = nil
     public var linger: Bool? = nil
     public var dataRoot: String? = nil

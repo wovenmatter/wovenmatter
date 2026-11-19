@@ -13,56 +13,6 @@ enum FederatedExecutionAction: Codable, Sendable {
     /// The chat closed: a streamed workspace ends its `conversation` subscription.
     case close(conversationID: String)
 }
-/// A chat that ran over SSH before and could not move to its Linux host's
-/// server. It stays in the library, readable; sending to it says why.
-struct LegacyRemoteChatError: LocalizedError, Equatable {
-    var workspace: String
-    var reason: String
-    var errorDescription: String? {
-        "This chat ran on \(workspace) over SSH, which Woven Matter no longer uses, and it could not move to \(workspace)'s server: "
-            + reason.trimmingCharacters(in: CharacterSet(charactersIn: ". ")) + ". Its history stays here, read-only. Start a new chat to continue."
-    }
-}
-
-/// A chat that ran over SSH whose move to its Linux host's server did not
-/// finish this time: the host could not be reached, did not answer in time,
-/// or was still busy with the session. The move is idempotent, so it is tried
-/// again when the chat reopens or sends; meanwhile its history shows here.
-struct RemoteChatMoveDeferredError: LocalizedError, Equatable {
-    var workspace: String
-    var reason: String
-    /// The host's session was still working; nothing failed.
-    var busy = false
-    var errorDescription: String? {
-        let retry = "Woven Matter tries again when you reopen this chat or send a message."
-        if busy { return "This chat moves to \(workspace)'s server once its current work there finishes. " + retry }
-        return "This chat is moving to \(workspace)'s server, but \(workspace) could not be reached: "
-            + reason.trimmingCharacters(in: CharacterSet(charactersIn: ". ")) + ". " + retry
-    }
-
-    /// Whether an adoption failure is the host deciding the chat cannot move
-    /// (`LegacyRemoteChatError`, read-only history) or one that may pass by
-    /// itself (`RemoteChatMoveDeferredError`): no connection, a timeout, a
-    /// server error, this Mac not yet in its member list, or a busy session.
-    static func classify(_ error: any Error, workspace: String) -> any Error {
-        if error is LegacyRemoteChatError || error is RemoteChatMoveDeferredError || error is CancellationError { return error }
-        let message = (error as? LibraryAPIError)?.message ?? error.localizedDescription
-        // The host's refusals while the session is still working there.
-        var busy = message.localizedCaseInsensitiveContains("not idle") || message.localizedCaseInsensitiveContains("still running")
-        guard let refusal = error as? LibraryAPIError else {
-            // Network failures, the request timeout and unreadable replies are not the host's decision.
-            return Self(workspace: workspace, reason: message, busy: busy)
-        }
-        if refusal.code == "execution_busy" { busy = true }
-        let passing: Set<String> = ["execution_busy", "unauthorized", "revoked", "workspace_unavailable", "unavailable",
-                                    "internal_error", "execution_unconfirmed", "http_408", "http_429"]
-        if busy || passing.contains(refusal.code) || refusal.code.hasPrefix("http_5") {
-            return Self(workspace: workspace, reason: message, busy: busy)
-        }
-        return LegacyRemoteChatError(workspace: workspace, reason: message)
-    }
-}
-
 struct FederatedExecutionSnapshot: Codable, Sendable {
     var workspace: ExecutionWorkspace
     var transcript: LibraryTranscript?
@@ -244,9 +194,9 @@ extension ApplicationModel {
 
     private func federatedSnapshot(_ id: String, workspace: ExecutionWorkspace, client: MemberExecutionClient,
                                    transcript: LibraryTranscript?, session: SessionSettings?) -> FederatedExecutionSnapshot {
-        // A chat still moving to its host, or whose live view its owner ended,
-        // shows its saved history with why, as a machine that is not connected does.
-        let problem = remoteChatMoveRetries[id] ?? client.endedLiveView(id)
+        // A chat whose live view its owner ended shows its saved history with
+        // why, as a machine that is not connected does.
+        let problem = client.endedLiveView(id)
         return FederatedExecutionSnapshot(workspace: workspace, transcript: transcript,
             capability: client.capabilities[id], interactions: client.pending[workspace.id]?.filter { $0.conversationID == id } ?? [],
             session: session, online: problem == nil && client.onlineWorkspaces.contains(workspace.id),
@@ -270,75 +220,6 @@ extension ApplicationModel {
             transcript: transcript, capability: nil, interactions: [], session: nil, online: false, error: nil)
     }
 
-    /// A chat that ran over SSH before moves to its Linux host's server on
-    /// first open, refresh or send: the host adopts its native session
-    /// (`POST execution/adopt`, signed) with the transcript this Mac shows.
-    /// The database fence precedes the request; every retry sends the same
-    /// immutable adoption, so a lost acknowledgement never creates a run.
-    /// Nothing runs a chat over SSH any more, so one that cannot move stays
-    /// here as read-only history and this throws `LegacyRemoteChatError`. A
-    /// move that may pass by itself (the host offline, busy or slow) throws
-    /// `RemoteChatMoveDeferredError` and is tried again on the next open or send.
-    func adoptRegisteredRemoteConversationIfNeeded(_ conversation: WorkspaceConversationRecord) async throws {
-        guard !conversation.isArchived, !isBackendFrontend, !adoptedExecutionConversations.contains(conversation.id),
-              let workspaceID = conversation.remoteWorkspaceID, let store = libraryStore else { return }
-        let id = workspaceID.uuidString.lowercased()
-        let owner = try await store.database.libraryExecutionOwner(conversationID: conversation.id)
-        // Created on the host's server: there is nothing to move.
-        if owner != nil, try await !store.database.hasExecutionAdoption(conversationID: conversation.id) {
-            adoptedExecutionConversations.insert(conversation.id); return
-        }
-        let name = remoteWorkspaces.configuration(id: workspaceID)?.name ?? "its Linux workspace"
-        guard remoteWorkspaces.configuration(id: workspaceID) != nil else {
-            throw LegacyRemoteChatError(workspace: name, reason: "That workspace is no longer set up on this Mac.")
-        }
-        guard let workspace = try await store.database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) else {
-            throw LegacyRemoteChatError(workspace: name, reason: "It is not in this library's workspaces yet. Reconnect it in Settings → Workspaces.")
-        }
-        if let pending = federatedAdoptionTasks[conversation.id] { try await pending.value; return }
-        let task = Task { @MainActor in
-            do {
-                if owner == nil {
-                    // The SSH session that ran it is gone with the app that started
-                    // it; an unsettled run is interrupted so the chat can move.
-                    try await store.database.interruptLegacyRemoteRuns(conversationID: conversation.id)
-                    try await store.detachLocalACPForExecutionAdoption(conversationID: conversation.id)
-                }
-                let identity = try await store.database.libraryIdentity()
-                let adoption: ExecutionAdoption
-                do {
-                    adoption = try await store.database.prepareExecutionAdoption(conversationID: conversation.id,
-                        workspaceID: id, deviceID: identity.hostDeviceID)
-                } catch let error as LibraryAPIError {
-                    throw RemoteChatMoveDeferredError.classify(error, workspace: name)
-                }
-                self.federatedExecutionOwners[conversation.id] = id
-                do {
-                    let routes = try await self.memberExecutionClient().memberRoutes(for: workspace)
-                    try await routes.adopt(JSONEncoder().encode(adoption))
-                } catch {
-                    throw RemoteChatMoveDeferredError.classify(error, workspace: workspace.name)
-                }
-            } catch let deferred as RemoteChatMoveDeferredError {
-                self.remoteChatMoveRetries[conversation.id] = deferred.localizedDescription
-                self.windowStreamRelayChanged([conversation.id])
-                throw deferred
-            } catch {
-                self.remoteChatMoveRetries.removeValue(forKey: conversation.id)
-                throw error
-            }
-            self.adoptedExecutionConversations.insert(conversation.id)
-            // The host runs it now: its live view, ended while the host did not know it, is asked for again.
-            self.remoteChatMoveRetries.removeValue(forKey: conversation.id)
-            self.federatedExecutionClient?.resumeLiveView(conversation.id)
-            await self.refreshWorkspace()
-            self.windowStreamRelayChanged([conversation.id])
-        }
-        federatedAdoptionTasks[conversation.id] = task
-        defer { federatedAdoptionTasks.removeValue(forKey: conversation.id) }
-        try await task.value
-    }
-
     /// Called before any native runtime selection or preparation. Imported
     /// execution ownership is looked up live as well as cached for presentation.
     func dispatchFederatedMessage(conversationID: String, input: AgentMessageInput, note: WorkspaceNoteRecord?,
@@ -346,15 +227,11 @@ extension ApplicationModel {
         guard let database = libraryStore?.database else { return false }
         if let id = input.historyDeliveryID, try await database.toolDelivery(id: id)?.kind == .goal {
             // A primary-owner reservation can never become a foreign-owner send.
-            // Adoption cancels this reservation; the new owner resumes its own goal.
             try await database.validateClaimedToolDelivery(id: id)
             guard try await database.libraryExecutionOwner(conversationID: conversationID) == nil else {
                 throw WorkspaceToolError.invalid("This goal continuation belongs to the previous execution owner.")
             }
             return false
-        }
-        if let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == conversationID }) {
-            try await adoptRegisteredRemoteConversationIfNeeded(conversation)
         }
         guard try await database.libraryExecutionOwner(conversationID: conversationID) != nil else { return false }
         if try await database.libraryConversationExecutionWorkspace(conversationID: conversationID)?.kind == .ios {

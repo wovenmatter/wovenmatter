@@ -149,9 +149,9 @@ struct WovenVMTests {
         // Ballooned pages and dirty page cache: the first is not demand, the second is.
         #expect(WovenVMBalloonPolicy.demand(memory(used: 700 * mib, balloon: 5 * gib, dirty: 100 * mib),
                                             booted: 8 * gib, target: 3 * gib) == 800 * mib)
-        // An older agent does not report the balloon: the target stands in for it.
-        let old = WovenVMGuestMemory(total: 8 * gib, available: 8 * gib - (700 * mib + 5 * gib))
-        #expect(WovenVMBalloonPolicy.demand(old, booted: 8 * gib, target: 3 * gib) == 700 * mib)
+        // A kernel that keeps no balloon counters: the target stands in for them.
+        let uncounted = WovenVMGuestMemory(total: 8 * gib, available: 8 * gib - (700 * mib + 5 * gib))
+        #expect(WovenVMBalloonPolicy.demand(uncounted, booted: 8 * gib, target: 3 * gib) == 700 * mib)
         // A balloon still inflating toward its target holds less than the target says.
         #expect(WovenVMBalloonPolicy.demand(memory(used: 700 * mib, balloon: 2 * gib), booted: 8 * gib,
                                             target: 3 * gib) == 700 * mib)
@@ -403,11 +403,11 @@ struct WovenVMTests {
     }
 
     private static func step(_ name: String, limit: Int?, phase: String = "running", error: String? = nil,
-                             boot: String? = WovenVMTests.boot) -> [String: Any] {
+                             boot: String = WovenVMTests.boot) -> [String: Any] {
         var record: [String: Any] = ["phase": phase, "step": name]
         if let limit { record["timeout"] = limit }
         if let error { record["error"] = error }
-        if let boot { record["boot_id"] = boot }
+        record["boot_id"] = boot
         return record
     }
 
@@ -441,14 +441,6 @@ struct WovenVMTests {
         #expect(next.observe(.init(provisioningIn: rules), now: start + 1700 + 419) == .waiting(step: "Applying network rules"))
         #expect(next.observe(.init(provisioningIn: rules), now: start + 1700 + 420)
                 == .failed("Applying network rules did not finish within 5 minutes."))
-
-        // An older guest reports no limit.
-        var older = WovenVMProvisionWatch(now: start)
-        let unlimited = Self.status(provision: Self.step("Installing Docker Engine", limit: nil, boot: nil))
-        #expect(older.observe(.init(provisioningIn: unlimited), now: start) == .waiting(step: "Installing Docker Engine"))
-        #expect(older.observe(.init(provisioningIn: unlimited), now: start + 1799) == .waiting(step: "Installing Docker Engine"))
-        #expect(older.observe(.init(provisioningIn: unlimited), now: start + 1800)
-                == .failed("Installing Docker Engine did not finish within 30 minutes."))
     }
 
     @Test func aSilentGuestFailsInsteadOfWaitingForever() {

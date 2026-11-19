@@ -149,9 +149,6 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
   public let timestamp: Double
   public let provider: String
   public let sessionID: String
-  /// Always "Unknown", and never read: releases before account labels were
-  /// removed require the key, and devices run different versions for days.
-  private var accountLabel: String? = "Unknown"
   public let model: String
   public let billingProvider: String
   public let billingRoute: String

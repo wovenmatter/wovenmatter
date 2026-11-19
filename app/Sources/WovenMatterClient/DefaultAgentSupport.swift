@@ -158,20 +158,6 @@ public enum DefaultAgentSupport {
             return true
         }
     }
-    public static func migrateLocalOAuth() throws {
-        let path = FileManager.default.homeDirectoryForCurrentUser.appending(
-            path: ".wovenmatter/default-agent/oauth.json")
-        guard FileManager.default.fileExists(atPath: path.path) else { return }
-        let values = try JSONDecoder().decode([String: DefaultAgentCredential].self, from: Data(contentsOf: path))
-        for id in ["openai-codex", "xai"] {
-            if let c = values[id], !c.borrowed, try oauth(id) == nil {
-                try saveOAuth(c, provider: id, scope: "global", notify: false)
-            }
-        }
-        // Delete only after every Keychain write has succeeded.
-        try FileManager.default.removeItem(at: path)
-    }
-
     public static func key(_ provider: String, scope: String = "global", keychain: KeychainAccess = .init()) throws
         -> String?
     {

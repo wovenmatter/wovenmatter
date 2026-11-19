@@ -16,7 +16,7 @@ extension WorkspaceDatabaseConnection {
   public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) throws -> JSONValue {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      let requestID = try persistedToolRequestID(requestID, in: .creations)
+      let requestID = try canonicalToolRequestID(requestID)
       let encoded = try toolsJSON(arguments)
       guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             purpose.utf8.count <= 65_536,
@@ -54,7 +54,7 @@ extension WorkspaceDatabaseConnection {
       configuration: WorkspaceSessionCreationConfiguration) throws -> WorkspaceSessionCreationConfiguration {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      let requestID = try persistedToolRequestID(requestID, in: .creations)
+      let requestID = try canonicalToolRequestID(requestID)
       guard let row = try historyRowsUnlocked("SELECT configuration_json,status FROM session_creations WHERE id=? AND source_id=?",
         values: [requestID, sourceID]).first?.objectValue else { throw WorkspaceToolError.invalid("Creation reservation not found.") }
       if let json = row["configuration_json"]?.stringValue {
@@ -81,7 +81,7 @@ extension WorkspaceDatabaseConnection {
   public func markToolSessionCreationConfigured(requestID: String, sourceID: String) throws {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      let requestID = try persistedToolRequestID(requestID, in: .creations)
+      let requestID = try canonicalToolRequestID(requestID)
       guard let target = try historyRowsUnlocked("SELECT target_id FROM session_creations WHERE id=? AND source_id=? AND status='planned'",
         values: [requestID, sourceID]).first?.objectValue?["target_id"]?.stringValue else {
         throw WorkspaceToolError.invalid("This creation request is not being prepared.")
@@ -96,7 +96,7 @@ extension WorkspaceDatabaseConnection {
   /// later failure to deliver its first message.
   public func failToolSessionCreation(requestID: String) throws {
     try transaction {
-      let requestID = try persistedToolRequestID(requestID, in: .creations)
+      let requestID = try canonicalToolRequestID(requestID)
       try toolsExecuteUnlocked("UPDATE session_creations SET status='failed' WHERE id=? AND status='planned'", [requestID])
     }
   }
@@ -108,7 +108,7 @@ extension WorkspaceDatabaseConnection {
   public func completeToolSessionCreation(requestID: String, sourceID: String) throws {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      let requestID = try persistedToolRequestID(requestID, in: .creations)
+      let requestID = try canonicalToolRequestID(requestID)
       guard let row = try historyRowsUnlocked("SELECT * FROM session_creations WHERE id=? AND source_id=?", values: [requestID, sourceID]).first?.objectValue,
             let target = row["target_id"]?.stringValue else { throw WorkspaceToolError.invalid("Creation reservation not found.") }
       if row["status"]?.stringValue == "ready" { return }

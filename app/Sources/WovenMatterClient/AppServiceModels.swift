@@ -30,31 +30,8 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
         if let name = metadata?.modelName {
             return modelLabel(id: id, metadata: Self(name: name))
         }
-        // Old Pi Durable sessions predate modelName. Recognize only their exact
-        // provider-qualified IDs and corresponding emitted suffix, never split
-        // arbitrary provider-supplied names on a separator.
-        if let separator = id.firstIndex(of: "/"), let name = metadata?.name {
-            let provider = String(id[..<separator])
-            if let attribution = legacyBuiltInAttributions[provider] {
-                let suffix = " · " + attribution
-                if name.hasSuffix(suffix), name.count > suffix.count {
-                    return String(name.dropLast(suffix.count))
-                }
-            }
-        }
         return modelLabel(id: id, metadata: metadata)
     }
-
-    private static let legacyBuiltInAttributions = [
-        "openai-codex": "OpenAI · ChatGPT subscription",
-        "openai": "OpenAI · API key",
-        "openrouter": "OpenRouter",
-        "opencode-go": "OpenCode Go",
-        "xai": "Grok subscription",
-        "xai-api": "xAI · API key",
-        "claude-subscription": "Claude · Subscription",
-        "anthropic": "Claude · API key",
-    ]
 
     private static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }

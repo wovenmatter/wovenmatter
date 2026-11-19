@@ -83,7 +83,7 @@ struct MemberReachTests {
         #expect(created.success)
         #expect(created.result?.objectValue?["session"]?.objectValue?["workspace"]?.stringValue == workspace.id)
         #expect(linux.commands.map(\.kind) == [.createSession, .workspace, .send])
-        // The title names the session as it is created; the rename is for older destinations.
+        // The title names the session as it is created.
         #expect(linux.commands.first?.title == "Build it")
         #expect(linux.commands.dropFirst().allSatisfy { $0.title == nil })
         #expect(linux.commands.last?.text == "Start here")
@@ -268,7 +268,7 @@ struct MemberReachTests {
         try await directory.add(deviceID: macA.deviceID, kind: .mac, name: "Mac A", publicKey: macA.publicKey, endpoints: [])
         let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
             ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
-            capabilities: ["history.library", LibraryWorkspaceAction.createFolderCapability], executionDeviceID: bDevice)
+            capabilities: ["history.library"], executionDeviceID: bDevice)
         let commands = ReachMacCommands()
         let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
         let transport = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: macA.signer, send: Self.route { request in await api.handle(request) })
@@ -370,10 +370,9 @@ struct MemberReachTests {
         #expect(try await folders() == ["Doomed", "Elsewhere", "One", "Unbound"])
     }
 
-    /// A Mac from before folder creation lists no capability for it, so it is
-    /// asked to update and is sent nothing: it could not decode the action.
-    /// Rows that are not a live machine are no destination either.
-    @Test func aMacWithoutTheFolderCapabilityIsNamedForAnUpdateAndSentNothing() async throws {
+    /// Rows that are not a live machine are no destination for a folder
+    /// request, and are sent nothing.
+    @Test func aRowThatIsNotALiveMachineIsSentNoFolderRequest() async throws {
         let macA = try await FacadeFixture(); defer { macA.remove() }
         func row(_ name: String, kind: ExecutionWorkspace.Kind = .mac, capabilities: [String], retained: Bool? = nil, deleted: Bool = false) async throws -> ExecutionWorkspace {
             let device = UUID().uuidString.lowercased()
@@ -381,8 +380,7 @@ struct MemberReachTests {
                 ownerDeviceID: device, kind: kind, name: name, endpoint: URL(string: "https://mac-mini.fixture.ts.net:8443/wovenmatter")!,
                 capabilities: capabilities, executionDeviceID: device, deleted: deleted, retainedHistory: retained))
         }
-        let current = ["history.library", StreamProtocol.capability, LibraryWorkspaceAction.createFolderCapability]
-        let older = try await row("Mac mini", capabilities: ["history.library", StreamProtocol.capability])
+        let current = ["history.library", StreamProtocol.capability]
         let copied = try await row("Copied Mac", capabilities: current, retained: true)
         let removed = try await row("Removed Mac", capabilities: current, deleted: true)
         let phone = try await row("iPhone", kind: .ios, capabilities: [])
@@ -391,9 +389,6 @@ struct MemberReachTests {
         macA.model.federatedExecutionClient = try MemberExecutionClient(database: macA.database, commandJournalURL: journal,
             makeSignedTransport: { _ in signed.count += 1; return nil })
 
-        #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: older.id) == nil)
-        // Named as the sidebar titles it: by its tailnet machine name, not the name it registered.
-        #expect(macA.model.folderMutationError == "Update Woven Matter on mac-mini to create folders there.")
         for unavailable in [copied.id, removed.id, UUID().uuidString.lowercased()] {
             #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: unavailable) == nil)
             #expect(macA.model.folderMutationError == "This workspace is no longer available for new folders.")

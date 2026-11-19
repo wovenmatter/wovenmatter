@@ -58,7 +58,7 @@ struct SignInDevicePickerTests {
     }
 
     @Test func pageLinksOpenOnTheirDevice() {
-        // Scopes from older links and the Pi Durable page name the device that holds their sign-ins.
+        // Chat-settings scopes and the Pi Durable page name the device that holds their sign-ins.
         #expect(SignInDevicePicker.device(forPage: "global") == SignInDevice.localID)
         #expect(SignInDevicePicker.device(forPage: "local") == SignInDevice.localID)
         #expect(SignInDevicePicker.device(forPage: workspace.uppercased()) == SignInDevice.linuxID(workspace))

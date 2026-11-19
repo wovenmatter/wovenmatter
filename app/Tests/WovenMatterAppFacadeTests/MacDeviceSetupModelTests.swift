@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import AppKit
 import SwiftUI
@@ -70,7 +71,7 @@ struct MacDeviceSetupModelTests {
                 : "woven-mac-inspection\ninstalled\n0.3.2\n906\n0\narm64\n27.2\n\n\n").utf8)
         }), getRelease: { release })
         await devices.discover()
-        let suite = "mac-device-layout-\(UUID())"
+        let suite = TestDefaults.suiteName("mac-device-layout")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let application = ApplicationModel(applicationDefaults: defaults, startsAutomatically: false, ownsExecutionOverride: false)

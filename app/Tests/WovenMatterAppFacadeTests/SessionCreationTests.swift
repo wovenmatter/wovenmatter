@@ -109,13 +109,13 @@ struct SessionCreationTests {
         if let linux { #expect(await linux.commands.compactMap(\.title) == ["Release notes", "New Codex chat", "From a member"]) }
     }
 
-    @Test func legacyUnappliedDefaultsAreNotRetriedWhenOpeningOrSending() async throws {
+    @Test func unappliedDefaultsAreNotRetriedWhenOpeningOrSending() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
         let id = try await create(f, runtime: .codex, remote: false)
         let chat = try await record(f, id)
         let count = await f.recorder.configurations.count
         f.model.sessionSelectionPreferences.stageCalendarSelections(id: id, harness: "codex", workspace: "local:" + f.directory.path,
-            selections: .init(model: "old-unapplied-default"))
+            selections: .init(model: "unapplied-default"))
         await f.recorder.rejectConfiguration(true)
         await f.model.refreshLocalACPSession(conversation: chat)
         #expect(await f.model.sendAgentMessage(conversation: chat, input: .init(text: "No initial settings replay")))

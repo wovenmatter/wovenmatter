@@ -502,7 +502,7 @@ final class NoteWriteBehind: @unchecked Sendable {
         }
     }
     private func chainKey(_ entry: NoteJournalEntry) -> String {
-        "\(entry.writerSessionID ?? "legacy")/\(entry.noteID)"
+        "\(entry.writerSessionID ?? "")/\(entry.noteID)"
     }
 
     private func rebasedOverAcknowledgedPredecessor(_ entry: NoteJournalEntry) -> NoteJournalEntry {

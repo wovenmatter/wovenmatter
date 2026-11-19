@@ -108,7 +108,8 @@ struct ClosedLidProtectionTests {
     }
 
     private final class DefaultsFixture {
-        let name = "wovenmatter.closed-lid.tests." + UUID().uuidString
+        // Named by a path, so its file is in the temporary directory, not ~/Library/Preferences.
+        let name = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-closed-lid-tests-" + UUID().uuidString).path
         let defaults: UserDefaults
         init() { defaults = UserDefaults(suiteName: name)! }
         deinit { defaults.removePersistentDomain(forName: name) }

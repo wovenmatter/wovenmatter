@@ -7,7 +7,7 @@ import CSQLite
 import WovenMatterClient
 import WovenMatterCore
 
-// Canonical OpenCode projections; legacy ACP rows are never migrated.
+// Canonical OpenCode projections.
 extension WorkspaceDatabaseConnection {
   public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
     try knownSessionIDs(sql: "SELECT session_id FROM opencode_sessions WHERE connection_id = ?", scope: connectionID)
@@ -199,8 +199,7 @@ extension WorkspaceDatabaseConnection {
           }
           try stepDone(obsolete)
           // An identical surviving part need not fire the source UPDATE trigger.
-          // Restore from current source rows, including tombstones left by an older
-          // build that already removed the message's hidden marker.
+          // Restore tombstoned summaries from their current source rows.
           let revival = try prepareUnlocked("""
             UPDATE activity_revision SET revision=revision+1 WHERE singleton=1
               AND EXISTS(SELECT 1 FROM activity_summaries i
@@ -310,7 +309,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
   /// Native snapshots remain verbatim in storage; only the presentation copy
-  /// retains the original input, including for older messages with app prefixes.
+  /// retains the original input, including for messages that carry app prefixes.
   public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws -> OpenCodeSessionSnapshot {
     try withLock {
       var result = snapshot

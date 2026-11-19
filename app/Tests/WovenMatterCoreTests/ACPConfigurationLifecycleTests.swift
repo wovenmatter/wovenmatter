@@ -131,40 +131,6 @@ struct ACPConfigurationLifecycleTests {
     #expect(driver.shutdowns == 1)
     await coordinator.shutdown()
   }
-
-  @Test func executionAdoptionDetachesOnlyItsIdleClientAndRejectsLegacyReopen() async throws {
-    let persistence = try PersistenceFixture(); defer { persistence.remove() }
-    let database = try await persistence.openDatabase()
-    let firstID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Transfer", ownerDeviceID: UUID())
-    let secondID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
-    let first = SelectorDriverState(expectedExistingSessionID: nil)
-    let second = SelectorDriverState(expectedExistingSessionID: nil)
-    let drivers = SelectorDriverSequence([first, second])
-    let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in drivers.next() })
-    let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
-      executableURL: URL(filePath: "/nonexistent-adoption-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
-    _ = try await coordinator.configuration(conversationID: firstID, launch: launch, workspace: workspace)
-    _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
-    let original = try await database.localACPSession(conversationID: firstID)
-    try await coordinator.detachForExecutionAdoption(conversationID: firstID)
-    #expect(first.shutdowns == 1 && second.shutdowns == 0)
-    await #expect(throws: (any Error).self) {
-      try await coordinator.configuration(conversationID: firstID, launch: launch, workspace: workspace)
-    }
-    _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
-    #expect(drivers.requests == 2)
-    await first.emit(.init(model: "selected-model", modelOptions: ["default-model", "selected-model"]))
-    #expect(try await database.localACPSession(conversationID: firstID).model == original.model)
-    let running = try await database.beginLocalACPRun(conversationID: secondID, input: .init(text: "Other process is busy"))
-    await #expect(throws: (any Error).self) { try await coordinator.detachForExecutionAdoption(conversationID: secondID) }
-    #expect(second.shutdowns == 0)
-    try await database.completeLocalACPRun(runID: running.runID)
-    _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
-    await coordinator.shutdown()
-    #expect(first.shutdowns == 1 && second.shutdowns == 1)
-  }
-
 }
 
 private actor DraftPromptInterruption {

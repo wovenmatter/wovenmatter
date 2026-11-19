@@ -164,15 +164,13 @@ private enum HostFixtureError: Error { case timeout }
 
     init() async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "library-host-\(UUID())")
-        suite = "library.host.\(UUID())"
+        suite = TestDefaults.suiteName("library-host")
         defaults = UserDefaults(suiteName: suite)!
         let store = try await LibraryStore(supportDirectory: directory)
         model = ApplicationModel(applicationDefaults: defaults, libraryStore: store, startsAutomatically: false)
     }
     /// Local folders are bound to `device:<device id>`, generated apart
-    /// from the registry id and host device id. A record an earlier build
-    /// published without the folder owner gains it on the next refresh, under
-    /// the same workspace id, so existing folders are never rewritten.
+    /// from the registry id and host device id, and published with the row.
     @Test func aMacPublishesTheFolderOwnerItsFoldersUse() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
@@ -186,22 +184,15 @@ private enum HostFixtureError: Error { case timeout }
         #expect(published.folderOwnerID == folderOwner)
         #expect(ExecutionWorkspace.displayOwner(of: folderOwner, in: [published]) == published.id)
 
-        var legacy = published; legacy.folderOwnerID = nil
-        let downgraded = try await database.registerExecutionWorkspace(.init(workspace: legacy, expectedRevision: published.revision), deviceID: identity.hostDeviceID)
-        #expect(ExecutionWorkspace.displayOwner(of: folderOwner, in: [downgraded]) == nil)
-        try await fixture.host.refreshExecutionRegistry()
-        let upgraded = try #require(try await database.libraryExecutionWorkspaces().first { $0.id == published.id })
-        #expect(upgraded.folderOwnerID == folderOwner && upgraded.revision == downgraded.revision + 1)
-
-        var forged = upgraded; forged.folderOwnerID = "remote:" + UUID().uuidString
+        var forged = published; forged.folderOwnerID = "remote:" + UUID().uuidString
         await #expect(throws: (any Error).self) {
-            try await database.registerExecutionWorkspace(.init(workspace: forged, expectedRevision: upgraded.revision), deviceID: identity.hostDeviceID)
+            try await database.registerExecutionWorkspace(.init(workspace: forged, expectedRevision: published.revision), deviceID: identity.hostDeviceID)
         }
     }
 
     func makeHost() -> LibraryHostController {
         // Fixtures never reach the user's Keychain: paired grants, pending
-        // claims, legacy and direct execution credentials stay in memory.
+        // claims and execution credentials stay in memory.
         LibraryHostController(model: model, defaults: defaults, supportDirectory: directory, retryInterval: .milliseconds(25),
             peerStorage: storage, makeExposure: { [unowned self] in makeExposure() })
     }
@@ -457,7 +448,7 @@ extension LibraryHostLifecycleTests {
         let miniID = try await mini.host.peerRoute().deviceID
         let registry = try await airDB.libraryExecutionWorkspaces().filter { $0.kind == .mac }
         let row = try #require(registry.first { $0.ownerDeviceID == miniID }), own = try #require(registry.first { $0.ownerDeviceID != miniID })
-        #expect(row.capabilities.contains(LibraryWorkspaceAction.createFolderCapability) && row.folderOwnerID == miniOwner)
+        #expect(row.folderOwnerID == miniOwner)
 
         let id = try #require(await air.model.createFolder(name: " Field notes ", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
         // The directory is the Mini's, in its managed root, with the Mini's own rows under the requested ID.

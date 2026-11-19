@@ -1198,8 +1198,8 @@ final class DefaultAgentSettingsModel {
                 if let login {
                     body["provider"] = login
                     if login == "claude-subscription", workspace == nil {
-                        // Reuse the single native connection, including its legacy
-                        // profile after migration. New connections use one stable slot.
+                        // Reuse the single native connection's profile. New
+                        // connections use one stable slot.
                         body["profile"] = profile ?? prepared.credentials[login]?.accountId ?? "default"
                     }
                 }
@@ -1395,16 +1395,13 @@ final class DefaultAgentSettingsModel {
         let provider = result["provider"] as? String
         let label = result["account"] as? String
         let reconnectID = context.reconnectingAccount
-        let legacy = status?.providers.first { $0.id == "claude-subscription" && $0.connected }
         do {
             let credential: DefaultAgentCredential?
             if let raw = result["credential"] {
                 credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: JSONSerialization.data(withJSONObject: raw))
             } else { credential = nil }
-            let legacyLabel = legacy?.account
-            let needsLegacyCheck = legacy != nil && profile == nil && !context.onLinux
             // A Linux workspace saved its own result: nothing is stored on this Mac.
-            let changesCredentials = !context.onLinux && (removeID != nil || profile != nil || credential != nil || needsLegacyCheck)
+            let changesCredentials = !context.onLinux && (removeID != nil || profile != nil || credential != nil)
             if changesCredentials {
                 try await ProviderConnectionStore.shared.perform {
                     if let removeID, let removeProvider {
@@ -1416,9 +1413,6 @@ final class DefaultAgentSettingsModel {
                     if let credential, let provider {
                         if let reconnectID { try ProviderConnectionAccounts.replace(credential, accountID: reconnectID, provider: provider, scope: accountScope) }
                         else { _ = try ProviderConnectionAccounts.addOAuth(credential, provider: provider, scope: accountScope) }
-                    }
-                    if needsLegacyCheck, try ProviderConnectionAccounts.list(provider: "claude-subscription", scope: accountScope).isEmpty {
-                        _ = try ProviderConnectionAccounts.addNative(profile: "legacy", provider: "claude-subscription", scope: accountScope, label: legacyLabel)
                     }
                 }
             }

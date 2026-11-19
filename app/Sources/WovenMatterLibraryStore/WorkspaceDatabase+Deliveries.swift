@@ -20,7 +20,7 @@ extension WorkspaceDatabaseConnection {
   func reserveToolDeliveryUnlocked(sourceID: String, targetID: String, text: String, requestID: String,
                                    kind: WorkspaceSessionDeliveryKind, purpose: String? = nil,
                                    eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
-      let requestID = try persistedToolRequestID(requestID, in: .deliveries)
+      let requestID = try canonicalToolRequestID(requestID)
       guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             text.utf8.count <= 65_536,
             purpose.map({ $0.utf8.count <= 65_536 }) ?? true,
@@ -257,7 +257,7 @@ extension WorkspaceDatabaseConnection {
 
   func canonicalDeliveryID(_ id: String) throws -> String {
     guard UUID(uuidString: id) != nil else { return id }
-    return try persistedToolRequestID(id, in: .deliveries)
+    return try canonicalToolRequestID(id)
   }
 
   private func deliveryFromRow(_ value: JSONValue) -> WorkspaceSessionDelivery {

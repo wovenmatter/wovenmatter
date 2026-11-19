@@ -184,140 +184,24 @@ struct LinuxMemberPathTests {
         }
     }
 
-    @Test func aChatThatRanOverSSHMovesToTheHostWithItsTranscript() async throws {
+    /// The registry lists what the host serves now: a capability it stopped
+    /// serving leaves its row, and one it gained joins it.
+    @Test func aLinuxRowListsTheCapabilitiesItsHostAnswers() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (workspace, fake) = try await enrolled(fixture)
-        let id = try await fixture.createConversation()
-        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Earlier question"))
-        try await fixture.database.write { connection in try connection.transaction {
-            try connection.toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id='native-session' WHERE conversation_id=?", [id])
-            try connection.toolsExecuteUnlocked("UPDATE messages SET content='Earlier answer' WHERE id=?", [run.assistantMessageID])
-        } }
-        let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
-        // Its run was left running when the app that ran it over SSH quit.
-        #expect(try await fixture.database.activeRunID(conversationID: id) == run.runID)
-
-        try await fixture.model.adoptRegisteredRemoteConversationIfNeeded(record)
-        let body = try #require(await fake.adoptions.first)
-        let adoption = try JSONDecoder().decode(ExecutionAdoption.self, from: body)
-        #expect(adoption.nativeSessionID == "native-session" && adoption.workspaceID == workspace.id && adoption.conversation.id == id)
-        #expect(adoption.transcript?.messages.map(\.content) == ["Earlier question", "Earlier answer"])
-        #expect(adoption.knownRunIDs == [run.runID])
-        #expect(try await fixture.database.libraryExecutionOwner(conversationID: id) == workspace.id)
-        #expect(try await fixture.database.activeRunID(conversationID: id) == nil)
-        // The saved adoption, retried after a lost reply, is the same request without the copied history.
-        let saved = try await fixture.database.read { try $0.federationValuesUnlocked("SELECT payload FROM execution_adoptions WHERE conversation_id=?", bindings: [id], as: ExecutionAdoption.self) }
-        #expect(saved.first?.transcript == nil)
-        // The chat's history stays in the library.
-        #expect(try await fixture.database.workspaceOverview().conversations.contains { $0.id == id })
-        #expect(await fixture.recorder.deliveries.isEmpty)
-    }
-
-    @Test func aChatThatCannotMoveStaysAsReadOnlyHistory() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let (_, fake) = try await enrolled(fixture)
-        // It never started a session on the host, so there is nothing to adopt.
-        let id = try await fixture.createConversation()
-        let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
-        await #expect(throws: LegacyRemoteChatError.self) { try await fixture.model.adoptRegisteredRemoteConversationIfNeeded(record) }
-        do {
-            _ = try await fixture.model.dispatchAgentMessage(conversation: record, input: .init(text: "Continue"))
-            Issue.record("A chat that could not move was sent to")
-        } catch let error as LegacyRemoteChatError {
-            #expect(error.localizedDescription.contains("read-only"))
-            #expect(error.localizedDescription.contains(fixture.remote.name))
+        func listed() async throws -> [String] {
+            try #require(try await fixture.database.libraryExecutionWorkspaces().first { $0.id == workspace.id }).capabilities
         }
-        #expect(await fake.adoptions.isEmpty)
-        #expect(await fake.commands.isEmpty)
-        #expect(await fixture.recorder.deliveries.isEmpty)
-        #expect(try await fixture.database.libraryExecutionOwner(conversationID: id) == nil)
-        #expect(try await fixture.database.workspaceOverview().conversations.contains { $0.id == id })
-
-        // A host that refuses the adoption leaves the chat readable, with the reason.
-        let adoptable = try await fixture.createConversation()
-        try await fixture.database.write { connection in try connection.transaction {
-            try connection.toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id='gone' WHERE conversation_id=?", [adoptable])
-        } }
-        await fake.refuseAdoptions()
-        let second = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == adoptable })
-        await #expect(throws: LegacyRemoteChatError.self) { try await fixture.model.adoptRegisteredRemoteConversationIfNeeded(second) }
-        await fixture.model.refreshLocalACPSession(conversation: second)
-        // The conversation view shows it as read-only history with the reason, without a composer.
-        #expect(fixture.model.legacyRemoteChatReasons[adoptable]?.contains("could not move") == true)
-        #expect(fixture.model.ensureConversationState(id: adoptable).error == nil)
-        await fixture.model.refreshLocalACPSession(conversation: record)
-        #expect(fixture.model.legacyRemoteChatReasons[id]?.contains("read-only") == true)
-        #expect(try await fixture.database.workspaceOverview().conversations.contains { $0.id == adoptable })
-    }
-
-    /// The host deciding a chat cannot move is read-only history; anything
-    /// that may pass by itself is tried again.
-    @Test func onlyTheHostsRefusalMakesAMoveReadOnly() {
-        func deferred(_ error: any Error) -> RemoteChatMoveDeferredError? {
-            RemoteChatMoveDeferredError.classify(error, workspace: "Build server") as? RemoteChatMoveDeferredError
-        }
-        func permanent(_ error: any Error) -> Bool {
-            RemoteChatMoveDeferredError.classify(error, workspace: "Build server") is LegacyRemoteChatError
-        }
-        // Not reachable, too slow, a server error, not yet a member there: tried again.
-        for error: any Error in [URLError(.cannotConnectToHost), URLError(.timedOut), MobileConnectionError.invalidResponse,
-                                  LibraryAPIError(code: "http_503", message: "Service unavailable"),
-                                  LibraryAPIError(code: "internal_error", message: "internal_error"),
-                                  LibraryAPIError(code: "unauthorized", message: "Build server does not recognize this Mac yet."),
-                                  LibraryAPIError(code: "workspace_unavailable", message: "Build server is not connected.")] {
-            let value = deferred(error)
-            #expect(value != nil && value?.busy == false, "\(error)")
-        }
-        // The host's session was still working.
-        for error in [LibraryAPIError(code: "http_409", message: "This session is not idle; client ownership was not changed"),
-                      LibraryAPIError(code: "execution_busy", message: "Wait for the current run to settle.")] {
-            #expect(deferred(error)?.busy == true, "\(error)")
-        }
-        // The host or the library refused it: read-only history.
-        for error in [LibraryAPIError(code: "http_409", message: "This native session was interrupted. It cannot move until it is reopened where it last ran."),
-                      LibraryAPIError(code: "adoption_unavailable", message: "This conversation has no known native session."),
-                      LibraryAPIError(code: "wrong_owner", message: "This conversation was transferred to another execution workspace.")] {
-            #expect(permanent(error), "\(error)")
-        }
-        let offline = RemoteChatMoveDeferredError(workspace: "Build server", reason: "The request timed out.")
-        #expect(offline.localizedDescription == "This chat is moving to Build server's server, but Build server could not be reached: "
-            + "The request timed out. Woven Matter tries again when you reopen this chat or send a message.")
-        let busy = RemoteChatMoveDeferredError(workspace: "Build server", reason: "not idle", busy: true)
-        #expect(busy.localizedDescription.hasPrefix("This chat moves to Build server's server once its current work there finishes."))
-        #expect(!offline.localizedDescription.contains("read-only") && !busy.localizedDescription.contains("read-only"))
-    }
-
-    @Test func aMoveThatCouldNotReachTheHostIsNotReadOnlyAndIsTriedAgain() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let (workspace, fake) = try await enrolled(fixture)
-        let id = try await fixture.createConversation()
-        _ = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Earlier question"))
-        try await fixture.database.write { connection in try connection.transaction {
-            try connection.toolsExecuteUnlocked("UPDATE harness_sessions SET native_session_id='native-session' WHERE conversation_id=?", [id])
-        } }
-        let record = try #require(try await fixture.database.workspaceOverview().conversations.first { $0.id == id })
-
-        // The host is offline when the chat opens: it keeps its composer and says it tries again.
-        await fake.failAdoptions(URLError(.timedOut))
-        await #expect(throws: RemoteChatMoveDeferredError.self) { try await fixture.model.adoptRegisteredRemoteConversationIfNeeded(record) }
-        await fixture.model.refreshLocalACPSession(conversation: record)
-        #expect(fixture.model.legacyRemoteChatReasons[id] == nil, "a host that could not be reached does not make the chat read-only")
-        let shown = try #require(fixture.model.federatedExecutionSnapshots[id])
-        #expect(!shown.online && shown.error?.contains("tries again") == true)
-        #expect(await fake.adoptions.isEmpty)
-
-        // The host is busy with the session: the same.
-        await fake.failAdoptions(LibraryAPIError(code: "http_409", message: "This session is not idle; client ownership was not changed"))
-        await fixture.model.refreshLocalACPSession(conversation: record)
-        #expect(fixture.model.legacyRemoteChatReasons[id] == nil)
-        #expect(fixture.model.remoteChatMoveRetries[id]?.contains("once its current work there finishes") == true)
-
-        // Reopened once the host answers: the same adoption moves it.
-        await fake.failAdoptions(nil)
-        await fixture.model.refreshLocalACPSession(conversation: record)
-        #expect(await fake.adoptions.count == 1)
-        #expect(fixture.model.remoteChatMoveRetries[id] == nil && fixture.model.legacyRemoteChatReasons[id] == nil)
-        #expect(try await fixture.database.libraryExecutionOwner(conversationID: id) == workspace.id)
+        await fake.serve(capabilities: ["idempotentCommands", "execution", "historyReplay"])
+        try await fixture.model.libraryHost.recordLinuxCapabilities(workspaceID: workspace.id)
+        #expect(try await listed() == ["execution", "historyReplay", "idempotentCommands"])
+        let revision = try #require(try await fixture.database.libraryExecutionWorkspaces().first { $0.id == workspace.id }).revision
+        // The same answer writes nothing.
+        try await fixture.model.libraryHost.recordLinuxCapabilities(workspaceID: workspace.id)
+        #expect(try await fixture.database.libraryExecutionWorkspaces().first { $0.id == workspace.id }?.revision == revision)
+        await fake.serve(capabilities: ["execution"])
+        try await fixture.model.libraryHost.recordLinuxCapabilities(workspaceID: workspace.id)
+        #expect(try await listed() == ["execution"])
     }
 }
 
@@ -353,20 +237,17 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     private(set) var uploads: [Upload] = []
     private(set) var optionRequests: [OptionRequest] = []
     private(set) var fileRequests: [FileRequest] = []
-    private(set) var adoptions: [Data] = []
     private var receipts: [String: LibraryCommandReceipt] = [:]
     private var directoriesRefused = false
-    private var file = Data(), knowsConversations = true, damaged = false, adoptionsRefused = false
-    /// Adoptions fail with this until cleared, as an unreachable or busy host does.
-    private var adoptionFailure: (any Error)?
+    private var file = Data(), knowsConversations = true, damaged = false
+    private var capabilities: [String] = []
 
     init(workspace: ExecutionWorkspace) { self.workspace = workspace }
     func refuseDirectories() { directoriesRefused = true }
     func serve(file: Data) { self.file = file }
     func forgetConversations() { knowsConversations = false }
     func damageFiles() { damaged = true }
-    func refuseAdoptions() { adoptionsRefused = true }
-    func failAdoptions(_ error: (any Error)?) { adoptionFailure = error }
+    func serve(capabilities: [String]) { self.capabilities = capabilities }
 
     func identity() -> ExecutionWorkspace { workspace }
     func providers() -> [HarnessCapabilities] {
@@ -414,11 +295,7 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
         return .init(name: "report.txt", mimeType: "text/plain", byteCount: Int64(file.count),
             sha256: damaged ? String(repeating: "0", count: 64) : digest, data: file.base64EncodedString())
     }
-    func adopt(_ body: Data) throws {
-        if adoptionsRefused { throw LibraryAPIError(code: "http_409", message: "The native session could not be reopened.") }
-        if let adoptionFailure { throw adoptionFailure }
-        adoptions.append(body)
-    }
+    func descriptor() -> ExecutionWorkspace { var value = workspace; value.capabilities = capabilities; return value }
     func startDefaultAgentControl(_ request: Data) throws -> DefaultAgentControlSession { throw LibraryAPIError(code: "unavailable", message: "") }
     func defaultAgentControl(id: String) throws -> DefaultAgentControlSession { throw LibraryAPIError(code: "unavailable", message: "") }
     func answerDefaultAgentControl(id: String, answerTo: String, answer: String) throws -> DefaultAgentControlSession { throw LibraryAPIError(code: "unavailable", message: "") }

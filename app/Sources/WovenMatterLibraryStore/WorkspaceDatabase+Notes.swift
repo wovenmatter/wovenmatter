@@ -532,16 +532,12 @@ extension WorkspaceDatabaseConnection {
                              requestID: String? = nil) throws -> NoteEditingResponse {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      if RemoteNoteEditEnvelope.requiresRevision(request.operations), request.expectedRevision == nil {
+        throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
+      }
       return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
         operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
-          // Upgraded clients must still replay a completed legacy receipt whose
-          // original request predates mandatory revisions. Only new writes need
-          // the revision; current tool authority is checked before either path.
-          if RemoteNoteEditEnvelope.requiresRevision(request.operations),
-             request.expectedRevision == nil {
-            throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
-          }
-          return try applyNoteEditsUnlocked(request, actor: boardActorUnlocked(callerConversationID: callerConversationID))
+          try applyNoteEditsUnlocked(request, actor: boardActorUnlocked(callerConversationID: callerConversationID))
         }.result
     }
   }

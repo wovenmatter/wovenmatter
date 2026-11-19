@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import AppKit
 import SwiftUI
 import Testing
@@ -10,7 +11,7 @@ import WovenMatterCore
 struct ConversationOuterScrollTests {
     @Test func firstExchangeAndConversationSwitchKeepContentInTheViewport() async throws {
         _ = NSApplication.shared
-        let suite = "outer-scroll-fixture.\(UUID())"
+        let suite = TestDefaults.suiteName("outer-scroll-fixture")
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let model = ApplicationModel(applicationDefaults: defaults, startsAutomatically: false, ownsExecutionOverride: false)

@@ -431,10 +431,7 @@ public actor LocalUsageService {
     now: Date
   ) async -> UsageAnalyticsSnapshot {
     let aliases = (try? await store.deviceAliases()) ?? [:]
-    let storedSamples = UsageSample.resolvingDeviceAliases((try? await store.samples(in: interval)) ?? [], aliases: aliases).filter {
-      // Legacy account-wide API imports are not activity on this device.
-      !$0.sourceID.hasPrefix("openrouter:activity:")
-    }
+    let storedSamples = UsageSample.resolvingDeviceAliases((try? await store.samples(in: interval)) ?? [], aliases: aliases)
     let samples = Self.reconcileOpenRouter(
       deduplicated(storedSamples)
     ).sorted { lhs, rhs in
@@ -479,7 +476,8 @@ public actor LocalUsageService {
       let stored = UsageSample.resolvingDeviceAliases(
         try await store.samples(in: DateInterval(start: since, end: max(since, now))), aliases: aliases
       ).filter {
-        guard !$0.sourceID.hasPrefix("openrouter:activity:"), $0.sourceID != "cursor:account" else { return false }
+        // Cursor's account-wide history is the account's, not this device's activity.
+        guard $0.sourceID != "cursor:account" else { return false }
         return $0.usageDeviceID == UsageDeviceSource.localDeviceID || relayedIDs.contains($0.usageDeviceID)
       }
       let compact = UsageAnalyticsSnapshot(
@@ -775,7 +773,7 @@ public actor LocalUsageService {
         location: databaseURL,
         store: store,
         interval: interval,
-        detail: "Per-reply token usage from Pi Durable and bots: their SQLite stores and the default agent's earlier session files, each reply counted once."
+        detail: "Per-reply token usage from Pi Durable and bots: their SQLite stores and the default agent's session files, each reply counted once."
       ))
     }
     if !enabledProviders.isEmpty,

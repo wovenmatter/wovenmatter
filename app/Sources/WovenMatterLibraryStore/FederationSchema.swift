@@ -31,9 +31,6 @@ extension WorkspaceDatabaseConnection {
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
         conversation TEXT NOT NULL, active_run_id TEXT
       );
-      CREATE TABLE IF NOT EXISTS execution_adoptions (
-        conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload TEXT NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS message_provenance (
         message_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
         source_title TEXT, source_agent TEXT, kind TEXT NOT NULL

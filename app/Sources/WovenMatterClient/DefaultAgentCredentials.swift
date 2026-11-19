@@ -302,7 +302,6 @@ public final class ProviderAccountCoordinator {
         try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: ProviderConnectionAccounts.deviceScope)
     }
     nonisolated public static func refreshStored(_ scopes: [String]) async throws -> [String: DefaultAgentPayload] {
-        try DefaultAgentSupport.migrateLocalOAuth()
         // Only this device's own subscriptions are renewed here.
         let device = ProviderConnectionAccounts.deviceScope
         var issues: [String: String] = [:]

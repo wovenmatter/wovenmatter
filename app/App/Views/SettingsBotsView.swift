@@ -60,7 +60,8 @@ struct SettingsBotsView: View {
 
     // MARK: Where bots run
 
-    /// Bots run on one machine. Several running is left over from before that rule.
+    /// Bots run on one machine. While more than one reports them running, the
+    /// section says so and asks for one.
     private var running: [BotMachine] {
         bots.machines.filter { ![.off, .unreachable].contains($0.state) }
     }

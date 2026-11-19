@@ -134,7 +134,7 @@ public final class SessionSelectionPreferences {
     return snapshot
   }
 
-  /// Migrates native session metadata without retroactively applying defaults.
+  /// Records a session that already exists natively, without applying defaults to it.
   /// Persisting an empty snapshot also protects sessions whose native values are unknown.
   @discardableResult
   public func captureExistingConversation(
@@ -265,9 +265,10 @@ public final class SessionSelectionPreferences {
     return document
   }
 
-  /// Saved defaults and conversation choices from a mode the product no longer
-  /// offers (Ask for approval, read only, plan, …) read as unset, so Full access
-  /// applies. The session coordinator moves such a native session when it starts.
+  /// A stored permission the product does not offer (a harness's own Ask for
+  /// approval, read only, plan, …, recorded from its session) reads as unset,
+  /// so Full access applies. The session coordinator moves such a native
+  /// session when it starts.
   private static func withoutUnsupportedPermissions(_ document: Document) -> Document {
     func supported(_ selections: SessionSelections, harness: String) -> SessionSelections {
       guard let permission = selections.permission,

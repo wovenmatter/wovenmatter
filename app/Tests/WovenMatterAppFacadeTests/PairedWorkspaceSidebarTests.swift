@@ -91,7 +91,7 @@ struct PairedWorkspaceSidebarTests {
             .init(id: mac, libraryID: "library", ownerDeviceID: mac, kind: .mac, name: "Other Mac"),
             .init(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Workstation"),
             .init(id: phone, libraryID: "library", ownerDeviceID: phone, kind: .ios, name: "iPhone"),
-            .init(id: "device:" + phone, libraryID: "library", ownerDeviceID: phone, kind: .ios, name: "Legacy alias"),
+            .init(id: "device:" + phone, libraryID: "library", ownerDeviceID: phone, kind: .ios, name: "Device alias"),
             .init(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "gone", kind: .ios, name: "Removed iPad", deleted: true),
             .init(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "ipad", kind: .ios, name: "iPad")
         ]
@@ -836,9 +836,6 @@ struct PairedWorkspaceSidebarTests {
         #expect(listed.folders[productionID]?.map(\.id) == [folder] && listed.unavailableFolderOwnerIDs.isEmpty)
         #expect(listed.choices[devID] == nil && listed.folders[devID] == nil)
         #expect(listed.choices[linuxID.uuidString.lowercased()]?.compactMap { $0.agent?.id } == [linuxAgent])
-        // The Mac cannot be asked for a folder: its row lists no folder capability.
-        #expect(RemoteFolderCreation.problem(for: section) == "Update Woven Matter on jamess-mac-mini to create folders there.")
-
         // Its Linux host is uninstalled: the deleted row places no agent and lists no section.
         var linuxRow = try #require(registry.first { $0.id == linuxID.uuidString.lowercased() })
         let revision = linuxRow.revision
@@ -858,10 +855,7 @@ struct PairedWorkspaceSidebarTests {
             let registry = fleet.registry.filter { $0.id != row.id } + [row]
             return RemoteFolderCreation.problem(for: try #require(fleet.links(registry: registry, names: names).first { $0.id == row.id }))
         }
-        // A Mac that has not updated lists no folder capability.
-        #expect(try problem(fleet.other) == "Update Woven Matter on jamess-mac-mini to create folders there.")
-        #expect(try problem(fleet.other, names: [fleet.other.id: "Studio"]) == "Update Woven Matter on Studio to create folders there.")
-        var current = fleet.other; current.capabilities = [LibraryWorkspaceAction.createFolderCapability]
+        var current = fleet.other
         #expect(try problem(current) == nil)
         current.endpoint = nil
         #expect(try problem(current) == "Connect this workspace before creating a folder.")

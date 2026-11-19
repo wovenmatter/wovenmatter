@@ -91,8 +91,9 @@ public struct ProgramStatus: Codable, Equatable, Sendable {
     }
   }
 
-  /// Legacy database/native values stay at their compatibility boundaries.
-  /// Queued, cancelled and uncertain are workflow facts, not new OSC states.
+  /// A run's status, or a harness's own name for a subagent's state, as a
+  /// program state. Queued, cancelled and uncertain are workflow facts, not
+  /// OSC states.
   public static func run(_ value: String?, error: String? = nil, app: String? = nil) -> Self? {
     switch value {
     case "running", "streaming", "in_progress", "working": Self(state: .working, app: app)

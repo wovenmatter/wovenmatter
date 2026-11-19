@@ -66,7 +66,7 @@ struct RemoteHostLiveValidationTests {
         }
         var inspection = try await client.preflight(hostName: host, userName: user, accessMode: accessMode)
         if !inspection.ready {
-            print("Host preparation actions: " + (inspection.requiredPrivilegedActions ?? inspection.preparationActions ?? []).joined(separator: "\n"))
+            print("Host preparation actions: " + (inspection.preparationActions ?? []).joined(separator: "\n"))
             guard environment["WOVENMATTER_LIVE_HOST_PREPARE"] == "1" else {
                 throw RemoteWorkspaceClientError.invalidResponse("Review the reported host preparation actions and set WOVENMATTER_LIVE_HOST_PREPARE=1 to execute them.")
             }

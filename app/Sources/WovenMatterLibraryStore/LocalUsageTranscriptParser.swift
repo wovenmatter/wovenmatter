@@ -14,8 +14,8 @@ struct CodexUsageScanState {
 }
 
 /// Pi session files (`type: session`, `model_change`, `message` lines): the Pi CLI's
-/// `~/.pi/agent/sessions` and the default agent's sessions from before Pi Durable.
-struct HarnessUsageScanState {
+/// `~/.pi/agent/sessions` and the default agent's `sessions` folder.
+struct PiSessionUsageScanState {
   var sessionID = ""
   var model = ""
   var provider = ""
@@ -264,13 +264,13 @@ enum LocalUsageTranscriptParser {
     )
   }
 
-  /// One Pi session line. The identity matches the reader that indexed these files
-  /// before October 2026, so rows it saved and rows read now stay one record.
-  static func parseHarness(
+  /// One Pi session line. A reply's identity is its session and message, so
+  /// reading a file again replaces its rows instead of adding to them.
+  static func parsePiSession(
     line: String,
     lineNumber: Int,
     harness: String,
-    state: inout HarnessUsageScanState
+    state: inout PiSessionUsageScanState
   ) -> UsageSample? {
     guard let root = object(line), let type = string(root["type"]) else { return nil }
 

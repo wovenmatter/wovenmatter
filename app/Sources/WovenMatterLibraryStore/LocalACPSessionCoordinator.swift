@@ -240,14 +240,14 @@ public actor LocalACPSessionCoordinator {
         case sessionBusy
         case sessionIdentityChanged
         case failedStopNeedsReconnection
-        case executionAdopted
+        case ownedElsewhere
 
         var errorDescription: String? {
             switch self {
             case .shutDown: "The local ACP session coordinator has shut down."
             case .sessionBusy: "Wait for the current session operation to finish before changing permissions."
             case .sessionIdentityChanged: "The harness could not reconnect the existing session to change permissions."
-            case .executionAdopted: "This conversation is controlled by its independent execution workspace. Reconnect that workspace to continue."
+            case .ownedElsewhere: "This conversation is controlled by its independent execution workspace. Reconnect that workspace to continue."
             case .failedStopNeedsReconnection: "The previous Stop was not confirmed. Reconnect the original agent session and confirm it has stopped before sending again."
             }
         }
@@ -310,7 +310,6 @@ public actor LocalACPSessionCoordinator {
     private var pendingSessionStarts: [String: PendingSessionStart] = [:]
     private var pendingSessionShutdowns: [String: PendingSessionShutdown] = [:]
     private var permissionMutationConversationIDs: Set<String> = []
-    private var executionAdoptionDetached: Set<String> = []
     private var isShutDown = false
     private var sessionStartSequence: UInt64 = 0
     private var sessionShutdownSequence: UInt64 = 0
@@ -941,7 +940,6 @@ public actor LocalACPSessionCoordinator {
     }
 
     private func ensureNoPermissionMutation(conversationID: String) throws {
-        guard !executionAdoptionDetached.contains(conversationID) else { throw LifecycleError.executionAdopted }
         guard !permissionMutationConversationIDs.contains(conversationID) else {
             throw LifecycleError.sessionBusy
         }
@@ -1264,39 +1262,6 @@ public actor LocalACPSessionCoordinator {
         continuation.resume()
     }
 
-    /// Retire exactly one proven-idle attachment before transferring native
-    /// ownership. Other conversations and their running processes are untouched.
-    public func detachForExecutionAdoption(conversationID: String) async throws {
-        guard runIDsByConversation[conversationID] == nil,
-              !admittingConversations.contains(conversationID),
-              !permissionMutationConversationIDs.contains(conversationID),
-              pendingSessionStarts[conversationID] == nil,
-              (activeSessions[conversationID]?.activeUseCount ?? 0) == 0,
-              failedStopSessionIDs[conversationID] == nil else { throw LifecycleError.sessionBusy }
-        if executionAdoptionDetached.contains(conversationID) {
-            await awaitPendingSessionShutdown(conversationID: conversationID)
-            return
-        }
-        executionAdoptionDetached.insert(conversationID)
-        do {
-            let lease = try await acquireOperationLease()
-            defer { releaseOperationLease(lease) }
-            let unsettled = try await database.read { connection in
-                try connection.withLock {
-                    try connection.federationScalarUnlocked("SELECT COUNT(*) FROM runs WHERE conversation_id=? AND status IN ('running','queued','pending','cancelling','uncertain')", bindings: [conversationID])
-                }
-            }
-            guard unsettled == 0 else { throw LocalACPSessionDatabaseError.runAlreadyActive }
-            await awaitPendingSessionShutdown(conversationID: conversationID)
-            if let session = activeSessions.removeValue(forKey: conversationID) {
-                await shutDownSession(session, conversationID: conversationID)
-            }
-        } catch {
-            executionAdoptionDetached.remove(conversationID)
-            throw error
-        }
-    }
-
     public func shutdown() async {
         guard !isShutDown else { return }
         isShutDown = true
@@ -1369,11 +1334,9 @@ public actor LocalACPSessionCoordinator {
         runID: String? = nil,
         requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
-        guard !executionAdoptionDetached.contains(descriptor.conversationID) else { throw LifecycleError.executionAdopted }
         guard try await database.libraryExecutionOwner(conversationID: descriptor.conversationID) == nil else {
-            throw LifecycleError.executionAdopted
+            throw LifecycleError.ownedElsewhere
         }
-        guard !executionAdoptionDetached.contains(descriptor.conversationID) else { throw LifecycleError.executionAdopted }
         guard !isShutDown else {
             throw LifecycleError.shutDown
         }
@@ -1381,7 +1344,6 @@ public actor LocalACPSessionCoordinator {
         await awaitPendingSessionShutdown(
             conversationID: descriptor.conversationID
         )
-        guard !executionAdoptionDetached.contains(descriptor.conversationID) else { throw LifecycleError.executionAdopted }
         guard !isShutDown else {
             throw LifecycleError.shutDown
         }

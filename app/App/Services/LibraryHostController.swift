@@ -26,12 +26,12 @@ enum IsolatedTestWorkspace {
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.resolvingSymlinksInPath()
         let production = home.appending(path: "Library/Application Support/Woven Matter").resolvingSymlinksInPath()
         let development = home.appending(path: "Library/Application Support/Woven Matter Dev").resolvingSymlinksInPath()
-        let legacy = home.appending(path: ".woven-matter").resolvingSymlinksInPath()
+        let workspaceRoot = home.appending(path: LocalACPWorkspaceProvisioner.rootDirectoryName).resolvingSymlinksInPath()
         guard isolated.path != "/", isolated != home, isolated != production,
               !isolated.path.hasPrefix(production.path + "/"),
               isolated != development, !isolated.path.hasPrefix(development.path + "/"),
-              !isolated.path.hasPrefix(development.path + " "), isolated != legacy,
-              !isolated.path.hasPrefix(legacy.path + "/") else {
+              !isolated.path.hasPrefix(development.path + " "), isolated != workspaceRoot,
+              !isolated.path.hasPrefix(workspaceRoot.path + "/") else {
             fatalError("The isolated test app cannot open a production workspace")
         }
         return isolated
@@ -98,6 +98,8 @@ final class LibraryHostController {
     struct LinuxHostSetupSteps {
         var adopt: @MainActor (RemoteWorkspaceConfiguration) async throws -> Void
         var enroll: @MainActor (String) async throws -> Void
+        /// Lists in the registry what the host serves now (`recordLinuxCapabilities`).
+        var describe: @MainActor (String) async throws -> Void = { _ in }
     }
     @ObservationIgnored var linuxHostSetupSteps: LinuxHostSetupSteps?
     private var revocationRetryInProgress = false
@@ -569,14 +571,13 @@ final class LibraryHostController {
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
         ]
-        // Other Macs send a folder creation here only when this row offers it.
-        desired[0].capabilities.append(LibraryWorkspaceAction.createFolderCapability)
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
             let prior = existing.first { $0.id == id }
             return .init(id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                 kind: .linux, name: chosenNames[id] ?? configuration.name, endpoint: prior?.endpoint,
-                // What the host itself answered its enrollment with (`registerLinuxEnrollment`).
+                // The host's own answers: its enrollment (`registerLinuxEnrollment`)
+                // and what it last said it serves (`recordLinuxCapabilities`).
                 capabilities: prior?.capabilities ?? [],
                 executionDeviceID: prior?.executionDeviceID)
         }
@@ -684,7 +685,8 @@ final class LibraryHostController {
     /// One attempt at each step that has not succeeded; the first failure is rethrown.
     private func completeLinuxHostSetup(_ configuration: RemoteWorkspaceConfiguration) async throws {
         let steps = linuxHostSetupSteps ?? .init(adopt: { [weak self] in try await self?.ensureLinuxMember(configuration: $0) },
-                                                 enroll: { [weak self] in _ = try await self?.enrollLinuxWorkspace(id: $0) })
+                                                 enroll: { [weak self] in _ = try await self?.enrollLinuxWorkspace(id: $0) },
+                                                 describe: { [weak self] in try await self?.recordLinuxCapabilities(workspaceID: $0) })
         var failure: (any Error)?
         do { try await steps.adopt(configuration) } catch { failure = error }
         if configuration.workspaceID != RemoteHostInstallMode.botsOnlyWorkspaceID {
@@ -693,8 +695,27 @@ final class LibraryHostController {
             if registered?.endpoint == nil || registered?.executionDeviceID == nil {
                 do { try await steps.enroll(id) } catch { failure = failure ?? error }
             }
+            if failure == nil {
+                do { try await steps.describe(id) } catch { failure = error }
+            }
         }
         if let failure { throw failure }
+    }
+
+    /// Replaces a Linux row's capabilities with what its host answers now
+    /// (`GET execution`), each time this Mac sets the host up. The row never
+    /// keeps a capability the host stopped serving, or lacks one it gained.
+    func recordLinuxCapabilities(workspaceID id: String) async throws {
+        guard let model, let database = model.libraryStore?.database else { return }
+        let identity = try await database.libraryIdentity()
+        guard var row = try await database.libraryExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }),
+              row.kind == .linux, row.ownerDeviceID == identity.hostDeviceID else { return }
+        let served = try await model.memberExecutionClient().memberRoutes(for: row).descriptor().capabilities
+        guard Array(Set(served)).sorted() != row.capabilities.sorted() else { return }
+        row.capabilities = served
+        _ = try await database.registerExecutionWorkspace(.init(workspace: row, expectedRevision: row.revision), deviceID: identity.hostDeviceID)
+        executionWorkspaces = try await database.libraryExecutionWorkspaces()
+        await connectExecutionStreams()
     }
 
     /// Enrolls a Linux host this Mac added (`setUpLinuxHost`): exposes its
@@ -900,7 +921,6 @@ final class LibraryHostController {
         if model?.isBackendFrontend == true { await forward(.pairAtEndpoint(endpoint)); return }
         do {
             let advertisement: DiscoveryAdvertisement = try await pairingNetwork.request(endpoint, path: "discovery")
-            guard advertisement.capabilities?.contains(PairedMacSyncController.capability) == true else { throw LibraryAPIError(code: "update_required", message: "Update both Macs before pairing their libraries.") }
             await pairWithPeer(.init(endpoint: endpoint, advertisement: advertisement))
         } catch { errorMessage = error.localizedDescription }
     }

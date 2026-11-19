@@ -219,12 +219,12 @@ import WovenMatterCore
             decodes += 1
             return NoteDocument.decode(source)
         }
-        let first = cache.value(noteID: "first", source: "Legacy note")
+        let first = cache.value(noteID: "first", source: "Plain text note")
         for _ in 0..<100 {
-            #expect(cache.value(noteID: "first", source: "Legacy note") == first,
-                "Repeated reads must preserve legacy block identity")
-            #expect(cache.isEditable(noteID: "first", source: "Legacy note"),
-                "Legacy note should remain editable")
+            #expect(cache.value(noteID: "first", source: "Plain text note") == first,
+                "Repeated reads must preserve block identity")
+            #expect(cache.isEditable(noteID: "first", source: "Plain text note"),
+                "A plain text note should remain editable")
         }
         #expect(decodes == 1, "Unchanged binding reads decoded the document again")
         #expect(validations == 1, "Unchanged binding reads validated the document again")
@@ -553,7 +553,7 @@ import WovenMatterCore
         table.rows[0].cells[0].runs = [NoteTextRun(text: "Stored cell", foregroundHex: "#004225")]
         let original = NoteDocument(blocks: [
             .richText(NoteRichTextBlock(id: "dark-ink", runs: [
-                NoteTextRun(text: "Legacy dark ink", foregroundHex: "#111827", highlightHex: "#FFEB94")
+                NoteTextRun(text: "Dark ink", foregroundHex: "#111827", highlightHex: "#FFEB94")
             ])), .table(table)
         ])
         var saved = original

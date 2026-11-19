@@ -56,7 +56,6 @@ struct PageEditor: View {
                                     .padding(.leading, CGFloat(segment.depth) * 20)
                                     .id(segment.id)
                             }
-                            legacyConnections
                             // The rest of the Page is part of its last line: clicking puts
                             // the cursor there, and right-clicking adds a component.
                             Color.clear.frame(maxWidth: .infinity, minHeight: 240).contentShape(Rectangle())
@@ -208,16 +207,6 @@ struct PageEditor: View {
     private func segmentContains(_ segment: PageSegment, id: String) -> Bool {
         if case .flow(_, _, _, _, let ids) = segment { return ids.contains(id) }
         return segment.id == id
-    }
-    @ViewBuilder private var legacyConnections: some View {
-        if let connections = page.canvasConnections, !connections.isEmpty {
-            DisclosureGroup("Retained connections") {
-                ForEach(connections) { connection in
-                    Text("\(projection.blocks[connection.from]?.plainText.prefix(60) ?? "Component") → \(projection.blocks[connection.to]?.plainText.prefix(60) ?? "Component"): \(connection.label)")
-                        .font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-            }.padding(.top, 20)
-        }
     }
 }
 

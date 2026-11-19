@@ -380,7 +380,6 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         let commandLine = status["cmdline"] as? String
         queue.async { [self] in
             guest = info
-            // An older guest agent does not say; its balloon stays open.
             guard let commandLine, commandLine != guestCommandLine else { return }
             guestCommandLine = commandLine
             let untouched = WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: commandLine)
@@ -662,9 +661,10 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         // ext4 skips groups already trimmed since mount, so this is cheap.
         if tick % 40 == 0 { _ = try? agent(["op": "trim"], timeout: 600) }
         // Idle: no container runs and nothing else is busy (an image build runs
-        // no listed container). An older agent does not report the load.
+        // no listed container, and shows in the load).
         let activity = try? agent(["op": "running_containers"], timeout: 10)
-        let idle = activity?["running"] as? Int == 0 && ((activity?["load"] as? NSNumber)?.doubleValue ?? 0) < 0.5
+        let idle = activity?["running"] as? Int == 0
+            && ((activity?["load"] as? NSNumber)?.doubleValue).map { $0 < 0.5 } == true
         let reason = queue.sync { () -> String? in
             let now = Date()
             idleSince = idle ? (idleSince ?? now) : nil

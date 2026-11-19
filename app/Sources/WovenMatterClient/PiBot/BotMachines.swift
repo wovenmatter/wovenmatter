@@ -328,9 +328,9 @@ public struct BotVersionReport: Equatable, Sendable {
                 parts.append(.init(id: machine.id, kind: machine.kind == .mac ? .mac : .linux, name: machine.name,
                                    current: app, expected: thisMacVersion))
             } else if machine.kind == .linux, machine.state == .needsUpdate {
-                // Same version name, different release (or one too old to say): name the releases.
+                // Same version name, different release: name the releases.
                 parts.append(.init(id: machine.id, kind: .linux, name: machine.name,
-                                   current: machine.versions.fingerprint.map { "release " + $0.prefix(8) } ?? machine.versions.app ?? "an older release",
+                                   current: machine.versions.fingerprint.map { "release " + $0.prefix(8) } ?? machine.versions.app ?? "another release",
                                    expected: thisMacVersion ?? "this Mac's release"))
             }
         }

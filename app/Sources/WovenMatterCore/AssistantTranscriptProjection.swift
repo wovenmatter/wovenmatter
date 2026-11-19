@@ -12,15 +12,17 @@ public struct AssistantTranscriptProjection: Sendable {
   public let commentary: [AgentRunActivity]
 
   public init(messageID: String, content: String, activities: [AgentRunActivity]) {
-    var legacyPrefix = ""
+    // A segment without a checkpoint (a Linux host's) belongs while the reply
+    // still starts with every such segment so far.
+    var uncheckpointed = ""
     var segments = activities.filter {
       guard $0.kind == .assistant, $0.assistantMessageID == messageID,
             let segment = $0.content, !segment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
       if let checkpoint = $0.assistantCheckpoint {
         return checkpoint.followingText(in: content) != nil
       }
-      legacyPrefix += segment
-      return content.hasPrefix(legacyPrefix)
+      uncheckpointed += segment
+      return content.hasPrefix(uncheckpointed)
     }
     let prefix = segments.compactMap(\.content).joined()
     let tail = segments.last?.assistantCheckpoint?.followingText(in: content)
