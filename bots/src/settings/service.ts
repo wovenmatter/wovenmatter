@@ -1,6 +1,7 @@
 import type { CredentialStore, Models } from "@earendil-works/pi-ai";
 import { parseModelRef } from "../config.ts";
 import { LIMIT_LABELS, type LimitEntry, type LimitKind } from "../limits.ts";
+import { newestFirst } from "../model-catalog.ts";
 import { type ModelAccess, type ModelPricing, modelAccess, modelFacts } from "../model-info.ts";
 import { TITLE_REASONING } from "../titles.ts";
 import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
@@ -50,6 +51,8 @@ export type SettingsOptions = {
   /** The search provider selected in Woven settings. */
   readonly searchProvider?: () => Promise<SearchProviderId | undefined>;
   readonly modelLimit?: (ref: string) => LimitEntry | undefined;
+  /** Load Pi's live model catalog before a model list is read (never throws). */
+  readonly refreshModels?: () => Promise<void>;
 };
 
 /**
@@ -121,6 +124,7 @@ export class SettingsService {
     reasoningLevels: readonly string[];
   }> {
     const models = this.#options.models;
+    await this.#options.refreshModels?.();
     const available = await models.getAvailable();
     const byProvider = new Map<string, ProviderModels>();
     for (const model of available) {
@@ -159,7 +163,12 @@ export class SettingsService {
           : {}),
       });
     }
-    return { providers: [...byProvider.values()], roles: this.roles(), reasoningLevels: TITLE_REASONING };
+    // Every list of models a person or a bot reads comes from here, newest first.
+    const providers = [...byProvider.values()].map((provider) => ({
+      ...provider,
+      models: newestFirst(provider.models),
+    }));
+    return { providers, roles: this.roles(), reasoningLevels: TITLE_REASONING };
   }
 
   roles(): Roles {

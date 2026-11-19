@@ -549,6 +549,16 @@ export class ClaudeAgentStream {
   }
 }
 
+/** One of Anthropic's models as the Claude subscription runs it: through the Claude Agent SDK. */
+export function claudeAgentModel<T extends { provider: string }>(model: T): T {
+  return {
+    ...model,
+    api: CLAUDE_AGENT_API,
+    provider: CLAUDE_SUBSCRIPTION_PROVIDER,
+    baseUrl: CLAUDE_AGENT_BASE_URL,
+  };
+}
+
 /** The `claude-subscription` provider: Anthropic's catalog, served through Claude Code. */
 export function claudeAgentProvider(options: ClaudeAgentOptions): Provider {
   const agent = new ClaudeAgentStream(new ClaudeAgentRuntime(options));
@@ -569,14 +579,7 @@ export function claudeAgentProvider(options: ClaudeAgentOptions): Provider {
             : undefined,
       },
     },
-    models: anthropicProvider()
-      .getModels()
-      .map((model) => ({
-        ...model,
-        api: CLAUDE_AGENT_API,
-        provider: CLAUDE_SUBSCRIPTION_PROVIDER,
-        baseUrl: CLAUDE_AGENT_BASE_URL,
-      })),
+    models: anthropicProvider().getModels().map(claudeAgentModel),
     api: { stream, streamSimple: stream },
   } as unknown as Parameters<typeof createProvider>[0]);
 }

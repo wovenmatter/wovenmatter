@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { Models } from "@earendil-works/pi-ai";
 import type { SqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -21,7 +22,8 @@ import { HostGitSource, NO_GIT } from "./host/git.ts";
 import { ModelAvailability } from "./limits.ts";
 import { MemoryExtractor, memorySection } from "./memory.ts";
 import { ConversationMirror } from "./mirror.ts";
-import { checkModelRoles, createBotModels } from "./models.ts";
+import { FileModelsStore } from "./model-catalog.ts";
+import { checkModelRoles, createBotModels, refreshBotModels } from "./models.ts";
 import { RuntimeOperations } from "./operations.ts";
 import { ProfileStore } from "./profiles.ts";
 import { type BotServer, startServer } from "./server.ts";
@@ -66,6 +68,8 @@ export type StartOptions = {
   readonly settings?: SettingsStore;
   /** Woven MCP HTTP (tests inject a fake). */
   readonly fetch?: typeof fetch;
+  /** Pi's model catalog service (tests point it at a fake). */
+  readonly catalog?: { readonly fetch?: typeof fetch; readonly baseUrl?: string; readonly now?: () => number };
   readonly port?: number;
   readonly log?: (message: string) => void;
   /** Options for the default container environment (tests shorten the idle period). */
@@ -105,6 +109,7 @@ export async function startRuntime(
   let memory: MemoryExtractor | undefined;
   let mirror: ConversationMirror | undefined;
   let forum: Forum | undefined;
+  let refreshModels: (how?: Parameters<typeof refreshBotModels>[1]) => Promise<void> = async () => {};
   const settings = options.settings ?? (await SettingsStore.open(config.paths.settings));
   const host = options.host ?? new HostClient(config.host.url, config.host.token);
   const credentials = new HostCredentialStore(host);
@@ -186,14 +191,33 @@ export async function startRuntime(
     }
   }
   try {
-    const models =
-      options.models ??
-      createBotModels(credentials, {
-        claude: {
-          directory: config.paths.claude,
-          ...(config.claude?.executable ? { executable: config.claude.executable } : {}),
-        },
-      });
+    const live = options.models
+      ? undefined
+      : createBotModels(credentials, {
+          claude: {
+            directory: config.paths.claude,
+            ...(config.claude?.executable ? { executable: config.claude.executable } : {}),
+          },
+          catalog: {
+            store: new FileModelsStore(join(config.paths.dataDir, "provider-models")),
+            ...(options.catalog ?? {}),
+          },
+        });
+    const models = options.models ?? (live as NonNullable<typeof live>);
+    /** Load Pi's live catalog; a provider that can't be refreshed keeps the list it had. */
+    const reported = new WeakSet<string[]>();
+    refreshModels = async (how = {}) => {
+      if (!live) return;
+      const problems = await refreshBotModels(live, how);
+      // Readers that shared one read share its result: say it once.
+      if (reported.has(problems)) return;
+      reported.add(problems);
+      for (const problem of problems) log(`model catalog: ${problem}`);
+    };
+    // The stored catalog, straight from disk: a profile may name a model only it lists. Nothing
+    // is fetched at start or on a timer, as elsewhere in Woven Matter: a newer catalog is read
+    // when someone opens a model list.
+    await refreshModels({ network: false });
     const profileSet = normalizeProfiles(settings.current);
     if (!options.models) {
       const refs: Record<string, ModelRef> = {};
@@ -202,7 +226,21 @@ export async function startRuntime(
       for (const profile of profileSet.profiles) {
         if (profile.main) refs[`profiles.${profile.id}.main`] = parseModelRef(profile.main);
       }
-      for (const problem of checkModelRoles(createBotModels(credentials), refs)) log(`warning: ${problem}`);
+      if (live) {
+        const warn = () => {
+          for (const problem of checkModelRoles(live, refs)) log(`warning: ${problem}`);
+        };
+        // A profile names a model of a provider bots have, which neither pi-ai nor the stored
+        // catalog lists (a cleared cache, a model added since): the one case a start reads a
+        // catalog, that provider's only, and without holding the start up.
+        const unknown = new Set(
+          Object.values(refs)
+            .filter((ref) => live.getProvider(ref.provider) && !live.getModel(ref.provider, ref.modelId))
+            .map((ref) => ref.provider),
+        );
+        if (unknown.size) void refreshModels({ providers: [...unknown] }).then(warn);
+        else warn();
+      }
     }
     const profiles = new ProfileStore(profileSet, {
       persist: (set) => settings.update((current) => ({ ...current, ...profilesToRaw(set) })).then(() => {}),
@@ -334,6 +372,9 @@ export async function startRuntime(
       store: settings,
       searchProvider,
       modelLimit: (ref) => availability.limit(ref),
+      // Whoever opens a model list sees Pi's current one (fetched when the stored one is over
+      // four hours old); a slow catalog never holds the list up long.
+      refreshModels: () => refreshModels(),
     });
     const operations = new RuntimeOperations({
       manager: opened,

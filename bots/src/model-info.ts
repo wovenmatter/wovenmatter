@@ -9,12 +9,13 @@ import { OPENCODE_GO_MODELS } from "@earendil-works/pi-ai/providers/opencode-go.
 import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.models";
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
 import { LIMIT_LABELS, type LimitEntry } from "./limits.ts";
+import { CATALOG_ENDPOINTS } from "./model-catalog.ts";
 
 /**
  * What Pi Bot knows about a model, for the main model's subagent choices and Settings' model pool.
  * Everything comes from the model entry pi-ai serves for that exact `provider/model-id` (no
  * cross-provider matching, no guessing), plus Pi Bot's own knowledge of how each provider is
- * accessed. Nothing is fetched from the network.
+ * accessed. Nothing is fetched here: the entry may be one Pi's live catalog added (model-catalog.ts).
  */
 
 /** USD per million tokens. */
@@ -66,8 +67,9 @@ export type ModelFacts = {
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * pi-ai's bundled static catalogs (no runtime refresh) of the providers Pi Bot registers. A price
- * is attributed to one only when the served model's cost equals the entry for the same id.
+ * pi-ai's bundled static catalogs (as shipped, without the live catalog) of the providers Pi Bot
+ * registers. A price is attributed to one only when the served model's cost equals the entry for
+ * the same id.
  */
 const BUNDLED_CATALOG: Readonly<Record<string, Readonly<Record<string, { cost: PriceRates }>>>> = {
   openai: OPENAI_MODELS,
@@ -85,6 +87,9 @@ const BUNDLED_CATALOG: Readonly<Record<string, Readonly<Record<string, { cost: P
 const CATALOG_ALIASES: Readonly<Record<string, string>> = {
   "claude-subscription": "anthropic",
 };
+
+/** Providers whose list Pi's live catalog adds to (models.ts registers them that way). */
+const LIVE_CATALOGS = new Set([...Object.keys(CATALOG_ENDPOINTS), "xai-api", "claude-subscription"]);
 
 const ACCESS: Readonly<Record<string, ModelAccess>> = {
   "claude-subscription": { kind: "subscription", label: "Claude subscription" },
@@ -160,13 +165,18 @@ const sameCost = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
 
 /**
  * Where the price of `provider`/`modelId` (served with `cost`) comes from, honestly: pi-ai's
- * bundled catalog when its entry for that exact id has this very cost, else the provider itself.
+ * bundled catalog when its entry for that exact id has this very cost, else the model list the
+ * entry came from (Pi's live catalog, or a provider registered some other way).
  */
 export function pricingSource(provider: string, modelId: string, cost: unknown): string {
   const catalog = CATALOG_ALIASES[provider] ?? provider;
   const entry = BUNDLED_CATALOG[catalog]?.[modelId];
   if (!entry || !sameCost(entry.cost, cost)) {
-    return `${provider} provider's own model list (not a verified price list)`;
+    // A price pi-ai did not ship came with the list the model is in: Pi's live catalog for the
+    // providers that have one, else whatever registered the provider.
+    return LIVE_CATALOGS.has(provider)
+      ? `Pi's live model catalog for ${provider} (not a verified price list)`
+      : `${provider} provider's own model list (not a verified price list)`;
   }
   const { version, generatedAt } = catalogProvenance();
   const base = `pi-ai${version ? ` ${version}` : ""} bundled ${catalog} catalog${generatedAt ? `, generated ${generatedAt}` : ""}`;

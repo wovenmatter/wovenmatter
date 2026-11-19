@@ -31,7 +31,7 @@ describe("model facts", () => {
     );
     // A provider serving another price for the same id is not attributed to the catalog.
     expect(pricingSource("openai-codex", "gpt-6-sol", { ...sol.cost, input: 99 })).toBe(
-      "openai-codex provider's own model list (not a verified price list)",
+      "Pi's live model catalog for openai-codex (not a verified price list)",
     );
   });
 
