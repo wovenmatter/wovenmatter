@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ProviderCatalog, parseProviderModels } from '../src/provider-catalog.mjs';
+import { ProviderCatalog, parseProviderModels, validatePublicModel } from '../src/provider-catalog.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { ClaudeRuntime } from '../src/claude-runtime.mjs';
 import { assistantMessage, assistantStream } from './fixtures/synthetic-stream.mjs';
@@ -19,7 +19,7 @@ const reply = (models = [descriptor()], headers = {}) => new Response(JSON.strin
 
 test('OpenCode Go cold startup and ID-only session restore pin current metadata for offline reopening', async t => {
   const root = await directory(t), reference = 'opencode-go/glm-5.3-flash'; let requests = 0;
-  const model = descriptor({ id: 'glm-5.3-flash', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1' });
+  const model = descriptor({ id: 'glm-5.3-flash', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/openai/v1' });
   const config = { providers: ['opencode-go'], defaultModel: reference };
   const makeEngine = catalog => new DefaultAgentEngine({ cwd: root, directory: root, config, catalog, claude: fakeClaudeRuntime() }).initialize();
   const catalog = () => new ProviderCatalog(root, { fetchCatalog: async () => { requests++; return reply([model]); } });
@@ -42,6 +42,30 @@ test('OpenCode Go cold startup and ID-only session restore pin current metadata 
   const offlineEngine = await makeEngine(offline), reopened = await offlineEngine.create(sessionID);
   t.after(() => reopened.session.dispose());
   assert.deepEqual(reopened.session.model, model);
+});
+
+test('OpenCode Go is read at its current endpoints, and sessions pinned at earlier ones still open', () => {
+  const go = patch => descriptor({ provider: 'opencode-go', ...patch });
+  // The catalog as Pi's service publishes it today, with an API this agent has no endpoint for.
+  const models = parseProviderModels([
+    go({ id: 'chat', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/openai/v1' }),
+    go({ id: 'responses', api: 'openai-responses', baseUrl: 'https://opencode.ai/inference/go/openai/v1' }),
+    go({ id: 'claude', api: 'anthropic-messages', baseUrl: 'https://opencode.ai/inference/go/anthropic' }),
+    go({ id: 'gemini', api: 'google-generative-ai', baseUrl: 'https://opencode.ai/inference/go/google/v1beta' }),
+  ], 'opencode-go');
+  assert.deepEqual(models.map(model => model.id), ['chat', 'responses', 'claude']);
+  for (const baseUrl of ['https://opencode.ai/inference/go/v1', 'https://opencode.ai/zen/go/v1']) {
+    assert.equal(validatePublicModel(go({ api: 'openai-completions', baseUrl })).baseUrl, baseUrl);
+  }
+  for (const baseUrl of ['https://opencode.ai/inference/go', 'https://opencode.ai/zen/go']) {
+    assert.equal(validatePublicModel(go({ api: 'anthropic-messages', baseUrl })).baseUrl, baseUrl);
+  }
+  // One API's earlier address is not another's, and nothing else under the host is trusted.
+  for (const patch of [{ api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/anthropic' },
+    { api: 'anthropic-messages', baseUrl: 'https://opencode.ai/inference/go/openai/v1' },
+    { api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/google/v1beta' }]) {
+    assert.throws(() => validatePublicModel(go(patch)), /invalid model metadata/);
+  }
 });
 
 test('foreign destinations, provider mismatches, malformed fields and oversized bodies fail closed', async t => {

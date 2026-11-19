@@ -10,14 +10,18 @@ export const providerEndpoints = {
   openai: { 'openai-responses': 'https://api.openai.com/v1' },
   'openai-codex': { 'openai-codex-responses': 'https://chatgpt.com/backend-api' },
   openrouter: { 'openai-completions': 'https://openrouter.ai/api/v1', 'anthropic-messages': 'https://openrouter.ai/api' },
-  'opencode-go': { 'openai-completions': 'https://opencode.ai/inference/go/v1', 'openai-responses': 'https://opencode.ai/inference/go/v1', 'anthropic-messages': 'https://opencode.ai/inference/go' },
+  'opencode-go': { 'openai-completions': 'https://opencode.ai/inference/go/openai/v1', 'openai-responses': 'https://opencode.ai/inference/go/openai/v1', 'anthropic-messages': 'https://opencode.ai/inference/go/anthropic' },
   xai: { 'openai-responses': 'https://api.x.ai/v1' },
   'xai-api': { 'openai-responses': 'https://api.x.ai/v1' },
 };
-// Existing caches and pinned sessions keep their reviewed destination across the rename.
-const legacyOpenCodeGoEndpoints = { 'openai-completions': 'https://opencode.ai/zen/go/v1', 'openai-responses': 'https://opencode.ai/zen/go/v1', 'anthropic-messages': 'https://opencode.ai/zen/go' };
+// OpenCode Go has moved twice. Existing caches and pinned sessions keep the destination they
+// were reviewed with.
+const legacyOpenCodeGoEndpoints = [
+  { 'openai-completions': 'https://opencode.ai/inference/go/v1', 'openai-responses': 'https://opencode.ai/inference/go/v1', 'anthropic-messages': 'https://opencode.ai/inference/go' },
+  { 'openai-completions': 'https://opencode.ai/zen/go/v1', 'openai-responses': 'https://opencode.ai/zen/go/v1', 'anthropic-messages': 'https://opencode.ai/zen/go' },
+];
 const trustedEndpoint = (model, provider) => model.baseUrl === providerEndpoints[provider]?.[model.api]
-  || (provider === 'opencode-go' && model.baseUrl === legacyOpenCodeGoEndpoints[model.api]);
+  || (provider === 'opencode-go' && legacyOpenCodeGoEndpoints.some(endpoints => model.baseUrl === endpoints[model.api]));
 const invalid = () => new DefaultAgentError('The provider returned invalid model metadata. Refresh models to retry.');
 const id = value => typeof value === 'string' && value.length > 0 && Buffer.byteLength(value) <= 512 && !/[\x00-\x1f\x7f]/u.test(value);
 const validator = value => typeof value === 'string' && value.length <= 1024 && !/[\r\n]/u.test(value) ? value : undefined;

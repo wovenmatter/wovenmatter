@@ -55,6 +55,42 @@ final class ProviderModelCatalogTests: XCTestCase {
   }
   private func data(_ models: [InferenceModel]) throws -> Data { try JSONEncoder().encode(models) }
 
+  func testOpenCodeIsReadAtItsCurrentEndpointsAndEarlierOnesStayTrusted() throws {
+    func entry(_ provider: String, _ id: String, _ api: String, _ baseUrl: String) -> InferenceModel {
+      var value = model(provider)
+      value.id = id; value.api = api; value.baseUrl = baseUrl
+      return value
+    }
+    // The catalogs as Pi's service publishes them today, with an API the app has no endpoint for.
+    let go = try InferenceModelPolicy.parse(try data([
+      entry("opencode-go", "chat", "openai-completions", "https://opencode.ai/inference/go/openai/v1"),
+      entry("opencode-go", "responses", "openai-responses", "https://opencode.ai/inference/go/openai/v1"),
+      entry("opencode-go", "claude", "anthropic-messages", "https://opencode.ai/inference/go/anthropic"),
+      entry("opencode-go", "gemini", "google-generative-ai", "https://opencode.ai/inference/go/google/v1beta"),
+    ]), provider: "opencode-go")
+    XCTAssertEqual(go.map(\.id), ["chat", "responses", "claude"])
+    let zen = try InferenceModelPolicy.parse(try data([
+      entry("opencode", "chat", "openai-completions", "https://opencode.ai/inference/openai/v1"),
+      entry("opencode", "claude", "anthropic-messages", "https://opencode.ai/inference/anthropic"),
+    ]), provider: "opencode")
+    XCTAssertEqual(zen.map(\.id), ["chat", "claude"])
+    // Conversations pinned before either move still open.
+    for (provider, api, baseUrl) in [
+      ("opencode-go", "openai-completions", "https://opencode.ai/inference/go/v1"), ("opencode-go", "anthropic-messages", "https://opencode.ai/inference/go"),
+      ("opencode-go", "openai-responses", "https://opencode.ai/zen/go/v1"), ("opencode-go", "anthropic-messages", "https://opencode.ai/zen/go"),
+      ("opencode", "openai-completions", "https://opencode.ai/zen/v1"), ("opencode", "anthropic-messages", "https://opencode.ai/zen"),
+    ] {
+      XCTAssertNoThrow(try InferenceModelPolicy.validate(entry(provider, "pinned", api, baseUrl), provider: provider), "\(provider) \(baseUrl)")
+    }
+    // One provider's address is not the other's, and one API's is not another's.
+    for (provider, api, baseUrl) in [
+      ("opencode", "openai-completions", "https://opencode.ai/inference/go/openai/v1"), ("opencode-go", "openai-completions", "https://opencode.ai/inference/openai/v1"),
+      ("opencode-go", "anthropic-messages", "https://opencode.ai/inference/go/openai/v1"), ("opencode", "openai-completions", "https://opencode.ai/zen"),
+    ] {
+      XCTAssertThrowsError(try InferenceModelPolicy.validate(entry(provider, "wrong", api, baseUrl), provider: provider), "\(provider) \(baseUrl)")
+    }
+  }
+
   func testCatalogRecoversInitialFailuresRevalidatesAndPreservesSavedModelsDuringOutage() async throws {
     let directory = root(), clock = CatalogClock(), body = try data([model()])
     let transport = CatalogFixture([.init(status: 304), .init(status: 503), .init(status: 200, data: body, etag: "\"fixture\"", lastModified: "Thu, 01 Oct 2026 12:00:00 GMT"), .init(status: 304)])
