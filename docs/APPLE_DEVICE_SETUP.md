@@ -17,18 +17,15 @@ access outside the app. The app never requests a password or starts account logi
 - **Pair** opens an installed app and starts the existing approval flow.
 - **Download & pair** downloads and verifies the current published release,
   installs it, opens it, and starts pairing.
-- **Update to [version]** installs a newer published version. Older installations
-  offer **Update & pair** only when the published manifest advertises the remote
-  pairing helper. Releases without that capability offer Download/Update and
-  Open Woven Matter for manual pairing. The downloaded signed app is checked for
-  that capability before replacement when a combined action was selected.
+- **Update to [version]** installs a newer published version.
 
 Either Mac can initiate pairing. Both continue running their full local desktop
 app, preserve their existing libraries, and synchronize shared data after approval
 on the other Mac. Pairing does not change a database role or restart into a node
 interface. An already paired Mac can add another Mac or an iPhone/iPad; its new
 connections and remote workspace inventory propagate to the other paired Macs.
-Both Macs must advertise the paired-library protocol; older apps need updating.
+Both Macs must advertise the `library.peers` capability; a Mac that does not
+has to be updated before it can pair.
 
 Remote setup uses a short-lived, nonsecret intent in the SSH user's app preferences.
 The receiving GUI consumes it after startup; pairing credentials stay in the

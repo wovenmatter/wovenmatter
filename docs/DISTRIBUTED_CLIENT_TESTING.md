@@ -1,9 +1,9 @@
 # Distributed client acceptance
 
 Manual acceptance for Macs, Linux hosts, and the iPhone app (beta) working
-together. Use Mac, Linux host, and iOS builds from the same revision: peers
-must have matching library schemas to sync, and updating one device does not
-update the others. Start with two Macs and a Linux host, then add an iPhone,
+together. Use Mac, Linux host, and iOS builds from the same revision: every
+device runs the same release, and updating one device does not update the
+others. Start with two Macs and a Linux host, then add an iPhone,
 then iPad layout and real network transitions.
 
 ## Build and automation
@@ -53,9 +53,10 @@ and fixtures do not prove UI, Tailscale, or real-account acceptance.
   block other changes.
 - Save an artifact, interrupt its transfer, reconnect, and verify exact bytes.
   Workspace files and runtime checkpoints stay with their owner.
-- Run devices on different versions. Each must show which part needs updating
-  and link to Settings → Updates, whose **Update everything** brings every
-  device up to date; after updating, sync resumes.
+- Leave one device on an earlier release. The others must show which device
+  needs updating and link to Settings → Updates, whose **Update everything**
+  brings every device up to date. A change the earlier device cannot apply
+  must wait there, not be lost or cut down, and appear once it is updated.
 - With the iPhone's paired Mac offline, the phone must sync with another Mac or
   the Linux host. Nothing on the phone should wait for its paired Mac.
 

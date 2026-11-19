@@ -60,7 +60,7 @@ library natively, and a Linux host writes its sessions into its own library
 copy, which synchronizes with every Mac and phone. The live view of a session
 on another machine (its transcript as it is written, run state, questions and
 approvals, capabilities and session settings) and the commands sent to it move
-on that machine's stream, `GET /v1/stream?protocol=1`, a member-signed
+on that machine's stream, `GET /v1/stream`, a member-signed
 WebSocket (see [Woven everywhere](architecture/WOVEN_EVERYWHERE.md),
 "Streaming"). On a Mac the background server holds the one stream to each
 other machine and relays it to its windows over their connection to it;
@@ -128,12 +128,13 @@ cancellation after restart. Ambiguous external effects are reconciled or
 surfaced rather than blindly replayed. Other devices see Quick Chats as
 read-only synced history.
 
-## Compatibility and acceptance
+## Requirements and acceptance
 
 Every desktop Mac runs its full local app and background server. Both Macs must
-advertise `library.peers.v2` before a new Mac pairing completes. Existing mobile
-pairing and execution protocol identifiers remain compatible; a workspace keeps
-its original library namespace and execution scope when its inventory is shared.
+advertise the `library.peers` capability before a new Mac pairing completes. A
+workspace keeps its original library namespace and execution scope when its
+inventory is shared. Every device runs the same Woven Matter release; nothing
+is kept for an older one.
 
 Acceptance covers independent offline edits, three-Mac synchronization with the
 joining Mac unavailable, conflict recovery, deletion races, restart/replay,

@@ -25,7 +25,7 @@ files are protected from cleanup while the chat is in Trash.
 
 Exports are local snapshots of what Woven Matter has retained. They do not fetch
 missing provider history or bundle attachment file bytes. The full-run JSON
-includes a schema version and coverage description. Both export actions use the
+includes a coverage description. Both export actions use the
 native Save dialog and remove the temporary export on success, cancellation, or
 save failure. Export contents are staged by the backend rather than carried in
 an IPC response, so large chats do not hit the response-size limit.

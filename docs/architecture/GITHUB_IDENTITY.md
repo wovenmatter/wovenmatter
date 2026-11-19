@@ -110,7 +110,7 @@ keeps their records waiting until it updates):
   over the canonical encoding with domain `woven.github.recipient.v1`. The
   private half is Keychain item `global.github-sealing` on a Mac and the same
   item in the library host's secret store on Linux. A phone's row is ignored.
-- `github_identity(singleton, payload)`: `{version, revision, author, identity,
+- `github_identity(singleton, payload)`: `{revision, author, identity,
   key? {publicKey, fingerprint, type, comment}, access?, sealed: [{device,
   recipient, ephemeral, box}], signature}`. Each sealed copy is the key's JSON
   in ChaCha20-Poly1305 under HKDF-SHA256 of an ephemeral X25519 agreement with
@@ -120,8 +120,11 @@ keeps their records waiting until it updates):
   sorted-key JSON without `signature`, after the domain
   `woven.github.identity.v1` and a zero byte.
 
-`version` is 1. A machine leaves a record with a newer version alone, and a Mac
-refuses changes until it is updated. A recipient row counts only under the
+The record carries no format number. A record an earlier release wrote has a
+`version` key inside its signed bytes; it is carried only so that record
+still verifies. Nothing reads it, and new records do not have it.
+
+A recipient row counts only under the
 device its signed payload names, and only for a current Mac or Linux member. A
 record counts only when a current Mac member signed it; a record a Linux host
 or phone writes is ignored, and a Mac that holds the key writes its own back.

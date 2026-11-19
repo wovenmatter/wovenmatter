@@ -7,7 +7,7 @@ installer's API token, for the host's runtime inventory and maintenance, its
 **View browser** window, updating a host too old for signed updates, and
 repair. Everything else, from every Mac, goes to the host's own server over
 Tailscale HTTPS, signed with the Mac's device key: sessions and their live
-stream (`GET /v1/stream?protocol=1`), files, Pi Durable settings, logs,
+stream (`GET /v1/stream`), files, Pi Durable settings, logs,
 restarts and updates. Each host is a library member with its own full library
 copy; session history reaches other devices by library sync.
 Docker is not required.

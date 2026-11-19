@@ -30,7 +30,7 @@ applies whichever row arrives last. Trash, restore and draft folder moves change
 runtime state, so the app sends them for another Mac's chat to that Mac, which
 applies its own checks and effects; with that Mac unreachable they fail rather
 than apply locally. A new folder on another Mac is asked of that Mac the same
-way (`createFolder`, from a Mac only, for a Mac that lists `folders.create.v1`):
+way (`createFolder`, from a Mac only, for a Mac that lists `folders.create`):
 it creates the directory in its own managed workspace root and its own folder
 rows, which synchronize to every device; the asking Mac writes none of them.
 No Mac writes a folder bound to another Mac's
@@ -131,7 +131,7 @@ ID.
 Another machine's chats arrive in this library by synchronization like any
 other history; there is no separate per-Mac cache of them. While one is open,
 this Mac's background server follows it live on that machine's member-signed
-stream (`GET /v1/stream?protocol=1`) and sends its commands there; nothing
+stream (`GET /v1/stream`) and sends its commands there; nothing
 polls the other machine. When it is unreachable, the chat shows the
 synchronized history and says the machine is offline.
 
@@ -230,12 +230,11 @@ key: `POST /v1/peers/sync`, `/v1/peers/notify`, `/v1/peers/files` and
 `/v1/peers/file`. A local commit is announced once, debounced, to online peers,
 and each pulls with one exchange; a peer that reappears is caught up once; a
 60-second presence check, backing off to 15 minutes for an offline peer,
-replaces constant polling. Peers must share the exchange format
-(`PairedLibraryFormat`), and a mismatch is reported as "update required" rather
-than partially applied. A release that only adds a shared table or column keeps
-the format: a device that has not updated keeps the records it cannot apply
-yet, relays them, and applies them once it updates
-([Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "Versions").
+replaces constant polling. The exchange carries no format or version number,
+and every device updates together. When a release adds a shared table or
+column, a device that has not updated yet keeps the records it cannot apply,
+relays them, and applies them once it updates; nothing is partially applied
+([Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "No version numbers").
 Requests go only to tailnet HTTPS endpoints (`https://*.ts.net`) taken from
 signed member entries; there is no public directory, redirects and cookies are
 disabled, and merely appearing on the tailnet grants nothing. Once membership

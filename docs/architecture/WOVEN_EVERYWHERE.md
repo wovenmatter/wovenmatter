@@ -121,9 +121,9 @@ change, change this document in the same commit.
     - `X-Woven-Member-Signature`: an Ed25519 signature, base64url without
       padding.
   - The signed message is the UTF-8 string
-    `woven-member-v2\n<audience>\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
+    `woven-member\n<audience>\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
     Device IDs (caller and audience) are lowercase UUIDs. An empty body
-    hashes the empty string. There is no `v1` fallback. A WebSocket upgrade signs its
+    hashes the empty string. A WebSocket upgrade signs its
     `GET` request. The path is the request target exactly as the client
     sends it, except that a leading `/wovenmatter` mount is dropped
     (`MemberRequestSignature.canonicalTarget`: `/wovenmatter/v1/x?y` and
@@ -359,7 +359,8 @@ among Macs that still stand; they never decide who wins a dispute.
     `mac` and `linux` members only, all signed: `POST /v1/peers/sync`
     (`LibraryPeerExchange {deviceID, after, page, version, attachment?}`: push
     this device's page after its last pushed cursor, receive the peer's after
-    `after`; repeated until neither has more). `after` is the caller's
+    `after`; repeated until neither has more; `version` is the caller's Woven
+    Matter release, kept only to show in sync status). `after` is the caller's
     committed receive cursor for the answering device, so the answering
     device also records it as what that caller holds (its pushed cursor for
     the caller becomes the larger of the two, never past its own last cursor)
@@ -417,22 +418,47 @@ among Macs that still stand; they never decide who wins a dispute.
   on every device, with title and status. Transcripts for very recent
   sessions (updated in the last 3 days, or running), plus any session the
   user opens or keeps offline. Large files are fetched when opened.
-- **Versions.** Peers synchronize at the same exchange format
-  (`PairedLibraryFormat.exchange`, carried as `format` on every page), not
-  with identical schemas. The format covers how values and identities are
-  encoded, how concurrent versions are ordered, which columns a deletion
-  carries, and the name, type and key of every shared column that exists.
-  A release that renames, retypes or removes something shared raises it; a
-  device on another format, or on a build before it, answers or receives
-  `update_required`, nothing is applied and no cursor moves, so the exchange
-  resumes once every device has updated. A release that only adds a shared
-  table or column leaves the format alone:
+- **No version numbers.** Nothing the devices store or exchange carries a
+  version number of its own: no schema, format or protocol number, and no
+  numbered capability name. The numbers that remain are the Woven Matter
+  release (which Settings → Updates shows and compares), other vendors'
+  versions, and the revisions of data (a row's version, a clock, a cursor).
+  Every device updates together ("Updates"), and there is no compatibility
+  layer for an older build: a change to something both sides use changes
+  both sides. A build tells what it faces from three things:
+  - **A named capability.** A machine that takes a request another build
+    might not lists a name for it: `stream`, `history.library` and
+    `folders.create` in its registry row's `capabilities`, `library.peers`
+    in a Mac's discovery advertisement. A sender looks for the name before
+    it relies on the feature: a Mac whose row lacks `folders.create` is sent
+    no folder request, and the requester names the Mac to update.
+  - **The shape of the data.** A reader recognises what it holds by the
+    tables, columns and keys that are there, and ignores a key it does not
+    use. A change to what a store already holds (a rename, a retype, a
+    removal) is recognised by the earlier shape and converted in place, in
+    one transaction that leaves none of that shape, so it runs once
+    (`convertEarlierLibraryUnlocked` for the library, under "Storage names"
+    below). A conversion of something shared rewrites the recorded versions
+    with it, so devices that update together keep their versions and
+    cursors. A name written into stored data has no number either: where
+    stored rows carry an earlier name (a native record's format tag), one
+    mapping reads them and the rows are not rewritten.
+  - **The shared-schema hash.** The shared tables are hashed (`schema`: per
+    table, its column names with their declared types, sorted by name, and
+    its key columns in key order; physical column order is not part of it,
+    so a library converted over many releases and a freshly created one
+    report the same). Peers report the hash; a difference means one of them
+    has additions the other keeps waiting, and
+    `LibrarySyncStatus.waitingForUpdate` counts them.
+
+  A release that only adds a shared table or column needs nothing more:
   - A device that does not know a record's table or one of its columns keeps
     the record exactly as received (a waiting entry of `peer_sync_versions`,
     marked `waits_for_update`),
     relays it to its own peers, keeps synchronizing everything else, and
-    applies it once it updates, checked then against the member that sent
-    it. It never applies a cut-down row: a later
+    tries it again when its own schema hash changes, which is when it has
+    updated; the record is checked then against the member that sent it. It
+    never applies a cut-down row: a later
     local edit would send the cut-down row back and lose the new column on
     every device. A local edit made while such a version waits is concurrent
     with it, as with a version waiting for its bytes.
@@ -442,35 +468,22 @@ among Macs that still stand; they never decide who wins a dispute.
     arrives at the same row whatever order the versions came in; a column no
     concurrent version carries keeps its local value, or its default in a
     new row. A new shared column is therefore nullable or has a default, and
-    the step that adds it leaves recorded versions as they are.
-  - `PairedLibraryRecord.needs` marks a record whose content, in a shape
-    that did not change (a new case of a stored enum, a new field a validator
-    requires), needs a newer build (`PairedLibraryFormat.content`). A device
-    below it keeps the record waiting instead of rejecting it. Relays carry
-    the marker unchanged.
+    adding it leaves recorded versions as they are.
   - File sync skips a file store this build does not keep.
-  The shared tables are still hashed (`schema`: per table, its column names
-  with their declared types, sorted by name, and its key columns in key
-  order; physical column order is not part of it, so a library migrated over
-  many releases and a freshly created one report the same). Peers report the
-  hash; a difference means one of them has additions the other keeps
-  waiting, and `LibrarySyncStatus.waitingForUpdate` counts them. When a
-  format differs, every device shows which part needs updating and offers
-  "Update everything". There is no compatibility
-  layer. A mismatched exchange answers 409 `{code: "update_required",
-  message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,
-  schema, peers: [{deviceID, name, kind, state: online|offline|updateRequired|failing,
-  version, lastSynchronized, lastContact, error}], conflicts, quarantined,
-  waitingForUpdate}`,
-  `updateRequired`) is on the Mac's `LibraryHostSnapshot.librarySync`, the
-  library socket's `GET /v1/sync/status` and, for phones, the mobile API's
-  signed `GET /v1/sync/status` on every Mac and Linux host. On a Mac, a peer
-  in `updateRequired` raises the same "Versions don't match" / "Update
-  everything" notice as a bots version mismatch (`ApplicationModel+Bots.swift`).
-- **Values a newer build wrote.** With matching schemas, devices still run
-  different builds for days, and a row or reply may hold a value an older
-  build does not know (a new workspace kind, journal entry kind, note kind,
-  goal state). The rule has two halves:
+
+  `LibrarySyncStatus` (`{deviceID, version, schema, peers: [{deviceID, name,
+  kind, state: online|offline|failing, version, lastSynchronized,
+  lastContact, error}], conflicts, quarantined, waitingForUpdate}`; each
+  `version` is that device's Woven Matter release, for display) is on the
+  Mac's `LibraryHostSnapshot.librarySync`, the library socket's
+  `GET /v1/sync/status` and, for phones, the mobile API's signed
+  `GET /v1/sync/status` on every Mac and Linux host. A Mac shows "Versions
+  don't match" with "Update everything" for a machine whose Woven Matter
+  release, host release fingerprint or library schema hash differs from its
+  own (`BotsRemoteStatus.mismatch`, `BotVersionReport`).
+- **Values a newer build wrote.** Until every device has updated, a row or
+  reply may hold a value a build does not know yet (a new workspace kind,
+  journal entry kind, note kind, goal state). The rule has two halves:
   - **Reading skips.** A list read from another device, or from a replicated
     table, keeps the elements this build can decode and drops the rest
     (`LossyArray`): the library snapshot and change pages, the workspace
@@ -504,7 +517,7 @@ among Macs that still stand; they never decide who wins a dispute.
   - `device_*` is what the library keeps for devices that reach it over the device API: the phone change feed (`device_sync_revisions`, `device_sync_changes`, written by the `<table>_device_sync_*` triggers), mutation, command, draft, tool and calendar receipts and scheduled MCP callers. Saved files are `saved_artifacts`, with uploads in progress in `artifact_uploads` and `artifact_chunks` (each chunk's bytes are a file in `library-chunks/` that the row names by SHA-256); `message_provenance` is the session that sent an agent's message.
   - `library_items`, `library_messages`, `library_settings` and `library_locations` index the Library pane (files and links found in chats); `library_members*` is the signed member list.
 
-  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The library carries no schema version: nothing writes a number into the file and nothing reads one, and a number an earlier release left there is ignored. What a library needs is told from its shape (`convertEarlierLibraryUnlocked`). The conversion runs for a library that still has a table under a name v0.4.2 used or a column v0.4.2 had (`hasEarlierShapeUnlocked`; a Dev snapshot renames the tables of the library it copies before the app opens it, so its columns say what it is), in one transaction that leaves neither, so it runs once; a later change to what a library already holds is detected the same way, by the earlier shape it looks for (the usage rows' account label, which was never collected reliably, is dropped where the column is found). A table that is only added, like Settings → GitHub's two shared tables (`GITHUB_IDENTITY.md`) or the shared table of workspace names `execution_workspace_names`, needs no conversion: its declaration creates it at the next open, so a library from any earlier release ends with exactly the schema of a new one. Each conversion copies the library first (`Library Backups/before-library-conversion-<time>.sqlite` beside it; a clone on a Mac, removed after 30 days). While it runs, the opening process publishes its stage and fraction (`LibraryUpgradeMonitor`); the background service puts them in its readiness reply, so a window shows the upgrade and keeps waiting instead of timing out. An earlier release that opens a library a later one has changed is not stopped by the library: mixed versions are handled between devices by the exchange format and by keeping records a build does not know waiting ("Versions"). New and converted libraries use incremental auto-vacuum. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
+  v0.4.2 still used the names of the OpenClaw dashboard the library came from (`dashboard_*`, `desktop_*`, OpenClaw gateway tables and columns, and per-row `user_id`, `governing_plane`, `authority_kind`, `authority_agent_id`, `origin_device_id` and `desktop_owned` columns every current writer sets to the same value). Its later tables were named for where they came from (`paired_*`, `device_*`, `workspace_*`), and it stored JSON as BLOB. Opening such a library converts it in place (`LibrarySchemaUpgrade.swift`, whose tables are the complete old-to-new map): tables and columns are renamed, dead ones dropped, JSON is stored as TEXT, every trigger is recreated under its `<table>_<purpose>_<op>` name and every index of a renamed table as `<table>_<purpose>`, and peer sync bookkeeping is rewritten to the new names and text values, so paired Macs that update together keep their versions and cursors. The library carries no schema version: nothing writes a number into the file and nothing reads one, and a number an earlier release left there is ignored. What a library needs is told from its shape (`convertEarlierLibraryUnlocked`). The conversion runs for a library that still has a table under a name v0.4.2 used or a column v0.4.2 had (`hasEarlierShapeUnlocked`; a Dev snapshot renames the tables of the library it copies before the app opens it, so its columns say what it is), in one transaction that leaves neither, so it runs once; a later change to what a library already holds is detected the same way, by the earlier shape it looks for (the usage rows' account label, which was never collected reliably, is dropped where the column is found). A table that is only added, like Settings → GitHub's two shared tables (`GITHUB_IDENTITY.md`) or the shared table of workspace names `execution_workspace_names`, needs no conversion: its declaration creates it at the next open, so a library from any earlier release ends with exactly the schema of a new one. Each conversion copies the library first (`Library Backups/before-library-conversion-<time>.sqlite` beside it; a clone on a Mac, removed after 30 days). While it runs, the opening process publishes its stage and fraction (`LibraryUpgradeMonitor`); the background service puts them in its readiness reply, so a window shows the upgrade and keeps waiting instead of timing out. Nothing in the library stops an earlier release from opening one a later release has changed: devices update together, and a record that names a table or column a build does not have waits there until that build is updated ("No version numbers"). New and converted libraries use incremental auto-vacuum. Rows the old columns hid or kept read-only stay that way: a dashboard chat becomes retained read-only history, and a hidden one stays archived. Each machine's device ID file (`dashboard-device-id`, now `device-id`; `DeviceIdentityFile.moveLegacyFile`) and the window, sidebar and theme settings saved under `wovenmatter.dashboard.*` (`WindowPreferenceUpgrade` on the Mac; the iPhone moves its theme) move once.
 
 ### Library host (`wovenmatter-library`)
 
@@ -538,7 +551,7 @@ wovenmatter-library --version
   list and exit (the same as the socket's `POST /v1/members/adopt`).
 - When both listeners are ready it prints one line to stdout and writes the
   same object to `DIR/run/library.json` (0600):
-  `{"event":"ready","pid":N,"port":N,"socket":"…","version":"1","schema":"<hex>"}`,
+  `{"event":"ready","pid":N,"port":N,"socket":"…","schema":"<hex>"}`,
   where `schema` is the paired-library schema hash (`pairedLibrarySchema()`),
   which the Node server reports as `librarySchema`. SIGTERM or
   SIGINT stops it cleanly and removes that file. Exit codes: 0 clean, 1
@@ -559,7 +572,7 @@ owned by the running user.
 **Loopback routes** (published with Tailscale Serve under `/wovenmatter`,
 which the host strips):
 
-- `GET /v1/health` → `{"status":"ok","service":"wovenmatter-library","version":"1","deviceID":"…","uptimeSeconds":N}`,
+- `GET /v1/health` → `{"status":"ok","service":"wovenmatter-library","deviceID":"…","uptimeSeconds":N}`,
   or 503 when the database is unavailable. Unauthenticated; it reveals only
   the device ID, which is the member device ID.
 - `GET /v1/identity` → `{deviceID, kind: "linux", name, publicKey, endpoints}`.
@@ -717,12 +730,12 @@ Tools that only a Mac serves (usage, which is the Mac's own provider usage
 data, HTML preview, which needs a Mac's renderer, and a scheduled task's tool
 policy, which the Mac that holds the schedule decides) go to any Mac member, signed with this host's key: `POST
 <mac endpoint>/mcp/workspace` (and `/mcp/workspace/prepare` with the task
-proof) with `X-Woven-Protocol: 3`, `X-Woven-Workspace-ID: <this workspace>`,
+proof) with `X-Woven-Workspace-ID: <this workspace>`,
 `X-Woven-Conversation-ID`, `X-Woven-Enabled-Groups` and
 `MCP-Protocol-Version`, and no bearer (`createMemberMacDelegate`). Macs are
 tried in sync-status order, online first; another Mac is tried only when the
 request never reached one or was refused before any effect (401, 403, 404,
-426, 503). The Mac accepts the call when the signer serves that non-deleted
+503). The Mac accepts the call when the signer serves that non-deleted
 Linux workspace (its execution device, or the member `MemberAudience.serving`
 names) and the conversation belongs to it. A scheduled task's caller record
 (`device_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
@@ -947,7 +960,7 @@ hands them to the macOS job, which checks them with
       writes them itself: it asks that Mac for an exchange at once and waits
       up to 5 s for them, and a new folder still on its way was created all
       the same.
-    - A Mac that accepts the command lists `folders.create.v1`
+    - A Mac that accepts the command lists `folders.create`
       (`LibraryWorkspaceAction.createFolderCapability`) in its registry
       row's `capabilities`. A Mac whose row lacks it is sent nothing, since
       it could not decode the action, and the requester says "Update Woven
@@ -1019,7 +1032,7 @@ hands them to the macOS job, which checks them with
   configuration for a Linux row it owns only stops listing it locally. A
   deleted row is never changed or registered again, so the same machine set
   up later is a new row under a new ID. Every
-  Mac member advertises `history.library.v1` (it serves its own sessions' history from the library
+  Mac member advertises `history.library` (it serves its own sessions' history from the library
   change feed), so the host route's agent list ("This Mac", from
   `GET /v1/providers` on the mobile API) belongs only to the registry row of
   the library host the phone currently syncs with, matched by its device ID;
@@ -1065,8 +1078,8 @@ hands them to the macOS job, which checks them with
   sent, `/wovenmatter` included) and send no bearer. A signed 401 means "this
   host does not know this phone yet" (`memberUnknown`, skipped like an offline
   host); a host that has not loaded its member list yet answers that it does
-  not accept member requests, which is retried like any other failure; 409
-  `update_required` becomes `updateRequired`. A phone that is not a member
+  not accept member requests, which is retried like any other failure. A
+  phone that is not a member
   (the Mac refused its key) syncs nothing and asks to pair again.
 - **Members.** The mobile API serves `GET /v1/members` (the resolved member
   list, as on the library socket) on every Mac and Linux host. The phone
@@ -1183,19 +1196,19 @@ whose stream is connected; the iPhone's no-stream fallback is under "Clients".
 
 ### Endpoint and authentication
 
-- `GET /v1/stream?protocol=1`, upgraded to a WebSocket. A Mac serves it under
-  its `/wovenmatter` mount; a Linux host under its execution endpoint
-  (`…/wovenmatter-execution/<id>/v1/stream`). The workspace descriptor's
-  `capabilities` includes `stream.v1`.
+- `GET /v1/stream`, with no query string, upgraded to a WebSocket. A Mac
+  serves it under its `/wovenmatter` mount; a Linux host under its execution
+  endpoint (`…/wovenmatter-execution/<id>/v1/stream`). The workspace
+  descriptor's `capabilities` includes `stream`.
 - The upgrade `GET` is member-signed exactly like any other member request
-  (`woven-member-v2`, headers only, empty body, the target including
-  `?protocol=1`). It is the whole credential: no ticket, bearer or grant.
+  (headers only, empty body, a target with no query). It is the whole
+  credential: no ticket, bearer or grant.
   Allowed member kinds are those of `/v1/execution/*`: `mac`, `ios`, `linux`.
   A Mac window has no key; it asks its own server to sign each attempt
   (`BotsCommand.signSocket`, widened to `/v1/stream`). Every reconnect signs
   afresh.
-- Refusals happen before the upgrade, as JSON HTTP errors: `426`
-  `{code:"protocol_unsupported", supported:[1]}`; `401`
+- Refusals happen before the upgrade, as JSON HTTP errors: `400`
+  `bad_request` when the request carries any query string; `401`
   `{code:"member_time_stale", serverTime}` when the signature time is outside
   the window, so the UI says the device clock is wrong; `401` `unauthorized`;
   `403` `browser_request` when the request carries `Origin` or `Cookie`;
@@ -1237,7 +1250,7 @@ decode and re-encode every fixture.
 
 | Direction | Frame | Meaning |
 |---|---|---|
-| server | `{t:"hello", protocol:1, deviceID, libraryID, workspaceID, serverTime, capabilities:[…], maxFrameBytes}` | First frame after the upgrade. `deviceID` is the server's member ID; `libraryID` and `workspaceID` are its registered execution workspace's, and a client closes a stream whose `hello` names another. |
+| server | `{t:"hello", deviceID, libraryID, workspaceID, serverTime, capabilities:[…], maxFrameBytes}` | First frame after the upgrade. `deviceID` is the server's member ID; `libraryID` and `workspaceID` are its registered execution workspace's, and a client closes a stream whose `hello` names another. |
 | client | `{t:"req", id, method, params}` | A call. `id` is unique per socket. |
 | server | `{t:"res", id, result}` or `{t:"res", id, error:{code, message, retryable}}` | Exactly one per `req`. |
 | client | `{t:"sub", id, stream, params}` | Open a subscription. |
@@ -1315,7 +1328,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
     (Mac and Linux; a library host also answers `GET v1/sessions/<id>/activity`)
     returns a `LibraryActivity` with the complete projection. A Linux host
     journals a settled activity's full projection as a
-    `wovenmatter.activity.v2` native record named in `detailsRecordID`, so
+    `wovenmatter.activity.chained` native record named in `detailsRecordID`, so
     history discloses it too.
   - `capabilities` `{capabilities: HarnessCapabilities}` on subscribe and when
     they change.
@@ -1323,7 +1336,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
     workspace read (`POST v1/execution/workspace-read` `.session`) returns:
     model, thinking, permission, enabled tools, goal and `canConfigure`. Sent
     on subscribe, before `synchronized`, and whenever it changes; an unchanged
-    value is not sent again. A client of a `stream.v1` workspace does not read
+    value is not sent again. A client of a workspace that lists `stream` does not read
     session settings. On Linux the stream reads them again when the record's
     runtime configuration, run, goal or tools change and after every settings
     action, because a runtime may keep its settings outside the record.
@@ -1363,7 +1376,7 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
 - `execution.receipt` `{commandID}` → `LibraryCommandReceipt` or `null`.
 - `POST v1/execution/commands` and the read routes stay for server-to-server
   calls and Woven MCP. `POST v1/execution/commands` also serves a workspace
-  without `stream.v1`, one request per command.
+  without `stream`, one request per command.
 
 ### Clients
 
@@ -1443,8 +1456,8 @@ normal, `1001` server stopping or sleeping, `1009` client frame over 1 MiB,
   down, another host) the 15 s foreground timer runs. It also syncs once on
   foreground, network return and connection.
   A route counts as streamed only while its stream is connected and serves
-  `workspace`, not because the workspace advertises `stream.v1`. For a route
-  without one (no `stream.v1`, the stream down or ended), the same 15 s
+  `workspace`, not because the workspace advertises `stream`. For a route
+  without one (no `stream`, the stream down or ended), the same 15 s
   foreground tick reads the live view the phone shows: the host route's
   questions and its open chat over the mobile API while the library host's
   stream is not connected, and the open chat of another workspace with its
@@ -1587,7 +1600,7 @@ no stdio relay.
   26 directly; TypeScript runs through Node's built-in type stripping, so
   there is no build step. Its npm lockfile follows `docs/DEPENDENCIES.md`.
 - The Woven server on the bot machine supervises it as a child process. It
-  listens only on a loopback port and serves Pi Bot protocol 1, with
+  listens only on a loopback port and serves the Pi Bot protocol, with
   additions, over WebSocket at `/ws`. Woven apps reach a remote machine's bots
   through that machine's Woven server at `/v1/bots/ws`, authenticated as a
   member, which then proxies to the loopback socket.
@@ -1712,10 +1725,10 @@ effect within that window.
 
 #### Runtime protocol
 
-Pi Bot protocol 1 over WebSocket at `/ws`: JSON text frames, each request
+The Pi Bot protocol over WebSocket at `/ws`: JSON text frames, each request
 `{id, type, …}` answered by `{type: "result", id, data}` or `{type: "error",
-id?, message}`. `hello` carries `version`, `protocol: 1`, `installationId`,
-`capabilities` and `environment` (`none`, `linux-dockerd` or `mac-vm`).
+id?, message}`. `hello` carries `installationId`, `capabilities` and
+`environment` (`none`, `linux-dockerd` or `mac-vm`).
 Capabilities: `groups`, `woven.mcp`, `message.context`, plus the additions
 `bots.environment`, `runtime.update` and `previews`. `GET /health` returns the
 same identity with `ok: true`.
@@ -1774,7 +1787,7 @@ Added requests:
 | `previews.list {botId?}` | `{previews: [{botId, port, url}]}` for one bot or all (`port` is the container port). |
 | `previews.stop {botId, port}` | `{stopped: boolean}`. |
 | `runtime.update {botIds?}` | `{started: true}` at once; the update runs for all bots (or the listed ones), one at a time. |
-| `runtime.status` | `{version, environment, bots}`. |
+| `runtime.status` | `{environment, bots}`. |
 
 Added pushes:
 
@@ -2163,11 +2176,12 @@ answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
   plus `workspaceEnabled`, `runtimeAvailable`, `engine`, `runtime` and
   `settings`. On Linux `versions.app` is the Woven Matter version that shipped
   the host release (the bundle manifest's `releaseVersion`, which
-  `remote-host.sh` passes as `WOVENMATTER_RELEASE_VERSION`; `null` for older
-  releases), `versions.fingerprint` is the release fingerprint,
-  `versions.librarySchema` is the library host's paired-library schema hash
-  once its ready line carries `schema` (`null` until then), `versions.runtime`
-  is the bots package version and `paused` is `botMCP.isEnabled == false`.
+  `remote-host.sh` passes as `WOVENMATTER_RELEASE_VERSION`; `null` when the
+  server was started without one), `versions.fingerprint` is the release
+  fingerprint, `versions.librarySchema` is the library host's paired-library
+  schema hash once its ready line carries `schema` (`null` until then),
+  `runtimeInstalled` is whether the release ships the bots runtime package
+  and `paused` is `botMCP.isEnabled == false`.
   `GET /v1/health` carries the same as `release {version, fingerprint,
   librarySchema}`. A Mac treats a Linux host whose fingerprint differs from the
   host release it would install (`RemoteWorkspaceSSHClient.bundledHostFingerprint()`)
@@ -2344,7 +2358,7 @@ under `/wovenmatter` when reached through Tailscale Serve:
 
 | Route | Reply |
 | --- | --- |
-| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol, fingerprint?, librarySchema? }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`updating` and `engineUpdateFailure`: a Mac's VM update) |
+| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, fingerprint?, librarySchema? }, runtimeInstalled, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`versions.app` is the machine's Woven Matter release; `runtimeInstalled` is true where its Woven Matter includes the bots runtime, and Settings → Updates shows Bots only on a machine where it is; `updating` and `engineUpdateFailure`: a Mac's VM update) |
 | `POST /v1/bots/engine/update` (Macs) | starts the Mac's VM update and returns the status at once; follow `updating`, then `engineUpdateFailure` |
 | `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
 | `POST /v1/bots/enabled` `{ enabled }` | turns bots on or off on this machine and returns the status. Bots run on one machine: choosing one in Settings → Bots turns them off everywhere else. Bots, their files and conversations stay. A Linux host saves `botsOff` with its bots settings and refuses `enabled: true` until bots are installed |

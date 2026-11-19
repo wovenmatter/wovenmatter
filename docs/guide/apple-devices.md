@@ -26,8 +26,6 @@ Devices** and use one of the options under **Pair a device**.
      is too old. Woven Matter downloads and verifies the current release on that
      Mac first.
    - **Update to** a version number to install a newer release on that Mac.
-   - **Download** or **Open Woven Matter** when its version can't be paired
-     from here. Finish pairing in Apple Devices on that Mac instead.
 3. Woven Matter opens on the other Mac and sends a pairing request. Approve it
    under **Pairing requests** on this Mac.
 
@@ -62,11 +60,11 @@ it the same way, through any of your Macs it can reach.
 
 ## Keep your library in sync
 
-Paired devices synchronize only when they run matching versions, because their
-libraries must use the same format. When a device falls behind, **Apple Devices**
-shows **Versions don't match**, and **Synchronization needs attention** names the
-device that needs updating. Your own writing is saved while synchronization
-waits.
+Keep every paired device on the same version of Woven Matter. When a device
+falls behind, **Apple Devices** shows **Versions don't match**. Changes the
+older device can't use yet are kept and appear on it once it is updated;
+**Synchronization needs attention** says how many are waiting. Nothing is
+lost, and your own writing is saved meanwhile.
 
 Choose **Versions don't match** to open Settings → Updates, then **Update
 everything**. It updates this Mac first when a newer release is out, then each

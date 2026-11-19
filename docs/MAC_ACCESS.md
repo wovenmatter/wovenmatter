@@ -71,7 +71,7 @@ sync carries the changed record to every other member. The fields are transport-
 unknown items and states from newer Macs decode as unknown, and older Macs that
 never checked report nothing. The background server combines prompt-free probes
 with the last Keychain and Automation results saved by Settings
-(`wovenmatter.mac-access.v1` in the app's defaults).
+(`wovenmatter.mac-access` in the app's defaults).
 
 A session on a Mac missing Full Disk Access or Keychain access — or Accessibility
 and Screen Recording when Computer Use is enabled for it — shows a quiet notice

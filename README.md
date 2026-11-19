@@ -96,9 +96,9 @@ can be offline, and the rest keep working.
 - Sync is peer-to-peer between every online host. It runs on changes, not on a
   timer, and a host catches up when it comes back online. Conflicting edits
   are kept as conflict copies.
-- Hosts must run matching versions to sync. Settings → Updates shows every
-  device's version and harnesses, and **Update everything across all of your
-  devices** brings them all up to date.
+- Keep every host on the same Woven Matter version. Settings → Updates shows
+  every device's version and harnesses, and **Update everything across all of
+  your devices** brings them all up to date.
 
 ### Sessions across machines
 
