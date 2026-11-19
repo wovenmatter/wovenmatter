@@ -77,7 +77,7 @@ struct ExecutorConnectionsCard: View {
                                 }
                             }
                             ForEach(model.remoteWorkspaces.workspaces) { workspace in
-                                Button(workspace.name) {
+                                Button(model.workspaceDisplayName(workspace)) {
                                     draft.host = workspace.hostName; draft.user = workspace.userName ?? ""
                                     let machine = model.remoteWorkspaces.machineCandidates.first { $0.hostName == workspace.hostName || $0.dnsName == workspace.hostName }
                                     draft.origin = "https://\(machine?.dnsName ?? workspace.hostName):8443"

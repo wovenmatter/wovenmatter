@@ -282,8 +282,11 @@ when an intentional design change is accepted.
 - **Workspace naming:** use Local workspace and Remote workspaces in the sidebar,
   and Workspaces and Apple Devices for Settings pages.
   Describe local workspaces as agents and files on this Mac, remote workspaces as
-  agents and files on remote Linux machines, and Apple devices as Macs, iPhones,
-  and iPads that share the library.
+  agents and files on your other Macs and Linux machines, and Apple devices as
+  Macs, iPhones, and iPads that share the library. A remote workspace is titled
+  by the name someone chose for it, else a Mac's tailnet machine name, else the
+  name it registered; use that one title wherever the desktop names it. A new
+  Linux workspace left unnamed takes its tailnet machine name.
 - **Workspaces:** one list with the local workspace as a status row, remote workspaces
   as rows that open their detail, and workspaces from other devices. Forms for adding
   a workspace open from Add workspace. A remote workspace shows status with a Manage
@@ -298,7 +301,15 @@ when an intentional design change is accepted.
   Pinned agents and folders lead their respective lists without a separate Pinned
   section. Each Folders section starts with New folder, scoped to that workspace.
   Remote workspace names align with the local workspace heading; both use the same
-  child indentation. All Workspaces sits above the workspaces, Trash below them,
+  child indentation. Local workspace holds only this Mac's agents and folders.
+  Remote workspaces is one list of every other machine, paired Macs and Linux
+  hosts together by name, listed whether or not it is online, then paired
+  iPhones and iPads. Agents under a remote workspace go by their harness name
+  alone ("Codex"); the heading says where. Its New folder creates the folder on
+  that machine, and its heading's menu has Rename…, which names the workspace
+  on every paired device. New Chat groups remote agents under their workspace's
+  name with the same titles and order; a chat row names a remote agent with its
+  workspace ("Codex · Studio"). All Workspaces sits above the workspaces, Trash below them,
   and Recents remains global. Never add an Unassigned workspace section: folderless
   chats appear in All Workspaces and still have an execution owner. Folder hover cards match chat previews and show the
   workspace, chat/note counts, root directory, and additional reference directories.

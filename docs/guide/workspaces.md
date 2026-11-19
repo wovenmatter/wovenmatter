@@ -6,17 +6,21 @@ SQLite history store; project files stay in their execution workspace.
 
 ## Create a project folder
 
-Choose **New folder** in the sidebar, select its workspace, and enter a name.
-The owning workspace must be connected. **Create New** makes a blank directory
-with that name under the managed workspace root: `~/.woven-matter` on your Mac
-while a native Linux host uses
+Each workspace in the sidebar has its own **Folders** list: **Local workspace**
+for this Mac, and under **Remote workspaces** one section for each of your
+other Macs and Linux hosts. Choose **New folder** in the workspace that should
+hold the folder and enter a name. The owning workspace must be connected.
+**Create New** makes a blank directory with that name under the managed
+workspace root: `~/.woven-matter` on your Mac while a native Linux host uses
 `~/.local/share/wovenmatter/workspace` under its SSH account.
 
 A folder for another paired Mac is created by that Mac, in its own
 `~/.woven-matter`, and appears on every device as soon as they synchronize.
 That Mac must be on and reachable; if it runs an older version, Woven asks you
 to update Woven Matter on it first. Any of your Macs can create a folder on a
-Linux host, whichever Mac set the host up.
+Linux host, whichever Mac set the host up. These folders are always created
+new: **Link Existing** is offered for this Mac and for a Linux host this Mac
+set up.
 
 **Link Existing** lets you choose an existing project directory on the owning
 execution machine, including an accessible directory on a native Linux host.
@@ -31,13 +35,29 @@ preserved. A folder on another Mac, or on a Linux host another Mac set up, can
 only be removed from Woven here; delete its directory on the machine that
 holds it. Conversations and notes remain in Woven.
 
+## Workspaces in the sidebar
+
+**Local workspace** lists this Mac's agents and folders. **Remote workspaces**
+lists every other machine, your other paired Macs and your Linux hosts in one
+list by name, whether or not each is online; paired iPhones and iPads follow.
+Under each remote workspace, **Agents** are the harnesses on that machine (the
+plus beside one starts a chat that runs there) and **Folders** are the folders
+that live there.
+
+A paired Mac is titled with its machine name on your tailnet, and a Linux host
+with the name from its setup. To change it, right-click the workspace's heading,
+choose **Rename…**, and save a name; every paired device shows it. **Use
+default name** returns to the original.
+
 ## Chats and reference locations
 
 **New chat** opens the agent chooser. Choose an agent to start a draft in the
 selected folder. The plus beside a folder opens the chooser for that folder,
 and the **All Workspaces** plus opens it without assigning a folder. In the
 sidebar, clicking an agent's name opens its most recent chat; the separate plus
-beside it starts a new chat with that agent in the selected folder.
+beside it starts a new chat with that agent in the selected folder. The chooser
+lists remote agents under the name of the workspace that runs them, and for a
+folder shows only the agents of the workspace that owns it.
 
 Before the first message, use the composer's folder selector to choose a folder
 owned by that agent's workspace or **All Workspaces**. Sending the first message

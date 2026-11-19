@@ -45,7 +45,7 @@ struct SettingsBackgroundServerView: View {
                 if !model.remoteWorkspaces.workspaces.isEmpty {
                     SettingsRow(title: "Server") {
                         SettingsPicker("Server", selection: $workspaceID, options: serverOptions) { id in
-                            id.flatMap { id in model.remoteWorkspaces.workspaces.first { $0.id == id }?.name } ?? "This Mac"
+                            id.flatMap { id in model.remoteWorkspaces.workspaces.first { $0.id == id }.map { model.workspaceDisplayName($0) } } ?? "This Mac"
                         }
                     }
                 }

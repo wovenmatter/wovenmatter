@@ -89,6 +89,8 @@ struct WorkspaceView: View {
     private var selectedNoteID: String? { assets.tabs.selectedNoteID }
     @State private var selectedFolderID: String?
     @State private var localExecutionWorkspaceID: String?
+    /// This Mac's library host ID, which its own registry row names as its owner.
+    @State private var localHostDeviceID: String?
     @State private var sidebarNavigation = SidebarNavigationState()
     @State private var destination = WindowDestination.workspace
     /// The one rail revealed while the window is too narrow for the requested rails.
@@ -124,6 +126,14 @@ struct WorkspaceView: View {
     private var sidebarAgents: [WorkspaceAgent] {
         model.installedOrderedLocalCLIAgents
             + model.remoteWorkspaceAgents
+    }
+
+    /// Every other machine's workspace, as the sidebar and New Chat list them.
+    private var remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink] {
+        RemoteWorkspaceSidebarModel.links(
+            configurations: model.remoteWorkspaces.workspaces, readyTargets: model.remoteWorkspaces.readyChatTargets,
+            registry: model.executionWorkspaceRegistry, nameOverrides: model.workspaceNameOverrides,
+            localHostDeviceID: localHostDeviceID, localFolderOwnerID: localExecutionWorkspaceID)
     }
 
     private var surfacePreferenceSignature: String {
@@ -186,6 +196,7 @@ struct WorkspaceView: View {
         }
         .task(id: model.state == .ready) {
             localExecutionWorkspaceID = try? await model.executionWorkspaceIdentity(workspaceID: nil)
+            localHostDeviceID = try? await model.libraryStore?.database.libraryIdentity().hostDeviceID
         }
     }
 
@@ -227,6 +238,7 @@ struct WorkspaceView: View {
                         model: model,
                         folderOwnerID: model.workspaceOverview?.folders.first(where: { $0.id == selectedFolderID })?.executionWorkspaceID,
                         localExecutionWorkspaceID: localExecutionWorkspaceID,
+                        remoteWorkspaceLinks: remoteWorkspaceLinks,
                         onClose: closeNewChatChooser,
                         onSelect: startNewChat
                     )
@@ -481,7 +493,9 @@ struct WorkspaceView: View {
             adaptiveExpanded: adaptiveExpanded,
             agents: allAgents,
             navigationAgents: sidebarAgents,
+            peerAgentIDs: Set(model.peerAgentWorkspaces.keys),
             remoteWorkspaces: model.remoteWorkspaces,
+            remoteWorkspaceLinks: remoteWorkspaceLinks,
             localWorkspaceReady: model.localACPWorkspaceAvailability.isReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
             executionWorkspaces: model.executionWorkspaceRegistry,
@@ -519,6 +533,8 @@ struct WorkspaceView: View {
                 onCreateConversation: createConversation,
                 onCreateNote: openNewNoteChooser,
                 onCreateFolder: createFolder,
+                onCreateFolderOnWorkspace: createFolderOnWorkspace,
+                onRenameWorkspace: renameWorkspace,
                 onRenameFolder: renameFolder,
                 onSetFolderPinned: setFolderPinned,
                 onMoveFolder: moveFolder,
@@ -639,7 +655,7 @@ struct WorkspaceView: View {
                     )
                 case .library:
                     LibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
-                        (id: $0.id.uuidString.lowercased(), name: $0.name)
+                        (id: $0.id.uuidString.lowercased(), name: model.workspaceDisplayName($0))
                     }) { item in
                         if model.workspaceOverview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
                             model.libraryMessageTarget = item
@@ -744,13 +760,12 @@ struct WorkspaceView: View {
         // A successful creation may arrive before the read projection. Keep its
         // selected ID until the next snapshot instead of restoring an older chat.
         if selectedConversationID != nil && selectedConversation == nil { return }
-        if selectedConversation?.localRuntimeKind != nil {
-            selectedAgentID = selectedConversation?.agentID.flatMap { agentID in
-                allAgents.first {
-                    $0.id.uuidString.lowercased() == agentID
-                }?.id
+        if let selectedConversation {
+            let agentID = listedAgentID(of: selectedConversation)
+            if selectedConversation.localRuntimeKind != nil || agentID != nil {
+                selectedAgentID = agentID
+                return
             }
-            return
         }
         if selectedConversation == nil,
            chatPanels.activePanelID != .primary || chatPanels.hasAuxiliaryPanels {
@@ -773,6 +788,15 @@ struct WorkspaceView: View {
         _ = chatPanels.replaceActiveConversation(
             with: conversationsForSelectedAgent.first?.id
         )
+    }
+
+    /// The listed agent a chat belongs to. A chat another Mac runs has no
+    /// native session here, yet names that Mac's agent, which is listed under
+    /// its workspace.
+    private func listedAgentID(of conversation: WorkspaceConversationRecord) -> UUID? {
+        conversation.agentID.flatMap { agentID in
+            allAgents.first { $0.id.uuidString.lowercased() == agentID }?.id
+        }
     }
 
     private func selectAgent(_ id: UUID) {
@@ -880,13 +904,8 @@ struct WorkspaceView: View {
     private func selectConversation(_ id: String) {
         guard let conversation = model.workspaceOverview?.conversations.first(where: { $0.id == id }) else { return }
         _ = chatPanels.replaceActiveConversation(with: id)
-        if conversation.localRuntimeKind != nil {
-            selectedAgentID = conversation.agentID.flatMap { agentID in
-                allAgents.first {
-                    $0.id.uuidString.lowercased() == agentID
-                }?.id
-            }
-        }
+        let agentID = listedAgentID(of: conversation)
+        if conversation.localRuntimeKind != nil || agentID != nil { selectedAgentID = agentID }
         destination = .workspace
         compactWorkspacePane = .chat
     }
@@ -926,6 +945,34 @@ struct WorkspaceView: View {
                 return
             }
             selectFolder(folderID)
+        }
+    }
+
+    /// A folder on another Mac, or on a Linux host this Mac did not set up.
+    /// Its owner creates it; another Mac's rows then arrive by library sync,
+    /// so the folder is selected only once it is here.
+    private func createFolderOnWorkspace(name: String, registryID: String) {
+        model.clearFolderMutationError()
+        Task {
+            guard let folderID = await model.createFolder(name: name, onWorkspace: registryID) else {
+                showNotice(model.folderMutationError ?? "The folder could not be created.")
+                return
+            }
+            if model.workspaceOverview?.folders.contains(where: { $0.id == folderID }) == true {
+                selectFolder(folderID)
+            } else {
+                showNotice("The folder was created. It appears here once its workspace syncs.")
+            }
+        }
+    }
+
+    private func renameWorkspace(registryID: String, name: String?) {
+        model.clearFolderMutationError()
+        Task {
+            guard await model.renameWorkspace(registryID: registryID, name: name) else {
+                showNotice(model.folderMutationError ?? "The workspace could not be renamed.")
+                return
+            }
         }
     }
 
@@ -1107,9 +1154,8 @@ struct WorkspaceView: View {
 
     private func startDirectChat(_ runtimeKind: AgentRuntimeKind) {
         let requestedFolderID = selectedFolderID
-        let selection = beginChatCreation(agentID: allAgents.first {
-            $0.executionLocation != .remote && $0.runtimeKind == runtimeKind
-        }?.id)
+        // `localCLIAgents` holds only agents this Mac owns, never another Mac's.
+        let selection = beginChatCreation(agentID: model.localCLIAgents.first { $0.runtimeKind == runtimeKind }?.id)
         Task {
             guard let conversationID = await model.createLocalACPSession(
                 runtimeKind: runtimeKind, requestedConversationID: selection.id, folderID: requestedFolderID
@@ -1128,8 +1174,10 @@ struct WorkspaceView: View {
 
     private func startRemoteChat(_ target: RemoteHarnessChatTarget) {
         let requestedFolderID = selectedFolderID
+        // This Mac's own agent for the host; another Mac may hold one for it too.
         let selection = beginChatCreation(agentID: allAgents.first {
             $0.executionLocation == .remote && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
+                && model.peerAgentWorkspaces[$0.id] == nil
         }?.id)
         Task {
             guard let conversationID = await model.createRemoteACPSession(
@@ -1218,13 +1266,8 @@ struct WorkspaceView: View {
 
     private func synchronizeSelectionToActivePanel() {
         guard let conversation = selectedConversation else { return }
-        if conversation.localRuntimeKind != nil {
-            selectedAgentID = conversation.agentID.flatMap { agentID in
-                allAgents.first {
-                    $0.id.uuidString.lowercased() == agentID
-                }?.id
-            }
-        }
+        let agentID = listedAgentID(of: conversation)
+        if conversation.localRuntimeKind != nil || agentID != nil { selectedAgentID = agentID }
         model.markConversationRead(id: conversation.id)
     }
 

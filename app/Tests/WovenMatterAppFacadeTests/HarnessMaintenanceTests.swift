@@ -91,8 +91,16 @@ struct HarnessMaintenanceTests {
         #expect(reopened.remoteWorkspaces.statuses.isEmpty)
         #expect(reopened.remoteWorkspaces.runtimeMaintenance.isEmpty)
         #expect(reopened.remoteWorkspaces.readyChatTargets.isEmpty)
-        #expect(RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: fixture.remote.id) == saved)
-        #expect(RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: UUID()).isEmpty)
+        // The sidebar lists the saved host and its agents with no status and no registry row.
+        let other = RemoteWorkspaceConfiguration(name: "Other", workspaceID: "other", hostName: "other.invalid", kind: .host,
+                                                 dataRoot: "/data", workspaceRoot: "/workspace")
+        let links = RemoteWorkspaceSidebarModel.links(configurations: reopened.remoteWorkspaces.workspaces + [other], readyTargets: [],
+            registry: [], nameOverrides: [:], localHostDeviceID: nil, localFolderOwnerID: nil)
+        let link = try #require(links.first { $0.id == fixture.remote.id.uuidString.lowercased() })
+        let listed = RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: link, peerAgentIDs: [])
+        #expect(listed.sorted { $0.id.uuidString < $1.id.uuidString } == saved.sorted { $0.id.uuidString < $1.id.uuidString })
+        let unrelated = try #require(links.first { $0.id == other.id.uuidString.lowercased() })
+        #expect(RemoteWorkspaceSidebarModel.agents(reopened.remoteWorkspaceAgents, in: unrelated, peerAgentIDs: []).isEmpty)
         // A failed refresh (no inventory) must not remove or rewrite known agents.
         await reopened.synchronizeRemoteAgentCatalog()
         #expect(reopened.remoteWorkspaceAgents == saved)

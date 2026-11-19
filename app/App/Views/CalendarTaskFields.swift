@@ -38,7 +38,7 @@ struct CalendarTaskFields: View {
             Text("Session").font(.system(size: 14, weight: .semibold))
             CalendarField("Work location") {
                 CalendarMenuPicker(title: "Work location", selection: workspace, options: workspaceOptions) { id in
-                    id == "local" ? "Local workspace" : model.remoteWorkspaces.workspaces.first { $0.id.uuidString == id }?.name ?? "Unavailable workspace"
+                    id == "local" ? "Local workspace" : model.remoteWorkspaces.workspaces.first { $0.id.uuidString == id }.map { model.workspaceDisplayName($0) } ?? "Unavailable workspace"
                 }
             }
             CalendarField("Agent") {

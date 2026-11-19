@@ -495,7 +495,7 @@ struct CloudConversation: View {
                         }
                         if isRemote, !isPhoneHistory, readOnlyReason == nil, let remote, !remote.online {
                             // Its saved history shows; controls return when its owner reconnects.
-                            MacAccessNotice(message: remote.error ?? "\(remote.workspace.name) is not connected. Woven Matter reconnects automatically.",
+                            MacAccessNotice(message: remote.error ?? "\(model.workspaceDisplayName(remote.workspace)) is not connected. Woven Matter reconnects automatically.",
                                 openSettings: nil)
                                 .accessibilityIdentifier("remote-conversation-offline")
                         }

@@ -259,7 +259,9 @@ struct PageAssignMenu: View {
         let folders = (model.workspaceOverview?.folders ?? []).map { "\($0.id):\($0.executionWorkspaceID ?? "")" }
         let places = model.remoteWorkspaces.readyChatTargets.map { "\($0.configuration.id):\($0.harness.id.rawValue)" }
             + model.remoteWorkspaceAgents.map(\.id.uuidString)
-        return (ready + bots + folders + places).joined(separator: "|")
+        // Agents are grouped under their workspace's name, which a rename changes.
+        let names = model.workspaceNameOverrides.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+        return (ready + bots + folders + places + names).joined(separator: "|")
     }
 
     private var groupTitles: [String] {

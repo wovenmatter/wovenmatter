@@ -48,7 +48,9 @@ up SSH access on the other Mac first if it is missing.
    refuses it.
 
 Either Mac can start pairing. Both keep their existing libraries and
-synchronize after approval.
+synchronize after approval. Each Mac then lists the other under **Remote
+workspaces** in the sidebar, with its agents and folders; see
+[Workspaces and storage](workspaces.md).
 
 ## Remove a device
 

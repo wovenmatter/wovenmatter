@@ -294,6 +294,17 @@ final class RemoteWorkspacesModel {
         workspaces.first { $0.id == id }
     }
 
+    /// A new workspace's name: the one entered, or, left blank, its host's
+    /// machine name on the tailnet (the first label of its address). A host
+    /// given as a Tailscale IP names no machine, so it needs a name entered.
+    nonisolated static func workspaceName(entered: String, hostName: String) -> String {
+        let name = entered.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.isEmpty else { return name }
+        let host = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.contains(":"), !host.split(separator: ".").allSatisfy({ $0.allSatisfy(\.isNumber) }) else { return "" }
+        return SignInDevice.tailnetName(host) ?? ""
+    }
+
     func isHarnessReady(
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration

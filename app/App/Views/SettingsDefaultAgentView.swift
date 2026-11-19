@@ -128,7 +128,7 @@ struct SettingsDefaultAgentView: View {
         SettingsSection {
             SettingsWorkspacePicker(title: "Applies to",
                 scope: Binding(get: { settingsScope }, set: { settingsScope = $0; selectScope($0) }),
-                workspaces: workspaces)
+                workspaces: workspaces, name: { model.workspaceDisplayName($0) })
             if settingsScope != "global" {
                 SettingsToggleRow(
                     title: "Use shared chat settings",

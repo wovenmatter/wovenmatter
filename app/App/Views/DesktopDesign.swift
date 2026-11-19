@@ -167,43 +167,131 @@ enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// Another machine's workspace: a paired Mac, or a Linux host, whichever Mac
+/// set it up. Listed whether or not it is online.
 struct RemoteWorkspaceSidebarLink: Equatable, Identifiable {
-    let configuration: RemoteWorkspaceConfiguration
+    /// The registry ID (`ExecutionWorkspace.id`), a lowercased UUID. A Linux
+    /// host this Mac set up has its configuration's ID.
+    let id: String
+    let kind: ExecutionWorkspace.Kind
+    let title: String
+    /// True when someone chose the title; false when it is the default name.
+    let hasChosenName: Bool
+    /// The synced registry row. Nil for a host set up here that has not registered yet.
+    let workspace: ExecutionWorkspace?
+    /// Set for a Linux host this Mac set up: it has status, SSH and a browser here.
+    let configuration: RemoteWorkspaceConfiguration?
     let readyTargets: [RemoteHarnessChatTarget]
-
-    var id: UUID { configuration.id }
+    /// What this workspace's folders name as their owner: `remote:<id>` for a
+    /// Linux host, the registry row's `folderOwnerID` for a Mac.
+    let folderOwnerID: String?
 }
 
 enum RemoteWorkspaceSidebarModel {
-    /// Membership is persisted separately from transient connection/readiness checks.
-    static func agents(_ saved: [WorkspaceAgent], in workspaceID: UUID) -> [WorkspaceAgent] {
-        saved.filter { $0.executionLocation == .remote && $0.runtimeDeviceID == workspaceID }
+    /// Every other machine's workspace as one list: the Linux hosts this Mac
+    /// set up, merged with the registry's Macs and Linux hosts. A registry row
+    /// is listed while it is visible in connections, so an offline Mac stays
+    /// and a retained snapshot owner or a stopped Dev connection does not.
+    /// This Mac's own row is the Local workspace: it is named by its library
+    /// host ID or its folder owner, and until one of them is known no Mac is
+    /// listed, so this Mac never appears as a remote workspace.
+    static func links(
+        configurations: [RemoteWorkspaceConfiguration],
+        readyTargets: [RemoteHarnessChatTarget],
+        registry: [ExecutionWorkspace],
+        nameOverrides: [String: String],
+        localHostDeviceID: String?,
+        localFolderOwnerID: String?
+    ) -> [RemoteWorkspaceSidebarLink] {
+        let targetsByWorkspaceID = Dictionary(grouping: readyTargets, by: { $0.configuration.id })
+        var rows: [String: ExecutionWorkspace] = [:]
+        for row in registry where row.isVisibleInConnections && row.kind != .ios {
+            let id = ExecutionWorkspace.displayID(row.id)
+            if rows[id] == nil { rows[id] = row }
+        }
+        var links = configurations.map { configuration -> RemoteWorkspaceSidebarLink in
+            let id = configuration.id.uuidString.lowercased()
+            return RemoteWorkspaceSidebarLink(
+                id: id, kind: .linux, title: nameOverrides[id] ?? configuration.name, hasChosenName: nameOverrides[id] != nil,
+                workspace: rows[id].flatMap { $0.kind == .linux ? $0 : nil }, configuration: configuration,
+                readyTargets: (targetsByWorkspaceID[configuration.id] ?? [])
+                    .sorted { $0.harness.id.presentationRank < $1.harness.id.presentationRank },
+                folderOwnerID: "remote:" + id)
+        }
+        let configured = Set(links.map(\.id))
+        let localOwner = localFolderOwnerID.map(ExecutionWorkspace.displayID)
+        for (id, row) in rows where !configured.contains(id) {
+            if row.kind == .mac {
+                guard localHostDeviceID != nil || localOwner != nil, row.ownerDeviceID != localHostDeviceID,
+                      localOwner == nil || row.folderOwnerID.map(ExecutionWorkspace.displayID) != localOwner else { continue }
+            }
+            links.append(RemoteWorkspaceSidebarLink(
+                id: id, kind: row.kind, title: ApplicationModel.workspaceDisplayName(row, overrides: nameOverrides),
+                hasChosenName: nameOverrides[id] != nil, workspace: row, configuration: nil, readyTargets: [],
+                folderOwnerID: row.kind == .mac ? row.folderOwnerID : "remote:" + id))
+        }
+        return links.sorted {
+            let comparison = $0.title.localizedStandardCompare($1.title)
+            return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
+        }
     }
 
-    static func links(
-        workspaces: [RemoteWorkspaceConfiguration],
-        readyTargets: [RemoteHarnessChatTarget]
-    ) -> [RemoteWorkspaceSidebarLink] {
-        let targetsByWorkspaceID = Dictionary(
-            grouping: readyTargets,
-            by: { $0.configuration.id }
-        )
-        return workspaces
-            .sorted { lhs, rhs in
-                let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
-                if comparison != .orderedSame { return comparison == .orderedAscending }
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-            .map { configuration in
-                RemoteWorkspaceSidebarLink(
-                    configuration: configuration,
-                    readyTargets: (targetsByWorkspaceID[configuration.id] ?? [])
-                        .sorted { lhs, rhs in
-                            lhs.harness.id.presentationRank
-                                < rhs.harness.id.presentationRank
-                        }
-                )
-            }
+    /// The registry ID of the workspace a folder's owner (`device:<id>` or
+    /// `remote:<id>`) belongs to. A Mac's registry ID is not its folder owner,
+    /// so this goes through the row that names the owner as its `folderOwnerID`
+    /// (`ExecutionWorkspace.displayOwner`). A Mac can register more than one
+    /// such row (a Dev instance beside it): the listed one holds the folders,
+    /// the one devices connect to first, as its agents are placed.
+    static func workspaceID(ofFolderOwner owner: String, in registry: [ExecutionWorkspace]) -> String {
+        let id = ExecutionWorkspace.displayID(owner)
+        guard !registry.contains(where: { ExecutionWorkspace.displayID($0.id) == id }) else { return id }
+        let listed = registry.filter { $0.isVisibleInConnections && $0.folderOwnerID.map(ExecutionWorkspace.displayID) == id }
+        if let row = listed.first(where: { $0.endpoint != nil }) ?? listed.first { return ExecutionWorkspace.displayID(row.id) }
+        return ExecutionWorkspace.displayOwner(of: owner, in: registry) ?? id
+    }
+
+    static func folders(_ folders: [WorkspaceFolderRecord], in link: RemoteWorkspaceSidebarLink,
+                        registry: [ExecutionWorkspace]) -> [WorkspaceFolderRecord] {
+        folders.filter { $0.executionWorkspaceID.map { workspaceID(ofFolderOwner: $0, in: registry) } == link.id }
+    }
+
+    /// Folder owners with no listed workspace: not this Mac, not a remote
+    /// workspace, and not a paired iPhone or iPad.
+    static func unavailableFolderOwnerIDs(folders: [WorkspaceFolderRecord], links: [RemoteWorkspaceSidebarLink],
+                                          paired: [ExecutionWorkspace], localFolderOwnerID: String?,
+                                          registry: [ExecutionWorkspace]) -> [String] {
+        let listed = Set(links.map(\.id) + paired.map { ExecutionWorkspace.displayID($0.id) })
+        return Set(folders.compactMap(\.executionWorkspaceID).filter {
+            !$0.isEmpty && $0 != localFolderOwnerID && !listed.contains(workspaceID(ofFolderOwner: $0, in: registry))
+        }).sorted()
+    }
+
+    /// The agents listed under a remote workspace, one per harness. Membership
+    /// is persisted separately from transient connection/readiness checks.
+    /// Two Macs can each hold an agent for the same Linux host and harness:
+    /// this Mac's is the one shown, and a harness this Mac has ready there
+    /// (`link.readyTargets`) is this Mac's too, before its agent is saved.
+    static func agents(_ saved: [WorkspaceAgent], in link: RemoteWorkspaceSidebarLink,
+                       peerAgentIDs: Set<UUID>) -> [WorkspaceAgent] {
+        let here = saved.filter { $0.executionLocation == .remote && $0.runtimeDeviceID?.uuidString.lowercased() == link.id }
+        var harnesses = Set<AgentRuntimeKind>()
+        let own = here.filter { !peerAgentIDs.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }
+            .filter { harnesses.insert($0.runtimeKind).inserted }
+        harnesses.formUnion(link.readyTargets.map(\.harness.id))
+        return own + here.filter { peerAgentIDs.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }
+            .filter { harnesses.insert($0.runtimeKind).inserted }
+    }
+
+    /// Whether "+" beside an agent may start a chat: always with no folder
+    /// selected, else only when the selected folder is on the agent's
+    /// workspace. `workspaceID` is a remote workspace's registry ID (a remote
+    /// agent's `runtimeDeviceID`); nil is this Mac.
+    static func canCreateChat(onWorkspace workspaceID: String?, selectedFolderID: String?, folders: [WorkspaceFolderRecord],
+                              localFolderOwnerID: String?, registry: [ExecutionWorkspace]) -> Bool {
+        guard let selectedFolderID else { return true }
+        guard let owner = folders.first(where: { $0.id == selectedFolderID })?.executionWorkspaceID else { return false }
+        guard let workspaceID else { return owner == localFolderOwnerID }
+        return self.workspaceID(ofFolderOwner: owner, in: registry) == workspaceID
     }
 }
 
@@ -277,8 +365,10 @@ enum AgentDisclosureKey {
     static let localWorkspace = "section:local-workspace"
     static let remoteWorkspaces = "section:remote-workspaces"
 
-    static func workspace(_ id: UUID) -> String {
-        "workspace:\(id.uuidString.lowercased())"
+    /// One scheme for every remote workspace, keyed by registry ID: a Linux
+    /// host's is its configuration ID, so its saved state carries over.
+    static func workspace(_ id: String) -> String {
+        "workspace:\(id.lowercased())"
     }
 }
 

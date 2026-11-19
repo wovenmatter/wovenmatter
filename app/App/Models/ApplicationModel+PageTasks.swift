@@ -235,8 +235,9 @@ extension ApplicationModel {
 
     // MARK: Who a task can be assigned to
 
-    /// The person, then agents by workspace as the sidebar lists them (Local
-    /// workspace, then remote workspaces), then bots. An agent starts in the Page's folder when its workspace owns it.
+    /// The person, then agents by workspace as the sidebar names them (Local
+    /// workspace, then remote workspaces by their display names), then bots.
+    /// An agent starts in the Page's folder when its workspace owns it.
     func pageAssignTargets(pageFolderID: String?) async -> [PageAssignTarget] {
         let folders = workspaceOverview?.folders ?? []
         let pageFolder = pageFolderID.flatMap { id in folders.first { $0.id == id } }
@@ -264,16 +265,18 @@ extension ApplicationModel {
         for target in configured {
             let id = target.configuration.id.uuidString.lowercased()
             let owner = Self.remoteDatabaseSourceID(target.configuration.id)
-            targets.append(.init(id: "\(id):\(target.harness.id.rawValue)", group: .place(target.configuration.name),
-                assignee: BoardTaskAssignee(kind: .agent, name: target.harness.id.displayName, place: target.configuration.name,
+            let place = workspaceDisplayName(target.configuration)
+            targets.append(.init(id: "\(id):\(target.harness.id.rawValue)", group: .place(place),
+                assignee: BoardTaskAssignee(kind: .agent, name: target.harness.id.displayName, place: place,
                                             workspaceID: id, runtime: target.harness.id.rawValue, folderID: folder(for: owner)),
                 ready: true, detail: nil, folderOwner: owner))
         }
         for peer in NewChatPeerTarget.resolve(agents: remoteWorkspaceAgents, peerWorkspaces: peerAgentWorkspaces,
                                               configured: configured, folderOwnerID: nil) where peer.workspace.id != own?.id {
             let owner = peer.workspace.folderOwnerID ?? peer.workspace.id
-            targets.append(.init(id: "\(peer.workspace.id):\(peer.runtimeKind.rawValue)", group: .place(peer.workspace.name),
-                assignee: BoardTaskAssignee(kind: .agent, name: peer.runtimeKind.displayName, place: peer.workspace.name,
+            let place = workspaceDisplayName(peer.workspace)
+            targets.append(.init(id: "\(peer.workspace.id):\(peer.runtimeKind.rawValue)", group: .place(place),
+                assignee: BoardTaskAssignee(kind: .agent, name: peer.runtimeKind.displayName, place: place,
                                             workspaceID: peer.workspace.id, runtime: peer.runtimeKind.rawValue, folderID: folder(for: owner)),
                 ready: true, detail: peer.workspace.kind == .mac ? nil : "Linux", folderOwner: owner))
         }

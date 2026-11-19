@@ -149,7 +149,7 @@ struct SettingsOpenCodeInstances: View {
                 }
             }
             ForEach(remotes) { workspace in
-                SettingsSummaryRow(workspace.name, value: statusLabel(model.remoteOpenCodes[workspace.id])) {
+                SettingsSummaryRow(model.workspaceDisplayName(workspace), value: statusLabel(model.remoteOpenCodes[workspace.id])) {
                     OpenCodeInstanceSettings(model: model, workspaceID: workspace.id)
                 }
             }

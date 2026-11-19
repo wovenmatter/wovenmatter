@@ -961,9 +961,12 @@ hands them to the macOS job, which checks them with
   next registry refresh, returning to the Mac's device name or the Linux
   host's setup name when it is cleared. The desktop reads the choice
   directly and otherwise titles another Mac with its tailnet machine name
-  (the first label of its `*.ts.net` address) and a Linux workspace with its
-  registry name (`ApplicationModel.workspaceDisplayName`). Every Mac member advertises
-  `history.library.v1` (it serves its own sessions' history from the library
+  (the first label of its `*.ts.net` address, plus `(Dev) · <instance>` for a
+  Dev instance) and a Linux workspace with its registry name
+  (`ApplicationModel.workspaceDisplayName`). Its sidebar and New Chat list
+  every other Mac and Linux workspace as one list of remote workspaces under
+  those titles, online or not (`RemoteWorkspaceSidebarModel.links`). Every
+  Mac member advertises `history.library.v1` (it serves its own sessions' history from the library
   change feed), so the host route's agent list ("This Mac", from
   `GET /v1/providers` on the mobile API) belongs only to the registry row of
   the library host the phone currently syncs with, matched by its device ID;

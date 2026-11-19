@@ -8,6 +8,10 @@ while the Mac is disconnected.
 A Linux machine can also run bots without being a workspace; see [Bots](bots.md).
 Adding a workspace to it later reuses the same Woven server.
 
+In the sidebar, **Remote workspaces** lists your Linux hosts together with your
+other paired Macs (see [Workspaces and storage](workspaces.md) and
+[Apple devices](apple-devices.md)). This page covers Linux hosts.
+
 ## What you need
 
 - An online amd64 or arm64 Linux host in your Tailnet.
@@ -35,8 +39,10 @@ there is no fallback connection mode.
    changes. Native setup installs missing browser dependencies and enables
    background service startup.
    Preparation does not create a workspace.
-4. Once that host is ready, the workspace form appears. Give the workspace a name
-   and ID, acknowledge the host permission notice where shown, and create it.
+4. Once that host is ready, the workspace form appears. Give the workspace an
+   ID and, if you like, a name; left blank, it is named after the machine's
+   name on your tailnet. Acknowledge the host permission notice where shown,
+   and create it. You can rename it later from its heading in the sidebar.
    Native hosts reuse existing signed-in tools; install any missing adapters or
    harnesses from setup or Settings. Changing the host, SSH user or access
    choice requires a matching host check.

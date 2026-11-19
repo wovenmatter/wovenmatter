@@ -42,7 +42,7 @@ struct RemoteHarnessSetupView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Set up harnesses").font(.system(size: 22, weight: .semibold))
-                    Text(workspace.name).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
+                    Text(application.workspaceDisplayName(workspace)).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer()
                 Button("Set up later", action: finish).buttonStyle(SettingsQuietButtonStyle())

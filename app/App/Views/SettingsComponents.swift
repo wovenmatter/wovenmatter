@@ -1309,6 +1309,8 @@ struct SettingsWorkspacePicker: View {
     @Binding var scope: String
     let workspaces: [RemoteWorkspaceConfiguration]
     var sharedLabel = "All workspaces"
+    /// A workspace's title as the sidebar shows it (`ApplicationModel.workspaceDisplayName`).
+    var name: (RemoteWorkspaceConfiguration) -> String = { $0.name }
 
     private var options: [String] {
         ["global", "local"] + workspaces.map { $0.id.uuidString.lowercased() }
@@ -1320,7 +1322,7 @@ struct SettingsWorkspacePicker: View {
                 switch option {
                 case "global": sharedLabel
                 case "local": "Local workspace"
-                default: workspaces.first { $0.id.uuidString.lowercased() == option }?.name ?? "Workspace"
+                default: workspaces.first { $0.id.uuidString.lowercased() == option }.map(name) ?? "Workspace"
                 }
             }
         }

@@ -79,7 +79,18 @@ relays the row and can never write it. The workspace's owner also publishes
 the name as its registry name, which is what the iPhone, agents and devices
 that have not updated show. Without a chosen name a Mac's workspace is titled
 on the desktop with its tailnet machine name (the first label of its
-`*.ts.net` address), and a Linux workspace with the name from its setup.
+`*.ts.net` address; a Dev instance adds `(Dev) · <instance>`, since it shares
+the machine), and a Linux workspace with the name from its setup, which
+defaults to the host's tailnet machine name.
+
+The desktop sidebar lists every other member's workspace, Mac or Linux, as one
+list of remote workspaces (`RemoteWorkspaceSidebarModel.links`): a registry
+row that is visible in connections and is not this Mac's own (by its library
+host ID or its folder owner), merged with the Linux hosts this Mac set up. An
+offline Mac stays listed. Folders are grouped under the row that names their
+owner (`ExecutionWorkspace.displayOwner`; when a Mac registered several rows
+for one device, such as a Dev instance beside it, the listed one), agents under
+the row their owner record leads to.
 
 Another machine's chats arrive in this library by synchronization like any
 other history; there is no separate per-Mac cache of them. While one is open,

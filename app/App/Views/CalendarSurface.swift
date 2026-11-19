@@ -371,7 +371,7 @@ struct ScheduledTasksSurface: View {
                     }
                     ForEach(tasks) { task in taskRow(task) }
                     ForEach(model.remoteCalendarGatewayErrors.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
-                        Text("\(model.remoteWorkspaces.configuration(id: id)?.name ?? "Remote workspace"): \(model.remoteCalendarGatewayErrors[id] ?? "")")
+                        Text("\(model.remoteWorkspaces.configuration(id: id).map { model.workspaceDisplayName($0) } ?? "Remote workspace"): \(model.remoteCalendarGatewayErrors[id] ?? "")")
                             .font(.system(size: 12)).foregroundStyle(WovenPalette.danger)
                     }
                     if let error = model.calendarMutationError { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger) }

@@ -164,12 +164,17 @@ extension View {
     }
 }
 
+/// Names a folder, or a remote workspace, which can also return to its default name.
 struct FolderNamePopover: View {
     let title: String
     let actionTitle: String
+    var placeholder = "Folder name"
     @Binding var name: String
     let onCancel: () -> Void
     let onCommit: () -> Void
+    /// An action above Cancel that removes a chosen name; shown only when there is one.
+    var resetTitle: String? = nil
+    var onReset: () -> Void = {}
     @FocusState private var nameFocused: Bool
 
     private var canCommit: Bool {
@@ -180,12 +185,13 @@ struct FolderNamePopover: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
-            TextField("Folder name", text: $name)
+            TextField(placeholder, text: $name)
                 .focused($nameFocused)
                 .quietTextInput()
                 .onSubmit {
                     if canCommit { onCommit() }
                 }
+            if let resetTitle { Button(resetTitle, action: onReset) }
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)

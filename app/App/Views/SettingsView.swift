@@ -276,7 +276,7 @@ struct SettingsView: View {
         case .piDurable: "Pi Durable"
         case .harness(let kind, _, _): kind.displayName
         case .wovenMCP: "Woven MCP"
-        case .workspaces(let id): id.flatMap { model.remoteWorkspaces.configuration(id: $0)?.name } ?? "Workspaces"
+        case .workspaces(let id): id.flatMap { model.remoteWorkspaces.configuration(id: $0) }.map { model.workspaceDisplayName($0) } ?? "Workspaces"
         case .appleDevices: "Apple Devices"
         case .backgroundServer: "Background Server"
         case .dictation: "Dictation"
@@ -295,7 +295,7 @@ struct SettingsView: View {
         switch origin {
         case .agents: "Agents"
         case .general: "General"
-        case .remoteWorkspace(let id): model.remoteWorkspaces.configuration(id: id)?.name ?? "Workspaces"
+        case .remoteWorkspace(let id): model.remoteWorkspaces.configuration(id: id).map { model.workspaceDisplayName($0) } ?? "Workspaces"
         }
     }
 
@@ -370,7 +370,7 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Workspaces",
-                    detail: "Agents and files on this Mac and on remote Linux machines.",
+                    detail: "Agents and files on this Mac, your other Macs and Linux machines.",
                     icon: { LucideIcon(glyph: .container, size: 15) },
                     action: { route = .workspaces(nil) }
                 )
@@ -515,14 +515,14 @@ private struct SettingsHarnessView: View {
         SettingsPage(
             title: runtimeKind.displayName,
             detail: isWorkspaceScoped
-                ? remoteWorkspace.map { "In \($0.name)." }
+                ? remoteWorkspace.map { "In \(model.workspaceDisplayName($0))." }
                 : nil,
             reservesRailControlSpace: reservesRailControlSpace,
             backTitle: backTitle,
             onBack: onBack
         ) {
             if showsWorkspacePicker {
-                SettingsWorkspacePicker(title: "Applies to", scope: $scope, workspaces: workspaces)
+                SettingsWorkspacePicker(title: "Applies to", scope: $scope, workspaces: workspaces, name: { model.workspaceDisplayName($0) })
             }
             SettingsHarnessAccounts(model: model, runtimeKind: runtimeKind, scope: scope)
             if runtimeKind == .opencode {

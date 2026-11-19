@@ -3127,10 +3127,14 @@ final class ApplicationModel {
     /// name someone chose for it; else, for a Mac, its tailnet machine name
     /// (the first label of its `*.ts.net` address); else the name its owner
     /// registered. The owner also publishes a chosen name as the registered
-    /// one, for devices that only read the registry.
+    /// one, for devices that only read the registry. A Mac's Dev instance
+    /// shares its machine name with production, so it says "(Dev)" and its
+    /// instance, in the shape `DevelopmentLaunch.deviceName` registers.
     nonisolated static func workspaceDisplayName(_ workspace: ExecutionWorkspace, overrides: [String: String]) -> String {
         if let name = overrides[workspace.id.lowercased()] { return name }
-        if workspace.kind == .mac, let machine = SignInDevice.tailnetName(workspace.endpoint?.host) { return machine }
+        if workspace.kind == .mac, let machine = SignInDevice.tailnetName(workspace.endpoint?.host) {
+            return workspace.developmentInstance.map { machine + " (Dev) · " + $0 } ?? machine
+        }
         return workspace.name
     }
     func workspaceDisplayName(_ workspace: ExecutionWorkspace) -> String {

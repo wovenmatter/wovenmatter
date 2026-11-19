@@ -70,7 +70,7 @@ struct SettingsHarnessAccounts: View {
         _ workspace: RemoteWorkspaceConfiguration, @ViewBuilder content: () -> Content
     ) -> some View {
         if scope == "global" {
-            SettingsSummaryRow(workspace.name) { content() }
+            SettingsSummaryRow(model.workspaceDisplayName(workspace)) { content() }
         } else {
             content()
         }

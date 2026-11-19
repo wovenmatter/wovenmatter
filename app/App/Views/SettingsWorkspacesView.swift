@@ -34,7 +34,7 @@ struct SettingsWorkspacesView: View {
         return application.libraryHost.executionWorkspaces.filter {
             $0.isVisibleInConnections && !configured.contains($0.id)
                 && ($0.kind == .linux || $0.ownerDeviceID != thisDevice)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }.sorted { application.workspaceDisplayName($0).localizedStandardCompare(application.workspaceDisplayName($1)) == .orderedAscending }
     }
 
     /// A workspace another device added. Linux hosts without an SSH setup here are
@@ -47,7 +47,7 @@ struct SettingsWorkspacesView: View {
             let state = model.sharedHosts[workspace.id]
             let ready = state?.serviceState == "running" || state?.serviceState == "ready"
             VStack(alignment: .leading, spacing: 4) {
-                SettingsRow(title: workspace.name, detail: detail) {
+                SettingsRow(title: application.workspaceDisplayName(workspace), detail: detail) {
                     if state?.busy == true { ProgressView().controlSize(.small) }
                     if let service = state?.serviceState {
                         SettingsStatus(ready ? "Ready" : service.capitalized, tone: ready ? .good : .warning)
@@ -71,7 +71,7 @@ struct SettingsWorkspacesView: View {
             }
             .task(id: workspace.id) { if model.sharedHosts[workspace.id] == nil { model.manageSharedHost(workspace.id, .refresh) } }
         } else {
-            SettingsRow(title: workspace.name, detail: detail) { EmptyView() }
+            SettingsRow(title: application.workspaceDisplayName(workspace), detail: detail) { EmptyView() }
         }
     }
 
@@ -84,7 +84,7 @@ struct SettingsWorkspacesView: View {
     }
 
     private var pageTitle: String {
-        selectedWorkspace?.name ?? (addingWorkspace ? "Add Workspace" : "Workspaces")
+        selectedWorkspace.map { application.workspaceDisplayName($0) } ?? (addingWorkspace ? "Add Workspace" : "Workspaces")
     }
 
     private var workspacePage: some View {
@@ -149,7 +149,7 @@ struct SettingsWorkspacesView: View {
         .sheet(item: $logsWorkspace) { workspace in
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("\(workspace.name) logs").font(.settingsSection)
+                    Text("\(application.workspaceDisplayName(workspace)) logs").font(.settingsSection)
                     Spacer()
                     Button("Refresh") { model.loadLogs(workspace) }
                     Button("Done") { logsWorkspace = nil }
@@ -168,7 +168,7 @@ struct SettingsWorkspacesView: View {
         .sheet(item: $sharedLogsWorkspace) { workspace in
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("\(workspace.name) logs").font(.settingsSection)
+                    Text("\(application.workspaceDisplayName(workspace)) logs").font(.settingsSection)
                     Spacer()
                     Button("Refresh") { model.manageSharedHost(workspace.id, .logs) }
                     Button("Done") { sharedLogsWorkspace = nil }
@@ -336,9 +336,10 @@ struct SettingsWorkspacesView: View {
                     tone: application.localACPWorkspaceAvailability.isReady ? .good : .warning)
             }
         }
-        SettingsSection(title: "Remote workspaces", detail: "Agents and files on remote Linux machines.") {
+        SettingsSection(title: "Remote workspaces", detail: "Agents and files on your other Macs and Linux machines.") {
             if model.workspaces.isEmpty {
-                SettingsEmpty("No remote workspaces yet.")
+                // Other Macs and the Linux machines they added are listed below.
+                if sharedWorkspaces.allSatisfy({ $0.kind == .ios }) { SettingsEmpty("No remote workspaces yet.") }
             } else {
                 VStack(spacing: 2) {
                     ForEach(model.workspaces) { workspace in workspaceRow(workspace) }
@@ -382,7 +383,7 @@ struct SettingsWorkspacesView: View {
         _ workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         SettingsDestinationRow(
-            title: workspace.name,
+            title: application.workspaceDisplayName(workspace),
             detail: workspaceLocation(workspace),
             status: statusLabel(workspace),
             statusTone: model.statuses[workspace.id]?.running == true ? .good : .warning,
@@ -624,8 +625,10 @@ struct SettingsWorkspacesView: View {
 
     private var createCard: some View {
         SettingsSection(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
-            SettingsField("Name") {
-                TextField("Remote workspace name", text: $name)
+            // Left blank, the workspace is named after its machine on the tailnet.
+            SettingsField("Name (optional)") {
+                let machine = RemoteWorkspacesModel.workspaceName(entered: "", hostName: hostName)
+                TextField(machine.isEmpty ? "Remote workspace name" : machine, text: $name)
                     .wovenInput()
             }
             SettingsField("Workspace ID") {
@@ -638,7 +641,7 @@ struct SettingsWorkspacesView: View {
 
             Button(model.isCreating ? "Creating…" : "Create workspace") {
                 model.create(
-                    name: name,
+                    name: RemoteWorkspacesModel.workspaceName(entered: name, hostName: hostName),
                     workspaceID: workspaceID,
                     hostName: hostName,
                     userName: userName,
@@ -649,7 +652,7 @@ struct SettingsWorkspacesView: View {
             .buttonStyle(WovenPrimaryButtonStyle())
             .disabled(model.isCreating || currentPreflight?.ready != true
                 || !acknowledgedHostAccess
-                || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || RemoteWorkspacesModel.workspaceName(entered: name, hostName: hostName).isEmpty
                 || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
