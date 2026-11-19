@@ -5,11 +5,12 @@ import WovenMatterShared
 /// The journal's index is atomic, while immutable bodies are written once. Native
 /// history stays outside the disposable transcript cache and is never evicted.
 enum WorkspaceJournalPersistence {
-  /// The saved index: an object holding the journal's `state`. An index an
-  /// earlier build saved also holds a number beside it, which is not read.
+  /// The saved index: an object holding the journal's `state`.
   private struct Envelope: Codable { var state: WorkspaceJournalState }
   static func load(at file: URL) throws -> WorkspaceJournalState {
-    let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.journal)
+    let saved = try Data(contentsOf: file)
+    let earlier = EarlierPhoneFiles.isEarlierIndex(saved)
+    let data = PersistedFieldRenames.upgrade(saved, renaming: PersistedFieldRenames.journal)
     var state = try JSONDecoder().decode(Envelope.self, from: data).state
     var loaded: [String: Data] = [:]
     try transform(&state) { encodedReference in
@@ -24,6 +25,12 @@ enum WorkspaceJournalPersistence {
     // the library accepts it, so include every body and the index on open, before any edit.
     for reference in loaded.keys { try? MobileStorePersistence.applyBackupIfChanged(.include, at: directory(file).appendingPathComponent(reference)) }
     try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
+    if earlier {
+      // Saved again at once in today's shape, so there is nothing to convert
+      // at the next open. If the save fails, the next open converts again.
+      EarlierPhoneFiles.convert(&state)
+      try? persist(state, at: file)
+    }
     return state
   }
   static func persist(_ source: WorkspaceJournalState, at file: URL) throws {

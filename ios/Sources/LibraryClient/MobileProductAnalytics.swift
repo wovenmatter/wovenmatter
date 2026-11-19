@@ -170,14 +170,14 @@ public protocol ProductAnalyticsTransport: Sendable {
 }
 extension HTTPSLibraryTransport: ProductAnalyticsTransport {
   public func analyticsPreference() async throws -> ProductAnalyticsPreference {
-    try await request("v1/analytics/preference", timeout: 5)
+    try await request("analytics/preference", timeout: 5)
   }
   public func setAnalyticsPreference(_ change: ProductAnalyticsPreferenceChange) async throws
     -> ProductAnalyticsPreference
   {
-    try await request("v1/analytics/preference", method: "POST", body: JSONEncoder().encode(change), timeout: 5)
+    try await request("analytics/preference", method: "POST", body: JSONEncoder().encode(change), timeout: 5)
   }
   public func sendAnalytics(_ batch: ProductAnalyticsBatch) async throws
     -> ProductAnalyticsAcknowledgement
-  { try await request("v1/analytics/events", method: "POST", body: JSONEncoder().encode(batch), timeout: 5) }
+  { try await request("analytics/events", method: "POST", body: JSONEncoder().encode(batch), timeout: 5) }
 }

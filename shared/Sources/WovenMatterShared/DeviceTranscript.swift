@@ -6,12 +6,49 @@ import CryptoKit
 /// Rebuilds display history from the native SDK snapshot, including conversations
 /// saved before structured rendering existed. Tool results are never chat messages.
 public enum DeviceTranscript {
-  public static func project(snapshot: [String: Any], conversationID: String,
+  /// The run IDs a conversation's stored history already uses: the run each
+  /// user message started, and the run of anything before the first user
+  /// message. A turn's run ID is derived once, the first time the turn is
+  /// projected. From then on the stored ID is the turn's identity: it names
+  /// the run's row and is part of its tool activities' IDs on every device,
+  /// so a projection is given it back and never works it out again.
+  public struct StoredRuns: Equatable, Sendable {
+    /// The run of rows that precede the first user message, if any are stored.
+    public var initial: String?
+    /// User message ID → the run that message started.
+    public var turns: [String: String]
+    public init(initial: String? = nil, turns: [String: String] = [:]) { self.initial = initial; self.turns = turns }
+
+    /// Reads them from the transcript stored for the conversation; nil is a
+    /// conversation with nothing stored yet.
+    public init(_ stored: LibraryTranscript?) {
+      self.init()
+      guard let stored else { return }
+      for message in stored.messages where message.role == "user" {
+        if let runID = message.runID { turns[message.id] = runID }
+      }
+      let started = Set(turns.values)
+      initial = stored.runs?.first { !started.contains($0.id) }?.id
+        ?? stored.messages.lazy.compactMap(\.runID).first { !started.contains($0) }
+        ?? stored.activities.first { !started.contains($0.runID) }?.runID
+    }
+
+    /// These runs, with any turn they do not hold taken from `other`: a second
+    /// stored copy of the same conversation.
+    public func filling(from other: StoredRuns) -> StoredRuns {
+      StoredRuns(initial: initial ?? other.initial, turns: turns.merging(other.turns) { own, _ in own })
+    }
+  }
+
+  /// `storedRuns` is what the conversation's stored history already holds
+  /// (`StoredRuns(storedTranscript)`). Its turns keep their run IDs; only a
+  /// turn that is not stored yet gets a new one.
+  public static func project(snapshot: [String: Any], conversationID: String, storedRuns: StoredRuns,
                              activeRunID: String? = nil, runStatus: String = "completed") -> LibraryTranscript {
     var messages: [LibraryMessage] = []
     var activities: [LibraryActivity] = []
     var runs: [LibraryTranscriptRun] = []
-    var runID = stableRunID(conversationID + "-initial")
+    var runID = storedRuns.initial ?? newRunID(conversationID + "-initial")
     var sequence: Int64 = 0
     var callIndexes: [String: Int] = [:]
     var removedMessageIDs: [String] = []
@@ -95,7 +132,7 @@ public enum DeviceTranscript {
       guard let role = message["role"] as? String else { return }
       let date = timestamp(message["timestamp"])
       if role == "user" {
-        runID = stableRunID(conversationID + "-turn-" + id)
+        runID = storedRuns.turns[id] ?? newRunID(conversationID + "-turn-" + id)
         ensureRun(at: date)
         messages.append(.init(id: id, conversationID: conversationID, runID: runID,
           role: role, content: WorkspaceGoal.displayPrompt(text(message["content"])), createdAt: date ?? "", sequence: sequence))
@@ -184,10 +221,11 @@ public enum DeviceTranscript {
     }
   }
 
-  // The federation protocol requires UUID run identities. A stable digest keeps
-  // the same native turn identity across reopen, replay, and library sync.
-  private static func stableRunID(_ key: String) -> String {
-    var bytes = Array(SHA256.hash(data: Data(("wovenmatter.native-turn.v1:" + key).utf8)).prefix(16))
+  // Run identities are UUIDs. A turn that is not stored yet gets one from a
+  // digest of its conversation and user message, so two projections of the
+  // same new turn before either is stored still agree.
+  private static func newRunID(_ key: String) -> String {
+    var bytes = Array(SHA256.hash(data: Data(("wovenmatter.native-turn:" + key).utf8)).prefix(16))
     bytes[6] = (bytes[6] & 0x0f) | 0x80
     bytes[8] = (bytes[8] & 0x3f) | 0x80
     return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],

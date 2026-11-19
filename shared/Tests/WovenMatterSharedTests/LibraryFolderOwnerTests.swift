@@ -42,13 +42,11 @@ struct LibraryFolderOwnerTests {
     #expect(ExecutionWorkspace.displayOwner(of: owner, in: [deleted]) == nil)
   }
 
-  @Test("the field round-trips and older records decode without it")
+  @Test("the field round-trips, and only a device owner is valid")
   func wire() throws {
     let workspace = mac(folderOwnerID: "device:" + localDeviceID)
     let decoded = try JSONDecoder().decode(ExecutionWorkspace.self, from: JSONEncoder().encode(workspace))
     #expect(decoded.folderOwnerID == workspace.folderOwnerID)
-    let legacy = try JSONDecoder().decode(ExecutionWorkspace.self, from: Data(#"{"id":"w","libraryID":"l","ownerDeviceID":"o","kind":"mac","name":"Mac","capabilities":[],"journalDeviceIDs":[],"revision":1,"deleted":false}"#.utf8))
-    #expect(legacy.folderOwnerID == nil)
     #expect(ExecutionWorkspace.isValidFolderOwnerID("device:" + localDeviceID))
     #expect(!ExecutionWorkspace.isValidFolderOwnerID("remote:" + localDeviceID))
     #expect(!ExecutionWorkspace.isValidFolderOwnerID("device:unavailable"))

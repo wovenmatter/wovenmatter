@@ -21,24 +21,18 @@ extension NoteDocument {
     guard content.utf8.count <= LibraryProtocol.maximumNoteBytes else { throw NoteDocumentSafetyError.tooLarge }
     guard let bytes = content.data(using: .utf8) else { throw NoteDocumentSafetyError.unsupportedFormat }
     guard let object = try? JSONSerialization.jsonObject(with: bytes) else {
-      // A damaged structured document must never become editable legacy text.
-      let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.hasPrefix("{"), !trimmed.hasPrefix("[") else {
-        throw NoteDocumentSafetyError.unsupportedFormat
-      }
-      // Existing plain text/HTML legacy notes remain intentionally migratable.
-      return NoteDocument.decode(content)
+      // A note with nothing in it yet is an empty document. Any other content
+      // that is not JSON is not a document, and stays as it is.
+      guard content.allSatisfy(\.isWhitespace) else { throw NoteDocumentSafetyError.unsupportedFormat }
+      return NoteDocument()
     }
-    guard var original = object as? [String: Any], isStructured(original),
+    guard let original = object as? [String: Any], isStructured(original),
           let document = try? JSONDecoder().decode(NoteDocument.self, from: bytes),
           let encoded = try? JSONEncoder().encode(document),
           let roundTrip = try? JSONSerialization.jsonObject(with: encoded) else {
       throw NoteDocumentSafetyError.unsupportedFormat
     }
     try document.validateEditableShape()
-    // Names stored data: a key notes already stored carry. It is not part of
-    // the document, so it is not among the fields that must survive.
-    original.removeValue(forKey: "version")
     guard preserves(original, in: roundTrip) else { throw NoteDocumentSafetyError.unsupportedFormat }
     return document
   }

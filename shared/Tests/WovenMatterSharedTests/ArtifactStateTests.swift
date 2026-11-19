@@ -22,7 +22,7 @@ struct ArtifactStateTests {
     try document.applyArtifactStateEdits([.init(action: .remove, key: "app:gone", expectedVersion: 1)], at: time)
 
     let encoded = try document.encoded()
-    // Older builds read this as an unknown field, so editable decoding must keep exact fidelity.
+    // Editable decoding keeps every saved value exactly.
     let reopened = try NoteDocument.editableDocument(from: encoded)
     #expect(reopened == document.normalized())
     #expect(reopened.artifactState?["app:null"]?.value == .null)

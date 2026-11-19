@@ -22,13 +22,9 @@
     {"name": "item-owner", "frame": {"t": "item", "id": "s2", "kind": "owner", "data": {"online": false, "error": "Workstation is not connected. Woven Matter reconnects automatically."}}},
     {"name": "item-library", "frame": {"t": "item", "id": "s1", "kind": "library", "data": {"cursor": 1287}}},
     {"name": "item-pending-conversation", "frame": {"t": "item", "id": "s2", "kind": "pending", "data": {"interactions": []}}},
-    {"name": "item-unknown-kind", "frame": {"t": "item", "id": "s1", "seq": 43, "kind": "futureKind", "data": {"anything": true}}},
     {"name": "end-resync", "frame": {"t": "end", "id": "s2", "error": {"code": "resync", "message": "This subscription fell behind. Subscribe again.", "retryable": true}}},
     {"name": "end-normal", "frame": {"t": "end", "id": "s3"}},
     {"name": "cancel", "frame": {"t": "cancel", "id": "s2"}}
-  ],
-  "unknownFrames": [
-    {"t": "futureFrame", "id": "x1"}
   ],
   "lengthPrefixed": {
     "frame": {"t": "cancel", "id": "s2"},

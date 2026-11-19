@@ -12,8 +12,10 @@ struct NoteDocumentSafetyTests {
     let table = NoteTableBlock(rows: 2, columns: 2, headerRow: true)
     let original = NoteDocument(blocks: [.richText(text), .table(table)])
     let raw = try original.encoded()
-    #expect(try NoteDocument.editableDocument(from: "Legacy text").plainText == "Legacy text")
-    #expect(!raw.contains("\"version\""))
+    // A note with nothing in it yet is an empty document; text that is not a document is not edited.
+    #expect(try NoteDocument.editableDocument(from: "").plainText == "")
+    #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: "Not a document") }
+    #expect(NoteDocument.decode("Not a document").plainText == "Not a document")
     var edited = try NoteDocument.editableDocument(from: raw)
     edited.blocks.append(.richText(NoteRichTextBlock(text: "New idea")))
     let read = try NoteDocument.editableDocument(from: edited.encoded())
@@ -25,7 +27,7 @@ struct NoteDocumentSafetyTests {
   func futureFields() throws {
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: "{\"blocks\":[],broken") }
     // A JSON object that is not a structured document is never opened as an empty one.
-    for unrecognised in ["{}", #"{"kind":"note","html":""}"#, #"{"blocks":{}}"#, #"{"version":2}"#, "[]"] {
+    for unrecognised in ["{}", #"{"kind":"note","html":""}"#, #"{"blocks":{}}"#, "[]"] {
       #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: unrecognised) }
     }
     let raw = try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: "Retain me"))]).encoded()
@@ -48,7 +50,7 @@ struct NoteDocumentSafetyTests {
     #expect(throws: NoteDocumentSafetyError.tooLarge) {
       try NoteDocument.editableDocument(from: String(repeating: "x", count: LibraryProtocol.maximumNoteBytes + 1))
     }
-    // The permissive legacy display entry point must also avoid expansion.
+    // The permissive display entry point must also avoid expansion.
     #expect(NoteDocument.decode(raw).blocks.count == 1)
     for cells in [[], [NoteTableCell(text: "first"), NoteTableCell(text: "must not disappear")]] {
       let ragged = NoteTableBlock(columns: [NoteTableColumn()], rows: [NoteTableRow(cells: cells)])
@@ -57,68 +59,49 @@ struct NoteDocumentSafetyTests {
     }
   }
 
-  /// Notes as builds up to 0.4.6 stored them, key for key. Each must open as
-  /// the document it always was, and be editable.
-  @Test("notes already stored open as the same documents, whatever number they carry")
-  func storedNotesKeepOpening() throws {
-    let text = #"{"blocks":[{"type":"richText","value":{"id":"b1","runs":[{"bold":true,"italic":false,"text":"Plan","underline":false}],"style":"heading2"}},{"type":"table","value":{"columns":[{"id":"c1"}],"headerRowCount":1,"id":"t1","rows":[{"cells":[{"id":"x1","runs":[{"bold":false,"italic":false,"text":"Cell","underline":false}]}],"id":"r1"}]}}],"html":"","kind":"note","version":2}"#
-    let expectedText = NoteDocument(blocks: [
-      .richText(NoteRichTextBlock(id: "b1", style: .heading2, runs: [NoteTextRun(text: "Plan", bold: true)])),
-      .table(NoteTableBlock(id: "t1", columns: [NoteTableColumn(id: "c1")],
-                            rows: [NoteTableRow(id: "r1", cells: [NoteTableCell(id: "x1", text: "Cell")])], headerRowCount: 1)),
-    ])
+  /// The one-time conversion of stored note content: the release before this
+  /// one stored a number under a top-level `version` key, which a document
+  /// does not have. Today's stored bytes in, the same bytes without that
+  /// member out, and nothing left to convert.
+  @Test("a stored note loses its version member once, and nothing else")
+  func storedNotesAreConvertedOnce() throws {
+    let note = #"{"blocks":[{"type":"richText","value":{"id":"b1","runs":[{"bold":true,"italic":false,"text":"Plan, \"version\":2}","underline":false}],"style":"heading2"}}],"html":"","kind":"note","version":2}"#
     let page = #"{"blocks":[{"type":"richText","value":{"id":"a","runs":[],"style":"paragraph"}}],"boardItems":{"a":{"task":{"status":"done"}}},"html":"","kind":"canvas","version":2}"#
+    // An App's saved value keeps its own revision, which is data and stays.
     let artifact = #"{"artifactState":{"app:x":{"updatedAt":"2026-11-01T00:00:00Z","value":1,"version":3}},"blocks":[{"type":"richText","value":{"id":"e","runs":[],"style":"paragraph"}}],"html":"<input>","kind":"html","version":2}"#
-    // The earlier shape: blocks alone, under the earlier number or none.
-    let earlier = #"{"version":1,"blocks":[{"type":"richText","value":{"id":"b1","style":"paragraph","runs":[{"text":"Earlier","bold":false,"italic":false,"underline":false}]}}]}"#
-    let expectedEarlier = NoteDocument(blocks: [.richText(NoteRichTextBlock(id: "b1", text: "Earlier"))])
-
-    #expect(NoteDocument.decode(text) == expectedText)
-    #expect(try NoteDocument.editableDocument(from: text) == expectedText)
-    #expect(NoteDocument.decode(earlier) == expectedEarlier)
-    #expect(try NoteDocument.editableDocument(from: earlier) == expectedEarlier)
-    #expect(try NoteDocument.editableDocument(from: earlier.replacingOccurrences(of: #""version":1,"#, with: "")) == expectedEarlier)
-
-    let decodedPage = try NoteDocument.editableDocument(from: page)
-    #expect(decodedPage.kind == .canvas)
-    #expect(decodedPage.boardItems?["a"]?.task?.status == .done)
-    let decodedArtifact = try NoteDocument.editableDocument(from: artifact)
-    #expect(decodedArtifact.kind == .html)
-    #expect(decodedArtifact.html == "<input>")
-    // An App's saved value keeps its own revision, which is data, not a format number.
-    #expect(decodedArtifact.artifactState?["app:x"]?.version == 3)
-
-    for stored in [text, page, artifact, earlier] {
-      // The same document with and without the stored key, and whatever its value.
-      let without = stored.replacingOccurrences(of: #","version":2"#, with: "").replacingOccurrences(of: #""version":1,"#, with: "")
-      #expect(!without.contains(#""version":2"#) && !without.contains(#""version":1"#))
-      #expect(NoteDocument.decode(without) == NoteDocument.decode(stored))
-      var object = try #require(JSONSerialization.jsonObject(with: Data(stored.utf8)) as? [String: Any])
-      object["version"] = 99
-      #expect(try NoteDocument.editableDocument(from: encode(object)) == NoteDocument.editableDocument(from: stored))
-      // What is written from now on carries no such key, and reads back the same.
-      let rewritten = try NoteDocument.editableDocument(from: stored).encoded()
-      let keys = try #require(JSONSerialization.jsonObject(with: Data(rewritten.utf8)) as? [String: Any]).keys
-      #expect(!keys.contains("version"))
-      #expect(NoteDocument.decode(rewritten) == NoteDocument.decode(stored))
-      #expect(try NoteDocument.editableDocument(from: rewritten) == NoteDocument.editableDocument(from: stored))
+    for stored in [note, page, artifact] {
+      // As stored, the member is a field no document has, so the note is read-only.
+      #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: stored) }
+      let converted = try #require(EarlierNoteContent.removingVersionMember(stored))
+      #expect(converted == String(stored.dropLast(#","version":2}"#.count)) + "}")
+      #expect(EarlierNoteContent.removingVersionMember(converted) == nil)
+      // The same document as before, and now one this build edits.
+      #expect(try NoteDocument.editableDocument(from: converted) == NoteDocument.decode(stored))
+      // A host keeps its clocks after the document; they stay where they are.
+      let clocked = String(stored.dropLast()) + #","~sync":{"title":{"n":4,"r":"mac"}}}"#
+      #expect(EarlierNoteContent.removingVersionMember(clocked) == String(converted.dropLast()) + #","~sync":{"title":{"n":4,"r":"mac"}}}"#)
     }
-    // Only the key is dropped: every other byte of a stored note is written as before.
-    #expect(try NoteDocument.editableDocument(from: text).encoded() == text.replacingOccurrences(of: #","version":2"#, with: ""))
+    #expect(try NoteDocument.editableDocument(from: #require(EarlierNoteContent.removingVersionMember(artifact))).artifactState?["app:x"]?.version == 3)
+    // For a Note, the converted bytes are exactly what this build writes for it.
+    let converted = try #require(EarlierNoteContent.removingVersionMember(note))
+    #expect(try NoteDocument.editableDocument(from: converted).encoded() == converted)
+    // Wherever the member sits, only it goes.
+    #expect(EarlierNoteContent.removingVersionMember(#"{"version":2,"blocks":[],"kind":"note"}"#) == #"{"blocks":[],"kind":"note"}"#)
+    #expect(EarlierNoteContent.removingVersionMember(#"{ "blocks" : [ ] , "version" : 2 , "kind" : "note" }"#) == #"{ "blocks" : [ ] , "kind" : "note" }"#)
+    #expect(EarlierNoteContent.removingVersionMember(#"{"version":2}"#) == "{}")
+    for untouched in ["Plain text about a \"version\" key", #"{"blocks":[],"kind":"note"}"#, #"{"artifactState":{"a":{"version":3}},"blocks":[]}"#, #"["version"]"#, #"{"blocks":[],"version""#] {
+      #expect(EarlierNoteContent.removingVersionMember(untouched) == nil)
+    }
   }
 
-  @Test("an edit envelope carries no format number, and one that does is read the same")
+  @Test("an edit envelope is found between its markers and checked against the note")
   func editEnvelope() throws {
     let nonce = "n", begin = RemoteNoteEditEnvelope.beginMarker(nonce: nonce), end = RemoteNoteEditEnvelope.endMarker(nonce: nonce)
     let envelope = RemoteNoteEditEnvelope(nonce: nonce, noteID: "note", expectedRevision: "r", operations: [.appendText("More", .paragraph)])
     let written = String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
-    #expect(!written.contains("version"))
-    let numbered = #"{"version":1,"# + written.dropFirst()
-    for payload in [written, numbered] {
-      let found = try RemoteNoteEditEnvelope.extract(from: "\(begin)\n\(payload)\n\(end)", nonce: nonce, noteID: "note",
-                                                     expectedRevision: "r", noteKind: .note)
-      #expect(found == envelope)
-    }
+    let found = try RemoteNoteEditEnvelope.extract(from: "\(begin)\n\(written)\n\(end)", nonce: nonce, noteID: "note",
+                                                   expectedRevision: "r", noteKind: .note)
+    #expect(found == envelope)
     #expect(throws: RemoteNoteEditError.invalidEnvelope) {
       try RemoteNoteEditEnvelope.extract(from: "\(begin)\n\(written)\n\(end)", nonce: nonce, noteID: "note",
                                          expectedRevision: "stale", noteKind: .note)

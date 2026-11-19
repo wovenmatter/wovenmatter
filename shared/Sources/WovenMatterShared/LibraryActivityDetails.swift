@@ -29,13 +29,13 @@ public enum LibraryActivityDetails {
       totalBytes += record.data.count
       guard let object = try? JSONSerialization.jsonObject(with: record.data) as? [String: Any] else { throw invalid }
       let activity: [String: Any], previous: String?
-      let complete = NativeRecordFormat.activity.matches(record.format)
+      let complete = record.format == NativeRecordFormat.activity.name
       if complete {
         activity = object; previous = nil
         // A complete activity's disclosure returns the original projection unchanged.
         // A delta stored as a complete activity cannot be the base of a chain.
         guard visited.count == 1 || activity["contentIsDelta"] as? Bool != true else { throw invalid }
-      } else if NativeRecordFormat.chainedActivity.matches(record.format) {
+      } else if record.format == NativeRecordFormat.chainedActivity.name {
         guard let value = object["activity"] as? [String: Any],
           let delta = value["contentIsDelta"] as? Bool else { throw invalid }
         activity = value

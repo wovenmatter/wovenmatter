@@ -35,7 +35,7 @@ struct BoardDocumentTests {
   }
 
   @Test func sparseStoredItemsUseDefaults() throws {
-    let raw = #"{"version":2,"kind":"canvas","blocks":[{"type":"richText","value":{"id":"a","style":"paragraph","runs":[]}}],"html":"","boardItems":{"a":{"task":{"status":"done"}}}}"#
+    let raw = #"{"kind":"canvas","blocks":[{"type":"richText","value":{"id":"a","style":"paragraph","runs":[]}}],"html":"","boardItems":{"a":{"task":{"status":"done"}}}}"#
     let document = try NoteDocument.editableDocument(from: raw)
     #expect(document.boardItems?["a"] == .init(task: .init(status: .done)))
     #expect(document.boardItems?["a"]?.sessions == [])

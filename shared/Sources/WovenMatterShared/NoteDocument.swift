@@ -1,10 +1,7 @@
 import Foundation
 
 /// A note's stored content: a JSON object recognised by its shape (see
-/// `isStructured`). Reading gives an absent key its default, so a document an
-/// earlier build stored with fewer keys reads as the same document. Notes
-/// already stored also carry a number under a `version` key; it is not part of
-/// the document, is never read, and is not written.
+/// `isStructured`). Reading gives an absent key its default.
 public struct NoteDocument: Codable, Equatable, Sendable {
   public var kind: NoteArtifactKind
   public var blocks: [NoteBlock]
@@ -60,8 +57,7 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   }
 
   /// Whether a decoded JSON value has the shape of a structured document: an
-  /// object holding a `blocks` array, which every build has always written.
-  /// Anything else is earlier plain text or HTML, or not a note this build edits.
+  /// object holding a `blocks` array. Anything else is not a document.
   public static func isStructured(_ json: Any) -> Bool {
     (json as? [String: Any])?["blocks"] is [Any]
   }
@@ -84,11 +80,14 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     artifactState = try values.decodeIfPresent([String: ArtifactStateEntry].self, forKey: .artifactState)
   }
 
+  /// The document `content` holds, for display. Content that is not a
+  /// readable document (nothing yet, or damaged) is shown as it is, as one
+  /// paragraph; `editableDocument(from:)` decides what may be edited.
   public static func decode(_ content: String) -> NoteDocument {
     guard let data = NoteSync.strip(content).data(using: .utf8),
           let document = try? JSONDecoder().decode(NoteDocument.self, from: data),
           (try? document.validateEditableShape()) != nil else {
-      return NoteDocument(legacyContent: content)
+      return NoteDocument(blocks: [.richText(NoteRichTextBlock(text: content.trimmingCharacters(in: .whitespacesAndNewlines)))])
     }
     return document.normalized()
   }
@@ -121,34 +120,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       pageNodes: pageNodes,
       artifactState: artifactState
     )
-  }
-
-  private init(legacyContent: String) {
-    let text = Self.plainText(fromLegacyContent: legacyContent)
-    self.init(blocks: [.richText(NoteRichTextBlock(text: text))])
-  }
-
-  private static func plainText(fromLegacyContent content: String) -> String {
-    var value = content.replacingOccurrences(
-      of: "<!-- wovenmatter-appkit-rich-v1 -->",
-      with: ""
-    )
-    let replacements: [(String, String, String.CompareOptions)] = [
-      (#"</p>\s*<p[^>]*>"#, "\n", [.regularExpression, .caseInsensitive]),
-      (#"<br\s*/?>"#, "\n", [.regularExpression, .caseInsensitive]),
-      (#"</li>\s*<li[^>]*>"#, "\n", [.regularExpression, .caseInsensitive]),
-      (#"<[^>]+>"#, "", .regularExpression),
-      ("&nbsp;", " ", []),
-      ("&amp;", "&", []),
-      ("&lt;", "<", []),
-      ("&gt;", ">", []),
-      ("&quot;", "\"", []),
-      ("&#39;", "'", []),
-    ]
-    for (source, replacement, options) in replacements {
-      value = value.replacingOccurrences(of: source, with: replacement, options: options)
-    }
-    return value.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 

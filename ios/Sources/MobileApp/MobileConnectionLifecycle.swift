@@ -79,8 +79,7 @@ extension MobileModel {
   }
 
   /// The foreground library sync cadence while the library host's stream does
-  /// not announce its changes (no stream, an older host, or the stream is
-  /// down). It reads no execution workspace. While that stream carries
+  /// not announce its changes (no stream, or the stream is down). It reads no execution workspace. While that stream carries
   /// `library` items there is no timer: each item ahead of this phone's
   /// cursor synchronizes at once.
   static let librarySyncInterval: Duration = .seconds(15)

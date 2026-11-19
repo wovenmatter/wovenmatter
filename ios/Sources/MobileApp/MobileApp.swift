@@ -268,10 +268,11 @@ struct HomePane: View {
         .accessibilityIdentifier("home-connect-mac")
       homeCaption("Pair with Woven Matter on your Mac to use its workspaces and agents here and sync your notes and chats. Everything on \(model.deviceWorkspaceInSentence) is kept.")
         .accessibilityIdentifier("home-connect-mac-caption")
+    } else if model.needsMemberPairing {
+      SettingsNavigationRow(title: "Pair again", icon: .monitor) { PairingPane(model: model) }
+        .accessibilityIdentifier("home-pair-again")
+      homeCaption(model.membershipNotice ?? "").accessibilityIdentifier("home-pair-again-caption")
     } else {
-      if model.needsMemberPairing {
-        SettingsNavigationRow(title: "Pair again", icon: .monitor) { PairingPane(model: model) }
-      }
       homeCaption("No paired Mac or Linux workspace is reachable right now. Each one appears here when it reconnects.")
         .accessibilityIdentifier("home-no-workspaces")
     }

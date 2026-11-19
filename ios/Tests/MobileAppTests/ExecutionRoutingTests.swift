@@ -101,24 +101,6 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(saved.commands.isEmpty); XCTAssertTrue(saved.launches.isEmpty)
   }
 
-  @MainActor func testEarlierPhoneAgentsAreRetainedWithoutStartingTheirSavedTools() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
-    model.executionDirectory = root.appendingPathComponent("execution")
-    let record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Earlier agent", enabledTools: ["execute_command", "woven_executor"], connectionID: "old", modelJSON: "{}", runID: "old-run", status: "running", updatedAt: "")
-    model.executionRecords[record.id] = record
-    try model.persistExecutionConfiguration()
-    // The earliest records say nothing about Quick Chat at all.
-    try Self.saveRecords(in: model.executionDirectory, asEarlier: [record.id: nil])
-    try await model.loadExecutionConfiguration()
-    model.selectedConversationID = record.id
-    XCTAssertEqual(model.executionRecords[record.id]?.savedHistoryOnly, true)
-    XCTAssertEqual(model.executionRecords[record.id]?.status, "retained")
-    XCTAssertFalse(model.canResumeLocalRun)
-    XCTAssertTrue(model.localRuntimes.isEmpty)
-  }
-
   /// A connection a Mac hosted before v0.4.6 used that Mac's sign-in. It is
   /// dropped on load; this device's own sign-ins and their Keychain items stay.
   @MainActor func testHostedConnectionsAreDroppedAndDeviceSignInsKept() async throws {
@@ -311,26 +293,6 @@ final class ExecutionRoutingTests: XCTestCase {
     try await model.loadExecutionConfiguration()
     XCTAssertEqual(model.inferenceConnections.map(\.id), ["server", "own"])
     XCTAssertEqual(model.inferenceConnectionID, "own")
-  }
-
-  /// Rewrites saved Quick Chat records as an earlier build saved them. In place
-  /// of today's flag that build wrote a number under `quickChatVersion` (1 for
-  /// a Quick Chat, 0 for saved history); the earliest wrote neither (nil here).
-  /// `permissionModes` adds the permission mode earlier builds also saved.
-  private static func saveRecords(in directory: URL?, asEarlier numbers: [String: Int?], permissionModes: [String: String] = [:]) throws {
-    let file = try XCTUnwrap(directory).appendingPathComponent("preferences.json")
-    var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-    var conversations = try XCTUnwrap(saved["conversations"] as? [String: Any])
-    for (id, number) in numbers {
-      var value = try XCTUnwrap(conversations[id] as? [String: Any])
-      XCTAssertNotNil(value.removeValue(forKey: "savedHistoryOnly"), "Today's flag is always saved")
-      if let number { value["quickChatVersion"] = number }
-      if let mode = permissionModes[id] { value["permissionMode"] = mode }
-      conversations[id] = value
-    }
-    saved["conversations"] = conversations
-    if !permissionModes.isEmpty { saved["chatSettings"] = ["permissionMode": "ask"] }
-    try JSONSerialization.data(withJSONObject: saved).write(to: file)
   }
 
   private static let offlineModelJSON = """
@@ -811,60 +773,49 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(MobileModel.clockDescription(Date(timeIntervalSince1970: 0), timeZone: TimeZone(identifier: "UTC")!).prefix(25), "Now: 1970-01-01T00:00:00Z")
   }
 
-  /// Quick Chat has only Full Access: a chat saved with the former Ask for Approval
-  /// mode reopens in Full Access, and a chat from an earlier on-device agent
-  /// stays retained history.
-  @MainActor func testEarlierAskChatsReopenInFullAccessAndEarlierChatsStayRetained() async throws {
+  /// A chat of the earlier on-device agent is kept as history: it shows, and
+  /// nothing resumes it or opens its runtime.
+  @MainActor func testAChatKeptAsHistoryIsNeverResumed() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = MobileModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    // A complete saved connection, so opening reaches the history guard itself
+    // rather than failing for a missing account. No request is made.
+    let connection = InferenceConnection(id: "fixture", name: "Saved", provider: "openai", route: .direct, modelID: "test")
+    var kept = DeviceConversationRecord(id: "kept", title: "Kept", connectionID: connection.id, connection: connection, modelJSON: "{}",
+                                        runID: "old-run", status: "interrupted", updatedAt: "")
+    kept.savedHistoryOnly = true
+    model.executionRecords = ["kept": kept]
+    model.selectedConversationID = "kept"
+    XCTAssertFalse(model.canResumeLocalRun)
+    do { _ = try await model.deviceRuntime("kept"); XCTFail("A chat kept as history opened its runtime") }
+    catch { XCTAssertTrue(error.localizedDescription.contains("saved as history"), "Refused as history, not for another reason: \(error.localizedDescription)") }
+    XCTAssertTrue(model.localRuntimes.isEmpty)
+  }
+
+  /// Quick Chat's records as the release before this one saved them: a number
+  /// said what each is. Loading rewrites the file once with today's flag;
+  /// there is then nothing left to convert.
+  @MainActor func testQuickChatRecordsSavedByTheEarlierReleaseAreConvertedWhenLoaded() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
-    let model = MobileModel(store: store, transport: ExecutionTestLibrary())
-    model.executionDirectory = root.appendingPathComponent("execution")
-    // A complete saved connection, so reopening reaches the retained-history guard
-    // itself rather than failing earlier for a missing account. No request is made.
-    let connection = InferenceConnection(id: "fixture", name: "Saved", provider: "openai", route: .direct, modelID: "test")
-    func record(_ id: String) -> DeviceConversationRecord {
-      DeviceConversationRecord(id: id, title: id, connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
-    }
-    var history = record("history"); history.status = "retained"
-    model.executionRecords = ["full": record("full"), "ask": record("ask"), "legacy": record("legacy"), "history": history]
-    try model.persistExecutionConfiguration()
-    // Earlier builds saved a permission mode, and a number in place of today's
-    // flag: 1 for a Quick Chat, 0 for saved history, and the earliest none at all.
-    try Self.saveRecords(in: model.executionDirectory, asEarlier: ["full": 1, "ask": 1, "legacy": nil, "history": 0],
-                         permissionModes: ["full": "full", "ask": "ask", "legacy": "full", "history": "full"])
+    let directory = root.appendingPathComponent("execution")
+    let file = directory.appendingPathComponent("preferences.json")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data(#"{"selectedConnectionID":"","workspaceID":"local","connections":[],"conversations":{"chat":{"id":"chat","quickChatVersion":1,"title":"Chat","connectionID":"c","modelJSON":"{}","status":"ready","updatedAt":""},"kept":{"id":"kept","quickChatVersion":0,"title":"Kept","connectionID":"c","modelJSON":"{}","status":"retained","updatedAt":""}}}"#.utf8).write(to: file)
 
-    let reopened = MobileModel(store: store, transport: ExecutionTestLibrary())
-    reopened.executionDirectory = model.executionDirectory
-    try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(Set(reopened.executionRecords.keys), ["full", "ask", "legacy", "history"], "A saved Ask mode never drops a chat")
-    for id in ["full", "ask"] {
-      guard case .session(let settings) = try await reopened.readDeviceWorkspace(.session(id: id)) else { return XCTFail("Missing settings") }
-      XCTAssertEqual(settings.permission, "full", id)
-      XCTAssertEqual(settings.permissions.map(\.id), ["full"], id)
-      XCTAssertEqual(reopened.executionRecords[id]?.savedHistoryOnly, false, id)
-      XCTAssertEqual(reopened.executionRecords[id]?.status, "ready", id)
-    }
-    XCTAssertEqual(reopened.executionRecords["history"]?.savedHistoryOnly, true)
-    XCTAssertEqual(reopened.executionRecords["history"]?.status, "retained")
-    // Loading saves the records again: under today's flag, without the earlier number.
-    let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
-    let rewritten = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-    let conversations = try XCTUnwrap(rewritten["conversations"] as? [String: [String: Any]])
-    XCTAssertEqual(conversations.mapValues { $0["savedHistoryOnly"] as? Bool }, ["full": false, "ask": false, "legacy": true, "history": true])
-    XCTAssertTrue(conversations.values.allSatisfy { $0["quickChatVersion"] == nil })
-    let readBack = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file)).conversations
-    XCTAssertEqual(readBack.mapValues(\.savedHistoryOnly), ["full": false, "ask": false, "legacy": true, "history": true],
-                   "Records saved under today's flag read back the same")
-    XCTAssertEqual(readBack.mapValues(\.status), ["full": "ready", "ask": "ready", "legacy": "retained", "history": "retained"])
-    let retained = try XCTUnwrap(reopened.executionRecords["legacy"])
-    XCTAssertTrue(retained.savedHistoryOnly)
-    XCTAssertEqual(retained.status, "retained")
-    reopened.selectedConversationID = "legacy"
-    XCTAssertFalse(reopened.canResumeLocalRun, "Earlier chats are history and never run tools")
-    do { _ = try await reopened.deviceRuntime("legacy"); XCTFail("An earlier chat reopened its runtime") }
-    catch { XCTAssertTrue(error.localizedDescription.contains("saved as history"), "Refused as retained history, not for another reason: \(error.localizedDescription)") }
-    XCTAssertTrue(reopened.localRuntimes.isEmpty)
+    let model = MobileModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = directory
+    try await model.loadExecutionConfiguration()
+    XCTAssertEqual(model.executionRecords.mapValues(\.savedHistoryOnly), ["chat": false, "kept": true])
+    XCTAssertEqual(model.executionRecords.mapValues(\.status), ["chat": "ready", "kept": "retained"])
+    let saved = try Data(contentsOf: file)
+    XCTAssertNil(String(decoding: saved, as: UTF8.self).range(of: "quickChatVersion"))
+    XCTAssertNil(EarlierPhoneFiles.convertedQuickChatPreferences(saved), "Nothing is left to convert")
+    XCTAssertEqual(try JSONDecoder().decode(DeviceExecutionPreferences.self, from: saved).conversations.mapValues(\.savedHistoryOnly),
+                   ["chat": false, "kept": true])
   }
 
   @MainActor func testOnlyFullAccessIsAcceptedForQuickChat() async throws {

@@ -15,27 +15,27 @@ public protocol FederationTransport: Sendable {
 }
 
 extension HTTPSLibraryTransport: FederationTransport {
-  public func libraryIdentity() async throws -> LibraryIdentity { try await request("v1/federation/identity") }
-  public func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await list("v1/federation/workspaces") }
+  public func libraryIdentity() async throws -> LibraryIdentity { try await request("federation/identity") }
+  public func executionWorkspaces() async throws -> [ExecutionWorkspace] { try await request("federation/workspaces") }
   public func registerWorkspace(_ registration: LibraryWorkspaceRegistration) async throws -> ExecutionWorkspace {
-    try await request("v1/federation/workspaces", method: "POST", body: JSONEncoder().encode(registration))
+    try await request("federation/workspaces", method: "POST", body: JSONEncoder().encode(registration))
   }
-  public func journal(after: Int64) async throws -> ExecutionJournalPage { try await request("v1/federation/journal", query: [.init(name: "after", value: String(after))]) }
+  public func journal(after: Int64) async throws -> ExecutionJournalPage { try await request("federation/journal", query: [.init(name: "after", value: String(after))]) }
   public func importJournal(_ batch: ExecutionJournalBatch) async throws -> ExecutionJournalBatchResult {
-    try await request("v1/federation/journal", method: "POST", body: JSONEncoder().encode(batch))
+    try await request("federation/journal", method: "POST", body: JSONEncoder().encode(batch))
   }
-  public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await list("v1/federation/artifacts") }
+  public func artifactManifests() async throws -> [LibraryArtifactManifest] { try await request("federation/artifacts") }
   public func registerArtifact(_ registration: LibraryArtifactRegistration) async throws -> LibraryArtifactTransfer {
-    try await request("v1/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(registration))
+    try await request("federation/artifacts/register", method: "POST", body: JSONEncoder().encode(registration))
   }
   public func uploadArtifactChunk(_ chunk: LibraryArtifactChunk) async throws -> LibraryArtifactTransfer {
-    try await request("v1/federation/artifacts/chunk", method: "POST", body: JSONEncoder().encode(chunk))
+    try await request("federation/artifacts/chunk", method: "POST", body: JSONEncoder().encode(chunk))
   }
   public func commitArtifact(_ commit: LibraryArtifactCommit) async throws -> LibraryArtifactManifest {
-    try await request("v1/federation/artifacts/commit", method: "POST", body: JSONEncoder().encode(commit))
+    try await request("federation/artifacts/commit", method: "POST", body: JSONEncoder().encode(commit))
   }
   public func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) async throws -> LibraryArtifactChunk {
-    try await request("v1/federation/artifacts/" + TailnetJSONClient.safeID(id) + "/chunk", query: [.init(name: "revision", value: String(revision)), .init(name: "offset", value: String(offset))])
+    try await request("federation/artifacts/" + TailnetJSONClient.safeID(id) + "/chunk", query: [.init(name: "revision", value: String(revision)), .init(name: "offset", value: String(offset))])
   }
 }
 

@@ -126,7 +126,7 @@ extension MobileStore {
             if let identity = raw["conversationId"] { nativeConversationID = String(describing: identity) }
             nativeKind = raw["kind"] as? String
             if let timestamp = raw["createdAt"] as? String { recordedAt = timestamp }
-            if NativeRecordFormat.piDurableEntry.matches(metadata.format), let model = (raw["model"] as? [[String: Any]])?.first,
+            if metadata.format == NativeRecordFormat.piDurableEntry.name, let model = (raw["model"] as? [[String: Any]])?.first,
                let milliseconds = model["timestamp"] as? Double, milliseconds.isFinite {
               recordedAt = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: milliseconds / 1_000))
             }

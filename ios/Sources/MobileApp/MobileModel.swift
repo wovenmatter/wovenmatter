@@ -459,6 +459,7 @@ import MobileInference
       guard generation == connectionGeneration else { return }
       synchronizationStatus = status
       await adoptCurrentLibraryHost(engine)
+      if membership?.memberRejected == true { await endRefusedMembership(); return }
       online = status.hostReachable == true
       hostProvidersRefreshDue = true
       libraryRetryCount += 1

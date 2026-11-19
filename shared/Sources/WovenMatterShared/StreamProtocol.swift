@@ -2,12 +2,12 @@ import Foundation
 
 /// The live stream between a user interface (or another server) and one Woven
 /// server. See "Streaming" in docs/architecture/WOVEN_EVERYWHERE.md. The same
-/// frames travel on a member-signed WebSocket (`GET /v1/stream`)
+/// frames travel on a member-signed WebSocket (`GET /stream`)
 /// and, from a Mac window to its own server, on the length-prefixed Unix socket.
 public enum StreamProtocol {
   /// Relative to a server's endpoint (a Mac's `/wovenmatter`, a Linux host's
   /// execution endpoint). The request carries no query; a server refuses one.
-  public static let path = "v1/stream"
+  public static let path = "stream"
   /// The registry capability of a workspace that serves the stream.
   public static let capability = "stream"
   public static let maximumFrameBytes = 8 * 1_024 * 1_024
@@ -104,7 +104,6 @@ public enum StreamProtocol {
 
 public enum StreamProtocolError: Error, Equatable, Sendable {
   case frameTooLarge(Int)
-  case unknownFrame(String)
 }
 
 public struct StreamError: Codable, Equatable, Error, Sendable {
@@ -202,7 +201,7 @@ public struct StreamCancel: Codable, Equatable, Sendable {
 }
 
 public struct StreamConversations: Codable, Equatable, Sendable {
-  @LossyArray public var conversations: [LibraryConversation]
+  public var conversations: [LibraryConversation]
   public var deletedConversationIDs: [String]?
   public var snapshot: Bool
   public init(conversations: [LibraryConversation], deletedConversationIDs: [String]? = nil, snapshot: Bool) {
@@ -211,8 +210,7 @@ public struct StreamConversations: Codable, Equatable, Sendable {
 }
 
 public struct StreamPending: Codable, Equatable, Sendable {
-  /// A question or approval of a kind this build does not know is not listed.
-  @LossyArray public var interactions: [PendingInteraction]
+  public var interactions: [PendingInteraction]
   public init(interactions: [PendingInteraction]) { self.interactions = interactions }
 }
 
@@ -247,7 +245,7 @@ public struct StreamServerState: Codable, Equatable, Sendable {
   public init(scopes: [String], conversationIDs: [String]? = nil) { self.scopes = scopes; self.conversationIDs = conversationIDs }
 }
 
-/// The server's mobile library change cursor (the phone's `GET v1/changes`
+/// The server's mobile library change cursor (the phone's `GET changes`
 /// feed, `device_sync_changes`): on a `workspace` subscription, on subscribe
 /// and whenever the feed advances with a change a phone syncs, at most every
 /// `StreamProtocol.libraryInterval`. A phone that holds this server's library
@@ -285,23 +283,19 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case library(StreamLibrary)
     case synchronized
     case serverState(StreamServerState)
-    /// A kind this build does not know, or an item of a known kind whose
-    /// data it cannot read. Ignored, but a `seq` still advances.
-    case unknown(kind: String, data: JSONValue)
 
-    public var kind: String {
+    public var kind: Kind {
       switch self {
-      case .conversations: Kind.conversations.rawValue
-      case .pending: Kind.pending.rawValue
-      case .journal: Kind.journal.rawValue
-      case .transcript: Kind.transcript.rawValue
-      case .capabilities: Kind.capabilities.rawValue
-      case .session: Kind.session.rawValue
-      case .owner: Kind.owner.rawValue
-      case .library: Kind.library.rawValue
-      case .synchronized: Kind.synchronized.rawValue
-      case .serverState: Kind.serverState.rawValue
-      case .unknown(let kind, _): kind
+      case .conversations: .conversations
+      case .pending: .pending
+      case .journal: .journal
+      case .transcript: .transcript
+      case .capabilities: .capabilities
+      case .session: .session
+      case .owner: .owner
+      case .library: .library
+      case .synchronized: .synchronized
+      case .serverState: .serverState
       }
     }
   }
@@ -318,28 +312,17 @@ public struct StreamItem: Codable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(String.self, forKey: .id)
     seq = try container.decodeIfPresent(Int64.self, forKey: .seq)
-    let kind = try container.decode(String.self, forKey: .kind)
-    do {
-      switch Kind(rawValue: kind) {
-      case .conversations: payload = .conversations(try container.decode(StreamConversations.self, forKey: .data))
-      case .pending: payload = .pending(try container.decode(StreamPending.self, forKey: .data))
-      case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
-      case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
-      case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
-      case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
-      case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
-      case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
-      case .synchronized: payload = .synchronized
-      case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
-      case nil: payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
-      }
-    } catch {
-      // A newer server's item of a kind this build knows, holding a value it
-      // does not: the frame is valid JSON, so it is ignored like an unknown
-      // kind instead of closing the socket, which would reconnect into the
-      // same item forever.
-      payload = .unknown(kind: kind, data: try container.decodeIfPresent(JSONValue.self, forKey: .data) ?? .null)
-      NSLog("Ignoring an unreadable %@ stream item", kind)
+    switch try container.decode(Kind.self, forKey: .kind) {
+    case .conversations: payload = .conversations(try container.decode(StreamConversations.self, forKey: .data))
+    case .pending: payload = .pending(try container.decode(StreamPending.self, forKey: .data))
+    case .journal: payload = .journal(try container.decode(StreamJournal.self, forKey: .data))
+    case .transcript: payload = .transcript(try container.decode(StreamTranscript.self, forKey: .data))
+    case .capabilities: payload = .capabilities(try container.decode(StreamCapabilities.self, forKey: .data))
+    case .session: payload = .session(try container.decode(StreamSession.self, forKey: .data))
+    case .owner: payload = .owner(try container.decode(StreamOwner.self, forKey: .data))
+    case .library: payload = .library(try container.decode(StreamLibrary.self, forKey: .data))
+    case .synchronized: payload = .synchronized
+    case .serverState: payload = .serverState(try container.decode(StreamServerState.self, forKey: .data))
     }
   }
 
@@ -359,7 +342,6 @@ public struct StreamItem: Codable, Equatable, Sendable {
     case .library(let value): try container.encode(value, forKey: .data)
     case .synchronized: try container.encode([String: String](), forKey: .data)
     case .serverState(let value): try container.encode(value, forKey: .data)
-    case .unknown(_, let data): try container.encode(data, forKey: .data)
     }
   }
 }
@@ -372,17 +354,14 @@ public enum StreamFrame: Equatable, Sendable {
   case item(StreamItem)
   case end(StreamEnd)
   case cancel(StreamCancel)
-  /// A frame type this build does not know. Ignored.
-  case unknown(String)
 }
 
 extension StreamFrame: Codable {
   private enum TypeKey: String, CodingKey { case t }
-  private enum FrameType: String { case hello, req, res, sub, item, end, cancel }
+  private enum FrameType: String, Decodable { case hello, req, res, sub, item, end, cancel }
 
   public init(from decoder: any Decoder) throws {
-    let type = try decoder.container(keyedBy: TypeKey.self).decode(String.self, forKey: .t)
-    switch FrameType(rawValue: type) {
+    switch try decoder.container(keyedBy: TypeKey.self).decode(FrameType.self, forKey: .t) {
     case .hello: self = .hello(try StreamHello(from: decoder))
     case .req: self = .request(try StreamRequest(from: decoder))
     case .res: self = .response(try StreamResponse(from: decoder))
@@ -390,7 +369,6 @@ extension StreamFrame: Codable {
     case .item: self = .item(try StreamItem(from: decoder))
     case .end: self = .end(try StreamEnd(from: decoder))
     case .cancel: self = .cancel(try StreamCancel(from: decoder))
-    case nil: self = .unknown(type)
     }
   }
 
@@ -404,7 +382,6 @@ extension StreamFrame: Codable {
     case .item(let value): try container.encode(FrameType.item.rawValue, forKey: .t); try value.encode(to: encoder)
     case .end(let value): try container.encode(FrameType.end.rawValue, forKey: .t); try value.encode(to: encoder)
     case .cancel(let value): try container.encode(FrameType.cancel.rawValue, forKey: .t); try value.encode(to: encoder)
-    case .unknown(let type): throw StreamProtocolError.unknownFrame(type)
     }
   }
 }

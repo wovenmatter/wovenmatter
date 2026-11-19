@@ -19,7 +19,7 @@ final class TranscriptDetailTests: XCTestCase {
       ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "render", "name": legacy ? "wovenmatter_html" : "woven_html_render", "arguments": legacy ? ["arguments": ["call", "--json", json]] : focused]]]]],
       ["id": 3, "model": [["role": "toolResult", "toolCallId": "render", "content": [["type": "text", "text": response]], "details": ["wovenHTMLPage": prepared]]]]
     ]]
-    let transcript = DeviceTranscript.project(snapshot: snapshot, conversationID: "c")
+    let transcript = DeviceTranscript.project(snapshot: snapshot, conversationID: "c", storedRuns: .init())
     let projection = try XCTUnwrap(transcript.activities.first?.projectionJSON)
     let value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(projection.utf8)) as? [String: Any])
     XCTAssertEqual(value["kind"] as? String, "activity")
@@ -44,7 +44,7 @@ final class TranscriptDetailTests: XCTestCase {
     var entries = try XCTUnwrap(failedSnapshot["entries"] as? [[String: Any]])
     entries[2]["model"] = [["role": "toolResult", "toolCallId": "render", "isError": true, "content": [["type": "text", "text": response]]]]
     failedSnapshot["entries"] = entries
-    let failed = DeviceTranscript.project(snapshot: failedSnapshot, conversationID: "c")
+    let failed = DeviceTranscript.project(snapshot: failedSnapshot, conversationID: "c", storedRuns: .init())
     XCTAssertFalse(failed.activities.first?.projectionJSON?.contains("htmlRender\":") ?? true)
     }
   }
@@ -146,32 +146,54 @@ final class TranscriptDetailTests: XCTestCase {
     }
   }
 
-  /// Records already stored keep the tag they were written with. A publisher
-  /// that retries a stored chunk after it updates sends today's name for the
-  /// same format: still that chunk, while another format is a conflict.
-  func testAStoredPartRetriedUnderTodaysNameIsTheSamePart() async throws {
-    let journal = try WorkspaceJournal(file: file())
-    var sequence: Int64 = 1
-    try await journal.record(.init(workspaceID: "owner", originSequence: sequence, conversationID: "chat", runID: "run",
-      kind: .transcript, transcript: .init(conversationID: "chat", activities: [
-        .init(id: "trace", runID: "run", title: "Thinking", status: "completed", detailsRecordID: "head")
-      ])))
-    func record(_ part: NativeRecordPart) async throws {
-      sequence += 1
-      try await journal.record(.init(workspaceID: "owner", originSequence: sequence, conversationID: "chat",
-        runID: "run", kind: .nativeRecord, nativeRecord: part))
+  /// A Quick Chat is projected from its native history every time it is
+  /// opened. Each turn keeps the run ID stored for it, so projecting a stored
+  /// chat again changes nothing: the journal records no new run and no second
+  /// copy of a tool activity. Only a turn that is not stored yet gets an ID.
+  func testProjectingAStoredChatAgainRecordsNothingNew() async throws {
+    let turn = "0a0a0a0a-0000-4000-8000-000000000001"
+    var entries: [[String: Any]] = [
+      ["id": 1, "model": [["role": "user", "content": "List my files.", "timestamp": 1_000]]],
+      ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "files", "name": "list_files", "arguments": [:]]], "timestamp": 2_000]]],
+      ["id": 3, "model": [["role": "toolResult", "toolCallId": "files", "toolName": "list_files", "content": [["type": "text", "text": "[]"]], "timestamp": 3_000]]],
+      ["id": 4, "model": [["role": "assistant", "content": [["type": "text", "text": "No files."]], "timestamp": 4_000]]]]
+    // `stored` is nil for a chat this build first projects, and otherwise the
+    // run ID its first turn was stored with, however that ID was made.
+    for stored in [nil, turn] as [String?] {
+      let journal = try WorkspaceJournal(file: file())
+      let chat = LibraryConversation(id: "c", title: "Chat")
+      var runs = await journal.storedRuns(conversationID: "c")
+      XCTAssertEqual(runs, .init())
+      if let stored { runs = .init(turns: ["c-1-0": stored]) }
+      let first = DeviceTranscript.project(snapshot: ["entries": entries], conversationID: "c", storedRuns: runs)
+      if let stored { XCTAssertEqual(first.runs?.map(\.id), [stored]) }
+      let recorded = try await journal.append(workspaceID: "phone", conversation: chat, transcript: first)
+      XCTAssertFalse(recorded.isEmpty)
+
+      runs = await journal.storedRuns(conversationID: "c")
+      XCTAssertEqual(runs, .init(turns: ["c-1-0": try XCTUnwrap(first.runs?.first?.id)]))
+      let again = DeviceTranscript.project(snapshot: ["entries": entries], conversationID: "c", storedRuns: runs)
+      XCTAssertEqual(again, first)
+      let nothing = try await journal.append(workspaceID: "phone", conversation: chat, transcript: again)
+      XCTAssertTrue(nothing.isEmpty, "The same chat projected again is the same rows")
+
+      // The next turn: one new run, and every stored row as it was.
+      let longer = entries + [
+        ["id": 5, "model": [["role": "user", "content": "And notes?", "timestamp": 5_000]]],
+        ["id": 6, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "files", "name": "list_notes", "arguments": [:]]], "timestamp": 6_000]]]]
+      let next = DeviceTranscript.project(snapshot: ["entries": longer], conversationID: "c", storedRuns: runs)
+      let added = try await journal.append(workspaceID: "phone", conversation: chat, transcript: next)
+      let delta = try XCTUnwrap(added.compactMap(\.transcript).first)
+      XCTAssertEqual(next.runs?.count, 2)
+      let newRun = try XCTUnwrap(next.runs?.last?.id)
+      XCTAssertNotEqual(newRun, first.runs?.first?.id)
+      XCTAssertEqual(Set(delta.messages.compactMap(\.runID)), [newRun])
+      XCTAssertEqual(delta.activities.map(\.id), [newRun + ":files"])
+      let state = await journal.snapshot()
+      XCTAssertEqual(state.transcripts["c"]?.activities.map(\.id), [try XCTUnwrap(first.runs?.first?.id) + ":files", newRun + ":files"])
+      XCTAssertEqual(state.transcripts["c"]?.runs?.map(\.id), next.runs?.map(\.id))
+      if stored == nil { entries = Array(longer.prefix(4)) }
     }
-    let current = try parts("head", "Stored before the update", title: "Thinking")
-    for var part in current { part.format = "wovenmatter.activity.v2"; try await record(part) }
-    for part in current { try await record(part) }
-    let detail = try await journal.activityDetails(conversationID: "chat", activityID: "trace")
-    XCTAssertEqual(detail?.projectionJSON?.contains("Stored before the update"), true)
-    var other = current[0]; other.format = NativeRecordFormat.activity.name
-    try await record(other)
-    do {
-      _ = try await journal.activityDetails(conversationID: "chat", activityID: "trace")
-      XCTFail("A part retried as another format was accepted")
-    } catch let error as LibraryAPIError { XCTAssertEqual(error.code, "invalid_activity_details") }
   }
 
   private func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }

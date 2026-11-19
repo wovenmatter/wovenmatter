@@ -34,9 +34,8 @@ public struct LibraryNote: Codable, Equatable, Identifiable, Sendable {
   public var content: String
   public var contentIncluded: Bool
   public var contentByteCount: Int
-  /// A hint derived from `content`. A kind a newer build added reads as nil,
-  /// exactly as an older host reports it; `content` is untouched either way.
-  @LossyOptional public var kind: NoteArtifactKind?
+  /// A hint derived from `content`, which is the document itself.
+  public var kind: NoteArtifactKind?
   public var revision: Int64
   public var isPinned: Bool?
   public var updatedAt: String
@@ -219,17 +218,12 @@ public struct InteractionResponse: Codable, Equatable, Sendable {
 public struct LibrarySnapshot: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var cursor: Int64
-  @LossyArray public var folders: [LibraryFolder]
-  @LossyArray public var notes: [LibraryNote]
-  @LossyArray public var conversations: [LibraryConversation]
+  public var folders: [LibraryFolder]
+  public var notes: [LibraryNote]
+  public var conversations: [LibraryConversation]
   public init(workspaceID: String, cursor: Int64, folders: [LibraryFolder] = [], notes: [LibraryNote] = [], conversations: [LibraryConversation] = []) {
     self.workspaceID = workspaceID; self.cursor = cursor; self.folders = folders; self.notes = notes; self.conversations = conversations
   }
-  /// Whether each list is all the host holds. A reader takes "absent from the
-  /// snapshot" as "deleted" only for a list that decoded in full.
-  public var hasEveryFolder: Bool { $folders.unreadable.isEmpty }
-  public var hasEveryNote: Bool { $notes.unreadable.isEmpty }
-  public var hasEveryConversation: Bool { $conversations.unreadable.isEmpty }
 }
 
 public struct LibraryMutation: Codable, Equatable, Sendable {
@@ -283,9 +277,7 @@ public struct LibraryChange: Codable, Equatable, Identifiable, Sendable {
 public struct LibraryChangePage: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var cursor: Int64
-  /// A change this build cannot read (a resource kind a newer host added) is
-  /// dropped; `cursor` still covers it, so the reader moves past it.
-  @LossyArray public var changes: [LibraryChange]
+  public var changes: [LibraryChange]
   public var hasMore: Bool
   public var resetRequired: Bool
   public init(workspaceID: String, cursor: Int64, changes: [LibraryChange] = [], hasMore: Bool = false, resetRequired: Bool = false) {
@@ -312,12 +304,11 @@ public struct LibraryCommand: Codable, Equatable, Sendable {
   public var workspaceAction: LibraryWorkspaceAction?
   public var response: InteractionResponse?
   /// `createSession` only: the new session's title, applied as it is created.
-  /// Older destinations ignore it, so callers still follow with a rename.
   public var title: String?
   /// `createSession` only: the caller's choices for the new session.
   public var sessionOptions: LibrarySessionOptions?
   /// `send` and `steer`: files uploaded first with
-  /// `PUT v1/execution/attachments/<sha256>`. On `send` and `steer`, `noteID`
+  /// `PUT execution/attachments/<sha256>`. On `send` and `steer`, `noteID`
   /// is the note the sending device shows, which `woven_context` returns.
   public var attachments: [LibraryAttachmentReference]?
   /// `send` and `steer`: text the harness receives after the message (the
@@ -364,10 +355,10 @@ public struct LibraryAttachmentReference: Codable, Equatable, Sendable {
   public static func isDigest(_ value: String) -> Bool {
     value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
   }
-  /// `GET <workspace endpoint>/v1/execution/attachments/<sha256>?name=`: the
+  /// `GET <workspace endpoint>/execution/attachments/<sha256>?name=`: the
   /// file's bytes, from the workspace that runs its session, with the same
   /// authorization as the other execution reads.
-  public var readPath: String { "v1/execution/attachments/" + id }
+  public var readPath: String { "execution/attachments/" + id }
 }
 
 public struct LibraryCommandReceipt: Codable, Equatable, Sendable {

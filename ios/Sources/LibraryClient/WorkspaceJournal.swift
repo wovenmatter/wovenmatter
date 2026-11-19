@@ -56,6 +56,9 @@ public actor WorkspaceJournal {
     if state.conversationOwners == nil { state.conversationOwners = state.conversationWorkspaceIDs }
   }
   public func snapshot() -> WorkspaceJournalState { state }
+  /// The run IDs this journal already holds for a conversation: what a new
+  /// projection of that conversation's native history must keep.
+  public func storedRuns(conversationID: String) -> DeviceTranscript.StoredRuns { .init(state.transcripts[conversationID]) }
   /// Cached observer history never becomes a publisher queue. Legacy relay flags
   /// are removed atomically, without deleting any origin record or projection.
   public func prepareOwnerPublication(deviceID: String) throws {
@@ -97,15 +100,9 @@ public actor WorkspaceJournal {
       // A publisher may retry immutable chunks under new journal event IDs
       // after a crash. Match the library store's (recordID, partIndex) identity:
       // identical bytes and manifests are idempotent; conflicting reuse is not.
-      // A retry after an update may carry today's name for the format of a
-      // chunk stored under its earlier tag; that is still the same chunk.
       var uniqueParts: [Int: NativeRecordPart] = [:]
       for part in entries.compactMap(\.nativeRecord) {
-        if let existing = uniqueParts[part.partIndex] {
-          var retried = part; retried.format = existing.format
-          guard retried == existing, NativeRecordFormat.isSame(part.format, existing.format) else { throw LibraryActivityDetails.invalid }
-          continue
-        }
+        if let existing = uniqueParts[part.partIndex], existing != part { throw LibraryActivityDetails.invalid }
         uniqueParts[part.partIndex] = part
       }
       let parts = uniqueParts.values.sorted { $0.partIndex < $1.partIndex }
@@ -113,7 +110,7 @@ public actor WorkspaceJournal {
       guard first.partCount > 0, first.partCount <= 65_536, first.byteCount >= 0,
         first.byteCount <= LibraryActivityDetails.maximumBytes,
         parts.allSatisfy({ $0.partCount == first.partCount && $0.byteCount == first.byteCount &&
-          $0.sha256 == first.sha256 && NativeRecordFormat.isSame($0.format, first.format) && $0.partIndex >= 0 && $0.partIndex < first.partCount }) else {
+          $0.sha256 == first.sha256 && $0.format == first.format && $0.partIndex >= 0 && $0.partIndex < first.partCount }) else {
         throw LibraryActivityDetails.invalid
       }
       guard parts.count <= first.partCount else { throw LibraryActivityDetails.invalid }
@@ -343,15 +340,12 @@ public actor WorkspaceJournal {
   /// Preserve complete native history, without truncating it to a UI transcript.
   /// A recordID identifies one immutable native record in the workspace. The
   /// checksum verifies bytes; it must not serve as identity for distinct records.
-  /// A record already stored keeps the tag it was written with: the same record
-  /// offered again under the name written from now on is that record.
   @discardableResult public func appendNativeRecord(workspaceID: String, conversationID: String, runID: String? = nil,
     recordID: String, format: String, data: Data) throws -> [ExecutionJournalEntry] {
     let sha = SHA256.hash(data: data).hexString
     let existing = state.entries.values.filter { $0.workspaceID == workspaceID && $0.nativeRecord?.recordID == recordID }
     if !existing.isEmpty {
-      guard existing.allSatisfy({ $0.conversationID == conversationID && $0.runID == runID && $0.nativeRecord?.sha256 == sha
-        && ($0.nativeRecord?.format).map { NativeRecordFormat.isSame($0, format) } == true }) else { throw Failure.reusedIdentity }
+      guard existing.allSatisfy({ $0.conversationID == conversationID && $0.runID == runID && $0.nativeRecord?.sha256 == sha && $0.nativeRecord?.format == format }) else { throw Failure.reusedIdentity }
       return existing.sorted { $0.originSequence < $1.originSequence }
     }
     let partBytes = 64 * 1_024, count = max(1, (data.count + partBytes - 1) / partBytes)
@@ -383,14 +377,8 @@ public actor WorkspaceJournal {
   public func receiveLibrary(_ page: ExecutionJournalPage) throws {
     try transaction { next in
       guard next.libraryID == page.libraryID else { throw Failure.wrongLibrary }
-      let covered = page.entries.count + (page.skipped?.count ?? 0)
-      guard page.cursor == next.libraryCursor + Int64(covered), !page.hasMore || covered > 0 else { throw Failure.replayGap }
-      var skips = Skips(page.skipped)
-      for entry in page.entries {
-        skips.pass(before: entry, in: &next)
-        try Self.insert(entry, into: &next)
-      }
-      try skips.finish(in: &next)
+      guard page.cursor == next.libraryCursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
+      for entry in page.entries { try Self.insert(entry, into: &next) }
       next.libraryCursor = page.cursor
     }
   }
@@ -398,64 +386,18 @@ public actor WorkspaceJournal {
     try transaction { next in
       guard (next.workspaces[workspaceID]?.libraryID ?? next.libraryID) == page.libraryID else { throw Failure.wrongLibrary }
       let cursor = next.directCursors[workspaceID] ?? 0
-      let owner = localDeviceID.flatMap { id in next.workspaces[workspaceID].map { Self.isLocalExecutionOwner($0, deviceID: id) } } ?? false
-      let skipped = page.skipped ?? []
-      // This device publishes what its own workspace records, and a host
-      // refuses history with a missing sequence: nothing of its own is skipped.
-      guard skipped.allSatisfy({ $0.workspaceID == workspaceID }), !owner || skipped.isEmpty else { throw Failure.replayGap }
-      let covered = page.entries.count + skipped.count
-      guard page.cursor == cursor + Int64(covered), !page.hasMore || covered > 0 else { throw Failure.replayGap }
-      var skips = Skips(skipped)
-      let named = Set(skipped.map(\.originSequence))
-      var entries = page.entries[...]
-      // Entries, in order, and skips are together exactly the sequences after the cursor.
-      for sequence in stride(from: cursor + 1, through: page.cursor, by: 1) {
-        guard let entry = entries.first, entry.originSequence == sequence else {
-          guard named.contains(sequence) else { throw Failure.replayGap }
-          continue
-        }
-        entries.removeFirst()
-        guard entry.workspaceID == workspaceID else { throw Failure.replayGap }
-        skips.pass(before: entry, in: &next)
+      guard page.cursor == cursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
+      for (index, entry) in page.entries.enumerated() {
+        guard entry.workspaceID == workspaceID, entry.originSequence == cursor + Int64(index) + 1 else { throw Failure.replayGap }
         try Self.insert(entry, into: &next)
         // Only the workspace's exact execution owner queues publication; a
         // remote observer merely caches the immutable entries.
-        if owner { next.pendingEventIDs.insert(entry.eventID) }
+        if let localDeviceID, let workspace = next.workspaces[workspaceID],
+           Self.isLocalExecutionOwner(workspace, deviceID: localDeviceID) {
+          next.pendingEventIDs.insert(entry.eventID)
+        }
       }
-      guard entries.isEmpty else { throw Failure.replayGap }
-      try skips.finish(in: &next)
       next.directCursors[workspaceID] = page.cursor
-    }
-  }
-  /// Records a page names without their contents (`ExecutionJournalPage.skipped`):
-  /// a newer build wrote them and the host, or this build, cannot read them.
-  /// Each moves its workspace's sequence one step, in order with the entries
-  /// around it, so the records after it are still accepted and nothing but a
-  /// named position is ever passed over. A sequence already held is ignored.
-  private struct Skips {
-    private var sequences: [String: [Int64]] = [:]
-    init(_ skipped: [ExecutionJournalSkip]?) {
-      for skip in skipped ?? [] { sequences[skip.workspaceID, default: []].append(skip.originSequence) }
-      for id in sequences.keys { sequences[id]?.sort() }
-    }
-    /// Takes the skips that directly follow what is held, up to `limit`.
-    private mutating func pass(_ workspaceID: String, below limit: Int64?, in next: inout WorkspaceJournalState) {
-      while let first = sequences[workspaceID]?.first, limit.map({ first < $0 }) ?? true {
-        let held = next.originSequences[workspaceID] ?? 0
-        guard first <= held + 1 else { return }
-        next.originSequences[workspaceID] = max(held, first)
-        sequences[workspaceID]?.removeFirst()
-      }
-    }
-    mutating func pass(before entry: ExecutionJournalEntry, in next: inout WorkspaceJournalState) {
-      pass(entry.workspaceID, below: entry.originSequence, in: &next)
-    }
-    /// Every skip must have had its turn: one that leaves a gap is a gap.
-    mutating func finish(in next: inout WorkspaceJournalState) throws {
-      for id in sequences.keys.sorted() {
-        pass(id, below: nil, in: &next)
-        guard sequences[id]?.isEmpty != false else { throw Failure.replayGap }
-      }
     }
   }
   public func rememberCommand(_ command: LibraryCommand, workspaceID: String) throws -> LibraryCommand {
@@ -636,7 +578,7 @@ public actor WorkspaceClient {
     // Recover an acknowledgement before resubmitting the exact same command.
     let receipt: LibraryCommandReceipt
     if let stream {
-      // `execution.command` is the handler of `POST v1/execution/commands`,
+      // `execution.command` is the handler of `POST execution/commands`,
       // which checks the command against its authenticated scope: it names
       // this workspace and its own library (the one its `hello` names), as
       // the HTTP transport's body does.
@@ -671,11 +613,7 @@ public actor WorkspaceClient {
       if !page.hasMore { break }
     }
     for record in await store.journal.commandRecords(workspaceID: workspaceID) where record.receipt?.status != .completed && record.receipt?.status != .rejected {
-      // A receipt in a state a newer workspace added cannot be read here. That
-      // command stays unresolved; the others are still asked about.
-      let answer: LibraryCommandReceipt?
-      do { answer = try await transport.receipt(record.id) } catch is DecodingError { continue }
-      if let receipt = answer {
+      if let receipt = try await transport.receipt(record.id) {
         try await store.journal.rememberReceipt(receipt, workspaceID: workspaceID)
         for launch in await store.snapshot().launches where launch.create.workspaceID == workspaceID && (launch.create.commandID == receipt.commandID || launch.initialSend.commandID == receipt.commandID) {
           try await store.rememberLaunchReceipt(receipt, launchID: launch.id)
@@ -688,15 +626,5 @@ public actor WorkspaceClient {
     let value = try await transport.transcript(id)
     guard value.conversationID == id else { throw MobileConnectionError.invalidResponse }
     try await store.cache(value); return value
-  }
-}
-
-extension NativeRecordFormat {
-  private static let all: [NativeRecordFormat] = [.activity, .chainedActivity, .piDurableEntry, .nativeUpdate,
-                                                  .fileManifest, .fileChunk, .recordReference, .textFragment]
-  /// Whether two tags name one format. Records already stored keep the tag
-  /// they were written with, so a stored tag and today's name can both appear.
-  static func isSame(_ first: String, _ second: String) -> Bool {
-    first == second || all.contains { $0.matches(first) && $0.matches(second) }
   }
 }

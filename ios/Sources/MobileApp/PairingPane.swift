@@ -11,7 +11,16 @@ struct PairingPane: View {
   @State private var confirmDisconnect = false
   var body: some View {
     Form {
-      if let credential = model.credential {
+      if model.needsMemberPairing {
+        // No Mac or Linux machine accepts this pairing any more. Say so,
+        // and put pairing first; nothing here claims a device is syncing.
+        Section { Text(model.membershipNotice ?? "").accessibilityIdentifier("pairing-membership-notice") }
+        pairingControls(header: "Pair again", footer: "Scan the code from Woven Matter → Settings → Apple Devices on any of your Macs. Pairing once is enough for every device.")
+        Section {
+          Button("Forget this pairing", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
+            .accessibilityIdentifier("pairing-forget")
+        } footer: { Text("\(model.deviceWorkspaceName) then works on its own until you pair it. Everything on it is kept.") }
+      } else if let credential = model.credential {
         Section {
           Text(model.libraryHostName.map { "Syncing with " + $0 } ?? credential.endpoint.host ?? "Paired database")
             .textSelection(.enabled).accessibilityIdentifier("pairing-library-host")
@@ -20,10 +29,8 @@ struct PairingPane: View {
           }
           Button("Unpair", role: .destructive) { confirmDisconnect = true }.disabled(model.pairingInProgress)
         } header: { Text("Your devices") } footer: {
-          if let notice = model.membershipNotice { Text(notice).accessibilityIdentifier("pairing-membership-notice") }
-          else { Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.") }
+          Text("\(model.deviceWorkspaceName) connects directly to each Mac and Linux machine. Any one that is online keeps it in sync.")
         }
-        if model.needsMemberPairing { pairingControls(header: "Pair again", footer: "Scan the code from Woven Matter → Settings → Apple Devices on any of your Macs. Pairing once is enough for every device.") }
       } else {
         pairingControls(header: "Device Connections", footer: "On any Mac with Woven Matter, open Settings → Apple Devices. Scan its code or paste its link. Both devices must use the same Tailscale network. After pairing once, \(model.deviceWorkspaceInSentence) reaches every Mac and Linux machine directly.")
       }
@@ -40,8 +47,8 @@ struct PairingPane: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
         }
       }
-      .confirmationDialog("Unpair \(model.deviceWorkspaceInSentence)?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
-        Button("Unpair", role: .destructive) { Task { await model.disconnectMac() } }
+      .confirmationDialog(model.needsMemberPairing ? "Forget this pairing?" : "Unpair \(model.deviceWorkspaceInSentence)?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+        Button(model.needsMemberPairing ? "Forget" : "Unpair", role: .destructive) { Task { await model.disconnectMac() } }
       } message: { Text("Your notes, chats, provider sign-ins, and pending changes stay on \(model.deviceWorkspaceInSentence). It stops syncing with your Macs and Linux machines until you pair again.") }
       .tint(theme.palette.themeAccent)
   }

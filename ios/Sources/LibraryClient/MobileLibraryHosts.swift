@@ -27,9 +27,11 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
   /// The last host a synchronization succeeded with; tried first next time.
   public var preferredHostDeviceID: String?
   public var currentHost: MobileLibraryHost?
-  /// True when the paired Mac answered that it does not list this phone's
-  /// key (it did not add it, or the key changed, as after a backup is
-  /// restored): pair again. Nothing syncs meanwhile.
+  /// True when a machine that accepted this phone (the Mac it paired with, or
+  /// the host it last synced with) answers that it does not list it: the Mac
+  /// never added its key, the key changed (as after a backup is restored),
+  /// the phone was removed, or that machine's pairings were cleared. The
+  /// phone is not paired any more; nothing syncs until it pairs again.
   public var memberRejected: Bool?
   public var syncStatus: MobileLibrarySyncStatus?
   public var updatedAt: Date?
@@ -60,12 +62,20 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
     return value
   }
 
+  /// Whether `host` has accepted this phone as a member: the Mac it paired
+  /// with added it, and the preferred host is the last one a sync succeeded
+  /// with. Any other host may simply not have learned about it yet.
+  func acceptedBefore(_ host: MobileLibraryHost) -> Bool {
+    host.deviceID == preferredHostDeviceID || host.deviceID == pairedHostDeviceID
+      || Self.libraryEndpoint(host.endpoint, tailnet: nil) == Self.libraryEndpoint(pairedEndpoint, tailnet: nil)
+  }
+
   /// The member that serves a workspace's endpoint, from the member list this
   /// phone learned (`MemberAudience.serving`): the audience of its signed
   /// requests there. Nil until the phone has learned it.
   public func audience(for workspace: ExecutionWorkspace) -> String? {
     MemberAudience.serving(workspace, members: members.compactMap { member in
-      MemberKind(rawValue: member.kind).map { .init(deviceID: member.deviceID, kind: $0, endpoints: member.endpoints, revoked: member.revoked) }
+      MemberKind(rawValue: member.kind).map { .init(deviceID: member.deviceID, kind: $0, revoked: member.revoked) }
     })
   }
 
@@ -174,13 +184,16 @@ public actor MobileLibraryHosts {
   /// Chooses a reachable host, trying candidates in order and failing over
   /// automatically. Each attempt is one short hello; nothing polls. A host that
   /// does not know this phone yet (it has not synced with the Mac that added
-  /// it) is skipped like an offline one.
+  /// it) is skipped like an offline one. When no host accepts this phone and
+  /// one that accepted it before says it no longer lists it, the phone is not
+  /// paired any more: that is recorded, and the error says so.
   public func connect(registry: [ExecutionWorkspace]) async throws -> (HTTPSLibraryTransport, LibraryHello, MobileLibraryHost) {
-    var failures: [any Error] = []
+    var failures: [any Error] = [], forgotten: MobileLibraryHost?
     for host in state.candidates(registry: registry) {
       try Task.checkCancellation()
+      let transport: HTTPSLibraryTransport
+      do { transport = try self.transport(for: host) } catch { failures.append(error); continue }
       do {
-        let transport = try transport(for: host)
         let hello = try await transport.probe()
         update { next in
           next.preferredHostDeviceID = host.deviceID; next.currentHost = host
@@ -189,10 +202,15 @@ public actor MobileLibraryHosts {
         return (transport, hello, host)
       } catch {
         if error is CancellationError { throw error }
+        if case MobileConnectionError.memberUnknown = error, forgotten == nil, state.acceptedBefore(host) { forgotten = host }
         failures.append(error)
       }
     }
     update { $0.currentHost = nil }
+    if let forgotten {
+      update { $0.memberRejected = true }
+      throw MobileConnectionError.notPaired(forgotten.name)
+    }
     throw Self.summary(failures)
   }
 

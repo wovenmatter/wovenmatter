@@ -95,7 +95,7 @@ final class StreamEvents: @unchecked Sendable {
   private let lock = NSLock()
   private var _events: [StreamSubscriptionEvent] = []
   var events: [StreamSubscriptionEvent] { lock.withLock { _events } }
-  var kinds: [String] { events.map { if case .item(let item) = $0 { item.payload.kind } else { "ended" } } }
+  var kinds: [String] { events.map { if case .item(let item) = $0 { item.payload.kind.rawValue } else { "ended" } } }
   var disposition: @Sendable (StreamItem) -> StreamItemDisposition = { _ in .accepted }
   func handler() -> StreamConnection.Handler {
     { [self] event in
@@ -166,12 +166,12 @@ final class StreamConnectionTests: XCTestCase {
     await socket.push(.item(.init(id: id, payload: .pending(.init(interactions: [])))))
     await socket.push(journalItem(id, 42))
     await socket.push(.item(.init(id: "someone-else", payload: .synchronized)))
-    await socket.push(.item(.init(id: id, seq: 43, payload: .unknown(kind: "futureKind", data: .object([:])))))
+    await socket.push(journalItem(id, 43))
     await socket.push(.item(.init(id: id, payload: .synchronized)))
     await eventually("items") { events.events.count == 4 }
-    XCTAssertEqual(events.kinds, ["pending", "journal", "futureKind", "synchronized"])
+    XCTAssertEqual(events.kinds, ["pending", "journal", "journal", "synchronized"])
     let after = await connection.parameters(subscription)?.after
-    XCTAssertEqual(after, 43, "An accepted seq advances after, unknown kinds included")
+    XCTAssertEqual(after, 43, "An accepted seq advances after")
   }
 
   func testReconnectResubscribesWithTheLatestAfterAndSignsEachAttempt() async throws {
@@ -415,49 +415,6 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(methods, ["execution.receipt"], "The command itself is not resent")
   }
 
-  /// A receipt in a state a newer server added cannot be read here. That
-  /// command stays unresolved; the next one is still asked about.
-  func testAReceiptThisBuildCannotReadDoesNotStopTheOthersBeingResolved() async throws {
-    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "journal.json")
-    let journal = try WorkspaceJournal(file: file)
-    let server = FakeStreamServer()
-    let connection = server.connection()
-    await connection.start()
-    let socket = await open(server, connection)
-    let unread = try await journal.rememberCommand(.init(deviceID: "phone", kind: .stop, conversationID: "chat", runID: "run"), workspaceID: "linux")
-    let known = try await journal.rememberCommand(.init(deviceID: "phone", kind: .send, conversationID: "chat", text: "Hello"), workspaceID: "linux")
-    let completed = LibraryCommandReceipt(commandID: known.commandID, deviceID: "phone", status: .completed, conversationID: "chat")
-    let resolve = Task { try await StreamCommands.resolveUnknown(workspaceID: "linux", journal: journal, connection: connection) }
-    for index in 0..<2 {
-      await eventually("receipt request \(index)") { await socket.requests.count == index + 1 }
-      let ask = await socket.requests[index]
-      if try ask.decodeParams(StreamReceiptParams.self).commandID == known.commandID {
-        await socket.push(.response(try .init(id: ask.id, encoding: completed)))
-      } else {
-        await socket.push(try StreamProtocol.decode(Data(
-          #"{"t":"res","id":"\#(ask.id)","result":{"commandID":"\#(unread.commandID)","deviceID":"phone","status":"superseded"}}"#.utf8)))
-      }
-    }
-    let learned = try await resolve.value
-    XCTAssertEqual(learned, [completed])
-    let records = await journal.commandRecords(workspaceID: "linux")
-    XCTAssertEqual(records.first { $0.command.commandID == known.commandID }?.receipt, completed)
-    XCTAssertNil(records.first { $0.command.commandID == unread.commandID }?.receipt)
-  }
-
-  /// A frame that is JSON but holds a value this build cannot read is not a
-  /// protocol violation (which closes the socket with 4400 and reconnects
-  /// into the same frame); a frame that is not JSON still is.
-  func testAnItemThisBuildCannotReadIsIgnoredNotAProtocolViolation() throws {
-    let text = #"{"t":"item","id":"s1","seq":44,"kind":"journal","data":{"entry":{"eventID":"e","workspaceID":"w","originSequence":44,"conversationID":"c","kind":"forkedConversation"}}}"#
-    guard case .item(let item) = try WebSocketStreamTransport.decode(.string(text)) else { return XCTFail("Expected an item") }
-    XCTAssertEqual(item.seq, 44)
-    XCTAssertEqual(item.payload.kind, "journal")
-    if case .journal = item.payload { XCTFail("An entry of an unknown kind was read") }
-    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.string("{")))
-    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.data(Data(#"{"id":"s1"}"#.utf8))))
-  }
-
   func testARetriedCommandAsksForItsReceiptFirst() async throws {
     let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "journal.json")
     let journal = try WorkspaceJournal(file: file)
@@ -600,7 +557,7 @@ final class StreamConnectionTests: XCTestCase {
 
   func testRefusedUpgradeResponsesAreReadFromXWovenErrorFirst() throws {
     let now = Date(timeIntervalSince1970: 1_762_905_600)
-    let url = URL(string: "https://studio.example.ts.net:8443/wovenmatter/v1/stream")!
+    let url = URL(string: "https://studio.example.ts.net:8443/wovenmatter/stream")!
     func response(_ status: Int, _ headers: [String: String]) -> HTTPURLResponse {
       HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
     }
@@ -635,9 +592,9 @@ final class StreamConnectionTests: XCTestCase {
     let signer = MemberRequestSigner(deviceID: "6F1C2A8E-58A4-4D0E-9B6B-1B2E3C4D5E6F", key: key)
     let audience = "4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d"
     let mac = try StreamEndpoint.url(for: URL(string: "https://studio.example.ts.net:8443/wovenmatter")!)
-    XCTAssertEqual(mac.absoluteString, "wss://studio.example.ts.net:8443/wovenmatter/v1/stream")
+    XCTAssertEqual(mac.absoluteString, "wss://studio.example.ts.net:8443/wovenmatter/stream")
     let linux = try StreamEndpoint.url(for: URL(string: "https://server.example.ts.net/wovenmatter-execution/abc/")!)
-    XCTAssertEqual(linux.absoluteString, "wss://server.example.ts.net/wovenmatter-execution/abc/v1/stream")
+    XCTAssertEqual(linux.absoluteString, "wss://server.example.ts.net/wovenmatter-execution/abc/stream")
     XCTAssertThrowsError(try StreamEndpoint.url(for: URL(string: "https://example.com/wovenmatter")!))
     XCTAssertThrowsError(try StreamEndpoint.url(for: URL(string: "http://studio.example.ts.net/wovenmatter")!))
 
@@ -650,10 +607,10 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(first.value(forHTTPHeaderField: "X-Woven-Workspace"), "mac")
     XCTAssertEqual(first.value(forHTTPHeaderField: MemberRequestSignature.audienceHeader), audience)
     XCTAssertNil(first.value(forHTTPHeaderField: "Authorization"))
-    XCTAssertEqual(StreamEndpoint.target(of: mac), "/wovenmatter/v1/stream")
+    XCTAssertEqual(StreamEndpoint.target(of: mac), "/wovenmatter/stream")
     // The signature covers GET, the target (it has no query) and an empty body.
     let time = Int64(first.value(forHTTPHeaderField: MemberRequestSignature.timeHeader)!)!
-    let message = MemberRequestSignature.message(audience: audience, method: "GET", target: "/wovenmatter/v1/stream",
+    let message = MemberRequestSignature.message(audience: audience, method: "GET", target: "/wovenmatter/stream",
       time: time, nonce: first.value(forHTTPHeaderField: nonce)!, bodySHA256: MemberRequestSignature.bodyHash(Data()))
     let signature = MemberRequestSignature.decodeBase64URL(first.value(forHTTPHeaderField: MemberRequestSignature.signatureHeader)!)!
     XCTAssertTrue(key.publicKey.isValidSignature(signature, for: message))
@@ -689,7 +646,6 @@ final class StreamFixtureDecodingTests: XCTestCase {
     struct Named: Decodable { let name: String; let frame: JSONValue }
     struct Prefixed: Decodable { let frame: JSONValue; let hex: String }
     let frames: [Named]
-    let unknownFrames: [JSONValue]
     let lengthPrefixed: Prefixed
   }
   private func fixtures() throws -> Fixtures {
@@ -707,15 +663,11 @@ final class StreamFixtureDecodingTests: XCTestCase {
     for fixture in fixtures.frames {
       let text = String(decoding: try JSONEncoder().encode(fixture.frame), as: UTF8.self)
       let frame = try WebSocketStreamTransport.decode(.string(text))
-      if case .unknown = frame { XCTFail("\(fixture.name) decoded as unknown") }
       let binary = try WebSocketStreamTransport.decode(.data(Data(text.utf8)))
       XCTAssertEqual(frame, binary, fixture.name)
       XCTAssertEqual(try object(StreamProtocol.encode(frame)), try object(Data(text.utf8)), fixture.name)
     }
-    for frame in fixtures.unknownFrames {
-      let decoded = try WebSocketStreamTransport.decode(.string(String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)))
-      XCTAssertEqual(decoded, .unknown("futureFrame"))
-    }
+    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.string(#"{"t":"futureFrame","id":"x1"}"#)), "Not a frame this build defines")
   }
 
   func testTheLengthPrefixedFixtureDecodesThroughTheByteChannelPath() async throws {

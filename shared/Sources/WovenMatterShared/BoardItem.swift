@@ -127,7 +127,7 @@ public struct BoardTaskAssignee: Codable, Equatable, Identifiable, Sendable {
 
   /// A conversation UUID that every host derives the same way from one assignment.
   public static func conversationID(for assigneeID: String) -> String {
-    var bytes = Array(SHA256.hash(data: Data("woven-page-task-v1\u{0}\(assigneeID)".utf8)).prefix(16))
+    var bytes = Array(SHA256.hash(data: Data("woven-page-task\u{0}\(assigneeID)".utf8)).prefix(16))
     bytes[6] = (bytes[6] & 0x0f) | 0x50; bytes[8] = (bytes[8] & 0x3f) | 0x80
     return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
                        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15])).uuidString.lowercased()
@@ -166,7 +166,8 @@ public struct BoardTask: Codable, Equatable, Sendable {
     details = try values.decodeIfPresent(String.self, forKey: .details) ?? ""
     assignees = try values.decodeIfPresent([BoardTaskAssignee].self, forKey: .assignees) ?? []
   }
-  /// Older readers and fingerprints keep their encoding while a task has no details or assignees.
+  /// A task with no details or assignees is written without those keys, so
+  /// the fingerprint of a task that never had them stays what it was.
   public func encode(to encoder: any Encoder) throws {
     var values = encoder.container(keyedBy: CodingKeys.self)
     try values.encode(status, forKey: .status)

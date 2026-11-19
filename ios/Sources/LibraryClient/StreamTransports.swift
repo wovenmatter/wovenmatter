@@ -4,7 +4,7 @@ import WovenMatterShared
 import FoundationNetworking
 #endif
 
-/// Where a member's stream is: `GET <endpoint>/v1/stream`, upgraded.
+/// Where a member's stream is: `GET <endpoint>/stream`, upgraded.
 public enum StreamEndpoint {
   /// The WebSocket URL under a member's endpoint (a Mac's
   /// `https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, a Linux host's
@@ -77,7 +77,7 @@ public final class WebSocketStreamTransport: StreamTransport, @unchecked Sendabl
     switch message {
     case .string(let text): try StreamProtocol.decode(Data(text.utf8))
     case .data(let data): try StreamProtocol.decode(data)
-    @unknown default: .unknown("")
+    @unknown default: throw StreamConnectionError.refused(status: 101, code: "invalid", message: "The server sent a message that is not a frame.")
     }
   }
 

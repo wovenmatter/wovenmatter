@@ -486,7 +486,7 @@ public actor StreamConnection {
         subscription.retryTask?.cancel()
         _ = await subscription.handler(.ended(end.error))
       }
-    case .hello, .request, .subscribe, .cancel, .unknown:
+    case .hello, .request, .subscribe, .cancel:
       break
     }
   }
@@ -756,11 +756,7 @@ public enum StreamCommands {
     var learned: [LibraryCommandReceipt] = []
     for record in await journal.commandRecords(workspaceID: workspaceID)
     where record.receipt == nil || record.receipt?.status == .outcomeUnknown {
-      // A receipt in a state a newer server added cannot be read here. That
-      // command stays unresolved; the others are still asked about.
-      let answer: LibraryCommandReceipt?
-      do { answer = try await connection.receipt(record.command.commandID) } catch is DecodingError { continue }
-      guard let receipt = answer,
+      guard let receipt = try await connection.receipt(record.command.commandID),
             receipt.commandID == record.command.commandID, receipt.deviceID == record.command.deviceID,
             receipt.status != .outcomeUnknown else { continue }
       try await journal.rememberReceipt(receipt, workspaceID: workspaceID)

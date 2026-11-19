@@ -6,9 +6,9 @@ public protocol LibraryDictationTransport: Sendable {
   func publishDictation(_ record: DictationRecord) async throws -> DictationRecord
 }
 extension HTTPSLibraryTransport: LibraryDictationTransport {
-  public func dictationChanges(after: Int64) async throws -> DictationHistoryPage { try await request("v1/dictations", query: [URLQueryItem(name: "after", value: String(after))]) }
+  public func dictationChanges(after: Int64) async throws -> DictationHistoryPage { try await request("dictations", query: [URLQueryItem(name: "after", value: String(after))]) }
   public func publishDictation(_ record: DictationRecord) async throws -> DictationRecord {
-    try await request("v1/dictations", method: "POST", body: JSONEncoder().encode(record))
+    try await request("dictations", method: "POST", body: JSONEncoder().encode(record))
   }
 }
 extension MobileSyncEngine {

@@ -49,38 +49,39 @@ struct MemberRequestSignatureTests {
   }
 
   @Test func mountPrefixIsNotSigned() {
-    #expect(MemberRequestSignature.canonicalTarget("/wovenmatter/v1/peers/sync") == "/v1/peers/sync")
+    #expect(MemberRequestSignature.canonicalTarget("/wovenmatter/peers/sync") == "/peers/sync")
     #expect(MemberRequestSignature.canonicalTarget("/wovenmatter?x=1") == "/?x=1")
-    #expect(MemberRequestSignature.canonicalTarget("/wovenmatterx/v1") == "/wovenmatterx/v1")
+    #expect(MemberRequestSignature.canonicalTarget("/wovenmatterx/peers") == "/wovenmatterx/peers")
     let audience = "a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c"
-    #expect(MemberRequestSignature.message(audience: audience, method: "get", target: "/wovenmatter/v1/a?b=1", time: 1, nonce: "n", body: Data())
-      == MemberRequestSignature.message(audience: audience, method: "GET", target: "/v1/a?b=1", time: 1, nonce: "n", body: Data()))
+    #expect(MemberRequestSignature.message(audience: audience, method: "get", target: "/wovenmatter/a?b=1", time: 1, nonce: "n", body: Data())
+      == MemberRequestSignature.message(audience: audience, method: "GET", target: "/a?b=1", time: 1, nonce: "n", body: Data()))
   }
 
   @Test func theAudienceComesFromSyncedRecordsOnly() {
     let mac = "a0000000-0000-4000-8000-00000000000a", linux = "b0000000-0000-4000-8000-00000000000b"
     let members: [MemberAudience.Member] = [
-      .init(deviceID: mac, kind: .mac, endpoints: [URL(string: "https://studio.tail1.ts.net:8443/wovenmatter")!], revoked: false),
-      .init(deviceID: linux, kind: .linux, endpoints: [URL(string: "https://box.tail1.ts.net:8443/wovenmatter/")!], revoked: false)]
+      .init(deviceID: mac, kind: .mac, revoked: false),
+      .init(deviceID: linux, kind: .linux, revoked: false)]
     let macWorkspace = ExecutionWorkspace(id: "m", libraryID: "l", ownerDeviceID: mac, kind: .mac, name: "Studio",
       endpoint: URL(string: "https://studio.tail1.ts.net:8443/wovenmatter"), executionDeviceID: mac)
     #expect(MemberAudience.serving(macWorkspace, members: members) == mac)
-    // A Linux host's execution device is its Node server's own ID: matched by host instead.
+    // A Linux workspace names the member that runs it.
     let box = ExecutionWorkspace(id: "w", libraryID: "l", ownerDeviceID: mac, kind: .linux, name: "Box",
-      endpoint: URL(string: "https://box.tail1.ts.net/wovenmatter-execution/w"), executionDeviceID: "c0000000-0000-4000-8000-00000000000c")
+      endpoint: URL(string: "https://box.tail1.ts.net/wovenmatter-execution/w"), executionDeviceID: linux)
     #expect(MemberAudience.serving(box, members: members) == linux)
-    var elsewhere = box; elsewhere.endpoint = URL(string: "https://other.tail1.ts.net/wovenmatter-execution/w")
-    #expect(MemberAudience.serving(elsewhere, members: members) == nil)
-    // Removed, ambiguous or phone members never serve a workspace.
-    #expect(MemberAudience.serving(box, members: [.init(deviceID: linux, kind: .linux, endpoints: members[1].endpoints, revoked: true)]) == nil)
-    #expect(MemberAudience.serving(box, members: members + [.init(deviceID: "d0000000-0000-4000-8000-00000000000d", kind: .linux,
-      endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter/")!], revoked: false)]) == nil)
-    #expect(MemberAudience.serving(box, members: [.init(deviceID: linux, kind: .ios, endpoints: members[1].endpoints, revoked: false)]) == nil)
-    var macByHost = macWorkspace; macByHost.executionDeviceID = nil
-    #expect(MemberAudience.serving(macByHost, members: members) == nil, "a Mac workspace is addressed only by its execution device")
+    // One that names no member is not addressed, whatever its endpoint.
+    var unnamed = box; unnamed.executionDeviceID = "c0000000-0000-4000-8000-00000000000c"
+    #expect(MemberAudience.serving(unnamed, members: members) == nil)
+    unnamed.executionDeviceID = nil
+    #expect(MemberAudience.serving(unnamed, members: members) == nil)
+    // Removed or phone members never serve a workspace.
+    #expect(MemberAudience.serving(box, members: [.init(deviceID: linux, kind: .linux, revoked: true)]) == nil)
+    #expect(MemberAudience.serving(box, members: [.init(deviceID: linux, kind: .ios, revoked: false)]) == nil)
+    var macWithoutDevice = macWorkspace; macWithoutDevice.executionDeviceID = nil
+    #expect(MemberAudience.serving(macWithoutDevice, members: members) == nil, "a Mac workspace is addressed only by its execution device")
     // A Mac workspace's execution device is that Mac's member ID, even before the list arrives; a removed Mac is not.
     #expect(MemberAudience.serving(macWorkspace, members: []) == mac)
-    #expect(MemberAudience.serving(macWorkspace, members: [.init(deviceID: mac, kind: .mac, endpoints: [], revoked: true)]) == nil)
+    #expect(MemberAudience.serving(macWorkspace, members: [.init(deviceID: mac, kind: .mac, revoked: true)]) == nil)
   }
 
   @Test func base64URLIsStrict() {
@@ -163,16 +164,16 @@ struct MemberRequestSignatureTests {
     let signer = MemberRequestSigner(deviceID: device, key: key)
     let body = Data("{\"after\":3}".utf8)
     let host = UUID().uuidString.lowercased()
-    let headers = try signer.headers(method: "POST", target: "/wovenmatter/v1/peers/sync", body: body, audience: host)
+    let headers = try signer.headers(method: "POST", target: "/wovenmatter/peers/sync", body: body, audience: host)
     let member = MemberKey(deviceID: device, kind: .linux, name: "Host", publicKey: key.publicKey.rawRepresentation)
     let verifier = MemberRequestVerifier(audience: host, lookup: { $0 == device ? member : nil })
     // A Linux host behind Tailscale Serve sees the path without its prefix.
-    #expect(try await verifier.verify(method: "POST", target: "/v1/peers/sync", headers: Self.lowercased(headers), body: body) == member)
+    #expect(try await verifier.verify(method: "POST", target: "/peers/sync", headers: Self.lowercased(headers), body: body) == member)
     await #expect(throws: MemberRequestError.signature) {
-      try await MemberRequestVerifier(audience: host, lookup: { _ in member }).verify(method: "POST", target: "/v1/peers/files", headers: Self.lowercased(headers), body: body)
+      try await MemberRequestVerifier(audience: host, lookup: { _ in member }).verify(method: "POST", target: "/peers/files", headers: Self.lowercased(headers), body: body)
     }
     // Nothing can be signed without knowing the destination.
-    #expect(throws: MemberRequestError.audienceUnknown) { try signer.headers(method: "GET", target: "/v1/hello", audience: "paired") }
+    #expect(throws: MemberRequestError.audienceUnknown) { try signer.headers(method: "GET", target: "/hello", audience: "paired") }
   }
 
   /// Each member keeps its own nonce cache, so a captured request must not
@@ -182,24 +183,24 @@ struct MemberRequestSignatureTests {
     let first = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
     let member = MemberKey(deviceID: device, kind: .ios, name: "Phone", publicKey: key.publicKey.rawRepresentation)
     let signer = MemberRequestSigner(deviceID: device, key: key)
-    let headers = Self.lowercased(try signer.headers(method: "GET", target: "/wovenmatter/v1/snapshot", audience: first))
+    let headers = Self.lowercased(try signer.headers(method: "GET", target: "/wovenmatter/snapshot", audience: first))
     let atFirst = MemberRequestVerifier(audience: first, lookup: { $0 == device ? member : nil })
     let atSecond = MemberRequestVerifier(audience: second, lookup: { $0 == device ? member : nil })
-    #expect(try await atFirst.verify(method: "GET", target: "/v1/snapshot", headers: headers, body: Data()) == member)
+    #expect(try await atFirst.verify(method: "GET", target: "/snapshot", headers: headers, body: Data()) == member)
     // The same bytes replayed to the second member.
     await #expect(throws: MemberRequestError.audience) {
-      try await atSecond.verify(method: "GET", target: "/v1/snapshot", headers: headers, body: Data())
+      try await atSecond.verify(method: "GET", target: "/snapshot", headers: headers, body: Data())
     }
     // Relabelled for the second member, the signature no longer verifies.
     var relabelled = headers; relabelled["x-woven-member-audience"] = second
     await #expect(throws: MemberRequestError.signature) {
-      try await atSecond.verify(method: "GET", target: "/v1/snapshot", headers: relabelled, body: Data())
+      try await atSecond.verify(method: "GET", target: "/snapshot", headers: relabelled, body: Data())
     }
     // Missing or malformed audiences are refused outright.
     var missing = headers; missing["x-woven-member-audience"] = nil
-    await #expect(throws: MemberRequestError.missing) { try await atFirst.verify(method: "GET", target: "/v1/snapshot", headers: missing, body: Data()) }
+    await #expect(throws: MemberRequestError.missing) { try await atFirst.verify(method: "GET", target: "/snapshot", headers: missing, body: Data()) }
     var upper = headers; upper["x-woven-member-audience"] = first.uppercased()
-    await #expect(throws: MemberRequestError.signature) { try await atFirst.verify(method: "GET", target: "/v1/snapshot", headers: upper, body: Data()) }
+    await #expect(throws: MemberRequestError.signature) { try await atFirst.verify(method: "GET", target: "/snapshot", headers: upper, body: Data()) }
   }
   #endif
 }

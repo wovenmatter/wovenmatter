@@ -204,9 +204,6 @@ public actor MobileSyncEngine {
     let deviceID = await store.snapshot().deviceID
     let snapshot = try await connection.snapshot()
     guard snapshot.workspaceID == libraryID else { throw MobileStore.Failure.wrongWorkspace }
-    // A move compares everything this device holds with everything the host
-    // holds, so it needs the host's whole list; see `MobileStore.rebindLibrary`.
-    guard snapshot.hasEveryNote, snapshot.hasEveryFolder, snapshot.hasEveryConversation else { throw MobileConnectionError.invalidResponse }
     var bodies: [String: LibraryNote] = [:]
     for id in await store.notesNeedingBodies(for: snapshot) {
       try Task.checkCancellation()
@@ -351,11 +348,7 @@ public actor MobileSyncEngine {
     }
     let records = await store.snapshot().commands
     for record in records where record.receipt == nil || record.receipt?.status == .accepted || record.receipt?.status == .outcomeUnknown {
-      // A receipt in a state a newer host added cannot be read here. That
-      // command stays unresolved; the others are still asked about.
-      let answer: LibraryCommandReceipt?
-      do { answer = try await transport.receipt(record.id) } catch is DecodingError { continue }
-      if let receipt = answer { try await store.rememberReceipt(receipt) }
+      if let receipt = try await transport.receipt(record.id) { try await store.rememberReceipt(receipt) }
     }
   }
   public func linkedData(note: LibraryNote, tableID: String? = nil) async throws -> LinkedDataPreview {
@@ -379,11 +372,9 @@ public actor MobileSyncEngine {
     try await store.cacheTranscriptPage(page)
     return page
   }
-  /// The activity's complete projection, from the details route; a Mac too old
-  /// to have it answers with the activity as its transcript carries it.
-  public func transcriptActivityDetail(_ id: String, runID: String? = nil, activityID: String) async throws -> LibraryActivity? {
-    if let runID, let detail = try? await transport.activityDetails(id, runID: runID, activityID: activityID) { return detail }
-    return try await transport.transcript(id).activities.first { $0.id == activityID }
+  /// The activity's complete projection, from the library host's details route.
+  public func transcriptActivityDetail(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
+    try await transport.activityDetails(id, runID: runID, activityID: activityID)
   }
   public func refreshTranscriptIfNeeded(_ id: String) async throws {
     let local = await store.snapshot()

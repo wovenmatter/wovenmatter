@@ -23,10 +23,6 @@ public struct MacAccessStatus: Codable, Equatable, Sendable {
 
   public enum State: String, Codable, Sendable {
     case ready, needsAttention, unknown
-    /// A state added by a newer Mac decodes as unknown instead of failing the record.
-    public init(from decoder: any Decoder) throws {
-      self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
-    }
   }
 
   /// Items every session may need: saved credentials and files in protected folders.
@@ -34,7 +30,7 @@ public struct MacAccessStatus: Codable, Equatable, Sendable {
   /// Items Computer Use needs in addition.
   public static let computerUseRequirements: [Item] = [.accessibility, .screenRecording]
 
-  /// Keys are `Item` raw values; unknown future items decode and are ignored.
+  /// Keys are `Item` raw values.
   public var items: [String: State]
   /// The app name macOS lists in Privacy & Security, e.g. "Woven Matter".
   public var appName: String
@@ -45,7 +41,7 @@ public struct MacAccessStatus: Codable, Equatable, Sendable {
   }
 
   /// The name macOS lists in Privacy & Security: the display name, else the
-  /// bundle name. Blank values are skipped; Dev builds carried an empty display name.
+  /// bundle name. Blank values are skipped.
   public static func appName(displayName: String?, bundleName: String?) -> String {
     [displayName, bundleName].lazy.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
       .first { !$0.isEmpty } ?? "Woven Matter"
@@ -53,8 +49,8 @@ public struct MacAccessStatus: Codable, Equatable, Sendable {
 
   public func state(_ item: Item) -> State { items[item.rawValue] ?? .unknown }
 
-  /// Required items known to be missing. Unknown items are not reported, so an
-  /// older Mac that never checked does not produce a false warning.
+  /// Required items known to be missing. An item the Mac has not checked is
+  /// `unknown` and is not reported.
   public func missing(computerUse: Bool = false) -> [Item] {
     (Self.sessionRequirements + (computerUse ? Self.computerUseRequirements : []))
       .filter { state($0) == .needsAttention }
@@ -69,8 +65,6 @@ public struct MacAccessStatus: Codable, Equatable, Sendable {
       : names.dropLast().joined(separator: ", ") + ", and " + names.last!
     let subject = isThisDevice ? "This Mac" : deviceName
     let action = isThisDevice ? "Open Settings → Permissions & Access to set it up." : "Open Settings → Permissions & Access on that Mac."
-    // Records published by those Dev builds still carry a blank name.
-    let app = Self.appName(displayName: appName, bundleName: nil)
-    return "\(subject) is missing \(list) for \(app). \(action)"
+    return "\(subject) is missing \(list) for \(appName). \(action)"
   }
 }

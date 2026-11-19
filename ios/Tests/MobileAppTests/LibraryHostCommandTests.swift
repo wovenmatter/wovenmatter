@@ -3,7 +3,7 @@ import LibraryClient
 import WovenMatterShared
 @testable import WovenMatterMobileApp
 
-/// The library host's mobile API (`POST v1/commands`), recording every host route command.
+/// The library host's mobile API (`POST commands`), recording every host route command.
 private actor HostLibrary: OfflineLibraryTransport {
   private(set) var commands: [LibraryCommand] = []
   func workspaceIdentity() async throws -> String { "library-a" }
@@ -23,7 +23,7 @@ private actor HostLibrary: OfflineLibraryTransport {
 }
 
 /// Each Mac's signed HTTP routes: its execution descriptor, agents and the
-/// library host's `GET v1/hello`. Commands never arrive here: streamed
+/// library host's `GET hello`. Commands never arrive here: streamed
 /// workspaces take them on their stream.
 private final class MacHTTP: MobileHTTPPerforming, @unchecked Sendable {
   private let lock = NSLock()
@@ -36,10 +36,10 @@ private final class MacHTTP: MobileHTTPPerforming, @unchecked Sendable {
     let workspace = lock.withLock { recorded.append((request.httpMethod ?? "GET") + " " + host + path); return workspaces[host] }
     let body: Data
     switch path {
-    case "/wovenmatter/v1/hello": body = try JSONEncoder().encode(LibraryHello(workspaceID: "library-a", hostName: "Dev"))
-    case "/wovenmatter/v1/execution": body = try JSONEncoder().encode(workspace)
-    case "/wovenmatter/v1/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace?.libraryID ?? "", cursor: 0))
-    case "/wovenmatter/v1/execution/providers":
+    case "/wovenmatter/hello": body = try JSONEncoder().encode(LibraryHello(workspaceID: "library-a", hostName: "Dev"))
+    case "/wovenmatter/execution": body = try JSONEncoder().encode(workspace)
+    case "/wovenmatter/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace?.libraryID ?? "", cursor: 0))
+    case "/wovenmatter/execution/providers":
       body = try JSONEncoder().encode([HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: true, canStop: true)])
     default: body = Data("[]".utf8)
     }
@@ -200,7 +200,7 @@ final class LibraryHostCommandTests: XCTestCase {
 
   /// Codex under the library host's own workspace is the host route: the
   /// live row, never a copy. The chat is created and used through the mobile
-  /// API (`POST v1/commands`), and nothing reaches the host's stream.
+  /// API (`POST commands`), and nothing reaches the host's stream.
   @MainActor func testChatOnTheLibraryHostUsesTheMobileAPI() async throws {
     let fixture = try await makeFixture(); let model = fixture.model
     defer { try? FileManager.default.removeItem(at: fixture.root); model.closeWorkspaceStreams() }
@@ -225,7 +225,7 @@ final class LibraryHostCommandTests: XCTestCase {
     XCTAssertTrue(sent.allSatisfy { $0.conversationID == id && $0.deviceID == model.state.deviceID && $0.workspaceID == nil })
     let streamed = await fixture.devServer.commands()
     XCTAssertTrue(streamed.isEmpty, "Host route commands stay on the mobile API: \(streamed.map(\.kind))")
-    XCTAssertFalse(fixture.http.paths.contains { $0.contains("/v1/execution/commands") })
+    XCTAssertFalse(fixture.http.paths.contains { $0.contains("/execution/commands") })
 
     // The next message, stopping and the composer's route stay on the host route too.
     model.composer = "And the changelog"

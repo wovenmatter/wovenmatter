@@ -45,7 +45,7 @@ public enum MemberRequestSignature {
 
   /// The signed path omits a leading `/wovenmatter` mount prefix, because
   /// Tailscale Serve strips it before a Linux host sees the request while a
-  /// Mac receives it intact. `/wovenmatter/v1/x?y` and `/v1/x?y` sign alike.
+  /// Mac receives it intact. `/wovenmatter/x?y` and `/x?y` sign alike.
   public static func canonicalTarget(_ target: String) -> String {
     if target == "/wovenmatter" { return "/" }
     if target.hasPrefix("/wovenmatter/") { return String(target.dropFirst("/wovenmatter".count)) }
@@ -236,28 +236,21 @@ public enum MemberAudience {
   public struct Member: Sendable, Equatable {
     public let deviceID: String
     public let kind: MemberKind
-    public let endpoints: [URL]
     public let revoked: Bool
-    public init(deviceID: String, kind: MemberKind, endpoints: [URL], revoked: Bool) {
-      self.deviceID = deviceID.lowercased(); self.kind = kind; self.endpoints = endpoints; self.revoked = revoked
+    public init(deviceID: String, kind: MemberKind, revoked: Bool) {
+      self.deviceID = deviceID.lowercased(); self.kind = kind; self.revoked = revoked
     }
   }
 
   /// The workspace's execution device when that is an active Mac or Linux
   /// member, and for a Mac workspace (whose execution device is the Mac's
-  /// member ID) whenever that device was not removed. A Linux host registers
-  /// new workspaces with its member ID too; a workspace a host registered with
-  /// a random ID before v0.4.0 names its Node server's own execution device ID,
-  /// so otherwise it is the one active Linux member that advertises an endpoint
-  /// on the same tailnet host. Two members claiming that host: nobody.
+  /// member ID) whenever that device was not removed. A workspace that names
+  /// no member is not addressed.
   public static func serving(_ workspace: ExecutionWorkspace, members: [Member]) -> String? {
-    guard workspace.kind != .ios, !workspace.deleted else { return nil }
-    let active = members.filter { !$0.revoked && $0.kind != .ios }
-    if let id = workspace.executionDeviceID?.lowercased(), active.contains(where: { $0.deviceID == id }) { return id }
-    if workspace.kind == .mac, let id = workspace.executionDeviceID?.lowercased(), MemberRequestSignature.isDeviceID(id),
-       !members.contains(where: { $0.deviceID == id && ($0.revoked || $0.kind != .mac) }) { return id }
-    guard workspace.kind == .linux, let host = workspace.endpoint?.host?.lowercased(), host.hasSuffix(".ts.net") else { return nil }
-    let matches = active.filter { member in member.kind == .linux && member.endpoints.contains { $0.host?.lowercased() == host } }
-    return matches.count == 1 ? matches[0].deviceID : nil
+    guard workspace.kind != .ios, !workspace.deleted, let id = workspace.executionDeviceID?.lowercased() else { return nil }
+    if members.contains(where: { $0.deviceID == id && !$0.revoked && $0.kind != .ios }) { return id }
+    guard workspace.kind == .mac, MemberRequestSignature.isDeviceID(id),
+          !members.contains(where: { $0.deviceID == id && ($0.revoked || $0.kind != .mac) }) else { return nil }
+    return id
   }
 }

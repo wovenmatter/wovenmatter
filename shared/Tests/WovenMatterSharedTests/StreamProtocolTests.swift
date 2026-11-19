@@ -8,7 +8,6 @@ private struct StreamFixtures: Decodable {
   struct Named: Decodable { let name: String; let frame: JSONValue }
   struct Prefixed: Decodable { let frame: JSONValue; let hex: String }
   let frames: [Named]
-  let unknownFrames: [JSONValue]
   let lengthPrefixed: Prefixed
 
   static func load() throws -> Self {
@@ -29,7 +28,6 @@ private func object(_ data: Data) throws -> NSObject {
     for fixture in fixtures.frames {
       let source = try json(fixture.frame)
       let frame = try StreamProtocol.decode(source)
-      if case .unknown = frame { Issue.record("\(fixture.name) decoded as an unknown frame") }
       let encoded = try StreamProtocol.encode(frame)
       #expect(try object(encoded) == object(source), "\(fixture.name) did not round-trip")
     }
@@ -44,51 +42,24 @@ private func object(_ data: Data) throws -> NSObject {
       case .request: types.insert("req")
       case .response: types.insert("res")
       case .subscribe: types.insert("sub")
-      case .item(let item): types.insert("item"); kinds.insert(item.payload.kind)
+      case .item(let item): types.insert("item"); kinds.insert(item.payload.kind.rawValue)
       case .end: types.insert("end")
       case .cancel: types.insert("cancel")
-      case .unknown: break
       }
     }
     #expect(types == ["hello", "req", "res", "sub", "item", "end", "cancel"])
-    let known = Set(["conversations", "pending", "journal", "transcript", "capabilities", "session", "owner", "library", "synchronized", "server.state"])
-    #expect(known.isSubset(of: kinds))
+    #expect(kinds == ["conversations", "pending", "journal", "transcript", "capabilities", "session", "owner", "library", "synchronized", "server.state"])
   }
 
-  @Test func unknownFramesAndKindsAreTolerated() throws {
-    let fixtures = try StreamFixtures.load()
-    for frame in fixtures.unknownFrames {
-      #expect(try StreamProtocol.decode(json(frame)) == .unknown("futureFrame"))
+  /// Every device runs the same build, so a frame is one this build defines
+  /// and reads whole. Anything else is a protocol violation.
+  @Test func aFrameThisBuildDoesNotDefineIsRefused() throws {
+    for frame in [#"{"t":"futureFrame","id":"x1"}"#,
+                  #"{"t":"item","id":"s1","seq":43,"kind":"futureKind","data":{"anything":true}}"#,
+                  #"{"t":"item","id":"s2","kind":"transcript","data":{"transcript":{"conversationID":7},"snapshot":true}}"#,
+                  "{", #"{"id":"s1","kind":"journal"}"#, #"{"t":"item","kind":"journal","data":{}}"#] {
+      #expect(throws: (any Error).self, "\(frame)") { try StreamProtocol.decode(Data(frame.utf8)) }
     }
-    let item = try #require(fixtures.frames.first { $0.name == "item-unknown-kind" })
-    guard case .item(let decoded) = try StreamProtocol.decode(json(item.frame)) else { Issue.record("not an item"); return }
-    #expect(decoded.seq == 43)
-    #expect(decoded.payload.kind == "futureKind")
-  }
-
-  /// A newer server's item of a kind this build knows, holding a value it does
-  /// not, is valid JSON: it decodes as an ignored item that keeps its `seq`
-  /// rather than failing the frame, which closes the socket with 4400 and
-  /// reconnects into the same item.
-  @Test func anItemOfAKnownKindThisBuildCannotReadIsIgnoredAndKeepsItsSequence() throws {
-    func item(_ json: String) throws -> StreamItem {
-      guard case .item(let item) = try StreamProtocol.decode(Data(json.utf8)) else { throw StreamProtocolError.unknownFrame("not an item") }
-      return item
-    }
-    let journal = try item(#"{"t":"item","id":"s1","seq":44,"kind":"journal","data":{"entry":{"eventID":"e","workspaceID":"w","originSequence":44,"conversationID":"c","kind":"forkedConversation"}}}"#)
-    #expect(journal.seq == 44 && journal.payload.kind == "journal")
-    guard case .unknown(_, let data) = journal.payload else { Issue.record("decoded as a journal entry"); return }
-    #expect(data.objectValue?["entry"]?.objectValue?["originSequence"]?.intValue == 44)
-    let transcript = try item(#"{"t":"item","id":"s2","kind":"transcript","data":{"transcript":{"conversationID":7},"snapshot":true}}"#)
-    #expect(transcript.payload == .unknown(kind: "transcript", data: .object(["transcript": .object(["conversationID": .number(7)]), "snapshot": .bool(true)])))
-    // Inside an item, only the part this build cannot read is dropped.
-    let pending = try item(#"{"t":"item","id":"s1","kind":"pending","data":{"interactions":[{"id":"q1","conversationID":"c","kind":"signature","title":"Sign","options":[],"questions":[]},{"id":"q2","conversationID":"c","kind":"question","title":"Which?","options":[],"questions":[]}]}}"#)
-    guard case .pending(let value) = pending.payload else { Issue.record("not pending"); return }
-    #expect(value.interactions.map(\.id) == ["q2"])
-    // A frame that is not JSON, or has no type, is still a protocol violation.
-    #expect(throws: (any Error).self) { try StreamProtocol.decode(Data("{".utf8)) }
-    #expect(throws: (any Error).self) { try StreamProtocol.decode(Data(#"{"id":"s1","kind":"journal"}"#.utf8)) }
-    #expect(throws: (any Error).self) { try StreamProtocol.decode(Data(#"{"t":"item","kind":"journal","data":{}}"#.utf8)) }
   }
 
   @Test func lengthPrefixedFramesMatchTheFixtureAndSplit() throws {

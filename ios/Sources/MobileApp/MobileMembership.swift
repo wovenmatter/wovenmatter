@@ -10,8 +10,9 @@ import WovenMatterShared
 /// one it syncs with, syncs with any online library host and manages sessions
 /// on every workspace directly. It has no home Mac.
 extension MobileModel {
-  /// Paired, but not a member any Mac or Linux host accepts (the Mac refused
-  /// its key, as after a backup is restored): it syncs nothing until it pairs again.
+  /// Holds a pairing no Mac or Linux host accepts any more (the Mac never
+  /// added its key, removed it, or cleared its pairings): it syncs nothing
+  /// until it pairs again.
   var needsMemberPairing: Bool { credential != nil && libraryHosts == nil }
   /// Never paired (or unpaired): everything runs on this device. Pairing a Mac
   /// adds workspaces, agents on your computers and sync; it keeps local data.
@@ -39,7 +40,7 @@ extension MobileModel {
   /// Re-pairing notices for Settings and the sync status.
   var membershipNotice: String? {
     if membership?.memberRejected == true {
-      return "Pair again: \(membership?.pairedName ?? "your Mac") did not accept \(deviceWorkspaceInSentence)'s key, so it doesn't sync. In that Mac's device list remove \(deviceWorkspaceInSentence) if it is listed, then pair again."
+      return "\(deviceWorkspaceName) is no longer paired, so it isn’t syncing with your Macs and Linux machines. Pair again with any Mac. Your notes and chats stay on \(deviceWorkspaceInSentence)."
     }
     if needsMemberPairing {
       return "Pair again with any Mac so \(deviceWorkspaceInSentence) connects directly to every Mac and Linux machine. Your notes and chats stay on \(deviceWorkspaceInSentence)."
@@ -150,6 +151,26 @@ extension MobileModel {
       }
       await previousEngine?.cancelSynchronization()
     } catch { pairingError = error.localizedDescription }
+  }
+
+  /// A sync found that this device is not paired any more
+  /// (`MobileMembershipState.memberRejected`, saved by the host list): stop
+  /// every connection that would only be refused again. The pairing and
+  /// everything stored stay as they are, and Settings and Home offer "Pair again".
+  func endRefusedMembership() async {
+    guard membership?.memberRejected == true, libraryHosts != nil else { return }
+    connectionGeneration = UUID()
+    connectionRefreshTask?.cancel(); connectionRefreshTask = nil
+    for task in workspaceReadTasks.values { task.cancel() }
+    workspaceReadTasks = [:]
+    closeWorkspaceStreams()
+    let previousEngine = engine
+    libraryHosts = nil; transport = nil; engine = nil
+    online = false; connecting = false
+    workspaceClients = [:]; workspaceProviders = [:]; workspaceReachable = [:]
+    remotePending = [:]; pending = []; providers = []
+    await previousEngine?.cancelSynchronization()
+    await reload()
   }
 
   func clearMembership() {

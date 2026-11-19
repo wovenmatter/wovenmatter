@@ -47,13 +47,13 @@ final class MemberReachTests: XCTestCase {
     let key = identity.publicKey
     let verifier = MemberRequestVerifier(audience: box, lookup: { id in id == identity.deviceID ? .init(deviceID: id, kind: .ios, name: "iPhone", publicKey: key) : nil })
     // A Linux host sees the path with Serve's `/wovenmatter` mount removed; both verify.
-    let member = try await verifier.verify(method: "GET", target: "/v1/hello", headers: headers, body: Data(), allowing: [.ios])
+    let member = try await verifier.verify(method: "GET", target: "/hello", headers: headers, body: Data(), allowing: [.ios])
     XCTAssertEqual(member.deviceID, identity.deviceID)
-    XCTAssertEqual(MobileRequestSigning.target(of: request.url!), "/wovenmatter/v1/hello")
+    XCTAssertEqual(MobileRequestSigning.target(of: request.url!), "/wovenmatter/hello")
     XCTAssertEqual(headers["x-woven-member-audience"], box)
     // The same request at any other member is refused.
     let other = MemberRequestVerifier(audience: UUID().uuidString.lowercased(), lookup: { id in id == identity.deviceID ? .init(deviceID: id, kind: .ios, name: "iPhone", publicKey: key) : nil })
-    do { _ = try await other.verify(method: "GET", target: "/v1/hello", headers: headers, body: Data(), allowing: [.ios]); XCTFail("Accepted elsewhere") }
+    do { _ = try await other.verify(method: "GET", target: "/hello", headers: headers, body: Data(), allowing: [.ios]); XCTFail("Accepted elsewhere") }
     catch { XCTAssertEqual(error as? MemberRequestError, .audience) }
     // A host whose member device ID is unknown is skipped rather than signed for.
     XCTAssertThrowsError(try HTTPSLibraryTransport(host: URL(string: "https://box.tail1.ts.net/wovenmatter")!, hostDeviceID: "paired", identity: identity, performer: http))
@@ -75,7 +75,7 @@ final class MemberReachTests: XCTestCase {
     let read = try await direct.activityDetails(conversation, runID: "run 1", activityID: "tool/1 #a")
     XCTAssertEqual(read, full)
     let request = try XCTUnwrap(http.requests.last?.url)
-    XCTAssertEqual(request.path, "/wovenmatter/v1/execution/conversations/\(conversation)/activity")
+    XCTAssertEqual(request.path, "/wovenmatter/execution/conversations/\(conversation)/activity")
     let items = URLComponents(url: request, resolvingAgainstBaseURL: false)?.queryItems ?? []
     XCTAssertEqual(items.first { $0.name == "id" }?.value, "tool/1 #a")
     XCTAssertEqual(items.first { $0.name == "run" }?.value, "run 1")
@@ -85,7 +85,7 @@ final class MemberReachTests: XCTestCase {
     let store = try MobileStore(file: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString).appending(path: "store.json"))
     let viaHost = try await MobileSyncEngine(store: store, transport: library).transcriptActivityDetail(conversation, runID: "run 1", activityID: "tool/1 #a")
     XCTAssertEqual(viaHost, full)
-    XCTAssertEqual(http.requests.last?.url?.path, "/wovenmatter/v1/sessions/\(conversation)/activity")
+    XCTAssertEqual(http.requests.last?.url?.path, "/wovenmatter/sessions/\(conversation)/activity")
     XCTAssertEqual(http.requests.count, 2, "One read per expansion; no transcript read when the route answers")
   }
 
@@ -167,6 +167,64 @@ final class MemberReachTests: XCTestCase {
     let next = await hosts.snapshot()
     XCTAssertEqual(next.preferredHostDeviceID, "a0000000-0000-0000-0000-000000000003")
     XCTAssertEqual(next.candidates().first?.name, "Box")
+  }
+
+  /// "Not a member" from a host that never accepted this phone only means it
+  /// has not learned of it yet. From the Mac it paired with, or the host it
+  /// last synced with, it means the pairing is over: that is recorded, and
+  /// the error says to pair again.
+  func testAHostThatAcceptedThisPhoneAndNoLongerListsItEndsThePairing() async throws {
+    let studio = "a0000000-0000-0000-0000-000000000001", box = "a0000000-0000-0000-0000-000000000003"
+    var state = MobileMembershipState(deviceID: phoneID, pairedEndpoint: URL(string: "https://studio.tail1.ts.net/wovenmatter")!,
+                                      pairedHostDeviceID: studio, pairedName: "Studio")
+    state.members = [.init(deviceID: studio, kind: "mac", name: "Studio", endpoints: [URL(string: "https://studio.tail1.ts.net/wovenmatter")!]),
+                     .init(deviceID: box, kind: "linux", name: "Box", endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter")!])]
+    let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
+    let notAMember = try JSONEncoder().encode(LibraryAPIError(code: "unauthorized", message: MemberRequestError.unknown.message))
+    let hello = try JSONEncoder().encode(LibraryHello(workspaceID: "library", hostName: "Box"))
+
+    // Studio is asleep and Box, which never accepted this phone, does not list it: nothing final.
+    let asleep = RecordingHTTP { request in
+      guard request.url?.host == "box.tail1.ts.net" else { throw URLError(.cannotConnectToHost) }
+      return (401, notAMember)
+    }
+    var hosts = try MobileLibraryHosts(state: state, identity: identity, file: nil, performer: asleep)
+    do { _ = try await hosts.connect(registry: []); XCTFail("Connected") }
+    catch MobileConnectionError.notPaired { XCTFail("One host that never knew this phone does not end its pairing") }
+    catch {}
+    var saved = await hosts.snapshot()
+    XCTAssertNil(saved.memberRejected)
+
+    // Studio does not list it, but Box accepts it: it is still a member, and syncs with Box.
+    let partly = RecordingHTTP { request in request.url?.host == "box.tail1.ts.net" ? (200, hello) : (401, notAMember) }
+    hosts = try MobileLibraryHosts(state: state, identity: identity, file: nil, performer: partly)
+    let (_, _, host) = try await hosts.connect(registry: [])
+    XCTAssertEqual(host.name, "Box")
+    saved = await hosts.snapshot()
+    XCTAssertNil(saved.memberRejected)
+
+    // No host accepts it, and the Mac it paired with says it does not list it.
+    let forgotten = RecordingHTTP { _ in (401, notAMember) }
+    hosts = try MobileLibraryHosts(state: state, identity: identity, file: nil, performer: forgotten)
+    do { _ = try await hosts.connect(registry: []); XCTFail("Connected") }
+    catch MobileConnectionError.notPaired(let name) { XCTAssertEqual(name, "Studio") }
+    saved = await hosts.snapshot()
+    XCTAssertEqual(saved.memberRejected, true)
+    XCTAssertNil(saved.currentHost)
+    XCTAssertEqual(MobileConnectionError.notPaired("Studio").errorDescription,
+                   "Studio no longer lists this device, so it isn’t paired. Pair again in Settings → Device Connections. Everything on this device is kept.")
+
+    // The same from the host it last synced with, while the paired Mac is asleep.
+    var synced = state; synced.preferredHostDeviceID = box
+    hosts = try MobileLibraryHosts(state: synced, identity: identity, file: nil, performer: asleep)
+    do { _ = try await hosts.connect(registry: []); XCTFail("Connected") }
+    catch MobileConnectionError.notPaired(let name) { XCTAssertEqual(name, "Box") }
+    // A host that is not ready to check members says nothing about the pairing.
+    let starting = try JSONEncoder().encode(LibraryAPIError(code: "unauthorized", message: "This device does not accept member requests yet."))
+    hosts = try MobileLibraryHosts(state: state, identity: identity, file: nil, performer: RecordingHTTP { _ in (401, starting) })
+    do { _ = try await hosts.connect(registry: []); XCTFail("Connected") }
+    catch MobileConnectionError.notPaired { XCTFail("A host that is still starting does not end the pairing") }
+    catch {}
   }
 
   /// The move to another host of the same library: revisions are the host's,

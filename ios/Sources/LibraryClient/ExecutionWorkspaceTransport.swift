@@ -34,9 +34,9 @@ public protocol ExecutionWorkspaceTransport: Sendable {
   func capabilities(_ id: String) async throws -> HarnessCapabilities
   func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult
   /// One activity's complete projection, read when its disclosure opens
-  /// (`GET v1/execution/conversations/<id>/activity?id=&run=`).
+  /// (`GET execution/conversations/<id>/activity?id=&run=`).
   func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity
-  /// A message file's bytes (`GET v1/execution/attachments/<sha256>?name=`),
+  /// A message file's bytes (`GET execution/attachments/<sha256>?name=`),
   /// checked against its digest.
   func attachment(_ reference: LibraryAttachmentReference) async throws -> Data
 }
@@ -78,47 +78,47 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
       signer: identity.signer, audience: audience, performer: performer)
   }
   public func identity() async throws -> ExecutionWorkspace {
-    let value: ExecutionWorkspace = try await client.request("v1/execution")
+    let value: ExecutionWorkspace = try await client.request("execution")
     guard value.id == credential.workspaceID, value.libraryID == credential.libraryID else { throw MobileStore.Failure.wrongWorkspace }
     return value
   }
   public func providers() async throws -> [HarnessCapabilities] {
-    try await client.list("v1/execution/providers")
+    try await client.request("execution/providers")
   }
   public func pending() async throws -> [PendingInteraction] {
-    try await client.list("v1/execution/interactions")
+    try await client.request("execution/interactions")
   }
   public func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt {
     guard command.deviceID == credential.deviceID else { throw MobileConnectionError.revoked }
     // Identity is also carried in the body for workspace services behind private Serve.
     var value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(command)) as! [String: Any]
     value["libraryID"] = credential.libraryID; value["workspaceID"] = credential.workspaceID
-    return try await client.request("v1/execution/commands", method: "POST", body: JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
+    return try await client.request("execution/commands", method: "POST", body: JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
   }
   public func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
-    do { return try await client.request("v1/execution/commands/" + TailnetJSONClient.safeID(id), query: [.init(name: "deviceID", value: credential.deviceID)]) }
+    do { return try await client.request("execution/commands/" + TailnetJSONClient.safeID(id), query: [.init(name: "deviceID", value: credential.deviceID)]) }
     catch MobileConnectionError.http(404, _) { return nil }
   }
   public func events(after: Int64) async throws -> ExecutionJournalPage {
-    try await client.request("v1/execution/events", query: [.init(name: "after", value: String(after))])
+    try await client.request("execution/events", query: [.init(name: "after", value: String(after))])
   }
   public func conversations() async throws -> [LibraryConversation] {
-    try await client.list("v1/execution/conversations")
+    try await client.request("execution/conversations")
   }
   public func transcript(_ id: String) async throws -> LibraryTranscript {
-    try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/transcript")
+    try await client.request("execution/conversations/" + TailnetJSONClient.safeID(id) + "/transcript")
   }
   public func transcript(_ id: String, before: String) async throws -> LibraryTranscript {
-    try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/transcript", query: [.init(name: "before", value: before)])
+    try await client.request("execution/conversations/" + TailnetJSONClient.safeID(id) + "/transcript", query: [.init(name: "before", value: before)])
   }
   public func capabilities(_ id: String) async throws -> HarnessCapabilities {
-    try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/capabilities")
+    try await client.request("execution/conversations/" + TailnetJSONClient.safeID(id) + "/capabilities")
   }
   public func readWorkspace(_ request: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult {
-    try await client.request("v1/execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
+    try await client.request("execution/workspace-read", method: "POST", body: JSONEncoder().encode(request))
   }
   public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
-    try await client.request("v1/execution/conversations/" + TailnetJSONClient.safeID(id) + "/activity",
+    try await client.request("execution/conversations/" + TailnetJSONClient.safeID(id) + "/activity",
       query: activityDetailsQuery(runID: runID, activityID: activityID))
   }
   public func attachment(_ reference: LibraryAttachmentReference) async throws -> Data {
@@ -150,11 +150,6 @@ final class TailnetJSONClient: @unchecked Sendable {
   }
   func request<Value: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil) async throws -> Value {
     try JSONDecoder().decode(Value.self, from: await data(path, method: method, query: query, body: body))
-  }
-  /// A list the workspace answers with. An element a newer workspace wrote and
-  /// this build cannot read is dropped; the rest of the list still arrives.
-  func list<Element: Decodable>(_ path: String) async throws -> [Element] {
-    (try await request(path) as LossyArray<Element>).wrappedValue
   }
   /// A 2xx reply's bytes, at most `maximumBytes`.
   func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil,

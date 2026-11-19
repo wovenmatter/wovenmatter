@@ -88,7 +88,7 @@ public enum MobileRequestSigning {
 }
 
 /// The member list a phone learns from whichever Mac or Linux host it syncs
-/// with (`GET /v1/members` on the mobile API). Keys are not needed here: the
+/// with (`GET /members` on the mobile API). Keys are not needed here: the
 /// phone signs, it does not verify other members.
 public struct MobileLibraryMember: Codable, Equatable, Sendable, Identifiable {
   public var id: String { deviceID }
@@ -107,7 +107,7 @@ public struct MobileLibraryMemberList: Codable, Equatable, Sendable {
   public init(members: [MobileLibraryMember], revision: String) { self.members = members; self.revision = revision }
 }
 
-/// `GET /v1/sync/status` on every Mac and Linux library host.
+/// `GET /sync/status` on every Mac and Linux library host.
 public struct MobileLibrarySyncStatus: Codable, Equatable, Sendable {
   public struct Peer: Codable, Equatable, Sendable, Identifiable {
     public var id: String { deviceID }

@@ -52,7 +52,8 @@ extension MobileModel {
       for id in Array(workspaceProviders.keys) where !availableIDs.contains(id) {
         workspaceProviders.removeValue(forKey: id); workspaceReachable.removeValue(forKey: id)
       }
-      guard generation == connectionGeneration, !pairingInProgress, credential != nil else { return }
+      // A pairing no host accepts any more reaches no workspace either.
+      guard generation == connectionGeneration, !pairingInProgress, credential != nil, !needsMemberPairing else { return }
       for workspace in executionWorkspaces {
         guard workspace.endpoint != nil else { continue }
         // A client made in this pass is read once; others only when forced.
@@ -230,7 +231,7 @@ extension MobileModel {
     } catch { errorMessage = error.localizedDescription }
   }
   /// A message file of a session another machine runs, for Quick Look: read
-  /// from that workspace (`GET v1/execution/attachments/<sha256>`, the library
+  /// from that workspace (`GET execution/attachments/<sha256>`, the library
   /// host for a host chat), checked against its digest and kept on this
   /// iPhone under the name it was sent with. A file read once opens offline.
   func attachmentURL(_ reference: LibraryAttachmentReference, conversationID: String) async throws -> URL {

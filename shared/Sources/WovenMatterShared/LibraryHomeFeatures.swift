@@ -40,9 +40,6 @@ public struct LibraryUsageSample: Codable, Equatable, Identifiable, Sendable {
   public var timestamp: Date
   public var provider: String
   public var model: String
-  /// Always empty, and never read: releases before account labels were removed
-  /// require the key, and devices run different versions for days.
-  private var account: String? = ""
   public var workspace: String?
   public var sessionID: String
   public var inputTokens: Int64

@@ -10,14 +10,12 @@ final class PersistedFieldRenamesTests: XCTestCase {
     addTeardownBlock { try? FileManager.default.removeItem(at: url) }
     return url
   }
-  /// Rewrites a saved index as v0.4.2 saved it: the `state` keys under their
-  /// earlier names, and the numbers that release wrote beside them.
+  /// Rewrites a saved index's `state` keys to their v0.4.2 names.
   private func saveAsV042(_ file: URL, _ keys: [String: String]) throws {
     var root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     var state = try XCTUnwrap(root["state"] as? [String: Any])
     for (old, new) in keys { state[old] = state.removeValue(forKey: new) }
-    state["formatVersion"] = 1
-    root["state"] = state; root["version"] = 2
+    root["state"] = state
     try JSONSerialization.data(withJSONObject: root).write(to: file)
   }
 
@@ -50,24 +48,7 @@ final class PersistedFieldRenamesTests: XCTestCase {
   }
 
   func testFilesWithoutOldNamesAreReadUnchanged() throws {
-    for text in [#"{"version":2,"state":{"libraryCursor":3}}"#, #"{"state":{"libraryCursor":3}}"#] {
-      let data = Data(text.utf8)
-      XCTAssertEqual(PersistedFieldRenames.upgrade(data, renaming: PersistedFieldRenames.journal), data)
-    }
-  }
-
-  /// The saved index is recognised by its `state` object, with or without the
-  /// number an earlier release wrote beside it. Nothing else is touched.
-  func testOldNamesMoveInsideAnyStateAndNowhereElse() throws {
-    func upgraded(_ text: String) throws -> [String: Any] {
-      let data = PersistedFieldRenames.upgrade(Data(text.utf8), renaming: PersistedFieldRenames.journal)
-      return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    }
-    for text in [#"{"version":2,"state":{"centralCursor":3}}"#, #"{"state":{"centralCursor":3}}"#] {
-      let state = try XCTUnwrap(try upgraded(text)["state"] as? [String: Any])
-      XCTAssertEqual(state["libraryCursor"] as? Int, 3); XCTAssertNil(state["centralCursor"])
-    }
-    let other = Data(#"{"centralCursor":3}"#.utf8)
-    XCTAssertEqual(PersistedFieldRenames.upgrade(other, renaming: PersistedFieldRenames.journal), other)
+    let data = Data(#"{"state":{"libraryCursor":3}}"#.utf8)
+    XCTAssertEqual(PersistedFieldRenames.upgrade(data, renaming: PersistedFieldRenames.journal), data)
   }
 }

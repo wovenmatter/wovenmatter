@@ -99,9 +99,6 @@ public struct LaunchableAgent: Identifiable, Equatable, Sendable {
 }
 
 extension ExecutionWorkspace {
-  /// The registry capability of a workspace whose own sessions' history is
-  /// the library's: members read it from the library, not from that workspace.
-  public static let libraryHistoryCapability = "history.library"
   /// A live Mac member whose own sessions' history is the library's. Every
   /// Mac advertises the capability, so several are live; a copied snapshot
   /// owner (`retainedHistory`) keeps it for its history but is not live.

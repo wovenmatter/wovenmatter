@@ -14,12 +14,12 @@ const audience = 'a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c';
 const otherAudience = 'c0ffee00-1234-4abc-8def-0123456789ab';
 
 const cases = [
-  { name: 'post-with-body', method: 'POST', target: '/v1/peers/sync', time: 1762646400000,
+  { name: 'post-with-body', method: 'POST', target: '/peers/sync', time: 1762646400000,
     nonce: 'AAECAwQFBgcICQoLDA0ODw', body: '{"deviceID":"6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b","after":0}' },
-  { name: 'get-empty-body-with-query', method: 'GET', target: '/v1/changes?after=12&limit=200', time: 1762646400123,
+  { name: 'get-empty-body-with-query', method: 'GET', target: '/changes?after=12&limit=200', time: 1762646400123,
     nonce: 'EBESExQVFhcYGRobHB0eHw', body: '' },
-  { name: 'websocket-upgrade', method: 'GET', target: '/v1/bots/ws', time: 1762646401000, nonce: 'ICEiIyQlJicoKSorLC0uLw', body: '' },
-  { name: 'unicode-body', method: 'POST', target: '/v1/mutations', time: 1762646402000, nonce: 'MDEyMzQ1Njc4OTo7PD0-Pw',
+  { name: 'websocket-upgrade', method: 'GET', target: '/bots/ws', time: 1762646401000, nonce: 'ICEiIyQlJicoKSorLC0uLw', body: '' },
+  { name: 'unicode-body', method: 'POST', target: '/mutations', time: 1762646402000, nonce: 'MDEyMzQ1Njc4OTo7PD0-Pw',
     body: '{"title":"Café — notes 📝"}' },
 ];
 
@@ -44,8 +44,8 @@ const signed = cases.map((c) => {
 // Each reject reuses the named case's signature with one field changed; every verifier must refuse it.
 const rejects = [
   { name: 'method-changed', case: 'post-with-body', method: 'PUT' },
-  { name: 'target-changed', case: 'post-with-body', target: '/v1/peers/files' },
-  { name: 'query-changed', case: 'get-empty-body-with-query', target: '/v1/changes?after=13&limit=200' },
+  { name: 'target-changed', case: 'post-with-body', target: '/peers/files' },
+  { name: 'query-changed', case: 'get-empty-body-with-query', target: '/changes?after=13&limit=200' },
   { name: 'time-changed', case: 'post-with-body', time: 1762646400001 },
   { name: 'nonce-changed', case: 'post-with-body', nonce: 'AAECAwQFBgcICQoLDA0OEA' },
   { name: 'body-changed', case: 'post-with-body', body: '{"deviceID":"6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b","after":1}' },

@@ -7,7 +7,7 @@ import WovenMatterShared
 /// The library host's mobile API, counting every live read the phone makes.
 private actor CountingLibrary: OfflineLibraryTransport {
   private(set) var transcripts = 0, pendingReads = 0, providerReads = 0, receiptReads = 0, changeReads = 0
-  /// The host's library change cursor, as `GET v1/changes` reports it.
+  /// The host's library change cursor, as `GET changes` reports it.
   private var latestCursor: Int64 = 1
   func setCursor(_ value: Int64) { latestCursor = value }
   func workspaceIdentity() async throws -> String { "library-a" }
@@ -35,7 +35,7 @@ private final class RecordingWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sen
   private var workspaces: [String: ExecutionWorkspace] = [:]
   private var recorded: [String] = []
   private var _attachment = Data()
-  /// The bytes `GET v1/execution/attachments/<sha256>` answers with.
+  /// The bytes `GET execution/attachments/<sha256>` answers with.
   var attachment: Data { get { lock.withLock { _attachment } } set { lock.withLock { _attachment = newValue } } }
   func serve(_ workspace: ExecutionWorkspace) { lock.withLock { workspaces[workspace.endpoint?.host ?? ""] = workspace } }
   var paths: [String] { lock.withLock { recorded } }
@@ -45,11 +45,11 @@ private final class RecordingWorkspaceHTTP: MobileHTTPPerforming, @unchecked Sen
     let workspace = lock.withLock { recorded.append(host + path); return workspaces[host] }
     let body: Data
     switch path {
-    case "/wovenmatter/v1/execution": body = try JSONEncoder().encode(workspace)
-    case "/wovenmatter/v1/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace?.libraryID ?? "", cursor: 0))
-    case "/wovenmatter/v1/execution/providers":
+    case "/wovenmatter/execution": body = try JSONEncoder().encode(workspace)
+    case "/wovenmatter/execution/events": body = try JSONEncoder().encode(ExecutionJournalPage(libraryID: workspace?.libraryID ?? "", cursor: 0))
+    case "/wovenmatter/execution/providers":
       body = try JSONEncoder().encode([HarnessCapabilities(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: true)])
-    case let value where value.hasPrefix("/wovenmatter/v1/execution/attachments/"): body = attachment
+    case let value where value.hasPrefix("/wovenmatter/execution/attachments/"): body = attachment
     default: body = Data("[]".utf8)
     }
     return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!)
@@ -309,7 +309,7 @@ final class HostRouteStreamTests: XCTestCase {
     let url = try await model.attachmentURL(reference, conversationID: "host-chat")
     XCTAssertEqual(try Data(contentsOf: url), bytes)
     XCTAssertEqual(url.lastPathComponent, "photo...png", "No path separators from the sent name")
-    XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }, ["studio.tail1.ts.net/wovenmatter/v1/execution/attachments/" + digest])
+    XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }, ["studio.tail1.ts.net/wovenmatter/execution/attachments/" + digest])
     // Opened again: from this iPhone, with no request.
     _ = try await model.attachmentURL(reference, conversationID: "host-chat")
     XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").filter { $0.contains("/attachments/") }.count, 1)
@@ -341,7 +341,7 @@ final class HostRouteStreamTests: XCTestCase {
     let studioBefore = fixture.http.paths(host: "studio.tail1.ts.net").count
     await model.refreshLiveViewsWithoutStream()
     let tick = Array(fixture.http.paths(host: "mini.tail1.ts.net").dropFirst(before))
-    XCTAssertTrue(tick.contains { $0.hasSuffix("/v1/execution/interactions") }, "\(tick)")
+    XCTAssertTrue(tick.contains { $0.hasSuffix("/execution/interactions") }, "\(tick)")
     XCTAssertTrue(tick.contains { $0.contains("/conversations/mini-chat/transcript") }, "\(tick)")
     XCTAssertFalse(tick.contains { $0.hasSuffix("/providers") }, "The agent list is not read on the tick")
     XCTAssertEqual(fixture.http.paths(host: "studio.tail1.ts.net").count, studioBefore, "A connected stream is never read")

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import WovenMatterShared
 
-@Suite("Library wire compatibility")
+@Suite("Library wire contracts")
 struct LibraryProtocolTests {
 
   @Test("a pairing code is its endpoint and token, and pairing messages carry no format number")
@@ -21,10 +21,6 @@ struct LibraryProtocolTests {
     #expect(try keys(PairRequest(token: token, deviceID: "phone", deviceName: "iPhone")) == ["token", "deviceID", "deviceName"])
     #expect(try keys(PairResponse(workspaceID: "workspace", deviceID: "phone", credential: token)) == ["workspaceID", "deviceID", "credential"])
     #expect(try keys(LibraryHello(workspaceID: "workspace", hostName: "Mac")) == ["workspaceID", "hostName"])
-    // A tool request a Mac stored under an earlier build still reads: the key it carries is not looked at.
-    let stored = Data(#"{"schemaVersion":1,"requestID":"r","arguments":["notes","list"],"contextID":"c"}"#.utf8)
-    let request = try JSONDecoder().decode(WovenMatterToolRequest.self, from: stored)
-    #expect(request.requestID == "r" && request.arguments == ["notes", "list"] && request.contextID == "c")
     #expect(try keys(DiscoveryAdvertisement(identity: identity)) == ["identity"])
     #expect(try keys(PairingApprovalRequest(requestID: "r", requestSecret: "s", identity: identity)) == ["requestID", "requestSecret", "identity"])
     #expect(try keys(LibraryIdentity(libraryID: "l", hostDeviceID: "mac")) == ["libraryID", "hostDeviceID"])

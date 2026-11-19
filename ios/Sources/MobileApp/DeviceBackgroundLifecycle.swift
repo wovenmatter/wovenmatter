@@ -41,7 +41,7 @@ extension MobileModel {
     if executionRecords[id]?.status == "running" { executionRecords[id]?.status = "interrupted" }
     try? persistExecutionConfiguration()
     if let record = executionRecords[id], let snapshot {
-      let transcript = DeviceTranscript.project(snapshot: snapshot, conversationID: id,
+      let transcript = DeviceTranscript.project(snapshot: snapshot, conversationID: id, storedRuns: await storedDeviceRuns(id),
         activeRunID: nil, runStatus: record.status)
       try? await adoptDeviceConversation(record, transcript: transcript)
       await reload()

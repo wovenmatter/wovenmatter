@@ -17,20 +17,18 @@ extension MobileModel {
     if let record = executionRecords[conversationID] {
       let runtime = try await deviceRuntime(conversationID)
       let object = try Self.executionObject(await runtime.snapshot())
-      let transcript = DeviceTranscript.project(snapshot: object, conversationID: conversationID,
+      let transcript = DeviceTranscript.project(snapshot: object, conversationID: conversationID, storedRuns: await storedDeviceRuns(conversationID),
         activeRunID: record.status == "running" ? record.runID : nil, runStatus: record.status)
       if let activity = decode(transcript.activities.first { $0.id == activityID }) { return activity }
     }
     // The chat's owner serves the full projection on its details route
-    // (`GET v1/execution/conversations/<id>/activity`, or the library host's
-    // `GET v1/sessions/<id>/activity` for a host chat); its streamed rows
-    // carry only the compact one. An owner too old for the route answers with
-    // the activity as its transcript carries it.
+    // (`GET execution/conversations/<id>/activity`, or the library host's
+    // `GET sessions/<id>/activity` for a host chat); its streamed rows
+    // carry only the compact one.
     let remote: LibraryActivity?
     let route = executionRoute(for: conversationID)
     if route != "host", route != "local", let client = workspaceClients[route] {
-      if let detail = try? await client.activityDetails(conversationID, runID: runID, activityID: activityID) { remote = detail }
-      else { remote = try await client.refreshTranscript(conversationID).activities.first { $0.id == activityID } }
+      remote = try await client.activityDetails(conversationID, runID: runID, activityID: activityID)
     } else if let engine {
       remote = try await engine.transcriptActivityDetail(conversationID, runID: runID, activityID: activityID)
     } else { remote = nil }

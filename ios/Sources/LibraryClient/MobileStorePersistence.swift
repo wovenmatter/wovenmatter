@@ -15,13 +15,14 @@ public enum MobileBackup: Sendable { case include, exclude }
 /// edit never rewrites the rest of the library. Blobs are durable before the index
 /// commits; old blobs are collected only after a successful index replacement.
 enum MobileStorePersistence {
-  /// The saved index: an object holding the store's `state`. An index an
-  /// earlier build saved also holds a number beside it, which is not read.
+  /// The saved index: an object holding the store's `state`.
   private struct Envelope: Codable { var state: MobileStoreState }
   /// Where a body comes from. Cached bodies may be absent after a restore and are fetched again.
   enum BodyRole: Hashable { case local, cachedNote(String), cachedBase(String), cachedTranscript(String) }
   static func load(from file: URL) throws -> MobileStoreState {
-    let data = PersistedFieldRenames.upgrade(try Data(contentsOf: file), renaming: PersistedFieldRenames.store)
+    let saved = try Data(contentsOf: file)
+    let earlier = EarlierPhoneFiles.isEarlierIndex(saved)
+    let data = PersistedFieldRenames.upgrade(saved, renaming: PersistedFieldRenames.store)
     var state = try JSONDecoder().decode(Envelope.self, from: data).state
     var missing = Set<BodyRole>(), roles: [String: MobileBackup] = [:]
     try transform(&state) { reference, role in
@@ -49,6 +50,12 @@ enum MobileStorePersistence {
     // Nothing is excluded in place (see persist).
     for (reference, backup) in roles where backup == .include { try? applyBackupIfChanged(.include, at: blobDirectory(file).appendingPathComponent(reference)) }
     try? applyBackupIfChanged(.include, at: file)
+    if earlier {
+      // Saved again at once in today's shape, so there is nothing to convert
+      // at the next open. If the save fails, the next open converts again.
+      EarlierPhoneFiles.convert(&state)
+      _ = try? persist(state, at: file)
+    }
     return state
   }
   static func persist(_ source: MobileStoreState, at file: URL) throws -> Int {

@@ -55,8 +55,14 @@ public extension LibraryTransport {
 
 public enum MobileConnectionError: Error, LocalizedError {
   case http(Int, String), revoked, invalidResponse, responseTooLarge, insecureEndpoint, offline
-  /// Signed: this host does not list this phone as a member (yet, or any more).
+  /// Signed: this host does not list this phone as a member. On its own this
+  /// says nothing final: a host learns a new member only when it syncs with
+  /// the Mac that added it.
   case memberUnknown
+  /// The Mac this phone paired with, or the host it last synced with, no
+  /// longer lists it as a member: it is not paired any more, and nothing
+  /// syncs until it pairs again. Carries that machine's name.
+  case notPaired(String)
   public var errorDescription: String? {
     switch self {
     case .http(_, let message): message
@@ -66,6 +72,7 @@ public enum MobileConnectionError: Error, LocalizedError {
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
     case .memberUnknown: "The device you reached doesn’t recognize this one yet. It learns about it after it syncs with a Mac you paired with."
+    case .notPaired(let name): "\(name) no longer lists this device, so it isn’t paired. Pair again in Settings → Device Connections. Everything on this device is kept."
     }
   }
 }
@@ -132,14 +139,14 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     let transport = try HTTPSLibraryTransport(credential: provisional, performer: performer)
     let request = PairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName,
       metadata: metadata, requiresConfirmation: true)
-    let preview: PairingPreview = try await transport.request("v1/pair/preview", method: "POST", body: JSONEncoder().encode(request))
+    let preview: PairingPreview = try await transport.request("pair/preview", method: "POST", body: JSONEncoder().encode(request))
     return preview.workspaceID
   }
   public func confirmPairing() async throws {
-    let _: [String: Bool] = try await request("v1/pair/confirm", method: "POST", body: Data("{}".utf8))
+    let _: [String: Bool] = try await request("pair/confirm", method: "POST", body: Data("{}".utf8))
   }
   public func unpair() async throws {
-    let _: [String: Bool] = try await request("v1/pair/unpair", method: "POST", body: Data("{}".utf8))
+    let _: [String: Bool] = try await request("pair/unpair", method: "POST", body: Data("{}".utf8))
   }
   /// Every pairing is confirmed: the Mac adds this device only after `confirmPairing`.
   public static func pair(_ payload: PairingPayload, deviceID: String, deviceName: String,
@@ -152,7 +159,7 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
     // The Mac signs an `ios` member entry for this key; the phone then signs
     // its requests to every Mac and Linux member, whichever is online.
     request.memberPublicKey = memberPublicKey
-    let result: PairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
+    let result: PairResponse = try await transport.request("pair", method: "POST", body: JSONEncoder().encode(request))
     // The Mac answers for this device and library, and adds the device only once it confirms.
     guard result.deviceID == deviceID, expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
       result.confirmationRequired == true else { throw MobileConnectionError.invalidResponse }
@@ -193,47 +200,42 @@ public final class HTTPSLibraryTransport: LibraryTransport, MobilePairingRequest
       maximumBytes: 80 * 1_024 * 1_024, timeout: 24 * 60 * 60, headers: headers)
     return try JSONDecoder().decode(JSONValue.self, from: responseData)
   }
-  public func readWorkspace(_ value: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
+  public func readWorkspace(_ value: LibraryWorkspaceRead) async throws -> LibraryWorkspaceResult { try await request("workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {
-    let hello: LibraryHello = try await request("v1/hello")
+    let hello: LibraryHello = try await request("hello")
     // A signed host connection reports its own library ID; the store binds or rebinds.
     guard (signer != nil && credential.workspaceID.isEmpty) || hello.workspaceID == credential.workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     return hello.workspaceID
   }
   /// Members with endpoints, as this host resolves them.
-  public func members() async throws -> MobileLibraryMemberList { try await request("v1/members", timeout: 15) }
+  public func members() async throws -> MobileLibraryMemberList { try await request("members", timeout: 15) }
   /// Every peer's synchronization state on this host, shown beside each device.
-  public func syncStatus() async throws -> MobileLibrarySyncStatus { try await request("v1/sync/status", timeout: 15) }
+  public func syncStatus() async throws -> MobileLibrarySyncStatus { try await request("sync/status", timeout: 15) }
   /// A short reachability and identity probe used when choosing a library host.
   public func probe(timeout: TimeInterval = 8) async throws -> LibraryHello {
-    try await request("v1/hello", timeout: timeout)
+    try await request("hello", timeout: timeout)
   }
-  public func snapshot() async throws -> LibrarySnapshot { try await request("v1/snapshot") }
-  public func changes(after: Int64) async throws -> LibraryChangePage { try await request("v1/changes", query: [.init(name: "after", value: String(after)), .init(name: "limit", value: "200")]) }
-  public func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult { try await request("v1/mutations", method: "POST", body: JSONEncoder().encode(mutation)) }
-  public func note(_ id: String) async throws -> LibraryNote { try await request("v1/notes/\(try Self.safeID(id))") }
-  public func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { try await request("v1/assets/\(try Self.safeID(id))/linked-data", query: tableID.map { [.init(name: "tableID", value: $0)] } ?? []) }
-  public func providers() async throws -> [HarnessCapabilities] { try await list("v1/providers") }
-  public func pending() async throws -> [PendingInteraction] { try await list("v1/pending") }
-  public func transcript(_ id: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript") }
-  public func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await request("v1/sessions/\(try Self.safeID(id))/transcript", query: [.init(name: "before", value: before)]) }
+  public func snapshot() async throws -> LibrarySnapshot { try await request("snapshot") }
+  public func changes(after: Int64) async throws -> LibraryChangePage { try await request("changes", query: [.init(name: "after", value: String(after)), .init(name: "limit", value: "200")]) }
+  public func mutate(_ mutation: LibraryMutation) async throws -> LibraryMutationResult { try await request("mutations", method: "POST", body: JSONEncoder().encode(mutation)) }
+  public func note(_ id: String) async throws -> LibraryNote { try await request("notes/\(try Self.safeID(id))") }
+  public func linkedData(_ id: String, tableID: String?) async throws -> LinkedDataPreview { try await request("assets/\(try Self.safeID(id))/linked-data", query: tableID.map { [.init(name: "tableID", value: $0)] } ?? []) }
+  public func providers() async throws -> [HarnessCapabilities] { try await request("providers") }
+  public func pending() async throws -> [PendingInteraction] { try await request("pending") }
+  public func transcript(_ id: String) async throws -> LibraryTranscript { try await request("sessions/\(try Self.safeID(id))/transcript") }
+  public func transcript(_ id: String, before: String) async throws -> LibraryTranscript { try await request("sessions/\(try Self.safeID(id))/transcript", query: [.init(name: "before", value: before)]) }
   public func activityDetails(_ id: String, runID: String, activityID: String) async throws -> LibraryActivity {
-    try await request("v1/sessions/\(try Self.safeID(id))/activity", query: activityDetailsQuery(runID: runID, activityID: activityID))
+    try await request("sessions/\(try Self.safeID(id))/activity", query: activityDetailsQuery(runID: runID, activityID: activityID))
   }
-  public func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { try await request("v1/commands", method: "POST", body: JSONEncoder().encode(command)) }
+  public func command(_ command: LibraryCommand) async throws -> LibraryCommandReceipt { try await request("commands", method: "POST", body: JSONEncoder().encode(command)) }
   public func receipt(_ id: String) async throws -> LibraryCommandReceipt? {
-    do { return try await request("v1/command-receipts/\(try Self.safeID(id))") }
+    do { return try await request("command-receipts/\(try Self.safeID(id))") }
     catch MobileConnectionError.http(404, _) { return nil }
   }
-  public func deviceConnections() async throws -> [DeviceConnection] { try await list("v1/devices") }
-  public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
-  public func asset(_ id: String) async throws -> LibraryNote { try await request("v1/assets/\(try Self.safeID(id))") }
+  public func deviceConnections() async throws -> [DeviceConnection] { try await request("devices") }
+  public func capabilities(_ id: String) async throws -> HarnessCapabilities { try await request("sessions/\(try Self.safeID(id))/capabilities") }
+  public func asset(_ id: String) async throws -> LibraryNote { try await request("assets/\(try Self.safeID(id))") }
 
-  /// A list the host answers with. An element a newer host wrote and this
-  /// build cannot read is dropped; the rest of the list still arrives.
-  func list<Element: Decodable>(_ path: String) async throws -> [Element] {
-    (try await request(path) as LossyArray<Element>).wrappedValue
-  }
   func request<Result: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Result {
     let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024, timeout: timeout)
     return try JSONDecoder().decode(Result.self, from: data)

@@ -84,9 +84,7 @@ public struct SessionSettings: Codable, Equatable, Sendable {
   public var permissions: [SessionSettingOption]
   public var availableTools: [SessionSettingOption]
   public var enabledTools: [String]
-  /// A goal in a state a newer build added reads as no goal here; the rest of
-  /// the settings still arrive.
-  @LossyOptional public var goal: WorkspaceGoal?
+  public var goal: WorkspaceGoal?
   public var canConfigure: Bool
   /// The harness's slash commands (ACP `available_commands_update`), for the composer's palette.
   public var commands: [SessionCommand]?

@@ -42,49 +42,6 @@ struct DeviceConversationRecord: Codable, Equatable {
   var updatedAt: String
 }
 
-extension DeviceConversationRecord {
-  /// Names stored data only: records saved before `savedHistoryOnly` hold this
-  /// number instead, 1 for a Quick Chat and 0 for saved history. It is read
-  /// once here and never written.
-  private enum EarlierKeys: String, CodingKey { case quickChatVersion }
-
-  init(from decoder: any Decoder) throws {
-    let values = try decoder.container(keyedBy: CodingKeys.self)
-    id = try values.decode(String.self, forKey: .id)
-    goalLedger = try values.decodeIfPresent(WorkspaceGoalLedger.self, forKey: .goalLedger)
-    goalUsageBaseline = try values.decodeIfPresent(Int64.self, forKey: .goalUsageBaseline)
-    title = try values.decode(String.self, forKey: .title)
-    folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
-    isPinned = try values.decodeIfPresent(Bool.self, forKey: .isPinned)
-    isTrashed = try values.decodeIfPresent(Bool.self, forKey: .isTrashed)
-    enabledTools = try values.decodeIfPresent([String].self, forKey: .enabledTools)
-    thinkingLevel = try values.decodeIfPresent(String.self, forKey: .thinkingLevel)
-    executionPolicy = try values.decodeIfPresent(PiExecutionPolicy.self, forKey: .executionPolicy)
-    additionalInstructions = try values.decodeIfPresent(String.self, forKey: .additionalInstructions)
-    connectionID = try values.decode(String.self, forKey: .connectionID)
-    connection = try values.decodeIfPresent(InferenceConnection.self, forKey: .connection)
-    modelJSON = try values.decode(String.self, forKey: .modelJSON)
-    runID = try values.decodeIfPresent(String.self, forKey: .runID)
-    submissionID = try values.decodeIfPresent(Int.self, forKey: .submissionID)
-    pendingInput = try values.decodeIfPresent(String.self, forKey: .pendingInput)
-    inputAssetID = try values.decodeIfPresent(String.self, forKey: .inputAssetID)
-    sourceDraftKey = try values.decodeIfPresent(String.self, forKey: .sourceDraftKey)
-    sourceDraft = try values.decodeIfPresent(MobileChatDraft.self, forKey: .sourceDraft)
-    status = try values.decode(String.self, forKey: .status)
-    updatedAt = try values.decode(String.self, forKey: .updatedAt)
-    if let saved = try values.decodeIfPresent(Bool.self, forKey: .savedHistoryOnly) {
-      savedHistoryOnly = saved
-    } else if let number = try decoder.container(keyedBy: EarlierKeys.self).decodeIfPresent(Int.self, forKey: .quickChatVersion) {
-      savedHistoryOnly = number != 1
-    } else {
-      // The earliest records, saved before Quick Chat, hold neither key: their
-      // history is retained without resuming saved code, tools, timers or goals.
-      savedHistoryOnly = true
-      status = "retained"
-    }
-  }
-}
-
 struct DeviceAgentDefaults: Codable, Equatable {
   var thinkingLevel: String?
   func thinking(for model: InferenceModel?) -> String {
@@ -378,7 +335,13 @@ extension MobileModel {
     try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
     let file = executionDirectory.appendingPathComponent("preferences.json")
     if FileManager.default.fileExists(atPath: file.path) {
-      let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
+      var data = try Data(contentsOf: file)
+      // What the release before this one saved is rewritten once, here.
+      if let converted = EarlierPhoneFiles.convertedQuickChatPreferences(data) {
+        try converted.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        data = converted
+      }
+      let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: data)
       // A connection hosted by a Mac (before v0.4.6) used that Mac's sign-in; it is dropped,
       // and Quick Chat asks for a sign-in on this device.
       inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections.filter { $0.route == .direct },
@@ -751,7 +714,7 @@ extension MobileModel {
     do {
       let object = try Self.executionObject(await runtime.snapshot())
       guard let record = executionRecords[id] else { return }
-      let transcript = DeviceTranscript.project(snapshot: object, conversationID: id,
+      let transcript = DeviceTranscript.project(snapshot: object, conversationID: id, storedRuns: await storedDeviceRuns(id),
         activeRunID: record.status == "running" ? record.runID : nil,
         runStatus: record.status == "idle" ? "completed" : record.status)
       try await adoptDeviceConversation(record, transcript: transcript)
@@ -760,6 +723,14 @@ extension MobileModel {
       guard !localInterrupting.contains(id), localRuntimes[id] === runtime else { return }
       errorMessage = "Couldn’t save execution history: " + error.localizedDescription
     }
+  }
+  /// The run IDs already stored for a Quick Chat, in the journal that
+  /// publishes it and in the copy this device shows. A projection keeps them,
+  /// so a stored turn's run and tool activities are the same rows every time.
+  func storedDeviceRuns(_ id: String) async -> DeviceTranscript.StoredRuns {
+    let shown = DeviceTranscript.StoredRuns(state.transcripts[id])
+    guard let store else { return shown }
+    return await store.journal.storedRuns(conversationID: id).filling(from: shown)
   }
   func adoptDeviceConversation(_ record: DeviceConversationRecord, transcript: LibraryTranscript?) async throws {
     guard record.isTrashed != true else { return }

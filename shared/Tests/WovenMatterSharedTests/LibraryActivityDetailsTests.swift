@@ -48,50 +48,23 @@ struct LibraryActivityDetailsTests {
     }
   }
 
-  /// Rows already stored carry the earlier tags; new rows carry the current ones.
-  @Test(arguments: [
-    ["wovenmatter.activity", "wovenmatter.activity.chained"],
-    ["wovenmatter.activity.v1", "wovenmatter.activity.v2"],
-    ["wovenmatter.activity.v1", "wovenmatter.activity.chained"],
-  ])
-  func completeRecordsRemainByteExactAndCanAnchorChainedSuffixes(tags: [String]) throws {
+  @Test func completeRecordsRemainByteExactAndCanAnchorChainedSuffixes() throws {
     let complete = Data("{\"id\":\"trace\", \"kind\":\"thought\", \"content\":\"Full café\", \"contentIsDelta\":false}".utf8)
-    #expect(try LibraryActivityDetails.reconstruct(recordID: "old", activityID: "trace") { _ in (tags[0], complete) } == complete)
+    let activity = NativeRecordFormat.activity.name, chained = NativeRecordFormat.chainedActivity.name
+    #expect(try LibraryActivityDetails.reconstruct(recordID: "old", activityID: "trace") { _ in (activity, complete) } == complete)
     let head = try record(" 🧵", previous: "old", version: 2)
     let bytes = try LibraryActivityDetails.reconstruct(recordID: "head", activityID: "trace") {
-      $0 == "head" ? (tags[1], head) : (tags[0], complete)
+      $0 == "head" ? (chained, head) : (activity, complete)
     }
     let object = try #require(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
     #expect(object["content"] as? String == "Full café 🧵")
     #expect(object["detailVersion"] as? Int == 2)
   }
 
-  @Test func aTagThisBuildDoesNotKnowIsRefused() throws {
+  @Test func aRecordOfAnotherFormatIsRefused() throws {
     let bytes = try record("Base")
     #expect(throws: LibraryActivityDetails.invalid) {
-      try LibraryActivityDetails.reconstruct(recordID: "head", activityID: "trace") { _ in ("wovenmatter.activity.other", bytes) }
+      try LibraryActivityDetails.reconstruct(recordID: "head", activityID: "trace") { _ in (NativeRecordFormat.piDurableEntry.name, bytes) }
     }
-  }
-
-  @Test func recordFormatsWriteOneNameAndReadTheTagsAlreadyStored() {
-    let stored: [(NativeRecordFormat, String, [String])] = [
-      (.activity, "wovenmatter.activity", ["wovenmatter.activity.v1"]),
-      (.chainedActivity, "wovenmatter.activity.chained", ["wovenmatter.activity.v2"]),
-      (.piDurableEntry, "pi-durable.entry", ["pi-durable.entry.v1"]),
-      (.nativeUpdate, "woven-native-update", ["woven-native-update-v1"]),
-      (.fileManifest, "woven-native-file-manifest", ["woven-native-file-manifest/v1", "woven-native-file-manifest/v2"]),
-      (.fileChunk, "woven-native-file-chunk", ["woven-native-file-chunk/v1"]),
-      (.recordReference, "woven-native-record-reference", ["woven-native-record-reference/v1"]),
-      (.textFragment, "woven-native-text-fragment", ["woven-native-text-fragment/v1"]),
-    ]
-    for (format, name, earlier) in stored {
-      #expect(format.name == name)
-      #expect(format.names == [name] + earlier)
-      for tag in [name] + earlier {
-        // Every tag names exactly one format.
-        #expect(stored.filter { $0.0.matches(tag) }.count == 1, "\(tag)")
-      }
-    }
-    #expect(!NativeRecordFormat.activity.matches("wovenmatter.activity.chained"))
   }
 }
