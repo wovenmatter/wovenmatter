@@ -190,7 +190,7 @@ describe("ModelAvailability", () => {
     const db = await openSharedDatabase(join(dir.path, "db.sqlite"));
     try {
       const registry = new BotRegistry(db);
-      await registry.migrate();
+      await registry.createTables();
       let now = NOW;
       const first = new ModelAvailability({ now: () => now, store: registry });
       first.mark("openai-codex/gpt-6-sol", { kind: "weekly", resetsAt: NOW + 86_400_000 });
@@ -293,7 +293,7 @@ describe("main-model fallbacks", () => {
     db = await openSharedDatabase(join(dir.path, "db.sqlite"));
     // As the app does: stored limits are restored before any bot opens.
     const registry = new BotRegistry(db);
-    await registry.migrate();
+    await registry.createTables();
     availability = new ModelAvailability({
       ...(cooldownMs ? { cooldownMs } : {}),
       ...(persist ? { store: registry } : {}),

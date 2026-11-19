@@ -1,5 +1,4 @@
-import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, readdir, lstat, realpath, chmod } from 'node:fs/promises'
+import { mkdir, readFile, rm, readdir, lstat, realpath, chmod, rename, cp } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { createWorkspaceBrowserMCP } from './workspace-browser-mcp.mjs'
@@ -452,8 +451,31 @@ function createProfileBrowser({ profile, launch }) {
 
 const validProfile = id => typeof id === 'string' && /^[a-z0-9-]{1,32}$/.test(id)
 
+// Every profile's folder is `<profilesRoot>/<id>`, the default one included. The
+// current release kept the default profile in `browser`, beside the other data
+// in the account's Woven Matter folder; a host it ran on has its cookies and
+// sign-ins there. That folder moves to `<profilesRoot>/default` here, once,
+// before any browser starts: afterwards it does not exist, and nothing else
+// names it. Returns whether it moved.
+export async function adoptDefaultBrowserProfile({ home, profilesRoot }) {
+  const stored = resolve(home, '.local/share/wovenmatter/browser'), root = resolve(profilesRoot), target = join(root, 'default')
+  const info = await lstat(stored).catch(error => { if (error.code === 'ENOENT') return null; throw error })
+  if (!info?.isDirectory() || await lstat(target).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error })) return false
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  try { await rename(stored, target) } catch (error) {
+    if (error.code !== 'EXDEV') throw error
+    // The profiles folder is on another volume: copy beside the target, then put it in place.
+    const copy = join(root, '.default.' + randomUUID())
+    try { await cp(stored, copy, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true }); await rename(copy, target) }
+    catch (failed) { await rm(copy, { recursive: true, force: true }); throw failed }
+    await rm(stored, { recursive: true, force: true })
+  }
+  return true
+}
+
 // Each identity owns its browser, tabs, action receipts and cookies. Choosing a
 // profile never changes another identity's page or shares its browser context.
+// `profile` alone, with no `profilesRoot`, serves one fixed folder as the only profile.
 export function createWorkspaceBrowser({ profile, profilesRoot, launch = launchBrowser }) {
   const profiles = new Map()
   let closed = false
@@ -467,14 +489,11 @@ export function createWorkspaceBrowser({ profile, profilesRoot, launch = launchB
     const rootStat = await lstat(root)
     if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw failure(409, 'unsafe_browser_profiles_directory')
     await chmod(root, 0o700)
-    // Keeping the old directory as default preserves all cookies and login
-    // state without a potentially destructive cross-filesystem migration.
-    const legacy = id === 'default' && profile && existsSync(profile)
-    const path = legacy ? resolve(profile) : join(root, id)
+    const path = join(root, id)
     await mkdir(path, { recursive: true, mode: 0o700 })
     const info = await lstat(path)
     if (info.isSymbolicLink() || !info.isDirectory()) throw failure(409, 'unsafe_browser_profile_directory')
-    if (!legacy && await realpath(path) !== join(await realpath(root), id)) throw failure(409, 'unsafe_browser_profile_directory')
+    if (await realpath(path) !== join(await realpath(root), id)) throw failure(409, 'unsafe_browser_profile_directory')
     await chmod(path, 0o700)
     return path
   }

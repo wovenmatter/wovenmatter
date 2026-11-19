@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createWorkspaceBrowser, streamBrowserFrames, browserLaunchOptions } from '../src/workspace-browser.mjs'
+import { adoptDefaultBrowserProfile, createWorkspaceBrowser, streamBrowserFrames, browserLaunchOptions } from '../src/workspace-browser.mjs'
 import { mkdtemp, mkdir, writeFile, readFile, stat, symlink, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,12 +15,40 @@ test('native production launch explicitly enables the sandbox and keeps control 
   assert.ok(!Object.keys(options.env).some(key => /TOKEN|SECRET|PASSWORD|API_KEY/i.test(key)))
 })
 
-test('profile identities have separate directories, browsers and lifecycle and retain legacy default bytes', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'wovenmatter-browser-profiles-')), legacy = join(root, 'browser'), profilesRoot = join(root, 'profiles')
+test('the default profile the current release kept in its own folder moves into the profiles folder, once', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'wovenmatter-browser-home-')), data = join(home, '.local/share/wovenmatter')
+  t.after(() => rm(home, { recursive: true, force: true }))
+  const stored = join(data, 'browser'), profilesRoot = join(data, 'browser-profiles'), target = join(profilesRoot, 'default')
+  // A host with no such folder has nothing to move, and gets none.
+  assert.equal(await adoptDefaultBrowserProfile({ home, profilesRoot }), false)
+  await assert.rejects(stat(profilesRoot), { code: 'ENOENT' })
+  // As the current release left it: cookies and sign-ins in `browser`, another profile beside it.
+  await mkdir(join(stored, 'Default'), { recursive: true }); await writeFile(join(stored, 'Default/Cookies'), 'existing browser state')
+  await mkdir(join(profilesRoot, 'work'), { recursive: true }); await writeFile(join(profilesRoot, 'work/Cookies'), 'another profile')
+  assert.equal(await adoptDefaultBrowserProfile({ home, profilesRoot }), true)
+  assert.equal(await readFile(join(target, 'Default/Cookies'), 'utf8'), 'existing browser state')
+  assert.equal(await readFile(join(profilesRoot, 'work/Cookies'), 'utf8'), 'another profile')
+  await assert.rejects(stat(stored), { code: 'ENOENT' })
+  // The browser service serves it as the default profile, from the one place every profile lives.
+  const launches = []
+  const service = createWorkspaceBrowser({ profilesRoot, launch: async directory => {
+    launches.push(directory); const context = Object.assign(new EventEmitter(), { pages: () => [], close: async () => { context.emit('close') } })
+    return { context, endpoint: 'ws://127.0.0.1/1' }
+  } })
+  t.after(() => service.close())
+  assert.deepEqual(await service.profiles(), { profiles: ['default', 'work'] })
+  await service.connect()
+  assert.deepEqual(launches, [target])
+  // Nothing is left to find: a second start moves nothing.
+  assert.equal(await adoptDefaultBrowserProfile({ home, profilesRoot }), false)
+  assert.equal(await readFile(join(target, 'Default/Cookies'), 'utf8'), 'existing browser state')
+})
+
+test('profile identities have separate directories, browsers and lifecycle', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'wovenmatter-browser-profiles-')), profilesRoot = join(root, 'profiles')
   t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(legacy); await writeFile(join(legacy, 'cookies-fixture'), 'existing browser state')
   const launches = [], contexts = []
-  const service = createWorkspaceBrowser({ profile: legacy, profilesRoot, launch: async directory => {
+  const service = createWorkspaceBrowser({ profilesRoot, launch: async directory => {
     const context = Object.assign(new EventEmitter(), { pages: () => [], close: async () => { context.closed = true; context.emit('close') } })
     contexts.push(context); launches.push({ directory }); return { context, endpoint: 'ws://127.0.0.1/' + contexts.length }
   } })
@@ -30,11 +58,10 @@ test('profile identities have separate directories, browsers and lifecycle and r
   assert.equal(launches.length, 0)
   const [one, same, two] = await Promise.all([service.connect(), service.connect(), service.forProfile('work').connect()])
   assert.deepEqual(one, same); assert.notDeepEqual(one, two); assert.equal(launches.length, 2)
-  assert.ok(launches.some(value => value.directory === legacy))
+  assert.ok(launches.some(value => value.directory === join(profilesRoot, 'default')))
   assert.ok(launches.some(value => value.directory === join(profilesRoot, 'work')))
   assert.deepEqual(await service.profiles(), { profiles: ['default', 'work'] })
-  assert.equal(await readFile(join(legacy, 'cookies-fixture'), 'utf8'), 'existing browser state')
-  for (const directory of [legacy, profilesRoot, join(profilesRoot, 'work')]) assert.equal((await stat(directory)).mode & 0o777, 0o700)
+  for (const directory of [profilesRoot, join(profilesRoot, 'default'), join(profilesRoot, 'work')]) assert.equal((await stat(directory)).mode & 0o777, 0o700)
   await service.forProfile('work').close()
   assert.equal(contexts.filter(value => value.closed).length, 1)
   assert.equal((await service.tabs()).running, true)

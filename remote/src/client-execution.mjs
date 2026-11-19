@@ -59,31 +59,19 @@ function inputExtras(command) {
 }
 
 // Opens `execution.sqlite`. The file carries no version number: nothing
-// writes its `PRAGMA user_version` and nothing reads it, so a number an
-// earlier release left there stays and means nothing. Its tables belong to
+// writes its `PRAGMA user_version` and nothing reads it. Its tables belong to
 // this module and to the ones `createClientExecution` starts (publisher,
 // session watch, member sessions, workspace MCP, orchestration). Each
-// declares its own with `CREATE TABLE IF NOT EXISTS` on every open: that
-// creates a new store and adds a new table to an existing one.
+// declares its own with `CREATE TABLE IF NOT EXISTS` on every open.
 // A change to what a store already holds goes here. It is recognised by the
-// earlier shape it looks for (a table, a column) and, in this one
-// transaction, makes the change and removes what it looked for: it happens
-// once, and a current store is only read.
+// shape it looks for and, in this one transaction, makes the change and
+// removes what it looked for: it happens once, and a current store is only read.
 function openExecutionStore(path) {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL')
   db.exec('BEGIN IMMEDIATE')
   try {
     const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
-    // A v0.4.2 store also published to a single designated Mac (its
-    // `central_publication` target, encrypted bearer and receipts) and kept
-    // that Mac's library MCP grant: those are dropped, and its lanes are
-    // renamed to serve this machine's own library copy.
-    for (const name of ['central_publication', 'retained_publication_receipts', 'mcp_library_connection']) if (tables.has(name)) db.exec(`DROP TABLE ${name}`)
-    if (tables.has('central_publication_lanes'))
-      db.exec(tables.has('publication_lanes') ? 'DROP TABLE central_publication_lanes' : 'ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
-    if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
-      db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
     // The journal is replayed to every device as it is stored, and they read a native
     // record by the name of its format. Records the current release journaled carry its
     // names for the two formats this server writes; they take today's names here. One
@@ -111,10 +99,8 @@ function openExecutionStore(path) {
   }
   return db
 }
-// A session saved before its harness started, which a crash left behind.
-// Older builds saved it without a title or `updatedAt`, and never a native session.
-const unfinishedCreation = record => record.creating === true
-  || (!record.conversation?.updatedAt && !Object.keys(record.native ?? {}).length && !record.transcript?.messages?.length)
+// What every workspace on this server serves; `extraCapabilities` adds what its listeners do.
+const servedCapabilities = Object.freeze(['execution', 'historyReplay', 'idempotentCommands'])
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
@@ -226,7 +212,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     for (const row of db.prepare('SELECT id,body FROM conversations').all()) {
       const record = JSON.parse(row.body)
       // As a failed creation is: its command's receipt becomes outcomeUnknown above.
-      if (unfinishedCreation(record)) { db.prepare('DELETE FROM conversations WHERE id=?').run(row.id); continue }
+      // A session saved before its harness started, which a crash left behind.
+      if (record.creating === true) { db.prepare('DELETE FROM conversations WHERE id=?').run(row.id); continue }
       if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
         delete record.presentationFrames
@@ -240,10 +227,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   })
   function descriptor() {
     assertIdentity()
-    const value = copy(identity)
-    // A workspace provisioned before v0.4.6 recorded `inference`, which it no longer serves.
-    value.capabilities = [...new Set([...(value.capabilities ?? []), ...extraCapabilities()])].filter(capability => capability !== 'inference')
-    return value
+    // The capabilities are what this server serves now, never what a stored row said.
+    return { ...copy(identity), capabilities: [...new Set([...servedCapabilities, ...extraCapabilities()])] }
   }
   // A new workspace's execution device is this host's member device ID (its
   // library host's identity), so other members address it from the registry
@@ -259,7 +244,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     transaction(() => {
       nextIdentity = identity ? copy(identity) : { id: body.workspaceID, libraryID: body.libraryID, ownerDeviceID: body.ownerDeviceID, executionDeviceID: identifier(executionDeviceID) ? executionDeviceID : randomUUID(),
         kind, name: typeof body.workspaceName === 'string' ? body.workspaceName.slice(0,256) : name,
-        capabilities: ['execution','historyReplay','idempotentCommands'], journalDeviceIDs: [], revision: 1, deleted: false }
+        journalDeviceIDs: [], revision: 1, deleted: false }
       if (body.endpoint) {
         const endpoint = new URL(body.endpoint)
         if (endpoint.protocol !== 'https:' || !endpoint.hostname.endsWith('.ts.net') || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw fail(400, 'Use a private Tailscale HTTPS endpoint.')

@@ -41,9 +41,10 @@ def verify(folder, version, revision):
     assert supported[-1] == build and all(isinstance(b, int) and 0 < b <= build for b in supported)
     asset = f'WovenMatter_{version}_{build}_arm64.dmg'
     assert record['full_asset'] == asset
-    legacy = f'WovenMatter_{version}_arm64.dmg'
+    # The same disk image under the name that does not change with the build: the public download.
+    download = f'WovenMatter_{version}_arm64.dmg'
     assert record['delta_assets'] == [], 'Full-only release must not list delta assets'
-    expected = sorted([asset, legacy, 'latest-mac.json', 'appcast.xml', 'release-build.json'])
+    expected = sorted([asset, download, 'latest-mac.json', 'appcast.xml', 'release-build.json'])
     assert inventory(folder) == expected, 'Unexpected release asset inventory'
     checksums = {}
     for line in (folder / 'SHA256SUMS.txt').read_text().splitlines():
@@ -53,16 +54,16 @@ def verify(folder, version, revision):
     assert sorted(checksums) == expected, 'Incomplete checksum inventory'
     for name, sha in checksums.items():
         assert digest(folder / name) == sha, f'Checksum mismatch: {name}'
-    assert checksums[asset] == checksums[legacy], 'Compatibility DMG differs from signed update'
+    assert checksums[asset] == checksums[download], 'The download differs from the signed update'
     manifest = json.loads((folder / 'latest-mac.json').read_text())
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{version}/'
     # JSON true equals 1 in Python, so the build's type is checked first.
     assert type(manifest.get('build')) is int, 'Invalid build in manifest'
     assert manifest == dict(version=version, build=build, architecture='arm64',
                            minimum_macos='26.0',
-                           download_url=prefix + legacy,
+                           download_url=prefix + download,
                            release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{version}',
-                           sha256=checksums[legacy]), 'Update manifest differs from the generated contract'
+                           sha256=checksums[download]), 'Update manifest differs from the generated contract'
     items = ET.parse(folder / 'appcast.xml').findall('./channel/item')
     assert len(items) == 1, 'Feed must contain exactly the current build'
     item = items[0]

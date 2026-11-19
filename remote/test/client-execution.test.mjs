@@ -54,22 +54,22 @@ test('per-device bearer grants never expose administration or another device rec
   assert.equal(f.service.principal('Bearer '+f.grant.token,'execution'),null)
 })
 
-test('a device grant is for execution alone, and a stored workspace that also recorded inference serves execution only',async t=>{
+test('a device grant is for execution alone, and a workspace lists exactly what this server serves',async t=>{
   const f=fixture(t)
   for(const scopes of [['execution','inference'],['inference'],[],undefined])
     assert.throws(()=>f.service.provision({...f.enrollment,deviceID:randomUUID(),scopes}),{statusCode:400})
-  // A grant and workspace stored with both scopes.
-  const {DatabaseSync}=await import('node:sqlite'),{createHash,randomBytes}=await import('node:crypto')
+  const served=['execution','historyReplay','idempotentCommands']
+  assert.deepEqual(f.service.descriptor().capabilities,served)
+  assert.deepEqual(f.service.provision({...f.enrollment,deviceID:randomUUID()}).workspace.capabilities,served)
+  // Whatever list a stored row holds, the workspace publishes what this server serves now.
+  const {DatabaseSync}=await import('node:sqlite')
   const db=new DatabaseSync(join(f.directory,'execution.sqlite'))
-  const token=randomBytes(32).toString('base64url'),id=randomUUID(),scopes=['execution','inference']
-  db.prepare('INSERT INTO devices VALUES (?,?,?)').run(id,createHash('sha256').update(token).digest('hex'),JSON.stringify({id,name:'Mac',scopes,createdAt:new Date().toISOString()}))
   const identity=JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get().body)
-  db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify({...identity,capabilities:[...identity.capabilities,'inference']}))
+  assert.equal(identity.capabilities,undefined,'the list is not stored')
+  db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify({...identity,capabilities:['execution','a-capability-once-served']}))
   db.close()
   await f.restart()
-  assert.equal(f.service.principal('Bearer '+token,'execution').id,id)
-  assert.equal(f.service.descriptor().capabilities.includes('inference'),false)
-  assert.ok(f.service.descriptor().capabilities.includes('execution'))
+  assert.deepEqual(f.service.descriptor().capabilities,served)
 })
 
 test('concurrent retransmission has one execution and changed-payload retries fail',async t=>{

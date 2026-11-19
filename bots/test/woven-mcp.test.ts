@@ -65,7 +65,7 @@ describe("stateless Woven MCP", () => {
   beforeEach(async () => {
     db = await openSharedDatabase(":memory:");
     registry = new BotRegistry(db);
-    await registry.migrate();
+    await registry.createTables();
   });
   afterEach(async () => {
     await db.close();

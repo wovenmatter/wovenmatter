@@ -27,7 +27,7 @@ test('OpenCode Go cold startup and ID-only session restore pin current metadata 
   assert.equal(requests, 0);
   const record = await engine.create(), sessionID = record.session.sessionId;
   assert.equal(record.selected, reference); assert.deepEqual(record.session.model, model);
-  // Older sessions stored only the model ID, before descriptors were pinned.
+  // A session saved with only its model ID, and no descriptor, resolves the model again.
   record.saveOptions({ selectedModel: null });
   await record.configurationQueue;
   await record.session.dispose();

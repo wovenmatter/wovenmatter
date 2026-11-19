@@ -182,7 +182,7 @@ def harness_path():
     # Woven's ACP adapters, then where each vendor's official installer puts its CLI.
     # Those folders stay on the service PATH before they exist, so a CLI installed
     # after the service is found without reinstalling it; the dedicated ones come
-    # before ~/.local/bin so an older npm copy there never shadows the official one.
+    # before ~/.local/bin so another copy there never shadows the official one.
     always=[ROOT/'acp-adapters/bin',HOME/'.opencode/bin',HOME/'.grok/bin',HOME/'.local/bin']
     candidates=[HOME/'.npm-global/bin',HOME/'.bun/bin',HOME/'.cargo/bin',
         HOME/'.local/share/mise/shims',HOME/'.asdf/shims',HOME/'.nvm/current/bin',Path('/usr/local/bin')]
@@ -406,13 +406,9 @@ def inspect(mode='user',roles=None):
     actions=privileged_actions(distro,roles)
     if actions and not elevated: blockers.append('Host preparation requires an account with existing noninteractive administrative access.')
     disk=shutil.disk_usage(HOME)
-    containers=[]
-    if shutil.which('docker') and run(['docker','info'],timeout=5).returncode==0:
-        output=run(['docker','ps','--filter','name=wovenmatter-','--format','{{.Names}}|{{.Ports}}'],timeout=5)
-        containers=[line for line in text(output).splitlines() if line]
     supported=distro.get('ID') in ('ubuntu','debian','arch','omarchy') or 'arch' in distro.get('ID_LIKE','').split()
-    return {'ready':not blockers and not actions,'runtime':'host','kind':'host','version':distro.get('VERSION_ID','unknown'),
-        'architecture':architecture,'capabilities':{'memory':False,'swap':False},'limitations':[] if supported else ['This Linux distribution is best-effort; browser self-test verifies its libraries and sandbox.'],
+    return {'ready':not blockers and not actions,'version':distro.get('VERSION_ID','unknown'),
+        'architecture':architecture,'limitations':[] if supported else ['This Linux distribution is best-effort; browser self-test verifies its libraries and sandbox.'],
         'os':{'id':distro.get('ID','unknown'),'version':distro.get('VERSION_ID','unknown')},'systemdUser':manager,'linger':linger(),
         'sudoAvailable':elevated,'apparmorRestrictUnprivilegedUserns':apparmor_restriction(),'tailscaleInstalled':bool(shutil.which('tailscale')),
         'tailscaleOperatorReady':tailscale_operator_ready() if shutil.which('tailscale') else None,
@@ -420,10 +416,9 @@ def inspect(mode='user',roles=None):
         'workspaceID':installed['id'] if installed else None,'port':installed['port'] if installed else None,
         'fingerprint':installed['fingerprint'] if installed else None,'dataRoot':str(ROOT),'workspaceRoot':str(ROOT/'workspace'),
         'databasesDirectory':str(ROOT/'databases'),'attachmentsDirectory':str(ROOT/'workspace/.wovenmatter/attachments'),
-        'containerPorts':containers,'harnesses':inventory(paths),'harnessPath':':'.join(paths),'bestEffort':not supported,
-        'requiredPrivilegedActions':['sudo -n '+' '.join(shell_quote(a) for a in action) for action in actions],
+        'harnesses':inventory(paths),'harnessPath':':'.join(paths),'bestEffort':not supported,
         'preparationActions':['sudo -n '+' '.join(shell_quote(a) for a in action) for action in actions],
-        'blockingIssues':blockers,'blockers':blockers,'canPrepare':elevated,'preparationRequired':bool(actions),
+        'blockingIssues':blockers,'canPrepare':elevated,'preparationRequired':bool(actions),
         'hostStorageCapacityBytes':disk.total,'hostStorageAvailableBytes':disk.free,'hostStorageLow':disk.free<10*1024**3,
         'storageWarning':'Less than 10 GiB of free host storage remains.' if disk.free<10*1024**3 else None,
         'requestedRoles':roles,'bots':bots_discovery(installed,elevated),'memberIdentity':member_identity()}
@@ -466,10 +461,9 @@ def status(workspace_id):
     except (OSError,ValueError): pass
     return {'id':workspace_id,'name':'wovenmatter-'+workspace_id,'state':'running' if running else active or 'inactive','systemdState':active,'running':running,
         'health':'healthy' if state else 'unhealthy' if running else None,'startedAt':text(run(['systemctl','--user','show',UNIT_NAME,'--property=ActiveEnterTimestamp','--value'])),
-        'image':'native-host:'+installed['fingerprint'],'memoryBytes':0,'swapBytes':0,'swapMode':'default','hostPort':installed['port'],
-        'persistentVolume':str(ROOT),'capabilities':{'memory':False,'swap':False},'storageKind':'host','storageUsedBytes':None,
+        'hostPort':installed['port'],
         'hostStorageCapacityBytes':disk.total,'hostStorageAvailableBytes':disk.free,'hostStorageLow':disk.free<10*1024**3,
-        'storageWarning':None,'legacyStorage':False,'kind':'host','linger':linger(),'fingerprint':installed['fingerprint'],
+        'storageWarning':None,'linger':linger(),'fingerprint':installed['fingerprint'],
         'dataRoot':str(ROOT),'workspaceRoot':str(ROOT/'workspace'),'databasesDirectory':str(ROOT/'databases'),
         'attachmentsDirectory':str(ROOT/'workspace/.wovenmatter/attachments'),'accessMode':installed['accessMode'],'browserSelfTest':browser,
         'roles':installed['roles'],'botsState':bots_discovery(installed,False)['state'],'memberIdentity':member_identity(),
@@ -1172,7 +1166,7 @@ def uninstall(workspace_id,remove_data=False):
     if remove_data:
         if ROOT.is_symlink() or ROOT.stat().st_uid!=os.getuid(): fail('unsafe_host_path','The data root is unsafe; no data was removed.',78)
         shutil.rmtree(ROOT)
-    return {'deleted':True,'id':workspace_id,'containerExisted':False,'persistentDataRemoved':remove_data,'kind':'host','privateRoutesRemoved':removed_routes,'privateRoutesCleanupVerified':True,'botsEngineRemoved':engine_removed}
+    return {'deleted':True,'id':workspace_id,'persistentDataRemoved':remove_data,'privateRoutesRemoved':removed_routes,'privateRoutesCleanupVerified':True,'botsEngineRemoved':engine_removed}
 
 def main(args):
     if not args: fail('invalid_command','A host lifecycle command is required.',64)
@@ -1201,7 +1195,7 @@ def main(args):
         output=text(run(['journalctl','--user','-u',UNIT_NAME,'--no-pager','-n',count],check=True))
         settings=parse_env()
         if settings.get('WOVENMATTER_API_TOKEN'): output=output.replace(settings['WOVENMATTER_API_TOKEN'],'[redacted]')
-        return {'logs':output,'kind':'host'}
+        return {'logs':output}
     if action in ('uninstall','delete') and 1<=len(args)<=2:
         if len(args)>1 and args[1]!='--data': fail('invalid_command','Use --data to remove persistent workspace data.',64)
         with lifecycle_lock(): return uninstall(args[0],len(args)>1)

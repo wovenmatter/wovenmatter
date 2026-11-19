@@ -40,7 +40,7 @@ test('full-root direct Pi sessions apply workspace permissions on creation and l
   assert.equal(calls.filter(value => value.method === 'session/set_config_option').at(-1).params.value, 'full')
 })
 
-test('an Ask session or request moves to Full access; a supported mode stays', async t => {
+test('a new session starts in Full access unless a mode Woven offers is asked for; any other is refused', async t => {
   const root = mkdtempSync(join(tmpdir(), 'woven-no-ask-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const calls = [], permission = { id: 'permission_mode', currentValue: 'ask', options: [{ value: 'ask' }, { value: 'full' }] }
@@ -61,15 +61,14 @@ test('an Ask session or request moves to Full access; a supported mode stays', a
     configuration: loadRuntimeConfiguration({ HOME: root }) })
   t.after(() => runtime.close())
   const changes = () => calls.filter(value => value.method === 'session/set_config_option').map(value => value.params.value)
-  await runtime.create({ runtimeKind: 'default_agent', conversationID: randomUUID(), nativeWorkingDirectory: root, permission: 'ask' })
-  assert.deepEqual(changes(), ['full'], 'A requested Ask mode creates the session in Full access')
-  // An existing session saved in Ask moves to Full access when it is reattached.
+  await assert.rejects(runtime.create({ runtimeKind: 'default_agent', conversationID: randomUUID(), nativeWorkingDirectory: root, permission: 'ask' }), /not offered/)
+  assert.deepEqual(calls, [], 'a mode Woven does not offer starts nothing')
+  await runtime.create({ runtimeKind: 'default_agent', conversationID: randomUUID(), nativeWorkingDirectory: root })
+  assert.deepEqual(changes(), ['full'], 'with no mode asked for, the session is created in Full access')
+  // Reattaching a session leaves its permission as it is.
   permission.currentValue = 'ask'
-  await runtime.adopt({ native: { sessionID: 'earlier', nativeWorkingDirectory: root }, runtimeKind: 'default_agent' })
-  assert.deepEqual(changes(), ['full', 'full'])
-  // A session already in a supported mode is left alone.
-  await runtime.adopt({ native: { sessionID: 'current', nativeWorkingDirectory: root }, runtimeKind: 'default_agent' })
-  assert.deepEqual(changes(), ['full', 'full'])
+  await runtime.adopt({ native: { sessionID: 'adopted', nativeWorkingDirectory: root }, runtimeKind: 'default_agent' })
+  assert.deepEqual(changes(), ['full'])
 })
 
 test('direct clients run an actual fixture ACP process, answer approvals and replay saved output',async t=>{
@@ -105,24 +104,24 @@ test('direct clients run an actual fixture ACP process, answer approvals and rep
   assert.equal(service.transcript(opened.conversationID).messages.at(-1).content,'before approval after approval')
   assert.equal(service.interactions().length,0)
   assert.ok(service.events().entries.some(entry=>entry.nativeRecord))
-  const legacyID=randomUUID(),legacy=await relay.handle('POST','/durable-acp/attach',{channelID:legacyID,harnessID:'fixture',cwd:workspaceRoot,attachmentTokens:true})
-  const legacySend=message=>relay.handle('POST','/durable-acp/message',{channelID:legacyID,attachmentToken:legacy.attachmentToken,deliveryID:randomUUID(),message})
-  await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
-  await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'session/new',params:{cwd:workspaceRoot}})
-  const legacySession=(await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:legacyID,after:0}),value=>!!value.snapshot.session?.sessionId)).snapshot.session.sessionId
-  const oldRun=randomUUID(),adoption={workspaceID:ids.workspaceID,conversation:{id:legacyID,title:'Existing desktop conversation',preview:'',updatedAt:'',runtimeKind:'fixture'},runtimeKind:'fixture',nativeSessionID:legacySession,knownRunIDs:[oldRun],nativeWorkingDirectory:workspaceRoot}
-  await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'session/prompt',params:{sessionId:legacySession,prompt:[{type:'text',text:'existing run'}],_meta:{wovenRunID:oldRun}}})
-  await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:legacyID,after:0}),value=>value.snapshot.pendingRequests.length>0)
+  const adoptedID=randomUUID(),attached=await relay.handle('POST','/durable-acp/attach',{channelID:adoptedID,harnessID:'fixture',cwd:workspaceRoot,attachmentTokens:true})
+  const adoptedSend=message=>relay.handle('POST','/durable-acp/message',{channelID:adoptedID,attachmentToken:attached.attachmentToken,deliveryID:randomUUID(),message})
+  await adoptedSend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
+  await adoptedSend({jsonrpc:'2.0',id:randomUUID(),method:'session/new',params:{cwd:workspaceRoot}})
+  const adoptedSession=(await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:adoptedID,after:0}),value=>!!value.snapshot.session?.sessionId)).snapshot.session.sessionId
+  const oldRun=randomUUID(),adoption={workspaceID:ids.workspaceID,conversation:{id:adoptedID,title:'Existing desktop conversation',preview:'',updatedAt:'',runtimeKind:'fixture'},runtimeKind:'fixture',nativeSessionID:adoptedSession,knownRunIDs:[oldRun],nativeWorkingDirectory:workspaceRoot}
+  await adoptedSend({jsonrpc:'2.0',id:randomUUID(),method:'session/prompt',params:{sessionId:adoptedSession,prompt:[{type:'text',text:'existing run'}],_meta:{wovenRunID:oldRun}}})
+  await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:adoptedID,after:0}),value=>value.snapshot.pendingRequests.length>0)
   await assert.rejects(service.adopt(adoption),/not idle/)
-  await legacySend({jsonrpc:'2.0',id:'approval',result:{outcome:{outcome:'selected',optionId:'once'}}})
-  await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:legacyID,after:0}),value=>!value.snapshot.busy)
+  await adoptedSend({jsonrpc:'2.0',id:'approval',result:{outcome:{outcome:'selected',optionId:'once'}}})
+  await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:adoptedID,after:0}),value=>!value.snapshot.busy)
   await assert.rejects(service.adopt({...adoption,nativeSessionID:'different-session'}),/different native session/)
-  await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
+  await adoptedSend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
   const adopted=await service.adopt(adoption)
-  assert.equal(adopted.id,legacyID)
-  assert.equal((await service.adopt(adoption)).id,legacyID)
-  await assert.rejects(legacySend({jsonrpc:'2.0',id:randomUUID(),method:'session/prompt',params:{sessionId:legacySession,prompt:[]}}),/attachment was replaced/)
-  const stale=await service.command(command('send',{conversationID:legacyID,runID:oldRun,text:'never replay'}),principal)
+  assert.equal(adopted.id,adoptedID)
+  assert.equal((await service.adopt(adoption)).id,adoptedID)
+  await assert.rejects(adoptedSend({jsonrpc:'2.0',id:randomUUID(),method:'session/prompt',params:{sessionId:adoptedSession,prompt:[]}}),/attachment was replaced/)
+  const stale=await service.command(command('send',{conversationID:adoptedID,runID:oldRun,text:'never replay'}),principal)
   assert.equal(stale.status,'rejected')
   await service.close()
   const reopenedRuntime=createClientExecutionRuntime({defaultAgent:{cancelActive:async()=>{}},durableACP:createDurableACP({catalog,workspaceRoot,environment:()=>process.env}),catalog,workspaceRoot,environment:()=>process.env})

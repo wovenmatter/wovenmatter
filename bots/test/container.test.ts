@@ -278,13 +278,13 @@ describe("bot containers on the Engine API", () => {
     must(await shell().writeFile("keep.txt", "kept", ctx));
     const container = engine.containers.get(containerName(BOT));
     if (!container) throw new Error("no container");
-    // The earlier layout: its own helper volume at /opt/woven-bot, no shared volume, no links.
-    engine.volumes.set("woven-bots-helper-legacy", { [HELPER_LABEL]: "woven-bots-helper-legacy", "woven.bots.machine": "machine-1" });
-    container.labels[HELPER_LABEL] = "woven-bots-helper-legacy";
+    // The layout before the shared volume: its own helper volume at /opt/woven-bot, no links.
+    engine.volumes.set("woven-bots-helper-own", { [HELPER_LABEL]: "woven-bots-helper-own", "woven.bots.machine": "machine-1" });
+    container.labels[HELPER_LABEL] = "woven-bots-helper-own";
     container.links.clear();
     (container.spec.HostConfig as { Mounts: unknown[] }).Mounts = [
       { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
-      { Type: "volume", Source: "woven-bots-helper-legacy", Target: "/opt/woven-bot", ReadOnly: true },
+      { Type: "volume", Source: "woven-bots-helper-own", Target: "/opt/woven-bot", ReadOnly: true },
     ];
     expect((await env.imageStatus()).staleBots).toEqual([BOT]);
     // A failed move restores the old container exactly, old helper volume and all.
@@ -298,9 +298,9 @@ describe("bot containers on the Engine API", () => {
     const restored = engine.containers.get(containerName(BOT));
     expect((restored?.spec.HostConfig as { Mounts: unknown[] }).Mounts).toEqual([
       { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },
-      { Type: "volume", Source: "woven-bots-helper-legacy", Target: "/opt/woven-bot", ReadOnly: true },
+      { Type: "volume", Source: "woven-bots-helper-own", Target: "/opt/woven-bot", ReadOnly: true },
     ]);
-    expect(engine.volumes.has("woven-bots-helper-legacy")).toBe(true);
+    expect(engine.volumes.has("woven-bots-helper-own")).toBe(true);
     // A move that works puts it in the current layout, and the old helper volume can go.
     env.close();
     env = make();
@@ -312,14 +312,14 @@ describe("bot containers on the Engine API", () => {
     expect((await env.imageStatus()).staleBots).toEqual([]);
     expect(must(await shell().readTextFile("keep.txt", ctx))).toBe("kept");
     // Pruned once the update finished.
-    await expect.poll(() => engine.volumes.has("woven-bots-helper-legacy")).toBe(false);
+    await expect.poll(() => engine.volumes.has("woven-bots-helper-own")).toBe(false);
   });
 
-  it("treats a container an earlier build made as current: it is told by its mounts, with or without the engine listing them", async () => {
+  it("treats a container the current release made as current: it is told by its mounts, with or without the engine listing them", async () => {
     must(await shell().writeFile("keep.txt", "kept", ctx));
     const container = engine.containers.get(containerName(BOT));
     if (!container) throw new Error("no container");
-    // A label earlier builds put on their containers. Nothing reads it; it stays where it is.
+    // The label the current release put on its containers. Nothing reads it; it stays where it is.
     container.labels["woven.bots.layout"] = "2";
     for (const listsMounts of [true, false]) {
       engine.listsMounts = listsMounts;

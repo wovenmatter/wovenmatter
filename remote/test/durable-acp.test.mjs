@@ -33,7 +33,7 @@ test('replacement attachment fences delayed old input, cancel and approval witho
     { jsonrpc: '2.0', id: 'permission', result: { outcome: 'selected' } },
   ]) {
     await assert.rejects(f.call('message', { attachmentToken: old.attachmentToken, deliveryID: 'late', message }), /attachment was replaced/)
-    await assert.rejects(f.call('message', { deliveryID: 'legacy', message }), /attachment was replaced/)
+    await assert.rejects(f.call('message', { deliveryID: 'tokenless', message }), /attachment was replaced/)
   }
   assert.equal(f.received(), '')
   assert.equal((await f.call('poll')).snapshot.recoveryComplete, false)

@@ -424,7 +424,7 @@ describe("previews", () => {
   it("proxies HTTP through the transport, counts traffic as activity, and unpublishes", async () => {
     const db = await openSharedDatabase(":memory:");
     const registry = new BotRegistry(db);
-    await registry.migrate();
+    await registry.createTables();
     const upstream = createServer((socket) => {
       socket.once("data", () =>
         socket.end("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello"),

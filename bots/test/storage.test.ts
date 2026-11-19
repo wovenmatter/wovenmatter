@@ -45,19 +45,17 @@ describe("shared storage", () => {
 
   const schema = (db: SqliteExecutor) =>
     db.all("SELECT type, name, sql FROM sqlite_master ORDER BY type, name");
-  // The number an earlier release may have left in the file. Nothing reads or writes it.
+  // The number the current release left in the file. Nothing reads or writes it.
   const leftNumber = async (db: SqliteExecutor) =>
     (await db.get<{ user_version: number }>("PRAGMA user_version"))?.user_version;
   // SQLite's own count of schema changes: every CREATE or ALTER that does something advances it.
   const schemaChanges = async (db: SqliteExecutor) =>
     (await db.get<{ schema_version: number }>("PRAGMA schema_version"))?.schema_version;
-  const columns = async (db: SqliteExecutor, table: string) =>
-    (await db.all<{ name: string }>(`PRAGMA table_info(${table})`)).map((column) => column.name);
 
   it("creates a new database that carries no version number", async () => {
     const db = await openSharedDatabase(join(dir.path, "bots.sqlite"));
     try {
-      await new BotRegistry(db).migrate();
+      await new BotRegistry(db).createTables();
       expect(await leftNumber(db)).toBe(0);
     } finally {
       await db.close();
@@ -68,7 +66,7 @@ describe("shared storage", () => {
     const path = join(dir.path, "bots.sqlite");
     const botId = "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4";
     let db = await openSharedDatabase(path);
-    await new BotRegistry(db).migrate();
+    await new BotRegistry(db).createTables();
     await db.run(
       `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at) VALUES (?, ?, ?, ?)`,
       botId,
@@ -78,7 +76,7 @@ describe("shared storage", () => {
     );
     const before = await schema(db);
     await db.close();
-    // v0.4.3 and v0.4.4 stamped 1; no release wrote 7.
+    // Whatever the number is, the database opens the same and keeps it.
     for (const number of [1, 7]) {
       db = await openSharedDatabase(path);
       try {
@@ -86,7 +84,7 @@ describe("shared storage", () => {
         await db.close();
         db = await openSharedDatabase(path);
         const registry = new BotRegistry(db);
-        await registry.migrate();
+        await registry.createTables();
         expect((await registry.list()).map((bot) => bot.id)).toEqual([botId]);
         expect(await leftNumber(db)).toBe(number);
         expect(await schema(db)).toEqual(before);
@@ -96,66 +94,16 @@ describe("shared storage", () => {
     }
   });
 
-  it("adds the missing columns to an earlier database once, whatever number the file carries", async () => {
-    const current = await openSharedDatabase(":memory:");
-    await new BotRegistry(current).migrate();
-    const tables = [DELIVERIES_TABLE, BOTS_TABLE, THREADS_TABLE];
-    const expected = await Promise.all(tables.map((table) => columns(current, table)));
-    await current.close();
-    const botId = "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4";
-    for (const number of [0, 1, 7]) {
-      const db = await openSharedDatabase(join(dir.path, `earlier-${number}.sqlite`));
-      try {
-        // Each table as its first build declared it.
-        await db.exec(`
-          CREATE TABLE ${DELIVERIES_TABLE} (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL) STRICT;
-          CREATE TABLE ${BOTS_TABLE} (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, schema_prefix TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL
-          ) STRICT;
-          CREATE TABLE ${THREADS_TABLE} (
-            bot_id TEXT NOT NULL REFERENCES ${BOTS_TABLE}(id) ON DELETE CASCADE,
-            conversation_id INTEGER NOT NULL, parent_conversation_id INTEGER NOT NULL,
-            forked_at_entry INTEGER NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL,
-            PRIMARY KEY (bot_id, conversation_id)
-          ) STRICT;
-          PRAGMA user_version = ${number};
-        `);
-        await db.run(
-          `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at) VALUES (?, ?, ?, ?)`,
-          botId,
-          "Test",
-          botPrefix(botId),
-          "2026-01-01",
-        );
-        const registry = new BotRegistry(db);
-        await registry.migrate();
-        // The same columns, in the same order, as a database created today.
-        expect(await Promise.all(tables.map((table) => columns(db, table)))).toEqual(expected);
-        expect(await registry.list()).toMatchObject([{ id: botId, kind: "bot", manager: false }]);
-        expect(await leftNumber(db)).toBe(number);
-        // Nothing of the earlier shape is left: the next open only reads.
-        const converted = await schema(db);
-        const changes = await schemaChanges(db);
-        await registry.migrate();
-        expect(await schema(db)).toEqual(converted);
-        expect(await schemaChanges(db)).toBe(changes);
-      } finally {
-        await db.close();
-      }
-    }
-  });
-
   it("reopens a current database without changing it", async () => {
     const path = join(dir.path, "bots.sqlite");
     let db = await openSharedDatabase(path);
-    await new BotRegistry(db).migrate();
+    await new BotRegistry(db).createTables();
     const before = await schema(db);
     const changes = await schemaChanges(db);
     await db.close();
     db = await openSharedDatabase(path);
     try {
-      await new BotRegistry(db).migrate();
+      await new BotRegistry(db).createTables();
       expect(await schema(db)).toEqual(before);
       expect(await schemaChanges(db)).toBe(changes);
       expect(await leftNumber(db)).toBe(0);
@@ -164,11 +112,11 @@ describe("shared storage", () => {
     }
   });
 
-  it("migrates legacy threads, persists pins, and keeps newest-first order within each group", async () => {
+  it("persists pins and keeps newest-first order within each group", async () => {
     const path = join(dir.path, "pins.sqlite");
     let db = await openSharedDatabase(path);
     let registry = new BotRegistry(db);
-    await registry.migrate();
+    await registry.createTables();
     const botId = "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4";
     await db.run(
       `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at) VALUES (?, ?, ?, ?)`,
@@ -177,8 +125,6 @@ describe("shared storage", () => {
       botPrefix(botId),
       "2026-01-01",
     );
-    // Reproduce a pre-pin table with real existing thread rows.
-    await db.exec(`ALTER TABLE ${THREADS_TABLE} DROP COLUMN is_pinned`);
     for (const [id, created] of [
       [2, "2026-01-01"],
       [3, "2026-01-02"],
@@ -192,8 +138,6 @@ describe("shared storage", () => {
         title: `Thread ${id}`,
         createdAt: created,
       });
-    await registry.migrate();
-    await registry.migrate();
     expect((await registry.listThreads(botId)).map((t) => t.conversationId)).toEqual([4, 3, 2]);
     expect(await registry.setThreadPinned(botId, 2, true)).toMatchObject({ pinned: true });
     await registry.setThreadPinned(botId, 3, true);
@@ -332,104 +276,6 @@ describe("shared storage", () => {
     }
   });
 
-  it("adds the orchestrator column to a team-era database and keeps its bots", async () => {
-    const dbPath = join(dir.path, "pi-bot.sqlite");
-    const db = await openSharedDatabase(dbPath);
-    const ids = ["0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4", "1b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4"];
-    const [adminId, botId] = ids as [string, string];
-    // The registry as it was before the orchestrator: kind, teams, profiles, no is_orchestrator.
-    await db.exec(
-      `CREATE TABLE ${BOTS_TABLE} (id TEXT PRIMARY KEY, name TEXT NOT NULL, schema_prefix TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, deleted_at TEXT, kind TEXT NOT NULL DEFAULT 'bot', is_manager INTEGER NOT NULL DEFAULT 0, manager_id TEXT, model TEXT, profile TEXT) STRICT`,
-    );
-    await db.run(
-      `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at, kind, profile) VALUES (?, ?, ?, ?, 'admin', 'fast')`,
-      adminId,
-      "Admin Bot",
-      botPrefix(adminId),
-      "2026-01-01T00:00:00.000Z",
-    );
-    await db.run(
-      `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at, is_manager) VALUES (?, ?, ?, ?, 1)`,
-      botId,
-      "Lead",
-      botPrefix(botId),
-      "2026-01-02T00:00:00.000Z",
-    );
-    const registry = new BotRegistry(db);
-    try {
-      await registry.migrate();
-      await registry.migrate();
-      expect(await registry.list()).toEqual([
-        expect.objectContaining({
-          id: adminId,
-          kind: "admin",
-          profile: "fast",
-          orchestrator: false,
-        }),
-        expect.objectContaining({ id: botId, name: "Lead", manager: true, orchestrator: false }),
-      ]);
-      await registry.setOrchestrator(botId);
-      expect(await registry.get(botId)).toMatchObject({ orchestrator: true, manager: true });
-      // The unique index allows at most one orchestrator.
-      await expect(
-        db.run(`UPDATE ${BOTS_TABLE} SET is_orchestrator = 1 WHERE id = ?`, adminId),
-      ).rejects.toThrow();
-      await registry.setOrchestrator(undefined);
-      expect((await registry.list()).filter((bot) => bot.orchestrator)).toEqual([]);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("adds deleted_at and team columns to a registry created before them", async () => {
-    const dbPath = join(dir.path, "pi-bot.sqlite");
-    const db = await openSharedDatabase(dbPath);
-    const id = "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4";
-    await db.exec(
-      `CREATE TABLE ${BOTS_TABLE} (id TEXT PRIMARY KEY, name TEXT NOT NULL, schema_prefix TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL) STRICT`,
-    );
-    await db.run(
-      `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at) VALUES (?, ?, ?, ?)`,
-      id,
-      "Old",
-      botPrefix(id),
-      "2026-01-01T00:00:00.000Z",
-    );
-    const registry = new BotRegistry(db);
-    try {
-      await registry.migrate();
-      await registry.migrate();
-      expect(await registry.list()).toEqual([
-        expect.objectContaining({ name: "Old", kind: "bot", manager: false, orchestrator: false }),
-      ]);
-      expect(await registry.admin()).toBeUndefined();
-      await registry.setTeam(id, { manager: true });
-      await registry.setProfile(id, "fast");
-      expect(await registry.get(id)).toMatchObject({ manager: true, profile: "fast" });
-      expect(await registry.clearProfile("fast")).toEqual([id]);
-      expect((await registry.get(id))?.profile).toBeUndefined();
-      expect(await registry.note("account")).toBeUndefined();
-      await registry.setNote("account", "first");
-      await registry.setNote("account", "second");
-      expect(await registry.note("account")).toMatchObject({ text: "second" });
-      await registry.setTeam(id, { manager: false });
-      expect(await registry.markDeleted(id)).toBe(true);
-      expect(await registry.markDeleted(id)).toBe(false);
-      expect(await registry.list()).toEqual([]);
-      expect(await registry.deletedAt(id)).toMatch(/^\d{4}-/);
-      expect(await registry.markDeleted("00000000-0000-4000-8000-000000000000")).toBe(false);
-      expect(await registry.listDeleted()).toEqual([
-        expect.objectContaining({ id, name: "Old", deletedAt: expect.any(String) }),
-      ]);
-      expect(await registry.restore(id)).toBe(true);
-      expect(await registry.restore(id)).toBe(false);
-      expect(await registry.listDeleted()).toEqual([]);
-      expect((await registry.list()).map((bot) => bot.id)).toEqual([id]);
-      expect(await registry.deletedAt(id)).toBeUndefined();
-    } finally {
-      await db.close();
-    }
-  });
 });
 
 async function rowCounts(

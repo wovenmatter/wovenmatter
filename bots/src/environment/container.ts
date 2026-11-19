@@ -299,13 +299,12 @@ export class BotEnvironment implements BotEnvironmentAdapter {
 
   /** Each bot's SSH agent relay (helper/ssh-agent.mjs) and whether it is listening. */
   readonly #relays = new Map<string, { readonly process: AgentProcess; readonly ready: Promise<boolean> }>();
-  /** When a bot's relay last failed to start: an older helper has none, so wait before asking again. */
+  /** When a bot's relay last failed to start, so the next attempt waits a minute. */
   readonly #relayFailed = new Map<string, number>();
 
   /**
    * The bot's relay, started if needed; true once it listens. git's ssh in the container asks it,
    * it asks here, and the machine's signing agent answers (the key never enters the container).
-   * A container whose helper predates the relay has none until an update.
    */
   #relay(botId: string): Promise<boolean> {
     const answer = this.#options.sshAgent;
@@ -385,8 +384,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     try {
       const answered = await this.#options.git(botId);
       if (!answered) return;
-      // github.conf names the relay's socket: without a listening relay (an older helper), the
-      // files keep the user's own SSH settings and HTTPS remotes as they are.
+      // github.conf names the relay's socket: without a listening relay, the files keep the
+      // user's own SSH settings and HTTPS remotes as they are.
       const setup = answered.publicKey && !(await this.#relay(botId)) ? { ...answered, publicKey: null } : answered;
       const digest = gitDigest(setup);
       if (!force && this.#gitWritten.get(botId) === digest) return;

@@ -140,13 +140,6 @@ test('only the generation a link points into is ever chosen for deletion', async
   // The layout this installer writes.
   await symlink(await file(join(installations, 'adapter-abc123/node_modules/.bin/codex-acp')), join(bin, 'current'));
   assert.equal(await linkedGeneration(prefix, join(bin, 'current')), join(installations, 'adapter-abc123'));
-  // The layout v0.4.5 and earlier wrote: bin -> Installations/<UUID>/bin -> ../lib/node_modules/...
-  const legacy = join(installations, '348945E6-11D7-42AD-A243-BCDD2BCB2A4C');
-  await file(join(legacy, 'lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js'));
-  await mkdir(join(legacy, 'bin'), { recursive: true });
-  await symlink('../lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js', join(legacy, 'bin/claude-agent-acp'));
-  await symlink(join(legacy, 'bin/claude-agent-acp'), join(bin, 'legacy'));
-  assert.equal(await linkedGeneration(prefix, join(bin, 'legacy')), legacy);
   // Nothing outside Installations is ever chosen: an npm-global connector, a generation that is
   // itself a link to somewhere else, a missing link, and a plain file.
   await symlink(await file(join(prefix, 'lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js')), join(bin, 'global'));

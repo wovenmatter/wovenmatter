@@ -25,29 +25,29 @@ test('failed activation rolls back every native table and its receipt and can re
   const storage=await openWorkspacePiStorage(options); await storage.close(context);
 });
 
-test('a database an earlier build made still opens: its store list loses the column nothing reads, and keeps its rows',async t=>{
+test('a database the current release made still opens: its store list loses the column nothing reads, and keeps its rows',async t=>{
   const options=await fixture(t), other={...options,manifest:{storeID:randomUUID(),sessionID:randomUUID()}};
   const {Harness,createRegistry}=await import('@earendil-works/pi-durable');
   const {createModels}=await import('@earendil-works/pi-ai/models');
   const open=async manifest=>{const storage=await openWorkspacePiStorage({...options,manifest});return {storage,harness:await Harness.open(storage,{models:createModels(),registry:createRegistry()},context)}};
   const first=await open(options.manifest), root=await first.harness.root(context);
-  const receipt=await root.submit({type:'write',requestId:'kept',entry:{kind:'fixture.commit',data:{text:'written by the earlier build'}}},context);
+  const receipt=await root.submit({type:'write',requestId:'kept',entry:{kind:'fixture.commit',data:{text:'written by the current release'}}},context);
   await first.storage.close(context);
-  // The store list exactly as the earlier build declared and filled it.
+  // The store list exactly as the current release declared and filled it.
   const columns=()=>{const database=new DatabaseSync(options.databasePath);try{return database.prepare('PRAGMA table_info(wm_pi_runtime_stores)').all().map(column=>column.name)}finally{database.close()}};
-  const earlier=new DatabaseSync(options.databasePath);
-  const activated=earlier.prepare('SELECT * FROM wm_pi_runtime_stores').all();
-  earlier.exec(`BEGIN;
+  const stored=new DatabaseSync(options.databasePath);
+  const activated=stored.prepare('SELECT * FROM wm_pi_runtime_stores').all();
+  stored.exec(`BEGIN;
     DROP TABLE wm_pi_runtime_stores;
     CREATE TABLE wm_pi_runtime_stores (store_id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, schema_prefix TEXT NOT NULL UNIQUE, format INTEGER NOT NULL, activated_at TEXT NOT NULL);
     COMMIT`);
-  for(const row of activated)earlier.prepare('INSERT INTO wm_pi_runtime_stores VALUES (?,?,?,?,?)').run(row.store_id,row.session_id,row.schema_prefix,1,row.activated_at);
-  earlier.close();
+  for(const row of activated)stored.prepare('INSERT INTO wm_pi_runtime_stores VALUES (?,?,?,?,?)').run(row.store_id,row.session_id,row.schema_prefix,1,row.activated_at);
+  stored.close();
   assert.deepEqual(columns(),['store_id','session_id','schema_prefix','format','activated_at']);
   // Its session reopens with what it committed, and another session activates beside it.
   const reopened=await openWorkspacePiStorage(options);
   assert.equal((await reopened.submissionByRequest(root.id,'kept',context)).id,receipt.id);
-  assert.equal((await reopened.scanEntries({conversationId:root.id},100,undefined,context)).items.filter(entry=>entry.data?.text==='written by the earlier build').length,1);
+  assert.equal((await reopened.scanEntries({conversationId:root.id},100,undefined,context)).items.filter(entry=>entry.data?.text==='written by the current release').length,1);
   await reopened.close(context);
   assert.deepEqual(columns(),['store_id','session_id','schema_prefix','activated_at']);
   const second=await open(other.manifest); await second.storage.close(context);

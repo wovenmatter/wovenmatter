@@ -12,7 +12,7 @@ assets = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assets)
 SHA = 'a' * 40
 VERSION, BUILD = '1.2.3', 42
-LEGACY, FULL = f'WovenMatter_{VERSION}_arm64.dmg', f'WovenMatter_{VERSION}_{BUILD}_arm64.dmg'
+DOWNLOAD, FULL = f'WovenMatter_{VERSION}_arm64.dmg', f'WovenMatter_{VERSION}_{BUILD}_arm64.dmg'
 STUB = r'''#!/usr/bin/env python3
 import hashlib, json, os, pathlib, sys
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
@@ -64,12 +64,12 @@ elif name not in ('xcrun', 'swift'): sys.exit(92)
 def release_files(folder, payload):
     """A valid full-only inventory whose two DMG names share identical bytes."""
     folder.mkdir(parents=True)
-    for name in (LEGACY, FULL):
+    for name in (DOWNLOAD, FULL):
         (folder / name).write_bytes(payload)
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/'
     # The production generator writes the manifest, so this fixture follows its contract.
     subprocess.run([str(ROOT / 'scripts/generate-release-manifest.sh'), VERSION, str(BUILD),
-                    str(folder / LEGACY), str(folder / 'latest-mac.json')], check=True)
+                    str(folder / DOWNLOAD), str(folder / 'latest-mac.json')], check=True)
     (folder / 'appcast.xml').write_text(
         '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>'
         f'<sparkle:version>{BUILD}</sparkle:version><sparkle:shortVersionString>{VERSION}</sparkle:shortVersionString>'
@@ -124,13 +124,13 @@ with tempfile.TemporaryDirectory() as directory:
     downloads, edited, _ = publish('--verify-only')
     # Six assets, two identical DMG names: five downloads, one shared DMG digest.
     assert len(downloads) == 5 and not edited, downloads
-    assert blob(LEGACY).read_bytes() == (original / LEGACY).read_bytes(), 'Binary bytes altered'
+    assert blob(DOWNLOAD).read_bytes() == (original / DOWNLOAD).read_bytes(), 'Binary bytes altered'
     assert oct(scope.stat().st_mode & 0o777) == '0o700'
     assert publish('--verify-only')[0] == [], 'Verified bytes were downloaded again'
 
     # Corrupt, truncated and symlinked bytes are discarded and fetched again.
     for damage in ('corrupt', 'truncated', 'symlink'):
-        path = blob(LEGACY)
+        path = blob(DOWNLOAD)
         content = path.read_bytes()
         path.unlink()
         if damage == 'corrupt':
@@ -165,7 +165,7 @@ with tempfile.TemporaryDirectory() as directory:
         path.unlink()
     _, edited, result = publish('--approved-notes', str(original / 'appcast.xml'), success=False)
     assert not edited and 'differ from GitHub metadata' in result.stderr, result.stderr
-    assert not list(scope.glob('.partial-*')) and not blob(LEGACY).exists()
+    assert not list(scope.glob('.partial-*')) and not blob(DOWNLOAD).exists()
 
     # Malformed or incomplete inventories stop before any download or publication.
     for change in (dict(name='../escape'), dict(name='.hidden'), dict(name='a/b'), dict(state='starter'),

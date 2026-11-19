@@ -81,7 +81,7 @@ export class ClaudeRuntime {
   }
   withProfile(profile, operation) { return this.profileContext.run(profile, operation); }
   profileDirectory(profile = this.profileContext.getStore()) {
-    if (!profile || profile === 'legacy') return this.directory;
+    if (!profile) return this.directory;
     if (!/^[a-zA-Z0-9-]{1,64}$/.test(profile)) throw new DefaultAgentError('Invalid Claude account profile.');
     return join(this.directory, 'claude-accounts', profile);
   }

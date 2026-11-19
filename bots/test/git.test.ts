@@ -57,7 +57,7 @@ describe("Settings → GitHub for bots", () => {
 
   it("never writes a private key, and names the relay as github.com's agent", () => {
     const files = gitFiles(SETUP);
-    expect(files.id_github).toBeNull();
+    expect(Object.keys(files)).not.toContain("id_github");
     expect(files["id_github.pub"]).toBe(`${PUBLIC_KEY}\n`);
     expect(files["github.conf"]).toContain(`IdentityAgent "${gitAgentSocket()}"`);
     expect(gitAgentSocket()).toBe(`${CONTAINER_GIT_DIRECTORY}/agent.sock`);

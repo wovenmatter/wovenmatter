@@ -60,10 +60,9 @@ test('only the public key is ever on disk, and ssh and git point at the agent fo
     assert.equal(git(['ls-remote', '--get-url', 'https://example.com/o/r.git']).stdout, 'https://example.com/o/r.git\n')
   }
 
-  // A key file an earlier build wrote is removed; turned off, only the identity stays.
-  writeFileSync(join(directory, 'id_github'), 'old')
+  // Turned off, only the identity stays.
   await writeGitHubFiles({ publicKey: null, identity: { name: 'Ada', email: '' } }, directory)
-  for (const name of ['id_github', 'id_github.pub', 'github.conf']) assert.equal(existsSync(join(directory, name)), false, name)
+  for (const name of ['id_github.pub', 'github.conf']) assert.equal(existsSync(join(directory, name)), false, name)
   assert.equal(readFileSync(join(directory, 'gitconfig'), 'utf8'), '[user]\n\tname = "Ada"\n')
   assert.deepEqual(readdirSync(directory).filter(name => /^\.[a-z_.]+\.[0-9a-f-]{36}$/.test(name)), [])
 })

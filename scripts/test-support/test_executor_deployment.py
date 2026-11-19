@@ -24,14 +24,14 @@ SECURITY_FILES = {path: base64.b64encode((ROOT / 'remote/security' / path).read_
 CURRENT_IMAGE = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(DOCKERFILE.encode()).hexdigest()[:16]
 
 class ExecutorDeploymentTests(unittest.TestCase):
-    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False, refresh=False, legacy=False,
-                network='earlier', foreign_network=False, label='earlier'):
+    def fixture(self, root, existing=False, conflicting_route=False, foreign=False, old_version=False, readiness_failure=False, previous=False, rename_failure=False, old_recipe=False, refresh=False,
+                network='stored', foreign_network=False, label='stored'):
         # `label` and `network` are what the ownership label holds on an existing container and
-        # network: 'earlier' stands for the value earlier deployments stored there, which is as
+        # network: 'stored' stands for the value the current release wrote there, which is as
         # much ours as today's. `network=None` is a host with no network yet.
-        earlier = 'managed-v1'
-        labels = {'container': None if foreign else earlier if label == 'earlier' else label,
-                  'network': None if foreign_network else earlier if network == 'earlier' else network}
+        stored = 'managed-v1'
+        labels = {'container': None if foreign else stored if label == 'stored' else label,
+                  'network': None if foreign_network else stored if network == 'stored' else network}
         commands = root / 'commands'
         commands.mkdir()
         log = root / 'commands.log'
@@ -64,17 +64,9 @@ elif args[0]=='inspect':
     if name not in state: sys.exit(1)
     if '--format' in args:
         fmt=args[args.index('--format')+1]
-        legacy=bool(os.environ.get('WM_FIXTURE_LEGACY'))
         values={
             '.Config.Image': state[name],
             'eq $key "sh.wovenmatter.executor"': 'owned' if json.loads(os.environ['WM_FIXTURE_LABELS'])['container'] is not None else '',
-            '.HostConfig.NetworkMode': 'host' if legacy else 'wovenmatter-executor',
-            '.HostConfig.ReadonlyRootfs': 'false' if legacy else 'true',
-            '.Config.User': '' if legacy else '1000:1000',
-            'json .HostConfig.PortBindings': '{}' if legacy else '{"4312/tcp":[{"HostIp":"127.0.0.1","HostPort":"4312"}]}',
-            'json .HostConfig.CapDrop': 'null' if legacy else '["ALL"]',
-            'json .HostConfig.SecurityOpt': 'null' if legacy else '["no-new-privileges"]',
-            '.HostConfig.PidsLimit': '0' if legacy else '512',
         }
         print(next(value for key, value in values.items() if key in fmt))
 elif args[0]=='rename':
@@ -124,7 +116,7 @@ elif sys.argv[1:]==['serve','status','--json']:
         env = {**os.environ, 'PATH': str(commands)+':/usr/bin:/bin', 'WM_FIXTURE_LOG': str(log), 'WM_FIXTURE_STATE': str(state), 'PYTHONPATH': str(root),
                'WM_FIXTURE_LABELS': json.dumps(labels)}
         if network is None: env['WM_FIXTURE_NO_NETWORK'] = '1'
-        for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure), ('WM_FIXTURE_LEGACY', legacy)]:
+        for flag, value in [('WM_FIXTURE_EXISTING', existing), ('WM_FIXTURE_CONFLICT', conflicting_route), ('WM_FIXTURE_FOREIGN', foreign), ('WM_FIXTURE_READY_FAIL', readiness_failure), ('WM_FIXTURE_RENAME_FAIL', rename_failure)]:
             if value: env[flag] = '1'
         # Replace only the home directory anchor; every deployment command and
         # credential/route/ownership check runs from the production source.
@@ -156,10 +148,10 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertIn('--init', run)
             self.assertEqual(run[run.index('--label') + 1], 'sh.wovenmatter.executor=managed')
             self.assertFalse(any(call[:3] == ['docker', 'network', 'create'] for call in calls), 'an owned network is kept')
-            migration = next(call for call in calls if call[:2] == ['docker', 'run'] and '--entrypoint' in call)
-            self.assertIn('none', migration)
-            self.assertIn('CHOWN', migration)
-            self.assertIn('no-new-privileges', migration)
+            self.assertEqual(sum(call[:2] == ['docker', 'run'] for call in calls), 1, 'one container, and nothing run beside it')
+            self.assertEqual(run[run.index('--cap-drop') + 1], 'ALL')
+            self.assertEqual(run[run.index('--security-opt') + 1], 'no-new-privileges')
+            self.assertEqual(run[run.index('--user') + 1], f'{os.getuid() or 1000}:{os.getgid() if os.getuid() else 1000}')
             build = next(call for call in calls if call[:2] == ['docker', 'build'])
             self.assertIn('--pull', build)
             self.assertIn('--no-cache', build)
@@ -175,8 +167,8 @@ elif sys.argv[1:]==['serve','status','--json']:
             self.assertEqual((root / 'runtime/.dockerignore').read_text(), '*\n!Dockerfile\n!npm-runtime/\n!npm-runtime/package*.json\n!executor-runtime/\n!executor-runtime/package*.json\n!security/\n!security/**\n')
 
     def test_retry_restarts_only_owned_container(self):
-        # Owned is the label being there: with the value an earlier deployment wrote, or today's.
-        for value in ('earlier', 'managed'):
+        # Owned is the label being there: with the value the current release wrote, or today's.
+        for value in ('stored', 'managed'):
             with self.subTest(label=value), tempfile.TemporaryDirectory() as temporary:
                 result, log = self.fixture(Path(temporary), existing=True, label=value, network=value)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -238,19 +230,6 @@ elif sys.argv[1:]==['serve','status','--json']:
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
             self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor': 'wovenmatter/executor:2.0.0-beta.7'})
-
-    def test_failed_replacement_never_restores_legacy_host_network_runtime(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            result, log = self.fixture(root, existing=True, old_version=True, readiness_failure=True, legacy=True)
-            self.assertNotEqual(result.returncode, 0)
-            calls = [json.loads(line) for line in log.read_text().splitlines()]
-            build = next(i for i, call in enumerate(calls) if call[:2] == ['docker', 'build'])
-            stop = next(i for i, call in enumerate(calls) if call == ['docker', 'stop', 'wovenmatter-executor'])
-            self.assertLess(stop, build)
-            self.assertNotIn(['docker', 'rename', 'wovenmatter-executor-previous', 'wovenmatter-executor'], calls)
-            self.assertNotIn(['docker', 'start', 'wovenmatter-executor-previous'], calls)
-            self.assertEqual(json.loads((root/'docker.json').read_text()), {'wovenmatter-executor-previous': 'wovenmatter/executor:2.0.0-beta.7'})
 
     def test_failed_rename_restarts_current_runtime(self):
         with tempfile.TemporaryDirectory() as temporary:

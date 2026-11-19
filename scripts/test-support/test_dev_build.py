@@ -196,9 +196,9 @@ class DevelopmentBuildTests(unittest.TestCase):
             with sqlite3.connect(source / "workspace.sqlite") as db:
                 self.assertEqual(db.execute("SELECT active FROM mcp_bot_machines").fetchone(), (1,))
 
-    def test_snapshot_reads_either_device_id_file_and_writes_its_own(self):
+    def test_snapshot_reads_the_source_device_id_and_writes_its_own(self):
         source_id = "c0ffee00-1234-4abc-8def-0123456789ab"
-        for name in ("device-id", "dashboard-device-id"):
+        for name in ("device-id",):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); source = root / "source"; source.mkdir()
                 with sqlite3.connect(source / "workspace.sqlite") as db:
@@ -212,7 +212,6 @@ class DevelopmentBuildTests(unittest.TestCase):
                 device_id = (target / "device-id").read_text()
                 self.assertNotEqual(device_id, source_id)
                 self.assertEqual((target / "device-id").stat().st_mode & 0o777, 0o600)
-                self.assertFalse((target / "dashboard-device-id").exists())
                 # The marker that makes this folder a development snapshot: an ID, where it
                 # came from and when.
                 marker = json.loads((target / "development-snapshot.json").read_text())
@@ -230,53 +229,76 @@ class DevelopmentBuildTests(unittest.TestCase):
             writer.executescript("""
               PRAGMA journal_mode=WAL;
               CREATE TABLE notes(id TEXT PRIMARY KEY, content TEXT);
-              -- A v0.4.2 library, still on its old table names.
-              CREATE TABLE desktop_local_acp_sessions(id TEXT);
-              CREATE TABLE dashboard_agents(id TEXT PRIMARY KEY, execution_location TEXT, governing_plane TEXT,
+              CREATE TABLE harness_sessions(id TEXT);
+              CREATE TABLE agents(id TEXT PRIMARY KEY, execution_location TEXT, governing_plane TEXT,
                 runtime_device_id TEXT, deleted_at TEXT, status TEXT);
-              CREATE TABLE dashboard_conversations(id TEXT PRIMARY KEY, agent_id TEXT REFERENCES dashboard_agents(id),
-                is_archived INTEGER NOT NULL DEFAULT 0, desktop_owned INTEGER NOT NULL DEFAULT 1);
-              CREATE TRIGGER desktop_dashboard_revision_notes_insert AFTER INSERT ON notes BEGIN SELECT 1; END;
-              INSERT INTO dashboard_agents VALUES('local-pi','local','wovenmatter_macos',NULL,NULL,'ready');
-              INSERT INTO dashboard_agents VALUES('remote-pi','remote','remote_workspace','remote',NULL,'ready');
-              INSERT INTO dashboard_conversations(id,agent_id) VALUES('history','local-pi');
-              CREATE TABLE paired_mac_routes(device_id TEXT, endpoint TEXT);
-              CREATE TABLE paired_library_clock(device_id TEXT, tick INTEGER);
-              CREATE TABLE paired_library_changes(cursor INTEGER,payload TEXT);
-              INSERT INTO paired_mac_routes VALUES('source','https://production.fixture.ts.net/wovenmatter');
-              INSERT INTO paired_library_clock VALUES('source',42);
-              INSERT INTO paired_library_changes VALUES(1,'production-private-sync');
-              CREATE TABLE paired_calendar_owners(id TEXT, device_id TEXT);
-              INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
-              CREATE TABLE paired_library_state(name TEXT, value TEXT);
-              INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
-              -- A current library's peer sync bookkeeping.
+              CREATE TABLE conversations(id TEXT PRIMARY KEY, agent_id TEXT REFERENCES agents(id),
+                is_archived INTEGER NOT NULL DEFAULT 0);
+              CREATE TRIGGER workspace_revision_notes_insert AFTER INSERT ON notes BEGIN SELECT 1; END;
+              INSERT INTO agents VALUES('local-pi','local','wovenmatter_macos',NULL,NULL,'ready');
+              INSERT INTO agents VALUES('remote-pi','remote','remote_workspace','remote',NULL,'ready');
+              INSERT INTO conversations(id,agent_id) VALUES('history','local-pi');
+              CREATE TABLE mac_routes(device_id TEXT, endpoint TEXT);
+              INSERT INTO mac_routes VALUES('source','https://production.fixture.ts.net/wovenmatter');
+              CREATE TABLE calendar_item_owners(id TEXT, device_id TEXT);
+              INSERT INTO calendar_item_owners VALUES('schedule','other-mac');
+              -- Peer sync bookkeeping, and what pairs this library with other devices.
               CREATE TABLE peer_sync_versions(cursor INTEGER PRIMARY KEY, payload TEXT);
               INSERT INTO peer_sync_versions VALUES(1,'production-private-sync');
+              CREATE TABLE peer_sync_state(name TEXT, value TEXT);
+              INSERT INTO peer_sync_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
+              CREATE TABLE library_members(device_id TEXT NOT NULL, added_by TEXT NOT NULL, added_at INTEGER NOT NULL, payload TEXT NOT NULL);
+              INSERT INTO library_members VALUES('other-mac','source',1,'{}');
+              CREATE TABLE library_member_anchors(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+              INSERT INTO library_member_anchors VALUES('other-mac','{}');
+              CREATE TABLE library_member_pin_candidates(device_id TEXT, payload TEXT);
+              INSERT INTO library_member_pin_candidates VALUES('phone','{}');
+              CREATE TABLE library_member_revocations(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, payload TEXT NOT NULL);
+              INSERT INTO library_member_revocations VALUES('event','gone','{}');
+              CREATE TABLE github_identity(id INTEGER PRIMARY KEY, payload TEXT);
+              INSERT INTO github_identity VALUES(1,'sealed');
+              CREATE TABLE github_identity_recipients(device_id TEXT, payload TEXT);
+              INSERT INTO github_identity_recipients VALUES('other-mac','sealed');
+              CREATE TABLE member_tool_sessions(id TEXT PRIMARY KEY, caller_id TEXT NOT NULL, workspace_id TEXT NOT NULL, created_at TEXT NOT NULL);
+              INSERT INTO member_tool_sessions VALUES('session','caller','other-mac','2026-01-01');
+              CREATE TABLE member_session_watch(id TEXT PRIMARY KEY, state TEXT);
+              INSERT INTO member_session_watch VALUES('session','running');
+              CREATE TABLE member_session_wakeups(id TEXT PRIMARY KEY, caller_id TEXT);
+              INSERT INTO member_session_wakeups VALUES('wake','caller');
+              CREATE TABLE member_session_wakeup_counts(caller_id TEXT PRIMARY KEY, count INTEGER);
+              INSERT INTO member_session_wakeup_counts VALUES('caller',3);
+              -- Tables nothing reads any more are copied as they are and left alone.
+              CREATE TABLE companion_native_history(record_id TEXT PRIMARY KEY, format TEXT);
+              INSERT INTO companion_native_history VALUES('record','kept');
               CREATE TABLE library_identity(singleton INTEGER, host_device_id TEXT, library_id TEXT);
               INSERT INTO library_identity VALUES(1,'source','production-identity');
               CREATE TABLE execution_workspaces(id TEXT,payload BLOB);
               INSERT INTO execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
-              CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
-              CREATE TABLE dashboard_runs(id TEXT,status TEXT);
-              CREATE TABLE workspace_session_goals(session_id TEXT,value TEXT);
-              CREATE TABLE workspace_session_timers(id TEXT,is_paused INTEGER,pending_delivery_id TEXT);
+              CREATE TABLE calendar_items(id TEXT, calendar_json TEXT);
+              CREATE TABLE runs(id TEXT,status TEXT);
+              CREATE TABLE session_goals(session_id TEXT,value TEXT);
+              CREATE TABLE session_timers(id TEXT,is_paused INTEGER,pending_delivery_id TEXT);
               INSERT INTO notes VALUES('note','shared content');
-              INSERT INTO desktop_local_acp_sessions VALUES('production-session');
-              INSERT INTO dashboard_calendar_items VALUES('job','{"task":{"prompt":"retain me"}}');
-              INSERT INTO dashboard_runs VALUES('run','running');
-              INSERT INTO workspace_session_goals VALUES('session','{"status":"active"}');
-              INSERT INTO workspace_session_timers VALUES('timer',0,'pending');
+              INSERT INTO harness_sessions VALUES('production-session');
+              INSERT INTO calendar_items VALUES('job','{"task":{"prompt":"retain me"}}');
+              INSERT INTO runs VALUES('run','running');
+              INSERT INTO session_goals VALUES('session','{"status":"active"}');
+              INSERT INTO session_timers VALUES('timer',0,'pending');
             """)
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
             chunks = source / "library-chunks"; chunks.mkdir(); (chunks / "part").write_bytes(b"SQLite format 3\x00 first chunk")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
-                for table in ("mac_routes", "paired_library_clock", "paired_library_changes", "peer_sync_versions"):
-                    self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
+                # A snapshot is paired with nothing and syncs with nothing.
+                for table in ("mac_routes", "peer_sync_versions", "peer_sync_state", "library_members", "library_member_anchors",
+                              "library_member_pin_candidates", "library_member_revocations", "github_identity",
+                              "github_identity_recipients", "member_tool_sessions", "member_session_watch",
+                              "member_session_wakeups", "member_session_wakeup_counts"):
+                    self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0, table)
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
                 self.assertEqual(copy.execute("SELECT device_id FROM calendar_item_owners").fetchall(), [("other-mac",)])
-                self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [])
+                self.assertEqual(copy.execute("SELECT format FROM companion_native_history").fetchall(), [("kept",)])
+                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall(), [("workspace_revision_notes_insert",)])
                 workspace = json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
                 self.assertNotIn("endpoint", workspace)
@@ -291,7 +313,6 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(len(identity), 1)
                 self.assertNotIn(identity[0][0], ("source", None)); self.assertNotIn(identity[0][1], ("production-identity", None))
                 self.assertEqual(json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])["libraryID"], identity[0][1])
-                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE name LIKE 'dashboard%' OR name LIKE 'desktop%'").fetchall(), [])
                 self.assertEqual(copy.execute("SELECT conversation_id FROM retained_execution_history").fetchall(), [("history",)])
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM calendar_task_executors").fetchone()[0], 1)
                 self.assertIn("retain me", copy.execute("SELECT calendar_json FROM calendar_items").fetchone()[0])
@@ -300,9 +321,9 @@ class DevelopmentBuildTests(unittest.TestCase):
                 self.assertEqual(copy.execute("SELECT is_paused,pending_delivery_id FROM session_timers").fetchone(), (1, None))
                 copy.execute("UPDATE notes SET content='private'"); copy.commit()
             self.assertEqual(writer.execute("SELECT content FROM notes").fetchone()[0], "shared content")
-            self.assertEqual(writer.execute("SELECT deleted_at,status FROM dashboard_agents WHERE id='local-pi'").fetchone(), (None, "ready"))
-            self.assertEqual(writer.execute("SELECT status FROM dashboard_runs").fetchone()[0], "running")
-            self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
+            self.assertEqual(writer.execute("SELECT deleted_at,status FROM agents WHERE id='local-pi'").fetchone(), (None, "ready"))
+            self.assertEqual(writer.execute("SELECT status FROM runs").fetchone()[0], "running")
+            self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
             self.assertEqual((target / "library-chunks/part").read_bytes(), b"SQLite format 3\x00 first chunk")
             with self.assertRaises(ValueError): dev.snapshot(source, target)

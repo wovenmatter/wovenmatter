@@ -23,7 +23,7 @@ export const TOOLCHAIN_PATH = "/opt/woven-toolchain";
 /** The runtime's shared volume, mounted read-only in every bot: helper/<hash>, toolchain/<hash>. */
 export const SHARED_VOLUME = "woven-bots-shared";
 export const SHARED_MOUNT = "/opt/woven";
-/** Legacy helper volumes (one per helper version, before the shared volume) carry this label. */
+/** A container from before the shared volume mounts its own helper volume, which carries this label. */
 export const HELPER_LABEL = "woven.bots.helper";
 export const SHARED_LABEL = "woven.bots.shared";
 const COMPLETE = ".complete";

@@ -76,8 +76,6 @@ class Rendering(unittest.TestCase):
         self.assertIn(f'iifname "{bridge}" ip saddr != {subnet} drop',rules)
         self.assertIn(f'ip saddr {subnet} oifname != "{bridge}" masquerade',rules)
         self.assertEqual(engine.bridge_address(self.config['subnet']),engine.address(10,237,0,1)+'/24')
-        legacy=engine.render_ruleset(self.layout,{**self.config,'subnet':cidr(10,237,prefix=16)})
-        self.assertEqual(legacy,rules,'a /16 recorded by an older install is filtered as its bridge /24')
         self.assertNotIn(f'iifname != "{bridge}" oifname != "{bridge}" drop',rules)
         owned=engine.render_ruleset(self.layout,self.config,drop_foreign=True)
         self.assertIn(f'iifname != "{bridge}" oifname != "{bridge}" drop',owned,'non-bot forwarding is dropped when the engine enabled it')
@@ -104,9 +102,6 @@ class Rendering(unittest.TestCase):
         self.assertEqual(engine.choose_subnet([cidr(10,237,0,prefix=24),cidr(172,17,prefix=16),cidr(100,83,1,2,prefix=32)]),cidr(10,238,prefix=24))
         self.assertEqual(engine.choose_subnet([cidr(10,237,5,prefix=24)]),cidr(10,237,prefix=24),'only the bridge /24 must be free')
         self.assertEqual(engine.bridge_address(cidr(10,240,prefix=24)),engine.address(10,240,0,1)+'/24')
-        # An install that recorded a /16 serves, and filters, only the bridge /24.
-        self.assertEqual(engine.bridge_network(cidr(10,240,prefix=16)),cidr(10,240,prefix=24))
-        self.assertEqual(engine.bridge_address(cidr(10,240,prefix=16)),engine.address(10,240,0,1)+'/24')
         self.assertIn(cidr(100,64,prefix=10),engine.BLOCKED_IPV4); self.assertEqual(engine.DNS,[engine.address(1,1,1,1),engine.address(8,8,8,8)])
 
 class Requests(unittest.TestCase):
@@ -115,7 +110,7 @@ class Requests(unittest.TestCase):
         self.layout=engine.Layout('wmtest',root); self.host=RecordingHost()
         self.engine=engine.Engine(self.layout,self.host,'/usr/bin/python3')
         self.layout.etc.mkdir(parents=True); self.layout.requests.mkdir(parents=True); self.layout.state_dir.mkdir(parents=True)
-        self.engine.save_config({'user':'bots','uid':os.getuid(),'gid':os.getgid(),'group':'bots','subnet':cidr(10,237,prefix=16),'poolBytes':None,'diskBytes':None})
+        self.engine.save_config({'user':'bots','uid':os.getuid(),'gid':os.getgid(),'group':'bots','subnet':cidr(10,237,prefix=24),'poolBytes':None,'diskBytes':None})
         self.applied=[]
         # Host facts come from /proc and /sys on Linux; fix them for any test host.
         for name,value in (('total_memory',lambda:16*1024**3),):
@@ -150,7 +145,7 @@ class Requests(unittest.TestCase):
         joined=[' '.join(call) for call in self.host.calls]
         self.assertIn(f'iptables -w -N {self.layout.chain}',joined)
         self.assertIn(f'iptables -w -I FORWARD 1 -j {self.layout.chain}',joined)
-        # The recorded subnet is an older install's /16; the chain accepts only the bridge /24.
+        # The chain accepts only the bridge's own /24.
         self.assertIn(f'iptables -w -A {self.layout.chain} -i {self.layout.bridge} -s {cidr(10,237,prefix=24)} ! -o {self.layout.bridge} -j ACCEPT',joined)
         self.assertTrue(all(self.layout.bridge in call or 'FORWARD' in call or '-N' in call or '-F' in call or '-S' in call for call in joined))
     def firewall_with(self,forwarding,iptables=True):

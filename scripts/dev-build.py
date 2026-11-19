@@ -145,47 +145,6 @@ def copy_assets(source, target, content_addressed=False):
         raise ValueError(f"Unsupported snapshot asset: {source}")
 
 
-# A library v0.4.2 or an earlier release wrote used these names. The app
-# renames them in place on open
-# (app/Sources/WovenMatterLibraryStore/LibrarySchemaUpgrade.swift) and
-# converts the columns; a snapshot of such a library is renamed the same way
-# first, so its isolation below sees current table names. The app still
-# recognises the renamed copy as unconverted by its columns
-# (`hasEarlierShapeUnlocked`) and converts it when it opens.
-LEGACY_TABLES = {
-    "dashboard_agents": "agents", "dashboard_conversations": "conversations", "dashboard_messages": "messages",
-    "dashboard_message_attachments": "message_attachments", "dashboard_message_references": "message_references",
-    "dashboard_runs": "runs", "dashboard_run_visible_context": "run_visible_notes", "dashboard_run_events": "run_activities",
-    "dashboard_calendar_items": "calendar_items", "desktop_local_acp_sessions": "harness_sessions",
-    "desktop_conversation_titles": "conversation_titles", "desktop_session_imports": "session_imports",
-    "desktop_opencode_sessions": "opencode_sessions", "desktop_opencode_submissions": "opencode_submissions",
-    "desktop_opencode_hidden_messages": "opencode_hidden_messages", "desktop_program_status": "run_program_statuses",
-    "desktop_remote_note_edits": "remote_note_edits", "desktop_dashboard_revision": "workspace_revision",
-    "desktop_activity_index": "activity_summaries", "desktop_activity_revision": "activity_revision",
-    "desktop_message_revisions": "message_revisions",
-    "paired_agent_owners": "agent_owners", "paired_conversation_owners": "conversation_owners",
-    "paired_calendar_owners": "calendar_item_owners", "paired_mac_routes": "mac_routes",
-    "paired_remote_workspaces": "remote_workspace_configurations", "device_message_provenance": "message_provenance",
-    "device_saved_artifacts": "saved_artifacts", "device_artifact_uploads": "artifact_uploads",
-    "device_artifact_chunks": "artifact_chunks", "workspace_automation_cancellations": "automation_cancellations",
-    "workspace_automation_requests": "automation_requests",
-    "workspace_calendar_remote_ownership": "calendar_remote_ownership",
-    "workspace_calendar_remote_receipts": "calendar_remote_receipts", "workspace_calendar_runs": "calendar_runs",
-    "workspace_calendar_sessions": "calendar_task_sessions",
-    "workspace_coordination_access_requests": "coordination_access_requests",
-    "workspace_coordination_observations": "coordination_observations",
-    "workspace_executor_sessions": "session_executor_profiles", "workspace_goal_runs": "goal_runs",
-    "workspace_goal_usage": "goal_usage", "workspace_history_events": "history_events",
-    "workspace_history_search": "history_search", "workspace_input_contexts": "input_contexts",
-    "workspace_mcp_bot_machines": "mcp_bot_machines", "workspace_mcp_callers": "mcp_callers",
-    "workspace_opencode_input_context": "opencode_input_contexts", "workspace_session_creations": "session_creations",
-    "workspace_session_deliveries": "session_deliveries", "workspace_session_goals": "session_goals",
-    "workspace_session_grants": "session_grants", "workspace_session_relationships": "session_relationships",
-    "workspace_session_timers": "session_timers", "workspace_session_tools": "session_tools",
-    "workspace_tool_mutations": "tool_mutations", "workspace_tool_settings": "tool_settings",
-}
-
-
 def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, published_root):
     """Keep ownership/history; disable copied execution and isolate test projects."""
     with sqlite3.connect(file) as db:
@@ -196,22 +155,11 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
         quote = lambda name: '"' + name.replace('"', '""') + '"'
         for name, _ in triggers:
             db.execute("DROP TRIGGER " + quote(name))
-        # Triggers of a renamed library are not restored: the app recreates
-        # every trigger under its current name.
-        if any(old in tables for old in LEGACY_TABLES):
-            triggers = []
-        for old, new in LEGACY_TABLES.items():
-            if old in tables:
-                db.execute(("DROP TABLE " + quote(old)) if new in tables else ("ALTER TABLE " + quote(old) + " RENAME TO " + quote(new)))
-                tables.discard(old); tables.add(new)
         # Ownership is durable metadata. Availability is a separate history state;
         # copied conversations never acquire authority to resume against production.
-        # (A v0.4.2 library's desktop_owned=0 rows were already read-only.)
         if "conversations" in tables:
-            columns = {r[1] for r in db.execute("PRAGMA table_info(conversations)")}
-            native = " AND desktop_owned=1" if "desktop_owned" in columns else ""
             db.execute("CREATE TABLE IF NOT EXISTS retained_execution_history(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE)")
-            db.execute("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM conversations WHERE is_archived=0" + native)
+            db.execute("INSERT OR IGNORE INTO retained_execution_history SELECT id FROM conversations WHERE is_archived=0")
             db.execute("UPDATE conversations SET is_archived=1 WHERE id IN (SELECT conversation_id FROM retained_execution_history)")
         if source_device_id and "folder_execution_roots" in tables:
             # Each source-local project keeps its folder identity and relationship,
@@ -238,8 +186,15 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
         # another Mac's (or the source's) schedules; drop the peer sync
         # bookkeeping, the Mac routes and the remote workspace configurations.
         peer_routes = {"mac_routes", "remote_workspace_configurations"}
+        # A snapshot is paired with nothing: the source's members, what it pinned
+        # and revoked, the GitHub identity shared with them, and the sessions it
+        # follows on their machines all stay behind.
+        pairing = {"library_members", "library_member_anchors", "library_member_pin_candidates",
+                   "library_member_revocations", "github_identity", "github_identity_recipients",
+                   "member_tool_sessions", "member_session_watch", "member_session_wakeups",
+                   "member_session_wakeup_counts"}
         for name in tables:
-            if name in transient or name.startswith(("paired_library_", "peer_sync_")) or name in peer_routes or name in source_state:
+            if name in transient or name.startswith("peer_sync_") or name in peer_routes or name in source_state or name in pairing:
                 db.execute("DELETE FROM " + quote(name))
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the
@@ -341,10 +296,8 @@ def snapshot(source, destination):
             catalog.write_text(json.dumps(rows))
         device_id = str(uuid.uuid4())
         execution_root = temporary / "ExecutionHome" / ".woven-matter"
-        # A v0.4.2 library that the app has not opened since still holds its
-        # ID as `dashboard-device-id`; the app moves it to `device-id` on open.
-        source_device_file = next((path for path in (source / "device-id", source / "dashboard-device-id") if path.exists()), None)
-        source_device_id = source_device_file.read_text().strip().lower() if source_device_file else None
+        source_device_file = source / "device-id"
+        source_device_id = source_device_file.read_text().strip().lower() if source_device_file.exists() else None
         disconnect_snapshot(temporary / "workspace.sqlite", device_id=device_id, source_device_id=source_device_id,
                             execution_root=execution_root,
                             published_root=destination / "ExecutionHome" / ".woven-matter")

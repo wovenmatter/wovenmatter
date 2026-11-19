@@ -5,7 +5,7 @@ import { applyTaskConfiguration } from './task-gateway-runner.mjs'
 import { clientInteraction, clientInteractionResponse } from './client-interactions.mjs'
 import { createNativeClientSessions } from './client-native-sessions.mjs'
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
-import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration, presentPermissionChoices, fullAccessPermissions, supportedPermissions, supportedPermission } from './config.mjs'
+import { runtimeConfiguration, workspacePermission, workspaceExecutionConfiguration, presentPermissionChoices, fullAccessPermissions, supportedPermissions, offeredPermission } from './config.mjs'
 import { openEphemeralACP, ephemeralSession } from './ephemeral-acp.mjs'
 import { promptBlocks, textWithFiles } from './execution-attachments.mjs'
 import { releaseName } from './release.mjs'
@@ -54,18 +54,14 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   // Full root forces Full access. A new session (`creation`) otherwise gets the
   // requested destination default, or the harness's Full access mode when none
   // was saved; an adapter that does not offer it keeps its native mode.
-  // Reattaching an existing session changes its permission only to move it off
-  // a mode Woven no longer offers (Ask for approval, read only, plan, an older
-  // Codex adapter's workspace access, …).
+  // Reattaching an existing session leaves its permission as it is.
   async function applyWorkspacePolicy(native, runtimeKind, call, creation) {
     const forced = workspacePermission(runtimeKind, undefined, configuration)
     const projected = runtimeKind === 'grok_build' ? undefined : project(runtimeKind, native.configuration ?? {})
     const offered = projected?.permissions?.map(choice => choice.id) ?? []
     const offers = id => id != null && (offered.length ? offered.includes(id) : supportedPermissions(runtimeKind).includes(id))
     const requested = offers(creation?.permission) ? creation.permission : undefined
-    const current = projected?.permission
-    const unsupported = current != null && !offers(current)
-    const permission = forced ?? (creation ? requested ?? fullAccessPermissions[runtimeKind] : unsupported ? fullAccessPermissions[runtimeKind] : undefined)
+    const permission = forced ?? (creation ? requested ?? fullAccessPermissions[runtimeKind] : undefined)
     if (!permission || runtimeKind === 'grok_build') return
     await applyTaskConfiguration(async (method, params) => {
       const result = await call(method, params)
@@ -167,7 +163,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     } finally {channel.pending.delete(id)}
   }
   async function create({runtimeKind,conversationID,workspaceID,mcpConnection,nativeWorkingDirectory:requestedDirectory,permission}) {
-    const requestedPermission = supportedPermission(runtimeKind, permission)
+    const requestedPermission = configuration.accessMode === 'fullRoot' ? undefined : offeredPermission(runtimeKind, permission)
     permission = workspacePermission(runtimeKind, requestedPermission, configuration)
     if(mcpConnection)mcpConnections.set(conversationID,mcpConnection)
     const nativeWorkingDirectory = requestedDirectory??join(workspaceRoot,'scratch',scratchFolderName(conversationID,'',new Date(),true))
@@ -367,10 +363,10 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
   // The Mac's Grok modes (`LocalACPSessionPermissions.grokMetadata`).
   const grokPermissionChoices=[['auto','Auto',"Grok's safety checker decides which actions may run automatically."],
     ['bypassPermissions','Full access','Allow commands and edits without ordinary approval prompts. Native deny rules, hooks, and administrator policies still apply.']].map(([id,label,description])=>({id,label,description}))
-  // Grok's permission is a process flag. A missing or no-longer-offered mode
-  // starts Grok in Full access rather than its native ask default.
+  // Grok's permission is a process flag. A session with none saved starts Grok
+  // in Full access rather than its native ask default.
   function grokPermission(native) {
-    return workspacePermission('grok_build', supportedPermission('grok_build', native.permission) ?? fullAccessPermissions.grok_build, configuration)
+    return workspacePermission('grok_build', native.permission ?? fullAccessPermissions.grok_build, configuration)
   }
   const selections = options => (options??[]).flatMap(item=>item.value!=null?[{id:String(item.value),label:item.name??String(item.value),
     ...(typeof item.description==='string'&&item.description?{description:item.description}:{}),...(typeof item._meta?.kind==='string'?{kind:item._meta.kind}:{})}]:selections(item.options))

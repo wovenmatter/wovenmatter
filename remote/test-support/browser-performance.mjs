@@ -62,7 +62,7 @@ try {
       await sleep(rtt / 2); await service.frame(tab.id); await sleep(rtt / 2)
       count++; await sleep(200)
     } while (performance.now() - start < 3000)
-    const legacyFPS = count * 1000 / (performance.now() - start)
+    const polledFPS = count * 1000 / (performance.now() - start)
     const response = new EventEmitter(), deliveries = [], timers = new Set()
     response.writableLength = 0
     response.writeHead = () => { response.headersSent = true }
@@ -77,7 +77,7 @@ try {
     await sleep(3300); response.emit('close'); await streaming
     for (const timer of timers) clearTimeout(timer)
     const elapsed = deliveries.at(-1).arrived - deliveries[0].arrived
-    console.log(JSON.stringify({ metric: 'animated_frames_per_second', rtt_ms: rtt, legacy: +legacyFPS.toFixed(1), stream: +((deliveries.length - 1) * 1000 / elapsed).toFixed(1) }))
+    console.log(JSON.stringify({ metric: 'animated_frames_per_second', rtt_ms: rtt, polled: +polledFPS.toFixed(1), stream: +((deliveries.length - 1) * 1000 / elapsed).toFixed(1) }))
   }
   await page.evaluate(() => { window.animate = false }); await sleep(100)
   let bytes = 0, images = 0

@@ -15,7 +15,7 @@ import { maximumWakeUpsPerRun } from './stream-protocol.mjs'
 // stream's first snapshot is compared with the stored state.
 
 const stableID = value => {
-  const h = createHash('sha256').update('woven-session-wake-up-v1\0' + value).digest('hex')
+  const h = createHash('sha256').update('woven-session-wake-up\0' + value).digest('hex')
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`
 }
 const stamp = () => new Date().toISOString()

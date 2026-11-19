@@ -14,10 +14,7 @@ export const providerEndpoints = {
   xai: { 'openai-responses': 'https://api.x.ai/v1' },
   'xai-api': { 'openai-responses': 'https://api.x.ai/v1' },
 };
-// Existing caches and pinned sessions keep their reviewed destination across the rename.
-const legacyOpenCodeGoEndpoints = { 'openai-completions': 'https://opencode.ai/zen/go/v1', 'openai-responses': 'https://opencode.ai/zen/go/v1', 'anthropic-messages': 'https://opencode.ai/zen/go' };
-const trustedEndpoint = (model, provider) => model.baseUrl === providerEndpoints[provider]?.[model.api]
-  || (provider === 'opencode-go' && model.baseUrl === legacyOpenCodeGoEndpoints[model.api]);
+const trustedEndpoint = (model, provider) => model.baseUrl === providerEndpoints[provider]?.[model.api];
 const invalid = () => new DefaultAgentError('The provider returned invalid model metadata. Refresh models to retry.');
 const id = value => typeof value === 'string' && value.length > 0 && Buffer.byteLength(value) <= 512 && !/[\x00-\x1f\x7f]/u.test(value);
 const validator = value => typeof value === 'string' && value.length <= 1024 && !/[\r\n]/u.test(value) ? value : undefined;

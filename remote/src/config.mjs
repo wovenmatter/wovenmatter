@@ -36,7 +36,6 @@ export function loadRuntimeConfiguration(environment = process.env) {
     defaultAgentDirectory: environment.WOVEN_DEFAULT_AGENT_DIRECTORY || resolve(environment.WOVENMATTER_DATA_ROOT ?? resolve(managedDataRoot, '..'), 'default-agent'),
     stateDirectory: environment.WOVENMATTER_STATE_DIRECTORY ?? resolve(home, '.wovenmatter'),
     browserProfilesRoot: environment.WOVENMATTER_BROWSER_PROFILES ?? resolve(home, '.local/share/wovenmatter/browser-profiles'),
-    legacyBrowserProfile: resolve(home, '.local/share/wovenmatter/browser'),
     harnessPath: environment.WOVENMATTER_HARNESS_PATH ?? '',
     serviceFingerprint: environment.WOVENMATTER_SERVICE_FINGERPRINT ?? null,
     // The Woven Matter version that shipped this host release (remote-host.sh reads it
@@ -82,8 +81,8 @@ export function acpAdapterPrefix(configuration = runtimeConfiguration) {
 
 // Where each vendor's official installer puts its CLI: OpenCode v2 in
 // ~/.opencode/bin, Grok in ~/.grok/bin, Claude and Codex in ~/.local/bin. The
-// dedicated folders come first, so an older npm copy in ~/.local/bin (as older
-// Woven hosts installed OpenCode) never shadows the official one.
+// dedicated folders come first, so another copy in ~/.local/bin never shadows
+// the official one.
 const nativeCLIFolders = Object.freeze({ opencode: '.opencode/bin', grok: '.grok/bin', claude: '.local/bin', codex: '.local/bin' })
 export function nativeCLIDirectories(configuration = runtimeConfiguration) {
   return ['.opencode/bin', '.grok/bin', '.local/bin'].map(path => resolve(configuration.home, path))
@@ -146,9 +145,10 @@ export function supportedPermissions(runtimeKind) {
   return [fullAccessPermissions[runtimeKind], autoPermissions[runtimeKind]].filter(Boolean)
 }
 
-// A saved or requested mode Woven no longer offers becomes Full access.
-export function supportedPermission(runtimeKind, permission) {
-  return permission == null || supportedPermissions(runtimeKind).includes(permission) ? permission : fullAccessPermissions[runtimeKind]
+// A saved default or a request names a mode Woven offers, or none; anything else is refused.
+export function offeredPermission(runtimeKind, permission) {
+  if (permission == null || supportedPermissions(runtimeKind).includes(permission)) return permission
+  throw Object.assign(new Error('This permission mode is not offered.'), { statusCode: 409, beforePrompt: true })
 }
 
 // The Mac's names and descriptions for native permission modes
@@ -194,14 +194,14 @@ export function workspacePermission(runtimeKind, requested, configuration = runt
   return fullAccessPermissions[runtimeKind] ?? requested
 }
 
-// A saved permission Woven no longer offers runs as the product's Full access
-// default, which inherits native policy when the adapter does not offer it.
+// A Full root workspace runs every session in Full access; any other runs the
+// saved permission, which must be one Woven offers.
 export function workspaceExecutionConfiguration(value, configuration = runtimeConfiguration) {
-  const supported = supportedPermission(value.runtimeKind, value.permission)
-  if (supported !== value.permission) value = { ...value, permission: supported, usesProductPermissionDefault: true }
-  const permission = workspacePermission(value.runtimeKind, value.permission, configuration)
-  return configuration.accessMode === 'fullRoot'
-    ? { ...value, permission, usesProductPermissionDefault: false } : value
+  if (configuration.accessMode === 'fullRoot') {
+    return { ...value, permission: workspacePermission(value.runtimeKind, value.permission, configuration), usesProductPermissionDefault: false }
+  }
+  offeredPermission(value.runtimeKind, value.permission)
+  return value
 }
 
 export const runtimeConfiguration = loadRuntimeConfiguration()

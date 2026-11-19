@@ -18,7 +18,7 @@ wm_runtime_gid="$(id -g)"
 if [ "$wm_runtime_uid" = 0 ]; then wm_runtime_uid=1000; wm_runtime_gid=1000; fi
 wm_network=wovenmatter-executor
 # The network and container this deployment owns carry the label sh.wovenmatter.executor.
-# Ownership is the label being there: what an earlier deployment wrote as its value is not read.
+# Ownership is the label being there; its value is not read.
 if $wm_docker network inspect "$wm_network" >/dev/null 2>&1; then
   test "$($wm_docker network inspect --format '{{range $key, $value := .Labels}}{{if eq $key "sh.wovenmatter.executor"}}owned{{end}}{{end}}' "$wm_network")" = owned
 else
@@ -26,17 +26,6 @@ else
     --opt com.docker.network.bridge.enable_icc=false \
     --label sh.wovenmatter.executor=managed "$wm_network" >/dev/null
 fi
-wm_container_hardened() {
-  wm_name="$1"
-  wm_user="$($wm_docker inspect --format '{{.Config.User}}' "$wm_name")"
-  case "$wm_user" in ''|0|0:*|root|root:*) return 1 ;; esac
-  test "$($wm_docker inspect --format '{{.HostConfig.NetworkMode}}' "$wm_name")" = "$wm_network" \
-    && test "$($wm_docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$wm_name")" = true \
-    && test "$($wm_docker inspect --format '{{json .HostConfig.PortBindings}}' "$wm_name")" = '{"4312/tcp":[{"HostIp":"127.0.0.1","HostPort":"4312"}]}' \
-    && test "$($wm_docker inspect --format '{{json .HostConfig.CapDrop}}' "$wm_name")" = '["ALL"]' \
-    && test "$($wm_docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$wm_name")" = '["no-new-privileges"]' \
-    && test "$($wm_docker inspect --format '{{.HostConfig.PidsLimit}}' "$wm_name")" = 512
-}
 # Verify the selected private origin belongs to this machine before installing.
 tailscale status --json > "$wm_root/host.json"
 tailscale serve status --json > "$wm_root/serve.json"
@@ -89,13 +78,12 @@ PY
 # this transaction; later setup resolves the supported channel again.
 wm_image="wovenmatter/executor:$(cat "$wm_root/image-tag")"
 wm_previous=false
-wm_previous_safe=false
 wm_new=false
 wm_healthy=false
 wm_rollback() {
   if [ "$wm_healthy" = false ] && [ "$wm_new" = true ]; then
     $wm_docker rm -f wovenmatter-executor >/dev/null 2>&1 || true
-    if [ "$wm_previous" = true ] && [ "$wm_previous_safe" = true ]; then
+    if [ "$wm_previous" = true ]; then
       $wm_docker rename wovenmatter-executor-previous wovenmatter-executor
       $wm_docker start wovenmatter-executor >/dev/null
     fi
@@ -105,8 +93,7 @@ wm_rollback() {
 trap wm_rollback EXIT
 if $wm_docker inspect wovenmatter-executor >/dev/null 2>&1; then
   test "$($wm_docker inspect --format '{{range $key, $value := .Config.Labels}}{{if eq $key "sh.wovenmatter.executor"}}owned{{end}}{{end}}' wovenmatter-executor)" = owned
-  if [ "$($wm_docker inspect --format '{{.Config.Image}}' wovenmatter-executor)" = "$wm_image" ] \
-      && wm_container_hardened wovenmatter-executor; then
+  if [ "$($wm_docker inspect --format '{{.Config.Image}}' wovenmatter-executor)" = "$wm_image" ]; then
     $wm_docker start wovenmatter-executor >/dev/null
     wm_current=true
   else
@@ -124,30 +111,17 @@ fi
 if [ "$wm_current" = false ]; then
   printf '%s\n' '*' '!Dockerfile' '!npm-runtime/' '!npm-runtime/package*.json' \
     '!executor-runtime/' '!executor-runtime/package*.json' '!security/' '!security/**' > "$wm_root/.dockerignore"
-  # An old host-network/root container is an active exposure, not rollback
-  # coverage. Stop it before any potentially slow replacement build.
-  if $wm_docker inspect wovenmatter-executor >/dev/null 2>&1 \
-      && ! wm_container_hardened wovenmatter-executor; then
-    $wm_docker stop wovenmatter-executor >/dev/null
-  fi
   $wm_docker build --pull --no-cache --tag "$wm_image" "$wm_root" >/dev/null 2>&1
   if $wm_docker inspect wovenmatter-executor >/dev/null 2>&1; then
     # A previous failed rollback is retained for inspection, never overwritten.
     if $wm_docker inspect wovenmatter-executor-previous >/dev/null 2>&1; then exit 69; fi
-    if wm_container_hardened wovenmatter-executor; then wm_previous_safe=true; fi
     $wm_docker stop wovenmatter-executor >/dev/null
     if ! $wm_docker rename wovenmatter-executor wovenmatter-executor-previous; then
-      if [ "$wm_previous_safe" = true ]; then $wm_docker start wovenmatter-executor >/dev/null; fi
+      $wm_docker start wovenmatter-executor >/dev/null
       exit 69
     fi
     wm_previous=true
   fi
-  # The former image ran as root. Migrate only root-owned persistent entries
-  # while the old container is stopped; the helper has no network or other caps.
-  $wm_docker run --rm --network none --user 0:0 --read-only \
-      --cap-drop ALL --cap-add CHOWN --security-opt no-new-privileges --pids-limit 64 \
-      --mount "type=bind,src=$wm_root/data,dst=/data" --entrypoint /usr/bin/find "$wm_image" \
-      /data -xdev -uid 0 -exec /usr/bin/chown --no-dereference "$wm_runtime_uid:$wm_runtime_gid" '{}' +
   wm_new=true
   $wm_docker run -d --name wovenmatter-executor --label sh.wovenmatter.executor=managed \
       --restart unless-stopped --network "$wm_network" --publish 127.0.0.1:4312:4312 \
@@ -155,7 +129,6 @@ if [ "$wm_current" = false ]; then
       --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
       --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --init \
       --mount "type=bind,src=$wm_root/data,dst=/data" "$wm_image" >/dev/null
-  wm_container_hardened wovenmatter-executor
 fi
 # Require authenticated readiness before publishing the route or deleting the
 # rollback container. Keys stay inside the private payload, never command args.

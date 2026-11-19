@@ -190,7 +190,7 @@ export function piSessionParser(harness = 'Pi') {
 const PI_DURABLE = 'Pi Durable'
 
 /// A Pi Durable reply's identity is its session, time, model and token total, the
-/// same on the desktop, so a migrated store and its retained backup count once.
+/// same on the desktop.
 function piDurableEvent(message, session) {
   if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') return null
   const milliseconds = Number(message.timestamp)
@@ -220,13 +220,6 @@ export function piDurableEvents(records, session) {
     })
   }
   return [...latest.values()]
-}
-
-/// Entries in a pre-SQLite Pi Durable commit log (`durable/<session>/native/main.jsonl`).
-export function legacyPiDurableEntries(lineText) {
-  if (!lineText.includes('"usage"')) return []
-  const commit = object(lineText)
-  return Array.isArray(commit?.writes) ? commit.writes.filter(write => write?.type === 'entry' && write.value).map(write => write.value) : []
 }
 
 const SAFE_PREFIX = /^(wm_pi|pibot)_[0-9a-f]{32}_$/
@@ -439,18 +432,6 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
     add(await cached(roots.opencode, readOpenCode, databaseStamp))
     // Reported as "Pi", which record IDs are built from; the desktop shows it as "Pi CLI".
     for (const path of await walk(roots.pi, file => file.endsWith('.jsonl'))) add(await cached(path, file => readFile(file, piSessionParser('Pi'))))
-    for (const directory of agentDirectories) {
-      for (const path of await walk(join(directory, 'sessions'), file => file.endsWith('.jsonl'))) {
-        add(await cached(path, async file => (await readFile(file, piSessionParser('Pi'))).map(value => {
-          const milliseconds = Math.round(value.timestamp * 1_000)
-          return { ...value, harness: PI_DURABLE, application: 'Woven Matter', dedupeKey: `pi-durable:${value.sessionID}:${milliseconds}:${value.model}:${value.total}` }
-        })))
-      }
-      for (const path of await walk(join(directory, 'durable'), file => basename(file) === 'main.jsonl' && basename(join(file, '..')) === 'native')) {
-        const session = { id: basename(join(path, '../..')) }
-        add(await cached(path, async file => piDurableEvents(await readFile(file, legacyPiDurableEntries), session)))
-      }
-    }
     for (const path of roots.piDurable) add(await piDurableDatabase(path))
     // A resumed transcript repeats earlier messages, which must only count once.
     const seen = new Set()

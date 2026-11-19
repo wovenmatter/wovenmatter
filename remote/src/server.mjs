@@ -17,7 +17,7 @@ import { createTaskExecutor } from './task-gateway-runner.mjs'
 import { createDurableACP } from './durable-acp.mjs'
 import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
-import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
+import { adoptDefaultBrowserProfile, createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
 import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, nonInteractiveSessionEnvironment, shellQuote } from './config.mjs'
@@ -124,8 +124,8 @@ const taskGateway = runningAsService ? createTaskGateway({
   },
 }) : null
 
-const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyBrowserProfile,
-  profilesRoot: configuration.browserProfilesRoot })
+if (runningAsService) await adoptDefaultBrowserProfile({ home: configuration.home, profilesRoot: configuration.browserProfilesRoot })
+const workspaceBrowser = createWorkspaceBrowser({ profilesRoot: configuration.browserProfilesRoot })
 let browserSelfTestPending
 const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser_use', 'woven_browser_use_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 

@@ -69,11 +69,6 @@ export const operationFailureCodes = Object.freeze([
 export function diagnosticCategory(error) {
   const text = String(error ?? '')
   if (operationFailureCodes.includes(text)) return text
-  // Records saved by older hosts held free text.
-  if (text.startsWith('Installer exited ')) return 'installer_failed'
-  if (text.startsWith('Update exited ')) return 'update_failed'
-  if (text === 'Installer finished but required components could not be verified.') return 'installation_verification_failed'
-  if (text === 'Update finished but a required component is still behind the checked version.') return 'update_verification_failed'
   return 'runtime_operation_failed'
 }
 export function sanitize(value, environment = {}) {
@@ -164,19 +159,15 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   }, workspaceRoot, timeout)
   const inside = (path, root) => path === root || path.startsWith(root + sep)
   // A CLI in the person's home is theirs to update with its vendor's command; one
-  // elsewhere (a distribution package under /usr) belongs to the system. One in the
-  // home that resolves into a node_modules tree is an older npm install (older Woven
-  // hosts installed OpenCode that way): its vendor's updater would go back through
-  // npm, so it is replaced with the official installer instead.
+  // elsewhere (a distribution package under /usr) belongs to the system.
   async function componentSource(path, adapter = false) {
     if (!path) return 'missing'
     const target = await realpath(path).catch(() => path)
     if (adapter) return inside(target, configuration.home) || inside(path, configuration.home) ? 'managed' : 'system'
-    if (!inside(path, configuration.home) && !inside(target, configuration.home)) return 'system'
-    return [path, target].some(value => value.split(sep).includes('node_modules')) ? 'npm' : 'native'
+    return inside(path, configuration.home) || inside(target, configuration.home) ? 'native' : 'system'
   }
   async function commandPath(command) {
-    // Where the official installer puts the CLI wins over an older copy earlier on PATH.
+    // Where the official installer puts the CLI wins over any other copy on PATH.
     const official = nativeCLILocation(command, configuration)
     if (official && await access(official, fsConstants.X_OK).then(() => true, () => false)) return official
     const found = await run(`command -v ${quote(command)}`)
@@ -244,7 +235,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       if (adapter) adapter.latestVersion = await latest(h.adapterPackage)
       s.versionCheckAvailable = components.filter(c => c.id !== 'transport').every(c => c.latestVersion !== null)
     } else for (const c of components) c.latestVersion = previous.find(p => p.id === c.id)?.latestVersion ?? null
-    for (const c of components) c.updateAvailable = c.source === 'npm' || (c.id !== 'transport' && c.source !== 'system' && c.source !== 'missing' && precedes(c.installedVersion, c.latestVersion))
+    for (const c of components) c.updateAvailable = c.id !== 'transport' && c.source !== 'system' && c.source !== 'missing' && precedes(c.installedVersion, c.latestVersion)
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
     const operation = storedOperation && !storedOperation.finishedAt ? { ...storedOperation, status: 'running' } : storedOperation
@@ -253,7 +244,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     let notice = h.id === 'opencode'
       ? (openCodeV1 && !cli.installed ? `OpenCode ${openCodeV1.version} (v1) is installed. Woven supports OpenCode v2; installing it replaces the v1 opencode command.` : null)
       : h.adapterPackage ? `Chats use this host's ${h.cliCommand} through its ACP connection.` : null
-    if (cli.source === 'npm') notice = [notice, `${cli.displayName} was installed with npm. Updating replaces it with the official installer's copy.`].filter(Boolean).join(' ')
     if (checkLatest && components.some(c => c.id !== 'transport' && c.latestVersion === null)) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
     s.notice = notice
     return { id: h.id, displayName: h.displayName, source: cli.source, path: cli.path, installed, components, operation,
@@ -289,15 +279,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       if (!cli.installed) {
         if (h.id === 'opencode' && before.openCodeV1 && body.replaceOpenCodeV1 !== true) throw failure('opencode_v1_replacement_confirmation_required')
         steps.push(await officialInstall())
-      } else if (cli.source === 'npm') steps.push(await officialInstall())
+      }
       if (adapter && !adapter.installed) steps.push({ kind: 'install', command: await adapterInstallCommand(h), timeout: installTimeout })
       return steps
     }
     // Update: the vendor's own command for the CLI, wherever its installer put it,
-    // and a fresh adapter when a newer one is published. An npm copy gets the
-    // official installer instead; the npm copy itself is left as it was.
-    if (cli.installed && cli.source === 'npm') steps.push(await officialInstall())
-    else if (cli.installed && cli.source === 'native' && (cli.updateAvailable || !cli.latestVersion)) {
+    // and a fresh adapter when a newer one is published.
+    if (cli.installed && cli.source === 'native' && (cli.updateAvailable || !cli.latestVersion)) {
       steps.push({ kind: 'update', command: [cli.path, ...nativeUpdateArguments(h)].map(quote).join(' '), timeout: updateTimeout })
     }
     if (adapter?.installed && adapter.updateAvailable) steps.push({ kind: 'update', command: await adapterInstallCommand(h), timeout: installTimeout })
@@ -325,8 +313,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
           if (result.code !== 0) throw failure(step.kind === 'update' ? 'update_failed' : 'installer_failed')
         }
         const after = await inventory(h)
-        const afterCLI = after.components.find(c => c.id === (h.adapterPackage ? 'cli' : 'runtime'))
-        if (!after.installed || (steps.some(step => step.kind === 'install') && afterCLI?.source === 'npm')) throw failure('installation_verification_failed')
+        if (!after.installed) throw failure('installation_verification_failed')
         if (action === 'update') {
           // The updater's exit status isn't proof: each part that was behind must now be current.
           const behind = before.components.filter(c => c.updateAvailable)
@@ -351,14 +338,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       await loaded
       const path = await commandPath(command)
       return { path, source: await componentSource(path) }
-    },
-    async recordFailure(h, action, error) {
-      const s = await state(h.id)
-      if (operations.get(h.id) && !operations.get(h.id).finishedAt) return
-      s.failureCount += 1
-      const now = new Date().toISOString()
-      operations.set(h.id, { id: randomUUID(), harnessID: h.id, action, status: 'failed', output: '', error: diagnosticCategory(error.message), startedAt: now, finishedAt: now })
-      await persist()
     },
     async isInstalled(id) {
       const harness = catalog.get(id)

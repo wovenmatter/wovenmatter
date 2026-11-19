@@ -69,13 +69,12 @@ describe("bot tools", () => {
   const hasTool = (context: string | undefined, name: string) =>
     (context ?? "").includes(`"name":"${name}"`);
 
-  it("names the admin bot Admin Bot and renames an older admin row on open", async () => {
+  it("names the admin bot Admin Bot, and keeps the one it has on the next open", async () => {
     const admin = await manager.admin();
     expect(admin?.name).toBe("Admin Bot");
     await manager.close();
-    await db.run("UPDATE pibot_bots SET name = 'Admin' WHERE kind = 'admin'");
     manager = await openManager();
-    expect((await manager.list()).map((bot) => bot.name)).toEqual(["Admin Bot"]);
+    expect((await manager.list()).map((bot) => [bot.id, bot.name])).toEqual([[admin?.id, "Admin Bot"]]);
   });
 
   it("gives Admin Bot the profile tools and prompt; other bots get bot tools", async () => {

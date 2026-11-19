@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ordered } from './durable-json.mjs'
-import { fullAccessPermissions, supportedPermission } from './config.mjs'
+import { fullAccessPermissions, offeredPermission } from './config.mjs'
 
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode})
 const stamp=()=>new Date().toISOString()
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
-const stableID=value=>{const h=createHash('sha256').update('woven-mcp-orchestration-v1\0'+value).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`}
+const stableID=value=>{const h=createHash('sha256').update('woven-mcp-orchestration\0'+value).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`}
 // These operations use the workspace's existing accepted-command engine. The
 // MCP credential selects the source, and no model argument can change it.
 export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,runtime,settings,runningSessions=()=>0,policy,notifyApproval}) {
@@ -106,7 +106,7 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
       let intent=previous?.intent?JSON.parse(previous.intent):null
       if(!intent) {
         const kind=input.harness??source.conversation.runtimeKind,defaults=settings().harnessDefaults?.[kind]??{}
-        const permission=supportedPermission(kind,defaults.permission)??fullAccessPermissions[kind]
+        const permission=offeredPermission(kind,defaults.permission)??fullAccessPermissions[kind]
         const enabled=[...new Set([...(defaults.tools??settings().enabledByDefault),'goals'])]
         intent={id:stableID([scope.conversationID,requestID,'child'].join(':')),runtimeKind:kind,title:input.title,text:input.text,purpose:input.purpose,
           ...(input.folder==='all'?{}:input.folder||source.conversation.folderID?{folderID:input.folder??source.conversation.folderID}:{}),

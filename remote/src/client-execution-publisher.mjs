@@ -11,8 +11,6 @@ const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount
 // library host) through the socket's `/publisher/*` routes and reaches
 // other devices by peer sync. Without a library host nothing is published.
 export function createClientExecutionPublisher({ db, identity, events, flush = () => {}, intervalMilliseconds = 5000, localLibrary = null }) {
-  // A v0.4.2 store's single-Mac publication tables are converted when
-  // `execution.sqlite` opens (`openExecutionStore`, client-execution.mjs).
   db.exec(`CREATE TABLE IF NOT EXISTS publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
     INSERT OR IGNORE INTO publication_lanes(name) VALUES ('journal'),('artifacts');
     CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL);

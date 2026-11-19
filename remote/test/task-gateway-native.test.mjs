@@ -148,7 +148,7 @@ test('OpenCode installs a private HTTP MCP connection and persists only capture 
   assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/prompt')).body.metadata.wovenMCP,{captureID:context.captureID})
 })
 
-test('OpenCode rejects missing, malformed and legacy RPC connection envelopes before MCP installation or prompt',async()=>{
+test('OpenCode rejects missing, malformed and wrongly shaped connection envelopes before MCP installation or prompt',async()=>{
   const proxy={endpointURL:'http://127.0.0.1:9999/mcp',bearerToken:'fixture-token'}
   for(const mcpResponse of [{},{data:proxy},{output:null},{output:[]},{output:'invalid'},
     {output:{endpointURL:proxy.endpointURL}},{output:{...proxy,endpointURL:''}},
@@ -162,9 +162,9 @@ test('OpenCode rejects missing, malformed and legacy RPC connection envelopes be
 })
 
 test('OpenCode confirms native rules without removing custom rules and projects the completed response',async()=>{
-  // An explicit Full access choice, and an older Ask or Deny session given none, both run in Full access.
-  for(const [permission,earlier] of [['allow','ask'],[undefined,'ask'],[undefined,'deny']]){
-    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:earlier}]})
+  // An explicit Full access choice replaces the session's wildcard rule, whatever it was.
+  for(const [permission,stored] of [['allow','ask'],['allow','deny'],['allow','allow']]){
+    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:stored}]})
     const updates=[];fixture.context.run.task.configuration={runtimeKind:'opencode',permission,model:'lab/new',thinking:'high'};fixture.context.publish=x=>updates.push(x)
     await fixture.execute(fixture.context)
     assert.deepEqual(fixture.session.permissions,[custom,{action:'*',resource:'*',effect:'allow'}])

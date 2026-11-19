@@ -171,25 +171,18 @@ export class BotRegistry {
   }
 
   /**
-   * Creates the shared tables, or brings an earlier database to their current shape, in one
-   * transaction. The database carries no version number: nothing writes its `PRAGMA user_version`
-   * and nothing reads it, so a number an earlier release left there stays and means nothing.
-   * `#createTables` declares the current shape with `CREATE TABLE IF NOT EXISTS`: that creates a
-   * new database and adds a new table to an existing one. A change to what a database already
-   * holds is recognised by the earlier shape it looks for (a table, a column, or a column's
-   * absence) and leaves nothing of that shape behind: it happens once, and a current database is
-   * only read.
+   * Creates the shared tables and their indexes, in one transaction; a database that has them is
+   * only read. The database carries no version number: nothing writes its `PRAGMA user_version`
+   * and nothing reads it.
    */
-  async migrate(): Promise<void> {
+  async createTables(): Promise<void> {
     await this.#db.transaction(async (tx) => {
-      await this.#createTables(tx);
-      await this.#addMissingColumns(tx);
+      await this.#declareTables(tx);
       await this.#createIndexes(tx);
     });
   }
 
-  /** The current shape. A column added here is also added to earlier databases below. */
-  async #createTables(db: SqliteExecutor): Promise<void> {
+  async #declareTables(db: SqliteExecutor): Promise<void> {
     await db.exec(`
       CREATE TABLE IF NOT EXISTS ${GROUPS_TABLE} (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL
@@ -236,46 +229,6 @@ export class BotRegistry {
         updated_at TEXT NOT NULL
       ) STRICT;
     `);
-  }
-
-  /**
-   * A database created before a column was declared lacks it: each missing one is added, with the
-   * declaration above (existing bots are plain bots). A current database has them all.
-   */
-  async #addMissingColumns(db: SqliteExecutor): Promise<void> {
-    const threadColumns = await db.all<{ name: string }>(
-      `PRAGMA table_info(${THREADS_TABLE})`,
-    );
-    if (!threadColumns.some((column) => column.name === "is_pinned"))
-      await db.exec(
-        `ALTER TABLE ${THREADS_TABLE} ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`,
-      );
-    const columns = new Set(
-      (await db.all<{ name: string }>(`PRAGMA table_info(${BOTS_TABLE})`)).map(
-        (column) => column.name,
-      ),
-    );
-    const deliveryColumns = await db.all<{ name: string }>(
-      `PRAGMA table_info(${DELIVERIES_TABLE})`,
-    );
-    if (!deliveryColumns.some((column) => column.name === "accepted")) {
-      await db.exec(
-        `ALTER TABLE ${DELIVERIES_TABLE} ADD COLUMN accepted INTEGER NOT NULL DEFAULT 0`,
-      );
-    }
-    const added: [string, string][] = [
-      ["deleted_at", "TEXT"],
-      ["kind", "TEXT NOT NULL DEFAULT 'bot'"],
-      ["is_manager", "INTEGER NOT NULL DEFAULT 0"],
-      ["manager_id", "TEXT"],
-      ["profile", "TEXT"],
-      ["group_id", `TEXT REFERENCES ${GROUPS_TABLE}(id) ON DELETE SET NULL`],
-      ["is_orchestrator", "INTEGER NOT NULL DEFAULT 0"],
-    ];
-    for (const [name, type] of added) {
-      if (!columns.has(name))
-        await db.exec(`ALTER TABLE ${BOTS_TABLE} ADD COLUMN ${name} ${type}`);
-    }
   }
 
   async #createIndexes(db: SqliteExecutor): Promise<void> {
@@ -399,15 +352,6 @@ export class BotRegistry {
       `UPDATE ${BOTS_TABLE} SET name = ? WHERE id = ? AND deleted_at IS NULL`,
       name,
       id,
-    );
-  }
-
-  /** Startup migration: give the admin-kind bot its current built-in name. */
-  async renameAdmin(name: string): Promise<void> {
-    await this.#db.run(
-      `UPDATE ${BOTS_TABLE} SET name = ? WHERE kind = 'admin' AND name <> ?`,
-      name,
-      name,
     );
   }
 

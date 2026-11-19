@@ -73,8 +73,11 @@ const PRUNE = [
   "/etc/ld.so.conf.d/*.conf.dpkg-*",
 ];
 
-/** Old in-image toolchain files at /usr/local's top (never the bot's own). */
-const LEGACY_FILES = [
+/**
+ * The toolchain a base image from before the shared volume carried at /usr/local's top (never the
+ * bot's own): a move leaves these files behind, since the new container links to the shared one.
+ */
+const IMAGE_TOOLCHAIN_FILES = [
   "/usr/local/bin/node",
   "/usr/local/bin/npm",
   "/usr/local/bin/npx",
@@ -150,7 +153,7 @@ manifest | sort -u | comm -23 - "$base/files.txt" | comm -23 - "$out/.owned" \\
          { kind = $1; path = substr($0, index($0, "  ") + 2)
            if ((kind ~ /^link:/ || kind ~ /^dir:/) && (path in listed)) next
            print path }' "$out/.listed" - > "$out/.changed"
-grep -vxF -e '${LEGACY_FILES.join("' -e '")}' "$out/.changed" > "$out/files.txt" || true
+grep -vxF -e '${IMAGE_TOOLCHAIN_FILES.join("' -e '")}' "$out/.changed" > "$out/files.txt" || true
 rm -f "$out/.owned" "$out/.listed" "$out/.changed"
 if [ -s "$out/files.txt" ]; then
   tr '\\n' '\\0' < "$out/files.txt" | tar --null --no-recursion --numeric-owner -cpf "$out/files.tar" -T - \\

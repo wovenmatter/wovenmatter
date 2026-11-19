@@ -21,8 +21,8 @@ async function restrictIfPresent(path: string): Promise<void> {
 /**
  * Open the one SQLite database every bot shares (Woven's sqlite-storage pattern): the directory
  * is 0700, the database and its WAL/SHM files 0600, `synchronous=FULL` and foreign keys on.
- * `:memory:` is accepted for tests. The file carries no version number; `BotRegistry.migrate`
- * creates the shared tables and recognises an earlier database by its shape.
+ * `:memory:` is accepted for tests. The file carries no version number;
+ * `BotRegistry.createTables` creates the shared tables.
  */
 export async function openSharedDatabase(path: string): Promise<NodeSqliteDatabase> {
   if (path !== ":memory:") {

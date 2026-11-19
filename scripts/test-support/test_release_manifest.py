@@ -12,7 +12,7 @@ assets = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assets)
 SHA = 'a' * 40
 VERSION, BUILD = '1.2.3', 42
-LEGACY, FULL = f'WovenMatter_{VERSION}_arm64.dmg', f'WovenMatter_{VERSION}_{BUILD}_arm64.dmg'
+DOWNLOAD, FULL = f'WovenMatter_{VERSION}_arm64.dmg', f'WovenMatter_{VERSION}_{BUILD}_arm64.dmg'
 MISSING = object()
 
 
@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory() as directory:
     folder = temp / 'release'
     folder.mkdir()
     payload = b'signed disk image' * 100
-    for name in (LEGACY, FULL):
+    for name in (DOWNLOAD, FULL):
         (folder / name).write_bytes(payload)
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/'
     (folder / 'appcast.xml').write_text(
@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory() as directory:
     manifest_path = folder / 'latest-mac.json'
     # The real production generator's output is accepted as is.
     subprocess.run([str(ROOT / 'scripts/generate-release-manifest.sh'), VERSION, str(BUILD),
-                    str(folder / LEGACY), str(manifest_path)], check=True)
+                    str(folder / DOWNLOAD), str(manifest_path)], check=True)
     generated = json.loads(manifest_path.read_text())
     assert sorted(generated) == ['architecture', 'build', 'download_url', 'minimum_macos', 'release_url', 'sha256', 'version']
     assets.prepare(folder, VERSION, BUILD, SHA)

@@ -459,11 +459,10 @@ export type BotManagerOptions = {
   readonly onThreadsChanged?: (botId: string) => void;
   /**
    * Model profiles. With them, each open bot's main channel and threads follow its profile's main
-   * model (on open, on `setProfile`, and on every profile change), and legacy per-bot model
-   * overrides are migrated to profiles on open.
+   * model (on open, on `setProfile`, and on every profile change).
    */
   readonly profiles?: ProfileStore;
-  /** Server-side log lines (model changes, migrations). */
+  /** Server-side log lines (model changes). */
   readonly log?: (message: string) => void;
   /**
    * Main-model usage limits shared by every bot. With it (and profiles), a bot whose main model is
@@ -555,10 +554,9 @@ export class BotManager {
 
   static async open(options: BotManagerOptions): Promise<BotManager> {
     const manager = new BotManager(options);
-    await manager.registry.migrate();
-    if (options.ensureAdmin) {
-      if (await manager.registry.admin()) await manager.registry.renameAdmin(ADMIN_NAME);
-      else await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
+    await manager.registry.createTables();
+    if (options.ensureAdmin && !(await manager.registry.admin())) {
+      await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
     }
     options.profiles?.onChange(() => manager.#profilesChanged());
     options.availability?.onChange(() => void manager.#reapplyAll());

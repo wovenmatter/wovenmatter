@@ -41,8 +41,8 @@ Include ~/.ssh/config
 Include /etc/ssh/ssh_config
 `,
     known_hosts: githubKnownHosts,
-    // Never on disk: a key file from an earlier build is removed.
-    id_github: null, 'id_github.pub': null, 'github.conf': null, gitconfig: null,
+    // The files that depend on what is set; one that no longer applies is removed.
+    'id_github.pub': null, 'github.conf': null, gitconfig: null,
   }
   if (value?.publicKey) {
     files['id_github.pub'] = value.publicKey + '\n'
@@ -84,8 +84,6 @@ export async function writeGitHubFiles(value, directory, agentSocket = githubAge
     await writeFile(temporary, text, { mode: 0o600 })
     await rename(temporary, path)
   }
-  // Files an earlier build of this feature kept.
-  for (const name of ['.revision', '.identity.json', '.access.json']) await rm(join(directory, name), { force: true })
 }
 
 /** The static files, written once so every session environment can point at them. */

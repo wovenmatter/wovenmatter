@@ -122,7 +122,7 @@ export async function startRuntime(
   };
   const db = await openSharedDatabase(config.paths.database);
   const registry = new BotRegistry(db);
-  await registry.migrate();
+  await registry.createTables();
   let env: BotEnvironmentAdapter | undefined;
   let previews: PreviewManager | undefined;
   const woven = new WovenMCP(registry, host, options.fetch ?? fetch);

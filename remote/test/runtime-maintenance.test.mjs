@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, readFile, writeFile, symlink, chmod } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile, writeFile, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createRuntimeMaintenance, sanitize, nativeInstaller, nativeUpdateArguments, runHost, claudeCodeNativeChannel, operationFailureCodes } from '../src/runtime-maintenance.mjs'
@@ -253,12 +253,6 @@ test('active work blocks changes; two failures give an allowlisted diagnostic', 
   assert.match(value.diagnosticPrompt, /OpenCode.*remote workspace host/)
   assert.match(value.diagnosticPrompt, /runtime_active/)
   assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123', { SECRET_TOKEN: 'very-secret-token' }), '[redacted] [URL redacted] [redacted]')
-  const secret = '/home/private-account/project confidential-provider-response'
-  await f.service.recordFailure(opencode, 'install', new Error('Installer exited 1. ' + secret))
-  const result = (await f.service.list()).runtimes[0]
-  assert.equal(result.operation.error, 'installer_failed')
-  assert.match(result.diagnosticPrompt, /Failure: installer_failed/)
-  assert.doesNotMatch(result.diagnosticPrompt, /private-account|confidential/)
 })
 
 test('duplicate operations share one reservation', async t => {
@@ -270,23 +264,6 @@ test('duplicate operations share one reservation', async t => {
   assert.equal((await f.service.operation(a.id.toUpperCase())).id, a.id)
   assert.equal((await finished(f.service)).operation.status, 'succeeded')
   assert.equal(f.installers.length, 1)
-})
-
-test('older preference files keep their failure counts and nothing else', async t => {
-  const f = await fixture(t, { commands: { opencode: { path: '/home/x/.opencode/bin/opencode', version: '2.1.0' } } })
-  await mkdir(resolve(f.root, '.wovenmatter'), { recursive: true })
-  await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), JSON.stringify({
-    opencode: { enabled: false, visible: false, failureCount: 2, managedComponents: { runtime: { path: '/x', target: '/x' } } },
-  }))
-  const service = createRuntimeMaintenance(f.options)
-  assert.equal(await service.isInstalled('opencode'), true)
-  assert.equal((await service.list()).runtimes[0].failureCount, 2)
-  await service.recordFailure(opencode, 'install', new Error('fixture'))
-  const saved = JSON.parse(await readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
-  assert.deepEqual(saved.opencode, { failureCount: 3 })
-  await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'corrupt legacy file')
-  assert.equal(await createRuntimeMaintenance(f.options).isInstalled('opencode'), true)
-  assert.equal(await service.isInstalled('unknown'), false)
 })
 
 test('the native installer and update command come from the catalog when it names them', () => {
@@ -350,49 +327,3 @@ test('a failed command reports a fixed id; what it printed stays in the sanitize
   assert.equal((await finished(odd.service)).operation.error, 'runtime_operation_failed')
 })
 
-test('an npm-installed OpenCode is replaced by the official installer, never upgraded through npm', async t => {
-  let restarts = 0
-  const f = await fixture(t, { latest: '2.3.0', restartOpenCodeService: async () => { restarts++ }, on: async (command, { root, commands }) => {
-    if (command.startsWith("'bash' ")) {
-      const official = resolve(root, '.opencode/bin/opencode')
-      await mkdir(resolve(root, '.opencode/bin'), { recursive: true })
-      await writeFile(official, '#!/bin/sh\n'); await chmod(official, 0o700)
-      // The npm copy stays first on this PATH; the official location still wins.
-      commands['opencode-official'] = { path: official, version: 'opencode v2.3.0' }
-      return { code: 0, output: '' }
-    }
-    if (command.endsWith("'upgrade'")) throw Error('npm-installed OpenCode was upgraded through npm')
-  } })
-  // `npm --prefix ~/.local install -g @opencode/cli@2`, as older Woven hosts did.
-  const packaged = resolve(f.root, '.local/lib/node_modules/@opencode/cli/bin/opencode')
-  await mkdir(resolve(packaged, '..'), { recursive: true }); await writeFile(packaged, '#!/bin/sh\n')
-  await mkdir(resolve(f.root, '.local/bin'), { recursive: true })
-  await symlink(packaged, resolve(f.root, '.local/bin/opencode'))
-  f.commands.opencode = { path: resolve(f.root, '.local/bin/opencode'), version: 'opencode v2.2.7' }
-  const before = await f.service.inventory(opencode, true)
-  assert.equal(before.source, 'npm')
-  assert.equal(before.installed, true)
-  assert.equal(before.updateAvailable, true)
-  assert.match(before.notice, /installed with npm/)
-  await f.service.start(opencode, 'update', { confirmed: true })
-  const after = await finished(f.service)
-  assert.equal(after.operation.status, 'succeeded', after.operation.error)
-  assert.deepEqual(f.installers, [['opencode', 'https://opencode.ai/v2/install']])
-  assert.equal(after.path, resolve(f.root, '.opencode/bin/opencode'))
-  assert.equal(after.source, 'native')
-  assert.equal(after.updateAvailable, false)
-  assert.equal(restarts, 1, 'the shared service moves to the official CLI')
-  assert.equal(f.calls.some(([command]) => /npm|'upgrade'/.test(command)), false)
-})
-
-test('an npm-installed CLI that the official installer does not replace fails verification', async t => {
-  const f = await fixture(t, { catalog: [grok], on: command => { if (command.startsWith("'bash' ")) return { code: 0, output: '' } } })
-  const packaged = resolve(f.root, '.npm-global/lib/node_modules/@xai/grok/bin/grok')
-  await mkdir(resolve(packaged, '..'), { recursive: true }); await writeFile(packaged, '#!/bin/sh\n')
-  f.commands.grok = { path: packaged, version: 'grok 1.0.77' }
-  assert.equal((await f.service.inventory(grok)).source, 'npm')
-  await f.service.start(grok, 'install', { confirmed: true })
-  const result = await finished(f.service)
-  assert.deepEqual(f.installers, [['grok_build', 'https://x.ai/cli/install.sh']])
-  assert.equal(result.operation.error, 'installation_verification_failed')
-})

@@ -1,5 +1,5 @@
 import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
-import { mkdirSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { mkdirSync, readdirSync, renameSync, statSync, openSync, readSync, fsyncSync, closeSync } from 'node:fs'
 import { createReadStream } from 'node:fs'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -11,9 +11,39 @@ import { nativeRecordFormats } from './native-record-formats.mjs'
 const { sanitizeNativeTransportBytes } = await import(defaultAgentModule('src/native-journal.mjs'))
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
 // Retained parts back off from any high surrogate at the boundary; IDs derive
-// from these boundaries, so they must stay stable across service builds.
+// from these boundaries, so they must stay as they are.
 const textParts = value => { const result=[];for(let start=0;start<value.length;) {let end=Math.min(start+16384,value.length);if(end<value.length&&/[\uD800-\uDBFF]/.test(value[end-1]))end--;result.push(value.slice(start,end));start=end}return result.length?result:[''] }
-const stableID = value => { const h=hash('woven-retained-v1\0'+value); return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
+const derivedID = (label,value) => { const h=hash(label+'\0'+value); return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
+const stableID = value => derivedID('woven-retained',value)
+const spoolName = /^run-[0-9a-f-]{36}-[0-9a-f-]{36}\.jsonl$/
+const spoolKey = name => 'default:'+name.slice(-42,-6)
+const taskKey = id => 'task:'+id
+
+/// A capture's saved state is a file named by the ID derived from its key. The
+/// current release derived that ID under another label, so a host it ran on
+/// has each file under that name. Here they take today's names, once: every
+/// key this host can have is a spool in the Pi Durable directory or a task
+/// result, the name each had is worked out, and a file found under it is
+/// renamed. A renamed file is not found again, and nothing else knows the label.
+/// Returns how many files it renamed.
+export function adoptRetainedStateFiles({directory, defaultDirectory, taskGateway}) {
+  let stored
+  try {stored=new Set(readdirSync(directory).filter(name=>/^(projection|unmapped)-[0-9a-f-]{36}\.json$/.test(name)))}catch(error){if(error.code==='ENOENT')return 0;throw error}
+  if(!stored.size)return 0
+  let spools=[]
+  try {spools=readdirSync(defaultDirectory).filter(name=>spoolName.test(name))}catch(error){if(error.code!=='ENOENT')throw error}
+  let renamed=0
+  for(const key of [...spools.map(spoolKey),...(taskGateway?.resultIDs?.()??[]).map(taskKey)]) {
+    const was=derivedID('woven-retained-v1',key)
+    for(const kind of ['projection','unmapped']) {
+      const name=`${kind}-${was}.json`
+      if(!stored.delete(name))continue
+      renameSync(resolve(directory,name),resolve(directory,`${kind}-${stableID(key)}.json`));renamed++
+    }
+  }
+  if(renamed) {const folder=openSync(directory,'r');try {fsyncSync(folder)}finally{closeSync(folder)}}
+  return renamed
+}
 
 /// Workspace-owned archive bridge for scheduled tasks and for spools a
 /// retired Pi Durable RPC run left behind. It reads their durable output into
@@ -23,6 +53,7 @@ const stableID = value => { const h=hash('woven-retained-v1\0'+value); return `$
 export function createRetainedExecutionCapture({directory, defaultDirectory, taskGateway, execution,
   resolveAssociation = async()=>null, intervalMilliseconds=2000}) {
   mkdirSync(directory,{recursive:true,mode:0o700})
+  adoptRetainedStateFiles({directory,defaultDirectory,taskGateway})
   const checkpointPath=resolve(directory,'checkpoint.json')
   let checkpoint=read(checkpointPath,{taskCursor:'0'})
   let timer,pending,closed=false,lastError=null,unmapped=0
@@ -45,14 +76,14 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
   }
   async function begin(binding) {
     if(!uuid(binding.conversationID)||!uuid(binding.runID)||typeof binding.nativeSessionID!=='string'||!binding.nativeSessionID)throw new Error('Retained execution has no verified native identity.')
-    const workspace=execution.descriptor()
-    const conversation={id:binding.conversationID,title:binding.title||'Conversation',runtimeKind:binding.runtimeKind,
-      workspaceID:workspace.id,libraryID:workspace.libraryID,routeID:workspace.id,updatedAt:binding.completedAt}
-    await importEntries([event(binding,'conversation','conversation',{conversation,retainedExecution:{source:binding.source,
-      nativeSessionID:binding.nativeSessionID,runtimeKind:binding.runtimeKind,runID:binding.runID,status:binding.status}})])
     const state=stateFor(binding.key)
     if(state.finished)return state
     if(!state.initialized) {
+      const workspace=execution.descriptor()
+      const conversation={id:binding.conversationID,title:binding.title||'Conversation',runtimeKind:binding.runtimeKind,
+        workspaceID:workspace.id,libraryID:workspace.libraryID,routeID:workspace.id,updatedAt:binding.completedAt}
+      await importEntries([event(binding,'conversation','conversation',{conversation,retainedExecution:{source:binding.source,
+        nativeSessionID:binding.nativeSessionID,runtimeKind:binding.runtimeKind,runID:binding.runID,status:binding.status}})])
       const user=textParts(binding.prompt??'').filter(Boolean).map((content,index)=>({id:index?`${binding.inputID??binding.runID+'-input'}-part-${index}`:binding.inputID??binding.runID+'-input',
         conversationID:binding.conversationID,runID:binding.runID,role:'user',content,createdAt:binding.startedAt}))
       if(user.length)await importEntries(user.map((message,index)=>event(binding,'input-'+index,'transcript',{transcript:{conversationID:binding.conversationID,messages:[message],activities:[]}})))
@@ -116,7 +147,7 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     for(let pages=0;pages<100;pages++) {
       const page=taskGateway.results(checkpoint.taskCursor)
       for(const result of page.entries) {
-        const binding={key:'task:'+result.id,source:'task-gateway',conversationID:result.run.sessionID,runID:result.run.id,
+        const binding={key:taskKey(result.id),source:'task-gateway',conversationID:result.run.sessionID,runID:result.run.id,
           nativeSessionID:result.nativeSessionID,runtimeKind:result.run.task.configuration.runtimeKind,
           title:result.run.title,prompt:result.run.task.prompt,startedAt:result.run.scheduledAt,completedAt:result.completedAt,
           status:result.run.status==='accepted'?'completed':result.run.status==='failed'?'failed':'interrupted'}
@@ -152,9 +183,9 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
   async function captureDefault() {
     let names=[]
     const taskRuns=new Set(taskGateway.retainedRunIDs?.()??[])
-    try {names=readdirSync(defaultDirectory).filter(name=>/^run-[0-9a-f-]{36}-[0-9a-f-]{36}\.jsonl$/.test(name)).sort()}catch(error){if(error.code!=='ENOENT')throw error}
+    try {names=readdirSync(defaultDirectory).filter(name=>spoolName.test(name)).sort()}catch(error){if(error.code!=='ENOENT')throw error}
     for(const name of names) {
-      const operationID=name.slice(-42,-6),key='default:'+operationID
+      const operationID=name.slice(-42,-6),key=spoolKey(name)
       if(stateFor(key).finished || taskRuns.has(operationID) || execution.hasRun?.(operationID))continue
       const file=resolve(defaultDirectory,name),runIDs=new Set()
       let nativeSessionID

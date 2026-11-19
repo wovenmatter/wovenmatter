@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { createTaskGateway } from '../src/task-gateway.mjs'
-import { createRetainedExecutionCapture } from '../src/client-retained-history.mjs'
+import { adoptRetainedStateFiles, createRetainedExecutionCapture } from '../src/client-retained-history.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
 const turn=()=>new Promise(done=>setTimeout(done,5))
@@ -56,7 +56,7 @@ test('workspace startup captures durable scheduled output without a client, surv
   assert.deepEqual(entries(f.execution).map(item=>item.eventID),ids)
 })
 
-test('restart recovers exact legacy spool associations and preserves an incomplete trailing write',async t=>{
+test('restart recovers the exact association of a spool left behind and preserves an incomplete trailing write',async t=>{
   const f=fixture(t),operationID=randomUUID(),runID=randomUUID(),conversationID=randomUUID(),epoch=randomUUID()
   const file=join(f.defaultDirectory,`run-${epoch}-${operationID}.jsonl`)
   const bytes=JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'old-native',records:[{id:'record',runID,payload:'saved'}]}})+'\n'
@@ -72,7 +72,7 @@ test('restart recovers exact legacy spool associations and preserves an incomple
   assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.content==='Already saved')))
 })
 
-test('active task and direct execution spools are never re-imported as legacy RPC histories',async t=>{
+test('active task and direct execution spools are never imported as spools left behind',async t=>{
   const f=fixture(t),taskID=randomUUID(),directID=randomUUID();let imports=0
   for(const id of [taskID,directID])writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${id}.jsonl`),'{"sessionUpdate":"agent_message_chunk","content":{"text":"owned"}}\n')
   const bridge=capture(f,{execution:{descriptor:()=>f.execution.descriptor(),hasRun:id=>id===directID,importRetainedEvents:()=>{imports++}},
@@ -165,4 +165,63 @@ test('retained terminal flush preserves coalesced suffix and replays a lost fina
   assert.equal(JSON.parse(Buffer.concat(parts.map(part=>Buffer.from(part.data,'base64')))).activity.content,large+' final suffix')
   assert.equal(new Set(saved.map(item=>item.eventID)).size,saved.length)
   assert.ok(saved.some(item=>item.transcript?.runs?.[0]?.status==='completed'))
+})
+
+test('a host the current release ran on keeps its capture state under today\'s names: nothing is imported again, a result read part-way continues, and a second start renames nothing',async t=>{
+  const f=fixture(t),stamp='2026-11-18T10:00:00.000Z',conversationID=randomUUID(),spoolRun=randomUUID(),operationID=randomUUID()
+  const chunk=text=>({sessionUpdate:'agent_message_chunk',content:{text}})
+  const result=(id,updates,updateOffset,complete,nativeSessionID='native-'+id)=>({id,nativeSessionID,completedAt:stamp,updates,updateOffset,complete,
+    run:{id,sessionID:id,title:'Scheduled',scheduledAt:stamp,status:'accepted',task:{prompt:'work',configuration:{runtimeKind:'codex'}}}})
+  const done=randomUUID(),part=randomUUID(),refused=randomUUID(),partUpdates=[chunk('one '),chunk('two '),chunk('three')]
+  let phase=0
+  const taskGateway={resultIDs:()=>[done,refused,part],retainedRunIDs:()=>[],
+    results:cursor=>cursor==='0'?{cursor:'2:64:2',entries:[result(done,[chunk('finished')],0,true),result(refused,[],0,true,null),result(part,partUpdates.slice(0,2),0,false)]}
+      :cursor==='2:64:2'&&phase===1?{cursor:'3',entries:[result(part,partUpdates.slice(2),2,true)]}:{cursor,entries:[]}}
+  writeFileSync(join(f.defaultDirectory,`run-${randomUUID()}-${operationID}.jsonl`),JSON.stringify({sessionUpdate:'woven_native_record',recordBatch:{nativeSessionID:'spool-native',records:[{runID:spoolRun}]}})+'\n'+JSON.stringify(chunk('from the spool'))+'\n')
+  let bridge=capture(f,{taskGateway,resolveAssociation:async()=>({conversationID,runID:spoolRun,nativeSessionID:'spool-native',runtimeKind:'default_agent'})})
+  await bridge.pump();await bridge.close()
+  assert.equal(JSON.parse(readFileSync(join(f.directory,'checkpoint.json'),'utf8')).taskCursor,'2:64:2','the checkpoint is part-way through a result')
+
+  // As the current release left the folder: each state file under the ID it derived for the key.
+  const named=(label,key)=>{const h=createHash('sha256').update(label+'\0'+key).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`}
+  const files=[['projection','task:'+done],['projection','task:'+part],['unmapped','task:'+refused],['projection','default:'+operationID]]
+  const today=files.map(([kind,key])=>`${kind}-${named('woven-retained',key)}.json`),left=files.map(([kind,key])=>`${kind}-${named('woven-retained-v1',key)}.json`)
+  const state=()=>readdirSync(f.directory).filter(name=>/^(projection|unmapped)-/.test(name)).sort()
+  assert.deepEqual(state(),[...today].sort())
+  today.forEach((name,index)=>renameSync(join(f.directory,name),join(f.directory,left[index])))
+  assert.deepEqual(state(),[...left].sort())
+  const before=entries(f.execution),records=list=>list.filter(item=>item.nativeRecord).length
+  await f.restart()
+
+  // The first start: the files take today's names, and the first pump imports nothing.
+  const imported=[],counting={descriptor:()=>f.execution.descriptor(),importRetainedEvents:batch=>{imported.push(...batch);return f.execution.importRetainedEvents(batch)}}
+  bridge=capture(f,{taskGateway,execution:counting,resolveAssociation:()=>assert.fail('A captured spool resolved its association again')})
+  assert.deepEqual(state(),[...today].sort())
+  await bridge.pump()
+  assert.deepEqual(imported,[])
+  assert.deepEqual(entries(f.execution).map(item=>item.eventID),before.map(item=>item.eventID))
+  assert.equal(records(entries(f.execution)),records(before))
+  assert.equal(bridge.status().pendingAssociationCount,1,'the task no native session admitted is still counted')
+
+  // The result the checkpoint is part-way through continues from where it stopped.
+  phase=1;await bridge.pump();await bridge.close()
+  assert.equal(bridge.status().lastError,null)
+  const after=entries(f.execution),added=after.slice(before.length)
+  assert.deepEqual(after.slice(0,before.length).map(item=>item.eventID),before.map(item=>item.eventID))
+  assert.deepEqual(added,imported.map((item,index)=>({...item,workspaceID:after[0].workspaceID,originSequence:before.length+index+1})))
+  assert.ok(added.every(item=>item.conversationID===part&&item.kind!=='conversation'))
+  assert.equal(records(added),2,'the third update and the completion, once each')
+  assert.equal(new Set(after.map(item=>item.eventID)).size,after.length)
+  assert.equal(after.flatMap(item=>item.transcript?.messages??[]).filter(message=>message.runID===part&&message.role==='assistant').at(-1).content,'one two three')
+  assert.ok(added.some(item=>item.transcript?.runs?.[0]?.id===part&&item.transcript.runs[0].status==='completed'))
+  assert.equal(JSON.parse(readFileSync(join(f.directory,'checkpoint.json'),'utf8')).taskCursor,'3')
+
+  // A second start finds nothing under an earlier name and leaves every file as it is.
+  const stamps=()=>state().map(name=>[name,statSync(join(f.directory,name)).ino])
+  const settled=stamps()
+  assert.equal(adoptRetainedStateFiles({directory:f.directory,defaultDirectory:f.defaultDirectory,taskGateway}),0)
+  await f.restart();imported.length=0
+  bridge=capture(f,{taskGateway,execution:counting});await bridge.pump();await bridge.close()
+  assert.deepEqual(stamps(),settled);assert.deepEqual(imported,[])
+  assert.deepEqual(entries(f.execution).map(item=>item.eventID),after.map(item=>item.eventID))
 })

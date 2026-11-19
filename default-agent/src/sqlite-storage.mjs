@@ -7,15 +7,15 @@ const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value
 async function exists(path) {
   try { return await lstat(path); } catch(error) { if (error.code === 'ENOENT') return null; throw error; }
 }
-// A database an earlier build made lists its stores with one more column, `format`,
+// A database the current release made lists its stores with one more column, `format`,
 // which nothing reads and a new row does not fill. The list is recognised by that
 // column and loses it, in the transaction that finds it; the rows stay as they are.
-const earlierStoreList = async database => (await database.all('PRAGMA table_info(wm_pi_runtime_stores)')).some(column => column.name === 'format');
-async function convertEarlierStoreList(database) {
-  if (!await earlierStoreList(database)) return;
+const storeListHasFormat = async database => (await database.all('PRAGMA table_info(wm_pi_runtime_stores)')).some(column => column.name === 'format');
+async function dropStoreListFormat(database) {
+  if (!await storeListHasFormat(database)) return;
   await database.transaction(async transaction => {
     // Another runtime that opened this database meanwhile may have converted it.
-    if (await earlierStoreList(transaction)) await transaction.exec('ALTER TABLE wm_pi_runtime_stores DROP COLUMN format');
+    if (await storeListHasFormat(transaction)) await transaction.exec('ALTER TABLE wm_pi_runtime_stores DROP COLUMN format');
   });
 }
 export async function openWorkspacePiStorage({databasePath, manifest, context, beforeActivation}) {
@@ -33,7 +33,7 @@ export async function openWorkspacePiStorage({databasePath, manifest, context, b
     await database.exec('PRAGMA synchronous = FULL');
     await database.exec('PRAGMA foreign_keys = ON');
     await database.exec('CREATE TABLE IF NOT EXISTS wm_pi_runtime_stores (store_id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, schema_prefix TEXT NOT NULL UNIQUE, activated_at TEXT NOT NULL)');
-    await convertEarlierStoreList(database);
+    await dropStoreListFormat(database);
     const installed = await database.get('SELECT * FROM wm_pi_runtime_stores WHERE store_id = ?',manifest.storeID);
     if (installed) {
       if (installed.session_id !== manifest.sessionID || installed.schema_prefix !== prefix) throw new Error('The Pi SQLite store identity changed.');

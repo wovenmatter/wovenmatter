@@ -110,18 +110,25 @@ class HostFixtures(unittest.TestCase):
     def test_inspect_contract(self):
         self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
         result=self.m.main(['inspect','fullRoot'])
-        self.assertEqual(result['kind'],'host'); self.assertEqual(result['runtime'],'host')
-        self.assertEqual(result['architecture'],'amd64'); self.assertIn('requiredPrivilegedActions',result)
-        self.assertIn('dataRoot',result); self.assertIn('harnesses',result)
+        self.assertEqual(result['architecture'],'amd64')
+        self.assertEqual(sorted(result),sorted(['ready','version','architecture','limitations','os','systemdUser','linger','sudoAvailable',
+            'apparmorRestrictUnprivilegedUserns','tailscaleInstalled','tailscaleOperatorReady','scriptInstalled','installation','workspaceID','port',
+            'fingerprint','dataRoot','workspaceRoot','databasesDirectory','attachmentsDirectory','harnesses','harnessPath','bestEffort',
+            'preparationActions','blockingIssues','canPrepare','preparationRequired','hostStorageCapacityBytes','hostStorageAvailableBytes',
+            'hostStorageLow','storageWarning','requestedRoles','bots','memberIdentity']))
         self.assertNotIn(TOKEN,json.dumps(result))
     def test_all_lifecycle_json_shapes(self):
         self.save_install()
         self.m.health=lambda *a:{'status':'ok'}
         for action in ('status','start','stop','restart'):
             result=self.m.main([action,'fixture']); json.dumps(result)
-            self.assertEqual(result['kind'],'host'); self.assertEqual(result['id'],'fixture')
+            self.assertEqual(result['id'],'fixture')
+            self.assertEqual(sorted(result),sorted(['id','name','state','systemdState','running','health','startedAt','hostPort',
+                'hostStorageCapacityBytes','hostStorageAvailableBytes','hostStorageLow','storageWarning','linger','fingerprint','dataRoot',
+                'workspaceRoot','databasesDirectory','attachmentsDirectory','accessMode','browserSelfTest','roles','botsState','memberIdentity','releaseVersion']))
             if result['running']: self.assertEqual(result['state'],'running')
-        self.assertNotIn(TOKEN,json.dumps(self.m.main(['logs','fixture','10'])))
+        logs=self.m.main(['logs','fixture','10'])
+        self.assertEqual(list(logs),['logs']); self.assertNotIn(TOKEN,json.dumps(logs))
         self.m.privileged_actions=lambda d,roles=None:[]; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
         # inspect() checks binary discovery after prepare. The fixture's fake
         # command runner does not imply these programs exist on the test host.

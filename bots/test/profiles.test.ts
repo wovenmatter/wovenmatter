@@ -14,14 +14,14 @@ import { openSharedDatabase } from "../src/storage/database.ts";
 import { parseTestSettings, tempDir } from "./helpers.ts";
 
 const ctx = BACKGROUND_CONTEXT;
-const legacy = {
+const saved = {
   profiles: { default: { name: "Default", main: "faux/faux-1", memoryModel: "faux/faux-2" } },
   titles: { model: "faux/faux-2" },
 };
 
 describe("ProfileStore", () => {
   const store = () =>
-    new ProfileStore(parseTestSettings(legacy).modelProfiles, {
+    new ProfileStore(parseTestSettings(saved).modelProfiles, {
       checkModel: (ref) => {
         if (!ref.startsWith("faux/")) throw new Error(`unknown model ${ref}`);
       },
@@ -116,7 +116,7 @@ describe("ProfileStore", () => {
     try {
       const path = join(dir.path, "settings.json");
       const settings = await SettingsStore.open(path);
-      await settings.update(() => parseSettings(legacy));
+      await settings.update(() => parseSettings(saved));
       const profiles = new ProfileStore(normalizeProfiles(settings.current), {
         persist: (set) =>
           settings.update((current) => ({ ...current, ...profilesToRaw(set) })).then(() => {}),
@@ -182,7 +182,7 @@ describe("bot profiles", () => {
     (await (await (await manager.get(id)).main()).agent(ctx)).model;
 
   it("assigns profiles live, follows edits and falls back when a profile is deleted", async () => {
-    const profiles = new ProfileStore(parseTestSettings(legacy).modelProfiles);
+    const profiles = new ProfileStore(parseTestSettings(saved).modelProfiles);
     const t = await open(join(dir.path, "db.sqlite"), profiles);
     try {
       const bot = await t.manager.create("Worker");

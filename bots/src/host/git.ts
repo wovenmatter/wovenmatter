@@ -54,7 +54,6 @@ Include ~/.ssh/config
 Include /etc/ssh/ssh_config
 `,
     known_hosts: GITHUB_KNOWN_HOSTS,
-    id_github: null,
     "id_github.pub": null,
     "github.conf": null,
     gitconfig: null,

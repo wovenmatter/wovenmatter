@@ -63,11 +63,12 @@ export function createWorkspaceInstances(options) {
       headers: { authorization: info.authorization }, redirect: 'error', signal: AbortSignal.timeout(5000),
     }
     let response = await fetchRequest(new URL('/api/info', info.url), requestOptions)
-    const legacyBeta = forStop && response.status === 404
-    if (legacyBeta) response = await fetchRequest(new URL('/api/health', info.url), requestOptions)
+    // An OpenCode beta service has no /api/info; it is asked at /api/health, and only to stop it.
+    const betaService = forStop && response.status === 404
+    if (betaService) response = await fetchRequest(new URL('/api/health', info.url), requestOptions)
     if (!response.ok) throw fail(503, 'opencode_health_unavailable')
     const result = await response.json()
-    const validBeta = legacyBeta && result.healthy === true && /^0\.0\.0-beta-\d+$/.test(result.version)
+    const validBeta = betaService && result.healthy === true && /^0\.0\.0-beta-\d+$/.test(result.version)
     if ((!supportsOpenCodeVersion(result.version) && !validBeta) || (info.version && info.version !== result.version)) {
       throw fail(409, 'opencode_version_incompatible')
     }

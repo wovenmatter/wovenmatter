@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadRuntimeConfiguration, nonInteractiveSessionEnvironment, runtimeHarnessEnvironment, sessionToolsDirectory, presentPermissionChoices, supportedPermissions, supportedPermission, workspaceExecutionConfiguration } from '../src/config.mjs'
+import { loadRuntimeConfiguration, nonInteractiveSessionEnvironment, runtimeHarnessEnvironment, sessionToolsDirectory, presentPermissionChoices, supportedPermissions, offeredPermission, workspaceExecutionConfiguration } from '../src/config.mjs'
 
 const tools = resolve(fileURLToPath(new URL('../host/session-tools', import.meta.url)))
 
@@ -106,17 +106,20 @@ test('permission choices offer only Full access, then the harness auto mode', ()
   assert.deepEqual(presentPermissionChoices('default_agent', ['ask', 'full'].map(id => ({ id, label: id }))).map(item => item.id), ['full'])
 })
 
-test('a saved mode Woven no longer offers runs as the Full access default', () => {
+test('a permission is one of the modes Woven offers, or it is refused', () => {
   assert.deepEqual(supportedPermissions('codex'), ['agent-full-access', 'agent'])
   assert.deepEqual(supportedPermissions('opencode'), ['allow'])
-  for (const [kind, saved, expected] of [['claude_code', 'default', 'bypassPermissions'], ['claude_code', 'plan', 'bypassPermissions'], ['claude_code', 'auto', 'auto'],
-    ['codex', 'read-only', 'agent-full-access'], ['grok_build', 'acceptEdits', 'bypassPermissions'], ['opencode', 'ask', 'allow'], ['default_agent', 'ask', 'full']]) {
-    assert.equal(supportedPermission(kind, saved), expected, `${kind} ${saved}`)
+  for (const [kind, mode] of [['claude_code', 'auto'], ['claude_code', 'bypassPermissions'], ['codex', 'agent'], ['opencode', 'allow'], ['default_agent', 'full'], ['codex', undefined]]) {
+    assert.equal(offeredPermission(kind, mode), mode, `${kind} ${mode}`)
   }
-  assert.equal(supportedPermission('codex', undefined), undefined)
+  for (const [kind, mode] of [['claude_code', 'default'], ['claude_code', 'plan'], ['codex', 'read-only'], ['grok_build', 'acceptEdits'], ['opencode', 'ask'], ['default_agent', 'ask']]) {
+    assert.throws(() => offeredPermission(kind, mode), { statusCode: 409, beforePrompt: true }, `${kind} ${mode}`)
+  }
   const user = loadRuntimeConfiguration({ HOME: '/home/fixture' })
-  assert.deepEqual(workspaceExecutionConfiguration({ runtimeKind: 'claude_code', permission: 'default', usesProductPermissionDefault: false }, user),
-    { runtimeKind: 'claude_code', permission: 'bypassPermissions', usesProductPermissionDefault: true })
-  assert.deepEqual(workspaceExecutionConfiguration({ runtimeKind: 'claude_code', permission: 'auto', usesProductPermissionDefault: false }, user),
-    { runtimeKind: 'claude_code', permission: 'auto', usesProductPermissionDefault: false })
+  const saved = { runtimeKind: 'claude_code', permission: 'auto', usesProductPermissionDefault: false }
+  assert.deepEqual(workspaceExecutionConfiguration(saved, user), saved)
+  assert.throws(() => workspaceExecutionConfiguration({ ...saved, permission: 'default' }, user), { statusCode: 409 })
+  // A Full root workspace runs Full access whatever was saved.
+  assert.deepEqual(workspaceExecutionConfiguration({ ...saved, permission: 'default', usesProductPermissionDefault: true }, loadRuntimeConfiguration({ HOME: '/home/fixture', WOVENMATTER_ACCESS_MODE: 'fullRoot' })),
+    { runtimeKind: 'claude_code', permission: 'bypassPermissions', usesProductPermissionDefault: false })
 })

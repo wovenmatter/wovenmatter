@@ -234,7 +234,7 @@ describe("title model selection", () => {
     const dir = await tempDir();
     const { models: titleSource, used } = twoModels();
     const { models: botModels } = echoModels();
-    // The profile's pool, memory model and a legacy background flag all name other models.
+    // The profile's pool and memory model name other models.
     const config = parseTestSettings({
       ...(titles ? { titles: { model: titles } } : {}),
       profiles: {
