@@ -246,5 +246,14 @@ own signed program. The person grants each permission once. See
 
 `scripts/build_and_run.sh --instance NAME` builds the app and starts it with
 its own data folder and its own server. It never reads or changes the data of
-an installed app. Automated tests use a stand-in runtime and never call a
-provider.
+an installed app.
+
+## Tests
+
+The test suite is small on purpose. A test earns its place by covering
+behaviour that would hurt if it broke: sync converging, a transcript being
+saved once, an owner being the only writer, a session surviving a restart. One
+test per behaviour, at the level where the behaviour lives. No tests for
+removed features, for wording, or for how code is arranged. Tests use a
+stand-in runtime and never call a provider. `scripts/test-changes.sh` runs
+them.
