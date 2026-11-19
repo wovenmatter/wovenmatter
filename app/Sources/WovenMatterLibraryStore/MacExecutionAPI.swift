@@ -86,7 +86,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
         if path == "/v1/execution/commands" {
           let command = try JSONDecoder().decode(LibraryCommand.self, from: request.body)
           guard command.deviceID == scope.deviceID, command.libraryID == scope.libraryID, command.workspaceID == scope.workspaceID else { return .error("wrong_workspace", "Command identity does not match its authenticated execution scope.", status: 403) }
-          return try .json(try await executeLocal(command, deviceID: scope.deviceID, authorize: authorize))
+          return try .json(try await executeLocal(command, deviceID: scope.deviceID, kind: member.kind, authorize: authorize))
         }
         if path == "/v1/execution/workspace-read" {
           let read = try JSONDecoder().decode(LibraryWorkspaceRead.self, from: request.body)
@@ -99,7 +99,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
       }
       return .error("not_found", "Unknown execution endpoint.", status: 404)
     } catch let error as LibraryAPIError {
-      let status = error.code == "unauthorized" ? 401 : ["wrong_workspace", "execution_disabled"].contains(error.code) ? 403 : 400
+      let status = error.code == "unauthorized" ? 401 : ["wrong_workspace", "wrong_device", "execution_disabled"].contains(error.code) ? 403 : 400
       return .error(error.code, error.message, status: status)
     } catch is DecodingError { return .error("invalid_request", "Invalid execution request.", status: 400) }
     catch { return .error("execution_error", "The Mac could not complete this execution request. Check its receipt before retrying.", status: 500) }
@@ -144,8 +144,8 @@ public final class MacExecutionAPI: ExecutionStreamSource {
   }
   /// `POST v1/execution/commands` once the caller is authenticated: only agents
   /// this Mac runs, with the shared idempotent command receipts. The stream's
-  /// `execution.command` uses the same path.
-  public func executeLocal(_ command: LibraryCommand, deviceID: String,
+  /// `execution.command` uses the same path. `kind` is the verified member's.
+  public func executeLocal(_ command: LibraryCommand, deviceID: String, kind: MemberKind,
                            authorize: @MainActor () async throws -> Void = {}) async throws -> LibraryCommandReceipt {
     guard command.deviceID == deviceID, command.libraryID == descriptor.libraryID, command.workspaceID == descriptor.id else {
       throw LibraryAPIError(code: "wrong_workspace", message: "Command identity does not match its authenticated execution scope.")
@@ -159,8 +159,11 @@ public final class MacExecutionAPI: ExecutionStreamSource {
       guard let action = command.workspaceAction else { throw notLocal }
       switch action {
       case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
-      // A new folder on this Mac's own disk: there is no session to own it.
-      case .createFolder: break
+      // A new folder on this Mac's own disk: there is no session to own it,
+      // so only a Mac may ask, as for a directory on a Linux host
+      // (`POST v1/projects`). A phone or a Linux host is refused here.
+      case .createFolder:
+        guard kind == .mac else { throw LibraryAPIError(code: "wrong_device", message: "Only a Mac can ask this Mac for a new folder.") }
       default: throw LibraryAPIError(code: "unsupported", message: "This app-data change syncs through the library.")
       }
     } else {

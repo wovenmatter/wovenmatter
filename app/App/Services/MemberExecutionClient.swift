@@ -54,6 +54,10 @@ final class MemberExecutionClient {
     private(set) var pending: [String: [PendingInteraction]] = [:]
     private(set) var onlineWorkspaces: Set<String> = []
     private(set) var errors: [String: String] = [:]
+    /// Folder requests still without a receipt, by Mac and name (`createFolder(name:on:arrived:)`).
+    @ObservationIgnored private var unansweredFolderRequests: [UnansweredFolderRequest.Key: UnansweredFolderRequest] = [:]
+    /// `folderRetryWindow`; tests shorten it.
+    @ObservationIgnored var folderRetryWindow = MemberExecutionClient.folderRetryWindow
 
     /// The command journal's file name in the library's support directory.
     nonisolated static let commandJournalName = "member-execution-commands.json"
@@ -360,25 +364,82 @@ final class MemberExecutionClient {
             workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
     /// Asks the Mac that serves `workspace` for a new folder of its own and
-    /// returns the folder's ID, which is also the command's: a retry replays
-    /// the receipt, and a request whose outcome is still unknown is asked again
-    /// under its first ID instead of as a second folder. A Mac that does not
-    /// list the capability is never sent the action, which it could not decode.
-    func createFolder(name: String, on workspace: ExecutionWorkspace) async throws -> String {
+    /// returns the folder's ID, which is also the command's. `arrived` asks
+    /// that Mac for a library exchange and reports whether the folder's rows
+    /// reached this library within its bound. A Mac that does not list the
+    /// capability is never sent the action, which it could not decode.
+    ///
+    /// Each request is a new folder under a new ID, with one exception: a
+    /// request that got no answer may have created the folder, so asking again
+    /// shortly afterwards is that request again, under its ID, and the owner
+    /// replays its receipt instead of refusing a name it just took. That holds
+    /// only while the first request can still be the one meant: within
+    /// `folderRetryWindow`, and while no folder with its ID is in this library
+    /// (once it is here, asking again is asking for a second folder, which the
+    /// owner refuses by name). And a repeated ID is believed only with its
+    /// folder: when the owner answers it as done and no rows arrive, the folder
+    /// it made is gone since, and the request goes out once more as a new one.
+    func createFolder(name: String, on workspace: ExecutionWorkspace, arrived: @MainActor (String) async -> Bool) async throws -> String {
         guard workspace.kind == .mac, workspace.capabilities.contains(LibraryWorkspaceAction.createFolderCapability) else {
             throw LibraryAPIError(code: "update_required", message: "Update Woven Matter on \(workspace.name) to create folders there.")
         }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = UnansweredFolderRequest.Key(workspaceID: workspace.id, name: name)
+        var repeated: String?
+        if let unanswered = unansweredFolderRequests[key] {
+            if ContinuousClock.now - unanswered.sentAt <= folderRetryWindow, try await database.folderName(id: unanswered.id) == nil {
+                repeated = unanswered.id
+            } else { unansweredFolderRequests[key] = nil }
+        }
+        let id = repeated ?? UUID().uuidString.lowercased()
+        try await requestFolder(id: id, key: key, on: workspace)
+        if await arrived(id) || repeated == nil { return id }
+        let fresh = UUID().uuidString.lowercased()
+        try await requestFolder(id: fresh, key: key, on: workspace)
+        _ = await arrived(fresh)
+        return fresh
+    }
+
+    /// How long after a folder request that got no answer the same name on the
+    /// same Mac is still that request (`createFolder(name:on:arrived:)`): long
+    /// enough to try again after a dropped connection, short enough that a
+    /// later request for the name is never mistaken for it.
+    nonisolated static let folderRetryWindow: Duration = .seconds(180)
+
+    /// A folder request no receipt has answered yet. Kept in memory only:
+    /// after a restart the next request is a new one, and the owner answers
+    /// for a name it already took.
+    struct UnansweredFolderRequest {
+        struct Key: Hashable { let workspaceID: String; let name: String }
+        let id: String
+        let sentAt: ContinuousClock.Instant
+    }
+
+    /// Sends one folder request and throws unless the owner made (or had
+    /// made) the folder. Any receipt settles the request, so the next one for
+    /// this name is new; without one it stays unanswered.
+    private func requestFolder(id: String, key: UnansweredFolderRequest.Key, on workspace: ExecutionWorkspace) async throws {
         let identity = try await database.libraryIdentity()
-        let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).lazy.compactMap { record -> String? in
-            guard record.receipt == nil || record.receipt?.status == .outcomeUnknown,
-                  case .createFolder(let id, name)? = record.command.workspaceAction else { return nil }
-            return id
-        }.first
-        let id = unresolved ?? UUID().uuidString.lowercased()
-        try await submit(.init(commandID: id, deviceID: identity.hostDeviceID, kind: .workspace,
-            workspaceAction: .createFolder(id: id, name: name), libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
-        return id
+        unansweredFolderRequests[key] = .init(id: id, sentAt: .now)
+        let receipt: LibraryCommandReceipt
+        do {
+            receipt = try await exchange(.init(commandID: id, deviceID: identity.hostDeviceID, kind: .workspace,
+                workspaceAction: .createFolder(id: id, name: key.name), libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
+        } catch let error as LibraryAPIError where error.code == "execution_unconfirmed" {
+            // The stream lost the answer; the request stays unanswered.
+            throw LibraryAPIError(code: error.code, message: "\(workspace.name) did not confirm the new folder. Try again; a folder it already made is not made twice.")
+        }
+        unansweredFolderRequests[key] = nil
+        switch receipt.status {
+        case .accepted, .completed: return
+        case .rejected:
+            throw LibraryAPIError(code: receipt.code ?? "rejected", message: receipt.message ?? "\(workspace.name) could not create this folder.")
+        case .outcomeUnknown:
+            // The owner took the request and stopped before recording its
+            // result; it never runs that ID again, so asking again must be new.
+            throw LibraryAPIError(code: "execution_unconfirmed",
+                message: "\(workspace.name) stopped before it finished creating “\(key.name)”. If the folder does not appear, create it again.")
+        }
     }
     private func requiredWorkspace(_ id: String) async throws -> ExecutionWorkspace {
         guard let workspace = try await workspace(conversationID: id), !workspace.deleted else {
@@ -390,6 +451,21 @@ final class MemberExecutionClient {
     /// destination already accepted it (command IDs make retries exact).
     func submit(_ requested: LibraryCommand, workspace: ExecutionWorkspace,
                         beforeDispatch: @MainActor () throws -> Void = {}) async throws -> LibraryCommandReceipt {
+        let receipt = try await exchange(requested, workspace: workspace, beforeDispatch: beforeDispatch)
+        guard receipt.status == .accepted || receipt.status == .completed else {
+            // A coded refusal (`attachment_unavailable`) is one the caller can act on.
+            throw LibraryAPIError(code: receipt.status == .rejected ? receipt.code ?? "execution_unconfirmed" : "execution_unconfirmed",
+                message: receipt.message ?? "The execution workspace has not confirmed this command. Its durable identity has been retained.")
+        }
+        // The stream pushes the command's effect; history follows by library sync.
+        return receipt
+    }
+
+    /// Sends the command and returns the destination's receipt for it in
+    /// whatever state, recorded in the journal. It throws only when the
+    /// destination gave no receipt.
+    private func exchange(_ requested: LibraryCommand, workspace: ExecutionWorkspace,
+                          beforeDispatch: @MainActor () throws -> Void = {}) async throws -> LibraryCommandReceipt {
         let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) &&
             $0.command.kind == requested.kind && $0.command.conversationID == requested.conversationID &&
@@ -426,12 +502,6 @@ final class MemberExecutionClient {
         guard receipt.commandID == command.commandID, receipt.deviceID == command.deviceID,
               receipt.workspaceID == nil || receipt.workspaceID == workspace.id else { throw MobileConnectionError.invalidResponse }
         try await commandJournal.rememberReceipt(receipt, workspaceID: workspace.id)
-        guard receipt.status == .accepted || receipt.status == .completed else {
-            // A coded refusal (`attachment_unavailable`) is one the caller can act on.
-            throw LibraryAPIError(code: receipt.status == .rejected ? receipt.code ?? "execution_unconfirmed" : "execution_unconfirmed",
-                message: receipt.message ?? "The execution workspace has not confirmed this command. Its durable identity has been retained.")
-        }
-        // The stream pushes the command's effect; history follows by library sync.
         return receipt
     }
 }

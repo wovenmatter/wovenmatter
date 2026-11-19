@@ -257,8 +257,8 @@ struct MemberReachTests {
     }
 
     /// A folder creation names no session, so a Mac's execution gate admits it
-    /// from a member; every other library-data action is still refused there,
-    /// and a session action still needs a session that Mac runs.
+    /// from a Mac member only; every other library-data action is still
+    /// refused there, and a session action still needs a session that Mac runs.
     @Test func theExecutionGateAdmitsFolderCreationAndStillRefusesOtherLibraryData() async throws {
         let macB = try await FacadeFixture(); defer { macB.remove() }
         let macA = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
@@ -291,6 +291,84 @@ struct MemberReachTests {
             await #expect(throws: MobileConnectionError.self, "\(action)") { _ = try await transport.command(command(action)) }
         }
         #expect(commands.executed.count == 1)
+
+        // A phone and a Linux host are members this gate serves, and neither
+        // may ask this Mac for a folder: only a Mac does, as on a Linux host.
+        for kind in [MemberKind.ios, .linux] {
+            let other = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: kind, key: .init())
+            try await directory.add(deviceID: other.deviceID, kind: kind, name: "\(kind)", publicKey: other.publicKey, endpoints: [])
+            let signed = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: other.signer, send: Self.route { request in await api.handle(request) })
+            #expect(try await signed.identity().id == descriptor.id, "\(kind)")
+            let asked = UUID().uuidString.lowercased()
+            let body = try JSONEncoder().encode(LibraryCommand(commandID: asked, deviceID: other.deviceID, kind: .workspace,
+                workspaceAction: .createFolder(id: asked, name: "Elsewhere"), libraryID: descriptor.libraryID, workspaceID: descriptor.id))
+            let target = "/wovenmatter/v1/execution/commands"
+            var headers = Dictionary(uniqueKeysWithValues: try other.signer.headers(method: "POST", target: target, body: body, audience: bDevice)
+                .map { ($0.key.lowercased(), $0.value) })
+            headers["x-woven-protocol"] = String(LibraryProtocol.version)
+            let response = await api.handle(.init(method: "POST", target: target, headers: headers, body: body))
+            #expect(response.status == 403, "\(kind)")
+            #expect(try JSONDecoder().decode(LibraryAPIError.self, from: response.body)
+                == LibraryAPIError(code: "wrong_device", message: "Only a Mac can ask this Mac for a new folder."), "\(kind)")
+        }
+        #expect(commands.executed.count == 1)
+    }
+
+    /// The owning Mac's side of a folder request. The requested ID is one
+    /// folder: the same ID and name again creates nothing, another name under
+    /// it is refused, and so is an ID any other folder holds, before the disk
+    /// is touched. A folder whose rows cannot be written leaves no directory.
+    @Test func theOwnerHoldsARequestedFolderIDToOneFolderAndLeavesNoDirectoryWithoutRows() async throws {
+        let mac = try await FacadeFixture(); defer { mac.remove() }
+        let device = UUID().uuidString.lowercased()
+        func ask(_ id: String, _ name: String, command: String = UUID().uuidString.lowercased()) async throws -> LibraryCommandReceipt {
+            try await mac.model.libraryCommands.execute(.init(commandID: command, deviceID: device, kind: .workspace,
+                workspaceAction: .createFolder(id: id, name: name)), deviceID: device)
+        }
+        func made(_ name: String) -> Bool { FileManager.default.fileExists(atPath: mac.directory.appending(path: name).path) }
+        func folders() async throws -> [String] { try await mac.database.workspaceOverview().folders.map(\.name).sorted() }
+
+        let folder = UUID().uuidString.lowercased()
+        #expect(try await ask(folder, "One", command: folder).status == .completed)
+        #expect(made("One"))
+        #expect(try await ask(folder, " One ").status == .completed)
+        let renamed = try await ask(folder, "Two")
+        #expect(renamed.status == .rejected && renamed.message == "This ID already names the folder “One” on this Mac.")
+        // The command's own ID with another request is refused before the folder rules.
+        #expect(try await ask(folder, "Three", command: folder).status == .rejected)
+        #expect(!made("Two") && !made("Three"))
+        #expect(try await folders() == ["One"])
+
+        // A folder with no bound directory, and one bound to another machine, hold their IDs too.
+        let unbound = UUID().uuidString.lowercased(), elsewhere = UUID()
+        try await mac.database.write { try $0.toolsExecuteUnlocked("INSERT INTO folders(id,name,created_at,updated_at) VALUES(?,'Unbound','','')", [unbound]) }
+        try await mac.database.createFolder(id: elsewhere, name: "Elsewhere",
+            location: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/Users/other/.woven-matter/Elsewhere", managed: true))
+        for (id, name) in [(unbound, "Orphan"), (elsewhere.uuidString.lowercased(), "Elsewhere")] {
+            let taken = try await ask(id, name)
+            #expect(taken.status == .rejected && taken.message == "Another folder already uses this ID.", "\(name)")
+            #expect(!made(name), "\(name)")
+        }
+        #expect(try await mac.database.folderExecutionLocation(id: unbound) == nil)
+
+        // Rows that cannot be written: the directory the request made is
+        // removed again, for a request and for a local Create New alike, and
+        // a linked directory, which no request made, is left alone.
+        try await mac.database.write { try $0.executeUnlocked("CREATE TRIGGER reject_folder BEFORE INSERT ON folders BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END") }
+        let failed = try await ask(UUID().uuidString.lowercased(), "Doomed")
+        #expect(failed.status == .rejected && failed.message?.isEmpty == false)
+        #expect(!made("Doomed"))
+        #expect(await mac.model.createFolder(name: "Doomed") == nil)
+        #expect(mac.model.folderMutationError?.isEmpty == false && !made("Doomed"))
+        let linked = mac.directory.appending(path: "Existing")
+        try FileManager.default.createDirectory(at: linked, withIntermediateDirectories: false)
+        #expect(await mac.model.createFolder(name: "Existing", externalRoot: linked) == nil)
+        #expect(made("Existing"))
+        // The name was not used up.
+        try await mac.database.write { try $0.executeUnlocked("DROP TRIGGER reject_folder") }
+        #expect(await mac.model.createFolder(name: "Doomed") != nil)
+        #expect(made("Doomed"))
+        #expect(try await folders() == ["Doomed", "Elsewhere", "One", "Unbound"])
     }
 
     /// A Mac from before folder creation lists no capability for it, so it is
@@ -355,6 +433,14 @@ struct MemberReachTests {
         // A taken name is the host's refusal in its own words, and records nothing.
         #expect(await macB.model.createFolder(name: "Field notes", onWorkspace: workspace.id) == nil)
         #expect(macB.model.folderMutationError == "A directory with that name already exists in this workspace.")
+        #expect(try await macB.database.workspaceOverview().folders.map(\.id) == [id])
+        // A directory the host could not make is a bare 500: said without
+        // asserting a cause it did not name, and in its own words when it sent any.
+        #expect(await macB.model.createFolder(name: "Unwritable", onWorkspace: workspace.id) == nil)
+        #expect(macB.model.folderMutationError
+            == "The host could not create this directory. Check its free space and permissions, and that the name is not already in use there.")
+        #expect(await macB.model.createFolder(name: "Full", onWorkspace: workspace.id) == nil)
+        #expect(macB.model.folderMutationError == "No space left on the workspace volume.")
         #expect(try await macB.database.workspaceOverview().folders.map(\.id) == [id])
 
         // A window asks the background server, which makes the same call and answers with the folder or the refusal.
@@ -710,6 +796,9 @@ final class ReachLinuxHost: @unchecked Sendable {
                 // As `remote/src/projects.mjs`: a blank directory, or 409 for a taken name.
                 struct Project: Decodable { let name: String; let reuseExisting: Bool }
                 let project = try JSONDecoder().decode(Project.self, from: body)
+                // A failed `mkdir` is the server's bare 500; a host could also word one.
+                if project.name == "Unwritable" { return try reply(500, ["error": "internal_error"]) }
+                if project.name == "Full" { return try reply(500, ["error": "internal_error", "message": "No space left on the workspace volume."]) }
                 let taken = lock.withLock { () -> Bool in
                     if _projects.contains(project.name) { return true }
                     _projects.append(project.name); return false

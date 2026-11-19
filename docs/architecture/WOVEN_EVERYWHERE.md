@@ -904,31 +904,62 @@ hands them to the macOS job, which checks them with
     `LibraryWorkspaceAction.createFolder {id, name}` (`execution.command`, or
     `POST v1/execution/commands` without a stream), with no conversation.
     `id` is a lowercase UUID the requester picks, and it is the command ID
-    too, so a retry replays the receipt and a request whose outcome is
-    unknown is asked again under the same ID. The owning Mac applies a local
-    "Create New": a blank `~/.woven-matter/<name>` by the same name rules,
-    and its own `folders` and `folder_execution_roots` rows (`device:<its
-    device id>`, managed) under `id`; a folder it already made under that ID
-    answers again without creating anything, and an `id` that is not a
-    lowercase UUID is refused. A refusal (an invalid or taken name) is a
-    `rejected` receipt carrying the owner's message. The rows reach every
-    device by library sync; the requester asks that Mac for an exchange at
-    once and waits up to 5 s for them, and a folder still on its way was
-    created all the same. A Mac that accepts the command lists
-    `folders.create.v1` (`LibraryWorkspaceAction.createFolderCapability`) in
-    its registry row's `capabilities`. A Mac whose row lacks it is sent
-    nothing, since it could not decode the action, and the requester says
-    "Update Woven Matter on <name> to create folders there." It is the one
-    workspace action a Mac's execution API accepts that names no session;
-    note, calendar and Library changes still only synchronize. The phone's
-    host route (`POST /v1/commands`) runs the same action on the Mac it
-    reaches, which creates the folder on itself; the iPhone app does not
-    send it.
+    too.
+    - Who may send it. On a Mac's execution API only a Mac member: the same
+      action signed by an iPhone or a Linux host is refused with
+      `wrong_device` (403 over HTTP, the error of the call on the stream),
+      as a Linux host's `POST v1/projects` admits only Macs. It is the one
+      workspace action that API accepts that names no session; note,
+      calendar and Library changes still only synchronize. Separately, the
+      library host route `POST /v1/commands`, which an iPhone or Mac member
+      signs to the Mac it synchronizes with, runs the action on that Mac,
+      which creates the folder on itself; the iPhone app does not send it.
+    - The owning Mac applies a local "Create New": a blank
+      `~/.woven-matter/<name>` by the same name rules, and its own `folders`
+      and `folder_execution_roots` rows (`device:<its device id>`, managed)
+      under `id`. An `id` is one folder. Asked again, under any command, for
+      the folder it made under that `id` and name, it answers without
+      creating anything. The same `id` with another name, an `id` any other
+      folder holds (bound to a directory or not) and an `id` that is not a
+      lowercase UUID are refused before the disk is touched. When the rows
+      cannot be written, the directory the request made is removed again
+      while it is empty, so the name stays free (a local "Create New" does
+      the same; a linked directory is never removed). A refusal is a
+      `rejected` receipt carrying the owner's message.
+    - Asking again. Each request is a new folder under a new `id`, with one
+      exception: a request that got no receipt may have created the folder,
+      so the same name asked of the same Mac within three minutes
+      (`MemberExecutionClient.folderRetryWindow`) is that request again,
+      under its `id`, and the owner replays its receipt instead of refusing
+      a name it just took. The exception ends with any receipt, when a
+      folder with that `id` is in the requester's library (asking again is
+      then asking for a second folder, which the owner refuses by name), and
+      when the requesting app restarts (the unanswered request is kept in
+      memory only). A repeated `id` is believed only with its folder: when
+      the owner answers it as done and no rows arrive within the wait below,
+      that folder was removed since, and the request goes out once more
+      under a new `id`. An `outcomeUnknown` receipt means the owner accepted
+      the command and stopped before recording its result; it never runs
+      that `id` again, so the requester says "<name> stopped before it
+      finished creating “<folder>”. If the folder does not appear, create it
+      again." and the next request is a new one.
+    - The rows reach every device by library sync and the requester never
+      writes them itself: it asks that Mac for an exchange at once and waits
+      up to 5 s for them, and a new folder still on its way was created all
+      the same.
+    - A Mac that accepts the command lists `folders.create.v1`
+      (`LibraryWorkspaceAction.createFolderCapability`) in its registry
+      row's `capabilities`. A Mac whose row lacks it is sent nothing, since
+      it could not decode the action, and the requester says "Update Woven
+      Matter on <name> to create folders there."
   - A Linux host: `POST v1/projects {name, reuseExisting: false}` creates a
     blank directory in the host's managed workspace root and answers `201
     {path}`; a name that is already there answers `409` with a message, an
-    invalid one `400`. It is an administrator route, so any Mac member's
-    signature reaches it: the Mac that set the host up uses its own
+    invalid one `400`. A directory the host could not make (no space, no
+    permission, no workspace root) is a bare `500`, which the Mac reports
+    without naming a cause, or in the host's own words when it sent any. It
+    is an administrator route, so any Mac member's signature reaches it,
+    and no other member's: the Mac that set the host up uses its own
     connection, and every other Mac signs the request at the workspace's
     execution endpoint. The requesting Mac then records `folders` and
     `folder_execution_roots` (`remote:<workspace id>`, the returned path,

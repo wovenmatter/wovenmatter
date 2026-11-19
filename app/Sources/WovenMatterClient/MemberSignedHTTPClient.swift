@@ -95,8 +95,10 @@ public enum MemberSignedHTTPError: Error, Equatable, Sendable, LocalizedError {
     struct Reply: Decodable { var code: String?; var error: String?; var message: String? }
     let reply = try? JSONDecoder().decode(Reply.self, from: data)
     return .http(status: status, code: reply?.code ?? reply?.error,
-                 message: reply?.message ?? reply?.error ?? "The device answered \(status).")
+                 message: reply?.message ?? reply?.error ?? unexplained(status: status))
   }
+  /// The message of a refusal that carried no words of its own.
+  public static func unexplained(status: Int) -> String { "The device answered \(status)." }
   public var errorDescription: String? {
     switch self {
     case .insecureEndpoint: "Other devices are reached only at private tailnet HTTPS addresses."

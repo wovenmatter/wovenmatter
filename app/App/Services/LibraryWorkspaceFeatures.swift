@@ -211,7 +211,7 @@ extension DeviceCommandService {
             // and rows, by the rules of a local "Create New", under the ID the
             // requester chose. A phone's host route creates it here as well.
             guard let folderID = UUID(uuidString: id), folderID.uuidString.lowercased() == id else { throw CommandError.invalidCommand }
-            guard await model.createFolder(name: name, id: folderID) != nil else {
+            guard await model.createFolder(name: name, requestedID: folderID) != nil else {
                 throw LibraryAPIError(code: "rejected", message: model.folderMutationError ?? "The folder could not be created.")
             }
             return

@@ -363,11 +363,31 @@ private enum HostFixtureError: Error { case timeout }
 /// What one mesh Mac's signed execution requests to another did: `cut` makes
 /// the other Mac unreachable, as a closed lid would.
 private final class MeshExecutionReach: @unchecked Sendable {
+    typealias Command = @Sendable (LibraryCommand) async throws -> Void
     private let lock = NSLock()
-    private var _cut = false, _requests = 0
+    private var _cut = false, _requests = 0, _lostCommandReplies = 0
+    private var _beforeRequest: (@Sendable () async -> Void)?, _command: Command?
     var cut: Bool { get { lock.withLock { _cut } } set { lock.withLock { _cut = newValue } } }
     var requests: Int { lock.withLock { _requests } }
-    func count() { lock.withLock { _requests += 1 } }
+    private var _log: [String] = []
+    /// Every request that left, as "METHOD path".
+    var log: [String] { lock.withLock { _log } }
+    func count(_ request: URLRequest) {
+        lock.withLock { _requests += 1; _log.append((request.httpMethod ?? "GET") + " " + (request.url?.path ?? "")) }
+    }
+    /// This many of the next commands run on the other Mac and their answers never arrive.
+    var lostCommandReplies: Int { get { lock.withLock { _lostCommandReplies } } set { lock.withLock { _lostCommandReplies = newValue } } }
+    func loseCommandReply() -> Bool {
+        lock.withLock { guard _lostCommandReplies > 0 else { return false }; _lostCommandReplies -= 1; return true }
+    }
+    /// Runs once, before the next request of any kind leaves.
+    var beforeNextRequest: (@Sendable () async -> Void)? {
+        get { lock.withLock { _beforeRequest } } set { lock.withLock { _beforeRequest = newValue } }
+    }
+    func takeBeforeRequest() -> (@Sendable () async -> Void)? { lock.withLock { defer { _beforeRequest = nil }; return _beforeRequest } }
+    /// Stands in, once, for the other Mac's handling of the next command.
+    var nextCommand: Command? { get { lock.withLock { _command } } set { lock.withLock { _command = newValue } } }
+    func takeCommand() -> Command? { lock.withLock { defer { _command = nil }; return _command } }
 }
 
 /// Folders on another Mac (docs/architecture/WOVEN_EVERYWHERE.md, "Folder
@@ -386,14 +406,20 @@ extension LibraryHostLifecycleTests {
         let reach = MeshExecutionReach()
         let send: MemberSignedHTTPClient.Send = { request in
             guard !reach.cut else { throw URLError(.notConnectedToInternet) }
-            reach.count()
+            reach.count(request)
+            await reach.takeBeforeRequest()?()
             let url = try #require(request.url), listener = try #require(listeners[url.host() ?? ""])
+            let isCommand = request.httpMethod == "POST" && url.path.hasSuffix("/v1/execution/commands")
+            if isCommand, let command = reach.takeCommand() {
+                try await command(JSONDecoder().decode(LibraryCommand.self, from: try #require(request.httpBody)))
+            }
             var components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
             components.scheme = listener.scheme; components.host = listener.host(); components.port = listener.port
             components.percentEncodedPath = MemberRequestSignature.canonicalTarget(components.percentEncodedPath)
             var local = request
             local.url = components.url
             let (data, response) = try await URLSession.shared.data(for: local)
+            if isCommand, reach.loseCommandReply() { throw URLError(.networkConnectionLost) }
             return (data, try #require(response as? HTTPURLResponse))
         }
         for fixture in [air, mini] {
@@ -435,7 +461,7 @@ extension LibraryHostLifecycleTests {
         // It is already here when the call returns, bound to the Mini and never to this Mac, whose disk is untouched.
         #expect(try await airDB.folderExecutionLocation(id: id) == made)
         #expect(made.workspaceID != airOwner)
-        #expect(air.model.workspaceOverview?.folders.contains { $0.id == id && $0.name == "Field notes" && $0.executionWorkspaceID == miniOwner } == true)
+        #expect(try await shows(air) { $0.id == id && $0.name == "Field notes" && $0.executionWorkspaceID == miniOwner })
         #expect(!FileManager.default.fileExists(atPath: air.directory.appending(path: "Field notes").path))
         // This Mac asked the Mini for an exchange rather than waiting for its announcement.
         let sync = try #require(air.host.peerSync.librarySync)
@@ -490,6 +516,64 @@ extension LibraryHostLifecycleTests {
         #expect(try await mini.model.libraryCommands.execute(viaPhone, deviceID: phone).status == .completed)
         #expect(try await miniDB.folderExecutionLocation(id: phoneFolder)?.workspaceID == miniOwner)
         #expect(isDirectory(mini.directory.appending(path: "From the phone")))
+
+        // A window asks the background server, which sends the Mini the same
+        // request and answers with the folder or with the Mini's refusal.
+        let backend = BackendApplicationService(model: air.model)
+        func fromWindow(_ name: String) async throws -> BackendRPCResponse {
+            await backend.handle(.init(method: "application.command", payload: try JSONEncoder().encode(
+                BackendApplicationCommand.workspaceMutation(.createFolderOnWorkspace(name: name, registryID: row.id)))))
+        }
+        let windowReply = try #require(try await fromWindow("From a window").result)
+        let windowFolder = try #require(try JSONDecoder().decode(BackendApplicationResult.self, from: windowReply).entityID)
+        let windowRoot = mini.directory.appendingPathComponent("From a window", isDirectory: true)
+        #expect(try await miniDB.folderExecutionLocation(id: windowFolder) == .init(workspaceID: miniOwner, rootPath: windowRoot.path, managed: true))
+        #expect(try await airDB.folderExecutionLocation(id: windowFolder)?.workspaceID == miniOwner)
+        #expect(try await fromWindow("From a window").error?.contains(LocalACPWorkspaceError.projectAlreadyExists.localizedDescription) == true)
+
+        // This Mac records nothing of the folder itself. With library sync to
+        // the Mini down the request still crosses and the Mini makes the
+        // folder, but no row of it is here until an exchange brings the Mini's.
+        let miniEndpoint = try await mini.host.peerRoute().endpoint.absoluteString
+        mesh.offline.insert(miniEndpoint)
+        let pending = try #require(await air.model.createFolder(name: "On its way", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
+        let theirs = try #require(try await miniDB.folderExecutionLocation(id: pending))
+        #expect(theirs.workspaceID == miniOwner)
+        #expect(try await airDB.folderName(id: pending) == nil)
+        #expect(air.model.workspaceOverview?.folders.contains { $0.id == pending } == false)
+        mesh.offline.remove(miniEndpoint)
+        #expect(try await folder(pending, reaches: air) == theirs)
+    }
+
+    /// Synchronizes until `fixture`'s library holds the folder, and returns where it is bound.
+    private func folder(_ id: String, reaches fixture: HostFixture) async throws -> WorkspaceFolderLocation? {
+        let database = try #require(fixture.model.libraryStore?.database)
+        for _ in 0..<100 {
+            await fixture.host.peerSync.synchronize(force: true)
+            if let location = try await database.folderExecutionLocation(id: id) { return location }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return nil
+    }
+
+    /// Whether the model shows a folder. The rows are in the library when a
+    /// request returns; the model's own refresh can be superseded by the one
+    /// library sync starts for the same rows, which lands a moment later.
+    private func shows(_ fixture: HostFixture, _ matches: (WorkspaceFolderRecord) -> Bool) async throws -> Bool {
+        for _ in 0..<50 {
+            if fixture.model.workspaceOverview?.folders.contains(where: matches) == true { return true }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
+
+    /// The IDs this Mac requested for a folder name, from its command journal.
+    private func requestedFolders(_ name: String, by fixture: HostFixture) async throws -> Set<String> {
+        let journal = try WorkspaceJournal(file: fixture.directory.appending(path: "folder-commands.json"))
+        return Set(await journal.snapshot().commands.values.compactMap { record -> String? in
+            guard case .createFolder(let folder, name)? = record.command.workspaceAction else { return nil }
+            return folder
+        })
     }
 
     /// With the other Mac unreachable nothing is created anywhere and the
@@ -510,14 +594,137 @@ extension LibraryHostLifecycleTests {
 
         reach.cut = false
         let id = try #require(await air.model.createFolder(name: "Later", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
-        let journal = try WorkspaceJournal(file: air.directory.appending(path: "folder-commands.json"))
-        let requested = await journal.snapshot().commands.values.compactMap { record -> String? in
-            guard case .createFolder(let folder, "Later")? = record.command.workspaceAction else { return nil }
-            return folder
-        }
-        #expect(requested == [id])
+        #expect(try await requestedFolders("Later", by: air) == [id])
         #expect(try await miniDB.workspaceOverview().folders.map(\.id) == [id])
         #expect(try await airDB.folderExecutionLocation(id: id)?.workspaceID == mini.model.executionWorkspaceIdentity(workspaceID: nil))
+    }
+
+    /// The request reaches the other Mac, which makes the folder, and only its
+    /// answer is lost. Asking again is that request: the owner replays its
+    /// receipt, and there is one folder, under the first ID.
+    @Test func aFolderRequestWhoseAnswerWasLostIsTheSameRequestWhenAskedAgain() async throws {
+        let (mesh, air, mini, reach) = try await folderMesh("lost"); defer { mesh.remove() }
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
+        let route = try await mini.host.peerRoute(), endpoint = route.endpoint.absoluteString
+        let row = try #require(try await airDB.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == route.deviceID })
+        // The connection drops for everything: the answer is lost and no library sync brings the folder either.
+        mesh.offline.insert(endpoint)
+        reach.lostCommandReplies = 1
+        #expect(await air.model.createFolder(name: "Lost", onWorkspace: row.id) == nil)
+        #expect(air.model.folderMutationError?.isEmpty == false)
+        let made = try await miniDB.workspaceOverview().folders
+        #expect(made.map(\.name) == ["Lost"], "the Mini ran the request")
+        #expect(isDirectory(mini.directory.appending(path: "Lost")))
+        #expect(try await airDB.workspaceOverview().folders.isEmpty)
+
+        // The Mini is back when the retry leaves this Mac.
+        reach.beforeNextRequest = { await MainActor.run { _ = mesh.offline.remove(endpoint) } }
+        let id = try #require(await air.model.createFolder(name: "Lost", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
+        #expect(made.map(\.id) == [id])
+        #expect(try await requestedFolders("Lost", by: air) == [id])
+        #expect(try await miniDB.workspaceOverview().folders.map(\.id) == [id])
+        let theirs = try await miniDB.folderExecutionLocation(id: id)
+        #expect(try await airDB.folderExecutionLocation(id: id) == theirs)
+        #expect(try await shows(air) { $0.id == id && $0.name == "Lost" })
+    }
+
+    /// Once the folder of a request whose answer was lost is here, asking for
+    /// its name again asks for a second folder: it goes out under a new ID and
+    /// the owner refuses the taken name, rather than replaying an old success.
+    @Test func aFolderThatArrivedAfterALostAnswerIsNotAskedForAgainUnderItsID() async throws {
+        let (mesh, air, mini, reach) = try await folderMesh("kept"); defer { mesh.remove() }
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
+        let miniID = try await mini.host.peerRoute().deviceID
+        let row = try #require(try await airDB.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == miniID })
+        reach.lostCommandReplies = 1
+        #expect(await air.model.createFolder(name: "Kept", onWorkspace: row.id) == nil)
+        let first = try #require(try await miniDB.workspaceOverview().folders.first { $0.name == "Kept" }?.id)
+        #expect(try await folder(first, reaches: air) != nil)
+
+        #expect(await air.model.createFolder(name: "Kept", onWorkspace: row.id) == nil)
+        #expect(air.model.folderMutationError == LocalACPWorkspaceError.projectAlreadyExists.localizedDescription)
+        let requested = try await requestedFolders("Kept", by: air)
+        #expect(requested.count == 2 && requested.contains(first))
+        #expect(try await miniDB.workspaceOverview().folders.map(\.id) == [first])
+        #expect(try await airDB.workspaceOverview().folders.map(\.id) == [first])
+    }
+
+    /// The folder of a request whose answer was lost arrived and was removed
+    /// since. Its ID is not that folder any more: asked again, the owner would
+    /// replay "done" and create nothing, so the request goes out as a new one
+    /// and the folder really exists afterwards.
+    @Test func aFolderRemovedSinceALostAnswerIsCreatedAgainUnderANewID() async throws {
+        let (mesh, air, mini, reach) = try await folderMesh("gone"); defer { mesh.remove() }
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
+        let miniID = try await mini.host.peerRoute().deviceID
+        let row = try #require(try await airDB.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == miniID })
+        /// A request whose answer is lost, its folder arriving by sync, then the
+        /// folder and its directory removed on the Mini and gone from here too.
+        func lostThenRemoved(_ name: String) async throws -> String {
+            reach.lostCommandReplies = 1
+            #expect(await air.model.createFolder(name: name, onWorkspace: row.id) == nil)
+            let id = try #require(try await miniDB.workspaceOverview().folders.first { $0.name == name }?.id)
+            #expect(try await folder(id, reaches: air) != nil)
+            try FileManager.default.removeItem(at: mini.directory.appending(path: name))
+            #expect(await mini.model.deleteFolder(id: id))
+            for _ in 0..<100 {
+                for fixture in [mini, air] { await fixture.host.peerSync.synchronize(force: true) }
+                if try await airDB.folderName(id: id) == nil { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            #expect(try await airDB.folderName(id: id) == nil)
+            return id
+        }
+        func receiptRequests(_ id: String) -> Int { reach.log.filter { $0.hasPrefix("GET ") && $0.hasSuffix("/v1/execution/commands/" + id) }.count }
+
+        // Soon after: the old ID is asked once more, the Mini answers it as
+        // done, no folder arrives for it, and a new request makes the folder.
+        let first = try await lostThenRemoved("Gone")
+        let asked = receiptRequests(first)
+        let second = try #require(await air.model.createFolder(name: "Gone", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
+        #expect(second != first && receiptRequests(first) == asked + 1)
+        #expect(isDirectory(mini.directory.appending(path: "Gone")))
+        #expect(try await miniDB.workspaceOverview().folders.map(\.id) == [second])
+        let theirs = try #require(try await miniDB.folderExecutionLocation(id: second))
+        #expect(try await airDB.folderExecutionLocation(id: second) == theirs)
+        #expect(try await requestedFolders("Gone", by: air) == [first, second])
+
+        // Past the retry window the old ID is not asked about at all.
+        let old = try await lostThenRemoved("Much later")
+        let before = receiptRequests(old)
+        try air.model.memberExecutionClient().folderRetryWindow = .zero
+        let new = try #require(await air.model.createFolder(name: "Much later", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
+        #expect(new != old && receiptRequests(old) == before)
+        #expect(isDirectory(mini.directory.appending(path: "Much later")))
+        #expect(try await airDB.folderExecutionLocation(id: new) != nil)
+    }
+
+    /// The owner durably accepted a request and quit before running it: it
+    /// never runs that ID and answers that its outcome is unknown. That is
+    /// said in the folder's terms, and the next request is a new one.
+    @Test func aFolderRequestTheOwnerNeverFinishedDoesNotBlockItsName() async throws {
+        let (mesh, air, mini, reach) = try await folderMesh("stuck"); defer { mesh.remove() }
+        let airDB = try #require(air.model.libraryStore?.database), miniDB = try #require(mini.model.libraryStore?.database)
+        let miniID = try await mini.host.peerRoute().deviceID
+        let row = try #require(try await airDB.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == miniID })
+        reach.nextCommand = { command in
+            #expect(try await miniDB.reserveLibraryCommand(command).isNew)
+            throw URLError(.networkConnectionLost)
+        }
+        #expect(await air.model.createFolder(name: "Stuck", onWorkspace: row.id) == nil)
+        let unfinished = try await requestedFolders("Stuck", by: air)
+        #expect(unfinished.count == 1)
+
+        #expect(await air.model.createFolder(name: "Stuck", onWorkspace: row.id) == nil)
+        #expect(air.model.folderMutationError == "\(row.name) stopped before it finished creating “Stuck”. If the folder does not appear, create it again.")
+        #expect(try await requestedFolders("Stuck", by: air) == unfinished, "the same request was asked about")
+        #expect(try await miniDB.workspaceOverview().folders.isEmpty)
+
+        let id = try #require(await air.model.createFolder(name: "Stuck", onWorkspace: row.id), "\(air.model.folderMutationError ?? "")")
+        #expect(!unfinished.contains(id))
+        #expect(try await miniDB.workspaceOverview().folders.map(\.id) == [id])
+        #expect(isDirectory(mini.directory.appending(path: "Stuck")))
+        #expect(try await airDB.folderExecutionLocation(id: id) != nil)
     }
 }
 

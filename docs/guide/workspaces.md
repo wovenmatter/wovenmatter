@@ -17,10 +17,11 @@ workspace root: `~/.woven-matter` on your Mac while a native Linux host uses
 A folder for another paired Mac is created by that Mac, in its own
 `~/.woven-matter`, and appears on every device as soon as they synchronize.
 That Mac must be on and reachable; if it runs an older version, Woven asks you
-to update Woven Matter on it first. Any of your Macs can create a folder on a
-Linux host, whichever Mac set the host up. These folders are always created
-new: **Link Existing** is offered for this Mac and for a Linux host this Mac
-set up.
+to update Woven Matter on it first. If the connection drops before that Mac
+confirms, create the folder again: one it already made is not made twice. Any
+of your Macs can create a folder on a Linux host, whichever Mac set the host
+up. These folders are always created new: **Link Existing** is offered for this
+Mac and for a Linux host this Mac set up.
 
 **Link Existing** lets you choose an existing project directory on the owning
 execution machine, including an accessible directory on a native Linux host.

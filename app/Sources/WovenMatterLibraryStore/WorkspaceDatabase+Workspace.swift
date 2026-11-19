@@ -565,6 +565,10 @@ extension WorkspaceDatabase {
     try await read { try $0.folderExecutionLocation(id: id) }
   }
 
+  public func folderName(id: String) async throws -> String? {
+    try await read { try $0.folderName(id: id) }
+  }
+
   @discardableResult
   public func renameFolder(
     id: String,
@@ -670,6 +674,12 @@ extension WorkspaceDatabaseConnection {
       """, values: [id]).first?.objectValue,
           let owner = row["workspace_id"]?.stringValue, let path = row["root_path"]?.stringValue else { return nil }
     return .init(workspaceID: owner, rootPath: path, managed: row["managed"]?.intValue == 1)
+  }
+
+  /// The name of the folder with this ID, whether or not a directory is bound
+  /// to it; nil when no folder has the ID.
+  public func folderName(id: String) throws -> String? {
+    try historyRowsUnlocked("SELECT name FROM folders WHERE id=?", values: [id]).first?.objectValue?["name"]?.stringValue
   }
 
   public func setFolderReferences(id: String, paths: [String]) throws {

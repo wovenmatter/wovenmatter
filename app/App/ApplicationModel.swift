@@ -1601,13 +1601,26 @@ final class ApplicationModel {
         }
     }
 
-    /// `id` is the folder ID a caller already chose (another Mac asking for a
-    /// folder here); asking again for a folder this Mac made under it succeeds
-    /// without creating anything.
-    func createFolder(name: String, workspaceID: UUID? = nil, externalRoot: URL? = nil, id: UUID? = nil) async -> String? {
+    func createFolder(name: String, workspaceID: UUID? = nil, externalRoot: URL? = nil) async -> String? {
+        await createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot, requestedID: nil)
+    }
+
+    /// A blank folder on this Mac under the ID another member chose
+    /// (`LibraryWorkspaceAction.createFolder`). Asked again for the folder this
+    /// Mac made under that ID and name, it succeeds without creating anything;
+    /// any other folder that already has the ID refuses the request before the
+    /// disk is touched. Only the process that holds the library runs this: a
+    /// window's request carries no ID, so a window is refused rather than
+    /// answered with a folder under another one.
+    func createFolder(name: String, requestedID: UUID) async -> String? {
+        await createFolder(name: name, workspaceID: nil, externalRoot: nil, requestedID: requestedID)
+    }
+
+    private func createFolder(name: String, workspaceID: UUID?, externalRoot: URL?, requestedID: UUID?) async -> String? {
         folderMutationError = nil
         do {
             if isBackendFrontend {
+                guard requestedID == nil else { throw ApplicationModelError.libraryStoreUnavailable }
                 let result = try await sendBackendCommand(.workspaceMutation(.createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot)))
                 await refreshWorkspace()
                 if result.entityID != nil, LocalExecutionRole.current != .backend {
@@ -1619,12 +1632,20 @@ final class ApplicationModel {
                 throw ApplicationModelError.libraryStoreUnavailable
             }
             let owner = try await executionWorkspaceIdentity(workspaceID: workspaceID)
-            if let id, let existing = try await libraryStore.database.folderExecutionLocation(id: id.uuidString.lowercased()) {
-                guard existing.workspaceID == owner else { throw WorkspaceToolError.invalid("Another folder already uses this ID.") }
-                return id.uuidString.lowercased()
+            if let id = requestedID?.uuidString.lowercased(), let existing = try await libraryStore.database.folderName(id: id) {
+                // Any folder row holds its ID, with a directory bound to it or not.
+                guard try await libraryStore.database.folderExecutionLocation(id: id)?.workspaceID == owner else {
+                    throw WorkspaceToolError.invalid("Another folder already uses this ID.")
+                }
+                guard existing == name.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                    throw WorkspaceToolError.invalid("This ID already names the folder “\(existing)” on this Mac.")
+                }
+                return id
             }
             let path: String
             let managed: Bool
+            // The local directory this call made, removed again if its rows are not written.
+            var made: URL?
             if let workspaceID {
                 guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else {
                     throw WorkspaceToolError.invalid("Remote folders must be created in their owning workspace.")
@@ -1649,12 +1670,22 @@ final class ApplicationModel {
                     }
                     path = url.path; managed = false
                 } else {
-                    path = try LocalACPWorkspaceProvisioner.createProject(named: name, in: workspace.rootURL).path
-                    managed = true
+                    // Without `reuseExisting` a returned directory is one this call made.
+                    let url = try LocalACPWorkspaceProvisioner.createProject(named: name, in: workspace.rootURL)
+                    path = url.path; managed = true; made = url
                 }
             }
-            let folderID = try await libraryStore.createFolder(id: id ?? UUID(), name: name,
-                location: .init(workspaceID: owner, rootPath: path, managed: managed))
+            let folderID: String
+            do {
+                folderID = try await libraryStore.createFolder(id: requestedID ?? UUID(), name: name,
+                    location: .init(workspaceID: owner, rootPath: path, managed: managed))
+            } catch {
+                // A folder that was not recorded leaves no directory behind, so
+                // its name stays free. `rmdir` removes only an empty directory:
+                // anything put there meanwhile is kept.
+                if let made { rmdir(made.path) }
+                throw error
+            }
             await refreshWorkspace()
             if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return folderID
@@ -1690,14 +1721,16 @@ final class ApplicationModel {
             switch workspace.kind {
             case .mac:
                 if try await workspace.ownerDeviceID == database.libraryIdentity().hostDeviceID { return await createFolder(name: name) }
-                folderID = try await memberExecutionClient().createFolder(name: name, on: workspace)
                 // The owner's rows come by library sync: ask for them now
                 // instead of waiting for its announcement, and give them a few
-                // seconds. A folder still on its way was created all the same.
-                await libraryHost.peerSync.exchange(withOwnerOf: workspace)
-                for _ in 0..<50 {
-                    if (try? await database.folderExecutionLocation(id: folderID)) != nil { break }
-                    try? await Task.sleep(for: .milliseconds(100))
+                // seconds. A new folder still on its way was created all the same.
+                folderID = try await memberExecutionClient().createFolder(name: name, on: workspace) { [libraryHost] id in
+                    await libraryHost.peerSync.exchange(withOwnerOf: workspace)
+                    for _ in 0..<50 {
+                        if (try? await database.folderExecutionLocation(id: id)) != nil { return true }
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                    return false
                 }
             case .linux:
                 guard let id = UUID(uuidString: workspace.id) else { throw WorkspaceToolError.invalid("This workspace is no longer available for new folders.") }

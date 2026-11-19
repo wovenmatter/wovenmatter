@@ -94,16 +94,18 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
     private func member<Value: Decodable>(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil,
                                           headers: [String: String] = [:], timeout: TimeInterval = 30) async throws -> Value {
         do { return try await client.request(path, method: method, query: query, body: body, headers: headers, timeout: timeout) }
-        catch let error as MemberSignedHTTPError {
-            switch error {
-            case .http(let status, let code, let message):
-                if status == 401 { throw MobileConnectionError.revoked }
-                // The server names some refusals (`unlock_refused`) and words others.
-                let named = code.flatMap { value in value.count <= 64 && value.allSatisfy({ $0.isLowercase || $0 == "_" }) ? value : nil }
-                throw LibraryAPIError(code: named ?? "http_\(status)", message: message)
-            case .insecureEndpoint: throw MobileConnectionError.insecureEndpoint
-            case .invalidResponse, .responseTooLarge: throw MobileConnectionError.invalidResponse
-            }
+        catch let error as MemberSignedHTTPError { throw Self.refusal(error) }
+    }
+
+    private static func refusal(_ error: MemberSignedHTTPError) -> any Error {
+        switch error {
+        case .http(let status, let code, let message):
+            if status == 401 { return MobileConnectionError.revoked }
+            // The server names some refusals (`unlock_refused`) and words others.
+            let named = code.flatMap { value in value.count <= 64 && value.allSatisfy({ $0.isLowercase || $0 == "_" }) ? value : nil }
+            return LibraryAPIError(code: named ?? "http_\(status)", message: message)
+        case .insecureEndpoint: return MobileConnectionError.insecureEndpoint
+        case .invalidResponse, .responseTooLarge: return MobileConnectionError.invalidResponse
         }
     }
 
@@ -160,12 +162,18 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
 
     func createProject(name: String) async throws -> RemoteProjectDirectory {
         do {
-            return try await member("v1/projects", method: "POST",
+            return try await client.request("v1/projects", method: "POST",
                 body: JSONSerialization.data(withJSONObject: ["name": name, "reuseExisting": false], options: [.sortedKeys]))
-        } catch let error as LibraryAPIError where error.code == "http_500" {
-            // A host from before this route named a taken name answers it,
-            // like any failed `mkdir`, with a bare 500.
-            throw LibraryAPIError(code: error.code, message: "The host could not create this directory. A directory with that name may already exist.")
-        }
+        } catch MemberSignedHTTPError.http(status: 500, let code, let message) {
+            // The host words what it refuses: 400 for a name it does not
+            // allow, 409 for one already there. A 500 is a directory it could
+            // not make (no space, no permission, no workspace root) or, on a
+            // host from before the 409, a name already there. Its own words
+            // are kept; a bare code or an empty answer says none of that.
+            let wordless = message == code || message == MemberSignedHTTPError.unexplained(status: 500)
+            throw LibraryAPIError(code: "http_500", message: wordless
+                ? "The host could not create this directory. Check its free space and permissions, and that the name is not already in use there."
+                : message)
+        } catch let error as MemberSignedHTTPError { throw Self.refusal(error) }
     }
 }

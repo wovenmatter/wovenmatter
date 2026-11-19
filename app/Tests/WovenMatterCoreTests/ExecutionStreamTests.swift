@@ -291,6 +291,31 @@ struct ExecutionStreamTests {
     return Double(arrivals.count - 1) <= ((last - start) + interval) / interval
   }
 
+  /// `execution.command` passes the same gate as `POST v1/execution/commands`:
+  /// a folder on this Mac is a Mac member's to ask for, never a phone's or a
+  /// Linux host's, though both hold a stream here.
+  @Test func aFolderRequestOverTheStreamIsRefusedUnlessAMacSendsIt() async throws {
+    let mac = try await StreamMac(); defer { mac.remove() }
+    func ask(_ kind: MemberKind) async throws -> (command: LibraryCommand, response: StreamResponse) {
+      let member = try await mac.member(kind), client = try await mac.connect(member); defer { client.close() }
+      guard case .hello = try await client.next() else { throw CancellationError() }
+      let id = UUID().uuidString.lowercased()
+      let command = LibraryCommand(commandID: id, deviceID: member.deviceID, kind: .workspace,
+        workspaceAction: .createFolder(id: id, name: "Field notes"), libraryID: mac.descriptor.libraryID, workspaceID: mac.descriptor.id)
+      client.send(.request(try .init(id: "folder", method: .executionCommand, params: StreamCommandParams(command: command))))
+      return (command, try await client.response("folder"))
+    }
+    for kind in [MemberKind.ios, .linux] {
+      let refused = try await ask(kind).response
+      #expect(refused.result == nil, "\(kind)")
+      #expect(refused.error == StreamError(code: "wrong_device", message: "Only a Mac can ask this Mac for a new folder."), "\(kind)")
+    }
+    #expect(await mac.commands.executed.isEmpty)
+    let (command, accepted) = try await ask(.mac)
+    #expect(try accepted.decodeResult(LibraryCommandReceipt.self).commandID == command.commandID)
+    #expect(await mac.commands.executed == [command])
+  }
+
   @Test func upgradesAreRefusedBeforeTheyBegin() async throws {
     let mac = try await StreamMac(); defer { mac.remove() }
     let phone = try await mac.member(.ios)

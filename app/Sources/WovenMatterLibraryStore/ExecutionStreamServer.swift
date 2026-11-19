@@ -14,7 +14,7 @@ import WovenMatterShared
   func localConversations(ids: Set<String>) async throws -> [String: LibraryConversation]
   func localPendingInteractions() async throws -> [PendingInteraction]
   func localReceipt(commandID: String, deviceID: String) async throws -> LibraryCommandReceipt?
-  func executeLocal(_ command: LibraryCommand, deviceID: String,
+  func executeLocal(_ command: LibraryCommand, deviceID: String, kind: MemberKind,
                     authorize: @MainActor () async throws -> Void) async throws -> LibraryCommandReceipt
 }
 

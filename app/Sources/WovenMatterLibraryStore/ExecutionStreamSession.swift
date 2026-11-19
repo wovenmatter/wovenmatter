@@ -226,7 +226,7 @@ actor StreamSession {
         switch StreamProtocol.Method(rawValue: request.method) {
         case .executionCommand?:
           let command = try request.decodeParams(StreamCommandParams.self).command
-          let receipt = try await source.executeLocal(command, deviceID: member.deviceID) {
+          let receipt = try await source.executeLocal(command, deviceID: member.deviceID, kind: member.kind) {
             guard await members.member(member.deviceID) != nil else { throw MemberRequestError.unknown }
           }
           response = try .init(id: request.id, encoding: receipt)
