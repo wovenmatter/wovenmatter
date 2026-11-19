@@ -18,10 +18,15 @@ import {
  * `refreshModels`, a `ModelsStore`, `Models.refresh()`), under the rules the default agent and the
  * iPhone app apply (docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md, "Provider model metadata"): the same
  * request, the same checks, the same four hours, and no fetch at launch or on a timer.
+ *
+ * The live catalog adds to the list pi-ai ships and wins where both name a model, as in Pi's own
+ * coding agent. It never takes a shipped model away: a bot keeps running on the model it has.
  */
 
 /** How long a fetched catalog counts as current. */
 export const CATALOG_REFRESH_MS = 4 * 60 * 60 * 1000;
+/** How long a catalog that could not be read is left alone before the next read tries again. */
+export const CATALOG_RETRY_MS = 5 * 60 * 1000;
 const CATALOG_URL = "https://pi.dev";
 const BYTE_LIMIT = 4 * 1024 * 1024;
 const MODEL_LIMIT = 4096;
@@ -43,6 +48,7 @@ export const CATALOG_ENDPOINTS: Readonly<Record<string, Readonly<Record<string, 
     "openai-completions": "https://opencode.ai/inference/go/openai/v1",
     "openai-responses": "https://opencode.ai/inference/go/openai/v1",
     "anthropic-messages": "https://opencode.ai/inference/go/anthropic",
+    "google-generative-ai": "https://opencode.ai/inference/go/google/v1beta",
   },
   xai: { "openai-responses": "https://api.x.ai/v1" },
 };
@@ -143,7 +149,7 @@ export function parseCatalog(value: unknown, source: string): Model<Api>[] {
 /**
  * `models` newest release first. The catalog carries no release dates, so the version numbers in a
  * model's id decide, highest first (gpt-6.2 before gpt-6.1 before gpt-6 before gpt-5.6), then the
- * name. Dates (2024-08-06, 12-2024, 20251001, 2508) and sizes (70b, 8x22b) are not versions, and an
+ * name. Dates (2024-08-06, 12-2024, 20251001, 2508) and sizes (70b, 8x22b, 32k) are not versions, and an
  * id with no version goes last. A provider that resells other labs' models (`openai/gpt-6`) keeps
  * each lab's models together, labs by name: version numbers of different labs say nothing about
  * which is newer.
@@ -157,7 +163,7 @@ export function newestFirst<T extends { readonly id: string; readonly name: stri
       ...id
         .slice(slash + 1)
         .replace(/\d{4}-\d{2}-\d{2}|(?<!\d)\d{2}-\d{4}(?!\d)/gu, "")
-        .matchAll(/(?<!\d)\d{1,3}(?![\dbB]|x\d)/gu),
+        .matchAll(/(?<!\d)\d{1,3}(?![\dbBkK]|x\d)/gu),
     ].map((match) => Number(match[0]));
     return { lab: slash < 0 ? "" : id.slice(0, slash), version };
   };
@@ -219,20 +225,55 @@ const validator = (value: string | null | undefined) =>
     ? value
     : undefined;
 
+export type LiveCatalog = {
+  /** `provider`, listing Pi's live catalog on top of what it ships. */
+  readonly provider: Provider;
+  /** Show a stored catalog. Reads no credential and nothing from the network. */
+  readonly restore: (stored: Readonly<ModelsStoreEntry> | undefined) => void;
+};
+
 /**
- * `provider` with Pi's live catalog in place of its bundled list. Until a catalog has been loaded
- * (from the store, or fetched) it lists what pi-ai ships, so a machine that is offline still has
- * models. `Models.refresh()` drives it: every call restores the stored catalog, and one made with
- * network access fetches a new one when the stored one is older than four hours.
+ * `provider` with Pi's live catalog on top of its shipped list: a live model is added, and wins
+ * over a shipped model of the same id; a shipped model the catalog does not name stays. Until a
+ * catalog has been loaded (from the store, or fetched) it lists what pi-ai ships, so a machine
+ * that is offline still has models. `Models.refresh()` drives it: every call restores the stored
+ * catalog, and one made with network access fetches a new one when the stored one is older than
+ * four hours. A catalog that could not be read is tried again after five minutes, not on every
+ * read.
  */
-export function withLiveCatalog(provider: Provider, options: LiveCatalogOptions = {}): Provider {
+export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}): LiveCatalog {
   const source = options.source ?? provider.id;
   const adapt = options.adapt ?? ((model: Model<Api>) => ({ ...model, provider: provider.id }));
   const fetcher = options.fetch ?? globalThis.fetch;
   const now = options.now ?? Date.now;
   let live: readonly Model<Api>[] | undefined;
+  let merged: { readonly chat: readonly AnyModel[]; readonly all: readonly AnyModel[] } | undefined;
+  let failedAt: number | undefined;
+  const show = (models: readonly Model<Api>[] | undefined) => {
+    if (!models) return;
+    live = models;
+    merged = undefined;
+  };
+  /** The shipped list with the live one over it. The shipped list does not change while running. */
+  const listed = () => {
+    if (!live) return undefined;
+    if (!merged) {
+      const over = (shipped: readonly AnyModel[]) => {
+        const byKey = new Map<string, AnyModel>();
+        for (const model of [...shipped, ...(live as readonly AnyModel[])]) {
+          byKey.set(`${(model as { type?: string }).type ?? "chat"}\0${model.id}`, model);
+        }
+        return [...byKey.values()];
+      };
+      merged = {
+        chat: over(provider.getModels() as readonly AnyModel[]),
+        all: over((provider.getAllModels?.() ?? provider.getModels()) as readonly AnyModel[]),
+      };
+    }
+    return merged;
+  };
   /** Stored entries are checked like fetched ones: a file on disk is no more trusted. */
-  const restore = (stored: Readonly<ModelsStoreEntry> | undefined) => {
+  const checked = (stored: Readonly<ModelsStoreEntry> | undefined) => {
     if (!stored?.models.length) return undefined;
     try {
       return parseCatalog(stored.models, source).map(adapt);
@@ -240,54 +281,40 @@ export function withLiveCatalog(provider: Provider, options: LiveCatalogOptions 
       return undefined;
     }
   };
-  return {
-    ...provider,
-    getModels: () => live ?? provider.getModels(),
-    getAllModels: () => live ?? provider.getAllModels?.() ?? provider.getModels(),
-    // The catalog comes from Pi's service, so a stale provider sign-in must not block it.
-    refreshModelsAuth: "configured",
-    refreshModels: async (context: RefreshModelsContext) => {
-      const stored = context.stored;
-      const restored = restore(stored);
-      const shown = await context.publish({
-        update: () => {
-          live = restored ?? live;
-        },
-      });
-      if (!shown || !context.allowNetwork || context.signal.aborted) return;
-      const checkedAt = stored?.checkedAt;
-      const age = checkedAt === undefined ? undefined : now() - checkedAt;
-      if (!context.force && restored && age !== undefined && age >= 0 && age < CATALOG_REFRESH_MS) {
-        return;
-      }
-      const url = new URL(`/api/models/providers/${encodeURIComponent(source)}`, options.baseUrl ?? CATALOG_URL);
-      url.searchParams.set("types", "chat");
-      url.searchParams.set("pi-version", PI_AI_VERSION);
-      // Only revalidate a catalog that is here to keep: a 304 must never leave the list empty.
-      const etag = restored ? validator(stored?.etag) : undefined;
-      const response = await fetcher(url, {
-        headers: {
-          accept: "application/json",
-          "user-agent": `pi/${PI_AI_VERSION}`,
-          ...(etag ? { "if-none-match": etag } : {}),
-        },
-        credentials: "omit",
-        redirect: "error",
-        signal: AbortSignal.any([context.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
-      });
-      if (context.signal.aborted) return;
-      if (response.status === 304 && stored && restored) {
-        await response.body?.cancel().catch(() => {});
-        await context.publish({ persist: { ...stored, checkedAt: now() } });
-        return;
-      }
-      if (response.status !== 200) {
-        await response.body?.cancel().catch(() => {});
-        throw new CatalogError(`the model catalog answered ${response.status}`);
-      }
-      const models = parseCatalog(await readBody(response), source);
-      const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
-      const next = models.map(adapt);
+  const fetchCatalog = async (
+    context: RefreshModelsContext,
+    stored: Readonly<ModelsStoreEntry> | undefined,
+    restored: readonly Model<Api>[] | undefined,
+  ) => {
+    const url = new URL(`/api/models/providers/${encodeURIComponent(source)}`, options.baseUrl ?? CATALOG_URL);
+    url.searchParams.set("types", "chat");
+    url.searchParams.set("pi-version", PI_AI_VERSION);
+    // Only revalidate a catalog that is here to keep: a 304 must never leave the list empty.
+    const etag = restored ? validator(stored?.etag) : undefined;
+    const response = await fetcher(url, {
+      headers: {
+        accept: "application/json",
+        "user-agent": `pi/${PI_AI_VERSION}`,
+        ...(etag ? { "if-none-match": etag } : {}),
+      },
+      credentials: "omit",
+      redirect: "error",
+      signal: AbortSignal.any([context.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+    });
+    if (response.status === 304 && stored && restored) {
+      await response.body?.cancel().catch(() => {});
+      await context.publish({ persist: { ...stored, checkedAt: now() } });
+      return;
+    }
+    if (response.status !== 200) {
+      await response.body?.cancel().catch(() => {});
+      throw new CatalogError(`the model catalog answered ${response.status}`);
+    }
+    const models = parseCatalog(await readBody(response), source);
+    const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
+    const next = models.map(adapt);
+    const update = () => show(next);
+    try {
       await context.publish({
         // Stored as the catalog gave them, so a restore checks them the same way.
         persist: {
@@ -296,12 +323,47 @@ export function withLiveCatalog(provider: Provider, options: LiveCatalogOptions 
           ...(Number.isFinite(lastModified) ? { lastModified } : {}),
           ...(validator(response.headers.get("etag")) ? { etag: response.headers.get("etag") as string } : {}),
         },
-        update: () => {
-          live = next;
-        },
+        update,
       });
+    } catch (error) {
+      // A catalog that could not be saved is still the current one.
+      if (!context.signal.aborted) await context.publish({ update });
+      throw error;
+    }
+  };
+  const wrapped = {
+    ...provider,
+    getModels: () => listed()?.chat ?? provider.getModels(),
+    getAllModels: () => listed()?.all ?? provider.getAllModels?.() ?? provider.getModels(),
+    // The catalog comes from Pi's service, so a stale provider sign-in must not block it.
+    refreshModelsAuth: "configured",
+    refreshModels: async (context: RefreshModelsContext) => {
+      const stored = context.stored;
+      const restored = checked(stored);
+      const shown = await context.publish({ update: () => show(restored) });
+      if (!shown || !context.allowNetwork || context.signal.aborted) return;
+      const since = (at: number | undefined) => (at === undefined ? undefined : now() - at);
+      const within = (age: number | undefined, limit: number) => age !== undefined && age >= 0 && age < limit;
+      if (!context.force) {
+        if (restored && within(since(stored?.checkedAt), CATALOG_REFRESH_MS)) return;
+        if (within(since(failedAt), CATALOG_RETRY_MS)) return;
+      }
+      try {
+        await fetchCatalog(context, stored, restored);
+        failedAt = undefined;
+      } catch (error) {
+        // Including a catalog that did not answer in time: the next reads don't wait for it again.
+        failedAt = now();
+        throw error;
+      }
     },
   } as Provider;
+  return { provider: wrapped, restore: (stored) => show(checked(stored)) };
+}
+
+/** `liveCatalog(provider).provider`, for a caller that restores through `Models.refresh()`. */
+export function withLiveCatalog(provider: Provider, options: LiveCatalogOptions = {}): Provider {
+  return liveCatalog(provider, options).provider;
 }
 
 const PROVIDER_FILE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -326,10 +388,15 @@ export class FileModelsStore implements ModelsStore {
       const info = await file.stat();
       if (!info.isFile() || info.size > BYTE_LIMIT) return undefined;
       const saved = JSON.parse(await file.readFile("utf8")) as Partial<ModelsStoreEntry> & { piVersion?: string };
-      // A catalog fetched for another Pi version is refetched, not reused.
-      if (saved.piVersion !== PI_AI_VERSION || !Array.isArray(saved.models)) return undefined;
+      const entries: unknown = saved?.models;
+      if (!Array.isArray(entries) || !entries.every((entry) => entry && typeof entry === "object" && !Array.isArray(entry))) {
+        return undefined;
+      }
+      // A catalog fetched for another Pi version still lists its models (a profile may name one
+      // only it has), but it is due at once: no time checked, and no validator to answer 304 to.
+      if (saved.piVersion !== PI_AI_VERSION) return { models: entries };
       return {
-        models: saved.models,
+        models: entries,
         ...(typeof saved.checkedAt === "number" && Number.isFinite(saved.checkedAt) ? { checkedAt: saved.checkedAt } : {}),
         ...(typeof saved.lastModified === "number" && Number.isFinite(saved.lastModified)
           ? { lastModified: saved.lastModified }

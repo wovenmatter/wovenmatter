@@ -150,17 +150,22 @@ shard directly, avoiding the service’s version-normalization redirect while re
 representation; both loaders explicitly retain only supported chat APIs. Native
 API-key xAI connections retain the `xai-api` identity while fetching the `xai` shard. Device Claude subscriptions retain `claude-subscription` while fetching the `anthropic` shard.
 
-The bots runtime reads the same shards for the providers its bots use, through
-pi-ai's own model refresh hook: the list pi-ai ships is only what a bot host has
-before its first catalog arrives, or while it is offline.
+The bots runtime reads the same shards for every provider it is signed in to,
+through pi-ai's own model refresh hook. Unlike the app, it does ship a list:
+the one inside pi-ai. A shard adds to that list and wins where both name a
+model, as in Pi's own coding agent; it never removes a shipped model, so a bot
+keeps the model it runs on.
 
 The native cache, the shared desktop/remote cache and the bots runtime's cache
 (`provider-models/` in its data folder) store bounded provider files
 with ETag, Last-Modified and a four-hour freshness window. They perform no launch
 fetch or polling. Refresh happens only while browsing a provider (for bots: whenever a model list
 is read, in first-run setup, Settings or by Admin Bot) or resolving an
-uncached selected descriptor; cached selections remain usable during catalog
-outages. Refresh/retry is explicit after a first-load failure. Public metadata
+uncached selected descriptor (for bots: a start that finds a profile on a model
+it does not know); cached selections remain usable during catalog
+outages. Refresh/retry is explicit after a first-load failure; bots, which have
+no refresh control, try again on a list read five minutes or more after a
+failure. Public metadata
 requests contain no credentials, cookies, account/device IDs or inference input,
 and do not follow redirects. Fixed provider/API/base-URL policy is checked before
 credential access. Complete compatibility, reasoning, input and tiered-cost
@@ -171,6 +176,9 @@ retain their original `modelJSON`. Desktop/remote conversations and native child
 contexts pin selected descriptors in their existing durable records; inference
 hosts also retain their own descriptor for each authorized client conversation.
 Catalog refresh cannot replace a run's model, provider, account or execution owner.
+Bots resolve a model by its id on every step instead of pinning a descriptor, so a
+refreshed shard can update the facts of a model a bot is on (its sizes and
+prices), never its provider, API or destination, which the fixed policy decides.
 Authorized subscription-host discovery and explicitly configured Tailscale server
 IDs remain separate from public metadata discovery.
 

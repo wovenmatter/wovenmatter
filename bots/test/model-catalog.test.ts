@@ -2,6 +2,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type Credential,
+  type CredentialStore,
   InMemoryModelsStore,
   type ModelsStore,
   PI_AI_VERSION,
@@ -10,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CLAUDE_SUBSCRIPTION_PROVIDER } from "../src/claude/provider.ts";
 import {
   CATALOG_REFRESH_MS,
+  CATALOG_RETRY_MS,
   checkCatalogModel,
   FileModelsStore,
   newestFirst,
@@ -105,7 +107,7 @@ describe("Pi's live model catalog for bots", () => {
     await dir.cleanup();
   });
 
-  it("lists what pi-ai ships until the catalog is loaded, then the live list", async () => {
+  it("lists what pi-ai ships until the catalog is loaded, then the live models as well", async () => {
     const service = catalogService({
       "openai-codex": [entry("openai-codex", "gpt-6.1-sol"), entry("openai-codex", "gpt-6.2-sol"), entry("openai-codex", "gpt-6.2-astra")],
     });
@@ -115,7 +117,14 @@ describe("Pi's live model catalog for bots", () => {
     expect(bundled).not.toContain("gpt-6.2-sol");
 
     expect(await refreshBotModels(models)).toEqual([]);
-    expect(ids(models.getModels("openai-codex"))).toEqual(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"]);
+    const listed = ids(models.getModels("openai-codex"));
+    expect(listed).toEqual(expect.arrayContaining(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"]));
+    expect(new Set(listed).size).toBe(listed.length);
+    // The catalog's word on a model both name; a shipped model it does not name stays, so a bot
+    // already running on one keeps running.
+    expect(models.getModel("openai-codex", "gpt-6.1-sol")?.name).toBe("GPT-6.1-SOL");
+    expect(listed).toEqual(expect.arrayContaining(bundled));
+    expect(models.getModel("openai-codex", "gpt-6-sol")).toMatchObject({ id: "gpt-6-sol", provider: "openai-codex" });
     expect(ids(await models.getAvailable("openai-codex"))).toContain("gpt-6.2-astra");
     expect(models.getModel("openai-codex", "gpt-6.2-sol")).toMatchObject({
       provider: "openai-codex",
@@ -159,15 +168,15 @@ describe("Pi's live model catalog for bots", () => {
     expect(codex).toHaveLength(2);
     // Unchanged: a 304 keeps the list and only moves when it was last checked.
     expect(codex[1]?.headers["if-none-match"]).toMatch(/^"openai-codex-/);
-    expect(ids(models.getModels("openai-codex"))).toEqual(["gpt-6.2-sol"]);
+    expect(ids(models.getModels("openai-codex"))).toContain("gpt-6.2-sol");
     expect((await store.read("openai-codex"))?.checkedAt).toBe(now);
 
     // A changed catalog replaces it; a forced refresh does not wait for the four hours.
     service.lists["openai-codex"] = [entry("openai-codex", "gpt-6.2-sol"), entry("openai-codex", "gpt-7-sol")];
     await refreshBotModels(models);
-    expect(ids(models.getModels("openai-codex"))).toEqual(["gpt-6.2-sol"]);
+    expect(ids(models.getModels("openai-codex"))).not.toContain("gpt-7-sol");
     await refreshBotModels(models, { force: true });
-    expect(ids(models.getModels("openai-codex"))).toEqual(["gpt-6.2-sol", "gpt-7-sol"]);
+    expect(ids(models.getModels("openai-codex"))).toEqual(expect.arrayContaining(["gpt-6.2-sol", "gpt-7-sol"]));
   });
 
   it("restores the stored catalog without the network, as a restart does", async () => {
@@ -176,11 +185,76 @@ describe("Pi's live model catalog for bots", () => {
     await refreshBotModels(await open(service, store));
     const requests = service.seen.length;
 
-    const restarted = await open(service, store);
+    // A start must not wait on the host for credentials, or renew a sign-in, to list models.
+    const read: string[] = [];
+    const credentials = await signedIn();
+    const watched: CredentialStore = {
+      read: (provider) => (read.push(provider), credentials.read(provider)),
+      list: () => (read.push("list"), credentials.list()),
+      modify: (provider, fn) => (read.push(provider), credentials.modify(provider, fn)),
+      delete: (provider) => credentials.delete(provider),
+    };
+    const restarted = createBotModels(watched, {
+      claude: { directory: join(dir.path, "claude") },
+      catalog: { store, fetch: service.fetch, now: () => now },
+    });
     expect(ids(restarted.getModels("openai-codex"))).not.toContain("gpt-6.2-sol");
     expect(await refreshBotModels(restarted, { network: false })).toEqual([]);
-    expect(ids(restarted.getModels("openai-codex"))).toEqual(["gpt-6.2-sol"]);
+    expect(ids(restarted.getModels("openai-codex"))).toContain("gpt-6.2-sol");
     expect(service.seen.length).toBe(requests);
+    expect(read).toEqual([]);
+  });
+
+  it("leaves a catalog that can't be read alone for five minutes instead of asking on every read", async () => {
+    const service = catalogService({ "openai-codex": 503 });
+    const models = await open(service);
+    expect(await refreshBotModels(models)).toEqual(["openai-codex: the model catalog answered 503"]);
+    // The next readers are not held up, and the log is not filled.
+    expect(await refreshBotModels(models)).toEqual([]);
+    now += CATALOG_RETRY_MS - 1_000;
+    expect(await refreshBotModels(models)).toEqual([]);
+    expect(service.seen).toHaveLength(1);
+
+    service.lists["openai-codex"] = [entry("openai-codex", "gpt-6.2-sol")];
+    now += 2_000;
+    expect(await refreshBotModels(models)).toEqual([]);
+    expect(service.seen).toHaveLength(2);
+    expect(ids(models.getModels("openai-codex"))).toContain("gpt-6.2-sol");
+  });
+
+  it("gives readers that arrive together the same new list, from one request", async () => {
+    const service = catalogService({ "openai-codex": [entry("openai-codex", "gpt-6.2-sol")] });
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = (async (...request: Parameters<typeof fetch>) => {
+      await held;
+      return service.fetch(...request);
+    }) as typeof fetch;
+    const models = createBotModels(await signedIn(), {
+      claude: { directory: join(dir.path, "claude") },
+      catalog: { store: new InMemoryModelsStore(), fetch: slow, now: () => now },
+    });
+    const listedAfter = () => refreshBotModels(models).then(() => ids(models.getModels("openai-codex")));
+    const first = listedAfter();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = listedAfter();
+    release();
+    expect(await first).toContain("gpt-6.2-sol");
+    expect(await second).toContain("gpt-6.2-sol");
+    expect(service.seen).toHaveLength(1);
+  });
+
+  it("still shows a catalog it could not save", async () => {
+    const service = catalogService({ "openai-codex": [entry("openai-codex", "gpt-6.2-sol")] });
+    const store = new InMemoryModelsStore();
+    store.write = async () => {
+      throw new Error("the disk is full");
+    };
+    const models = await open(service, store);
+    expect(await refreshBotModels(models)).toEqual(["openai-codex: the disk is full"]);
+    expect(ids(models.getModels("openai-codex"))).toContain("gpt-6.2-sol");
   });
 
   it("keeps the list it had when the catalog can't be read or is refused", async () => {
@@ -205,14 +279,20 @@ describe("Pi's live model catalog for bots", () => {
     });
     const models = await open(service, new InMemoryModelsStore(), ["xai", "xai-api", CLAUDE_SUBSCRIPTION_PROVIDER]);
     expect(await refreshBotModels(models)).toEqual([]);
-    expect(models.getModels("xai-api")).toMatchObject([{ id: "grok-5", provider: "xai-api", baseUrl: "https://api.x.ai/v1" }]);
-    expect(models.getModels("xai")).toMatchObject([{ id: "grok-5", provider: "xai" }]);
+    expect(models.getModel("xai-api", "grok-5")).toMatchObject({ provider: "xai-api", baseUrl: "https://api.x.ai/v1" });
+    expect(models.getModel("xai", "grok-5")).toMatchObject({ provider: "xai" });
+    for (const model of models.getModels("xai-api")) expect(model.provider).toBe("xai-api");
     // Claude runs through the Claude Agent SDK: its models keep that API, not Anthropic's endpoint.
     const bundled = createBotModels(await signedIn(), { claude: { directory: join(dir.path, "claude") } });
     const shipped = bundled.getModels(CLAUDE_SUBSCRIPTION_PROVIDER)[0];
-    expect(models.getModels(CLAUDE_SUBSCRIPTION_PROVIDER)).toMatchObject([
-      { id: "claude-next", provider: CLAUDE_SUBSCRIPTION_PROVIDER, api: shipped?.api, baseUrl: shipped?.baseUrl },
-    ]);
+    expect(models.getModel(CLAUDE_SUBSCRIPTION_PROVIDER, "claude-next")).toMatchObject({
+      provider: CLAUDE_SUBSCRIPTION_PROVIDER,
+      api: shipped?.api,
+      baseUrl: shipped?.baseUrl,
+    });
+    for (const model of models.getModels(CLAUDE_SUBSCRIPTION_PROVIDER)) {
+      expect(model).toMatchObject({ provider: CLAUDE_SUBSCRIPTION_PROVIDER, api: shipped?.api, baseUrl: shipped?.baseUrl });
+    }
     expect(service.seen.filter((item) => item.url.includes("/anthropic")).length).toBe(1);
   });
 
@@ -229,50 +309,76 @@ describe("Pi's live model catalog for bots", () => {
     expect(ids(models.getModels("openai-codex"))).toEqual(bundled);
   });
 
-  it("shows the live list wherever a model is chosen, and keeps it across a restart", async () => {
-    const service = catalogService({ xai: [entry("xai", "grok-4.3"), entry("xai", "grok-5")] });
-    const host = new FakeHost();
-    host.credentials.set("xai", { type: "api_key", key: "test-xai-key" });
-    const logs: string[] = [];
-    const start = () =>
-      startRuntime(testConfig(dir.path), {
+  describe("the running runtime", () => {
+    type Catalog = { providers: { id: string; models: { id: string }[] }[] };
+    const runtimeWith = (service: ReturnType<typeof catalogService>, model: string, logs: string[] = []) => {
+      const host = new FakeHost();
+      host.credentials.set("xai", { type: "api_key", key: "test-xai-key" });
+      return startRuntime(testConfig(dir.path), {
         env: null,
-        // A profile on a model only the live catalog lists.
-        settings: testSettings("xai/grok-5"),
+        settings: testSettings(model),
         host,
         port: 0,
         log: (line) => logs.push(line),
         catalog: { fetch: service.fetch },
       });
-    type Catalog = { providers: { id: string; models: { id: string }[] }[] };
-    const listed = async (runtime: Awaited<ReturnType<typeof start>>) => {
+    };
+    const listed = async (runtime: Awaited<ReturnType<typeof runtimeWith>>) => {
       const client = await openClient(`${runtime.server.url.replace("http", "ws")}/ws`);
       try {
         const catalog = await client.request<Catalog>("models.catalog");
-        return catalog.providers.find((provider) => provider.id === "xai")?.models.map((model) => model.id);
+        return catalog.providers.find((provider) => provider.id === "xai")?.models.map((model) => model.id) ?? [];
       } finally {
         client.close();
       }
     };
-    let runtime = await start();
-    try {
-      // Nothing is fetched at start: asking for the list is what loads the catalog, newest first.
-      expect(await listed(runtime)).toEqual(["grok-5", "grok-4.3"]);
-      expect(JSON.parse(await readFile(join(dir.path, "provider-models", "xai.json"), "utf8")).models).toHaveLength(2);
-    } finally {
-      await runtime.close();
-    }
-    // Restarted with the catalog service down: the stored list is there from the first moment.
-    service.lists.xai = 503;
-    logs.length = 0;
-    runtime = await start();
-    try {
-      expect(runtime.models.getModel("xai", "grok-5")).toMatchObject({ id: "grok-5", provider: "xai" });
-      expect(logs.filter((line) => line.includes("has no model"))).toEqual([]);
-      expect(await listed(runtime)).toEqual(["grok-5", "grok-4.3"]);
-    } finally {
-      await runtime.close();
-    }
+    const until = async (done: () => boolean) => {
+      for (let tries = 0; tries < 200 && !done(); tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(done()).toBe(true);
+    };
+
+    it("fetches nothing at start, and lists the live models newest first once a list is read", async () => {
+      const service = catalogService({ xai: [entry("xai", "grok-4.3"), entry("xai", "grok-9")] });
+      // A profile on a model pi-ai ships.
+      const runtime = await runtimeWith(service, "xai/grok-4.3");
+      try {
+        // Long enough for a read begun by the start to have reached the service.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(service.seen).toEqual([]);
+        const models = await listed(runtime);
+        expect(models[0]).toBe("grok-9");
+        expect(models).toContain("grok-4.3");
+        expect(service.seen).toHaveLength(1);
+        expect(JSON.parse(await readFile(join(dir.path, "provider-models", "xai.json"), "utf8")).models).toHaveLength(2);
+      } finally {
+        await runtime.close();
+      }
+    });
+
+    it("reads the catalog at start only for a profile on a model it does not know, and knows it offline afterwards", async () => {
+      const service = catalogService({ xai: [entry("xai", "grok-9")] });
+      // A profile on a model only the live catalog lists, and nothing stored yet.
+      let runtime = await runtimeWith(service, "xai/grok-9");
+      try {
+        await until(() => runtime.models.getModel("xai", "grok-9") !== undefined);
+        expect(service.seen).toHaveLength(1);
+      } finally {
+        await runtime.close();
+      }
+      // Restarted with the catalog service down: the stored list is there from the first moment.
+      service.lists.xai = 503;
+      service.seen.length = 0;
+      const logs: string[] = [];
+      runtime = await runtimeWith(service, "xai/grok-9", logs);
+      try {
+        expect(runtime.models.getModel("xai", "grok-9")).toMatchObject({ id: "grok-9", provider: "xai" });
+        expect(service.seen).toEqual([]);
+        expect(logs.filter((line) => line.includes("has no model"))).toEqual([]);
+        expect((await listed(runtime))[0]).toBe("grok-9");
+      } finally {
+        await runtime.close();
+      }
+    });
   });
 
   describe("the order of a model list", () => {
@@ -316,6 +422,7 @@ describe("Pi's live model catalog for bots", () => {
         sorted("gpt-4o-2024-08-06", "gpt-4.1", "mistral-medium-2508", "llama-3.3-70b", "claude-haiku-4-5-20251001", "claude-haiku-5-5"),
       ).toEqual(["claude-haiku-5-5", "claude-haiku-4-5-20251001", "gpt-4.1", "gpt-4o-2024-08-06", "llama-3.3-70b", "mistral-medium-2508"]);
       expect(sorted("grok-4.3", "grok-10", "grok-5")).toEqual(["grok-10", "grok-5", "grok-4.3"]);
+      expect(sorted("gpt-4", "gpt-4-32k", "gpt-4.1")).toEqual(["gpt-4.1", "gpt-4", "gpt-4-32k"]);
       expect(sorted("command-r-08-2024", "mixtral-8x22b-instruct", "command-a", "command-r7b-12-2024", "command-2")).toEqual([
         "command-2",
         "command-a",
@@ -407,15 +514,40 @@ describe("Pi's live model catalog for bots", () => {
       expect(await store.read("openai-codex")).toBeUndefined();
     });
 
-    it("does not reuse a file from another Pi version, a broken one, or an odd name", async () => {
+    it("keeps the models of a file from another Pi version, but as due for a fresh read", async () => {
+      const service = catalogService({ xai: [entry("xai", "grok-9"), entry("xai", "grok-10")] });
       const store = new FileModelsStore(join(dir.path, "provider-models"));
-      await store.write("xai", { models: [entry("xai", "grok-5")] as never, checkedAt: 1 });
+      await store.write("xai", { models: [entry("xai", "grok-9")] as never, checkedAt: now, etag: '"old"' });
       const path = join(dir.path, "provider-models", "xai.json");
-      const text = await readFile(path, "utf8");
-      await writeFile(path, text.replace(PI_AI_VERSION, "0.0.1"));
-      expect(await store.read("xai")).toBeUndefined();
+      await writeFile(path, (await readFile(path, "utf8")).replace(PI_AI_VERSION, "0.0.1"));
+      expect(await store.read("xai")).toEqual({ models: [entry("xai", "grok-9")] });
+
+      // A bot on a model only that catalog listed still has it after the update, before any read.
+      const models = await open(service, store, ["xai"]);
+      await refreshBotModels(models, { network: false });
+      expect(models.getModel("xai", "grok-9")).toBeDefined();
+      // And the next read fetches the whole catalog for this version: no four-hour wait, no 304.
+      await refreshBotModels(models);
+      expect(service.seen).toHaveLength(1);
+      expect(service.seen[0]?.headers["if-none-match"]).toBeUndefined();
+      expect(models.getModel("xai", "grok-10")).toBeDefined();
+    });
+
+    it("does not read a broken file, one that is not a list of models, or an odd name", async () => {
+      const service = catalogService({ xai: [entry("xai", "grok-9")] });
+      const store = new FileModelsStore(join(dir.path, "provider-models"));
+      await store.write("xai", { models: [entry("xai", "grok-9")] as never, checkedAt: 1 });
+      const path = join(dir.path, "provider-models", "xai.json");
       await writeFile(path, "{not json");
       expect(await store.read("xai")).toBeUndefined();
+      for (const models of ["[null]", '["grok"]', "[[]]", '{"a":1}']) {
+        await writeFile(path, `{"piVersion":"${PI_AI_VERSION}","checkedAt":${now},"models":${models}}`);
+        expect(await store.read("xai")).toBeUndefined();
+      }
+      // Such a file does not stop the provider's catalog from being read again.
+      const models = await open(service, store, ["xai"]);
+      expect(await refreshBotModels(models)).toEqual([]);
+      expect(models.getModel("xai", "grok-9")).toBeDefined();
       await expect(store.write("../escape", { models: [] })).rejects.toThrow("invalid provider id");
       expect(await store.read("../escape")).toBeUndefined();
     });

@@ -197,7 +197,7 @@ struct BotOnboardingView: View {
             })
     }
 
-    /// The user's pick, else Admin Bot's current model, else the newest model listed first.
+    /// The user's pick, else Admin Bot's current model, else the first model listed.
     private func selectedModel(_ catalog: PiBotModelCatalog) -> String {
         if let selection { return selection }
         if let current = bots.onboarding?.mainModel, catalog.isKnown(current) { return current }

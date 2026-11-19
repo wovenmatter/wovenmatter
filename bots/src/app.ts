@@ -209,7 +209,7 @@ export async function startRuntime(
       if (!live) return;
       for (const problem of await refreshBotModels(live, how)) log(`model catalog: ${problem}`);
     };
-    // The stored catalog, without the network: a profile may name a model only it lists. Nothing
+    // The stored catalog, straight from disk: a profile may name a model only it lists. Nothing
     // is fetched at start or on a timer, as elsewhere in Woven Matter: a newer catalog is read
     // when someone opens a model list.
     await refreshModels({ network: false });
@@ -221,7 +221,13 @@ export async function startRuntime(
       for (const profile of profileSet.profiles) {
         if (profile.main) refs[`profiles.${profile.id}.main`] = parseModelRef(profile.main);
       }
-      if (live) for (const problem of checkModelRoles(live, refs)) log(`warning: ${problem}`);
+      if (live && checkModelRoles(live, refs).length) {
+        // A profile names a model neither pi-ai nor the stored catalog lists (a cleared cache, a
+        // model added since): the one case a start reads the catalog, without holding the start up.
+        void refreshModels({ timeoutMs: 15_000 }).then(() => {
+          for (const problem of checkModelRoles(live, refs)) log(`warning: ${problem}`);
+        });
+      }
     }
     const profiles = new ProfileStore(profileSet, {
       persist: (set) => settings.update((current) => ({ ...current, ...profilesToRaw(set) })).then(() => {}),

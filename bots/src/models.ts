@@ -18,7 +18,7 @@ import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { claudeAgentModel, claudeAgentProvider } from "./claude/provider.ts";
 import type { ClaudeAgentOptions } from "./claude/runtime.ts";
 import type { ModelRef } from "./config.ts";
-import { type LiveCatalogOptions, withLiveCatalog } from "./model-catalog.ts";
+import { type LiveCatalog, type LiveCatalogOptions, liveCatalog } from "./model-catalog.ts";
 
 export type BotModelsOptions = {
   /** The Claude Agent SDK runtime; `directory` defaults to a per-user temp dir (app: the data dir). */
@@ -51,7 +51,7 @@ function xaiApiProvider(): Provider {
 /**
  * pi-ai models for every bot. Request auth resolves through `credentials` (the host API: provider
  * connections in Woven settings). `claude-subscription` is Claude through the Claude Agent SDK.
- * With `catalog`, every provider lists Pi's live catalog once `refreshBotModels` has loaded it.
+ * With `catalog`, every provider also lists Pi's live catalog once `refreshBotModels` has loaded it.
  */
 export function createBotModels(
   credentials: CredentialStore,
@@ -59,15 +59,18 @@ export function createBotModels(
 ): MutableModels {
   const catalog = options.catalog;
   const models = createModels({ credentials, ...(catalog ? { modelsStore: catalog.store } : {}) });
-  const live = (provider: Provider, more: Pick<LiveCatalogOptions, "source" | "adapt"> = {}) =>
-    catalog
-      ? withLiveCatalog(provider, {
-          ...more,
-          ...(catalog.fetch ? { fetch: catalog.fetch } : {}),
-          ...(catalog.baseUrl ? { baseUrl: catalog.baseUrl } : {}),
-          ...(catalog.now ? { now: catalog.now } : {}),
-        })
-      : provider;
+  const restores = new Map<string, LiveCatalog["restore"]>();
+  const live = (provider: Provider, more: Pick<LiveCatalogOptions, "source" | "adapt"> = {}) => {
+    if (!catalog) return provider;
+    const made = liveCatalog(provider, {
+      ...more,
+      ...(catalog.fetch ? { fetch: catalog.fetch } : {}),
+      ...(catalog.baseUrl ? { baseUrl: catalog.baseUrl } : {}),
+      ...(catalog.now ? { now: catalog.now } : {}),
+    });
+    restores.set(provider.id, made.restore);
+    return made.provider;
+  };
   models.setProvider(live(openaiProvider()));
   models.setProvider(live(openaiCodexProvider()));
   models.setProvider(live(anthropicProvider()));
@@ -87,26 +90,61 @@ export function createBotModels(
       { source: "anthropic", adapt: (model: Model<Api>) => claudeAgentModel(model) },
     ),
   );
+  if (catalog) catalogs.set(models, { store: catalog.store, restores });
   return models;
 }
 
+/** What `refreshBotModels` needs of the models `createBotModels` made with a catalog. */
+const catalogs = new WeakMap<
+  MutableModels,
+  { readonly store: ModelsStore; readonly restores: ReadonlyMap<string, LiveCatalog["restore"]>; reading?: Promise<string[]> }
+>();
+
 /**
- * Load Pi's live catalog into `models`: the stored one at once, and with `network` a newer one
- * for every signed-in provider whose stored catalog is older than four hours. Never throws: a
- * provider that could not be refreshed keeps the list it had, and is named in the result.
+ * Load Pi's live catalog into `models`. Without `network`, only the stored catalogs, read
+ * straight from the store: no credential is read and nothing is fetched, so a start can wait for
+ * it. With `network` (the default), also a newer catalog for every signed-in provider whose stored
+ * one is older than four hours. Readers that arrive while one is on its way share it. Never
+ * throws: a provider that could not be refreshed keeps the list it had, and is named in the result.
  */
 export async function refreshBotModels(
   models: MutableModels,
   options: { readonly network?: boolean; readonly force?: boolean; readonly timeoutMs?: number } = {},
 ): Promise<string[]> {
-  const result = await models
-    .refresh({
-      allowNetwork: options.network !== false,
-      ...(options.force ? { force: true } : {}),
-      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
-    })
-    .catch((error: unknown) => ({ errors: new Map([["models", error as Error]]) }));
-  return [...result.errors].map(([provider, error]) => `${provider}: ${error.message}`);
+  const catalog = catalogs.get(models);
+  if (!catalog) return [];
+  const problem = (provider: string, error: unknown) =>
+    `${provider}: ${error instanceof Error ? error.message : String(error)}`;
+  if (options.network === false) {
+    const problems: string[] = [];
+    await Promise.all(
+      [...catalog.restores].map(async ([provider, restore]) => {
+        try {
+          restore(await catalog.store.read(provider));
+        } catch (error) {
+          problems.push(problem(provider, error));
+        }
+      }),
+    );
+    return problems;
+  }
+  const read = () =>
+    models
+      .refresh({
+        allowNetwork: true,
+        ...(options.force ? { force: true } : {}),
+        ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+      })
+      .then(
+        (result) => [...result.errors].map(([provider, error]) => problem(provider, error)),
+        (error: unknown) => [problem("models", error)],
+      );
+  // pi-ai lets a second refresh supersede the first, which would then answer with the old list.
+  if (options.force) return read();
+  catalog.reading ??= read().finally(() => {
+    catalog.reading = undefined;
+  });
+  return catalog.reading;
 }
 
 /** Problems with the configured roles, for startup warnings (unknown provider or model). */
