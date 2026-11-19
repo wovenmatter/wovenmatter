@@ -109,10 +109,16 @@ Every synced row has:
   every row accepted from another machine.
 - `deleted`: a deleted row stays as a marker so the deletion spreads.
 
-A machine pulls from another by asking for rows whose `changed` is above the
-last value it received, table by table. A received row replaces the local one
-when its `stamp` is newer. Because rows pass on unchanged, any machine can hand
-on another machine's rows; the owner need not be online.
+A library has one `changed` counter across all its tables. A machine pulls from
+another by asking for rows whose `changed` is above the last value it received,
+and gets them from every table in that order. A received row replaces the local
+one when its `stamp` is newer. Because rows pass on unchanged, any machine can
+hand on another machine's rows; the owner need not be online.
+
+Deletion is final: a deleted row stays deleted whatever edit arrives later.
+Deleting a row also removes what belongs to it (a session's items, an
+artifact's versions, a machine's sessions and folders), and rows that arrive
+later for a deleted parent are refused.
 
 Large content (attachments, images, database copies) is stored by content
 digest in a file store beside the library and fetched by digest when needed.
