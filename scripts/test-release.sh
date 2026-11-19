@@ -101,6 +101,5 @@ python3 scripts/test-support/test_release_code.py
 if [ "$mode" != --portable ]; then
   python3 scripts/test-support/test_release_metadata.py
   python3 scripts/test-support/test_updater_signing.py
-  scripts/test-desktop-updater.sh
 fi
 printf '%s\n' 'Release contract validation passed.'

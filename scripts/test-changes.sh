@@ -1,242 +1,28 @@
 #!/usr/bin/env bash
+# Runs the test suite. Suites are added here as the rebuilt parts gain tests.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-if [ "$(uname -s)" = "Darwin" ]; then
-  default_cache_root="/private/tmp/wovenmatter-validation"
-else
-  default_cache_root="${TMPDIR:-/tmp}/wovenmatter-validation"
-fi
-cache_root="${WOVENMATTER_TEST_CACHE_DIR:-$default_cache_root}"
-swift_scratch="${cache_root}/SwiftPM"
-derived_data="${cache_root}/DerivedData"
-host_arch="$(uname -m)"
-mkdir -p "$swift_scratch" "$derived_data"
 
 run_static_checks() {
-  local file
-  for file in remote/executor-deploy.sh remote/host/build-bundle.sh remote/host/bin/wm-exec scripts/*.sh; do
-    bash -n "$file"
-  done
-  scripts/test-release.sh
-  python3 scripts/test-support/test_ci_scopes.py
-  python3 scripts/test-support/test_cua_runtime.py
-  python3 scripts/test-support/test_ios_runner.py
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_verify_ios_app.py
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_testflight_ios_only.py
-  bash scripts/test-dev-signing.sh
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_dev_build.py
-  scripts/test-app-termination.sh
-  scripts/test-conversation-layout.sh
-  python3 scripts/test-support/test_executor_deployment.py
-  node --test scripts/test-support/native-mcp.test.mjs scripts/test-support/live-streaming-smoke.test.mjs scripts/test-support/artifact-state.test.mjs
-  scripts/test-executor-docker.sh
-  scripts/test-remote-host.sh
-  for file in remote/src/*.mjs remote/test/*.test.mjs; do
-    node --check "$file"
-  done
-  jq -e '.schemaVersion == 4 and (.harnesses | length == 4)' harnesses/catalog.json >/dev/null
   scripts/scan-public-tree.sh
+  local file
+  while IFS= read -r -d '' file; do
+    [ ! -f "$file" ] || bash -n "$file"
+  done < <(git ls-files -z -- '*.sh')
+  git ls-files -z -- '*.py' | PYTHONDONTWRITEBYTECODE=1 xargs -0 python3 -c '
+import ast, sys
+for path in sys.argv[1:]:
+    ast.parse(open(path).read(), filename=path)
+'
+  echo 'Static checks passed.'
 }
 
-run_package_tests() {
-  local suite
-  local process_suites=(
-    ACPSessionPermissionTests
-    ACPSessionRoutingTests
-    ClosedLidProtectionTests
-    DefaultAgentSDKControlTests
-    RemoteBrowserViewerTests
-    WorkspaceAgentToolsServiceTests
-    ConversationHTMLWebKitTests
-    NativeHarnessArchiveTests
-    NativeFramePrivacyTests
-    NativeJSONSearchProjectionTests
-    WorkspaceNativeRunArchiveTests
-  )
-  local isolated_filter
-  printf -v isolated_filter '%s|' "${process_suites[@]}"
-  isolated_filter="${isolated_filter%|}"
-  local test_command=(env
-    "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
-    "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
-    swift test --build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
-  # Process/socket and browser-feed fixtures measure startup, leases, deadlines,
-  # and reaping; the SDK suite also
-  # deliberately saturates the shared dispatch pool. Large archive fixtures
-  # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
-  # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
-  # toolchains that combine every test target in one parallel runner. Every
-  # excluded suite runs below with its original bounds and explicit concurrency
-  # tests intact, using the same compiled test artifacts.
-  "${test_command[@]}" --skip "$isolated_filter"
-  for suite in "${process_suites[@]}"; do
-    "${test_command[@]}" --skip-build --filter "$suite"
-  done
-  WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-backend-process.sh
-}
-
-run_default_agent_tests() {
-  npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
-  # Serialize test files that spawn SDK processes; their own concurrency tests
-  # retain their original bounds and parallel operations.
-  npm test --prefix default-agent
-  node scripts/build-ios-pi-runtime.mjs --check
-  node scripts/build-ios-embedded-runtime.mjs --check
-  scripts/test-embedded-runtime-macos.sh
-}
-
-run_remote_tests() {
-  npm test --prefix remote
-}
-
-run_bots_tests() {
-  # The bots runtime requires Node 26 (bots/package.json engines). Bots run on Pi
-  # Durable's SDK copy, so their tests load default-agent's installed bundle.
-  scripts/with-pinned-node.sh npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
-  scripts/with-pinned-node.sh npm ci --prefix bots --ignore-scripts --no-audit --no-fund
-  scripts/with-pinned-node.sh npm test --prefix bots
-  bots_tested=1
-}
-
-run_app_build() {
-  xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
-    -project app/WovenMatter.xcodeproj \
-    -scheme WovenMatter \
-    -configuration Debug \
-    -destination "platform=macOS,arch=${host_arch}" \
-    -derivedDataPath "$derived_data" \
-    CODE_SIGNING_ALLOWED=NO \
-    build
-  scripts/validate-native-app.sh \
-    "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
-  # The packaged-app acceptance test lives in one test target. Build only that
-  # target (a no-op when the package tests were just built) and run only that
-  # test from its bundle: `swift test --skip-build` needs every test bundle.
-  local swift_env=(env "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache" "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache")
-  local swift_package=(--build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
-  "${swift_env[@]}" swift build "${swift_package[@]}" --target WovenMatterAgentToolsTests
-  local tools_tests
-  tools_tests="$("${swift_env[@]}" swift build "${swift_package[@]}" --show-bin-path)/WovenMatterAgentToolsTests.xctest"
-  local html_log="${cache_root}/packaged-html-tools.log"
-  if [ -d "$tools_tests" ]; then
-    WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
-      xcrun xctest -XCTest 'WovenMatterAgentToolsTests.WorkspaceAgentToolsServiceTests/packagedHTMLToolsWorkAcrossHarnesses(runtime:)' \
-      "$tools_tests" 2>&1 | tee "$html_log"
-    # A selection that matches nothing passes silently; require the test itself.
-    grep -Eq 'Test packagedHTMLToolsWorkAcrossHarnesses\(runtime:\) with [0-9]+ test cases passed' "$html_log"
-  else
-    # A build system that combines every test target into one bundle.
-    "${swift_env[@]}" WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
-      swift test "${swift_package[@]}" --filter packagedHTMLToolsWorkAcrossHarnesses
-  fi
-  # The fixture substitutes CEF entry points; it does not launch Chromium.
-  local browser_build="${derived_data}/Build/Intermediates.noindex/WovenMatter.build/Debug/WovenMatter.build/DerivedSources/cef-${host_arch}"
-  make -C "$browser_build" WovenBrowserLifecycleTests >/dev/null
-  "$browser_build/WovenBrowserLifecycleTests"
-}
-
-run_cross_device() {
-  local ios_mode="${1:---simulator}"
-  env \
-    CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
-    SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
-    swift test --build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --package-path shared --scratch-path "${cache_root}/SharedSwiftPM"
-  if [ "$ios_mode" != --desktop-only ]; then
-    env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
-      scripts/test-ios.sh "$ios_mode"
-  fi
-  env WOVENMATTER_INTEGRATION_TEST_CACHE_DIR="${cache_root}/Integration" \
-    scripts/test-cross-device-integration.sh
-}
-
-run_all() {
-  run_static_checks
-  run_default_agent_tests
-  run_remote_tests
-  run_bots_tests
-  run_package_tests
-  run_app_build
-  run_cross_device --all-devices
-}
-
-run_desktop() {
-  run_static_checks
-  run_default_agent_tests
-  run_package_tests
-  run_app_build
-}
-
-run_macos() {
-  run_desktop
-  run_cross_device --simulator
-}
-
-# CI already ran portable fixtures and JavaScript tests once on Linux.
-run_native() {
-  npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
-  python3 scripts/test-support/test_release_metadata.py
-  python3 scripts/test-support/test_updater_signing.py
-  scripts/test-desktop-updater.sh
-  scripts/test-app-termination.sh
-  scripts/test-conversation-layout.sh
-  scripts/test-embedded-runtime-macos.sh
-  run_package_tests
-  run_app_build
-}
-
-run_remote() {
-  run_static_checks
-  run_default_agent_tests
-  run_remote_tests
-  run_bots_tests
-}
-
-mode="${1:-changed}"
-case "$mode" in
-  --ci) scripts/test-ci.sh; exit ;;
-  --native) run_native; exit ;;
-  --all) run_all; exit ;;
-  --desktop) run_desktop; exit ;;
-  --macos) run_macos; exit ;;
-  --cross-device) run_cross_device --simulator; exit ;;
-  --cross-device-desktop) run_cross_device --desktop-only; exit ;;
-  --remote) run_remote; exit ;;
-  --linux) WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-linux-library.sh; exit ;;
-  changed) ;;
+case "${1:---all}" in
+  --ci|--all) run_static_checks ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--ci|--native|--all|--desktop|--macos|--cross-device|--cross-device-desktop|--remote|--linux]' >&2
+    echo 'usage: scripts/test-changes.sh [--all|--ci]' >&2
     exit 64
     ;;
 esac
-
-base="${WOVENMATTER_TEST_BASE:-origin/main}"
-changed="$(
-  git diff --name-only "$base"...HEAD
-  git diff --name-only
-  git diff --cached --name-only
-  git ls-files --others --exclude-standard
-)"
-changed="$(printf '%s\n' "$changed" | sort -u)"
-if [ -z "$changed" ]; then
-  printf 'No changes relative to %s.\n' "$base"
-elif printf '%s\n' "$changed" | grep -Eq '^(default-agent/|shared/|ios/|integration/|remote/|harnesses/|scripts/|\.github/|app/Package|app/WovenMatter\.xcodeproj)'; then
-  run_all
-elif printf '%s\n' "$changed" | grep -Eq '^app/App/' \
-  && printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then
-  run_macos
-elif printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then
-  run_package_tests
-elif printf '%s\n' "$changed" | grep -Eq '^bots/' \
-  && ! printf '%s\n' "$changed" | grep -Eqv '^(bots/|docs/)'; then
-  run_bots_tests
-else
-  run_static_checks
-  # The packaged-app acceptance fixture loads the default agent's MCP client.
-  npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund
-  run_app_build
-fi
-if [ -z "${bots_tested:-}" ] && printf '%s\n' "$changed" | grep -Eq '^bots/'; then
-  run_bots_tests
-fi

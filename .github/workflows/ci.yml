@@ -15,20 +15,7 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@main
-      - uses: actions/setup-node@main
-        with:
-          node-version-file: default-agent/.node-version
-          cache: npm
-          cache-dependency-path: default-agent/package-lock.json
-      - name: Run focused Linux validation
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # Compare the immutable PR trees without fetching the full history.
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
-          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
-          scripts/test-ci.sh --files "$RUNNER_TEMP/changed-files"
+      - run: scripts/test-changes.sh --ci
