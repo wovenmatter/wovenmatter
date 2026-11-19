@@ -153,6 +153,8 @@ export class ClaudeRuntime {
       if (!validModels(models)) throw new DefaultAgentError('Claude did not return a valid model list. Refresh models to retry.');
       if (models.length) {
         this.models = models;
+        // A refreshed list gives fast mode another chance after plan changes.
+        this.fastModeBlocked = undefined;
         await writePrivateJSON(join(this.directory, 'claude-models.json'), { runtimeVersion: await this.sdkVersion(), models });
       }
     } catch (error) {

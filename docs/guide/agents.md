@@ -31,9 +31,10 @@ OpenCode includes model selection and server controls; configure its provider
 accounts through OpenCode.
 
 Codex and Claude Code chats show a **Fast mode** switch in the composer's
-**Model** popout when the harness offers Fast mode for the selected model. The
-harness decides eligibility and usage; Codex does not offer Ultrafast through
-its integration. Pi Durable's speeds are described in [Pi Durable](default-agent.md#fast-mode).
+**Model** popout when the harness offers Fast mode for the selected model and
+your plan. Codex reads this from your ChatGPT account's model list; Claude Code
+removes the switch once Claude reports that your account cannot use Fast mode.
+Codex does not offer Ultrafast through its integration. Pi Durable's speeds are described in [Pi Durable](default-agent.md#fast-mode).
 
 OpenCode uses stable v2 releases. Use the app's installation flow to
 get a compatible version. Stopping a shared service can affect other clients

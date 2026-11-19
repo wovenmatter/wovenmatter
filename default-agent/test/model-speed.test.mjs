@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zstdDecompressSync } from 'node:zlib';
 import { streamSimple as codexStream } from '@earendil-works/pi-ai/api/openai-codex-responses';
-import { CodexServiceTiers, claudeSpeeds, codexCatalogClientVersion, parseCodexServiceTiers, speedReference, splitSpeedReference, withSpeed } from '../src/model-speed.mjs';
+import { CodexServiceTiers, claudeSpeeds, codexCatalogClientVersion, parseCodexServiceTiers, recordClaudeFastMode, speedReference, splitSpeedReference, withSpeed } from '../src/model-speed.mjs';
 import { speedModelOption } from '../src/model-presentation.mjs';
 import { withReasoningSummaries } from '../src/reasoning-stream-options.mjs';
 
@@ -106,4 +106,37 @@ test('Claude fast mode is offered only where the subscription runtime reports it
   assert.deepEqual(withSpeed(opus, { reasoning: 'high' }, { speed: 'fast', claude }), { reasoning: 'high', wovenSpeed: 'fast' });
   assert.deepEqual(withSpeed({ ...opus, id: 'sonnet' }, { reasoning: 'high' }, { speed: 'fast', claude }), { reasoning: 'high' });
   assert.deepEqual(withSpeed(opus, { reasoning: 'high' }, { speed: 'ultrafast', claude }), { reasoning: 'high' });
+});
+
+test('a Pro catalog offers Ultrafast only on the model that lists it; older catalogs use additional_speed_tiers', () => {
+  // Shape of a ChatGPT Pro account's Codex catalog (both fields present).
+  const pro = { models: [
+    { slug: 'gpt-6.2-sol', additional_speed_tiers: ['fast', 'ultrafast'], service_tiers: [{ id: 'priority', name: 'Fast', description: '2x speed, increased usage' }, { id: 'ultrafast', name: 'Ultrafast', description: 'The fastest available responses for latency-sensitive work.' }] },
+    { slug: 'gpt-6.2-astra', additional_speed_tiers: ['fast'], service_tiers: [{ id: 'priority', name: 'Fast', description: '2x speed, increased usage' }] },
+    { slug: 'gpt-daybreak-blue-latest', additional_speed_tiers: [], service_tiers: [] },
+  ] };
+  const parsed = parseCodexServiceTiers(pro);
+  assert.deepEqual(Object.keys(parsed), ['gpt-6.2-sol', 'gpt-6.2-astra']);
+  assert.deepEqual(parsed['gpt-6.2-sol'].map(entry => [entry.id, entry.tier]), [['fast', 'priority'], ['ultrafast', 'ultrafast']]);
+  assert.deepEqual(parsed['gpt-6.2-astra'].map(entry => [entry.id, entry.tier]), [['fast', 'priority']]);
+  // A plan without faster tiers advertises none.
+  assert.deepEqual(parseCodexServiceTiers({ models: pro.models.map(entry => ({ ...entry, additional_speed_tiers: [], service_tiers: [] })) }), {});
+  assert.deepEqual(parseCodexServiceTiers({ models: [{ slug: 'older', additional_speed_tiers: ['fast', 'ultrafast'] }] }).older.map(entry => [entry.id, entry.tier]),
+    [['fast', 'priority'], ['ultrafast', 'ultrafast']]);
+});
+
+test('Claude stops offering fast mode once it refuses the account, and offers it again when it serves fast', () => {
+  const claude = { models: [{ value: 'opus', supportsFastMode: true }] };
+  const opus = { provider: 'claude-subscription', id: 'opus' };
+  recordClaudeFastMode(claude, { type: 'system', subtype: 'init', fast_mode_state: 'off', fast_mode_disabled_reason: 'pending' });
+  recordClaudeFastMode(claude, { type: 'result', fast_mode_state: 'off', fast_mode_disabled_reason: 'network_error' });
+  recordClaudeFastMode(claude, { type: 'result', fast_mode_state: 'off', fast_mode_disabled_reason: 'model_not_allowed' });
+  assert.equal(claudeSpeeds(claude, opus).length, 1, 'transient and model reasons do not describe the account');
+  recordClaudeFastMode(claude, { type: 'result', fast_mode_state: 'off', fast_mode_disabled_reason: 'extra_usage_disabled' });
+  assert.deepEqual(claudeSpeeds(claude, opus), []);
+  assert.deepEqual(withSpeed(opus, {}, { speed: 'fast', claude }), {});
+  recordClaudeFastMode(claude, { type: 'system', subtype: 'compact_boundary', fast_mode_state: 'on' });
+  assert.deepEqual(claudeSpeeds(claude, opus), []);
+  recordClaudeFastMode(claude, { type: 'system', subtype: 'init', fast_mode_state: 'on' });
+  assert.equal(claudeSpeeds(claude, opus).length, 1);
 });

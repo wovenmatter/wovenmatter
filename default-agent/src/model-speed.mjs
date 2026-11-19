@@ -20,11 +20,25 @@ export function splitSpeedReference(reference) {
 export const speedReference = (reference, speed) => speed ? `${reference}#${speed}` : reference;
 
 // Claude owns subscription eligibility, extra-usage billing and rate-limit
-// cooldown. Woven only opts the bundled runtime in for models it reports.
+// cooldown. Woven offers fast mode for models the runtime reports as capable,
+// until Claude reports that this account cannot use it.
 export function claudeSpeeds(claude, model) {
-  if (model?.provider !== 'claude-subscription') return [];
+  if (model?.provider !== 'claude-subscription' || claude.fastModeBlocked) return [];
   return claude.models.some(entry => entry.value === model.id && entry.supportsFastMode === true)
     ? [{ id: 'fast', name: speeds.fast }] : [];
+}
+
+// Account-level refusals Claude reports with `fast_mode_disabled_reason`. Model,
+// network and pending reasons do not describe the account.
+const claudeAccountBlocks = new Set(['free', 'extra_usage_disabled', 'preference', 'not_first_party', 'disabled_by_env']);
+
+// Claude decides eligibility when it serves a request. Record its verdict so
+// the selector stops offering fast mode the account cannot use; refreshing the
+// model list or a later fast response clears it.
+export function recordClaudeFastMode(claude, event) {
+  if (!event || !['system', 'result'].includes(event.type) || (event.type === 'system' && event.subtype !== 'init')) return;
+  if (event.fast_mode_state === 'on' || event.fast_mode_state === 'cooldown') claude.fastModeBlocked = undefined;
+  else if (claudeAccountBlocks.has(event.fast_mode_disabled_reason)) claude.fastModeBlocked = event.fast_mode_disabled_reason;
 }
 
 // The ChatGPT Codex catalog advertises each account's service tiers per model.
@@ -44,9 +58,12 @@ export function parseCodexServiceTiers(value) {
   const models = {};
   for (const entry of value.models) {
     const slug = text(entry?.slug, 512);
-    if (!slug || !Array.isArray(entry.service_tiers)) continue;
+    if (!slug) continue;
+    // `additional_speed_tiers` is the catalog's older spelling of the same tiers.
+    const advertised = Array.isArray(entry.service_tiers) && entry.service_tiers.length ? entry.service_tiers
+      : Array.isArray(entry.additional_speed_tiers) ? entry.additional_speed_tiers.map(id => ({ id: id === 'fast' ? 'priority' : id })) : [];
     const tiers = [];
-    for (const tier of entry.service_tiers.slice(0, 16)) {
+    for (const tier of advertised.slice(0, 16)) {
       const id = text(tier?.id, 64), speed = codexSpeed(id);
       if (!speed || tiers.some(existing => existing.id === speed)) continue;
       tiers.push({ id: speed, tier: id, name: text(tier.name, 64) ?? speeds[speed], ...(text(tier.description, 512) ? { description: tier.description } : {}) });

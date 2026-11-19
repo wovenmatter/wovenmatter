@@ -687,7 +687,8 @@ struct CloudConversation: View {
                                         }
                                         choosingFolder = false
                                     }
-                                }
+                                },
+                                sessionSelectionUpdating: conversation.map { model.updatingLocalACPSessionIDs.contains($0.id) } ?? false
                             )
                             .disabled(conversation?.isArchived == true)
                             .task(id: conversation?.id) {

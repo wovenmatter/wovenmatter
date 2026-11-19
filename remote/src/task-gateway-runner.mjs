@@ -16,8 +16,11 @@ const delay = ms => new Promise(done => setTimeout(done,ms))
 // inherits native policy; explicit saved choices still fail before submission.
 // Codex and Claude Code offer Fast mode as their own on/off option for the
 // current model; clients select it as that model's `#fast` variant.
-export const harnessFastOption = configuration => (configuration?.configOptions ?? []).find(option => ['fast','fast-mode'].includes(option.id))
 export const harnessFastEnabled = option => option?.currentValue === true || option?.currentValue === 'on'
+// Claude Code appends why the account cannot use Fast mode to the option's
+// description while it is off; offer it only where the harness can serve it.
+export const harnessFastOption = configuration => (configuration?.configOptions ?? []).find(option => ['fast','fast-mode'].includes(option.id)
+  && (harnessFastEnabled(option) || !String(option.description ?? '').includes(' — ')))
 
 export async function applyTaskConfiguration(rpc, sessionID, initial, configuration) {
   let current = initial

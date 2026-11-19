@@ -64,6 +64,8 @@ struct ConversationComposer: View {
     var directAttachmentLabel: String? = nil
     /// Offered Escape first, after slash commands. Returns whether it handled the key.
     var onEscapeKey: (() -> Bool)? = nil
+    /// True while a model or speed change is being applied to this chat.
+    var sessionSelectionUpdating = false
     @Environment(\.wovenTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTaskProgress) private var taskProgress
@@ -80,6 +82,28 @@ struct ConversationComposer: View {
     @State private var openMenu: ComposerMenuKind?
     @State private var isDropTarget = false
     @State private var permitsNarrowExpandedControls = false
+    /// A chosen model or speed shows at once and holds until the agent confirms
+    /// it, so the control never snaps back through intermediate updates.
+    @State private var pendingModelSelection: String?
+    @State private var pendingModelGeneration = 0
+    /// A choice made while an earlier one is applying; sent once it settles.
+    @State private var queuedModelSelection: String?
+
+    private var displayedModel: String? { pendingModelSelection ?? sessionMetadata?.model }
+
+    private func selectModel(_ option: String) {
+        guard option != displayedModel else { return }
+        pendingModelSelection = option
+        pendingModelGeneration += 1
+        let generation = pendingModelGeneration
+        guard !sessionSelectionUpdating else { queuedModelSelection = option; return }
+        onSelectModel?(option)
+        // A remote change reports no completion; never hold a choice forever.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(20))
+            if pendingModelGeneration == generation { pendingModelSelection = nil }
+        }
+    }
 
     private var isCollapsed: Bool {
         collapseOverride ?? startsCollapsed
@@ -246,6 +270,19 @@ struct ConversationComposer: View {
             return onDropFiles(urls)
         } isTargeted: { targeted in
             isDropTarget = targeted
+        }
+        .onChange(of: sessionMetadata?.model) { _, model in
+            if model == pendingModelSelection { pendingModelSelection = nil }
+        }
+        .onChange(of: sessionSelectionUpdating) { _, updating in
+            guard !updating else { return }
+            if let queued = queuedModelSelection, queued != sessionMetadata?.model {
+                queuedModelSelection = nil
+                onSelectModel?(queued)
+            } else {
+                queuedModelSelection = nil
+                pendingModelSelection = nil
+            }
         }
         .onChange(of: focusRequestGeneration) { _, generation in
             guard generation != nil else { return }
@@ -464,13 +501,13 @@ struct ConversationComposer: View {
                 sessionMenu(
                     kind: .model,
                     icon: .cpu,
-                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                    title: displayedModel.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                     menuTitle: "Model",
                     accessibilityLabel: "Choose session model",
                     options: sessionMetadata?.selectableModels ?? [],
-                    selection: sessionMetadata?.model,
+                    selection: displayedModel,
                     optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
-                    action: onSelectModel
+                    action: onSelectModel.map { _ in selectModel }
                 )
                 sessionMenu(
                     kind: .thinking,
@@ -510,13 +547,13 @@ struct ConversationComposer: View {
                     compactSessionMenu(
                         kind: .model,
                         icon: .cpu,
-                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                        title: displayedModel.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                         menuTitle: "Model",
                         accessibilityLabel: "Choose session model",
                         options: sessionMetadata?.selectableModels ?? [],
-                        selection: sessionMetadata?.model,
+                        selection: displayedModel,
                         optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
-                        action: onSelectModel
+                        action: onSelectModel.map { _ in selectModel }
                     )
                     compactSessionMenu(
                         kind: .thinking,
@@ -826,7 +863,9 @@ struct ConversationComposer: View {
                     onSelectSpeed: action
                 ) { option in
                     openMenu = nil
-                    action?(kind == .model ? sessionMetadata?.modelChoice(option) ?? option : option)
+                    if kind == .model, let displayedModel,
+                       SessionModelSpeed.split(option).model == SessionModelSpeed.split(displayedModel).model { return }
+                    action?(kind == .model ? sessionMetadata?.modelChoice(option, current: displayedModel) ?? option : option)
                 }
             }
             .zIndex(openMenu == kind ? 3 : 0)
@@ -1217,7 +1256,7 @@ struct ComposerOptionMenu: View {
                                         }
                                     }
                                     Spacer(minLength: 0)
-                                    if option == selection {
+                                    if isSelected(option) {
                                         LucideIcon(glyph: .check, size: 14)
                                             .foregroundStyle(WovenPalette.primary)
                                     }
@@ -1228,9 +1267,9 @@ struct ComposerOptionMenu: View {
                                 .frame(minHeight: rowHeight(option))
                                 .help(optionHelp(option))
                                 .accessibilityLabel(optionHelp(option))
-                                .accessibilityValue(option == selection ? "Selected" : "")
+                                .accessibilityValue(isSelected(option) ? "Selected" : "")
                                 .background(
-                                    option == selection ? WovenPalette.muted.opacity(0.55) : .clear,
+                                    isSelected(option) ? WovenPalette.muted.opacity(0.55) : .clear,
                                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 )
                             }
@@ -1250,6 +1289,12 @@ struct ComposerOptionMenu: View {
     }
 
     private var isModelMenu: Bool { !showsDescriptions && !capitalizeOptions }
+
+    /// A model row stays selected while its speed changes.
+    private func isSelected(_ option: String) -> Bool {
+        guard isModelMenu, let selection else { return option == selection }
+        return SessionModelSpeed.split(option).model == SessionModelSpeed.split(selection).model
+    }
 
     /// One faster speed is a switch; several are a choice with Standard first.
     @ViewBuilder private var speedControl: some View {

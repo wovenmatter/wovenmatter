@@ -10,6 +10,7 @@ import { accessFailure, DefaultAgentError, operationErrorMessage } from './confi
 import { claudeModelName } from './model-presentation.mjs';
 import { canUseClaudeNativeCompaction, openClaudeSession } from './claude-session.mjs';
 import { contextOverflowDiagnostic } from './native-context.mjs';
+import { recordClaudeFastMode } from './model-speed.mjs';
 export { canUseClaudeNativeCompaction } from './claude-session.mjs';
 
 // Pi owns the agent loop and tools. Claude's official SDK owns its native
@@ -354,6 +355,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
               await native.invalidate();
             }
             if (event.type === 'system' && event.subtype === 'compact_boundary') { compactBoundary = event; compactionCount++; }
+            if (options.wovenSpeed === 'fast') recordClaudeFastMode(claude, event);
             if (nativeContext.archive && event.type !== 'auth_status') await nativeContext.archive([{ id: `claude-sdk:event:${event.uuid ?? createHash('sha256').update(JSON.stringify(event)).digest('hex')}`,
               kind: `claude.sdk.event.${event.subtype ?? event.type}`, payload: JSON.stringify(event), contentMode: 'event', ...(nativeContext.runID ? { runID: nativeContext.runID } : {}) }]);
             if (event.type === 'result' && acknowledge) {

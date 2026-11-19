@@ -186,6 +186,20 @@ struct ACPHarnessStreamingReviewTests {
     #expect(!log.contains("#fast"), "Speed variants never reach the harness")
   }
 
+  @Test func claudeCodeOffersNoFastSwitchForAnAccountItRefused() async throws {
+    let refused = #"{"configOptions":[{"id":"model","category":"model","currentValue":"opus","options":[{"value":"opus","name":"Opus"}]},{"id":"fast","name":"Fast mode","description":"Faster responses on supported models — requires extra usage to be enabled for this account","category":"model_config","type":"select","currentValue":"off","options":[{"value":"on","name":"On"},{"value":"off","name":"Off"}]}]}"#
+    let fixture = try ACPHarnessFixture(kind: .claudeCode, initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"selection","configOptions":[]}"#, extras: [:], initialConfiguration: refused)
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    let configuration = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil).configuration
+    #expect(configuration.model == "opus" && !configuration.modelOptions.contains("opus#fast"))
+    let standard = try await client.setSessionConfiguration(model: "opus#fast")
+    #expect(standard.model == "opus")
+    await client.shutdown()
+    #expect(!(try fixture.log()).contains("session/set_config_option"))
+  }
+
   @Test func grokCapturesVendorState() async throws {
     try await review(
       .grokBuild,

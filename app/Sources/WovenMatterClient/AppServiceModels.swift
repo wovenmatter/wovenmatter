@@ -178,8 +178,9 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     }
 
     /// Choosing another model keeps the current speed where that model offers it.
-    public func modelChoice(_ option: String) -> String {
-        guard let model, let speed = SessionModelSpeed.split(model).speed else { return option }
+    /// `current` is the selection shown, which may still await confirmation.
+    public func modelChoice(_ option: String, current: String? = nil) -> String {
+        guard let model = current ?? model, let speed = SessionModelSpeed.split(model).speed else { return option }
         let target = SessionModelSpeed.split(option).model
         guard target != SessionModelSpeed.split(model).model, SessionModelSpeed.split(option).speed == nil else { return option }
         let variant = target + "#" + speed

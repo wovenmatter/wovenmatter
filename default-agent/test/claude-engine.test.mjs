@@ -67,6 +67,15 @@ test('fast mode is a model selector variant that persists and reaches the native
   record.streamFunction = (selected, context, resolved) => { seen.push(resolved.wovenSpeed); return syntheticAssistant([{ type: 'text', text: 'Fast' }])(selected, context); };
   await engine.prompt(record, 'Answer quickly', () => {}, undefined, { runID: record.runID, inputID: record.inputID });
   assert.deepEqual(seen, ['fast']);
+  // Claude refuses fast mode for this account during a turn: the selector
+  // shows standard speed and offers no fast variant afterwards.
+  const updates = [];
+  record.streamFunction = (selected, context) => { engine.claude.fastModeBlocked = 'extra_usage_disabled'; return syntheticAssistant([{ type: 'text', text: 'Standard' }])(selected, context); };
+  await engine.prompt(record, 'Answer again', update => updates.push(update), undefined, { runID: record.runID, inputID: record.inputID });
+  const refused = menu(updates.filter(update => update.sessionUpdate === 'config_option_update').at(-1));
+  assert.equal(refused.currentValue, 'claude-subscription/sonnet');
+  assert.equal(refused.options.some(option => option.value.endsWith('#fast')), false);
+  engine.claude.fastModeBlocked = undefined;
 
   await record.session.dispose();
   const restarted = await new DefaultAgentEngine(options).initialize();

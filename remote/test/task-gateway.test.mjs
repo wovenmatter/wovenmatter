@@ -270,6 +270,9 @@ test('Codex and Claude Code apply a #fast model variant through their own Fast m
   await applyTaskConfiguration(rpc,'native',current,{runtimeKind,model:'b#fast'})
   assert.deepEqual(calls,[{sessionId:'native',configId:'model',value:'b'}])
  }
+ // Claude Code reports an account that cannot use Fast mode in its description.
+ const refused={configOptions:[{id:'model',currentValue:'a',options:[{value:'a'}]},{id:'fast',currentValue:'off',description:'Faster responses on supported models — requires extra usage to be enabled for this account',options:[{value:'on'},{value:'off'}]}]}
+ await applyTaskConfiguration(async()=>assert.fail('refused Fast mode was requested'),'native',refused,{runtimeKind:'claude_code',model:'a#fast'})
 })
 
 test('scheduled full-root Pi runs replace saved approval modes before dispatch and fail if unavailable', async () => {

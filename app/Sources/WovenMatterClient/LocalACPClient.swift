@@ -1917,9 +1917,13 @@ public actor LocalACPClient {
             permissionConfigurationID = parsed.permission?.id
             if runtimeKind == .codex || runtimeKind == .claudeCode {
                 let fast = configOptions.first { ["fast", "fast-mode"].contains($0["id"]?.stringValue ?? "") }
-                fastConfigurationID = fast?["id"]?.stringValue
                 fastConfigurationIsBoolean = fast?["type"]?.stringValue == "boolean"
                 fastEnabled = fast?["currentValue"]?.boolValue ?? (fast?["currentValue"]?.stringValue == "on")
+                // Claude Code appends why the account cannot use Fast mode to its
+                // description (“… — requires extra usage …”) while it is off.
+                // Offer the switch only where the harness can serve it.
+                let refused = !fastEnabled && fast?["description"]?.stringValue?.contains(" — ") == true
+                fastConfigurationID = refused ? nil : fast?["id"]?.stringValue
             }
             if parsed.permission != nil || hadPermissionOption {
                 permissionStateRevision &+= 1

@@ -200,7 +200,7 @@ export class DefaultAgentEngine {
       options.push({ id: modelRef(model), name: model.name, provider: model.provider, providerName: this.providerName(model.provider) });
     }
     // Speed variants follow their model, so menus group them with it.
-    const selectedSpeed = record.speed && record.session.model ? record.speed : undefined;
+    const selectedSpeed = this.selectedSpeed(record);
     const modelChoices = options.flatMap(option => {
       const model = option.id === record.selected && record.session.model ? record.session.model : this.resolveModel(option.id);
       const speeds = model ? this.speedOptions(model) : [];
@@ -335,6 +335,14 @@ export class DefaultAgentEngine {
     await record.configurationQueue;
     return this.configuration(record);
   }
+  // The chat's speed while its model offers it. ChatGPT tiers not yet read for
+  // this account keep the choice; a speed Claude refused for the account does not.
+  selectedSpeed(record) {
+    const model = record.session.model;
+    if (!record.speed || !model) return undefined;
+    if (this.speedOptions(model).some(speed => speed.id === record.speed)) return record.speed;
+    return model.provider === 'openai-codex' && !this.codexTiers.entry ? record.speed : undefined;
+  }
   speedOptions(model) {
     return model.provider === 'openai-codex' ? this.codexTiers.speeds(model) : claudeSpeeds(this.claude, model);
   }
@@ -440,6 +448,7 @@ export class DefaultAgentEngine {
           this.persistOptions(record);
           const configuration = this.configuration(record, fallbackReason);
           emit({ sessionUpdate: 'config_option_update', ...configuration });
+          const speedBefore = this.selectedSpeed(record);
           const continuations = [];
           const acceptSteer = (input, requestId, binding) => new Promise((resolve, reject) => {
             controller.signal.throwIfAborted();
@@ -487,6 +496,8 @@ export class DefaultAgentEngine {
           if (controller.signal.aborted) return { stopReason: 'cancelled', usage };
           if (record.lastCommandOutcome) return { stopReason: record.lastCommandOutcome, usage };
           const last = record.session.messages.at(-1);
+          // The provider may have refused the chat's speed for this account.
+          if (speedBefore !== this.selectedSpeed(record)) emit({ sessionUpdate: 'config_option_update', ...this.configuration(record) });
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn', usage };
           };

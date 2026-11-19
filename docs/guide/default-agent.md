@@ -102,8 +102,9 @@ Subscription models that offer faster inference show it in the composer's
 
 - **Claude subscription:** a **Fast mode** switch appears for models Claude
   reports as fast-capable, such as Opus 5.5 and Fable 5.2. Claude decides
-  eligibility and bills fast mode as extra usage on your plan; when Claude does
-  not allow it for your account, responses use standard speed.
+  eligibility when it answers and bills fast mode as extra usage on your plan.
+  If it refuses your account (for example, extra usage is off), that response
+  uses standard speed and the switch is removed until you refresh models.
 - **ChatGPT subscription:** a **Speed** choice offers **Fast** and, where your
   plan and model include it, **Ultrafast**; a model with only Fast shows a
   **Fast mode** switch. Woven Matter reads the tiers your ChatGPT account
