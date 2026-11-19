@@ -260,7 +260,7 @@ struct SettingsBotsMachineView: View {
     /// another machine sign in there, through that machine's scope.
     @ViewBuilder private func accountsLink(_ machine: BotMachine) -> some View {
         if machine.kind == .thisMac {
-            SettingsSummaryLink(title: "Subscriptions & API Keys", detail: "The sign-ins bots on this Mac use.") {
+            SettingsSummaryLink(title: "Subscriptions & API Keys", detail: "The sign-ins your bots use.") {
                 onOpenAccounts("global")
             }
         } else if let workspace = workspaces.first(where: {
@@ -268,11 +268,11 @@ struct SettingsBotsMachineView: View {
                 || $0.hostName.caseInsensitiveCompare(machine.name) == .orderedSame
         }) {
             SettingsSummaryLink(title: "Subscriptions & API Keys",
-                                detail: "Sign in for bots on \(machine.displayName). Claude signs in on that machine.") {
+                                detail: "Sign in for your bots. Claude signs in on \(machine.displayName).") {
                 onOpenAccounts(workspace.id.uuidString.lowercased())
             }
         } else {
-            SettingsNote("Bots on \(machine.displayName) use the sign-ins set up from the Mac that added it.")
+            SettingsNote("Your bots use the sign-ins set up from the Mac that added \(machine.displayName).")
         }
     }
 }
@@ -296,7 +296,7 @@ struct SettingsBotsMCPAccessSection: View {
     }
 
     var body: some View {
-        SettingsSection(title: "Bots", detail: "Each bot on this Mac gets its own key, so its calls are attributed to it.") {
+        SettingsSection(title: "Bots", detail: "Each bot gets its own key, so its calls are attributed to it.") {
             SettingsToggleRow(
                 title: "Give bots Woven MCP",
                 isOn: Binding(get: { snapshot?.botSettings.isEnabled ?? false }, set: { update(.setBotsEnabled($0)) })
@@ -315,7 +315,7 @@ struct SettingsBotsMCPAccessSection: View {
             // The switch that set this is gone; access revoked before then can still be given back.
             // It reads like a bot's revoked key below: revoked, and Reinstate brings it back.
             if bots.thisMachine?.paused == true {
-                SettingsRow(title: "Woven MCP access is revoked for bots on this Mac", detail: "Their Woven MCP calls are refused until you reinstate it. The bots themselves keep running.") {
+                SettingsRow(title: "Woven MCP access is revoked for bots", detail: "Their Woven MCP calls are refused until you reinstate it. The bots themselves keep running.") {
                     Button("Reinstate") { Task { await bots.attempt(.setPaused(false)) } }
                         .buttonStyle(SettingsQuietButtonStyle())
                         .disabled(bots.busy)
@@ -324,7 +324,7 @@ struct SettingsBotsMCPAccessSection: View {
             // A revoked key outlasts turning access off, so keys stay reachable.
             if !callers.isEmpty { keysRow }
             SettingsHelp {
-                SettingsNote("Bots on other machines get their keys from that machine. Outside agents have their own access below.")
+                SettingsNote("When bots run on another machine, they get their keys from it. Outside agents have their own access below.")
             }
             if let error { SettingsError(error) }
         }

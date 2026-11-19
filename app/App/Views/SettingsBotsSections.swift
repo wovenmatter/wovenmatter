@@ -49,7 +49,7 @@ struct SettingsBotsSectionPage: View {
         SettingsPage(title: section.title, detail: section.detail + " On \(bots.displayName).",
                      reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             BotSettingsErrorNotice(state: state)
-            if !bots.isConnected { SettingsEmpty("Bots on \(bots.displayName) are not connected.") }
+            if !bots.isConnected { SettingsEmpty("Bots are not connected.") }
             sectionBody
                 .disabled(state.disabled)
         }

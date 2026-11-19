@@ -406,13 +406,13 @@ final class BotMachineSession: Identifiable {
     }
 
     private func attempt(_ work: (PiBotClient) async throws -> Void) async {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return }
+        guard let client = connectedClient else { report("Bots are not connected."); return }
         do { try await work(client) }
         catch { report(error.localizedDescription) }
     }
 
     func createBot(name: String) async -> PiBotSummary? {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return nil }
+        guard let client = connectedClient else { report("Bots are not connected."); return nil }
         do {
             let bot = try await client.createBot(name: name)
             await reload()
@@ -501,7 +501,7 @@ final class BotMachineSession: Identifiable {
 
     /// A change that answers with the Forum's new state.
     private func changeForum(_ work: (PiBotClient) async throws -> PiBotForumState) async {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return }
+        guard let client = connectedClient else { report("Bots are not connected."); return }
         do {
             let state = try await work(client)
             guard client === self.client else { return }
@@ -525,7 +525,7 @@ final class BotMachineSession: Identifiable {
     /// A change that answers with every scheduled post.
     @discardableResult
     private func changeSchedules(_ work: (PiBotClient) async throws -> [PiBotForumSchedule]) async -> Bool {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return false }
+        guard let client = connectedClient else { report("Bots are not connected."); return false }
         do {
             let schedules = try await work(client)
             guard client === self.client else { return false }
@@ -554,7 +554,7 @@ final class BotMachineSession: Identifiable {
 
     /// Saves what bots call the user ("" clears it) and reports whether the runtime took it.
     func setUserName(_ name: String) async -> Bool {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return false }
+        guard let client = connectedClient else { report("Bots are not connected."); return false }
         do {
             let saved = try await client.setUserName(name.trimmingCharacters(in: .whitespacesAndNewlines))
             guard client === self.client else { return false }

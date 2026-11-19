@@ -23,6 +23,7 @@ import {
   type WebToolsOptions,
   webSearch,
 } from "../src/web.ts";
+import { VERSION } from "../src/version.ts";
 import { FAUX_MODEL, profileOf, tempDir } from "./helpers.ts";
 
 /** IPv4 addresses from their parts (the public-tree scan keeps literals out of the tree). */
@@ -322,6 +323,10 @@ describe("fetch_url", () => {
       "https://example.com/a",
     );
     expect(seen[0]?.url).toBe("https://example.com/a");
+    // It says what it is and where to read about it, and nothing about the user.
+    expect(seen[0]?.headers["user-agent"]).toBe(
+      `Mozilla/5.0 (compatible; WovenMatter-Bot/${VERSION}; +https://github.com/wovenmatter/wovenmatter)`,
+    );
     expect(out).toBe(
       "URL: https://example.com/a\nTitle: Hello & welcome\n\nMenu\n\nHeading\n\nFirst paragraph\nnext line\n\none\n\ntwo — — done",
     );

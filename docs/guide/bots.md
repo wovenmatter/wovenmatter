@@ -119,6 +119,9 @@ can't be read while that machine is unreachable.
   containers.
 - **No credentials inside.** Provider sign-ins and API keys never enter a
   container. Bots use the subscriptions and API keys of the machine they run on.
+- **Reading the web.** When a bot fetches a page with its own fetch tool, it tells
+  the site it is `WovenMatter-Bot`, with a link to this project. It sends nothing
+  about you.
 - **Previews.** A bot can share a web server running in its container. It gives
   you a private HTTPS address on your tailnet; it is never public.
 - **Services that come back.** A bot can register long-running services, such

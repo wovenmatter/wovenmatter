@@ -1096,18 +1096,18 @@ struct BotsUnavailableView: View {
     private var title: String {
         guard let machine else { return "This bot's machine isn't connected" }
         switch machine.state {
-        case .off: return machine.kind == .thisMac ? "Bots are off on this Mac" : "Bots are off on \(name)"
-        case .starting: return "Starting bots on \(name)"
+        case .off: return "Bots are off"
+        case .starting: return "Starting bots…"
         case .ready: return "Connecting…"
         case .unreachable: return "\(name) is unavailable"
         case .needsUpdate: return "Update in Settings → Updates to use these bots"
-        case .failed: return "Bots on \(name) could not start"
+        case .failed: return "Bots could not start"
         }
     }
 
     private var detail: String? {
         guard let machine else { return "Connect it in Settings → Apple Devices or Settings → Workspaces, then try again." }
-        if machine.state == .off, machine.kind == .thisMac { return "Turn them on in Settings → Bots." }
+        if machine.state == .off { return "Turn them on in Settings → Bots." }
         return machine.message
     }
 }

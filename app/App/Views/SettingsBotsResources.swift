@@ -16,7 +16,7 @@ struct SettingsBotsResourcesView: View {
     private var machine: BotMachine? { bots.machines.first { $0.id == machineID } }
 
     var body: some View {
-        SettingsPage(title: "Resources", detail: machine.map { "What bots on \($0.kind == .thisMac ? "this Mac" : $0.displayName) may use." },
+        SettingsPage(title: "Resources", detail: machine.map { "How much of \($0.kind == .thisMac ? "this Mac" : $0.displayName)'s memory and disk your bots may use." },
                      reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             if let machine, let capacity = machine.capacity {
                 let settings = draft ?? machine.resources ?? BotResourcePolicy.defaults(for: capacity)

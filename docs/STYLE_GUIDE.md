@@ -128,16 +128,19 @@ when an intentional design change is accepted.
   opens its main channel; a chevron reveals its threads, pinned first and then newest
   created. Thread dropdowns start closed. The Forum is a row in the same section, above
   Admin Bot, with the same chevron and thread rows and "Paused" as its trailing word.
-  Only the Forum is ever "paused". A bot whose models are all at a usage limit is "out
-  of usage" everywhere (its sidebar row, the banner in its channel, the profile editor),
-  one on a fallback model says "Fallback". Woven MCP access is "revoked" and
-  "reinstated", for one bot (its key) or for every bot on a machine (the older hold,
-  "Woven MCP revoked"), never paused. A bot in the Forum "sees" posts; one switched out sees none.
   It opens like a bot's channel: the same transcript, composer and thread-beside
   layout, with the poster's name over each bot's post, a bots button (who is in), a
   scheduled-posts button and one Pause or Resume button in its header, a banner while
   paused, and the "@" menu with a one-line note of what the draft's mentions do above
-  the composer. Everything about bots is native and uses the
+  the composer.
+  Wording: only the Forum is ever "paused". A bot whose models are all at a usage limit is
+  "out of usage" everywhere (its sidebar row, the banner in its channel, the profile
+  editor), one on a fallback model says "Fallback". Woven MCP access is "revoked" and
+  "reinstated", for one bot (its key) or for every bot on a machine (the older hold,
+  "Woven MCP revoked"), never paused. Text says "bots" or "your bots", not "bots on this
+  Mac": a machine is named only where the user picks it, goes to it, or it is the thing
+  that is unavailable. A bot in the Forum "sees" posts; one switched out sees none.
+  Everything about bots is native and uses the
   components regular chats and Settings use: the shared transcript text, user bubble and
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
   at 760 points and wider. Message actions appear on hover. Bots run on one machine.
