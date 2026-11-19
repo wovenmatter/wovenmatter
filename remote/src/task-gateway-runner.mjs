@@ -14,8 +14,18 @@ const delay = ms => new Promise(done => setTimeout(done,ms))
 
 // Apply advertised native options. An unavailable product permission default
 // inherits native policy; explicit saved choices still fail before submission.
+// Codex and Claude Code offer Fast mode as their own on/off option for the
+// current model; clients select it as that model's `#fast` variant.
+export const harnessFastOption = configuration => (configuration?.configOptions ?? []).find(option => ['fast','fast-mode'].includes(option.id))
+export const harnessFastEnabled = option => option?.currentValue === true || option?.currentValue === 'on'
+
 export async function applyTaskConfiguration(rpc, sessionID, initial, configuration) {
   let current = initial
+  let fast
+  if (['codex','claude_code'].includes(configuration.runtimeKind) && typeof configuration.model === 'string') {
+    fast = configuration.model.endsWith('#fast')
+    configuration = { ...configuration, model: fast ? configuration.model.slice(0, -'#fast'.length) : configuration.model }
+  }
   for (const [category,wanted] of [['model',configuration.model],['thinking',configuration.thinking],['permission',configuration.permission]]) {
     if (!wanted) continue
     if (category === 'permission' && configuration.runtimeKind === 'grok_build') continue // explicit CLI policy
@@ -36,6 +46,12 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
     } else if (category === 'permission' && current.modes?.availableModes?.some(x=>x.id===wanted)) {
       if (current.modes.currentModeId !== wanted) await rpc('session/set_mode',{sessionId:sessionID,modeId:wanted})
     } else throw before(`This agent cannot apply the task's saved ${category}.`)
+  }
+  // A model without the option keeps standard speed.
+  const option = harnessFastOption(current)
+  if (fast !== undefined && option && harnessFastEnabled(option) !== fast) {
+    const result = await rpc('session/set_config_option',{sessionId:sessionID,configId:option.id,value:option.type === 'boolean' ? fast : fast ? 'on' : 'off'})
+    current = { ...current,...result }
   }
 }
 

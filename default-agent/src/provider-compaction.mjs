@@ -15,7 +15,7 @@ const UNSUPPORTED_CODES = new Set(['unsupported_model', 'model_not_supported', '
 const clone = value => structuredClone(value);
 const nativeAccountHeader = values => (values instanceof Headers ? values : new Headers(Object.entries(values ?? {}).filter(([, value]) => value !== null && value !== undefined))).get('chatgpt-account-id');
 
-function tokenAccount(token) {
+export function tokenAccount(token) {
   try {
     const account = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'))?.['https://api.openai.com/auth']?.chatgpt_account_id;
     return typeof account === 'string' && account ? account : undefined;

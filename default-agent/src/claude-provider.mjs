@@ -330,6 +330,9 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
             CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off',
             ...(options.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(options.maxTokens) } : {}) },
           model: model.id, tools: [], skills: [], settingSources: [], strictMcpConfig: true,
+          // Claude's runtime requires an explicit SDK opt-in for fast mode. It
+          // still owns plan eligibility, extra usage and rate-limit cooldown.
+          ...(options.wovenSpeed === 'fast' && !compact ? { settings: { fastMode: true } } : {}),
           systemPrompt: { type: 'custom', prompt: request.system, snapshot: false },
           ...native.sdkOptions, maxTurns: 1, permissionMode: 'dontAsk', includePartialMessages: true,
           hooks: {

@@ -135,6 +135,57 @@ struct ACPHarnessStreamingReviewTests {
     #expect(!log.contains(#""value":{"#))
   }
 
+  @Test(arguments: [(AgentRuntimeKind.codex, "fast-mode"), (.claudeCode, "fast")])
+  func harnessFastModeIsTheCurrentModelsFastVariant(kind: AgentRuntimeKind, fastID: String) async throws {
+    let models = #"{"id":"model","category":"model","currentValue":"CURRENT","options":[{"value":"fast-model","name":"Fast model"},{"value":"plain-model","name":"Plain model"}]}"#
+    func state(_ model: String, fast: String?) -> String {
+      let fastOption = fast.map { #",{"id":"\#(fastID)","name":"Fast mode","category":"model_config","type":"select","currentValue":"\#($0)","options":[{"value":"on","name":"On"},{"value":"off","name":"Off"}]}"# } ?? ""
+      return #"{"configOptions":["# + models.replacingOccurrences(of: "CURRENT", with: model) + fastOption + "]}"
+    }
+    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"selection","configOptions":[]}"#,
+      extras: [:],
+      setConfigShell: """
+        case "$request" in
+          *'"value":"on"'*) respond "$id" '\(state("fast-model", fast: "on"))' ;;
+          *'"value":"plain-model"'*) respond "$id" '\(state("plain-model", fast: nil))' ;;
+          *) respond "$id" '\(state("fast-model", fast: "off"))' ;;
+        esac
+        """, initialConfiguration: state("fast-model", fast: "off"))
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    let initial = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil).configuration
+    #expect(initial.model == "fast-model")
+    #expect(initial.modelOptions.contains("fast-model#fast") && !initial.modelOptions.contains("plain-model#fast"))
+    #expect(initial.modelOptionMetadata["fast-model#fast"] == initial.modelOptionMetadata["fast-model"])
+    func metadata(_ configuration: LocalACPSessionConfiguration) -> LocalACPSessionMetadata {
+      LocalACPSessionMetadata(sessionKey: "fixture", configuration: configuration)
+    }
+    #expect(metadata(initial).selectableSpeeds == ["fast-model", "fast-model#fast"])
+    #expect(!metadata(initial).selectableModels.contains("fast-model#fast"))
+
+    let fast = try await client.setSessionConfiguration(model: "fast-model#fast")
+    #expect(fast.model == "fast-model#fast")
+    #expect(metadata(fast).selectableModels.first == "fast-model#fast")
+    var log = try fixture.log()
+    #expect(log.contains(#""configId":"\#(fastID)""#) && log.contains(#""value":"on""#))
+    #expect(!log.contains(#""value":"fast-model""#), "Fast mode keeps the model selection")
+
+    let standard = try await client.setSessionConfiguration(model: "fast-model")
+    #expect(standard.model == "fast-model")
+    #expect(try fixture.log().contains(#""value":"off""#))
+    // A model without the harness's Fast mode option keeps standard speed.
+    let plain = try await client.setSessionConfiguration(model: "plain-model#fast")
+    #expect(plain.model == "plain-model" && metadata(plain).selectableSpeeds.isEmpty)
+    do {
+      _ = try await client.setSessionConfiguration(model: "fast-model#ultrafast")
+      Issue.record("A harness accepted a speed it does not offer")
+    } catch LocalACPClientError.invalidConfigurationValue { }
+    await client.shutdown()
+    log = try fixture.log()
+    #expect(!log.contains("#fast"), "Speed variants never reach the harness")
+  }
+
   @Test func grokCapturesVendorState() async throws {
     try await review(
       .grokBuild,

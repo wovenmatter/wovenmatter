@@ -16,7 +16,7 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     }
 
     public static func modelLabel(id: String, metadata: Self?) -> String {
-        guard let name = metadata?.name else { return id }
+        guard let name = metadata?.name else { return SessionModelSpeed.split(id).model }
         // Some ACP catalogs omit the family from otherwise useful GPT names.
         // Restore only the family proven by the exact ID; keep versions intact.
         if id.hasPrefix("gpt-"), name.range(of: "GPT", options: .caseInsensitive) == nil {
@@ -59,6 +59,25 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     private static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value
+    }
+}
+
+/// Faster inference is a variant of the model reference (`model#fast`): Pi
+/// Durable advertises its subscription speeds this way, and the Codex and
+/// Claude Code clients present their own Fast mode option the same way. Saved
+/// selections carry it with the model; menus group a variant with its model.
+public enum SessionModelSpeed {
+    private static let speeds = ["fast": "Fast", "ultrafast": "Ultrafast"]
+
+    public static func split(_ id: String) -> (model: String, speed: String?) {
+        guard let separator = id.lastIndex(of: "#") else { return (id, nil) }
+        let model = String(id[..<separator]), speed = String(id[id.index(after: separator)...])
+        guard speeds[speed] != nil, !model.isEmpty else { return (id, nil) }
+        return (model, speed)
+    }
+
+    public static func label(_ id: String) -> String {
+        split(id).speed.flatMap { speeds[$0] } ?? "Standard"
     }
 }
 
@@ -121,8 +140,13 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
             .filter { !(excludedModels ?? []).contains($0) }
         var result: [String] = []
         var groupIndices: [String: Int] = [:]
+        let speedModels = Set(options.compactMap { id in
+            SessionModelSpeed.split(id).speed == nil ? nil : SessionModelSpeed.split(id).model
+        })
         for id in options {
-            guard let group = modelOptionMetadata?[id]?.modelGroup else {
+            let speedGroup = speedModels.contains(SessionModelSpeed.split(id).model)
+                ? "speed:" + SessionModelSpeed.split(id).model : nil
+            guard let group = modelOptionMetadata?[id]?.modelGroup ?? speedGroup else {
                 result.append(id)
                 continue
             }
@@ -139,6 +163,27 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
             }
         }
         return result
+    }
+
+    /// The selected model and its speed variants, standard first, when the
+    /// connection offers a faster speed for it.
+    public var selectableSpeeds: [String] {
+        guard let model else { return [] }
+        let base = SessionModelSpeed.split(model).model
+        let variants = Self.unique((modelOptions ?? []) + [model]).filter {
+            let parts = SessionModelSpeed.split($0)
+            return parts.model == base && parts.speed != nil
+        }
+        return variants.isEmpty ? [] : [base] + variants
+    }
+
+    /// Choosing another model keeps the current speed where that model offers it.
+    public func modelChoice(_ option: String) -> String {
+        guard let model, let speed = SessionModelSpeed.split(model).speed else { return option }
+        let target = SessionModelSpeed.split(option).model
+        guard target != SessionModelSpeed.split(model).model, SessionModelSpeed.split(option).speed == nil else { return option }
+        let variant = target + "#" + speed
+        return (modelOptions ?? []).contains(variant) ? variant : option
     }
 
     public var selectableThinkingLevels: [String] {

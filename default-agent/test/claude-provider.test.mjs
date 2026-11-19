@@ -137,6 +137,17 @@ test('Pi owns tools; native extraTurny is denied and first response owns content
   assert.equal(events.filter(event => event.type === 'text_delta').map(event => event.delta).join(''), 'Reading.');
 });
 
+test('a fast selection opts the native runtime into fast mode; standard requests do not', async t => {
+  for (const [options, expected] of [[{ wovenSpeed: 'fast' }, { fastMode: true }], [{}, undefined]]) {
+    const f = await fixture(t);
+    const stream = f.stream(model, context(), options);
+    for await (const _event of stream);
+    assert.equal((await stream.result()).stopReason, 'stop');
+    assert.deepEqual(f.calls.options.settings, expected);
+    assert.equal(JSON.parse(f.calls.options.env.CLAUDE_CODE_EXTRA_BODY).speed, undefined);
+  }
+});
+
 test('incomplete streams and unknown tool names never publish executable calls', async t => {
   for (const body of [responseEvents({ complete: false, blocks: [{ type: 'tool_use', id: 'call-1', name: 'mcp__woven__read', input: {} }] }),
     responseEvents({ blocks: [{ type: 'tool_use', id: 'call-2', name: 'mcp__other__Bash', input: {} }], stop: 'tool_use' })]) {

@@ -896,10 +896,12 @@ struct ConversationComposer: View {
                     showsDescriptions: kind == .permission,
                     emptyMessage: kind == .permission
                         ? "This harness has not reported native permission choices."
-                        : nil
+                        : nil,
+                    speedOptions: kind == .model ? sessionMetadata?.selectableSpeeds ?? [] : [],
+                    onSelectSpeed: action
                 ) { option in
                     openMenu = nil
-                    action?(option)
+                    action?(kind == .model ? sessionMetadata?.modelChoice(option) ?? option : option)
                 }
             }
             .zIndex(openMenu == kind ? 3 : 0)
@@ -1245,6 +1247,9 @@ struct ComposerOptionMenu: View {
     var optionMetadata: [String: SessionOptionMetadata] = [:]
     var showsDescriptions = false
     var emptyMessage: String? = nil
+    /// The selected model and its speed variants; empty when it has none.
+    var speedOptions: [String] = []
+    var onSelectSpeed: ((String) -> Void)? = nil
     let onSelect: (String) -> Void
 
     var body: some View {
@@ -1310,6 +1315,9 @@ struct ComposerOptionMenu: View {
                 .scrollIndicators(.never)
                 .frame(height: min(options.reduce(CGFloat(0)) { $0 + rowHeight($1) + 2 }, 248))
             }
+            if speedOptions.count > 1 {
+                speedControl
+            }
         }
         .padding(6)
         .frame(width: showsDescriptions ? 320 : (isModelMenu ? 360 : 288))
@@ -1317,6 +1325,52 @@ struct ComposerOptionMenu: View {
     }
 
     private var isModelMenu: Bool { !showsDescriptions && !capitalizeOptions }
+
+    /// One faster speed is a switch; several are a choice with Standard first.
+    @ViewBuilder private var speedControl: some View {
+        let selected = speedOptions.first { $0 == selection } ?? speedOptions[0]
+        if speedOptions.count == 2 {
+            Toggle(SessionModelSpeed.label(speedOptions[1]) + " mode", isOn: Binding(
+                get: { selected == speedOptions[1] },
+                set: { onSelectSpeed?($0 ? speedOptions[1] : speedOptions[0]) }
+            ))
+            .toggleStyle(CompactSwitchToggleStyle())
+            .font(.system(size: 13))
+            .foregroundStyle(WovenPalette.foreground)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+            .padding(.top, 4)
+        } else {
+            Text("Speed")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(WovenPalette.mutedForeground)
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+            ForEach(speedOptions, id: \.self) { option in
+                ComposerPopoverRow(action: { if option != selected { onSelectSpeed?(option) } }) {
+                    HStack(spacing: 12) {
+                        Text(SessionModelSpeed.label(option))
+                        Spacer(minLength: 0)
+                        if option == selected {
+                            LucideIcon(glyph: .check, size: 14)
+                                .foregroundStyle(WovenPalette.primary)
+                        }
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(WovenPalette.foreground)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 38)
+                    .accessibilityLabel(SessionModelSpeed.label(option))
+                    .accessibilityValue(option == selected ? "Selected" : "")
+                    .background(
+                        option == selected ? WovenPalette.muted.opacity(0.55) : .clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                }
+            }
+        }
+    }
 
     private func optionLabel(_ option: String) -> String {
         if showsDescriptions {

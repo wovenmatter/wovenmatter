@@ -1,6 +1,7 @@
 import { watchConversation } from './durable-view.mjs';
 import { runtimeStageError } from './runtime-stage-error.mjs';
 import { withReasoningSummaries } from './reasoning-stream-options.mjs';
+import { withSpeed } from './model-speed.mjs';
 import { wovenInstructions } from './woven-instructions.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { randomUUID } from 'node:crypto';
@@ -165,7 +166,8 @@ export async function openDurableSession(engine, id, requested) {
             const account = await currentAccount(model, scope);
             await withAccount(model, account, async () => {
               const nativeOptions = await scope.nativeBridge.requestOptions(model, prepared, options?.signal);
-              const resolved = withReasoningSummaries(model, { ...options, ...nativeOptions, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) });
+              const resolved = withSpeed(model, withReasoningSummaries(model, { ...options, ...nativeOptions, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }),
+                { speed: scope === record ? record.speed : undefined, claude: engine.claude, codexTiers: engine.codexTiers });
               const native = (scope.streamFunction ?? target.streamSimple.bind(target))(model, { ...input, messages: scope.nativeBridge.filterTools(input.messages) }, resolved);
               for await (const event of native) {
                 lastMessage = event.error ?? event.message ?? event.partial ?? lastMessage;
