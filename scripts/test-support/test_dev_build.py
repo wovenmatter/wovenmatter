@@ -267,9 +267,9 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO member_session_wakeups VALUES('wake','caller');
               CREATE TABLE member_session_wakeup_counts(caller_id TEXT PRIMARY KEY, count INTEGER);
               INSERT INTO member_session_wakeup_counts VALUES('caller',3);
-              -- Tables nothing reads any more are copied as they are and left alone.
+              -- Tables from before the device tables were renamed stay behind: the app would adopt a phone's journal from them.
               CREATE TABLE companion_native_history(record_id TEXT PRIMARY KEY, format TEXT);
-              INSERT INTO companion_native_history VALUES('record','kept');
+              INSERT INTO companion_native_history VALUES('record','left behind');
               CREATE TABLE library_identity(singleton INTEGER, host_device_id TEXT, library_id TEXT);
               INSERT INTO library_identity VALUES(1,'source','production-identity');
               CREATE TABLE execution_workspaces(id TEXT,payload BLOB);
@@ -297,7 +297,7 @@ class DevelopmentBuildTests(unittest.TestCase):
                     self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0, table)
                 # Ownership survives, so the snapshot never adopts another Mac's schedule.
                 self.assertEqual(copy.execute("SELECT device_id FROM calendar_item_owners").fetchall(), [("other-mac",)])
-                self.assertEqual(copy.execute("SELECT format FROM companion_native_history").fetchall(), [("kept",)])
+                self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE name LIKE 'companion_%'").fetchall(), [])
                 self.assertEqual(copy.execute("SELECT name FROM sqlite_master WHERE type='trigger'").fetchall(), [("workspace_revision_notes_insert",)])
                 workspace = json.loads(copy.execute("SELECT payload FROM execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])

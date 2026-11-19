@@ -196,6 +196,14 @@ def disconnect_snapshot(file, *, device_id, source_device_id, execution_root, pu
         for name in tables:
             if name in transient or name.startswith("peer_sync_") or name in peer_routes or name in source_state or name in pairing:
                 db.execute("DELETE FROM " + quote(name))
+        # Tables a library still holds from before its device tables were
+        # named for what they hold. The app adopts a phone's journal and
+        # receipts from them when it opens the library, and a snapshot must
+        # not take those over, so they are left behind like the rest of the
+        # source's execution state.
+        for name in sorted(tables):
+            if name.startswith("companion_"):
+                db.execute("DROP TABLE " + quote(name))
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the
         # active catalog so they cannot appear as duplicate runnable harnesses.
