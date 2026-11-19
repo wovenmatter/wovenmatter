@@ -76,7 +76,8 @@ public struct GitHubIdentityRecipient: Codable, Equatable, Sendable {
 }
 
 extension WorkspaceDatabaseConnection {
-  /// A new library's declaration; schema step 2 makes the same change to a v0.4.3 library.
+  /// Declared for every library, new or existing: an existing one gains the
+  /// tables at its next open (`migrateGitHubIdentity`).
   static let gitHubIdentityTablesSQL = """
     CREATE TABLE IF NOT EXISTS github_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1), payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS github_identity_recipients(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);

@@ -1,13 +1,13 @@
 import Foundation
 
 /// How far opening a library is in bringing an earlier release's library to
-/// the current schema (`librarySchemaSteps`). An upgrade rewrites the whole
+/// the current schema (`convertEarlierLibraryUnlocked`). An upgrade rewrites the whole
 /// file once and takes minutes for a library of a few gigabytes, so whoever
 /// waits on the open (the background service's readiness reply) can say what
 /// is happening instead of timing out.
 public struct LibraryUpgradeProgress: Sendable, Equatable, Codable {
   public enum Stage: String, Sendable, Codable {
-    /// Copying the library before a step rewrites it.
+    /// Copying the library before the conversion rewrites it.
     case backingUp
     /// Converting tables and recorded versions to the current schema.
     case converting
@@ -90,7 +90,7 @@ final class LibraryUpgradeReporter: @unchecked Sendable {
     progress = .init(stage: .backingUp, fraction: 0, libraryBytes: bytes, startedAt: Date())
     target = Self.spans[.backingUp]!.upperBound
     LibraryUpgradeMonitor.publish(progress, for: file)
-    NSLog("Upgrading the library (%lld bytes) to version %d.", bytes, WorkspaceDatabaseConnection.librarySchemaVersion)
+    NSLog("Converting an earlier release's library (%lld bytes) to the current schema.", bytes)
     timer.setEventHandler { [weak self] in self?.tick() }
     timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
     timer.resume()

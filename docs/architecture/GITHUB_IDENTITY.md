@@ -102,7 +102,7 @@ Durable's other credentials.
 ## Sharing between machines
 
 Two paired-library tables carry the setting; every member's library holds them
-(library schema step 2 adds them to a v0.4.3 library; a device still on v0.4.3
+(a library from v0.4.3 gains them when it next opens; a device still on v0.4.3
 keeps their records waiting until it updates):
 
 - `github_identity_recipients(device_id, payload)`: each Mac's and Linux host's

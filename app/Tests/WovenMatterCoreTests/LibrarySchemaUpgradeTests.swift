@@ -66,9 +66,10 @@ import WovenMatterCore
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
     #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
-    // Both carry the schema version, so later opens skip the conversion.
+    // Neither has a table under an earlier name left, which is what a later
+    // open looks for: the conversion does not run again. No number says so.
     for database in [library, current] {
-      #expect(try await row(database, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
+      #expect(try await !database.read { try $0.hasEarlierTableNamesUnlocked() })
     }
     // Opening it again changes nothing.
     let reopened = try await schema(WorkspaceDatabase(url: upgraded.databaseURL))
@@ -286,8 +287,8 @@ import WovenMatterCore
   }
 
   /// v0.4.3's library is this build's without Settings → GitHub's two shared
-  /// tables (step 2). Opening one adds them, keeps its rows, and ends with a
-  /// new library's schema.
+  /// tables. Opening one adds them, keeps its rows, and ends with a new
+  /// library's schema.
   @Test func aV043LibraryGainsTheGitHubTables() async throws {
     let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
     let current = try await WorkspaceDatabase(url: fresh.databaseURL)
@@ -295,7 +296,7 @@ import WovenMatterCore
     // That connection may still be finishing its work after opening.
     try PersistenceSQL(url: upgraded.databaseURL).execute("""
       PRAGMA busy_timeout=30000;
-      DROP TABLE github_identity; DROP TABLE github_identity_recipients; PRAGMA user_version=1;
+      DROP TABLE github_identity; DROP TABLE github_identity_recipients;
       INSERT INTO conversations(id,title,created_at,updated_at) VALUES('v043-chat','Kept','1','1');
       """)
     #expect(try scalar(upgraded.databaseURL, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'github_identity%'") == 0)
@@ -306,16 +307,16 @@ import WovenMatterCore
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
     #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
-    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
     #expect(try await row(library, "SELECT title FROM conversations WHERE id='v043-chat'")["title"]?.stringValue == "Kept")
     // Adding tables copies nothing first.
     let copies = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
     #expect(((try? FileManager.default.contentsOfDirectory(atPath: copies.path)) ?? []).isEmpty)
   }
 
-  /// v0.4.4's usage rows carry an account label (step 3 drops it). Whichever
-  /// opens the file first, the usage index or the library, the column goes,
-  /// rows stay, and the library ends with a new library's schema.
+  /// v0.4.4's usage rows carry an account label, which is dropped where it
+  /// is found. Whichever opens the file first, the usage index or the
+  /// library, the column goes, rows stay, and the library ends with a new
+  /// library's schema.
   @Test(arguments: [true, false])
   func aV044LibraryLosesTheUsageAccountLabel(usageIndexFirst: Bool) async throws {
     let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
@@ -326,7 +327,6 @@ import WovenMatterCore
     try PersistenceSQL(url: upgraded.databaseURL).execute("""
       PRAGMA busy_timeout=30000;
       ALTER TABLE usage_events ADD COLUMN account_label TEXT NOT NULL DEFAULT 'Unknown';
-      PRAGMA user_version=2;
       INSERT INTO usage_sources(source_id,source_name,source_location,provider,fingerprint,imported_at)
         VALUES('v044','Fixture','Fixture','codex','f',1);
       INSERT INTO usage_events(event_id,source_id,source_event_id,provider,billing_provider,billing_route,account_label,
@@ -337,7 +337,8 @@ import WovenMatterCore
         'Codex','Codex',5,0,0,0,0,'exact','modelCall',1);
       """)
     if usageIndexFirst { _ = try UsageStore(databaseURL: upgraded.databaseURL) }
-    // A step that rewrites nothing never compacts the whole library.
+    // Dropping the column rewrites nothing else: no upgrade is reported and
+    // the library is not compacted.
     final class Stages: @unchecked Sendable {
       let lock = NSLock(); var values: [LibraryUpgradeProgress.Stage] = []
       func add(_ value: LibraryUpgradeProgress?) { lock.withLock { if let value { values.append(value.stage) } } }
@@ -347,14 +348,13 @@ import WovenMatterCore
     LibraryUpgradeMonitor.observe(upgraded.databaseURL) { stages.add($0) }
     defer { LibraryUpgradeMonitor.observe(upgraded.databaseURL, nil) }
     let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
-    #expect(!stages.all.isEmpty && !stages.all.contains(.compacting))
+    #expect(stages.all.isEmpty)
     let usage = try UsageStore(databaseURL: upgraded.databaseURL)
     let expected = try await schema(current), actual = try await schema(library)
     #expect(actual.keys.sorted() == expected.keys.sorted())
     for key in expected.keys.sorted() where actual[key] != expected[key] {
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
-    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
     let kept = try usage.samples(in: DateInterval(start: .distantPast, end: .distantFuture))
     #expect(kept.map(\.id) == ["v044:e"])
     #expect(kept.first?.billingRoute == "Codex subscription" && kept.first?.tokens.inputTokens == 5)
@@ -362,8 +362,8 @@ import WovenMatterCore
 
   /// A library from before the shared table of workspace names gains it
   /// when it opens, with its capture and change-counter triggers, keeps its
-  /// rows and its version, and ends with a new library's schema; a name
-  /// written then is recorded for peers. There is no schema step for it.
+  /// rows, and ends with a new library's schema; a name written then is
+  /// recorded for peers.
   @Test func aLibraryWithoutTheWorkspaceNamesTableGainsItWhenItOpens() async throws {
     let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
     let current = try await WorkspaceDatabase(url: fresh.databaseURL)
@@ -381,8 +381,6 @@ import WovenMatterCore
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
     #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
-    // The version an older release checks before opening the library is unchanged.
-    #expect(try scalar(upgraded.databaseURL, "PRAGMA user_version") == scalar(fresh.databaseURL, "PRAGMA user_version"))
     #expect(try await row(library, "SELECT title FROM conversations WHERE id='kept-chat'")["title"]?.stringValue == "Kept")
     let workspace = UUID().uuidString.lowercased()
     try await library.setExecutionWorkspaceName(workspaceID: workspace, name: "Studio")
@@ -393,31 +391,26 @@ import WovenMatterCore
     #expect(((try? FileManager.default.contentsOfDirectory(atPath: copies.path)) ?? []).isEmpty)
   }
 
-  /// A library a newer release has changed is refused by everything that
-  /// opens the file, and left exactly as it was: an older build must never
-  /// run its statements over a schema it does not know.
-  @Test func aLibraryFromANewerReleaseIsRefusedAndLeftAlone() async throws {
-    let fixture = try PersistenceFixture(); defer { fixture.remove() }
-    let current = WorkspaceDatabaseConnection.librarySchemaVersion
-    #expect(current == WorkspaceDatabaseConnection.librarySchemaSteps.last?.version)
-    #expect(WorkspaceDatabaseConnection.librarySchemaSteps.map(\.version) == Array(1...current))
-    try PersistenceSQL(url: fixture.databaseURL).execute("""
-      PRAGMA user_version=\(current + 1);
-      CREATE TABLE conversations(id TEXT PRIMARY KEY, from_a_newer_release TEXT);
-      """)
-    let objects = try scalar(fixture.databaseURL, "SELECT count(*) FROM sqlite_master")
-    for readOnly in [false, true] {
-      do {
-        _ = try await WorkspaceDatabase(url: fixture.databaseURL, readOnlyProjection: readOnly)
-        Issue.record("A newer library opened (read-only: \(readOnly))")
-      } catch let error as WorkspaceDatabaseError {
-        guard case .open(let message) = error else { Issue.record("\(error)"); continue }
-        #expect(message.contains("newer Woven Matter"))
-      }
-      #expect(throws: (any Error).self) { _ = try UsageStore(databaseURL: fixture.databaseURL, readOnly: readOnly) }
+  /// The library has no version number. Nothing writes one into the file,
+  /// and a number an earlier release left there is neither read nor changed:
+  /// what a library needs is told from its shape alone.
+  @Test func theLibraryNeitherWritesNorReadsAVersionNumber() async throws {
+    let fresh = try PersistenceFixture(), stamped = try PersistenceFixture(), converted = try v042Library()
+    defer { fresh.remove(); stamped.remove(); converted.remove() }
+    for library in [fresh, stamped, converted] {
+      _ = try UsageStore(databaseURL: library.databaseURL)
+      do { _ = try await WorkspaceDatabase(url: library.databaseURL) }
+      #expect(try scalar(library.databaseURL, "PRAGMA user_version") == 0)
     }
-    #expect(try scalar(fixture.databaseURL, "PRAGMA user_version") == current + 1)
-    #expect(try scalar(fixture.databaseURL, "SELECT count(*) FROM sqlite_master") == objects)
+    // Whatever number a file carries, it opens the same way, in every role, and keeps it.
+    try PersistenceSQL(url: stamped.databaseURL).execute("PRAGMA busy_timeout=30000; PRAGMA user_version=3;")
+    let objects = try scalar(stamped.databaseURL, "SELECT count(*) FROM sqlite_master")
+    for readOnly in [false, true] {
+      _ = try UsageStore(databaseURL: stamped.databaseURL, readOnly: readOnly)
+      do { _ = try await WorkspaceDatabase(url: stamped.databaseURL, readOnlyProjection: readOnly) }
+    }
+    #expect(try scalar(stamped.databaseURL, "PRAGMA user_version") == 3)
+    #expect(try scalar(stamped.databaseURL, "SELECT count(*) FROM sqlite_master") == objects)
   }
 
   /// Opening a library that needs a rewriting upgrade publishes how far it
@@ -453,13 +446,14 @@ import WovenMatterCore
     #expect(seen.all.count == values.count)
   }
 
-  /// A step that rewrites data copies the library first, and the copy is
-  /// removed once it is old enough. New and converted libraries both give
-  /// freed pages back without a VACUUM.
-  @Test func aRewritingStepCopiesTheLibraryFirstAndTheCopyExpires() async throws {
+  /// The conversion copies the library first, and the copy is removed once
+  /// it is old enough, as is one an earlier release left under its own
+  /// name. New and converted libraries both give freed pages back without a
+  /// VACUUM.
+  @Test func theConversionCopiesTheLibraryFirstAndTheCopyExpires() async throws {
     let upgraded = try v042Library(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
-    let copy = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
-      .appending(path: "before-library-version-\(WorkspaceDatabaseConnection.librarySchemaVersion).sqlite")
+    let copies = WorkspaceDatabaseConnection.libraryBackupDirectory(for: upgraded.databaseURL)
+    let copy = copies.appending(path: WorkspaceDatabaseConnection.libraryBackupName)
     do {
       // The usage index is open, as in the app, while the library converts.
       let usage = try UsageStore(databaseURL: upgraded.databaseURL); _ = try UsageStore(databaseURL: fresh.databaseURL)
@@ -467,7 +461,6 @@ import WovenMatterCore
       withExtendedLifetime(usage) {}
     }
     // The copy is the library as v0.4.2 left it.
-    #expect(try scalar(copy, "PRAGMA user_version") == 0)
     #expect(try scalar(copy, "SELECT count(*) FROM sqlite_master WHERE name='dashboard_conversations'") == 1)
     #expect(try scalar(copy, "SELECT count(*) FROM dashboard_runs") == 5)
     #expect(try scalar(copy, "SELECT count(*) FROM pragma_quick_check WHERE quick_check='ok'") == 1)
@@ -475,13 +468,15 @@ import WovenMatterCore
     #expect(!FileManager.default.fileExists(atPath: WorkspaceDatabaseConnection.libraryBackupDirectory(for: fresh.databaseURL).path))
     for library in [upgraded, fresh] { #expect(try scalar(library.databaseURL, "PRAGMA auto_vacuum") == 2) }
 
-    // Reopening keeps a recent copy and removes an expired one.
+    // Reopening keeps a recent copy and removes an expired one, whichever release made it.
+    let earlier = copies.appending(path: "before-library-version-2.sqlite")
+    try FileManager.default.copyItem(at: copy, to: earlier)
     do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
-    #expect(FileManager.default.fileExists(atPath: copy.path))
+    #expect(FileManager.default.fileExists(atPath: copy.path) && FileManager.default.fileExists(atPath: earlier.path))
     let old = Date().addingTimeInterval(-WorkspaceDatabaseConnection.libraryBackupRetention - 60)
-    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: copy.path)
+    for file in [copy, earlier] { try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: file.path) }
     do { _ = try await WorkspaceDatabase(url: upgraded.databaseURL) }
-    #expect(!FileManager.default.fileExists(atPath: copy.path))
+    #expect(!FileManager.default.fileExists(atPath: copy.path) && !FileManager.default.fileExists(atPath: earlier.path))
   }
 
   @Test func aLongLivedV042LibraryLosesWhatOlderReleasesLeftBehind() async throws {
@@ -555,7 +550,6 @@ import WovenMatterCore
     #expect(try await row(library, "SELECT native_session_id FROM harness_sessions WHERE conversation_id='3b078bf3-4268-4819-96d2-6d282542f205'")["native_session_id"]?.stringValue == "native-session-1")
     #expect(try await row(library, "SELECT json_extract(calendar_json,'$.task.configuration.tools.enabled') AS enabled FROM calendar_items WHERE id=?", schedule)["enabled"]?.stringValue == #"["goals","html","notes","sessions"]"#)
     #expect(try await row(library, "SELECT json_extract(payload,'$.row.calendar_json.value') AS json FROM peer_sync_versions WHERE table_name='calendar_items' AND record_key=json_array(?)", schedule)["json"]?.stringValue?.contains(#""goals""#) == true)
-    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
   }
 
   @Test func peerBookkeepingIsCompactedAndKeepsItsCursors() async throws {

@@ -14,14 +14,6 @@ public enum WorkspaceDatabaseError: Error, Equatable {
   case step(String)
   case readOnlyProjection
   case corruptRow
-
-  /// A library a newer Woven Matter has already changed. This build would
-  /// run its older statements against tables it does not know, so it leaves
-  /// the file untouched instead.
-  static func newerLibrary(found: Int, supported: Int) -> WorkspaceDatabaseError {
-    .open("This library was updated by a newer Woven Matter (library version \(found); this version reads up to \(supported)). " +
-          "Update Woven Matter on this device to open it.")
-  }
 }
 
 /// Synchronous SQL implementation. Only the async facade may own a connection;
@@ -53,21 +45,18 @@ final class WorkspaceDatabaseConnection {
       if readOnlyProjection {
         try execute("PRAGMA query_only = ON")
         try execute("PRAGMA busy_timeout = 5000")
-        try withLock { try refuseNewerLibraryUnlocked() }
         return
       }
       try execute("PRAGMA busy_timeout = 5000")
-      // A library a newer release wrote is refused before anything changes it.
-      let version = try withLock { try refuseNewerLibraryUnlocked() }
       // A new library gives freed pages back to the file system without a
       // full VACUUM (`reclaimFreeSpaceUnlocked`). SQLite fixes this mode when
       // the first table is created, or at a VACUUM, and only before WAL.
       try execute("PRAGMA auto_vacuum = INCREMENTAL")
       try execute("PRAGMA journal_mode = WAL")
-      // A library an earlier release wrote is brought to this schema one
-      // numbered step at a time; a current one skips straight to the
-      // idempotent creation below.
-      let converted = try upgradeLibraryUnlocked(from: version, file: url)
+      // A library an earlier release wrote is recognised by its shape and
+      // brought to this schema; a current one goes straight to the
+      // idempotent creation below. The library carries no version number.
+      let converted = try convertEarlierLibraryUnlocked(file: url)
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -86,8 +75,6 @@ final class WorkspaceDatabaseConnection {
       upgradeReporter?.reach(.converting, 0.95, after: "peer sync records")
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
-      // A fresh library is stamped once everything above exists.
-      if version < Self.librarySchemaVersion { try execute("PRAGMA user_version = \(Self.librarySchemaVersion)") }
       Self.removeExpiredLibraryBackups(for: url)
       // The conversion leaves the space of the bookkeeping it compacted and
       // the tables it rebuilt free inside the file; give it back once. Nothing

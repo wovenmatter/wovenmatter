@@ -62,14 +62,11 @@ final class UsageStore {
       if readOnly {
         try execute("PRAGMA query_only = ON")
         try execute("PRAGMA busy_timeout = 5000")
-        try refuseNewerLibrary(database)
         return
       }
       try execute("PRAGMA busy_timeout = 5000")
       // The usage index lives in the library's file and is often its first
-      // opener: it leaves a library a newer release wrote untouched, and
-      // sets a new file's reclaim mode as the library does.
-      try refuseNewerLibrary(database)
+      // opener: it sets a new file's reclaim mode as the library does.
       try execute("PRAGMA auto_vacuum = INCREMENTAL")
       try execute("PRAGMA journal_mode = WAL")
       try execute("PRAGMA foreign_keys = ON")
@@ -83,19 +80,6 @@ final class UsageStore {
 
   deinit {
     if let connection { sqlite3_close(connection) }
-  }
-
-  /// The usage tables share the library's file and its `user_version`.
-  private func refuseNewerLibrary(_ database: OpaquePointer) throws {
-    var statement: OpaquePointer?
-    guard sqlite3_prepare_v2(database, "PRAGMA user_version", -1, &statement, nil) == SQLITE_OK, let statement else {
-      throw UsageStoreError.open(String(cString: sqlite3_errmsg(database)))
-    }
-    defer { sqlite3_finalize(statement) }
-    let version = sqlite3_step(statement) == SQLITE_ROW ? Int(sqlite3_column_int64(statement, 0)) : 0
-    guard version <= WorkspaceDatabaseConnection.librarySchemaVersion else {
-      throw UsageStoreError.open("this library was updated by a newer Woven Matter (library version \(version)). Update Woven Matter on this device.")
-    }
   }
 
   func source(_ id: String) throws -> UsageStoredSource? {
@@ -747,9 +731,10 @@ final class UsageStore {
         detail TEXT NOT NULL
       );
       """)
-    // Usage rows no longer carry an account label (library schema step 3). The
-    // usage index often opens the file before the library does, so it drops the
-    // column itself before writing rows without it.
+    // Usage rows no longer carry an account label. The usage index often opens
+    // the file before the library does (which drops it too,
+    // `convertEarlierLibraryUnlocked`), so it drops the column itself before
+    // writing rows without it.
     if try usageEventsHaveAccountLabel() {
       try execute("ALTER TABLE usage_events DROP COLUMN account_label")
     }
