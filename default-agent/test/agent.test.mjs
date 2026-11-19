@@ -1,0 +1,81 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { startAgent } from './fixtures/client.mjs';
+
+async function folders(t) {
+  const root = await mkdtemp(join(tmpdir(), 'pi-durable-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return { data: join(root, 'data'), cwd: root };
+}
+const text = (updates, kind = 'agent_message_chunk') => updates.filter(item => item.update.sessionUpdate === kind).map(item => item.update.content.text).join('');
+
+test('a conversation survives a process restart', async t => {
+  const { data, cwd } = await folders(t);
+  const first = startAgent({ data, cwd });
+  const { result: { sessionId } } = await first.request('session/new', { cwd, mcpServers: [] });
+  assert.equal((await first.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] })).result.stopReason, 'end_turn');
+  await first.stop();
+
+  const second = startAgent({ data, cwd });
+  const loaded = await second.request('session/load', { sessionId, cwd, mcpServers: [] });
+  assert.equal(loaded.result.configOptions.find(option => option.id === 'model').currentValue, 'synthetic/echo');
+  await second.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'two' }] });
+  assert.equal(text(second.updates), 'echo: two (turn 2)');
+  await second.stop();
+  assert.deepEqual(await readdir(data), ['pi-durable.sqlite']);
+});
+
+test('loading an unknown session fails with -32002 and creates nothing', async t => {
+  const { data, cwd } = await folders(t);
+  const agent = startAgent({ data, cwd });
+  const reply = await agent.request('session/load', { sessionId: '0190a000-0000-7000-8000-000000000000', cwd, mcpServers: [] });
+  assert.equal(reply.error.code, -32002);
+  await agent.stop();
+  assert.equal(existsSync(join(data, 'pi-durable.sqlite')), false);
+});
+
+test('a prompt streams its answer, then reports how it stopped and what it used', async t => {
+  const { data, cwd } = await folders(t);
+  const agent = startAgent({ data, cwd });
+  const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
+  const reply = await agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hello' }] });
+  assert.equal(text(agent.updates), 'echo: hello (turn 1)');
+  assert.deepEqual(reply.result, { stopReason: 'end_turn', usage: { inputTokens: 3, outputTokens: 2, cachedReadTokens: 1, cachedWriteTokens: 0 }, _meta: { model: 'synthetic/echo' } });
+  await agent.stop();
+});
+
+test('credentials come from the server, renewals go back to it, and none reach the disk', async t => {
+  const { data, cwd } = await folders(t);
+  const expired = { type: 'oauth', access: 'expired-access', refresh: 'old-refresh', expires: Date.now() - 1000 };
+  const agent = startAgent({ data, cwd, credentials: { synthetic: expired } });
+  const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
+  const reply = await agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hi' }] });
+  assert.equal(reply.result.stopReason, 'end_turn');
+  assert.ok(agent.credentialRequests >= 1);
+  const renewal = agent.notifications.find(message => message.method === 'woven/credentials/update');
+  assert.equal(renewal.params.provider, 'synthetic');
+  assert.equal(renewal.params.credential.refresh, 'renewed');
+  await agent.stop();
+  for (const name of await readdir(data, { recursive: true })) {
+    const contents = await readFile(join(data, name)).catch(() => Buffer.alloc(0));
+    for (const secret of ['expired-access', 'old-refresh', 'renewed', 'test-key']) assert.equal(contents.includes(secret), false, `${secret} in ${name}`);
+  }
+});
+
+test('a subagent shows as a task tool call carrying its answer', async t => {
+  const { data, cwd } = await folders(t);
+  const agent = startAgent({ data, cwd });
+  const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
+  await agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'delegate this' }] });
+  const call = agent.updates.find(item => item.update.sessionUpdate === 'tool_call')?.update;
+  assert.equal(call.title, 'Count');
+  assert.equal(call._meta.wovenKind, 'task');
+  const done = agent.updates.find(item => item.update.sessionUpdate === 'tool_call_update' && item.update.status === 'completed')?.update;
+  assert.equal(done.toolCallId, call.toolCallId);
+  assert.equal(done.content[0].content.text, 'echo: child work (turn 1)');
+  await agent.stop();
+});
