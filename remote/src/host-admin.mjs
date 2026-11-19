@@ -93,11 +93,11 @@ export function createHostAdministration({ serviceRoot, dataRoot, stateDirectory
   async function handle(request, response, url, { json, readJSON, readBody, administrator, bodyFile, member = null, installer = false }) {
     if (!url.pathname.startsWith('/host/')) return false
     const path = url.pathname, method = request.method
-    // Adopting members: the installer's bearer only before this host was
-    // ever adopted (the first adoption, when it cannot verify any Mac); a
-    // signed Mac member after that, even once every Mac was removed. The body
-    // reaches the library host unchanged, which accepts a later adoption only
-    // from a Mac it already trusts and never adds an anchor for it.
+    // Adopting members: a signed Mac member, or the installer's bearer while
+    // this host has no adopter (it cannot verify any Mac then). The body
+    // reaches the library host unchanged, which accepts the adoption of a
+    // host that has an adopter only from a Mac it already trusts and never
+    // adds an anchor for it.
     if (path === '/host/members/adopt') {
       if (method !== 'POST') { json(response, 405, { error: 'method_not_allowed' }); return true }
       if (!adoptMembers) { json(response, 503, { error: 'library_unavailable' }); return true }

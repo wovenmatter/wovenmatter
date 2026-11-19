@@ -54,7 +54,6 @@ test('owner executes offline and restart retries original immutable events witho
   await until(()=>f.events.size===before.length)
   assert.deepEqual([...f.events.values()],before)
   assert.ok(f.requests.every(x=>x.headers['x-woven-workspace-id']===f.enrollment.workspaceID))
-  assert.equal(f.service.descriptor().journalDeviceIDs.length,0)
 })
 test('lost acknowledgement and restart re-send the same IDs then advance durable origin cursor',async t=>{
   const f=fixture(t);await f.createSession();f.online=true;f.loseReply=true

@@ -123,7 +123,7 @@ class HostFixtures(unittest.TestCase):
         for action in ('status','start','stop','restart'):
             result=self.m.main([action,'fixture']); json.dumps(result)
             self.assertEqual(result['id'],'fixture')
-            self.assertEqual(sorted(result),sorted(['id','name','state','systemdState','running','health','startedAt','hostPort',
+            self.assertEqual(sorted(result),sorted(['id','state','systemdState','running','health','startedAt','hostPort',
                 'hostStorageCapacityBytes','hostStorageAvailableBytes','hostStorageLow','storageWarning','linger','fingerprint','dataRoot',
                 'workspaceRoot','databasesDirectory','attachmentsDirectory','accessMode','browserSelfTest','roles','botsState','memberIdentity','releaseVersion']))
             if result['running']: self.assertEqual(result['state'],'running')

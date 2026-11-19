@@ -12,7 +12,7 @@ import { createLibraryHostSupervisor } from '../src/library-host.mjs'
 import { createMemberVerifier } from '../src/member-auth.mjs'
 import { createMemberTransport } from '../src/member-client.mjs'
 import { createMemberSocketRegistry } from '../src/member-sockets.mjs'
-import { createSessionWatch, wakeUpText } from '../src/session-watch.mjs'
+import { createSessionWatch, wakeUpID, wakeUpText } from '../src/session-watch.mjs'
 import { maximumWaitSeconds, maximumWakeUpsPerRun, streamCapability } from '../src/stream-protocol.mjs'
 import { createStreamServer } from '../src/stream-server.mjs'
 import { loadWorkspaceMCPCatalog } from '../src/workspace-mcp.mjs'
@@ -115,7 +115,7 @@ async function hosts(t, prefix) {
   t.after(() => new Promise(closed => { server.closeAllConnections(); server.close(closed) }))
   const port = await new Promise(done => server.listen(0, '127.0.0.1', () => done(server.address().port)))
   const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
-    endpoint: `http://127.0.0.1:${port}${mounted}/`, capabilities: [streamCapability], journalDeviceIDs: [], revision: 1, deleted: false }
+    endpoint: `http://127.0.0.1:${port}${mounted}/`, capabilities: [streamCapability], revision: 1, deleted: false }
   writeFileSync(workspacesFile, JSON.stringify([mWorkspace]))
   const botDeliveries = []
   const l = workspace(t, { library: { client: lHost.client, available: lHost.available },
@@ -126,6 +126,19 @@ async function hosts(t, prefix) {
 
 test('wake-up text matches the shared fixtures', () => {
   for (const fixture of JSON.parse(readFileSync(wakeUpFixtures, 'utf8'))) assert.equal(wakeUpText(fixture), fixture.text, fixture.text)
+})
+
+// A Mac derives the same IDs (Swift `SessionWakeUps.stableID`): these values
+// were worked out from the formula apart from either implementation.
+test('a wake-up ID is the same on a Mac and on a Linux host', () => {
+  for (const [value, id] of [
+    // A conversation's wake-up: caller, session, key and attempt.
+    ['0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8:6f1c2a8e-58a4-4d0e-9b6b-1b2e3c4d5e6f:finished:1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b:0', '102c5694-e1f8-5daf-8d78-b6afcc972008'],
+    // A bot's: caller, session and key.
+    ['woven:bot:research:6f1c2a8e-58a4-4d0e-9b6b-1b2e3c4d5e6f:needsInput:7c6b5a4f-3e2d-4c1b-9a0f-8e7d6c5b4a3f', '10ad8fd9-ff95-57df-9960-5bcfd63783a8'],
+    // Hashed as UTF-8.
+    ['sesi\u00f3n:\u00fcberpr\u00fcfung:finished:unknown:3', '1c73af16-60a8-50cb-b458-812a8a9fd766'],
+  ]) assert.equal(wakeUpID(value), id, value)
 })
 
 test('the bundled catalog serves woven_sessions_wait as the Swift catalog exports it', t => {

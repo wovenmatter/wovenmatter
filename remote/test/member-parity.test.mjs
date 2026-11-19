@@ -368,9 +368,12 @@ test('member sessions run, and their channels survive, with background execution
   assert.equal(service.ownsConversation(other.channelID), false)
 })
 
-test('adoption reopens a stopped or missing durable channel and never leaves a failed one behind', async t => {
-  const workspaceRoot = temporary(t, 'wm-adopt-reopen-', { keep: true })
-  const fixture = acpFixture(workspaceRoot, { loadable: ['native-known', 'native-second'], reply: 'after adoption' })
+// A session this workspace keeps from a run outside its own commands (a
+// scheduled task's, a retained Pi Durable run's) is reopened when it is
+// continued: `runtime.adopt`, on the conversation's first message.
+test('continuing a kept session reopens a stopped or missing durable channel and never leaves a failed one behind', async t => {
+  const workspaceRoot = temporary(t, 'wm-kept-reopen-', { keep: true })
+  const fixture = acpFixture(workspaceRoot, { loadable: ['native-known', 'native-second'], reply: 'after reopening' })
   const catalog = new Map([['fixture', fixture.harness]])
   const relay = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
   const runtime = createClientExecutionRuntime({ defaultAgent: { status: async () => ({}), cancelActive: async () => {} }, durableACP: relay, catalog, workspaceRoot,
@@ -378,30 +381,27 @@ test('adoption reopens a stopped or missing durable channel and never leaves a f
   const service = createClientExecution({ directory: join(workspaceRoot, 'store'), workspaceRoot, runtime })
   t.after(async () => { await service.close(); await relay.stopAll(); rmSync(workspaceRoot, { recursive: true, force: true }) })
   const { enrollment, principal } = enroll(service)
-  const body = (id, nativeSessionID, extra = {}) => ({ workspaceID: enrollment.workspaceID, conversation: { id, title: 'Existing chat', preview: '', updatedAt: '', runtimeKind: 'fixture' },
-    runtimeKind: 'fixture', nativeSessionID, nativeWorkingDirectory: workspaceRoot, ...extra })
-  // An SSH session that never had a durable channel (background execution off).
-  const fresh = randomUUID(), runID = randomUUID()
-  const history = { messages: [{ id: randomUUID(), runID, role: 'user', content: 'before', createdAt: '' }, { id: runID, runID, role: 'assistant', content: 'partial', status: 'running', createdAt: '' }],
-    activities: [{ id: runID + ':tool', runID, title: 'Read', status: 'running' }] }
-  const adopted = await service.adopt(body(fresh, 'native-known', { transcript: history, knownRunIDs: [runID] }))
-  assert.equal(adopted.id, fresh)
-  const seeded = service.transcript(fresh)
-  assert.deepEqual(seeded.messages.map(item => [item.content, item.status ?? null]), [['before', null], ['partial', 'interrupted']])
-  assert.equal(seeded.activities[0].status, 'interrupted')
+  const kept = (id, nativeSessionID) => service.importRetainedEvents([{ eventID: randomUUID(), conversationID: id, kind: 'conversation',
+    conversation: { id, title: 'Existing chat', preview: '', updatedAt: '', runtimeKind: 'fixture' },
+    retainedExecution: { source: 'task-gateway', nativeSessionID, runtimeKind: 'fixture', runID: randomUUID(), status: 'completed' } }])
+  const send = async id => {
+    const input = { commandID: randomUUID(), deviceID: enrollment.deviceID, kind: 'send', conversationID: id, text: 'continue' }
+    await service.command(input, principal)
+    return until(() => service.receipt(input.commandID, enrollment.deviceID), receipt => receipt.status !== 'accepted')
+  }
+  // A session that never had a durable channel.
+  const fresh = randomUUID()
+  kept(fresh, 'native-known')
+  assert.equal(await relay.peek(fresh), null)
+  assert.equal((await send(fresh)).status, 'completed')
   assert.ok(fixture.requests().some(item => item.method === 'session/load' && item.params.sessionId === 'native-known'))
-  const input = { commandID: randomUUID(), deviceID: enrollment.deviceID, kind: 'send', conversationID: fresh, text: 'continue' }
-  await service.command(input, principal)
-  await until(() => service.receipt(input.commandID, enrollment.deviceID), receipt => receipt.status === 'completed')
-  assert.equal(service.transcript(fresh).messages.at(-1).content, 'after adoption')
-  assert.equal(service.conversations().find(item => item.id === fresh).title, 'Existing chat')
+  assert.equal(service.transcript(fresh).messages.at(-1).content, 'after reopening')
   // A native session the harness cannot load leaves no process or journal.
   const failing = randomUUID()
-  await assert.rejects(service.adopt(body(failing, 'native-unknown')))
+  await assert.rejects(runtime.adopt({ native: { sessionID: 'native-unknown', channelID: failing, nativeWorkingDirectory: workspaceRoot }, runtimeKind: 'fixture' }))
   assert.equal(await relay.peek(failing), null)
   assert.equal(existsSync(join(workspaceRoot, '.wovenmatter/durable-acp', failing + '.jsonl')), false)
-  assert.equal(service.ownsConversation(failing), false)
-  // A channel a host restart stopped is recovered and reloaded.
+  // A channel a host restart stopped is recovered and reloaded, as the session it was.
   const stopped = randomUUID()
   const page = await relay.handle('POST', '/durable-acp/attach', { channelID: stopped, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
   const message = value => relay.handle('POST', '/durable-acp/message', { channelID: stopped, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
@@ -410,13 +410,15 @@ test('adoption reopens a stopped or missing durable channel and never leaves a f
   await until(() => relay.handle('POST', '/durable-acp/poll', { channelID: stopped, after: 0 }), value => value.snapshot.session?.sessionId === 'native-second')
   await relay.stopAll({ except: id => id !== stopped })
   assert.equal((await relay.peek(stopped)).state, 'stopped')
-  await assert.rejects(service.adopt(body(stopped, 'another-session')), /different native session/)
-  assert.equal((await service.adopt(body(stopped, 'native-second'))).id, stopped)
+  await assert.rejects(runtime.adopt({ native: { sessionID: 'another-session', channelID: stopped, nativeWorkingDirectory: workspaceRoot }, runtimeKind: 'fixture' }), /different native session/)
+  assert.equal((await relay.peek(stopped)).state, 'stopped')
+  kept(stopped, 'native-second')
+  assert.equal((await send(stopped)).status, 'completed')
   assert.equal((await relay.peek(stopped)).state, 'running')
 })
 
-test('adoption reopens a durable channel its owner left interrupted, never one a process still holds', async t => {
-  const workspaceRoot = temporary(t, 'wm-adopt-interrupted-', { keep: true })
+test('continuing a kept session reopens a durable channel its owner left interrupted, never one a process still holds', async t => {
+  const workspaceRoot = temporary(t, 'wm-kept-interrupted-', { keep: true })
   const fixture = acpFixture(workspaceRoot, { loadable: ['native-left'], reply: 'after the crash' })
   const catalog = new Map([['fixture', fixture.harness]])
   // The former owner ran the channel and died without recording a stop.
@@ -438,15 +440,15 @@ test('adoption reopens a durable channel its owner left interrupted, never one a
   t.after(async () => { await service.close(); await relay.stopAll(); rmSync(workspaceRoot, { recursive: true, force: true }) })
   const { enrollment, principal } = enroll(service)
   assert.deepEqual(await relay.peek(channelID), { state: 'interrupted', live: false, sessionID: 'native-left', busy: false, pendingRequests: 0 })
-  const body = { workspaceID: enrollment.workspaceID, conversation: { id: channelID, title: 'Left running', preview: '', updatedAt: '', runtimeKind: 'fixture' },
-    runtimeKind: 'fixture', nativeSessionID: 'native-left', nativeWorkingDirectory: workspaceRoot }
-  await assert.rejects(service.adopt({ ...body, nativeSessionID: 'another-session' }), /different native session/)
+  await assert.rejects(runtime.adopt({ native: { sessionID: 'another-session', channelID, nativeWorkingDirectory: workspaceRoot }, runtimeKind: 'fixture' }), /different native session/)
   assert.equal((await relay.peek(channelID)).state, 'interrupted')
-  assert.equal((await service.adopt(body)).id, channelID)
-  assert.equal((await relay.peek(channelID)).state, 'running')
+  service.importRetainedEvents([{ eventID: randomUUID(), conversationID: channelID, kind: 'conversation',
+    conversation: { id: channelID, title: 'Left running', preview: '', updatedAt: '', runtimeKind: 'fixture' },
+    retainedExecution: { source: 'task-gateway', nativeSessionID: 'native-left', runtimeKind: 'fixture', runID: randomUUID(), status: 'interrupted' } }])
   const input = { commandID: randomUUID(), deviceID: enrollment.deviceID, kind: 'send', conversationID: channelID, text: 'continue' }
   await service.command(input, principal)
   await until(() => service.receipt(input.commandID, enrollment.deviceID), receipt => receipt.status === 'completed')
+  assert.equal((await relay.peek(channelID)).state, 'running')
   assert.equal(service.transcript(channelID).messages.at(-1).content, 'after the crash')
   // A channel whose process still runs is never released.
   await assert.rejects(relay.release(channelID), /still running/)

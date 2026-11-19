@@ -84,6 +84,10 @@ function openExecutionStore(path) {
         for (const [stored, current] of Object.entries(renamed)) rename.run(current, stored)
       }
     }
+    // The workspace's registration, as the current release stored it, also lists
+    // capabilities and devices following its journal. Neither is stored: the
+    // capabilities are what this server serves, and no device follows a journal.
+    if (tables.has('identity')) db.exec("UPDATE identity SET body=json_remove(body,'$.capabilities','$.journalDeviceIDs') WHERE json_type(body,'$.capabilities') IS NOT NULL OR json_type(body,'$.journalDeviceIDs') IS NOT NULL")
     db.exec(`CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
@@ -243,8 +247,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     let nextIdentity
     transaction(() => {
       nextIdentity = identity ? copy(identity) : { id: body.workspaceID, libraryID: body.libraryID, ownerDeviceID: body.ownerDeviceID, executionDeviceID: identifier(executionDeviceID) ? executionDeviceID : randomUUID(),
-        kind, name: typeof body.workspaceName === 'string' ? body.workspaceName.slice(0,256) : name,
-        journalDeviceIDs: [], revision: 1, deleted: false }
+        kind, name: typeof body.workspaceName === 'string' ? body.workspaceName.slice(0,256) : name, revision: 1, deleted: false }
       if (body.endpoint) {
         const endpoint = new URL(body.endpoint)
         if (endpoint.protocol !== 'https:' || !endpoint.hostname.endsWith('.ts.net') || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw fail(400, 'Use a private Tailscale HTTPS endpoint.')
@@ -252,8 +255,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
       const device = { id: body.deviceID, name: String(body.name ?? 'Client').slice(0,256), scopes, createdAt: date() }
       db.prepare('INSERT OR REPLACE INTO devices VALUES (?,?,?)').run(device.id, digest(token), JSON.stringify(device))
-      // Observing devices may control/read this workspace but never publish its origin history.
-      nextIdentity.journalDeviceIDs = []
       nextIdentity.revision++
       db.prepare('INSERT OR REPLACE INTO identity VALUES (1,?)').run(JSON.stringify(nextIdentity))
     })
@@ -269,68 +270,12 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     return null
   }
-  function revoke(id) {
-    transaction(() => {
-      db.prepare('DELETE FROM devices WHERE id=?').run(id)
-      if (identity?.journalDeviceIDs.includes(id)) {
-        const next=copy(identity); next.journalDeviceIDs=next.journalDeviceIDs.filter(value=>value!==id); next.revision++
-        db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify(next));identity=next
-      }
-    })
-  }
+  function revoke(id) { db.prepare('DELETE FROM devices WHERE id=?').run(id) }
   function getRecord(id) {
     if (!identifier(id)) throw fail(400, 'Invalid conversation identifier.')
     const row = db.prepare('SELECT body FROM conversations WHERE id=?').get(id)
     if (!row) throw fail(404, 'Conversation not found in this workspace.')
     return JSON.parse(row.body)
-  }
-  // The history the adopting Mac already shows (`transcript`: its messages
-  // and activities before adoption), so this owner's transcript starts with
-  // it. An unfinished entry is kept as interrupted.
-  function adoptedTranscript(value, conversationID) {
-    if (value == null) return { messages: [], activities: [] }
-    const messages = value.messages ?? [], activities = value.activities ?? []
-    if (typeof value !== 'object' || !Array.isArray(messages) || !Array.isArray(activities) || messages.length > 10000 || activities.length > 10000) throw fail(400, 'Invalid adopted history.')
-    const settled = status => ['running', 'pending', 'queued', 'cancelling', 'uncertain', 'streaming'].includes(status) ? 'interrupted' : status
-    const ids = new Set()
-    const entity = (item, valid) => {
-      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id || item.id.length > 256 || ids.has(item.id) || !valid(item)) throw fail(400, 'Invalid adopted history.')
-      ids.add(item.id)
-      return { ...copy(item), conversationID, ...(item.status != null ? { status: settled(item.status) } : {}) }
-    }
-    return { messages: messages.map(item => entity(item, value => ['user', 'assistant', 'system'].includes(value.role) && typeof value.content === 'string')),
-      activities: activities.map(item => entity(item, value => typeof value.title === 'string')).map(({ conversationID: _, ...item }) => item) }
-  }
-  async function adopt(body) {
-    assertIdentity()
-    if(body.workspaceID!==identity.id || !identifier(body.conversation?.id)||body.conversation.activeRunID
-      || typeof body.nativeSessionID!=='string'||!body.nativeSessionID||typeof body.runtimeKind!=='string'
-      || (body.knownRunIDs!=null&&(!Array.isArray(body.knownRunIDs)||body.knownRunIDs.some(id=>!identifier(id))))) throw fail(400,'Invalid native conversation adoption.')
-    return serialize('native:'+body.runtimeKind+':'+body.nativeSessionID,()=>serialize(body.conversation.id,async()=>{
-      const existing=db.prepare('SELECT body FROM conversations WHERE id=?').get(body.conversation.id)
-      if(existing) {
-        const record=JSON.parse(existing.body)
-        if(record.native.sessionID!==body.nativeSessionID||record.conversation.runtimeKind!==body.runtimeKind)throw fail(409,'This conversation already belongs to a different native session.')
-        return record.conversation
-      }
-      if(db.prepare("SELECT id FROM conversations WHERE json_extract(body,'$.conversation.runtimeKind')=? AND json_extract(body,'$.native.sessionID')=?").get(body.runtimeKind,body.nativeSessionID))throw fail(409,'This native session already belongs to another conversation.')
-      for(const runID of body.knownRunIDs??[])if(db.prepare('SELECT id FROM runs WHERE id=?').get(runID))throw fail(409,'A run already belongs to another conversation.')
-      const seeded=adoptedTranscript(body.transcript,body.conversation.id)
-      const native=await runtime.adopt({native:{sessionID:body.nativeSessionID,channelID:body.conversation.id,workspaceID:identity.id,nativeWorkingDirectory:body.nativeWorkingDirectory},runtimeKind:body.runtimeKind})
-      const record={native,pending:[],conversation:{...copy(body.conversation),runtimeKind:body.runtimeKind,workspaceID:identity.id,routeID:identity.id},
-        // A title the Mac already shows stays; its "New … chat" placeholder does not.
-        ...(typeof body.conversation.title==='string'&&body.conversation.title.trim()&&!/^New .+ chat$/.test(body.conversation.title)?{titled:true}:{}),transcript:{conversationID:body.conversation.id,...seeded}}
-      if(body.goal) {
-        if(body.goal.sessionID!==body.conversation.id)throw fail(400,'Goal identity does not match.')
-        record.goal=copy(body.goal);if(record.goal.status==='active')setGoalStatus(record.goal,'paused');delete record.goal.pendingDeliveryID
-        record.goalBaseCompletedTurns=record.goal.completedTurns;record.goalBaseTokensUsed=record.goal.tokensUsed;record.goalRuns={}
-      }
-      transaction(()=>{
-        for(const runID of new Set(body.knownRunIDs??[]))db.prepare('INSERT INTO runs VALUES (?,?)').run(runID,'adopted')
-        publish(record)
-      })
-      return copy(record.conversation)
-    }))
   }
   // A library folder's binding to a directory on this host, from this
   // machine's library copy (`woven_sessions_folders`): {workspaceID,
@@ -502,12 +447,12 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         const stops=['pause','clear','edit'].some(key=>action.mutation[key])
         if(stops&&record.conversation.activeRunID) {
           // Persist the goal fence before native cancellation.
-          record.goal=draft.goal;record.goalRuns=draft.goalRuns;record.goalBaseCompletedTurns=draft.goalBaseCompletedTurns;record.goalBaseTokensUsed=draft.goalBaseTokensUsed;save(record)
+          record.goal=draft.goal;record.goalRuns=draft.goalRuns;save(record)
           const runID=record.conversation.activeRunID,job=jobs.get(runID)
           if(job)job.stopped=true
           await runtime.stop({native:record.native,runtimeKind:record.conversation.runtimeKind,command:{...command,runID}})
           await job?.completion
-        } else { record.goal=draft.goal;record.goalRuns=draft.goalRuns;record.goalBaseCompletedTurns=draft.goalBaseCompletedTurns;record.goalBaseTokensUsed=draft.goalBaseTokensUsed;save(record) }
+        } else { record.goal=draft.goal;record.goalRuns=draft.goalRuns;save(record) }
         return transaction(()=>receipt(command,'completed'))
       }
       if (record.conversation.activeRunID) throw fail(409,'Wait for this run to finish before changing its settings.')
@@ -1054,7 +999,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     return {success:true,result:value,requestID}
   }
-  const service = { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, adopt, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
+  const service = { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
     publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, kickPublisher:publisher.kick, saveArtifact:publisher.saveArtifact,
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),

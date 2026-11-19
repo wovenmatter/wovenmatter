@@ -283,8 +283,7 @@ export function aggregate(events) {
 export function toRecord(value) {
   const id = createHash('sha256').update(JSON.stringify([Math.floor(value.timestamp / 3_600), value.provider, value.sessionID, value.model, value.billingRoute, value.reasoningLevel, value.harness, value.application, value.agent, value.workspace, value.cost != null])).digest('hex').slice(0, 32)
   return {
-    // `accountLabel` is never read; Mac releases before it was removed require the key.
-    id, timestamp: value.timestamp, provider: value.provider, sessionID: value.sessionID, accountLabel: 'Unknown', model: value.model,
+    id, timestamp: value.timestamp, provider: value.provider, sessionID: value.sessionID, model: value.model,
     billingProvider: value.billingProvider, billingRoute: value.billingRoute, reasoningLevel: value.reasoningLevel, harness: value.harness,
     application: value.application, agent: value.agent, workspace: value.workspace, inputTokens: value.input, cachedInputTokens: value.cached,
     cacheCreationTokens: value.created, outputTokens: value.output, reasoningTokens: value.reasoning, totalTokens: value.total,

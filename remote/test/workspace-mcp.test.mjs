@@ -69,10 +69,9 @@ test('session and outside-agent MCP credentials preserve caller scope, readonly 
   const f=await fixture(t)
   assert.equal(f.service.mcp.resolvePrincipal('Bearer unrelated'),null)
   const client=f.service.mcp.provisionClient({conversationID:f.id,label:'Outside reviewer'})
-  // A tool group this host does not have is left out, not refused.
-  const narrowed=f.service.mcp.provisionClient({conversationID:f.id,label:'Names another group',enabledGroups:['notes','a-group-not-here']})
-  assert.deepEqual(narrowed.enabledGroups,['notes'])
-  assert.throws(()=>f.service.mcp.provisionClient({conversationID:f.id,label:'Malformed',enabledGroups:['notes',7]}),{statusCode:400})
+  // A tool group is one of Woven's, or the client is refused.
+  for(const enabledGroups of [['notes','a-group-not-here'],['notes',7]])assert.throws(()=>f.service.mcp.provisionClient({conversationID:f.id,label:'Names another group',enabledGroups}),{statusCode:400})
+  assert.deepEqual(f.service.mcp.clients().map(item=>item.label),['Outside reviewer'])
   const principal=f.service.mcp.resolvePrincipal('Bearer '+client.connection.bearerToken)
   const denied=await f.call('woven_goals_set',{objective:'Must be denied'},principal)
   assert.equal(denied.error.code,-32602)
@@ -140,7 +139,7 @@ test('owner-local database MCP tools work with no Mac and roll back failed SQL a
 })
 
 test('scheduled MCP callers expose safe content tools and a null input capture without claiming a second lifecycle owner',async t=>{
-  const f=await fixture(t,{mac:async url=>String(url).endsWith('/prepare')?{status:200,body:{enabledGroups:['notes','sessions','goals','timers','browser','a-later-group']}}
+  const f=await fixture(t,{mac:async url=>String(url).endsWith('/prepare')?{status:200,body:{enabledGroups:['notes','sessions','goals','timers','browser']}}
     :{status:200,body:{jsonrpc:'2.0',id:'fixture',result:{content:[]}}}})
   const run={id:randomUUID(),sessionID:randomUUID(),eventID:randomUUID(),task:{configuration:{tools:{enabled:['notes','sessions','goals','timers','browser']}}}}
   const connection=await f.service.prepareTaskMCP({run,eventRevision:1})
@@ -151,4 +150,18 @@ test('scheduled MCP callers expose safe content tools and a null input capture w
   assert.ok(!names.includes('woven_goals_set'));assert.ok(!names.includes('woven_sessions_create'));assert.ok(!names.includes('woven_timers_create'))
   const context=await f.call('woven_context',{},scope)
   assert.equal(context.result.structuredContent.result,null)
+})
+
+test('a schedule tool policy naming a group Woven does not define is not a policy',async t=>{
+  const reply={enabledGroups:['notes','calendar']}
+  const f=await fixture(t,{mac:async url=>String(url).endsWith('/prepare')?{status:200,body:reply}
+    :{status:200,body:{jsonrpc:'2.0',id:'fixture',result:{content:[{type:'text',text:'From the Mac'}]}}}})
+  const prepared=async()=>{
+    const run={id:randomUUID(),sessionID:randomUUID(),eventID:randomUUID(),task:{configuration:{tools:{enabled:['notes']}}}}
+    return f.service.mcp.resolvePrincipal('Bearer '+(await f.service.prepareTaskMCP({run,eventRevision:1})).bearerToken)
+  }
+  assert.equal((await f.call('woven_calendar_list',{},await prepared())).result.content[0].text,'From the Mac')
+  // No part of such a reply applies: the caller keeps the tools its saved schedule names.
+  reply.enabledGroups=['notes','calendar','a-group-not-here']
+  assert.equal((await f.call('woven_calendar_list',{},await prepared())).error.code,-32602)
 })

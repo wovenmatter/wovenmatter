@@ -97,7 +97,7 @@ async function hosts(t, prefix, { botsOnly = false, unenrolled = false } = {}) {
   t.after(() => new Promise(closed => { server.closeAllConnections(); server.close(closed) }))
   const port = await new Promise(done => server.listen(0, '127.0.0.1', () => done(server.address().port)))
   const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
-    endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], journalDeviceIDs: [], revision: 1, deleted: false }
+    endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], revision: 1, deleted: false }
   writeFileSync(workspacesFile, JSON.stringify([mWorkspace]))
   const l = workspace(t, { enrolled: !botsOnly && !unenrolled, workspaceRole: () => !botsOnly, library: { client: lHost.client, available: lHost.available },
     members: { transport: createMemberTransport({ library: lHost.client, allowEndpoint: loopback }), deviceID: () => lIdentity.deviceID, hasMac: () => false } })

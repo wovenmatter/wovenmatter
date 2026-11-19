@@ -60,7 +60,7 @@ export function createStreamClient({ endpoint, sign, expected = null, webSocket 
     target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:'
     const current = new webSocket(target, { headers, perMessageDeflate: false, maxPayload: maximumFrameBytes, handshakeTimeout: 15_000 })
     socket = current
-    let pinger = null, deadline = null
+    let pinger = null, deadline = null, violated = false
     current.on('unexpected-response', (_, response) => {
       // A refusal before the upgrade, such as `member_time_stale`.
       const chunks = []
@@ -79,9 +79,14 @@ export function createStreamClient({ endpoint, sign, expected = null, webSocket 
     })
     current.on('pong', () => deadline?.refresh())
     current.on('message', (data, isBinary) => {
-      if (isBinary) return
-      let frame
-      try { frame = decodeFrame(data) } catch { current.close(streamCloseCodes.protocolViolation); return }
+      // Another workspace answered at this endpoint, or this server broke the
+      // protocol: nothing more it says is used.
+      if (mismatched || violated) return
+      // A binary frame, invalid JSON, a frame the protocol does not define, or
+      // anything but `hello` first is a protocol violation.
+      let frame = null
+      if (!isBinary) { try { frame = decodeFrame(data) } catch {} }
+      if (!frame || (!hello && frame.t !== 'hello')) { violated = true; current.close(streamCloseCodes.protocolViolation); return }
       receive(frame)
     })
     current.on('error', () => {})
@@ -106,10 +111,11 @@ export function createStreamClient({ endpoint, sign, expected = null, webSocket 
 
   function receive(frame) {
     if (frame.t === 'hello') {
+      // Only the first frame greets.
+      if (hello) return
       if (!identifies(frame)) {
-        // Another workspace answers at this endpoint: nothing it says is used.
         mismatched = true
-        emit({ type: 'mismatch', hello: { workspaceID: frame.workspaceID ?? null, libraryID: frame.libraryID ?? null } })
+        emit({ type: 'mismatch', hello: { workspaceID: frame.workspaceID, libraryID: frame.libraryID } })
         socket?.close(streamCloseCodes.normal)
         return
       }
@@ -141,7 +147,7 @@ export function createStreamClient({ endpoint, sign, expected = null, webSocket 
       subscriptions.delete(frame.id)
       try { subscription.onEnd(frame.error ?? null) } catch {}
     }
-    // Other frames are ignored.
+    // `req`, `sub` and `cancel` are a client's to send: nothing answers one.
   }
 
   return {

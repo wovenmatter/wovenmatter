@@ -142,7 +142,7 @@ test('a very large OpenCode database reads without overflowing a call', async ()
 
 test('toRecord uses the field names the desktop decodes', () => {
   const record = toRecord({ timestamp: 3_700, provider: 'codex', sessionID: 's', model: 'm', billingProvider: 'p', billingRoute: 'r', reasoningLevel: null, harness: 'h', application: 'a', agent: null, workspace: null, input: 1, cached: 2, created: 3, output: 4, reasoning: 0, total: 10, requests: 1, cost: null })
-  for (const key of ['id', 'timestamp', 'provider', 'sessionID', 'accountLabel', 'model', 'billingProvider', 'billingRoute', 'harness', 'application', 'inputTokens', 'cachedInputTokens', 'cacheCreationTokens', 'outputTokens', 'reasoningTokens', 'totalTokens', 'requestCount']) assert.ok(key in record, key)
+  for (const key of ['id', 'timestamp', 'provider', 'sessionID', 'model', 'billingProvider', 'billingRoute', 'harness', 'application', 'inputTokens', 'cachedInputTokens', 'cacheCreationTokens', 'outputTokens', 'reasoningTokens', 'totalTokens', 'requestCount']) assert.ok(key in record, key)
 })
 
 const piReply = (timestamp, input, { provider = 'openai-codex', model = 'gpt-5.5' } = {}) =>

@@ -95,7 +95,7 @@ test('a Linux host creates a session on another Linux host with every Mac offlin
     send(response, 404, { error: 'not_found' })
   })
   const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
-    endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], journalDeviceIDs: [], revision: 1, deleted: false }
+    endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], revision: 1, deleted: false }
   writeFileSync(workspacesFile, JSON.stringify([mWorkspace, { ...mWorkspace, id: randomUUID(), kind: 'ios', name: 'iPhone', endpoint: null }]))
   const l = service(t, { library: { client: lHost.client, available: lHost.available },
     members: { transport: createMemberTransport({ library: lHost.client, allowEndpoint: loopback }), deviceID: () => lIdentity.deviceID, hasMac: () => false } })
@@ -198,10 +198,10 @@ test('bots use this host’s library as app-wide callers and never get Mac-only 
   assert.equal((await call('woven_timers_list')).result?.isError, false)
 })
 
-// The installer's bearer adopts the first Mac; after that only a signed Mac
-// member may hand this host member records, which reach the library unchanged,
-// even once every Mac was removed: a host adopted once stays adopted.
-test('member adoption takes the installer bearer only until the host was adopted', async t => {
+// The installer's bearer adopts a host that has no adopter. One that has an
+// adopter takes member records only from a signed Mac member. They reach the
+// library unchanged.
+test('member adoption takes the installer bearer only while the host has no adopter', async t => {
   let adopted = false
   const forwarded = []
   const admin = createHostAdministration({ serviceRoot: '/nonexistent', dataRoot: '/nonexistent', stateDirectory: scratch(t, 'wm-adopt-'),
@@ -215,13 +215,15 @@ test('member adoption takes the installer bearer only until the host was adopted
     return reply.status
   }
   assert.equal(await adopt({ member: { kind: 'ios' } }), 403)
-  assert.equal(await adopt({ installer: true }), 200, 'the first adoption')
+  assert.equal(await adopt({ installer: true }), 200, 'a host with no adopter')
   assert.ok(forwarded[0].equals(payload), 'the body is forwarded byte for byte')
-  assert.equal(await adopt({ installer: true }), 403, 'later adoptions need a signed Mac')
+  assert.equal(await adopt({ installer: true }), 403, 'a host with an adopter needs a signed Mac')
   assert.equal(await adopt({ member: { kind: 'linux' } }), 403)
   assert.equal(await adopt({ member: { kind: 'mac' } }), 200)
-  // With every Mac removed the host has no Mac member, yet stays adopted.
-  assert.equal(await adopt({ installer: true }), 403, 'the bearer never re-adopts')
+  assert.equal(await adopt({ installer: true }), 403)
+  // Once its library names no adopter, the bearer adopts it again.
+  adopted = false
+  assert.equal(await adopt({ installer: true }), 200)
 })
 
 // A workspace's registry row names the member that serves it.

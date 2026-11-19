@@ -1,7 +1,10 @@
 // Frames of the live stream (docs/architecture/WOVEN_EVERYWHERE.md,
 // "Streaming"; Swift `StreamProtocol` in shared/). JSON text frames, one
-// message per frame. `decodeFrame` keeps only the fields a frame type defines,
-// as the Swift decoder does, so encoding a decoded frame gives the same JSON.
+// message per frame. Every device runs the same build, so a frame is one of
+// the types below, an item one of the kinds below, and each carries the keys
+// its type or kind requires: anything else is a protocol violation, as it is
+// for the Swift decoder. `decodeFrame` keeps only the fields a frame type
+// defines, so encoding a decoded frame gives the same JSON.
 
 export const streamPath = '/stream'
 export const streamCapability = 'stream'
@@ -24,36 +27,75 @@ const invalid = message => { throw new StreamFrameError(message) }
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const text = (value, name) => typeof value === 'string' && value.length > 0 && value.length <= 256 ? value : invalid(`A stream frame needs a ${name}.`)
 const integer = (value, name) => Number.isSafeInteger(value) ? value : invalid(`A stream frame's ${name} must be an integer.`)
+const flag = (value, name) => typeof value === 'boolean' ? value : invalid(`A stream frame's ${name} is true or false.`)
+const strings = (value, name) => Array.isArray(value) && value.every(item => typeof item === 'string') ? value : invalid(`A stream frame's ${name} are strings.`)
+const object = (value, name) => isObject(value) ? value : invalid(`A stream frame's ${name} is an object.`)
+/** An entity: an object that names itself with the string `keys`. */
+const entity = (value, name, keys) => isObject(value) && keys.every(key => typeof value[key] === 'string') ? value : invalid(`A stream frame's ${name} has ${keys.join(', ')}.`)
+const entities = (value, name, keys) => Array.isArray(value) ? value.map(item => entity(item, name, keys)) : invalid(`A stream frame lists each ${name}.`)
 
 function streamError(value) {
-  if (!isObject(value) || typeof value.code !== 'string' || typeof value.message !== 'string'
-    || (value.retryable !== undefined && typeof value.retryable !== 'boolean')) invalid('A stream error needs a code and a message.')
-  return { code: value.code, message: value.message, retryable: value.retryable === true }
+  if (!isObject(value) || typeof value.code !== 'string' || typeof value.message !== 'string' || typeof value.retryable !== 'boolean') invalid('A stream error has a code, a message and whether it is retryable.')
+  return { code: value.code, message: value.message, retryable: value.retryable }
 }
 
-/** The frame with only the fields its type defines, in a fixed order; `{t: 'unknown'}` for a type this build does not know. */
+// The item kinds and, for each, its `data` (Swift `StreamItem.Payload`): the
+// keys the kind defines and what names each entity they hold. The rest of an
+// entity is the library protocol's (`LibraryConversation`,
+// `PendingInteraction`, `ExecutionJournalEntry`, `LibraryTranscript`,
+// `HarnessCapabilities`, `SessionSettings`).
+const itemData = new Map(Object.entries({
+  conversations: data => ({ conversations: entities(data.conversations, 'conversation', ['id']),
+    ...(data.deletedConversationIDs != null ? { deletedConversationIDs: strings(data.deletedConversationIDs, 'deleted conversation IDs') } : {}),
+    snapshot: flag(data.snapshot, 'snapshot') }),
+  pending: data => ({ interactions: entities(data.interactions, 'interaction', ['id', 'conversationID']) }),
+  journal: data => {
+    const entry = entity(data.entry, 'journal entry', ['eventID', 'workspaceID', 'conversationID', 'kind'])
+    integer(entry.originSequence, 'journal sequence')
+    return { entry }
+  },
+  transcript: data => {
+    const transcript = entity(data.transcript, 'transcript', ['conversationID'])
+    entities(transcript.messages, 'message', ['id']); entities(transcript.activities, 'activity', ['id'])
+    return { transcript, snapshot: flag(data.snapshot, 'snapshot') }
+  },
+  capabilities: data => ({ capabilities: object(data.capabilities, 'capabilities') }),
+  session: data => ({ settings: object(data.settings, 'session settings') }),
+  owner: data => ({ online: flag(data.online, 'owner state'), ...(data.error != null ? { error: typeof data.error === 'string' ? data.error : invalid("A stream frame's owner error is text.") } : {}) }),
+  library: data => ({ cursor: integer(data.cursor, 'library cursor') }),
+  synchronized: () => ({}),
+  'server.state': data => ({ scopes: strings(data.scopes, 'scopes'),
+    ...(data.conversationIDs != null ? { conversationIDs: strings(data.conversationIDs, 'conversation IDs') } : {}) }),
+}))
+
+/** The frame with only the fields its type defines, in a fixed order. Throws `StreamFrameError` for anything else. */
 export function normalizeFrame(frame) {
   if (!isObject(frame) || typeof frame.t !== 'string') invalid('A stream frame is a JSON object with a type.')
   switch (frame.t) {
     case 'hello':
-      if (!Array.isArray(frame.capabilities) || frame.capabilities.some(item => typeof item !== 'string')) invalid('Hello capabilities are strings.')
       return { t: 'hello', deviceID: text(frame.deviceID, 'device ID'), libraryID: text(frame.libraryID, 'library ID'),
-        workspaceID: text(frame.workspaceID, 'workspace ID'), serverTime: integer(frame.serverTime, 'server time'), capabilities: [...frame.capabilities],
+        workspaceID: text(frame.workspaceID, 'workspace ID'), serverTime: integer(frame.serverTime, 'server time'), capabilities: [...strings(frame.capabilities, 'capabilities')],
         maxFrameBytes: integer(frame.maxFrameBytes, 'maximum frame size') }
     case 'req':
-      return { t: 'req', id: text(frame.id, 'request ID'), method: text(frame.method, 'method'), params: frame.params === undefined ? {} : frame.params }
+      if (frame.params === undefined) invalid('A call has parameters.')
+      return { t: 'req', id: text(frame.id, 'request ID'), method: text(frame.method, 'method'), params: frame.params }
     case 'res':
       // A success always carries `result`, `null` included; a failure carries `error`.
       return frame.error != null ? { t: 'res', id: text(frame.id, 'request ID'), error: streamError(frame.error) }
         : { t: 'res', id: text(frame.id, 'request ID'), result: frame.result === undefined ? null : frame.result }
-    case 'sub':
-      if (frame.params !== undefined && !isObject(frame.params)) invalid('Subscription parameters are an object.')
-      return { t: 'sub', id: text(frame.id, 'subscription ID'), stream: text(frame.stream, 'stream'), params: frame.params ?? {} }
+    case 'sub': {
+      const given = object(frame.params, 'subscription parameters'), params = {}
+      if (given.after != null) params.after = integer(given.after, 'journal cursor')
+      if (given.conversationID != null) params.conversationID = typeof given.conversationID === 'string' ? given.conversationID : invalid("A stream frame's conversation ID is text.")
+      return { t: 'sub', id: text(frame.id, 'subscription ID'), stream: text(frame.stream, 'stream'), params }
+    }
     case 'item': {
       const item = { t: 'item', id: text(frame.id, 'subscription ID') }
       if (frame.seq != null) item.seq = integer(frame.seq, 'sequence')
-      item.kind = text(frame.kind, 'item kind')
-      item.data = item.kind === 'synchronized' ? {} : frame.data === undefined ? null : frame.data
+      const data = itemData.get(frame.kind)
+      if (!data) invalid('A stream item has a kind this protocol defines.')
+      item.kind = frame.kind
+      item.data = data(frame.kind === 'synchronized' ? {} : object(frame.data, 'item data'))
       return item
     }
     case 'end':
@@ -61,11 +103,11 @@ export function normalizeFrame(frame) {
     case 'cancel':
       return { t: 'cancel', id: text(frame.id, 'ID') }
     default:
-      return { t: 'unknown', type: frame.t }
+      return invalid('A stream frame has a type this protocol defines.')
   }
 }
 
-/** Parses one text frame. Throws `StreamFrameError` for invalid JSON, a missing type or a malformed known frame. */
+/** Parses one text frame. Throws `StreamFrameError` for invalid JSON and for any frame `normalizeFrame` refuses. */
 export function decodeFrame(data, { maximumBytes = maximumFrameBytes } = {}) {
   const source = typeof data === 'string' ? data : Buffer.from(data).toString('utf8')
   if (Buffer.byteLength(source) > maximumBytes) invalid('The stream frame is too large.')
@@ -74,11 +116,9 @@ export function decodeFrame(data, { maximumBytes = maximumFrameBytes } = {}) {
   return normalizeFrame(value)
 }
 
-/** One frame as its JSON text. Throws for an unknown frame or one larger than `maximumFrameBytes`. */
+/** One frame as its JSON text. Throws for a frame `normalizeFrame` refuses or one larger than `maximumBytes`. */
 export function encodeFrame(frame, { maximumBytes = maximumFrameBytes } = {}) {
-  const value = normalizeFrame(frame)
-  if (value.t === 'unknown') invalid(`An unknown frame type (${value.type}) cannot be sent.`)
-  const encoded = JSON.stringify(value)
+  const encoded = JSON.stringify(normalizeFrame(frame))
   if (Buffer.byteLength(encoded) > maximumBytes) invalid('The stream frame is too large.')
   return encoded
 }

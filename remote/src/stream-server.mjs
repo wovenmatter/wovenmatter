@@ -161,25 +161,27 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     const connection = createConnection(ws, member)
     connections.add(connection)
     connection.enqueue({ t: 'hello', deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id,
-      serverTime: Date.now(), capabilities: descriptor.capabilities ?? [], maxFrameBytes: limit.frameBytes })
+      serverTime: Date.now(), capabilities: descriptor.capabilities, maxFrameBytes: limit.frameBytes })
   }
 
   function createConnection(ws, member) {
     const subscriptions = new Map(), calls = new Map()
     const device = { id: member.deviceID, name: member.name, scopes: ['execution'], memberKind: member.kind }
-    let ended = false, closeTimer = null
+    let ended = false, closing = false, closeTimer = null
 
     // Liveness: ping every 25 s; a socket from which nothing arrived for 60 s
-    // (no pong, ping or frame) is gone.
+    // (no pong, ping or frame) is closed as going away.
     const pinger = setInterval(() => { if (ws.readyState === OPEN) ws.ping() }, time.pingMilliseconds)
-    const deadline = setTimeout(() => ws.terminate(), time.pongTimeoutMilliseconds)
+    const deadline = setTimeout(() => close(streamCloseCodes.goingAway), time.pongTimeoutMilliseconds)
     pinger.unref?.(); deadline.unref?.()
     const heard = () => deadline.refresh()
     ws.on('pong', heard); ws.on('ping', heard)
     const unregister = registry ? registry.add(member, { kinds, close: (code, reason) => close(code, reason) }) : () => {}
 
+    // Once this side closes, for any reason, the client's frames are no longer read.
     function close(code, reason) {
       if (ended) return
+      closing = true
       try { ws.close(code, reason) } catch { ws.terminate() }
       closeTimer ??= setTimeout(() => ws.terminate(), time.closeMilliseconds)
       closeTimer.unref?.()
@@ -205,8 +207,8 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       const existing = subscriptions.get(frame.id)
       if (existing) { endSubscription(existing, streamFailure('invalid', 'This subscription ID is already in use.')); return }
       if (subscriptions.size >= limit.subscriptions) { enqueue({ t: 'end', id: frame.id, error: streamFailure('unavailable', 'Too many subscriptions on this connection.', true) }); return }
-      const make = typeof frame.stream === 'string' ? streams.get(frame.stream) : undefined
-      if (!make) { enqueue({ t: 'end', id: frame.id, error: streamFailure('invalid', `This server has no ${String(frame.stream).slice(0, 64)} stream.`) }); return }
+      const make = streams.get(frame.stream)
+      if (!make) { enqueue({ t: 'end', id: frame.id, error: streamFailure('invalid', `This server has no ${frame.stream.slice(0, 64)} stream.`) }); return }
       const subscription = { id: frame.id, ended: false, stop() {}, changed() {} }
       subscriptions.set(frame.id, subscription)
       const context = { subscription, enqueue, waitForRoom, room, end: error => endSubscription(subscription, error) }
@@ -249,7 +251,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     }
 
     ws.on('message', (data, isBinary) => {
-      if (ended) return
+      if (ended || closing) return
       heard()
       if (isBinary) return violation('The stream carries JSON text frames.')
       let frame
@@ -257,7 +259,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
       if (frame.t === 'req') void call(frame)
       else if (frame.t === 'sub') subscribe(frame)
       else if (frame.t === 'cancel') cancel(frame.id)
-      // Unknown frame types, and server frames, are ignored.
+      // `hello`, `res`, `item` and `end` are a server's to send: nothing answers one.
     })
     ws.on('error', () => {})
     ws.on('close', () => {
@@ -279,7 +281,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
   // library change cursor and, when `after` is given, the execution journal after it.
   async function workspaceStream({ subscription, enqueue, waitForRoom, room, end }, params) {
     const after = params.after
-    if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) throw failure('invalid', 'after is a journal sequence.')
+    if (after !== undefined && after < 0) throw failure('invalid', 'after is a journal sequence.')
     const summaries = new Map(), pendingByConversation = new Map(), dirty = new Set(), deleted = new Set()
     let pendingList = null, timer = null, lastSentAt = 0, cursor = after, pumping = false, more = false, synchronized = false
     let librarySent = null, libraryTimer = null, librarySentAt = -Infinity

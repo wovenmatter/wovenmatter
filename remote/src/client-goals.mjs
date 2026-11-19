@@ -27,7 +27,7 @@ export function mutateGoal(record,mutation,currentRunID) {
     validateGoal(options.objective,options.tokenBudget,options.turnBudget)
     if(old&&old.status!=='complete')throw fail('Clear or edit the existing goal first.')
     record.goal={id:randomUUID(),sessionID:record.conversation.id,objective:options.objective,status:'active',...(options.tokenBudget!=null?{tokenBudget:options.tokenBudget}:{}),...(options.turnBudget!=null?{turnBudget:options.turnBudget}:{}),completedTurns:0,activeSeconds:0,activeSince:now(),createdAt:now(),updatedAt:now(),baselineRunSequence:0,observedRunSequence:0,enrolledRunSequence:0,progressRevision:0,pendingProgressRevision:0}
-    record.goalBaseCompletedTurns=0;record.goalBaseTokensUsed=0;record.goalRuns={};if(currentRunID)record.goalRuns[currentRunID]={settled:false}
+    record.goalRuns={};if(currentRunID)record.goalRuns[currentRunID]={settled:false}
     return
   }
   if(!old||options.id!==old.id)throw fail('This goal has changed. Refresh before updating it.')
@@ -60,8 +60,8 @@ export function settleGoal(record,runID,succeeded,tokens) {
   if(!goal||!run||run.settled)return
   run.settled=true;run.succeeded=succeeded;if(Number.isSafeInteger(tokens)&&tokens>=0)run.tokens=tokens
   const runs=Object.values(record.goalRuns).filter(item=>item.settled)
-  goal.completedTurns=(record.goalBaseCompletedTurns??0)+runs.filter(item=>item.succeeded).length
-  if(runs.every(item=>item.tokens!=null)&&((record.goalBaseCompletedTurns??0)===0||record.goalBaseTokensUsed!=null))goal.tokensUsed=(record.goalBaseTokensUsed??0)+runs.reduce((sum,item)=>sum+item.tokens,0)
+  goal.completedTurns=runs.filter(item=>item.succeeded).length
+  if(runs.every(item=>item.tokens!=null))goal.tokensUsed=runs.reduce((sum,item)=>sum+item.tokens,0)
   else delete goal.tokensUsed
   if(goal.status!=='active')return
   if(!succeeded){setGoalStatus(goal,'blocked');goal.evidence='The run was interrupted or failed. Review saved state before resuming.'}
@@ -71,6 +71,5 @@ export function settleGoal(record,runID,succeeded,tokens) {
   goal.updatedAt=now()
 }
 export const goalUsageUnavailable = (record,currentRunID) =>
-  ((record.goalBaseCompletedTurns??0)>0&&record.goalBaseTokensUsed==null)
-  || Object.entries(record.goalRuns??{}).some(([id,run])=>id!==currentRunID&&run.tokens==null)
+  Object.entries(record.goalRuns??{}).some(([id,run])=>id!==currentRunID&&run.tokens==null)
 export const budgetReached = goal => (goal.turnBudget!=null&&goal.completedTurns>=goal.turnBudget)||(goal.tokenBudget!=null&&(goal.tokensUsed??0)>=goal.tokenBudget)

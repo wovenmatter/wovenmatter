@@ -170,23 +170,52 @@ test('every shared stream fixture decodes and re-encodes to the same JSON', () =
   const types = new Set(), kinds = new Set()
   for (const { name, frame } of fixtures.frames) {
     const decoded = decodeFrame(JSON.stringify(frame))
-    assert.notEqual(decoded.t, 'unknown', name)
     types.add(decoded.t); if (decoded.t === 'item') kinds.add(decoded.kind)
     assert.deepEqual(JSON.parse(encodeFrame(decoded)), frame, `${name} did not round-trip`)
   }
+  // Every frame type and item kind the protocol defines, as the Swift suite lists them.
   assert.deepEqual([...types].sort(), ['cancel', 'end', 'hello', 'item', 'req', 'res', 'sub'])
-  for (const kind of ['conversations', 'pending', 'journal', 'transcript', 'capabilities', 'session', 'library', 'synchronized', 'server.state']) assert.ok(kinds.has(kind), kind)
-  for (const frame of fixtures.unknownFrames) {
-    assert.deepEqual(decodeFrame(JSON.stringify(frame)), { t: 'unknown', type: 'futureFrame' })
-    assert.throws(() => encodeFrame(frame), StreamFrameError)
-  }
-  const unknownKind = decodeFrame(JSON.stringify(fixtures.frames.find(item => item.name === 'item-unknown-kind').frame))
-  assert.equal(unknownKind.seq, 43); assert.equal(unknownKind.kind, 'futureKind')
+  assert.deepEqual([...kinds].sort(), ['capabilities', 'conversations', 'journal', 'library', 'owner', 'pending', 'server.state', 'session', 'synchronized', 'transcript'])
   // The length-prefixed form is the Mac window's Unix socket; its JSON is still one frame.
   assert.deepEqual(JSON.parse(Buffer.from(fixtures.lengthPrefixed.hex, 'hex').subarray(4).toString('utf8')), fixtures.lengthPrefixed.frame)
-  assert.throws(() => decodeFrame('not json'), StreamFrameError)
-  assert.throws(() => decodeFrame('{"t":"req"}'), StreamFrameError)
-  assert.throws(() => encodeFrame({ t: 'item', id: 's', kind: 'x', data: 'x'.repeat(64) }, { maximumBytes: 32 }), StreamFrameError)
+  assert.throws(() => encodeFrame({ t: 'item', id: 's', kind: 'server.state', data: { scopes: ['x'.repeat(64)] } }, { maximumBytes: 32 }), StreamFrameError)
+})
+
+test('a frame the protocol does not define is refused, read or written', () => {
+  const journal = { eventID: 'e', workspaceID: 'w', conversationID: 'c', kind: 'conversation', originSequence: 1 }
+  const refused = [
+    // The frames the Swift suite refuses (`aFrameThisBuildDoesNotDefineIsRefused`).
+    '{"t":"futureFrame","id":"x1"}',
+    '{"t":"item","id":"s1","seq":43,"kind":"futureKind","data":{"anything":true}}',
+    '{"t":"item","id":"s2","kind":"transcript","data":{"transcript":{"conversationID":7},"snapshot":true}}',
+    '{', '{"id":"s1","kind":"journal"}', '{"t":"item","kind":"journal","data":{}}',
+    // A key its type or kind requires is missing or of another type.
+    'not json', '[]', '{"t":7}', '{"t":"req"}', '{"t":"req","id":"r","method":"execution.receipt"}',
+    '{"t":"sub","id":"s","stream":"workspace"}', '{"t":"sub","id":"s","stream":"workspace","params":{"after":"1"}}',
+    '{"t":"sub","id":"s","stream":"conversation","params":{"conversationID":7}}',
+    '{"t":"res","id":"r","error":{"code":"invalid","message":"No."}}', '{"t":"end","id":"s","error":{"code":"resync"}}',
+    '{"t":"hello","deviceID":"d","libraryID":"l","workspaceID":"w","serverTime":1,"maxFrameBytes":1}',
+    '{"t":"item","id":"s","kind":"constructor","data":{}}', '{"t":"item","id":"s","kind":"pending"}',
+    '{"t":"item","id":"s","kind":"pending","data":{"interactions":[{"id":"i"}]}}',
+    '{"t":"item","id":"s","kind":"conversations","data":{"conversations":[]}}',
+    '{"t":"item","id":"s","kind":"conversations","data":{"conversations":[{"title":"No ID"}],"snapshot":true}}',
+    '{"t":"item","id":"s","kind":"conversations","data":{"conversations":[],"deletedConversationIDs":[7],"snapshot":false}}',
+    JSON.stringify({ t: 'item', id: 's', seq: 1, kind: 'journal', data: { entry: { ...journal, originSequence: '1' } } }),
+    '{"t":"item","id":"s","kind":"transcript","data":{"transcript":{"conversationID":"c","messages":[]},"snapshot":true}}',
+    '{"t":"item","id":"s","kind":"capabilities","data":{}}', '{"t":"item","id":"s","kind":"session","data":{"settings":[]}}',
+    '{"t":"item","id":"s","kind":"owner","data":{}}', '{"t":"item","id":"s","kind":"library","data":{"cursor":"1"}}',
+    '{"t":"item","id":"s","kind":"server.state","data":{}}',
+  ]
+  for (const frame of refused) {
+    assert.throws(() => decodeFrame(frame), StreamFrameError, frame)
+    let value
+    try { value = JSON.parse(frame) } catch { continue }
+    assert.throws(() => encodeFrame(value), StreamFrameError, frame)
+  }
+  // A key a frame does not define is not kept, and an absent optional one is not written.
+  assert.deepEqual(decodeFrame('{"t":"sub","id":"s","stream":"workspace","params":{"after":null,"later":1},"extra":true}'), { t: 'sub', id: 's', stream: 'workspace', params: {} })
+  assert.deepEqual(decodeFrame(JSON.stringify({ t: 'item', id: 's', seq: 1, kind: 'journal', data: { entry: journal, extra: true } })), { t: 'item', id: 's', seq: 1, kind: 'journal', data: { entry: journal } })
+  assert.deepEqual(decodeFrame('{"t":"item","id":"s","kind":"synchronized"}'), { t: 'item', id: 's', kind: 'synchronized', data: {} })
 })
 
 test('the outbound queue supersedes queued entities and ends an overflowing subscription with resync', async () => {
@@ -198,11 +227,10 @@ test('the outbound queue supersedes queued entities and ends an overflowing subs
   // The first item is in flight and never acknowledged: the client stopped reading.
   queue.enqueue({ t: 'item', id: 'a', kind: 'pending', data: { interactions: [] } }, { subscription: a })
   assert.equal(sent.length, 1)
-  for (let index = 0; index < 10; index++) queue.enqueue({ t: 'item', id: 'b', kind: 'pending', data: { interactions: [], version: index } }, { subscription: b, key: 'pending', merge: replace })
+  for (let index = 0; index < 10; index++) queue.enqueue({ t: 'item', id: 'b', kind: 'library', data: { cursor: index } }, { subscription: b, key: 'library', merge: replace })
   assert.deepEqual(queue.size().items, 1, 'updates to one entity supersede the queued one')
-  queue.enqueue({ t: 'item', id: 'a', kind: 'journal', seq: 1, data: { entry: {} } }, { subscription: a })
-  queue.enqueue({ t: 'item', id: 'a', kind: 'journal', seq: 2, data: { entry: {} } }, { subscription: a })
-  queue.enqueue({ t: 'item', id: 'a', kind: 'journal', seq: 3, data: { entry: {} } }, { subscription: a })
+  const journal = seq => ({ t: 'item', id: 'a', kind: 'journal', seq, data: { entry: { eventID: 'e' + seq, workspaceID: 'w', conversationID: 'c', kind: 'conversation', originSequence: seq } } })
+  for (const seq of [1, 2, 3]) queue.enqueue(journal(seq), { subscription: a })
   assert.deepEqual(overflowed, ['a'])
   // Responses always go out.
   assert.equal(queue.enqueue({ t: 'res', id: 'r1', result: null }), true)
@@ -210,10 +238,12 @@ test('the outbound queue supersedes queued entities and ends an overflowing subs
   while (sent.some(entry => !entry.acknowledged)) { const entry = sent.find(item => !item.acknowledged); entry.acknowledged = true; entry.done() }
   const frames = sent.slice(1).map(entry => JSON.parse(entry.text))
   assert.deepEqual(frames.map(frame => [frame.t, frame.id]), [['item', 'b'], ['end', 'a'], ['res', 'r1']])
-  assert.equal(frames[0].data.version, 9)
+  assert.equal(frames[0].data.cursor, 9)
   assert.equal(frames[1].error.code, 'resync'); assert.equal(frames[1].error.retryable, true)
   // A large first item still goes out alone.
-  assert.equal(queue.enqueue({ t: 'item', id: 'b', kind: 'pending', data: { big: 'x'.repeat(10_000) } }, { subscription: b }), true)
+  assert.equal(queue.enqueue({ t: 'item', id: 'b', kind: 'server.state', data: { scopes: ['x'.repeat(10_000)] } }, { subscription: b }), true)
+  // A frame the protocol does not define is never queued.
+  assert.equal(queue.enqueue({ t: 'item', id: 'b', kind: 'noSuchKind', data: {} }, { subscription: b }), false)
 })
 
 test('the stream upgrade refuses a query, stale clocks, bearers and browsers before upgrading', async t => {
@@ -301,8 +331,7 @@ test('the workspace stream sends its snapshot, replays the journal after the cur
   client.send({ t: 'sub', id: 'plain', stream: 'workspace', params: {} })
   await client.next(isItem('synchronized', 'plain'))
   assert.equal(client.frames.filter(isItem('journal', 'plain')).length, 0)
-  // Unknown frames and streams.
-  client.send({ t: 'futureFrame', id: 'x' })
+  // A stream this server does not serve, and a cursor that is no sequence.
   client.send({ t: 'sub', id: 'state', stream: 'server.state', params: {} })
   assert.equal((await client.next(frame => frame.t === 'end' && frame.id === 'state')).error.code, 'invalid')
   client.send({ t: 'sub', id: 'bad', stream: 'workspace', params: { after: -1 } })
@@ -569,7 +598,7 @@ test('a socket that answers no pings is closed', async t => {
   const answering = f.connect(f.signed())
   await silent.next(frame => frame.t === 'hello'); await answering.next(frame => frame.t === 'hello')
   const started = Date.now()
-  await silent.closed
+  assert.equal((await silent.closed).code, 1001, 'closed as going away')
   assert.ok(Date.now() - started >= 900)
   assert.equal(answering.socket.readyState, WebSocket.OPEN, 'a socket that answers pings stays open')
   // The server answers the client's pings.
@@ -591,7 +620,7 @@ test('any frame from the client keeps its socket alive, not only a pong', async 
   for (const deadline = Date.now() + 1_000; Date.now() < deadline;) { talking.socket.ping(); await new Promise(resolve => setTimeout(resolve, 100)) }
   assert.equal(talking.socket.readyState, WebSocket.OPEN)
   // Silence still closes it.
-  await talking.closed
+  assert.equal((await talking.closed).code, 1001)
 })
 
 test('a stream name that is an Object prototype key is not a stream', async t => {
@@ -643,6 +672,24 @@ test('inbound frames are limited to 1 MiB and must be JSON text', async t => {
   await garbage.next(frame => frame.t === 'hello')
   garbage.socket.send('not json')
   assert.equal((await garbage.closed).code, 4400)
+  // So is a frame type or an item kind the protocol does not define, and a frame without a key it requires.
+  for (const frame of [{ t: 'noSuchFrame', id: 'x' }, { t: 'item', id: 's', kind: 'noSuchKind', data: {} }, { t: 'sub', id: 's', stream: 'workspace' },
+    { t: 'req', id: 'r', method: 'execution.receipt' }]) {
+    const client = f.connect()
+    await client.next(item => item.t === 'hello')
+    client.send(frame)
+    // What follows a violation is not read.
+    client.send({ t: 'req', id: 'after', method: 'execution.command', params: { command: f.command('createSession') } })
+    assert.equal((await client.closed).code, 4400, JSON.stringify(frame))
+    assert.ok(!client.frames.some(item => item.t === 'res'))
+  }
+  assert.deepEqual(f.execution.conversations(), [])
+  // A frame a server sends is not a client's: nothing answers it, and the socket stays open.
+  const echo = f.connect()
+  await echo.next(frame => frame.t === 'hello')
+  echo.send({ t: 'end', id: 's' }); echo.send({ t: 'res', id: 'r', result: null })
+  assert.equal((await echo.request('execution.receipt', { commandID: randomUUID() })).result, null)
+  assert.equal(echo.frames.length, 2)
 })
 
 test('a slow reader’s subscription ends with resync instead of growing without bound', async t => {
@@ -757,6 +804,46 @@ test('the stream client uses a server only when its hello names the expected wor
     wrong.client.retry()
     await eventually(() => wrong.signatures.length === attempts + 1 && wrong.client.state() === 'mismatched', 'retry checks again')
   }
+})
+
+test('the stream client closes a server that breaks the protocol with 4400', async t => {
+  const server = createServer(), sockets = new WebSocketServer({ server }), port = await listen(server)
+  const scripts = [], closes = []
+  sockets.on('connection', socket => { socket.on('close', code => closes.push(code)); scripts.shift()(socket) })
+  t.after(async () => { for (const socket of sockets.clients) socket.terminate(); await new Promise(resolve => server.close(resolve)) })
+  const hello = { t: 'hello', deviceID: 'd', libraryID: 'l', workspaceID: 'w', serverTime: 1, capabilities: [], maxFrameBytes: 8 * 1024 * 1024 }
+  const text = frame => JSON.stringify(frame), pending = { t: 'item', id: 's1', kind: 'pending', data: { interactions: [] } }
+  function connect() {
+    const items = [], ends = []
+    // A long backoff: each case is one connection.
+    const client = createStreamClient({ endpoint: `http://127.0.0.1:${port}`, sign: async () => ({}), timings: { initial: 60_000, maximum: 60_000 } })
+    t.after(() => client.close())
+    client.subscribe('workspace', {}, { onItem: frame => items.push(frame), onEnd: error => ends.push(error) })
+    client.connect()
+    return { client, items, ends }
+  }
+  const violations = {
+    'a frame before hello': socket => { socket.send(text(pending)); socket.send(text(hello)) },
+    'a frame type the protocol does not define': socket => { socket.send(text(hello)); socket.send(text({ t: 'noSuchFrame', id: 's1' })); socket.send(text(pending)) },
+    'an item kind the protocol does not define': socket => { socket.send(text(hello)); socket.send(text({ t: 'item', id: 's1', seq: 43, kind: 'noSuchKind', data: {} })) },
+    'an item its kind cannot read': socket => { socket.send(text(hello)); socket.send(text({ t: 'item', id: 's1', kind: 'pending', data: { interactions: [{ id: 'i' }] } })) },
+    'a binary frame': socket => { socket.send(text(hello)); socket.send(Buffer.from(text(pending)), { binary: true }) },
+    'invalid JSON': socket => { socket.send(text(hello)); socket.send('{') },
+  }
+  for (const [name, script] of Object.entries(violations)) {
+    scripts.push(script)
+    const seen = closes.length, { client, items, ends } = connect()
+    await eventually(() => closes.length === seen + 1, name)
+    assert.equal(closes.at(-1), 4400, name)
+    await eventually(() => client.state() === 'waiting', name + ': it reconnects after its backoff')
+    assert.deepEqual([items, ends], [[], []], name)
+    client.close()
+  }
+  // After its hello a server greets no more, and a client's own frame types are not answered.
+  scripts.push(socket => { socket.send(text(hello)); socket.send(text({ ...hello, workspaceID: 'other' })); socket.send(text({ t: 'cancel', id: 's1' })); socket.send(text(pending)) })
+  const open = connect()
+  await eventually(() => open.items.length === 1, 'the item after them is delivered')
+  assert.equal(open.client.state(), 'open'); assert.equal(open.client.hello().workspaceID, 'w')
 })
 
 test('the bots relay dials no runtime for a bad handshake, and a bearer rotation closes installer relays', async t => {

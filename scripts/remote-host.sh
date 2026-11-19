@@ -459,7 +459,7 @@ def status(workspace_id):
     browser=None
     try: browser=json.loads((ROOT/'run/browser-selftest.json').read_text())
     except (OSError,ValueError): pass
-    return {'id':workspace_id,'name':'wovenmatter-'+workspace_id,'state':'running' if running else active or 'inactive','systemdState':active,'running':running,
+    return {'id':workspace_id,'state':'running' if running else active or 'inactive','systemdState':active,'running':running,
         'health':'healthy' if state else 'unhealthy' if running else None,'startedAt':text(run(['systemctl','--user','show',UNIT_NAME,'--property=ActiveEnterTimestamp','--value'])),
         'hostPort':installed['port'],
         'hostStorageCapacityBytes':disk.total,'hostStorageAvailableBytes':disk.free,'hostStorageLow':disk.free<10*1024**3,

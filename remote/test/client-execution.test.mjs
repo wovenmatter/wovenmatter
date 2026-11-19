@@ -149,23 +149,6 @@ test('device grants survive restart without their token on disk',async t=>{
   }
 })
 
-test('native adoption has one conversation owner and retries preserve an active run',async t=>{
-  const f=fixture(t),id=randomUUID(),sessionID='existing-native',gate=Promise.withResolvers()
-  let calls=0
-  f.runtime.adopt=async({native})=>{calls++;await gate.promise;return native}
-  const body={workspaceID:f.enrollment.workspaceID,conversation:{id,title:'Existing',preview:'',updatedAt:'',runtimeKind:'default_agent'},runtimeKind:'default_agent',nativeSessionID:sessionID,knownRunIDs:[randomUUID()]}
-  const first=f.service.adopt(body),duplicateOwner=f.service.adopt({...body,conversation:{...body.conversation,id:randomUUID()}})
-  const rejected=assert.rejects(duplicateOwner,/another conversation/)
-  gate.resolve();await first;await rejected
-  assert.equal(calls,1)
-  const input=await f.service.command(f.command('send',{conversationID:id,text:'still running'}),f.principal)
-  await turn()
-  const repeated=await f.service.adopt(body)
-  assert.equal(repeated.activeRunID,input.runID)
-  assert.equal(calls,1)
-  assert.equal(f.service.transcript(id).messages.at(-1).status,'running')
-})
-
 test('interaction response never overwrites streaming or completion while awaiting native acknowledgement',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
   const sent=await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal)

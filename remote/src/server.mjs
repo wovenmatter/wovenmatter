@@ -297,8 +297,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         bodyFile = null
         if (error.statusCode === 403) return json(response, 403, { error: 'administrator_required' })
         if (error.statusCode === 413) return json(response, 413, { error: 'request_too_large' })
-        // The installing Mac signs its first adoption before this host knows
-        // it; the installer bearer it also sends still authenticates it.
+        // A Mac adopting a host that has no adopter signs before this host
+        // knows it; the installer bearer it also sends still authenticates it.
         if (!authorized(request) || consumed) return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
         member = null
       }
@@ -369,10 +369,6 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       const body=await readJSON(request,8*1024*1024)
       if(typeof body.data!=='string')return json(response,400,{error:'artifact_data_required'})
       return json(response,200,clientExecution.saveArtifact({...body,data:Buffer.from(body.data,'base64')}))
-    }
-    if (url.pathname === '/execution/adopt' && request.method === 'POST') {
-      if (!administrator) return json(response,403,{error:'administrator_required'})
-      return json(response,200,await clientExecution.adopt(await readJSON(request,8*1024*1024)))
     }
     const revokeDevice = url.pathname.match(/^\/execution\/devices\/([0-9a-f-]+)$/)
     if (revokeDevice && request.method === 'DELETE') {

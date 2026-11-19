@@ -14,9 +14,17 @@ import { maximumWakeUpsPerRun } from './stream-protocol.mjs'
 // sessions and pending wake-ups are stored, so both survive a restart: the
 // stream's first snapshot is compared with the stored state.
 
-const stableID = value => {
-  const h = createHash('sha256').update('woven-session-wake-up\0' + value).digest('hex')
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`
+/**
+ * The ID of one wake-up delivery, the same on a Mac (Swift
+ * `SessionWakeUps.stableID`): the first 16 bytes of SHA-256 of the label, a
+ * zero byte and `value`, as a UUID whose version is 5 and whose variant bits
+ * are `10`, the hash's other bits kept.
+ */
+export function wakeUpID(value) {
+  const bytes = createHash('sha256').update('woven-session-wake-up\0' + value).digest().subarray(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x50; bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const h = bytes.toString('hex')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 const stamp = () => new Date().toISOString()
 const isBot = callerID => String(callerID).startsWith('woven:bot:')
@@ -86,19 +94,18 @@ export function createRemoteSessionSource({ endpoint, sign, expected = null, int
   function receive(frame) {
     const keep = wanted()
     if (frame.kind === 'conversations') {
-      const data = frame.data ?? {}
+      const data = frame.data
       if (data.snapshot) { ready = false; snapshotting = true; known.clear(); conversations.clear() }
-      for (const conversation of data.conversations ?? []) {
-        const id = String(conversation?.id ?? '').toLowerCase()
-        if (!id) continue
+      for (const conversation of data.conversations) {
+        const id = conversation.id.toLowerCase()
         known.add(id); removed.delete(id)
         if (keep.has(id)) conversations.set(id, conversation); else conversations.delete(id)
       }
-      for (const raw of data.deletedConversationIDs ?? []) { const id = String(raw).toLowerCase(); known.delete(id); conversations.delete(id); removed.add(id) }
+      for (const raw of data.deletedConversationIDs ?? []) { const id = raw.toLowerCase(); known.delete(id); conversations.delete(id); removed.add(id) }
     } else if (frame.kind === 'pending') {
       pending.clear()
-      for (const interaction of frame.data?.interactions ?? []) {
-        const id = String(interaction?.conversationID ?? '').toLowerCase()
+      for (const interaction of frame.data.interactions) {
+        const id = interaction.conversationID.toLowerCase()
         if (keep.has(id)) pending.set(id, [...pending.get(id) ?? [], interaction])
       }
     } else if (frame.kind === 'synchronized') {
@@ -363,7 +370,7 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
         if (used >= maximumWakeUps) { db.prepare('DELETE FROM member_session_wakeups WHERE id=? AND key=?').run(wakeUp.id, wakeUp.key); continue }
         if (!deliverToBot) { db.prepare('DELETE FROM member_session_wakeups WHERE caller=?').run(callerID); break }
         try {
-          await deliverToBot({ botID: target.botID, text: textFor(wakeUp, used + 1 === maximumWakeUps), deliveryID: stableID([callerID, wakeUp.id, wakeUp.key].join(':')) })
+          await deliverToBot({ botID: target.botID, text: textFor(wakeUp, used + 1 === maximumWakeUps), deliveryID: wakeUpID([callerID, wakeUp.id, wakeUp.key].join(':')) })
         } catch (error) {
           // The bots runtime may be restarting; one that stays away (about ten minutes) drops it.
           if (wakeUp.attempt + 1 >= 20) { dropWakeUp(wakeUp.id); log(`A wake-up for bot ${target.botID} was dropped: ${error.message}`); continue }
@@ -387,7 +394,7 @@ export function createSessionWatch({ db, sourceFor, caller, deliverToConversatio
     }
     let receipt
     try {
-      receipt = await deliverToConversation({ callerID, commandID: stableID([callerID, wakeUp.id, wakeUp.key, wakeUp.attempt].join(':')),
+      receipt = await deliverToConversation({ callerID, commandID: wakeUpID([callerID, wakeUp.id, wakeUp.key, wakeUp.attempt].join(':')),
         text: textFor(wakeUp, used + 1 === maximumWakeUps), sessionID: wakeUp.id, title: wakeUp.title, harness: wakeUp.harness })
     } catch (error) {
       // A request the caller's workspace can never accept is not retried.

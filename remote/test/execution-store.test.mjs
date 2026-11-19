@@ -97,6 +97,30 @@ test('native records the current release journaled take today\'s format names, o
   assert.equal(inspect(path, db => db.prepare("SELECT count(*) AS n FROM events WHERE body LIKE '%\"format\":\"woven-native-update-v1\"%' OR body LIKE '%\"format\":\"wovenmatter.activity.v2\"%'").get().n), 0)
 })
 
+test('the registration the current release stored keeps what a workspace stores today, once', async t => {
+  const path = directory(t)
+  const first = open(path)
+  const { enrollment } = enroll(first)
+  const registered = first.descriptor()
+  await first.close()
+  assert.deepEqual(Object.keys(registered).sort(), ['capabilities', 'deleted', 'executionDeviceID', 'id', 'kind', 'libraryID', 'name', 'ownerDeviceID', 'revision'])
+  const body = () => inspect(path, db => db.prepare('SELECT body FROM identity WHERE id=1').get().body)
+  const today = body()
+  assert.deepEqual(Object.keys(JSON.parse(today)).sort(), ['deleted', 'executionDeviceID', 'id', 'kind', 'libraryID', 'name', 'ownerDeviceID', 'revision'])
+  // As the current release stored it: with the capabilities it served and the devices following its journal.
+  inspect(path, db => db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify({ ...JSON.parse(today),
+    capabilities: ['execution', 'historyReplay', 'idempotentCommands'], journalDeviceIDs: [] })))
+  const second = open(path)
+  assert.deepEqual(second.descriptor(), registered)
+  assert.equal(second.descriptor().id, enrollment.workspaceID)
+  await second.close()
+  const converted = body()
+  assert.deepEqual(JSON.parse(converted), JSON.parse(today))
+  // Nothing is left to find: the next open leaves the row as it is.
+  await open(path).close()
+  assert.equal(body(), converted)
+})
+
 test('a session being created is listed as a complete conversation before its harness starts', async t => {
   const path = directory(t)
   let started, release
