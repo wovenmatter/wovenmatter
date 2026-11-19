@@ -118,7 +118,9 @@ hand on another machine's rows; the owner need not be online.
 Deletion is final: a deleted row stays deleted whatever edit arrives later.
 Deleting a row also removes what belongs to it (a session's items, an
 artifact's versions, a machine's sessions and folders), and rows that arrive
-later for a deleted parent are refused.
+later for a deleted parent are refused. Settings and sealed secrets are the
+exception: they are keyed by name, so they are never deleted. Unsetting one
+writes an empty value, and the newest write wins as usual.
 
 Large content (attachments, images, database copies) is stored by content
 digest in a file store beside the library and fetched by digest when needed.
