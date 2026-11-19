@@ -276,6 +276,18 @@ private enum HostFixtureError: Error { case timeout }
     func add(_ name: String) async throws -> HostFixture {
         let fixture = try await HostFixture()
         fixture.dnsName = name + ".fixture.ts.net"
+        try await start(fixture, named: name)
+        return fixture
+    }
+    /// The same Mac started again: a new controller over the library, the
+    /// paired-device file, the defaults and the device-only storage it had.
+    func restart(_ fixture: HostFixture, named name: String) async throws {
+        if let endpoint = try? await fixture.host.peerRoute().endpoint.absoluteString { hosts[endpoint] = nil }
+        fixture.host.stopSharing()
+        fixture.host = fixture.makeHost()
+        try await start(fixture, named: name)
+    }
+    private func start(_ fixture: HostFixture, named name: String) async throws {
         let network = PairedMacNetwork(request: { [self] endpoint, path, token, libraryID, body in
             try await request(endpoint, path: path, token: token, libraryID: libraryID, body: body)
         })
@@ -291,7 +303,6 @@ private enum HostFixtureError: Error { case timeout }
         let route = try await fixture.host.peerRoute()
         hosts[route.endpoint.absoluteString] = fixture
         deviceEndpoints[route.deviceID] = route.endpoint.absoluteString
-        return fixture
     }
     var deviceEndpoints: [String: String] = [:]
     /// Signed member requests between Macs: the same offline rules, request
@@ -1200,3 +1211,240 @@ extension LibraryHostLifecycleTests {
     }
 }
 
+
+/// Pairing an earlier build made was signed under other labels, so none of
+/// it verifies. Each Mac clears it once when it opens, shows nothing as
+/// paired, and is paired again (`LibraryHostController.clearUnverifiablePairing`).
+extension LibraryHostLifecycleTests {
+    /// A member entry as a build that signed under other labels left it.
+    private func otherBuild(_ entry: LibraryMemberEntry, by signer: MemberIdentity) throws -> LibraryMemberEntry {
+        let statement = canonical([("device", entry.deviceID), ("kind", entry.kind.rawValue), ("name", entry.name),
+            ("key", entry.publicKey.base64EncodedString()), ("endpoints", entry.endpoints.map(\.absoluteString).joined(separator: "\n")),
+            ("added_by", entry.addedBy), ("added_at", String(entry.addedAt))], domain: "test.member.entry.other")
+        return .init(deviceID: entry.deviceID, kind: entry.kind, name: entry.name, publicKey: entry.publicKey, endpoints: entry.endpoints,
+                     addedBy: entry.addedBy, addedAt: entry.addedAt, signature: try signer.sign(statement))
+    }
+    private func count(_ database: WorkspaceDatabase, _ sql: String) async throws -> Int {
+        try await database.read { try $0.historyRowsUnlocked("SELECT (" + sql + ") AS n", values: []).first?.objectValue?["n"]?.intValue ?? -1 }
+    }
+    private func ids(_ database: WorkspaceDatabase, _ table: String) async throws -> [String] {
+        try await database.read { try $0.historyRowsUnlocked("SELECT id FROM " + table + " ORDER BY id", values: []).compactMap { $0.objectValue?["id"]?.stringValue } }
+    }
+    /// Rewrites every member record a library holds as the build before left
+    /// it, pins the other Macs as a day of trust would have, and leaves a
+    /// GitHub record and recipients no key here signed.
+    private func leaveAsAnotherBuildDid(_ database: WorkspaceDatabase, signers: [String: MemberIdentity]) async throws {
+        let records = try await database.libraryMemberRecords()
+        let rewritten = try records.entries.map { try otherBuild($0, by: try #require(signers[$0.addedBy])) }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let payloads = try rewritten.map { ($0.deviceID, $0.addedBy, String(decoding: try encoder.encode($0), as: UTF8.self)) }
+        let own = try await database.libraryIdentity().hostDeviceID
+        let signature = Data(repeating: 7, count: 64).base64EncodedString(), key = Data(repeating: 9, count: 32).base64EncodedString()
+        try await database.write { connection in
+            for (device, adder, payload) in payloads {
+                try connection.toolsExecuteUnlocked("UPDATE library_members SET payload=? WHERE device_id=? AND added_by=?", [payload, device, adder])
+            }
+            try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO github_identity(singleton,payload) VALUES(1,?)",
+                [#"{"access":{},"author":"\#(own)","identity":{},"revision":5,"sealed":[],"signature":"\#(signature)"}"#])
+            for device in signers.keys {
+                try connection.toolsExecuteUnlocked("INSERT OR REPLACE INTO github_identity_recipients(device_id,payload) VALUES(?,?)",
+                    [device, #"{"device":"\#(device)","key":"\#(key)","signature":"\#(signature)"}"#])
+            }
+        }
+        for signer in signers.values where signer.kind == .mac { try await database.saveLibraryMemberAnchor(signer.anchor) }
+    }
+
+    /// Two Macs whose libraries hold each other's content: after the update
+    /// both are unpaired with nothing lost, and pairing them again
+    /// synchronizes with no conflict, rejected record, lost owner or doubled agent.
+    @Test func twoPairedMacsAreClearedByTheUpdateAndPairAgainWithNothingLostOrDoubled() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("reset-air"), mini = try await mesh.add("reset-mini")
+        let fixtures = [("reset-air", air), ("reset-mini", mini)]
+        var databases: [WorkspaceDatabase] = [], signers: [String: MemberIdentity] = [:], chats: [String] = []
+        for (_, fixture) in fixtures {
+            let store = try #require(fixture.model.libraryStore)
+            try await store.prepareLocalWorkspace()
+            chats.append(try await store.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Before the update", ownerDeviceID: try await store.deviceID()))
+            databases.append(store.database)
+            let identity = MemberIdentity(try await fixture.host.peerSync.identity())
+            signers[identity.deviceID] = identity
+        }
+        let airDB = databases[0], miniDB = databases[1]
+        let airID = try await air.host.peerRoute().deviceID, miniID = try await mini.host.peerRoute().deviceID
+        try await mesh.pair(air, with: mini)
+        // A phone paired with the first Mac: a grant there and a member entry both Macs hold.
+        let phone = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .ios, key: .init())
+        let airAuthentication = try await air.host.peerAuthentication()
+        func pairPhone(_ authentication: DeviceAuthentication) async throws -> PairResponse {
+            let route = try await air.host.peerRoute()
+            return try await authentication.pairConfirmed(.init(token: try await authentication.createOffer(endpoint: route.endpoint).payload.token,
+                deviceID: phone.deviceID, deviceName: "iPhone", metadata: .init(kind: .iPhone)), workspaceID: route.libraryID)
+        }
+        let phoneGrant = try await pairPhone(airAuthentication)
+        try await air.host.peerSync.members().add(deviceID: phone.deviceID, kind: .ios, name: "iPhone", publicKey: phone.publicKey, endpoints: [])
+        let before = UUID().uuidString.lowercased(), fromMini = UUID().uuidString.lowercased()
+        try await writeNote(air, before, "Before, on Air"); try await writeNote(mini, fromMini, "Before, on Mini")
+        for _ in 0..<3 { for (_, fixture) in fixtures { await fixture.host.peerSync.synchronize(force: true) } }
+        #expect(try await miniDB.libraryNote(id: before) != nil)
+        #expect(try await airDB.libraryNote(id: fromMini) != nil)
+        #expect(await mini.host.peerSync.memberDirectory?.member(phone.deviceID) != nil)
+        // Two libraries made apart each wrote the same one-row settings before
+        // they first met; those versions are concurrent from the first pairing on.
+        func conflicts(_ database: WorkspaceDatabase) async throws -> [String] {
+            try await database.peerSyncConflicts().map { $0.record.table + " " + $0.record.key + " " + $0.record.origin }.sorted()
+        }
+        var agents: [[String]] = [], agentOwners: [[String]] = [], chatOwners: [[String]] = [], owned: [Set<UUID>] = [], concurrent: [[String]] = []
+        for database in databases {
+            concurrent.append(try await conflicts(database))
+            #expect(concurrent.last?.allSatisfy { $0.hasPrefix("product_analytics_preference ") || $0.hasPrefix("tool_settings ") } == true)
+            agents.append(try await ids(database, "agents")); agentOwners.append(try await ids(database, "agent_owners"))
+            chatOwners.append(try await ids(database, "conversation_owners")); owned.append(try await database.agentPlacements().own)
+        }
+        #expect(agents[0] == agents[1] && !agents[0].isEmpty && Set(agents[0]) == Set(agentOwners[0]))
+        #expect(Set(chats).isSubset(of: Set(chatOwners[0])) && chatOwners[0] == chatOwners[1])
+        #expect(owned[0].isDisjoint(with: owned[1]) && !owned[0].isEmpty)
+
+        // The update: every pairing record was signed under other labels.
+        for database in databases { try await leaveAsAnotherBuildDid(database, signers: signers.merging([phone.deviceID: phone]) { first, _ in first }) }
+        air.defaults.set(["stale"], forKey: LibraryHostController.appliedPeerRevocationsKey)
+        for (name, fixture) in fixtures { try await mesh.restart(fixture, named: name) }
+
+        for (index, (name, fixture)) in fixtures.enumerated() {
+            let database = databases[index], other = index == 0 ? miniID : airID
+            await fixture.host.refreshStatus()
+            #expect(fixture.host.pairedDevices.isEmpty, "\(name)")
+            #expect(fixture.host.showsPairingResetNotice, "\(name)")
+            #expect(mesh.credentials[name]?.isEmpty != false, "\(name)")
+            // Only itself is a member, under its own signature, with its address.
+            let members = try await fixture.host.peerSync.members()
+            let list = try await members.list()
+            #expect(list.members.map(\.deviceID) == [members.identity.deviceID], "\(name)")
+            #expect(list.members.first?.endpoints.isEmpty == false, "\(name)")
+            let records = try await database.libraryMemberRecords()
+            #expect(records.entries.count == 1 && records.entries.allSatisfy { $0.verifies(with: members.identity.publicKey) }, "\(name)")
+            #expect(records.revocations.isEmpty && records.anchors.map(\.deviceID) == [members.identity.deviceID], "\(name)")
+            #expect(try await !database.holdsUnverifiablePairing(), "\(name)")
+            #expect(try await count(database, "SELECT count(*) FROM github_identity_recipients WHERE payload LIKE '%BwcHBwcH%'") == 0, "\(name)")
+            #expect(try await count(database, "SELECT count(*) FROM github_identity WHERE payload LIKE '%BwcHBwcH%'") == 0, "\(name)")
+            // No peer to synchronize with, and nothing shown as one.
+            await fixture.host.peerSync.synchronize(force: true)
+            #expect(fixture.host.peerSync.syncStatus?.peers.isEmpty == true, "\(name)")
+            #expect(await members.member(other) == nil, "\(name)")
+            #expect(await members.member(phone.deviceID) == nil, "\(name)")
+            // The other Mac's workspace, agents and chats stay as they were: nothing became copied history.
+            let workspace = try #require(try await database.libraryExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == other })
+            #expect(workspace.retainedHistory != true && workspace.endpoint != nil && !workspace.deleted, "\(name)")
+            #expect(try await ids(database, "agents") == agents[index], "\(name)")
+            #expect(try await ids(database, "agent_owners") == agentOwners[index], "\(name)")
+            #expect(try await ids(database, "conversation_owners") == chatOwners[index], "\(name)")
+            #expect(try await database.agentPlacements().own == owned[index], "\(name)")
+            #expect(try await database.libraryNote(id: before) != nil, "\(name)")
+            #expect(try await database.libraryNote(id: fromMini) != nil, "\(name)")
+        }
+        #expect(air.defaults.stringArray(forKey: LibraryHostController.appliedPeerRevocationsKey) == nil)
+        let cleared = try await air.host.peerAuthentication()
+        await #expect(throws: LibraryAPIError.self) { try await cleared.authenticate(bearer: phoneGrant.credential) }
+
+        // Paired again, they synchronize what each wrote since.
+        try await mesh.pair(air, with: mini)
+        let after = UUID().uuidString.lowercased(), afterOnMini = UUID().uuidString.lowercased()
+        try await writeNote(air, after, "After, on Air"); try await writeNote(mini, afterOnMini, "After, on Mini")
+        for _ in 0..<3 { for (_, fixture) in fixtures { await fixture.host.peerSync.synchronize(force: true) } }
+        #expect(try await miniDB.libraryNote(id: after)?.title == "After, on Air")
+        #expect(try await airDB.libraryNote(id: afterOnMini)?.title == "After, on Mini")
+        for (index, (name, fixture)) in fixtures.enumerated() {
+            let database = databases[index]
+            #expect(fixture.host.peerSync.errors.isEmpty, "\(name): \(fixture.host.peerSync.errors)")
+            // Pairing again adds no conflict to those of the first pairing.
+            #expect(try await conflicts(database) == concurrent[index], "\(name)")
+            #expect(try await database.peerSyncQuarantineCount() == 0, "\(name)")
+            #expect(try await ids(database, "agents") == agents[index], "\(name)")
+            #expect(try await ids(database, "agent_owners") == agentOwners[index], "\(name)")
+            #expect(try await ids(database, "conversation_owners") == chatOwners[index], "\(name)")
+            #expect(try await database.agentPlacements().own == owned[index], "\(name)")
+            #expect(try await count(database, """
+                SELECT count(*) FROM (SELECT 1 FROM agents GROUP BY execution_location,lower(owner_device_id),runtime_kind,lower(runtime_device_id) HAVING count(*)>1)
+                """) == 0, "\(name)")
+            let members = try await fixture.host.peerSync.members()
+            let paired = try await members.list().members.filter { !$0.revoked }.map(\.deviceID)
+            #expect(Set(paired) == [airID, miniID], "\(name)")
+            await fixture.host.refreshStatus()
+            #expect(fixture.host.pairedDevices.map(\.id) == [index == 0 ? miniID : airID], "\(name)")
+            // Pairing a device ends the notice.
+            #expect(!fixture.host.showsPairingResetNotice, "\(name)")
+        }
+        // The phone pairs again with the same device ID and becomes a member on both.
+        let again = try await pairPhone(try await air.host.peerAuthentication())
+        #expect(again.credential != phoneGrant.credential)
+        try await air.host.peerSync.members().add(deviceID: phone.deviceID, kind: .ios, name: "iPhone", publicKey: phone.publicKey, endpoints: [], replacingKey: true)
+        for _ in 0..<2 { for (_, fixture) in fixtures { await fixture.host.peerSync.synchronize(force: true) } }
+        #expect(await mini.host.peerSync.memberDirectory?.activeKey(phone.deviceID) != nil)
+    }
+
+    /// One Mac, as the window sees it through the background server: the
+    /// reset empties the paired devices and device-only storage, raises the
+    /// notice once, and dismissing it is kept.
+    @Test func aMacThatHeldPairingsShowsTheResetOnceUntilItIsDismissed() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        let database = try #require(fixture.model.libraryStore?.database)
+        let key = Curve25519.Signing.PrivateKey()
+        try fixture.storage.saveSigningKey(key.rawRepresentation)
+        let own = MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID, kind: .mac, key: key)
+        let entry = try LibraryMemberEntry.signed(deviceID: own.deviceID, kind: .mac, name: "Studio", publicKey: own.publicKey, endpoints: [], by: own)
+        try await database.saveLibraryMemberEntries([try otherBuild(entry, by: own)])
+        let file = fixture.directory.appending(path: DeviceAuthentication.fileName), workspace = try await database.libraryID()
+        let earlier = try DeviceAuthentication(fileURL: file)
+        let token = try await earlier.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!).payload.token
+        let phone = try await earlier.pairConfirmed(.init(token: token, deviceID: UUID().uuidString.lowercased(), deviceName: "iPhone",
+            metadata: .init(kind: .iPhone)), workspaceID: workspace)
+        let peer = PairedMacRoute(deviceID: UUID().uuidString.lowercased(), libraryID: UUID().uuidString.lowercased(),
+            endpoint: URL(string: "https://mini.fixture.ts.net/wovenmatter")!, name: "Mini")
+        try fixture.storage.saveCredentials([.init(route: peer, deviceID: own.deviceID, token: String(repeating: "t", count: 43))])
+        let request = PairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: String(repeating: "s", count: 43),
+            identity: .init(deviceID: own.deviceID, deviceName: "Studio", metadata: .init(kind: .mac)))
+        try fixture.storage.saveClaim(.init(endpoint: peer.endpoint, request: request, expiresAt: Date().addingTimeInterval(600)), own.deviceID)
+
+        try await fixture.model.configureFacadeFixture(directory: fixture.directory)
+        fixture.model.libraryHost = fixture.host
+        let backend = BackendApplicationService(model: fixture.model)
+        func send(_ action: LibraryHostAction) async throws -> LibraryHostSnapshot {
+            let reply = await backend.handle(.init(method: "application.command", payload: try JSONEncoder().encode(BackendApplicationCommand.libraryHost(action))))
+            let result = try #require(reply.result)
+            return try #require(try JSONDecoder().decode(BackendApplicationResult.self, from: result).libraryHost)
+        }
+        let started = try await send(.start)
+        #expect(started.endpoint != nil && started.pairedDevices.isEmpty && started.showsPairingResetNotice == true)
+        #expect(try fixture.storage.loadCredentials().isEmpty)
+        #expect(try fixture.storage.loadClaim(own.deviceID) == nil)
+        #expect(try fixture.storage.loadSigningKey() == key.rawRepresentation)
+        let cleared = try await fixture.host.peerAuthentication()
+        await #expect(throws: LibraryAPIError.self) { try await cleared.authenticate(bearer: phone.credential) }
+        let stored = try #require(try await database.libraryMemberRecords().entries.first)
+        #expect(stored.verifies(with: own.publicKey) && stored.endpoints == [started.endpoint].compactMap { $0 })
+        #expect(try await send(.status).showsPairingResetNotice == true)
+        #expect(try await send(.dismissPairingResetNotice).showsPairingResetNotice == false)
+
+        // Started again, it has nothing to clear and nothing to say.
+        fixture.host.stopSharing()
+        fixture.host = fixture.makeHost()
+        fixture.model.libraryHost = fixture.host
+        let again = try await send(.start)
+        #expect(again.showsPairingResetNotice == false && again.pairedDevices.isEmpty)
+        #expect(try await database.libraryMemberRecords().entries.map(\.deviceID) == [own.deviceID])
+        #expect(try await !database.holdsUnverifiablePairing())
+    }
+
+    /// A Mac that never paired anything clears its unverifiable entry and says nothing.
+    @Test func aMacThatNeverPairedIsClearedWithoutANotice() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        let database = try #require(fixture.model.libraryStore?.database)
+        let own = MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID, kind: .mac, key: .init())
+        let entry = try LibraryMemberEntry.signed(deviceID: own.deviceID, kind: .mac, name: "Studio", publicKey: own.publicKey, endpoints: [], by: own)
+        try await database.saveLibraryMemberEntries([try otherBuild(entry, by: own)])
+        await fixture.host.start()
+        #expect(fixture.host.endpoint != nil && !fixture.host.showsPairingResetNotice && fixture.host.pairedDevices.isEmpty)
+        #expect(try await !database.holdsUnverifiablePairing())
+        #expect(!FileManager.default.fileExists(atPath: fixture.directory.appending(path: DeviceAuthentication.fileName).path))
+    }
+}

@@ -23,7 +23,7 @@ public struct LibraryMemberEntry: Codable, Equatable, Sendable {
   public let addedAt: Int64
   public let signature: Data
 
-  public static let domain = "woven.member.entry.v1"
+  public static let domain = "woven.member.entry"
   static func statement(deviceID: String, kind: MemberKind, name: String, publicKey: Data, endpoints: [URL],
                         addedBy: String, addedAt: Int64) -> Data {
     canonical([("device", deviceID), ("kind", kind.rawValue), ("name", name), ("key", publicKey.base64EncodedString()),
@@ -60,7 +60,7 @@ public struct LibraryMemberRevocation: Codable, Equatable, Sendable {
   public let revokedAt: Int64
   public let signature: Data
 
-  public static let domain = "woven.member.revocation.v1"
+  public static let domain = "woven.member.revocation"
   static func statement(eventID: String, deviceID: String, revokedBy: String, revokedAt: Int64) -> Data {
     canonical([("event", eventID), ("device", deviceID), ("revoked_by", revokedBy), ("revoked_at", String(revokedAt))], domain: domain)
   }
@@ -79,8 +79,9 @@ public struct LibraryMemberRevocation: Codable, Equatable, Sendable {
 /// A local trust root: this device itself, the Mac that adopted a Linux
 /// host, and every Mac this device has trusted (pinned on first sight, so
 /// removing the Mac that introduced it never cuts this device off from the
-/// others). Anchors are local, never synchronize, are never removed and
-/// never change key; any but this device's own can still be revoked.
+/// others). Anchors are local, never synchronize and never change key; any
+/// but this device's own can still be revoked. They go only with all of
+/// this device's pairing (`clearPairingRecords`).
 public struct LibraryMemberAnchor: Codable, Equatable, Sendable {
   public let deviceID: String
   public let kind: MemberKind
@@ -108,8 +109,9 @@ public struct LibraryMemberList: Codable, Equatable, Sendable {
   /// Opaque; changes whenever any resolved field changes.
   public let revision: String
   /// This device has anchored a Mac (a Linux host's first adoption, or any
-  /// Mac it has trusted). Anchors are never removed, so a Linux host that
-  /// was adopted once never takes the installer's bearer for adoption again.
+  /// Mac it has trusted). An anchor stays while this device keeps its
+  /// pairing, so an adopted Linux host does not take the installer's bearer
+  /// for adoption again.
   public var adopted: Bool?
   public init(members: [LibraryMember], revision: String, adopted: Bool? = nil) {
     self.members = members; self.revision = revision; self.adopted = adopted
@@ -351,6 +353,51 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
+  /// Whether the pairing this library holds was made by a build that signed
+  /// its records differently: this device's own member entry, which it
+  /// signed itself, does not verify under the key it names. One row is read
+  /// by its key. A device that signs as this build does always holds an own
+  /// entry that verifies (`MemberDirectory.ensureSelf`), and a peer cannot
+  /// store one here that does not (`peerRecordAllowed`), so this is true
+  /// exactly until `clearPairingRecords` has run.
+  public func holdsUnverifiablePairing() async throws -> Bool {
+    try await read { connection in
+      let own = try connection.libraryIdentityUnlocked().hostDeviceID.lowercased()
+      guard let payload = try connection.historyRowsUnlocked("SELECT payload FROM library_members WHERE device_id=? AND added_by=?",
+                                                             values: [own, own]).first?.objectValue?["payload"]?.stringValue else { return false }
+      guard let entry = try? JSONDecoder().decode(LibraryMemberEntry.self, from: Data(payload.utf8)), entry.isWellFormed else { return true }
+      return !entry.verifies(with: entry.publicKey)
+    }
+  }
+
+  /// The tables peers share that hold pairing: signed member records, and
+  /// the GitHub key's record and recipients, which are signed by members.
+  static let sharedPairingTables = ["library_members", "library_member_revocations", "github_identity", "github_identity_recipients"]
+
+  /// Removes every pairing record from this library, in one transaction:
+  /// member entries and removals, this device's anchors and pin candidates,
+  /// and the shared GitHub key record with its recipients (the Mac that
+  /// keeps the key re-shares it once devices are paired again). Nothing is
+  /// sent to a peer: the rows go without a recorded deletion, and with them
+  /// every version, conflict and rejected record this library kept of them.
+  /// Chats, agents, folders, workspaces and what is known of other machines
+  /// stay as they are. It is the last step of a pairing reset
+  /// (`holdsUnverifiablePairing` is false afterwards), so a reset that was
+  /// interrupted before it runs again from the start.
+  public func clearPairingRecords() async throws {
+    let shared = Self.sharedPairingTables
+    let named = shared.map { "'" + $0 + "'" }.joined(separator: ",")
+    let statements = ["UPDATE peer_sync_clock SET applying=1 WHERE singleton=1"]
+      + (shared + ["library_member_anchors", "library_member_pin_candidates"]).map { "DELETE FROM " + $0 }
+      + ["peer_sync_versions", "peer_sync_conflicts", "peer_sync_quarantine", "peer_sync_reassert"].map {
+        "DELETE FROM " + $0 + " WHERE table_name IN (" + named + ")"
+      }
+      + ["UPDATE peer_sync_clock SET applying=0 WHERE singleton=1"]
+    try await write { connection in
+      try connection.transaction { try connection.executeUnlocked(statements.joined(separator: ";\n") + ";") }
+    }
+  }
+
   public func libraryMemberRecords() async throws -> (entries: [LibraryMemberEntry], revocations: [LibraryMemberRevocation], anchors: [LibraryMemberAnchor]) {
     try await read { try $0.memberRecordsUnlocked() }
   }

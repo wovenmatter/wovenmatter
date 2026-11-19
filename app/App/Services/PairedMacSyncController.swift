@@ -117,8 +117,21 @@ final class PairedMacSyncController {
         return identity
     }
 
+    /// Drops what this Mac kept in device-only storage for pairing with other
+    /// Macs: the grants they issued it, an unfinished join and a pending
+    /// request. Part of a pairing reset (`LibraryHostController`); this Mac's
+    /// signing key stays.
+    func forgetPairedMacs(ownDeviceID: String) throws {
+        if try !loadCredentials().isEmpty { try saveCredentials([]) }
+        if try storage.loadClaim(ownDeviceID) != nil { try storage.saveClaim(nil, ownDeviceID) }
+        errors = [:]; nextAttempt = [:]; appliedMemberRemovals = []
+    }
+
     /// This Mac's member directory, keyed by the same identity as pairing.
     func members() async throws -> MemberDirectory {
+        if let memberDirectory { return memberDirectory }
+        // The member list is first read after pairing made by another build was cleared.
+        _ = try await host?.peerAuthentication()
         if let memberDirectory { return memberDirectory }
         guard let database = host?.model?.libraryStore?.database else { throw CancellationError() }
         let directory = MemberDirectory(database: database, identity: MemberIdentity(try await identity(), kind: .mac))
@@ -126,21 +139,14 @@ final class PairedMacSyncController {
         return directory
     }
 
-    /// Anchors this Mac, keeps its own entry's address current, converts Macs
-    /// paired before members existed into members (their keys were already
-    /// pinned by a signed join), and starts change-driven synchronization.
+    /// Anchors this Mac, keeps its own entry's address current, and starts
+    /// change-driven synchronization. A paired Mac becomes a member when its
+    /// signed join completes (`addMember`), and only then.
     private func startMembers(own: PairedMacRoute) async throws {
         guard let host else { return }
         let directory = try await members()
         try await directory.ensureSelf(name: own.name, endpoints: [own.endpoint])
         let authentication = try await host.peerAuthentication()
-        let current = try await directory.list()
-        for route in routes where route.deviceID != own.deviceID && current.active(route.deviceID) == nil {
-            guard await authentication.isActiveMac(route.deviceID), let pin = await authentication.pin(for: route.deviceID),
-                  pin.libraryID == route.libraryID else { continue }
-            do { try await directory.add(deviceID: route.deviceID, kind: .mac, name: route.name, publicKey: pin.publicKey, endpoints: [route.endpoint]) }
-            catch { errors[route.deviceID] = error.localizedDescription }
-        }
         if librarySync == nil {
             let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "development"
             // The paired-Mac roster (Mac introductions, signed unpairs and

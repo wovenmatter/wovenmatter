@@ -84,6 +84,17 @@ public final class LibraryHost: @unchecked Sendable {
     members = MemberDirectory(database: database, identity: identity)
     timers = LibraryHostTimers(database: database, machineID: identity.deviceID)
     github = GitHubIdentitySync(database: database, directory: members)
+    // Bearer grants are never issued here; the store only backs the API.
+    let authentication = try DeviceAuthentication(fileURL: layout.library.appending(path: DeviceAuthentication.fileName))
+    // Pairing made by a build that signed its records differently no longer
+    // verifies: it is cleared before anything reads it, the library last
+    // (`clearPairingRecords`), so a stop in between clears again at the next
+    // start. This machine then belongs to no library, and the Mac that
+    // manages it adopts it again with its installer bearer, as it first did.
+    if try await database.holdsUnverifiablePairing() {
+      try await authentication.clearPairing()
+      try await database.clearPairingRecords()
+    }
     try await members.ensureSelf(name: name ?? ProcessInfo.processInfo.hostName, endpoints: endpoints)
     var configuration = LibraryPeerSync.Configuration(version: Self.releaseVersion)
     configuration.presenceInterval = presenceInterval
@@ -92,8 +103,6 @@ public final class LibraryHost: @unchecked Sendable {
     for prefix in ["/peers/sync", "/peers/notify", "/peers/files", "/peers/file"] {
       mount(prefix: prefix) { await sync.handle($0) ?? .error("unauthorized", "Peer routes need a signed member request.", status: 401) }
     }
-    // Bearer grants are never issued here; the store only backs the API.
-    let authentication = try DeviceAuthentication(fileURL: layout.library.appending(path: DeviceAuthentication.fileName))
     let api = await MainActor.run { [database, members, executor, sync, ownID = identity.deviceID] in
       DeviceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
                             isActive: { true }, members: members, syncStatus: { await sync.status() },

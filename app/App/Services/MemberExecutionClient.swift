@@ -152,6 +152,13 @@ final class MemberExecutionClient {
         transcripts[conversationID] = Self.markCursor(saved, origin: "library")
     }
 
+    /// A machine that does not list this Mac as a member, or that this Mac's
+    /// member list does not hold. Waiting only helps while a pairing is
+    /// still synchronizing, so the message says what to do otherwise.
+    static func unrecognizedProblem(_ name: String) -> String {
+        "\(name) does not recognize this Mac. If the two are paired, it connects once they synchronize. Otherwise pair this Mac with it, or with the Mac that manages it, in Settings → Apple Devices."
+    }
+
     /// Why a workspace has no live stream here. `name` is what to call it
     /// (`workspaceTitle`); without one, the name it registered.
     static func unstreamedProblem(_ workspace: ExecutionWorkspace, name: String? = nil) -> String {
@@ -167,7 +174,7 @@ final class MemberExecutionClient {
         if !workspace.capabilities.contains(StreamProtocol.capability) {
             return "\(name) does not stream its sessions. Its chats show their saved history."
         }
-        return "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
+        return unrecognizedProblem(name)
     }
 
 
@@ -186,7 +193,7 @@ final class MemberExecutionClient {
         // Members sign every request; nothing is provisioned, so the Mac that
         // added the workspace does not need to be online. A refusal is final
         // until the member lists synchronize.
-        let unrecognized = LibraryAPIError(code: "unauthorized", message: "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+        let unrecognized = LibraryAPIError(code: "unauthorized", message: Self.unrecognizedProblem(name))
         guard workspace.endpoint != nil else {
             throw LibraryAPIError(code: "workspace_unavailable", message: Self.unstreamedProblem(workspace, name: name))
         }
@@ -225,7 +232,7 @@ final class MemberExecutionClient {
     /// The Linux server's member routes for `workspace`, signed by this Mac.
     func memberRoutes(for workspace: ExecutionWorkspace) async throws -> any MemberExecutionRoutes {
         guard let routes = try await transport(for: workspace) as? any MemberExecutionRoutes else {
-            throw LibraryAPIError(code: "workspace_unavailable", message: "\(workspaceTitle(workspace)) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+            throw LibraryAPIError(code: "workspace_unavailable", message: Self.unrecognizedProblem(workspaceTitle(workspace)))
         }
         return routes
     }
@@ -762,7 +769,7 @@ extension MemberExecutionClient {
         let name = name ?? workspace.name
         return switch error {
         case .memberTimeStale: "This Mac's clock is wrong. Set the date and time automatically in System Settings, then try again."
-        case .unauthorized: "\(name) does not recognize this Mac yet. It does once the two devices synchronize their member list."
+        case .unauthorized: unrecognizedProblem(name)
         case .memberRemoved: "\(name) no longer lists this Mac as a member. It reconnects once the member lists change."
         case nil, .disconnected, .timedOut, .notConnected: "\(name) is not connected. Woven Matter reconnects automatically."
         case let error?: error.localizedDescription

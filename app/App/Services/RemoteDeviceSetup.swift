@@ -38,7 +38,7 @@ enum RemoteDeviceSetup {
             case .pair:
                 guard let endpoint = request.endpoint else { throw MacDeviceSetupError("The paired Mac address is missing.") }
                 if let deviceID = host.peerIdentity?.deviceID { defaults.set(deviceID, forKey: "wovenmatter.device-setup.device-id") }
-                if host.connectedPeerRoutes.contains(where: { $0.endpoint == endpoint }) {
+                if host.connectedPeerRoutes.contains(where: { route in route.endpoint == endpoint && host.pairedDevices.contains(where: { $0.id == route.deviceID }) }) {
                     publish(request, phase: .paired, message: "Already paired with this Mac.", defaults: defaults)
                 } else {
                     await host.pairAtEndpoint(endpoint)

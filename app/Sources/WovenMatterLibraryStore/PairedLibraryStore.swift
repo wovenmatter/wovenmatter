@@ -383,6 +383,12 @@ extension WorkspaceDatabaseConnection {
             column("device_id") == entry.deviceID, column("added_by") == entry.addedBy, column("added_at") == String(entry.addedAt) else {
         throw PeerRecordRejected(message: "A member entry does not match its signed record.")
       }
+      // A device signs its own entry with the key the entry names. One that
+      // does not verify is nobody's record, and stored as this device's own
+      // it would read as pairing made by another build (`holdsUnverifiablePairing`).
+      guard entry.addedBy != entry.deviceID || entry.verifies(with: entry.publicKey) else {
+        throw PeerRecordRejected(message: "A member's own entry is not signed with its key.")
+      }
       guard let existing = try historyRowsUnlocked("SELECT added_at,payload FROM library_members WHERE device_id=? AND added_by=?",
                                                   values: [entry.deviceID, entry.addedBy]).first?.objectValue else { return true }
       let time = existing["added_at"]?.intValue.map(Int64.init) ?? 0

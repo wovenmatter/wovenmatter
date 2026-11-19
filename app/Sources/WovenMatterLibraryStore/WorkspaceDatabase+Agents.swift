@@ -14,35 +14,34 @@ import WovenMatterCore
 
 // Agent identity, catalog reconciliation and display metadata.
 extension WorkspaceDatabaseConnection {
-  private static func localCLIAgentID(
-    for runtimeKind: AgentRuntimeKind,
-    ownerDeviceID: UUID
-  ) -> String? {
-    guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
-      return nil
-    }
-    let seed = Data(
-      "wovenmatter.local-cli-agent.v1:\(ownerDeviceID.uuidString.lowercased()):\(runtimeKind.rawValue)".utf8
-    )
-    return deterministicAgentID(seed: seed)
-  }
-
-  private static func remoteHarnessAgentID(
-    runtimeKind: AgentRuntimeKind,
-    remoteWorkspaceID: UUID,
-    ownerDeviceID: UUID
-  ) -> String? {
-    guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
-      return nil
-    }
-    let seed = Data(
-      "wovenmatter.remote-harness-agent.v1:\(ownerDeviceID.uuidString.lowercased()):\(remoteWorkspaceID.uuidString.lowercased()):\(runtimeKind.rawValue)".utf8
-    )
-    return deterministicAgentID(seed: seed)
-  }
-
-  private static func deterministicAgentID(seed: Data) -> String {
-    var bytes = Array(SHA256.hash(data: seed).prefix(16))
+  /// The row that stands for one harness in one place: on the device that
+  /// owns it (`runtimeDeviceID` nil) or on a Linux workspace that device
+  /// added. Every caller that needs such an agent gets its ID here.
+  ///
+  /// The row is found by what it is, never by working out what its ID would
+  /// be: where it runs, the device that created it, the harness, and the
+  /// Linux workspace if any. A row in use comes before a retired one and the
+  /// earliest before a later one, so the same row is chosen at every open
+  /// and a retired one is put back in use rather than doubled. A row whose
+  /// owner record names another library host is that host's and is passed
+  /// over, as `reconcileLocalCLIAgentCatalog` leaves it unclaimed. Only when
+  /// there is no row is an ID made, from the same four facts, so two starts
+  /// of one device that both find none make the same row.
+  private func agentIDUnlocked(ownerDeviceID: UUID, runtimeKind: AgentRuntimeKind, runtimeDeviceID: UUID?) throws -> String? {
+    guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else { return nil }
+    let owner = ownerDeviceID.uuidString.lowercased(), workspace = runtimeDeviceID?.uuidString.lowercased()
+    let existing = try historyRowsUnlocked("""
+      SELECT a.id FROM agents a
+      WHERE a.execution_location=? AND lower(a.owner_device_id)=? AND a.runtime_kind=?
+        AND \(workspace == nil ? "a.runtime_device_id IS NULL" : "lower(a.runtime_device_id)=?")
+        AND NOT EXISTS(SELECT 1 FROM agent_owners o WHERE o.id=a.id
+          AND o.device_id<>(SELECT device_id FROM peer_sync_clock WHERE singleton=1))
+      ORDER BY a.deleted_at IS NOT NULL, a.created_at, a.id LIMIT 1
+      """, values: [workspace == nil ? "local" : "remote", owner, runtimeKind.rawValue] + (workspace.map { [$0] } ?? []))
+    if let id = existing.first?.objectValue?["id"]?.stringValue { return id }
+    let seed = workspace.map { "wovenmatter.remote-harness-agent:\(owner):\($0):\(runtimeKind.rawValue)" }
+      ?? "wovenmatter.local-cli-agent:\(owner):\(runtimeKind.rawValue)"
+    var bytes = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
     bytes[6] = (bytes[6] & 0x0f) | 0x50
     bytes[8] = (bytes[8] & 0x3f) | 0x80
     let hex = bytes.map { String(format: "%02x", $0) }
@@ -60,11 +59,8 @@ extension WorkspaceDatabaseConnection {
     status: AgentRuntimeStatus,
     updatedAt: Date
   ) throws -> String {
-    guard let id = Self.remoteHarnessAgentID(
-      runtimeKind: runtimeKind,
-      remoteWorkspaceID: remoteWorkspaceID,
-      ownerDeviceID: ownerDeviceID
-    ) else {
+    guard let id = try agentIDUnlocked(ownerDeviceID: ownerDeviceID, runtimeKind: runtimeKind,
+                                       runtimeDeviceID: remoteWorkspaceID) else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     let workspaceID = remoteWorkspaceID.uuidString.lowercased()
@@ -95,7 +91,7 @@ extension WorkspaceDatabaseConnection {
         updated_at = excluded.updated_at,
         deleted_at = NULL
       WHERE agents.execution_location = 'remote'
-        AND agents.runtime_device_id = excluded.runtime_device_id
+        AND lower(agents.runtime_device_id) = excluded.runtime_device_id
       """)
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement)
@@ -116,10 +112,10 @@ extension WorkspaceDatabaseConnection {
     return id
   }
 
-  /// This Mac owns the agents it ensures. The insert trigger claims a new
-  /// row, but never fires when the row already existed (a library older
-  /// than the owner tables), so the claim is repeated here. An owner record
-  /// that exists, or was received, stays.
+  /// This device owns the agents it ensures. The insert trigger claims a new
+  /// row but never fires for one that was already there without an owner
+  /// record, so the claim is made here too. An owner record that exists, or
+  /// was received, stays.
   private func claimAgentUnlocked(_ id: String) throws {
     try toolsExecuteUnlocked(
       "INSERT OR IGNORE INTO agent_owners(id,device_id) SELECT ?,device_id FROM peer_sync_clock WHERE singleton=1", [id])
@@ -156,10 +152,7 @@ extension WorkspaceDatabaseConnection {
     status: AgentRuntimeStatus?,
     updatedAt: Date
   ) throws -> String {
-    guard let id = Self.localCLIAgentID(
-      for: runtimeKind,
-      ownerDeviceID: ownerDeviceID
-    ),
+    guard let id = try agentIDUnlocked(ownerDeviceID: ownerDeviceID, runtimeKind: runtimeKind, runtimeDeviceID: nil),
           let codename = LocalACPRuntimeCatalog.conversationCodename(for: runtimeKind) else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }

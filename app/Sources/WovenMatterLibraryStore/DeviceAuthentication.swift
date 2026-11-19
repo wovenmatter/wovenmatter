@@ -101,6 +101,9 @@ public actor DeviceAuthentication {
     var roster: [String: RosterRecord]?
     /// Every known unpair event, signed by the Mac that made it.
     var revocations: [PeerRevocation]?
+    /// Set when `clearPairing` removed pairings this Mac held, until the
+    /// person dismisses the notice about it or pairs a device.
+    var pairingResetNotice: Bool?
   }
   struct RosterRecord: Codable, Equatable {
     var name: String
@@ -134,6 +137,30 @@ public actor DeviceAuthentication {
     return state.devices.filter { Self.isActive($0, in: state) && (!$0.isDevelopment || now().timeIntervalSince($0.lastSeenAt ?? .distantPast) < 45) && seen.insert($0.id).inserted }
   }
 
+  /// Forgets every pairing this file holds: each grant, pending pairing and
+  /// approval, every pin, admission and unpair event. Nothing here is
+  /// honored afterwards, and each device pairs again as a new one. It is one
+  /// replacement of the file, so it is all or nothing, and clearing a file
+  /// that is already clear changes nothing. When it removes a pairing with
+  /// another device, the notice about it is raised (`showsPairingResetNotice`).
+  public func clearPairing() throws {
+    var next = State()
+    let held = state.devices.contains { Self.isActive($0, in: state) && !$0.isDevelopment }
+    next.pairingResetNotice = held || state.pairingResetNotice == true ? true : nil
+    offer = nil; attempts = []; approvalKeys = [:]; lastSeenSaved = [:]
+    if FileManager.default.fileExists(atPath: fileURL.path) || next.pairingResetNotice == true { try persist(next) }
+    state = next
+  }
+
+  /// Whether Settings tells the person that pairing was reset and devices
+  /// need pairing again. It ends when they dismiss it or pair any device.
+  public func showsPairingResetNotice() -> Bool { state.pairingResetNotice == true }
+  public func dismissPairingResetNotice() throws {
+    guard state.pairingResetNotice != nil else { return }
+    var next = state
+    next.pairingResetNotice = nil
+    try persist(next); state = next
+  }
 
   // MARK: Paired-Mac identity, membership and target-local peer grants
 
@@ -303,7 +330,7 @@ public actor DeviceAuthentication {
       ("subject_key", join.publicKey.base64EncodedString()), ("revocations", join.acknowledgedRevocations.joined(separator: ",")),
       ("grant", grant.credentialHash.base64EncodedString()), ("reciprocal", Self.digest(join.returnCredential).base64EncodedString()),
       ("reciprocal_revocations", join.reciprocalRevocations.joined(separator: ",")), ("route", join.route.endpoint.absoluteString)
-    ], domain: "woven.peer.join.v2")))
+    ], domain: "woven.peer.join")))
     if let existing = grant.transcript {
       guard GrantSecrets.constantTimeEqual(existing, transcript) else { throw Self.error("join_conflict", "This pairing already completed with different details. Pair again.") }
       return
@@ -348,7 +375,7 @@ public actor DeviceAuthentication {
       acknowledgedRevocations: acknowledgedRevocations, subjectSignature: subjectSignature), name: route.name, in: &next)
     var device = PairedDevice(id: id, name: route.name, pairedAt: now(), metadata: .init(kind: .mac), credentialHash: hash)
     device.role = .peer; device.acknowledged = acknowledgedRevocations; device.origin = "join"
-    next.devices.append(device)
+    next.devices.append(device); next.pairingResetNotice = nil
     try persist(next); state = next
   }
 
@@ -473,7 +500,7 @@ public actor DeviceAuthentication {
     guard let entry = state.pendingQRPairings?.first(where: { $0.expiresAt > now() && $0.workspaceID == workspaceID && GrantSecrets.constantTimeEqual($0.device.credentialHash, hash) }),
       !state.devices.contains(where: { $0.revokedAt == nil && $0.id.lowercased() == entry.device.id.lowercased() }) else { throw Self.unauthorized }
     var next = state
-    next.devices.append(Self.issued(entry.device, in: next, purpose: entry.purpose))
+    next.devices.append(Self.issued(entry.device, in: next, purpose: entry.purpose)); next.pairingResetNotice = nil
     next.pendingQRPairings?.removeAll { $0.device.id == entry.device.id || $0.expiresAt <= now() }
     try persist(next); state = next
   }
@@ -607,6 +634,7 @@ public actor DeviceAuthentication {
       entries[entries.count - 1].encryptedCredential = encrypted
         next.devices.append(Self.issued(.init(id: request.identity.deviceID, name: request.identity.deviceName, pairedAt: now(), revokedAt: nil,
         metadata: request.identity.metadata, lastSeenAt: nil, credentialHash: Self.digest(credential)), in: next, purpose: request.purpose))
+      next.pairingResetNotice = nil
     }
     next.approvals = entries
     try persist(next); state = next
@@ -650,6 +678,7 @@ public actor DeviceAuthentication {
     let encrypted = try AES.GCM.seal(Data(credential.utf8), using: key).combined!
     next.devices.append(Self.issued(.init(id: identity.deviceID, name: identity.deviceName, pairedAt: now(), revokedAt: nil,
       metadata: identity.metadata, lastSeenAt: nil, credentialHash: Self.digest(credential)), in: next, purpose: entry.purpose))
+    next.pairingResetNotice = nil
     next.approvals?[index].state = .approved
     next.approvals?[index].workspaceID = workspaceID
     next.approvals?[index].encryptedCredential = encrypted

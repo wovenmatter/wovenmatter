@@ -14,7 +14,7 @@ import CSQLite
 import Testing
 @testable import WovenMatterShared
 import WovenMatterCore
-import WovenMatterLibraryStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterLibraryHost
 
 /// A one-request HTTP/1.1 client; the host closes every connection after its response.
@@ -324,6 +324,77 @@ struct LibraryHostTests {
     _ = try document.apply(operations)
     let stored = try Data(contentsOf: url.appending(path: "stored.json"))
     #expect(Data(try document.encoded().utf8) == stored)
+  }
+
+  /// A host whose pairing was signed under other labels clears it when it
+  /// starts: it belongs to no library again, so the Mac that manages it
+  /// adopts it as it first did (through the server, with the installer
+  /// bearer only that Mac holds), and no other Mac can take it over after.
+  @Test func aHostClearsUnverifiablePairingAtStartAndIsAdoptedAgainByItsMac() async throws {
+    let root = URL(fileURLWithPath: "/tmp").appending(path: "wml-\(UUID().uuidString.prefix(8))")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let layout = LibraryHostLayout(root: root), endpoint = URL(string: "https://box.tailnet.ts.net/wovenmatter/")!
+    func otherBuild(_ device: MemberIdentity, name: String, endpoints: [URL], by signer: MemberIdentity, at time: Int64) throws -> LibraryMemberEntry {
+      let statement = canonical([("device", device.deviceID), ("kind", device.kind.rawValue), ("name", name),
+        ("key", device.publicKey.base64EncodedString()), ("endpoints", endpoints.map(\.absoluteString).joined(separator: "\n")),
+        ("added_by", signer.deviceID), ("added_at", String(time))], domain: "test.member.entry.other")
+      return .init(deviceID: device.deviceID, kind: device.kind, name: name, publicKey: device.publicKey, endpoints: endpoints,
+                   addedBy: signer.deviceID, addedAt: time, signature: try signer.sign(statement))
+    }
+    func mac(_ name: String) async throws -> MemberDirectory {
+      let directory = root.appending(path: name)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+      let members = MemberDirectory(database: database, identity: MemberIdentity(deviceID: try await database.libraryIdentity().hostDeviceID,
+        kind: .mac, key: .init()), cacheLifetime: 0)
+      try await members.ensureSelf(name: name, endpoints: [URL(string: "https://\(name).tailnet.ts.net/wovenmatter")!])
+      return members
+    }
+    let manager = try await mac("studio"), other = try await mac("mini")
+    var host = try await LibraryHost(layout: layout, name: "Box", endpoints: [endpoint])
+    let own = host.identity, agents = try await host.database.workspaceAgents().count
+    try await manager.add(deviceID: own.deviceID, kind: .linux, name: "Box", publicKey: own.publicKey, endpoints: [endpoint])
+    #expect(try await host.members.adopt(manager.adoption()).adopted == true)
+    _ = try await host.github.hostCopy()
+    // Left as a build that signed under other labels left it: adopted, with the Mac pinned.
+    let now = MemberRequestSignature.now() + 1_000
+    try await host.database.saveLibraryMemberEntries([
+      try otherBuild(own, name: "Box", endpoints: [endpoint], by: own, at: now),
+      try otherBuild(own, name: "Box", endpoints: [endpoint], by: manager.identity, at: now),
+      try otherBuild(manager.identity, name: "studio", endpoints: [], by: manager.identity, at: now),
+    ])
+    #expect(try await host.database.holdsUnverifiablePairing())
+    host.stop()
+
+    host = try await LibraryHost(layout: layout, name: "Box", endpoints: [endpoint])
+    defer { host.stop() }
+    #expect(host.identity.publicKey == own.publicKey)
+    #expect(try await !host.database.holdsUnverifiablePairing())
+    var list = try await host.members.list()
+    #expect(list.adopted != true)
+    #expect(list.members.map(\.deviceID) == [own.deviceID] && list.members.first?.endpoints == [endpoint])
+    let records = try await host.database.libraryMemberRecords()
+    #expect(records.entries.count == 1 && records.entries.allSatisfy { $0.verifies(with: own.publicKey) })
+    #expect(records.revocations.isEmpty && records.anchors.map(\.deviceID) == [own.deviceID])
+    #expect(try await host.database.gitHubIdentityRecipients().isEmpty)
+    #expect(await host.members.activeKey(manager.identity.deviceID) == nil)
+    #expect(try await host.database.workspaceAgents().count == agents)
+
+    // A Mac that did not sign this host's key cannot adopt it, also now.
+    await #expect(throws: LibraryAPIError.self) { try await host.members.adopt(other.adoption()) }
+    // Its Mac, after its own reset, signs it again and adopts it.
+    try await manager.database.clearPairingRecords()
+    await manager.invalidate()
+    try await manager.ensureSelf(name: "studio", endpoints: [URL(string: "https://studio.tailnet.ts.net/wovenmatter")!])
+    try await manager.add(deviceID: own.deviceID, kind: .linux, name: "Box", publicKey: own.publicKey, endpoints: [endpoint])
+    list = try await host.members.adopt(manager.adoption())
+    #expect(list.adopted == true)
+    #expect(Set(list.members.filter { !$0.revoked }.map(\.deviceID)) == [own.deviceID, manager.identity.deviceID])
+    #expect(await host.members.activeKey(manager.identity.deviceID) != nil)
+    // Adopted, it takes records only from a Mac it trusts.
+    try await other.add(deviceID: own.deviceID, kind: .linux, name: "Box", publicKey: own.publicKey, endpoints: [endpoint])
+    await #expect(throws: LibraryAPIError.self) { try await host.members.adopt(other.adoption()) }
+    #expect(await host.members.activeKey(other.identity.deviceID) == nil)
   }
 
   /// A Mac reads the host's identity, signs its entry and hands it the

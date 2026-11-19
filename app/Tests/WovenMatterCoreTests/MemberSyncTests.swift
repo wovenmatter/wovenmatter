@@ -409,6 +409,28 @@ struct MemberSyncTests {
     #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
   }
 
+  /// A device's own entry is signed with the key it names. A member that
+  /// sends this device one that is not leaves it rejected: what this device
+  /// holds as its own entry stays one that verifies, so its pairing is never
+  /// taken for another build's (`holdsUnverifiablePairing`).
+  @Test func aPeerCannotMakeADeviceHoldAnOwnEntryThatDoesNotVerify() async throws {
+    let network = Network()
+    let a = try await Member("a.test", kind: .mac, network: network), b = try await Member("b.test", kind: .mac, network: network)
+    defer { Task { await a.remove(); await b.remove() } }
+    try await a.add(b); try await b.add(a)
+    let peer = try #require(await a.directory.member(b.id))
+    await a.sync.synchronize(with: peer)
+    let forged = LibraryMemberEntry(deviceID: a.id, kind: .mac, name: "Forged", publicKey: a.identity.publicKey, endpoints: [],
+      addedBy: a.id, addedAt: MemberRequestSignature.now() + 60_000, signature: Data(repeating: 1, count: 64))
+    try await b.database.saveLibraryMemberEntries([forged])
+    await a.sync.synchronize(with: peer)
+    #expect(try await a.database.peerSyncQuarantineCount() == 1)
+    let own = try #require(try await a.database.libraryMemberRecords().entries.first { $0.deviceID == a.id && $0.addedBy == a.id })
+    #expect(own.name == "a.test" && own.verifies(with: a.identity.publicKey))
+    #expect(try await !a.database.holdsUnverifiablePairing())
+    #expect(await a.directory.member(b.id) != nil)
+  }
+
   /// A peer whose shared tables differ still exchanges: nothing about a page
   /// says which build sent it, and what it carries is judged record by record.
   @Test func aPeerWithOtherSharedTablesStillExchangesAndUnsignedOrReplayedRequestsAreRefused() async throws {

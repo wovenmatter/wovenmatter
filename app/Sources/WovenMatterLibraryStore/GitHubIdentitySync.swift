@@ -42,7 +42,7 @@ public struct GitHubSharedIdentity: Codable, Equatable, Sendable {
   public var sealed: [Sealed]
   public var signature: String?
 
-  static let domain = "woven.github.identity.v1"
+  static let domain = "woven.github.identity"
 
   var statement: Data {
     var unsigned = self
@@ -65,7 +65,7 @@ public struct GitHubIdentityRecipient: Codable, Equatable, Sendable {
   public var signature: String
 
   static func statement(device: String, key: String) -> Data {
-    canonical([("device", device), ("key", key)], domain: "woven.github.recipient.v1")
+    canonical([("device", device), ("key", key)], domain: "woven.github.recipient")
   }
   func verifies(publicKey: Data) -> Bool {
     guard let bytes = Data(base64Encoded: signature) else { return false }
@@ -408,7 +408,7 @@ public actor GitHubIdentitySync {
   /// Bound to the machine and the key's fingerprint, not the revision: a Mac without the key can
   /// still change the list or the identity and carry every sealed copy into the new record.
   static func info(device: String, fingerprint: String) -> Data {
-    Data("woven.github.identity.v1|\(device)|\(fingerprint)".utf8)
+    Data("\(GitHubSharedIdentity.domain)|\(device)|\(fingerprint)".utf8)
   }
 
   static func seal(_ key: GitHubSSHKey, for device: String, to recipient: Curve25519.KeyAgreement.PublicKey) throws -> GitHubSharedIdentity.Sealed {

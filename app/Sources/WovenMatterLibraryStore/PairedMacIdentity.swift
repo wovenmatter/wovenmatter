@@ -47,7 +47,7 @@ public struct PeerRevocation: Codable, Equatable, Hashable, Sendable {
   public let revokerDeviceID: String
   public let signature: Data
   static func statement(eventID: String, deviceID: String, revokerDeviceID: String) -> Data {
-    canonical([("event", eventID), ("device", deviceID), ("revoker", revokerDeviceID)], domain: "woven.peer.revocation.v2")
+    canonical([("event", eventID), ("device", deviceID), ("revoker", revokerDeviceID)], domain: "woven.peer.revocation")
   }
   static func signed(deviceID: String, by own: PeerSelf) throws -> Self {
     let eventID = UUID().uuidString.lowercased()
@@ -69,7 +69,7 @@ public struct PeerRevocation: Codable, Equatable, Hashable, Sendable {
 /// events for it that the issuer knew, so no issuer can relabel an old proof
 /// into a newer revocation context. The issuer countersigns the subject proof.
 public struct PeerAdmission: Codable, Equatable, Sendable {
-  public static let protocolName = "woven.peer.admission.v2"
+  public static let protocolName = "woven.peer.admission"
   public static let role = "mac"
   public let issuerDeviceID: String
   public let issuerLibraryID: String

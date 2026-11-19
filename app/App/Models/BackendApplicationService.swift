@@ -265,6 +265,7 @@ final class BackendApplicationService {
             case .stop: host.stopSharing()
             case .createCode: await host.createPairingCode()
             case .revoke(let id): await host.revoke(id)
+            case .dismissPairingResetNotice: await host.dismissPairingResetNotice()
             }
             return .init(libraryHost: host.snapshot)
         case .setIdleSleepPolicy(let policy):

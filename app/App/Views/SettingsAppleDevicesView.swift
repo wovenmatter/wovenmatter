@@ -16,6 +16,7 @@ struct SettingsAppleDevicesView: View {
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             UpdatesStatusLink(bots: model.bots, onOpen: onOpenUpdates)
+            if host.showsPairingResetNotice { pairingResetNotice }
             SettingsSection {
                 deviceRow(icon: .mac, title: DevelopmentLaunch.deviceName(), detail: "This Mac")
             }
@@ -42,6 +43,19 @@ struct SettingsAppleDevicesView: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
+    }
+
+    /// Shown after this update cleared the pairings this Mac held, until it is
+    /// dismissed or a device is paired.
+    private var pairingResetNotice: some View {
+        SettingsSection {
+            SettingsRow(title: "Pairing was reset by this update",
+                        detail: "Pair your other Macs, iPhone, and iPad with this Mac again. Your chats, notes, and workspaces are unchanged.") {
+                Button("Dismiss") { Task { await host.dismissPairingResetNotice() } }
+                    .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("devices.pairing-reset.dismiss")
+            }
+        }
+        .accessibilityIdentifier("devices.pairing-reset")
     }
 
     private func deviceRow(icon: DeviceKind, title: String, detail: String?) -> some View {

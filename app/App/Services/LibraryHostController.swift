@@ -69,6 +69,11 @@ final class LibraryHostController {
     private let discovery = MacDiscovery()
     private let pairingNetwork = PairingNetwork()
     private(set) var pairedDevices: [PairedDevice] = []
+    /// Pairing on this Mac was reset and the person has neither dismissed the
+    /// notice about it nor paired a device since (`clearUnverifiablePairing`).
+    private(set) var showsPairingResetNotice = false
+    @ObservationIgnored private var pairingCheck: Task<Void, any Error>?
+    @ObservationIgnored private var pairingChecked = false
     private(set) var lastSeenAt: Date?
     private var authentication: DeviceAuthentication?
     private var executionAPI: MacExecutionAPI?
@@ -825,7 +830,7 @@ final class LibraryHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
+              pendingDeviceRevocations: pendingRevocations, showsPairingResetNotice: showsPairingResetNotice, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
               librarySync: peerSync.syncStatus)
     }
 
@@ -869,6 +874,7 @@ final class LibraryHostController {
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
             pendingDeviceRevocations = value.pendingDeviceRevocations
+            showsPairingResetNotice = value.showsPairingResetNotice
             peerPairingStatus = value.peerPairingStatus ?? ""; peerPairingError = value.peerPairingError
             projectedPeerRoutes = value.peerRoutes ?? []; discoveryIdentity = value.peerIdentity
             peerSyncErrors = value.peerSyncErrors ?? [:]
@@ -956,11 +962,67 @@ final class LibraryHostController {
             let file = try (supportDirectory ?? ApplicationModel.librarySupportDirectory()).appendingPathComponent(DeviceAuthentication.fileName)
             authentication = try DeviceAuthentication(fileURL: file)
         }
+        try await clearUnverifiablePairing()
         pairedDevices = await authentication?.devices() ?? []
+        showsPairingResetNotice = await authentication?.showsPairingResetNotice() ?? false
+    }
+
+    /// Clears this Mac's pairing, once, when a build that signed its records
+    /// differently made it (`WorkspaceDatabase.holdsUnverifiablePairing`):
+    /// none of those records verifies any more, so nothing built on them is
+    /// honored, and every device pairs with this Mac again. It runs before
+    /// the paired-device file is used for anything and before this Mac's
+    /// member list exists (`PairedMacSyncController.members`); a failure
+    /// stops the caller, which tries again.
+    ///
+    /// Cleared, in this order: every grant, pending pairing, pin, admission
+    /// and unpair event in the paired-device file; the grants other Macs
+    /// issued this Mac, an unfinished join and a pending request, in Keychain;
+    /// the record of unpairs already applied; and last, in one transaction,
+    /// the library's member entries, removals, anchors, pin candidates and
+    /// GitHub key record with its recipients. The library is what the check
+    /// reads, so a reset that stops anywhere before that last step starts
+    /// again at the next open, and each step is harmless to repeat.
+    ///
+    /// Kept: this Mac's signing key and its GitHub key, which are its own;
+    /// every chat, agent, folder and workspace, also other machines', which
+    /// stay as they are and are unreachable until paired again (this is not
+    /// the person removing a device, so nothing becomes copied history and
+    /// no Linux host is asked for a new installer bearer); the addresses of
+    /// other Macs (`mac_routes`), which name their workspaces; the Linux
+    /// hosts this Mac added and its enrollment on them, which it adopts
+    /// again by itself (`ensureLinuxMember`); synchronization cursors; and
+    /// revocations and installer rotations still owed to a workspace.
+    private func clearUnverifiablePairing() async throws {
+        guard !pairingChecked, let model, !model.isBackendFrontend, let authentication,
+              let database = model.libraryStore?.database, !database.isReadOnlyProjection else { return }
+        if let pairingCheck { return try await pairingCheck.value }
+        let peerSync = peerSync, defaults = defaults
+        let check = Task { @MainActor in
+            guard try await database.holdsUnverifiablePairing() else { return }
+            try await authentication.clearPairing()
+            try peerSync.forgetPairedMacs(ownDeviceID: try await database.libraryIdentity().hostDeviceID)
+            defaults.removeObject(forKey: Self.appliedPeerRevocationsKey)
+            try await database.clearPairingRecords()
+        }
+        pairingCheck = check
+        defer { pairingCheck = nil }
+        try await check.value
+        pairingChecked = true
+    }
+
+    func dismissPairingResetNotice() async {
+        if model?.isBackendFrontend == true { await forward(.dismissPairingResetNotice); return }
+        do {
+            try await loadAuthentication()
+            try await authentication?.dismissPairingResetNotice()
+            showsPairingResetNotice = false
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func didPair() async {
         pairedDevices = await authentication?.devices() ?? []
+        showsPairingResetNotice = await authentication?.showsPairingResetNotice() ?? false
         pairingPayload = nil; pairingExpiresAt = nil
     }
 
@@ -980,6 +1042,7 @@ enum LibraryHostAction: Codable, Sendable {
     case status, start, stop, createCode
     case revoke(String), approvePairing(String), denyPairing(String)
     case discover, pairWithPeer(DiscoveredPeer), pairAtEndpoint(URL), pairUsingLink(String), cancelPeerPairing
+    case dismissPairingResetNotice
 }
 
 struct LibraryHostSnapshot: Codable, Sendable {
@@ -997,6 +1060,7 @@ struct LibraryHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [ExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
+    let showsPairingResetNotice: Bool
     var peerPairingStatus: String? = nil
     var peerPairingError: String? = nil
     var peerSyncErrors: [String: String]? = nil
