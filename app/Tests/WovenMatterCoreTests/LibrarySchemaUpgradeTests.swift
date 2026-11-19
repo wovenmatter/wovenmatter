@@ -360,19 +360,18 @@ import WovenMatterCore
     #expect(kept.first?.billingRoute == "Codex subscription" && kept.first?.tokens.inputTokens == 5)
   }
 
-  /// A version 3 library is this build's without the shared table of
-  /// workspace names (step 4). Opening one adds the table with its capture
-  /// and change-counter triggers, keeps its rows, and ends with a new
-  /// library's schema; a name written then is recorded for peers.
-  @Test func aVersion3LibraryGainsTheWorkspaceNamesTable() async throws {
+  /// A library from before the shared table of workspace names gains it
+  /// when it opens, with its capture and change-counter triggers, keeps its
+  /// rows and its version, and ends with a new library's schema; a name
+  /// written then is recorded for peers. There is no schema step for it.
+  @Test func aLibraryWithoutTheWorkspaceNamesTableGainsItWhenItOpens() async throws {
     let upgraded = try PersistenceFixture(), fresh = try PersistenceFixture(); defer { upgraded.remove(); fresh.remove() }
     let current = try await WorkspaceDatabase(url: fresh.databaseURL)
     _ = try await WorkspaceDatabase(url: upgraded.databaseURL)
     try PersistenceSQL(url: upgraded.databaseURL).execute("""
       PRAGMA busy_timeout=30000;
       DROP TABLE execution_workspace_names; DELETE FROM peer_sync_seeded WHERE table_name='execution_workspace_names';
-      PRAGMA user_version=3;
-      INSERT INTO conversations(id,title,created_at,updated_at) VALUES('v3-chat','Kept','1','1');
+      INSERT INTO conversations(id,title,created_at,updated_at) VALUES('kept-chat','Kept','1','1');
       """)
     #expect(try scalar(upgraded.databaseURL, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'execution_workspace_names%'") == 0)
     let library = try await WorkspaceDatabase(url: upgraded.databaseURL)
@@ -382,8 +381,9 @@ import WovenMatterCore
       Issue.record("\(key) differs:\nupgraded: \(actual[key] ?? "missing")\nfresh: \(expected[key]!)")
     }
     #expect(try await library.pairedLibrarySchema() == current.pairedLibrarySchema())
-    #expect(try await row(library, "PRAGMA user_version")["user_version"]?.intValue == WorkspaceDatabaseConnection.librarySchemaVersion)
-    #expect(try await row(library, "SELECT title FROM conversations WHERE id='v3-chat'")["title"]?.stringValue == "Kept")
+    // The version an older release checks before opening the library is unchanged.
+    #expect(try scalar(upgraded.databaseURL, "PRAGMA user_version") == scalar(fresh.databaseURL, "PRAGMA user_version"))
+    #expect(try await row(library, "SELECT title FROM conversations WHERE id='kept-chat'")["title"]?.stringValue == "Kept")
     let workspace = UUID().uuidString.lowercased()
     try await library.setExecutionWorkspaceName(workspaceID: workspace, name: "Studio")
     #expect(try await library.executionWorkspaceNames() == [workspace: "Studio"])

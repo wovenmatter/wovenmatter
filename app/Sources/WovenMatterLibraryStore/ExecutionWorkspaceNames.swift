@@ -7,7 +7,8 @@ import WovenMatterCore
 /// publishes the name as its registry row's `name`, which is what devices
 /// that do not read this table show. No row means the default name.
 extension WorkspaceDatabaseConnection {
-  /// A new library's declaration; schema step 4 makes the same change to an earlier library.
+  /// Declared for every library, new or existing: created at the next open,
+  /// with no schema step and no version change (`migratePeerSync`).
   static let executionWorkspaceNamesTableSQL = """
     CREATE TABLE IF NOT EXISTS execution_workspace_names(workspace_id TEXT PRIMARY KEY, name TEXT NOT NULL);
 

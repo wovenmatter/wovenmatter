@@ -55,7 +55,13 @@ extension WorkspaceDatabaseConnection {
   /// (`CREATE ... IF NOT EXISTS` in each `migrate*`) declares the current
   /// shape for a new library; a step brings an existing one to it.
   ///
-  /// To change the schema in a later release:
+  /// A table that is only added needs no step and no new version: its
+  /// `CREATE TABLE IF NOT EXISTS` declaration creates it in an existing
+  /// library at the next open, and a build without it ignores it (for a
+  /// shared table, keeping its records waiting), so the older release still
+  /// opens the library (`execution_workspace_names` was added this way).
+  ///
+  /// To change the schema of what a library already holds in a later release:
   /// 1. Change the declaration a new library is created from.
   /// 2. Append a step here that makes the same change to an existing
   ///    library, with `libraryStepUnlocked`. `librarySchemaVersion` follows.
@@ -92,12 +98,6 @@ extension WorkspaceDatabaseConnection {
           "SELECT 1 AS present FROM pragma_table_info('usage_events') WHERE name='account_label'", values: [])
         if !present.isEmpty { try connection.executeUnlocked("ALTER TABLE usage_events DROP COLUMN account_label") }
       }
-    },
-    // A version 3 library to the shared table of workspace names people
-    // choose (`ExecutionWorkspaceNames.swift`). A device that has not updated
-    // keeps its records waiting and relays them.
-    .init(version: 4, rewritesData: false) { connection in
-      try connection.libraryStepUnlocked(4) { try connection.executeUnlocked(WorkspaceDatabaseConnection.executionWorkspaceNamesTableSQL) }
     },
   ]
 
