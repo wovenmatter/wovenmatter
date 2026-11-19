@@ -434,7 +434,8 @@ struct BotsSidebarSection: View {
 
     private func statusLabel(_ bot: PiBotSummary) -> String? {
         switch bot.modelStatus?.kind {
-        case "paused": "Paused"
+        // Not "Paused": that word is the Forum's, for when the user pauses it.
+        case "paused": "Out of usage"
         case "fallback": "Fallback"
         default: nil
         }

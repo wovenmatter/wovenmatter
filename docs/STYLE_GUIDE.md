@@ -128,6 +128,8 @@ when an intentional design change is accepted.
   opens its main channel; a chevron reveals its threads, pinned first and then newest
   created. Thread dropdowns start closed. The Forum is a row in the same section, above
   Admin Bot, with the same chevron and thread rows and "Paused" as its trailing word.
+  Only the Forum says "Paused"; a bot whose models are all at a usage limit says "Out
+  of usage", and one on a fallback model "Fallback".
   It opens like a bot's channel: the same transcript, composer and thread-beside
   layout, with the poster's name over each bot's post, a bots button (who is in), a
   scheduled-posts button and one Pause or Resume button in its header, a banner while
