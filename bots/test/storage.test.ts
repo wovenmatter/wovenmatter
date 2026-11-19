@@ -1,13 +1,9 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  BOTS_SCHEMA_VERSION,
-  openSharedDatabase,
-  sharedDatabaseView,
-} from "../src/storage/database.ts";
+import { openSharedDatabase, sharedDatabaseView } from "../src/storage/database.ts";
 import {
   BOTS_TABLE,
   BotRegistry,
@@ -47,70 +43,122 @@ describe("shared storage", () => {
     }
   });
 
-  it("records the schema version in a new database", async () => {
+  const schema = (db: SqliteExecutor) =>
+    db.all("SELECT type, name, sql FROM sqlite_master ORDER BY type, name");
+  // The number an earlier release may have left in the file. Nothing reads or writes it.
+  const leftNumber = async (db: SqliteExecutor) =>
+    (await db.get<{ user_version: number }>("PRAGMA user_version"))?.user_version;
+  // SQLite's own count of schema changes: every CREATE or ALTER that does something advances it.
+  const schemaChanges = async (db: SqliteExecutor) =>
+    (await db.get<{ schema_version: number }>("PRAGMA schema_version"))?.schema_version;
+  const columns = async (db: SqliteExecutor, table: string) =>
+    (await db.all<{ name: string }>(`PRAGMA table_info(${table})`)).map((column) => column.name);
+
+  it("creates a new database that carries no version number", async () => {
     const db = await openSharedDatabase(join(dir.path, "bots.sqlite"));
     try {
       await new BotRegistry(db).migrate();
-      expect(BOTS_SCHEMA_VERSION).toBe(1);
-      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: BOTS_SCHEMA_VERSION });
+      expect(await leftNumber(db)).toBe(0);
     } finally {
       await db.close();
     }
   });
 
-  it("refuses a database from a newer Woven Matter and leaves it unchanged", async () => {
+  it("opens a database carrying a number as any other and keeps the number", async () => {
     const path = join(dir.path, "bots.sqlite");
-    const db = await openSharedDatabase(path);
+    const botId = "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4";
+    let db = await openSharedDatabase(path);
     await new BotRegistry(db).migrate();
-    await db.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION + 1}`);
-    await db.close();
-    const before = await readFile(path);
-    const files = (await readdir(dir.path)).sort();
-    const refusal = new RegExp(
-      `written by a newer Woven Matter \\(bots schema version ${BOTS_SCHEMA_VERSION + 1}\\); this build supports version ${BOTS_SCHEMA_VERSION}\\. Update Woven Matter`,
+    await db.run(
+      `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at) VALUES (?, ?, ?, ?)`,
+      botId,
+      "Test",
+      botPrefix(botId),
+      "2026-01-01",
     );
-    await expect(openSharedDatabase(path)).rejects.toThrow(refusal);
-    expect(await readFile(path)).toEqual(before);
-    expect((await readdir(dir.path)).sort()).toEqual(files);
-    // `migrate` refuses it too, on a connection opened some other way.
-    const memory = await openSharedDatabase(":memory:");
-    try {
-      await memory.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION + 1}`);
-      await expect(new BotRegistry(memory).migrate()).rejects.toThrow(refusal);
-      expect(await memory.all("SELECT name FROM sqlite_master")).toEqual([]);
-    } finally {
-      await memory.close();
+    const before = await schema(db);
+    await db.close();
+    // v0.4.3 and v0.4.4 stamped 1; no release wrote 7.
+    for (const number of [1, 7]) {
+      db = await openSharedDatabase(path);
+      try {
+        await db.exec(`PRAGMA user_version = ${number}`);
+        await db.close();
+        db = await openSharedDatabase(path);
+        const registry = new BotRegistry(db);
+        await registry.migrate();
+        expect((await registry.list()).map((bot) => bot.id)).toEqual([botId]);
+        expect(await leftNumber(db)).toBe(number);
+        expect(await schema(db)).toEqual(before);
+      } finally {
+        await db.close();
+      }
     }
   });
 
-  it("upgrades a version-0 database of an older shape and records the version", async () => {
-    const db = await openSharedDatabase(join(dir.path, "bots.sqlite"));
-    try {
-      await db.exec(
-        `CREATE TABLE ${DELIVERIES_TABLE} (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL) STRICT`,
-      );
-      await new BotRegistry(db).migrate();
-      const columns = await db.all<{ name: string }>(`PRAGMA table_info(${DELIVERIES_TABLE})`);
-      expect(columns.map((column) => column.name)).toContain("accepted");
-      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: BOTS_SCHEMA_VERSION });
-    } finally {
-      await db.close();
+  it("adds the missing columns to an earlier database once, whatever number the file carries", async () => {
+    const current = await openSharedDatabase(":memory:");
+    await new BotRegistry(current).migrate();
+    const tables = [DELIVERIES_TABLE, BOTS_TABLE, THREADS_TABLE];
+    const expected = await Promise.all(tables.map((table) => columns(current, table)));
+    await current.close();
+    const botId = "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4";
+    for (const number of [0, 1, 7]) {
+      const db = await openSharedDatabase(join(dir.path, `earlier-${number}.sqlite`));
+      try {
+        // Each table as its first build declared it.
+        await db.exec(`
+          CREATE TABLE ${DELIVERIES_TABLE} (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL) STRICT;
+          CREATE TABLE ${BOTS_TABLE} (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, schema_prefix TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+          ) STRICT;
+          CREATE TABLE ${THREADS_TABLE} (
+            bot_id TEXT NOT NULL REFERENCES ${BOTS_TABLE}(id) ON DELETE CASCADE,
+            conversation_id INTEGER NOT NULL, parent_conversation_id INTEGER NOT NULL,
+            forked_at_entry INTEGER NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY (bot_id, conversation_id)
+          ) STRICT;
+          PRAGMA user_version = ${number};
+        `);
+        await db.run(
+          `INSERT INTO ${BOTS_TABLE} (id, name, schema_prefix, created_at) VALUES (?, ?, ?, ?)`,
+          botId,
+          "Test",
+          botPrefix(botId),
+          "2026-01-01",
+        );
+        const registry = new BotRegistry(db);
+        await registry.migrate();
+        // The same columns, in the same order, as a database created today.
+        expect(await Promise.all(tables.map((table) => columns(db, table)))).toEqual(expected);
+        expect(await registry.list()).toMatchObject([{ id: botId, kind: "bot", manager: false }]);
+        expect(await leftNumber(db)).toBe(number);
+        // Nothing of the earlier shape is left: the next open only reads.
+        const converted = await schema(db);
+        const changes = await schemaChanges(db);
+        await registry.migrate();
+        expect(await schema(db)).toEqual(converted);
+        expect(await schemaChanges(db)).toBe(changes);
+      } finally {
+        await db.close();
+      }
     }
   });
 
-  it("reopens a current database without changing its schema", async () => {
+  it("reopens a current database without changing it", async () => {
     const path = join(dir.path, "bots.sqlite");
-    const schema = (db: SqliteExecutor) =>
-      db.all("SELECT type, name, sql FROM sqlite_master ORDER BY type, name");
     let db = await openSharedDatabase(path);
     await new BotRegistry(db).migrate();
     const before = await schema(db);
+    const changes = await schemaChanges(db);
     await db.close();
     db = await openSharedDatabase(path);
     try {
       await new BotRegistry(db).migrate();
       expect(await schema(db)).toEqual(before);
-      expect(await db.get("PRAGMA user_version")).toEqual({ user_version: BOTS_SCHEMA_VERSION });
+      expect(await schemaChanges(db)).toBe(changes);
+      expect(await leftNumber(db)).toBe(0);
     } finally {
       await db.close();
     }
@@ -129,9 +177,8 @@ describe("shared storage", () => {
       botPrefix(botId),
       "2026-01-01",
     );
-    // Reproduce a pre-pin table with real existing thread rows, in a database from before the
-    // schema version was recorded.
-    await db.exec(`ALTER TABLE ${THREADS_TABLE} DROP COLUMN is_pinned; PRAGMA user_version = 0`);
+    // Reproduce a pre-pin table with real existing thread rows.
+    await db.exec(`ALTER TABLE ${THREADS_TABLE} DROP COLUMN is_pinned`);
     for (const [id, created] of [
       [2, "2026-01-01"],
       [3, "2026-01-02"],

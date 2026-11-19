@@ -57,40 +57,32 @@ function inputExtras(command) {
   if (command.attachments != null && (!Array.isArray(command.attachments) || command.attachments.length > 8)) throw fail(400, 'Attach up to 8 files to one message.')
 }
 
-// The schema version of `execution.sqlite`, kept in its `PRAGMA user_version`.
-// Files from builds before it was recorded read 0.
-export const executionSchemaVersion = 1
-// Opens `execution.sqlite`. A file from a newer Woven Matter is refused and
-// left as it is. Its tables belong to this module and to the ones
-// `createClientExecution` starts (publisher, session watch, member sessions,
-// workspace MCP, orchestration), which each create theirs with
-// `CREATE TABLE IF NOT EXISTS` on every open; `createClientExecution` records
-// the version once all of them have run. The one-time conversions of older
-// shapes happen here, in one transaction, only for a file below the version.
+// Opens `execution.sqlite`. The file carries no version number: nothing
+// writes its `PRAGMA user_version` and nothing reads it, so a number an
+// earlier release left there stays and means nothing. Its tables belong to
+// this module and to the ones `createClientExecution` starts (publisher,
+// session watch, member sessions, workspace MCP, orchestration). Each
+// declares its own with `CREATE TABLE IF NOT EXISTS` on every open: that
+// creates a new store and adds a new table to an existing one.
+// A change to what a store already holds goes here. It is recognised by the
+// earlier shape it looks for (a table, a column) and, in this one
+// transaction, makes the change and removes what it looked for: it happens
+// once, and a current store is only read.
 function openExecutionStore(path) {
   const db = new DatabaseSync(path)
-  const version = db.prepare('PRAGMA user_version').get().user_version
-  if (version > executionSchemaVersion) {
-    db.close()
-    throw Object.assign(new Error(`${path} was written by a newer Woven Matter (execution schema version ${version}); this build supports version ${executionSchemaVersion}. Update Woven Matter on this machine.`), { code: 'execution_store_newer' })
-  }
   db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL')
   db.exec('BEGIN IMMEDIATE')
   try {
-    // Step 1, from version 0: a v0.4.2 store also published to a single
-    // designated Mac (its `central_publication` target, encrypted bearer and
-    // receipts) and kept that Mac's library MCP grant: those are dropped, and
-    // its lanes are renamed to serve this machine's own library copy. Each
-    // statement is a no-op on a store without that shape.
-    if (version < 1) {
-      const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
-      db.exec('DROP TABLE IF EXISTS central_publication; DROP TABLE IF EXISTS retained_publication_receipts')
-      if (tables.has('central_publication_lanes') && !tables.has('publication_lanes')) db.exec('ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
-      if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
-        db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
-      db.exec('DROP TABLE IF EXISTS central_publication_lanes; DROP TABLE IF EXISTS mcp_library_connection')
-    }
-    // Step 2 goes here: `if (version < 2) { ... }`, with executionSchemaVersion raised to 2.
+    const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(row => row.name))
+    // A v0.4.2 store also published to a single designated Mac (its
+    // `central_publication` target, encrypted bearer and receipts) and kept
+    // that Mac's library MCP grant: those are dropped, and its lanes are
+    // renamed to serve this machine's own library copy.
+    for (const name of ['central_publication', 'retained_publication_receipts', 'mcp_library_connection']) if (tables.has(name)) db.exec(`DROP TABLE ${name}`)
+    if (tables.has('central_publication_lanes'))
+      db.exec(tables.has('publication_lanes') ? 'DROP TABLE central_publication_lanes' : 'ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
+    if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
+      db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
     db.exec(`CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
@@ -104,7 +96,7 @@ function openExecutionStore(path) {
     db.close()
     throw error
   }
-  return { db, version }
+  return db
 }
 // A session saved before its harness started, which a crash left behind.
 // Older builds saved it without a title or `updatedAt`, and never a native session.
@@ -121,7 +113,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   workspaceRoot = resolve(directory, '../..'), attachments = null, titleGenerator = null, performanceLog = null }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
-  const { db, version: storedSchemaVersion } = openExecutionStore(path)
+  const db = openExecutionStore(path)
   chmodSync(path, 0o600)
   let identity = JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get()?.body ?? 'null')
   const jobs = new Map(), queues = new Map(), dirty = new Map()
@@ -962,9 +954,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     throw fail(503,'This workspace reaches other workspaces through its library host, which is not running.')
   }
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
-  // Every module above has created its tables: the file is at the current
-  // schema version. Until this is recorded, the next open repeats step 1.
-  if (storedSchemaVersion < executionSchemaVersion) db.exec(`PRAGMA user_version=${executionSchemaVersion}`)
   // One operation on a session another workspace runs (or, for stop and
   // respond, one this caller coordinates here), through that workspace's
   // execution API.

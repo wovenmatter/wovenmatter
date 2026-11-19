@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { validateSqliteSchemaPrefix } from "@earendil-works/chord/sqlite";
 import type { SqliteDatabase, SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import type { LimitEntry } from "../limits.ts";
-import { BOTS_SCHEMA_VERSION, supportedSchemaVersion } from "./database.ts";
 
 /** Shared tables. Bot tables all start with `pibot_<32 hex>_`, so these can never collide. */
 export type SidebarGroup = { id: string; name: string; position: number };
@@ -172,23 +171,24 @@ export class BotRegistry {
   }
 
   /**
-   * Brings the shared tables to `BOTS_SCHEMA_VERSION` and records it, in one transaction. A
-   * database from a newer Woven Matter is refused unchanged. Every open runs the idempotent
-   * `CREATE ... IF NOT EXISTS`; only a database below a version runs that version's step.
+   * Creates the shared tables, or brings an earlier database to their current shape, in one
+   * transaction. The database carries no version number: nothing writes its `PRAGMA user_version`
+   * and nothing reads it, so a number an earlier release left there stays and means nothing.
+   * `#createTables` declares the current shape with `CREATE TABLE IF NOT EXISTS`: that creates a
+   * new database and adds a new table to an existing one. A change to what a database already
+   * holds is recognised by the earlier shape it looks for (a table, a column, or a column's
+   * absence) and leaves nothing of that shape behind: it happens once, and a current database is
+   * only read.
    */
   async migrate(): Promise<void> {
     await this.#db.transaction(async (tx) => {
-      const version = await supportedSchemaVersion(tx);
       await this.#createTables(tx);
-      // Step 1, from version 0: the shapes of builds before the version was recorded.
-      if (version < 1) await this.#addLaterColumns(tx);
-      // Step 2 goes here: `if (version < 2) ...`, with BOTS_SCHEMA_VERSION raised to 2.
+      await this.#addMissingColumns(tx);
       await this.#createIndexes(tx);
-      if (version < BOTS_SCHEMA_VERSION)
-        await tx.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION}`);
     });
   }
 
+  /** The current shape. A column added here is also added to earlier databases below. */
   async #createTables(db: SqliteExecutor): Promise<void> {
     await db.exec(`
       CREATE TABLE IF NOT EXISTS ${GROUPS_TABLE} (
@@ -202,7 +202,13 @@ export class BotRegistry {
         name TEXT NOT NULL,
         schema_prefix TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
-        deleted_at TEXT
+        deleted_at TEXT,
+        kind TEXT NOT NULL DEFAULT 'bot',
+        is_manager INTEGER NOT NULL DEFAULT 0,
+        manager_id TEXT,
+        profile TEXT,
+        group_id TEXT REFERENCES ${GROUPS_TABLE}(id) ON DELETE SET NULL,
+        is_orchestrator INTEGER NOT NULL DEFAULT 0
       ) STRICT;
       CREATE TABLE IF NOT EXISTS ${THREADS_TABLE} (
         bot_id TEXT NOT NULL REFERENCES ${BOTS_TABLE}(id) ON DELETE CASCADE,
@@ -211,6 +217,7 @@ export class BotRegistry {
         forked_at_entry INTEGER NOT NULL,
         title TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (bot_id, conversation_id)
       ) STRICT;
       CREATE TABLE IF NOT EXISTS ${NOTES_TABLE} (
@@ -231,7 +238,11 @@ export class BotRegistry {
     `);
   }
 
-  async #addLaterColumns(db: SqliteExecutor): Promise<void> {
+  /**
+   * A database created before a column was declared lacks it: each missing one is added, with the
+   * declaration above (existing bots are plain bots). A current database has them all.
+   */
+  async #addMissingColumns(db: SqliteExecutor): Promise<void> {
     const threadColumns = await db.all<{ name: string }>(
       `PRAGMA table_info(${THREADS_TABLE})`,
     );
@@ -239,7 +250,6 @@ export class BotRegistry {
       await db.exec(
         `ALTER TABLE ${THREADS_TABLE} ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`,
       );
-    // Older databases lack later columns: add each missing one (existing bots are plain bots).
     const columns = new Set(
       (await db.all<{ name: string }>(`PRAGMA table_info(${BOTS_TABLE})`)).map(
         (column) => column.name,
