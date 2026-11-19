@@ -27,7 +27,10 @@ export type BotModelsOptions = {
    * Pi's live model catalog: where fetched catalogs are kept, and (for tests) how they are
    * fetched. Without it bots list only the models pi-ai ships.
    */
-  readonly catalog?: { readonly store: ModelsStore } & Pick<LiveCatalogOptions, "fetch" | "baseUrl" | "now">;
+  readonly catalog?: { readonly store: ModelsStore } & Pick<
+    LiveCatalogOptions,
+    "fetch" | "baseUrl" | "now" | "requestMs"
+  >;
 };
 
 /**
@@ -67,6 +70,7 @@ export function createBotModels(
       ...(catalog.fetch ? { fetch: catalog.fetch } : {}),
       ...(catalog.baseUrl ? { baseUrl: catalog.baseUrl } : {}),
       ...(catalog.now ? { now: catalog.now } : {}),
+      ...(catalog.requestMs ? { requestMs: catalog.requestMs } : {}),
     });
     restores.set(provider.id, made.restore);
     return made.provider;
@@ -94,6 +98,9 @@ export function createBotModels(
   return models;
 }
 
+/** The longest a reader waits for the catalog, whatever is slow. */
+const READ_LIMIT_MS = 15_000;
+
 /** What `refreshBotModels` needs of the models `createBotModels` made with a catalog. */
 const catalogs = new WeakMap<
   MutableModels,
@@ -104,12 +111,18 @@ const catalogs = new WeakMap<
  * Load Pi's live catalog into `models`. Without `network`, only the stored catalogs, read
  * straight from the store: no credential is read and nothing is fetched, so a start can wait for
  * it. With `network` (the default), also a newer catalog for every signed-in provider whose stored
- * one is older than four hours. Readers that arrive while one is on its way share it. Never
+ * one is older than four hours. Readers that arrive while one is on its way share it, and its
+ * result (the same array: report it once). Never
  * throws: a provider that could not be refreshed keeps the list it had, and is named in the result.
  */
 export async function refreshBotModels(
   models: MutableModels,
-  options: { readonly network?: boolean; readonly force?: boolean; readonly timeoutMs?: number } = {},
+  options: {
+    readonly network?: boolean;
+    readonly force?: boolean;
+    /** Only these providers (a start reading for one profile's model). */
+    readonly providers?: readonly string[];
+  } = {},
 ): Promise<string[]> {
   const catalog = catalogs.get(models);
   if (!catalog) return [];
@@ -133,14 +146,20 @@ export async function refreshBotModels(
       .refresh({
         allowNetwork: true,
         ...(options.force ? { force: true } : {}),
-        ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+        ...(options.providers ? { providers: [...options.providers] } : {}),
+        // Each catalog request has its own, shorter limit, which is reported and remembered. This
+        // one only keeps a host that does not answer for a credential from holding a reader.
+        signal: AbortSignal.timeout(READ_LIMIT_MS),
       })
       .then(
-        (result) => [...result.errors].map(([provider, error]) => problem(provider, error)),
+        (result) => [
+          ...[...result.errors].map(([provider, error]) => problem(provider, error)),
+          ...(result.aborted ? ["models: reading the model catalog took too long"] : []),
+        ],
         (error: unknown) => [problem("models", error)],
       );
   // pi-ai lets a second refresh supersede the first, which would then answer with the old list.
-  if (options.force) return read();
+  if (options.force || options.providers) return read();
   catalog.reading ??= read().finally(() => {
     catalog.reading = undefined;
   });

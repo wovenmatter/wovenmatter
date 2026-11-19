@@ -17,7 +17,8 @@ import {
  * service publishes (`pi.dev`). Bots do the same through pi-ai's own hook (a provider's
  * `refreshModels`, a `ModelsStore`, `Models.refresh()`), under the rules the default agent and the
  * iPhone app apply (docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md, "Provider model metadata"): the same
- * request, the same checks, the same four hours, and no fetch at launch or on a timer.
+ * request, the same checks, the same four hours, and no fetch at launch or on a timer (a start
+ * reads a provider's catalog only when a profile names a model of it that is not known).
  *
  * The live catalog adds to the list pi-ai ships and wins where both name a model, as in Pi's own
  * coding agent. It never takes a shipped model away: a bot keeps running on the model it has.
@@ -30,7 +31,8 @@ export const CATALOG_RETRY_MS = 5 * 60 * 1000;
 const CATALOG_URL = "https://pi.dev";
 const BYTE_LIMIT = 4 * 1024 * 1024;
 const MODEL_LIMIT = 4096;
-const REQUEST_TIMEOUT_MS = 15_000;
+/** How long one catalog request may take. Readers wait for it, so it is short. */
+export const CATALOG_REQUEST_MS = 8_000;
 
 /**
  * Where each provider's requests may go, by API. Fixed policy, never downloaded: a catalog names
@@ -198,6 +200,8 @@ export type LiveCatalogOptions = {
   /** The catalog service (tests point it at a fake). */
   readonly baseUrl?: string;
   readonly now?: () => number;
+  /** How long one catalog request may take (tests shorten it). */
+  readonly requestMs?: number;
 };
 
 async function readBody(response: Response): Promise<unknown> {
@@ -234,7 +238,8 @@ export type LiveCatalog = {
 
 /**
  * `provider` with Pi's live catalog on top of its shipped list: a live model is added, and wins
- * over a shipped model of the same id; a shipped model the catalog does not name stays. Until a
+ * over a shipped model of the same id; a shipped model the catalog does not name stays. (A catalog
+ * stored by another Pi version only adds models: there the shipped list is the newer word.) Until a
  * catalog has been loaded (from the store, or fetched) it lists what pi-ai ships, so a machine
  * that is offline still has models. `Models.refresh()` drives it: every call restores the stored
  * catalog, and one made with network access fetches a new one when the stored one is older than
@@ -248,19 +253,28 @@ export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}
   const now = options.now ?? Date.now;
   let live: readonly Model<Api>[] | undefined;
   let merged: { readonly chat: readonly AnyModel[]; readonly all: readonly AnyModel[] } | undefined;
+  /** The live list only fills gaps: it names models the shipped list lacks, and wins nowhere. */
+  let fills = false;
   let failedAt: number | undefined;
-  const show = (models: readonly Model<Api>[] | undefined) => {
+  const show = (models: readonly Model<Api>[] | undefined, how: { readonly fills: boolean }) => {
     if (!models) return;
     live = models;
+    fills = how.fills;
     merged = undefined;
   };
+  /**
+   * A stored catalog with no time checked was saved for another Pi version (FileModelsStore): the
+   * list this version ships is the better word on a model both name.
+   */
+  const stale = (stored: Readonly<ModelsStoreEntry> | undefined) => stored?.checkedAt === undefined;
   /** The shipped list with the live one over it. The shipped list does not change while running. */
   const listed = () => {
     if (!live) return undefined;
     if (!merged) {
       const over = (shipped: readonly AnyModel[]) => {
         const byKey = new Map<string, AnyModel>();
-        for (const model of [...shipped, ...(live as readonly AnyModel[])]) {
+        const ours = live as readonly AnyModel[];
+        for (const model of fills ? [...ours, ...shipped] : [...shipped, ...ours]) {
           byKey.set(`${(model as { type?: string }).type ?? "chat"}\0${model.id}`, model);
         }
         return [...byKey.values()];
@@ -291,7 +305,10 @@ export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}
     url.searchParams.set("pi-version", PI_AI_VERSION);
     // Only revalidate a catalog that is here to keep: a 304 must never leave the list empty.
     const etag = restored ? validator(stored?.etag) : undefined;
-    const response = await fetcher(url, {
+    const timeout = AbortSignal.timeout(options.requestMs ?? CATALOG_REQUEST_MS);
+    const late = (error: unknown) =>
+      timeout.aborted && !context.signal.aborted ? new CatalogError("the model catalog did not answer in time") : error;
+    const response = await Promise.resolve(fetcher(url, {
       headers: {
         accept: "application/json",
         "user-agent": `pi/${PI_AI_VERSION}`,
@@ -299,9 +316,11 @@ export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}
       },
       credentials: "omit",
       redirect: "error",
-      signal: AbortSignal.any([context.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+      signal: AbortSignal.any([context.signal, timeout]),
+    })).catch((error: unknown) => {
+      throw late(error);
     });
-    if (response.status === 304 && stored && restored) {
+    if (response.status === 304 && etag && stored && restored) {
       await response.body?.cancel().catch(() => {});
       await context.publish({ persist: { ...stored, checkedAt: now() } });
       return;
@@ -310,10 +329,15 @@ export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}
       await response.body?.cancel().catch(() => {});
       throw new CatalogError(`the model catalog answered ${response.status}`);
     }
-    const models = parseCatalog(await readBody(response), source);
+    const models = parseCatalog(
+      await readBody(response).catch((error: unknown) => {
+        throw late(error);
+      }),
+      source,
+    );
     const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
     const next = models.map(adapt);
-    const update = () => show(next);
+    const update = () => show(next, { fills: false });
     try {
       await context.publish({
         // Stored as the catalog gave them, so a restore checks them the same way.
@@ -340,7 +364,7 @@ export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}
     refreshModels: async (context: RefreshModelsContext) => {
       const stored = context.stored;
       const restored = checked(stored);
-      const shown = await context.publish({ update: () => show(restored) });
+      const shown = await context.publish({ update: () => show(restored, { fills: stale(stored) }) });
       if (!shown || !context.allowNetwork || context.signal.aborted) return;
       const since = (at: number | undefined) => (at === undefined ? undefined : now() - at);
       const within = (age: number | undefined, limit: number) => age !== undefined && age >= 0 && age < limit;
@@ -353,12 +377,13 @@ export function liveCatalog(provider: Provider, options: LiveCatalogOptions = {}
         failedAt = undefined;
       } catch (error) {
         // Including a catalog that did not answer in time: the next reads don't wait for it again.
-        failedAt = now();
+        // Not a read that was called off (another one took its place): that says nothing about it.
+        if (!context.signal.aborted) failedAt = now();
         throw error;
       }
     },
   } as Provider;
-  return { provider: wrapped, restore: (stored) => show(checked(stored)) };
+  return { provider: wrapped, restore: (stored) => show(checked(stored), { fills: stale(stored) }) };
 }
 
 /** `liveCatalog(provider).provider`, for a caller that restores through `Models.refresh()`. */
@@ -393,7 +418,8 @@ export class FileModelsStore implements ModelsStore {
         return undefined;
       }
       // A catalog fetched for another Pi version still lists its models (a profile may name one
-      // only it has), but it is due at once: no time checked, and no validator to answer 304 to.
+      // only it has), but only where this version ships none of that id, and it is due at once:
+      // no time checked, and no validator to answer 304 to.
       if (saved.piVersion !== PI_AI_VERSION) return { models: entries };
       return {
         models: entries,

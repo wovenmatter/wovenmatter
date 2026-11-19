@@ -246,6 +246,47 @@ describe("Pi's live model catalog for bots", () => {
     expect(service.seen).toHaveLength(1);
   });
 
+  it("reports a catalog that does not answer in time, and does not wait for it again", async () => {
+    const asked: string[] = [];
+    const silent = ((input: string | URL | Request, init?: RequestInit) => {
+      asked.push(String(input));
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    }) as typeof fetch;
+    const models = createBotModels(await signedIn(), {
+      claude: { directory: join(dir.path, "claude") },
+      catalog: { store: new InMemoryModelsStore(), fetch: silent, now: () => now, requestMs: 40 },
+    });
+    expect(await refreshBotModels(models)).toEqual(["openai-codex: the model catalog did not answer in time"]);
+    expect(await refreshBotModels(models)).toEqual([]);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("does not hold a read that was called off against the catalog", async () => {
+    const service = catalogService({ "openai-codex": [entry("openai-codex", "gpt-6.2-sol")] });
+    let hold = true;
+    const fetcher = ((input: string | URL | Request, init?: RequestInit) => {
+      if (!hold) return service.fetch(input, init);
+      service.seen.push({ url: String(input), headers: {} });
+      return new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    }) as typeof fetch;
+    const models = createBotModels(await signedIn(), {
+      claude: { directory: join(dir.path, "claude") },
+      catalog: { store: new InMemoryModelsStore(), fetch: fetcher, now: () => now },
+    });
+    // A start's read for one provider, overtaken by someone opening a model list.
+    const first = refreshBotModels(models, { providers: ["openai-codex"] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    hold = false;
+    expect(await refreshBotModels(models)).toEqual([]);
+    expect(await first).toEqual([]);
+    expect(ids(models.getModels("openai-codex"))).toContain("gpt-6.2-sol");
+    expect(service.seen).toHaveLength(2);
+  });
+
   it("still shows a catalog it could not save", async () => {
     const service = catalogService({ "openai-codex": [entry("openai-codex", "gpt-6.2-sol")] });
     const store = new InMemoryModelsStore();
@@ -314,6 +355,7 @@ describe("Pi's live model catalog for bots", () => {
     const runtimeWith = (service: ReturnType<typeof catalogService>, model: string, logs: string[] = []) => {
       const host = new FakeHost();
       host.credentials.set("xai", { type: "api_key", key: "test-xai-key" });
+      host.credentials.set("openrouter", { type: "api_key", key: "test-openrouter-key" });
       return startRuntime(testConfig(dir.path), {
         env: null,
         settings: testSettings(model),
@@ -348,7 +390,11 @@ describe("Pi's live model catalog for bots", () => {
         const models = await listed(runtime);
         expect(models[0]).toBe("grok-9");
         expect(models).toContain("grok-4.3");
-        expect(service.seen).toHaveLength(1);
+        // Reading a list asks for every signed-in provider's catalog, once.
+        expect(service.seen.map((item) => new URL(item.url).pathname).sort()).toEqual([
+          "/api/models/providers/openrouter",
+          "/api/models/providers/xai",
+        ]);
         expect(JSON.parse(await readFile(join(dir.path, "provider-models", "xai.json"), "utf8")).models).toHaveLength(2);
       } finally {
         await runtime.close();
@@ -361,7 +407,8 @@ describe("Pi's live model catalog for bots", () => {
       let runtime = await runtimeWith(service, "xai/grok-9");
       try {
         await until(() => runtime.models.getModel("xai", "grok-9") !== undefined);
-        expect(service.seen).toHaveLength(1);
+        // That provider's catalog only, though another is signed in.
+        expect(service.seen.map((item) => new URL(item.url).pathname)).toEqual(["/api/models/providers/xai"]);
       } finally {
         await runtime.close();
       }
@@ -515,22 +562,28 @@ describe("Pi's live model catalog for bots", () => {
     });
 
     it("keeps the models of a file from another Pi version, but as due for a fresh read", async () => {
-      const service = catalogService({ xai: [entry("xai", "grok-9"), entry("xai", "grok-10")] });
+      const service = catalogService({ xai: [entry("xai", "grok-9"), entry("xai", "grok-10"), entry("xai", "grok-4.3")] });
       const store = new FileModelsStore(join(dir.path, "provider-models"));
-      await store.write("xai", { models: [entry("xai", "grok-9")] as never, checkedAt: now, etag: '"old"' });
+      const old = [entry("xai", "grok-9"), entry("xai", "grok-4.3", { name: "As the old version knew it" })];
+      await store.write("xai", { models: old as never, checkedAt: now, etag: '"old"' });
       const path = join(dir.path, "provider-models", "xai.json");
       await writeFile(path, (await readFile(path, "utf8")).replace(PI_AI_VERSION, "0.0.1"));
-      expect(await store.read("xai")).toEqual({ models: [entry("xai", "grok-9")] });
+      expect(await store.read("xai")).toEqual({ models: old });
 
       // A bot on a model only that catalog listed still has it after the update, before any read.
       const models = await open(service, store, ["xai"]);
+      const shipped = models.getModel("xai", "grok-4.3")?.name;
+      expect(shipped).toBeTruthy();
       await refreshBotModels(models, { network: false });
       expect(models.getModel("xai", "grok-9")).toBeDefined();
+      // But what this version ships is the better word on a model both name, until a fresh read.
+      expect(models.getModel("xai", "grok-4.3")?.name).toBe(shipped);
       // And the next read fetches the whole catalog for this version: no four-hour wait, no 304.
       await refreshBotModels(models);
       expect(service.seen).toHaveLength(1);
       expect(service.seen[0]?.headers["if-none-match"]).toBeUndefined();
       expect(models.getModel("xai", "grok-10")).toBeDefined();
+      expect(models.getModel("xai", "grok-4.3")?.name).toBe("GROK-4.3");
     });
 
     it("does not read a broken file, one that is not a list of models, or an odd name", async () => {

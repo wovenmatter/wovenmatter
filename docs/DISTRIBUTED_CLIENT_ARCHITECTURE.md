@@ -162,7 +162,7 @@ with ETag, Last-Modified and a four-hour freshness window. They perform no launc
 fetch or polling. Refresh happens only while browsing a provider (for bots: whenever a model list
 is read, in first-run setup, Settings or by Admin Bot) or resolving an
 uncached selected descriptor (for bots: a start that finds a profile on a model
-it does not know); cached selections remain usable during catalog
+it does not know reads that provider's shard); cached selections remain usable during catalog
 outages. Refresh/retry is explicit after a first-load failure; bots, which have
 no refresh control, try again on a list read five minutes or more after a
 failure. Public metadata
@@ -177,8 +177,9 @@ contexts pin selected descriptors in their existing durable records; inference
 hosts also retain their own descriptor for each authorized client conversation.
 Catalog refresh cannot replace a run's model, provider, account or execution owner.
 Bots resolve a model by its id on every step instead of pinning a descriptor, so a
-refreshed shard can update the facts of a model a bot is on (its sizes and
-prices), never its provider, API or destination, which the fixed policy decides.
+refreshed shard can update the description of a model a bot is on (its sizes,
+prices and compatibility, and which of that provider's allowed APIs it uses),
+never its provider or where its requests may go, which the fixed policy decides.
 Authorized subscription-host discovery and explicitly configured Tailscale server
 IDs remain separate from public metadata discovery.
 

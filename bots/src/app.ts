@@ -205,9 +205,14 @@ export async function startRuntime(
         });
     const models = options.models ?? (live as NonNullable<typeof live>);
     /** Load Pi's live catalog; a provider that can't be refreshed keeps the list it had. */
+    const reported = new WeakSet<string[]>();
     refreshModels = async (how = {}) => {
       if (!live) return;
-      for (const problem of await refreshBotModels(live, how)) log(`model catalog: ${problem}`);
+      const problems = await refreshBotModels(live, how);
+      // Readers that shared one read share its result: say it once.
+      if (reported.has(problems)) return;
+      reported.add(problems);
+      for (const problem of problems) log(`model catalog: ${problem}`);
     };
     // The stored catalog, straight from disk: a profile may name a model only it lists. Nothing
     // is fetched at start or on a timer, as elsewhere in Woven Matter: a newer catalog is read
@@ -221,12 +226,20 @@ export async function startRuntime(
       for (const profile of profileSet.profiles) {
         if (profile.main) refs[`profiles.${profile.id}.main`] = parseModelRef(profile.main);
       }
-      if (live && checkModelRoles(live, refs).length) {
-        // A profile names a model neither pi-ai nor the stored catalog lists (a cleared cache, a
-        // model added since): the one case a start reads the catalog, without holding the start up.
-        void refreshModels({ timeoutMs: 15_000 }).then(() => {
+      if (live) {
+        const warn = () => {
           for (const problem of checkModelRoles(live, refs)) log(`warning: ${problem}`);
-        });
+        };
+        // A profile names a model of a provider bots have, which neither pi-ai nor the stored
+        // catalog lists (a cleared cache, a model added since): the one case a start reads a
+        // catalog, that provider's only, and without holding the start up.
+        const unknown = new Set(
+          Object.values(refs)
+            .filter((ref) => live.getProvider(ref.provider) && !live.getModel(ref.provider, ref.modelId))
+            .map((ref) => ref.provider),
+        );
+        if (unknown.size) void refreshModels({ providers: [...unknown] }).then(warn);
+        else warn();
       }
     }
     const profiles = new ProfileStore(profileSet, {
@@ -361,7 +374,7 @@ export async function startRuntime(
       modelLimit: (ref) => availability.limit(ref),
       // Whoever opens a model list sees Pi's current one (fetched when the stored one is over
       // four hours old); a slow catalog never holds the list up long.
-      refreshModels: () => refreshModels({ timeoutMs: 8_000 }),
+      refreshModels: () => refreshModels(),
     });
     const operations = new RuntimeOperations({
       manager: opened,
