@@ -52,17 +52,14 @@ public struct SyncRow: Codable, Sendable, Hashable {
   /// Hybrid logical clock value of the last write.
   public var stamp: String
   public var deleted: Bool
-  /// For rows kept with version history: the stamp this write was made on top of.
-  public var editedFrom: String?
   /// Every other column, by name.
   public var values: [String: SQLValue]
 
-  public init(table: String, id: String, stamp: String, deleted: Bool, editedFrom: String?, values: [String: SQLValue]) {
+  public init(table: String, id: String, stamp: String, deleted: Bool, values: [String: SQLValue]) {
     self.table = table
     self.id = id
     self.stamp = stamp
     self.deleted = deleted
-    self.editedFrom = editedFrom
     self.values = values
   }
 }

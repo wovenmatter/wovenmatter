@@ -29,16 +29,24 @@ public final class Library: Sendable {
   private let readers: ReaderPool
   private let watchers = Mutex<[UUID: AsyncStream<Int64>.Continuation]>([:])
   private let latest: Mutex<Int64>
+  private let removedState = Mutex(false)
 
   public var fileURL: URL { folder.appendingPathComponent("library.sqlite") }
 
   /// Opens (or creates) `library.sqlite` in `folder`. `machineName` names this
-  /// machine the first time only.
+  /// machine the first time only. A library whose machine was removed is
+  /// erased here, with its content store, and begins again empty under a new
+  /// identifier.
   public static func open(folder: URL, machineName: String) async throws -> Library {
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let path = folder.appendingPathComponent("library.sqlite").path
     let lane = WriteLane()
-    let (machineID, changed) = try await lane.open(path: path, machineName: machineName)
+    let (machineID, changed) = try await lane.open(path: path, machineName: machineName, erase: {
+      for name in ["library.sqlite", "library.sqlite-wal", "library.sqlite-shm", "files"] {
+        let url = folder.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+      }
+    })
     return Library(machineID: machineID, folder: folder, lane: lane, changed: changed)
   }
 
@@ -53,11 +61,22 @@ public final class Library: Sendable {
   /// The library's `changed` counter after the last commit.
   public var changed: Int64 { latest.withLock { $0 } }
 
+  /// Another machine removed this one, and this library has received that.
+  /// From then on it refuses every write (they fail with `closed`), and its
+  /// `changes()` streams end. The server should stop; at the next `open`
+  /// the library is erased and begins again as a new machine.
+  public var isRemoved: Bool { removedState.withLock { $0 } }
+
   /// The counter after every later commit that changed synced rows. Values
-  /// a slow reader has not taken yet are folded into the newest.
+  /// a slow reader has not taken yet are folded into the newest. The stream
+  /// ends when the library closes or this machine is removed.
   public func changes() -> AsyncStream<Int64> {
     let (stream, continuation) = AsyncStream<Int64>.makeStream(bufferingPolicy: .bufferingNewest(1))
     let id = UUID()
+    if isRemoved {
+      continuation.finish()
+      return stream
+    }
     watchers.withLock { $0[id] = continuation }
     continuation.onTermination = { [weak self] _ in _ = self?.watchers.withLock { $0.removeValue(forKey: id) } }
     return stream
@@ -75,10 +94,17 @@ public final class Library: Sendable {
 
   /// Runs `body` as one transaction on the write lane.
   func write<T: Sendable>(_ body: @escaping @Sendable (Writer) throws -> T) async throws -> T {
-    let (result, counter, moved) = try await lane.run(body)
+    let (result, counter, moved, removed) = try await lane.run(body)
     if moved {
       latest.withLock { $0 = counter }
       for continuation in watchers.withLock({ Array($0.values) }) { continuation.yield(counter) }
+    }
+    if removed, removedState.withLock({ was in defer { was = true }; return !was }) {
+      let ending = watchers.withLock { watchers in
+        defer { watchers.removeAll() }
+        return Array(watchers.values)
+      }
+      for continuation in ending { continuation.finish() }
     }
     return result
   }
@@ -95,13 +121,22 @@ private final class WriteLane: @unchecked Sendable {
   private let queue = DispatchQueue(label: "woven.library.writer")
   private var writer: Writer?
 
-  func open(path: String, machineName: String) async throws -> (String, Int64) {
+  func open(path: String, machineName: String, erase: @escaping @Sendable () throws -> Void) async throws -> (String, Int64) {
     try await onQueue {
-      let connection = try Connection(path: path, readOnly: false)
-      try connection.execute("PRAGMA journal_mode = WAL")
-      try connection.execute("PRAGMA synchronous = NORMAL")
-      try Schema.apply(to: connection)
-      let writer = try Writer.open(connection, machineName: machineName)
+      func connect() throws -> Connection {
+        let connection = try Connection(path: path, readOnly: false)
+        try connection.execute("PRAGMA journal_mode = WAL")
+        try connection.execute("PRAGMA synchronous = NORMAL")
+        try Schema.apply(to: connection)
+        return connection
+      }
+      var connection: Connection? = try connect()
+      if try Writer.wasRemoved(connection!) {
+        connection = nil  // The only handle on the file closes before the file goes.
+        try erase()
+        connection = try connect()
+      }
+      let writer = try Writer.open(connection!, machineName: machineName)
       self.writer = writer
       return (writer.machineID, writer.counter)
     }
@@ -111,10 +146,13 @@ private final class WriteLane: @unchecked Sendable {
     _ = try? await onQueue { self.writer = nil }
   }
 
-  func run<T: Sendable>(_ body: @escaping @Sendable (Writer) throws -> T) async throws -> (T, Int64, Bool) {
+  /// Runs `body` as one transaction. Returns its result, the counter after,
+  /// whether the counter moved, and whether this machine is now removed.
+  func run<T: Sendable>(_ body: @escaping @Sendable (Writer) throws -> T) async throws -> (T, Int64, Bool, Bool) {
     try await onQueue {
       guard let writer = self.writer else { throw LibraryError(.closed, "The library is closed.") }
-      return try writer.transaction(body)
+      let (result, counter, moved) = try writer.transaction(body)
+      return (result, counter, moved, writer.removed)
     }
   }
 

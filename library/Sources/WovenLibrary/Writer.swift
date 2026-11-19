@@ -10,6 +10,8 @@ final class Writer {
   let machineID: String
   private(set) var clock: HybridClock
   private(set) var counter: Int64
+  /// Another machine removed this one. Every later transaction is refused.
+  private(set) var removed = false
 
   private init(db: Connection, machineID: String, clock: HybridClock, counter: Int64) {
     self.db = db
@@ -35,11 +37,17 @@ final class Writer {
     return writer
   }
 
+  /// The library was told that another machine removed this one.
+  static func wasRemoved(_ db: Connection) throws -> Bool {
+    try db.query("SELECT removed FROM this_machine LIMIT 1").first?.bool("removed") ?? false
+  }
+
   static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
   /// Runs `body` in one transaction. Returns its result, the counter after,
   /// and whether the counter moved. On failure the clock and counter go back.
   func transaction<T>(_ body: (Writer) throws -> T) throws -> (T, Int64, Bool) {
+    guard !removed else { throw LibraryError(.closed, "This machine was removed from the library.") }
     let before = (clock, counter)
     do {
       let result = try db.transaction {
@@ -52,6 +60,7 @@ final class Writer {
       return (result, counter, counter != before.1)
     } catch {
       (clock, counter) = before
+      removed = false
       throw error
     }
   }
@@ -79,12 +88,9 @@ final class Writer {
     columns["stamp"] = .text(stamp)
     columns["changed"] = .integer(nextChanged())
     if table.keepsLoser {
-      // A run of writes by one machine keeps the stamp the run started from.
-      if let current, let currentStamp = current.text("stamp") {
-        columns["edited_from"] = Stamp.machine(of: currentStamp) == machineID ? current["edited_from"] : .text(currentStamp)
-      } else {
-        columns["edited_from"] = .null
-      }
+      // This version has seen everything the one it was written on had seen,
+      // and this write.
+      columns[Seen.column] = Seen(current?[Seen.column]).merged(with: Seen([machineID: stamp])).value
     }
     if current == nil {
       columns["id"] = .text(id)
@@ -101,7 +107,12 @@ final class Writer {
   /// the deletion spreads. Rows that belong to it go too.
   func delete(_ tableName: String, id: String) throws {
     let table = try synced(tableName)
+    if table.name == "machines" && id == machineID { throw LibraryError(.invalid, "A machine cannot remove itself.") }
     guard let current = try row(table.name, id), !current.bool("deleted") else { return }
+    if let key = table.naturalKey {
+      try put(table.name, id: id, Self.cleared(table, keeping: key))
+      return
+    }
     try writeMarker(table, id: id, stamp: clock.tick())
     try cascade(from: table, id: id)
   }
@@ -113,6 +124,7 @@ final class Writer {
   @discardableResult
   func apply(_ incoming: SyncRow) throws -> Bool {
     let table = try synced(incoming.table)
+    guard !removed else { return false }
     clock.observe(incoming.stamp)
     if !incoming.deleted, try hasDeletedParent(table, incoming.values) { return false }
     guard let local = try row(table.name, incoming.id) else {
@@ -129,6 +141,11 @@ final class Writer {
       guard incoming.deleted, !localDeleted || incoming.stamp > localStamp else { return false }
       try store(table, incoming)
       if !localDeleted { try cascade(from: table, id: incoming.id) }
+      if table.name == "machines" && incoming.id == machineID {
+        // Another machine removed this one while it was away.
+        try db.run("UPDATE this_machine SET removed = 1")
+        removed = true
+      }
       return true
     }
 
@@ -140,18 +157,29 @@ final class Writer {
       try store(table, incoming)
       return true
     case .newestWinsKeepLoser(let history):
-      guard incoming.stamp != localStamp else { return false }
-      let mine = Version(stamp: localStamp, editedFrom: local.text("edited_from"))
-      let theirs = Version(stamp: incoming.stamp, editedFrom: incoming.editedFrom)
+      // A write that has seen everything the other has was made on top of
+      // it. Otherwise the two were edited apart: the newer is current, the
+      // other is saved, and the current one keeps what both had seen, so
+      // every library ends with the same row.
+      let mine = Seen(local[Seen.column]), theirs = Seen(incoming.values[Seen.column])
+      let merged = mine.merged(with: theirs)
       if incoming.stamp > localStamp {
-        if !mine.isAncestor(of: theirs) {
+        if !theirs.includes(mine) {
           try saveLoser(history, of: table, id: incoming.id, stamp: localStamp, values: local.values(excluding: Table.standardColumns))
         }
-        try store(table, incoming)
+        try store(table, incoming, seen: merged)
         return true
       }
-      guard !theirs.isAncestor(of: mine) else { return false }
-      return try saveLoser(history, of: table, id: incoming.id, stamp: incoming.stamp, values: incoming.values)
+      var changed = false
+      if incoming.stamp < localStamp, !mine.includes(theirs) {
+        changed = try saveLoser(history, of: table, id: incoming.id, stamp: incoming.stamp, values: incoming.values)
+      }
+      if merged != mine {
+        try db.run("UPDATE \(table.name) SET \(Seen.column) = ?, changed = ? WHERE id = ?",
+                   [merged.value, .integer(nextChanged()), .text(incoming.id)])
+        changed = true
+      }
+      return changed
     }
   }
 
@@ -175,16 +203,17 @@ final class Writer {
     return table
   }
 
-  /// Stores a received row exactly as it came, with a new local `changed`.
-  private func store(_ table: Table, _ incoming: SyncRow) throws {
+  /// Stores a received row as it came, with a new local `changed`, and for a
+  /// row kept with version history, `seen` as merged here.
+  private func store(_ table: Table, _ incoming: SyncRow, seen: Seen? = nil) throws {
     var columns: [String: SQLValue] = [
       "id": .text(incoming.id),
       "stamp": .text(incoming.stamp),
       "changed": .integer(nextChanged()),
       "deleted": .integer(incoming.deleted ? 1 : 0),
     ]
-    if table.keepsLoser { columns["edited_from"] = incoming.editedFrom.map(SQLValue.text) ?? .null }
     for column in table.columns { columns[column.name] = incoming.values[column.name] ?? column.fallback ?? .null }
+    if let seen { columns[Seen.column] = seen.value }
     try insert(table.name, columns, replacing: true)
   }
 
@@ -196,14 +225,19 @@ final class Writer {
 
   private func writeMarker(_ table: Table, id: String, stamp: String) throws {
     var columns: [(String, SQLValue)] = [("deleted", .integer(1)), ("stamp", .text(stamp)), ("changed", .integer(nextChanged()))]
-    if table.keepsLoser { columns.append(("edited_from", .null)) }
     columns += table.columns.map { ($0.name, $0.fallback ?? .null) }
     try db.run("UPDATE \(table.name) SET \(columns.map { "\($0.0) = ?" }.joined(separator: ", ")) WHERE id = ?",
                columns.map(\.1) + [.text(id)])
   }
 
+  /// A natural-key row's columns, emptied except for its key.
+  private static func cleared(_ table: Table, keeping key: [String]) -> [String: SQLValue] {
+    Dictionary(uniqueKeysWithValues: table.columns.filter { !key.contains($0.name) }.map { ($0.name, $0.fallback ?? .null) })
+  }
+
   /// Removes what belongs to a deleted row. Append-only rows are dropped
-  /// here (and refused if they arrive later); other rows become markers.
+  /// here (and refused if they arrive later); natural-key rows are emptied;
+  /// other rows become markers.
   private func cascade(from parent: Table, id: String) throws {
     for child in Schema.synced {
       for link in child.parents where link.table == parent.name {
@@ -212,6 +246,14 @@ final class Writer {
         for childID in ids {
           if child.rule == .appendOnly {
             try db.run("DELETE FROM \(child.name) WHERE id = ?", [.text(childID)])
+          } else if let key = child.naturalKey {
+            var columns = Self.cleared(child, keeping: key)
+            columns["stamp"] = .text(clock.tick())
+            columns["changed"] = .integer(nextChanged())
+            let names = Array(columns.keys)
+            try db.run("UPDATE \(child.name) SET \(names.map { "\($0) = ?" }.joined(separator: ", ")) WHERE id = ?",
+                       names.map { columns[$0]! } + [.text(childID)])
+            continue
           } else {
             try writeMarker(child, id: childID, stamp: clock.tick())
           }
@@ -253,16 +295,39 @@ final class Writer {
   }
 }
 
-/// One write of a row kept with version history, for telling whether one
-/// write was made on top of another.
-private struct Version {
-  let stamp: String
-  let editedFrom: String?
+/// What a version of a row kept with version history had seen: for each
+/// machine, the latest stamp of that machine's that the version includes.
+private struct Seen: Equatable {
+  static let column = "seen"
 
-  /// `other` was written on top of this write: directly, or later in the
-  /// same machine's run of writes from the same starting point.
-  func isAncestor(of other: Version) -> Bool {
-    if other.editedFrom == stamp { return true }
-    return Stamp.machine(of: stamp) == Stamp.machine(of: other.stamp) && editedFrom == other.editedFrom && stamp < other.stamp
+  private(set) var stamps: [String: String]
+
+  init(_ stamps: [String: String]) {
+    self.stamps = stamps
+  }
+
+  init(_ value: SQLValue?) {
+    guard case .text(let text) = value ?? .null,
+          let stamps = try? JSONDecoder().decode([String: String].self, from: Data(text.utf8)) else {
+      self.init([:])
+      return
+    }
+    self.init(stamps)
+  }
+
+  /// The column's value. Keys are sorted, so equal records are equal text.
+  var value: SQLValue {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return .text(String(decoding: (try? encoder.encode(stamps)) ?? Data("{}".utf8), as: UTF8.self))
+  }
+
+  /// This version has seen everything `other` has.
+  func includes(_ other: Seen) -> Bool {
+    other.stamps.allSatisfy { machine, stamp in (stamps[machine] ?? "") >= stamp }
+  }
+
+  func merged(with other: Seen) -> Seen {
+    Seen(stamps.merging(other.stamps) { max($0, $1) })
   }
 }

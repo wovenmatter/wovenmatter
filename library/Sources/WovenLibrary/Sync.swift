@@ -3,36 +3,31 @@ import WovenProtocol
 
 extension Library {
   /// Rows of every synced table whose `changed` is above `after`, in
-  /// `changed` order: what another machine asks for when it pulls.
+  /// `changed` order: what another machine asks for when it pulls. At most
+  /// `limit` rows, and no more after their size reaches `byteBudget`.
   public func pull(after: Int64, limit: Int = 500, byteBudget: Int = 8 << 20) async throws -> SyncPage {
     let limit = max(1, limit)
     return try await read { db in
-      var found: [(changed: Int64, row: SyncRow)] = []
-      var tableFull = false
-      for table in Schema.synced {
-        let rows = try db.query("SELECT * FROM \(table.name) WHERE changed > ? ORDER BY changed LIMIT ?",
-                                [.integer(after), .integer(Int64(limit))])
-        if rows.count == limit { tableFull = true }
-        for row in rows {
-          found.append((row.integer("changed") ?? 0, SyncRow(
-            table: table.name, id: row.text("id") ?? "", stamp: row.text("stamp") ?? "",
-            deleted: row.bool("deleted"), editedFrom: table.keepsLoser ? row.text("edited_from") : nil,
-            values: row.values(excluding: Table.standardColumns))))
-        }
-      }
-      // Each table gave its first `limit` rows, so the first `limit` of all
-      // of them together are the library's first `limit`.
-      found.sort { $0.changed < $1.changed }
+      // Only which rows come next is read across every table, through each
+      // table's `changed` index; each row is then read whole, in order,
+      // until the budget is spent.
+      let order = Schema.synced.map {
+        "SELECT * FROM (SELECT '\($0.name)' AS name, id, changed FROM \($0.name) WHERE changed > ?1 ORDER BY changed LIMIT ?2)"
+      }.joined(separator: " UNION ALL ") + " ORDER BY changed LIMIT ?2"
+      let next = try db.query(order, [.integer(after), .integer(Int64(limit) + 1)])
       var page: [SyncRow] = []
-      var next = after
+      var cursor = after
       var bytes = 0
-      for entry in found {
-        if page.count == limit || (!page.isEmpty && bytes >= byteBudget) { break }
-        page.append(entry.row)
-        next = entry.changed
-        bytes += entry.row.approximateSize
+      for entry in next.prefix(limit) {
+        if !page.isEmpty && bytes >= byteBudget { break }
+        guard let table = Schema.byName[entry.text("name") ?? ""], let id = entry.text("id"),
+              let row = try db.query("SELECT * FROM \(table.name) WHERE id = ?", [.text(id)]).first else { continue }
+        let synced = SyncRow(row, table: table.name)
+        page.append(synced)
+        cursor = entry.integer("changed") ?? cursor
+        bytes += synced.approximateSize
       }
-      return SyncPage(rows: page, next: next, more: page.count < found.count || tableFull)
+      return SyncPage(rows: page, next: cursor, more: page.count < next.count)
     }
   }
 
@@ -63,7 +58,9 @@ extension Library {
     try await write { try $0.put(table, id: id, values) }
   }
 
-  /// Deletes a synced row everywhere, and whatever belongs to it.
+  /// Deletes a synced row everywhere, and whatever belongs to it. A row of a
+  /// natural-key table (a setting, a sealed secret) is unset instead: its
+  /// value is cleared with a new stamp, and it can be set again.
   public func delete(_ table: String, id: String) async throws {
     try await write { try $0.delete(table, id: id) }
   }
@@ -72,11 +69,7 @@ extension Library {
   public func row(_ table: String, id: String) async throws -> SyncRow? {
     guard let declared = Schema.byName[table], declared.synced else { throw LibraryError(.invalid, "\(table) is not synced.") }
     return try await read { db in
-      try db.query("SELECT * FROM \(table) WHERE id = ?", [.text(id)]).first.map { row in
-        SyncRow(table: table, id: id, stamp: row.text("stamp") ?? "", deleted: row.bool("deleted"),
-                editedFrom: declared.keepsLoser ? row.text("edited_from") : nil,
-                values: row.values(excluding: Table.standardColumns))
-      }
+      try db.query("SELECT * FROM \(table) WHERE id = ?", [.text(id)]).first.map { SyncRow($0, table: declared.name) }
     }
   }
 
@@ -87,16 +80,19 @@ extension Library {
       throw LibraryError(.invalid, "\(table).\(column) is not a synced column.")
     }
     return try await read { db in
-      try db.query("SELECT * FROM \(table) WHERE \(column) = ? AND deleted = 0 ORDER BY id", [value]).map { row in
-        SyncRow(table: table, id: row.text("id") ?? "", stamp: row.text("stamp") ?? "", deleted: false,
-                editedFrom: declared.keepsLoser ? row.text("edited_from") : nil,
-                values: row.values(excluding: Table.standardColumns))
-      }
+      try db.query("SELECT * FROM \(table) WHERE \(column) = ? AND deleted = 0 ORDER BY id", [value])
+        .map { SyncRow($0, table: declared.name) }
     }
   }
 }
 
 extension SyncRow {
+  /// A stored row as it travels, without the local `changed` counter.
+  init(_ row: Row, table: String) {
+    self.init(table: table, id: row.text("id") ?? "", stamp: row.text("stamp") ?? "", deleted: row.bool("deleted"),
+              values: row.values(excluding: Table.standardColumns))
+  }
+
   var approximateSize: Int {
     values.values.reduce(id.utf8.count + stamp.utf8.count + 64) { total, value in
       switch value {

@@ -18,9 +18,12 @@ struct Stamp: Equatable {
     self.machine = machine
   }
 
+  /// The largest counter that fits its width.
+  static let maxCount: Int64 = 0xFFFFFF
+
   init?(text: String) {
     let parts = text.split(separator: ".", maxSplits: 2, omittingEmptySubsequences: false)
-    guard parts.count == 3, let time = Int64(parts[0], radix: 16), let count = Int64(parts[1], radix: 16) else { return nil }
+    guard parts.count == 3, parts[0].count == 12, parts[1].count == 6, let time = Int64(parts[0], radix: 16), let count = Int64(parts[1], radix: 16) else { return nil }
     self.init(time: time, count: count, machine: String(parts[2]))
   }
 
@@ -36,8 +39,13 @@ struct Stamp: Equatable {
 }
 
 /// The library's clock. Each local write gets a stamp later than every stamp
-/// this library has written or received, even when wall clocks disagree.
+/// this library has written, and than every stamp it has received unless that
+/// stamp is further ahead of this machine's wall clock than `maxLead`: a
+/// machine whose clock runs fast cannot drag the others' clocks with it.
 struct HybridClock {
+  /// How far a received stamp may move this clock ahead of the wall clock.
+  static let maxLead: Int64 = 5 * 60 * 1000
+
   let machine: String
   private(set) var last: Stamp?
 
@@ -47,10 +55,13 @@ struct HybridClock {
   }
 
   mutating func tick(now: Date = Date()) -> String {
-    let wall = Int64(now.timeIntervalSince1970 * 1000)
+    let wall = Self.millis(now)
     let next: Stamp
     if let last, last.time >= wall {
-      next = Stamp(time: last.time, count: last.count + 1, machine: machine)
+      // The counter carries into the time part rather than outgrow its width.
+      next = last.count < Stamp.maxCount
+        ? Stamp(time: last.time, count: last.count + 1, machine: machine)
+        : Stamp(time: last.time + 1, count: 0, machine: machine)
     } else {
       next = Stamp(time: wall, count: 0, machine: machine)
     }
@@ -58,11 +69,16 @@ struct HybridClock {
     return next.text
   }
 
-  /// Moves the clock past a stamp received from another machine.
-  mutating func observe(_ text: String) {
-    guard let stamp = Stamp(text: text) else { return }
-    if last.map({ $0.text < text }) ?? true {
+  /// Moves the clock past a stamp received from another machine, but never
+  /// more than `maxLead` ahead of the wall clock.
+  mutating func observe(_ text: String, now: Date = Date()) {
+    guard var stamp = Stamp(text: text) else { return }
+    let limit = Self.millis(now) + Self.maxLead
+    if stamp.time > limit { stamp = Stamp(time: limit, count: 0, machine: machine) }
+    if last.map({ ($0.time, $0.count) < (stamp.time, stamp.count) }) ?? true {
       last = Stamp(time: stamp.time, count: stamp.count, machine: machine)
     }
   }
+
+  private static func millis(_ date: Date) -> Int64 { Int64(date.timeIntervalSince1970 * 1000) }
 }

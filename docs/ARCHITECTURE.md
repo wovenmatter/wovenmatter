@@ -130,9 +130,10 @@ digest in a file store beside the library and fetched by digest when needed.
 - **Newest write wins**: machines, sessions (title, folder, archived), folders,
   settings, schedules, sealed secrets, database descriptions.
 - **Newest write wins, loser kept**: notes, pages and apps. Each write records
-  the `stamp` it was edited from. When a received write was not made on top of
-  the local one, the two were edited apart: the newer becomes current and the
-  other is saved in that artifact's version history. No separate copy appears.
+  the latest write it has seen from each machine. When a received write has
+  not seen everything the local one has, the two were edited apart: the newer
+  becomes current and the other is saved in that artifact's version history.
+  No separate copy appears.
 - **Never syncs**: sync cursors, this machine's identifier, live state, native
   session handles' process state, provider sign-ins.
 

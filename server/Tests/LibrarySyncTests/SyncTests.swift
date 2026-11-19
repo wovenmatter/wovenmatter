@@ -3,9 +3,9 @@ import Testing
 import WovenLibrary
 import WovenProtocol
 
-/// A fresh library in its own temporary folder.
-private func makeLibrary(_ name: String) async throws -> Library {
-  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-sync-\(UUID().uuidString)")
+/// A fresh library in its own temporary folder, or the one in `folder`.
+private func makeLibrary(_ name: String, folder: URL? = nil) async throws -> Library {
+  let folder = folder ?? FileManager.default.temporaryDirectory.appendingPathComponent("woven-sync-\(UUID().uuidString)")
   return try await Library.open(folder: folder, machineName: name)
 }
 
@@ -70,6 +70,64 @@ private func contents(_ library: Library) async throws -> Set<SyncRow> {
   try await sync(b, from: a)
   #expect(try await contents(a) == contents(b))
   #expect(try await contents(b) == contents(c))
+}
+
+@Test func editOnTopOfAnUnseenEditIsNoConflictButAnEditApartIsOneEverywhere() async throws {
+  let a = try await makeLibrary("a"), b = try await makeLibrary("b"), c = try await makeLibrary("c")
+  func versions(_ library: Library) async throws -> [SQLValue?] {
+    try await library.rows("artifact_versions", where: "artifact_id", is: .text("note")).map { $0.values["body"] }
+  }
+  try await a.put("artifacts", id: "note", ["kind": .text("note"), "body": .text("a1")])
+  try await sync(b, from: a)
+  try await sync(c, from: a)
+  // B edits on top of a1, A on top of B's edit; C, holding a1, never sees B's.
+  try await b.put("artifacts", id: "note", ["body": .text("b1 on a1")])
+  try await sync(a, from: b)
+  try await a.put("artifacts", id: "note", ["body": .text("a2 on b1")])
+  try await sync(c, from: a)
+  try await sync(b, from: c)
+  for library in [a, b, c] {
+    #expect(try await library.row("artifacts", id: "note")?.values["body"] == .text("a2 on b1"))
+    #expect(try await versions(library).isEmpty)
+  }
+
+  // B and C edit apart, then every library hears of both.
+  try await b.put("artifacts", id: "note", ["body": .text("edit on b")])
+  try await c.put("artifacts", id: "note", ["body": .text("edit on c")])
+  try await sync(a, from: b)
+  try await sync(a, from: c)
+  try await sync(b, from: a)
+  try await sync(c, from: a)
+  try await sync(a, from: b)
+  try await sync(a, from: c)
+  let expected = try await contents(a)
+  for library in [a, b, c] {
+    #expect(try await versions(library).count == 1)
+    #expect(try await contents(library) == expected)
+  }
+}
+
+@Test func machineRemovedWhileAwayLearnsItAndStartsAgainEmpty() async throws {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-sync-\(UUID().uuidString)")
+  let a = try await makeLibrary("a"), b = try await makeLibrary("b", folder: folder)
+  _ = try await b.createSession(runtime: .codex, title: "On B")
+  try await sync(a, from: b)
+  try await sync(b, from: a)
+  let removedID = b.machineID
+  // B is away while A removes it, then comes back and pulls.
+  try await a.removeMachine(removedID)
+  try await sync(b, from: a)
+
+  #expect(b.isRemoved)
+  await #expect(throws: LibraryError.self) { _ = try await b.createSession(runtime: .codex, title: "Refused") }
+
+  await b.close()
+  let fresh = try await makeLibrary("b", folder: folder)
+  #expect(!fresh.isRemoved)
+  #expect(fresh.machineID != removedID)
+  #expect(try await fresh.machines().map(\.id) == [fresh.machineID])
+  #expect(try await fresh.sessions().isEmpty)
+  #expect(try await fresh.cursor(for: a.machineID) == 0)
 }
 
 @Test func deletionSpreadsAndIsNotResurrectedByALateEdit() async throws {

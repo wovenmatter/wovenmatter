@@ -67,13 +67,19 @@ public struct Table: Sendable {
   /// The table's own columns. Synced tables also get the standard ones.
   public let columns: [Column]
   public let parents: [Parent]
+  /// For a table whose `id` is a natural key rather than generated, the
+  /// columns that make up that key. Such a row is never deleted: unsetting it
+  /// clears its other columns with a new stamp, so it can be set again.
+  let naturalKey: [String]?
   let indexes: [[String]]
 
-  init(_ name: String, _ rule: SyncRule, _ columns: [Column], parents: [Parent] = [], indexes: [[String]] = []) {
+  init(_ name: String, _ rule: SyncRule, _ columns: [Column], parents: [Parent] = [], naturalKey: [String]? = nil,
+       indexes: [[String]] = []) {
     self.name = name
     self.rule = rule
     self.columns = columns
     self.parents = parents
+    self.naturalKey = naturalKey
     self.indexes = indexes
   }
 
@@ -83,15 +89,12 @@ public struct Table: Sendable {
     if case .newestWinsKeepLoser = rule { true } else { false }
   }
 
-  /// `id`, `stamp`, `changed` and `deleted` on every synced row, and
-  /// `edited_from` where the loser of a conflict is kept.
-  static let standardColumns: Set<String> = ["id", "stamp", "changed", "deleted", "edited_from"]
+  /// `id`, `stamp`, `changed` and `deleted` on every synced row.
+  static let standardColumns: Set<String> = ["id", "stamp", "changed", "deleted"]
 
   var allColumns: [Column] {
     guard synced else { return columns }
-    var standard: [Column] = [.key("id"), .text("stamp", ""), .integer("changed", 0), .integer("deleted", 0)]
-    if keepsLoser { standard.append(.text("edited_from")) }
-    return standard + columns
+    return [.key("id"), .text("stamp", ""), .integer("changed", 0), .integer("deleted", 0)] + columns
   }
 
   var allIndexes: [[String]] {
@@ -145,7 +148,7 @@ public enum Schema {
     // `id` is the setting's key, so two machines setting one key write one row.
     Table("settings", .newestWins, [
       .text("value", "null"),
-    ]),
+    ], naturalKey: []),
     // Scheduled tasks, timers and wake-ups; each belongs to the machine that
     // runs it. When an entry next fires is local state (`schedule_state`).
     Table("schedules", .newestWins, [
@@ -167,7 +170,7 @@ public enum Schema {
       .text("name", ""),
       .text("machine_id", ""),
       .blob("sealed"),
-    ], parents: [Parent(column: "machine_id", table: "machines")]),
+    ], parents: [Parent(column: "machine_id", table: "machines")], naturalKey: ["name", "machine_id"]),
     // A database's description and its latest published copy, by digest.
     Table("databases", .newestWins, [
       .text("machine_id", ""),
@@ -187,6 +190,10 @@ public enum Schema {
       // The document, including an app's saved state.
       .text("body", ""),
       .integer("created_at", 0),
+      // What this version had seen: each machine's identifier and the latest
+      // stamp of that machine's included in it, as a JSON object with sorted
+      // keys. The writer keeps it; a write's own values for it are ignored.
+      .text("seen", "{}"),
     ]),
 
     // Append-only.
@@ -230,10 +237,13 @@ public enum Schema {
 
     // Never syncs.
     // One row: this machine's identifier, its clock and its `changed` counter.
+    // `removed` is set when another machine removed this one; at the next
+    // start the library is erased and begins again.
     Table("this_machine", .local, [
       .key("id"),
       .text("clock", ""),
       .integer("changed", 0),
+      .integer("removed", 0),
     ]),
     // How far this library has received each other machine's rows.
     Table("sync_cursors", .local, [
