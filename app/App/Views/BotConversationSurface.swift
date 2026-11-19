@@ -15,7 +15,7 @@ extension EnvironmentValues {
 }
 
 /// The fixes for a failed reply: sign in (Subscriptions & API Keys) or change the model (Bot settings).
-private struct BotIssueButtons: View {
+struct BotIssueButtons: View {
     enum Issue { case signIn, limit }
     let issue: Issue
     @Environment(\.botIssueActions) private var actions
@@ -86,6 +86,8 @@ struct BotConversationSurface: View {
                     BotOnboardingView(bots: session, onOpenConnections: onOpenConnections)
                     controls
                 }
+            } else if target.isForum {
+                forum(session)
             } else if let bot {
                 BotConversationWorkspace(
                     bots: session,
@@ -113,6 +115,35 @@ struct BotConversationSurface: View {
             } else {
                 unavailable
             }
+    }
+
+    /// The Forum takes a bot's place in the panel. A runtime from before the Forum has none.
+    @ViewBuilder private func forum(_ session: BotMachineSession) -> some View {
+        if session.supportsForum {
+            ForumWorkspace(
+                bots: session,
+                target: target,
+                headerInsets: headerInsets,
+                focusGeneration: focusGeneration,
+                startsComposerCollapsed: startsComposerCollapsed,
+                usesCompactSpacing: usesCompactSpacing,
+                showsClosePanel: showsClosePanel,
+                showsAddPanel: showsAddPanel,
+                onActivate: onActivate,
+                onClosePanel: onClosePanel,
+                onAddPanel: onAddPanel,
+                onRoute: onRoute,
+                onOpenLink: onOpenLink
+            )
+        } else if session.health != nil {
+            ZStack {
+                ConversationEmptyState(icon: .messageSquareReply, title: "The Forum needs an update",
+                    detail: "Update \(session.displayName) in Settings → Updates to use the Forum.")
+                controls
+            }
+        } else {
+            unavailable
+        }
     }
 
     private var unavailable: some View {
@@ -144,12 +175,52 @@ struct BotConversationSurface: View {
     }
 }
 
+/// A thread beside its channel: where the split starts and how far the divider moves.
+enum BotThreadSplit {
+    static let wideWidth: CGFloat = 760
+    static let minimumThreadWidth: CGFloat = 340
+    static let minimumMainWidth: CGFloat = 360
+
+    static func clamped(_ width: CGFloat, available: CGFloat) -> CGFloat {
+        max(minimumThreadWidth, min(available - minimumMainWidth, width))
+    }
+}
+
+/// The divider between a channel and the thread beside it.
+struct BotThreadResizer: View {
+    @Binding var threadWidth: CGFloat
+    let available: CGFloat
+    @State private var dragStartWidth: CGFloat?
+
+    var body: some View {
+        Rectangle()
+            .fill(WovenPalette.foreground.opacity(0.08))
+            .frame(width: 1)
+            .overlay {
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .pointerStyle(.columnResize)
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in
+                            let start = dragStartWidth ?? BotThreadSplit.clamped(threadWidth, available: available)
+                            dragStartWidth = start
+                            threadWidth = BotThreadSplit.clamped(start - value.translation.width, available: available)
+                        }
+                        .onEnded { _ in dragStartWidth = nil })
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Resize thread pane")
+            .accessibilityValue("\(Int(BotThreadSplit.clamped(threadWidth, available: available))) points")
+            .accessibilityAdjustableAction { direction in
+                let step: CGFloat = direction == .increment ? 24 : -24
+                threadWidth = BotThreadSplit.clamped(threadWidth + step, available: available)
+            }
+    }
+}
+
 /// The main channel and, on wide panels, a thread beside it. Narrow panels show one at a time.
 private struct BotConversationWorkspace: View {
-    private static let wideWidth: CGFloat = 760
-    private static let minimumThreadWidth: CGFloat = 340
-    private static let minimumMainWidth: CGFloat = 360
-
     @Bindable var bots: BotMachineSession
     let bot: PiBotSummary
     let target: BotTarget
@@ -166,19 +237,18 @@ private struct BotConversationWorkspace: View {
     let onRoute: (BotTarget) -> Void
     let onOpenLink: (URL) -> Void
     @State private var threadWidth: CGFloat = 440
-    @State private var dragStartWidth: CGFloat?
 
     var body: some View {
         GeometryReader { geometry in
-            let wide = geometry.size.width >= Self.wideWidth
+            let wide = geometry.size.width >= BotThreadSplit.wideWidth
             let split = target.conversationID != nil && target.showsThreadBesideMain && wide
             HStack(spacing: 0) {
                 if split {
                     pane(conversationID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
                          showsClose: showsClosePanel, showsAdd: false, compact: true)
-                    resizer(available: geometry.size.width)
+                    BotThreadResizer(threadWidth: $threadWidth, available: geometry.size.width)
                     threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
-                        .frame(width: clampedThreadWidth(available: geometry.size.width))
+                        .frame(width: BotThreadSplit.clamped(threadWidth, available: geometry.size.width))
                 } else if target.conversationID != nil {
                     threadPane(wide: wide, split: false, insets: headerInsets, showsClose: showsClosePanel, showsAdd: showsAddPanel)
                 } else {
@@ -186,10 +256,6 @@ private struct BotConversationWorkspace: View {
                 }
             }
         }
-    }
-
-    private func clampedThreadWidth(available: CGFloat) -> CGFloat {
-        max(Self.minimumThreadWidth, min(available - Self.minimumMainWidth, threadWidth))
     }
 
     private func pane(conversationID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
@@ -229,35 +295,9 @@ private struct BotConversationWorkspace: View {
         })
         return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split, actions: actions)
     }
-
-    private func resizer(available: CGFloat) -> some View {
-        Rectangle()
-            .fill(WovenPalette.foreground.opacity(0.08))
-            .frame(width: 1)
-            .overlay {
-                Color.clear
-                    .frame(width: 9)
-                    .contentShape(Rectangle())
-                    .pointerStyle(.columnResize)
-                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in
-                            let start = dragStartWidth ?? clampedThreadWidth(available: available)
-                            dragStartWidth = start
-                            threadWidth = max(Self.minimumThreadWidth, min(available - Self.minimumMainWidth, start - value.translation.width))
-                        }
-                        .onEnded { _ in dragStartWidth = nil })
-            }
-            .accessibilityElement()
-            .accessibilityLabel("Resize thread pane")
-            .accessibilityValue("\(Int(clampedThreadWidth(available: available))) points")
-            .accessibilityAdjustableAction { direction in
-                let step: CGFloat = direction == .increment ? 24 : -24
-                threadWidth = max(Self.minimumThreadWidth, min(available - Self.minimumMainWidth, threadWidth + step))
-            }
-    }
 }
 
-private struct BotPaneAction: Identifiable {
+struct BotPaneAction: Identifiable {
     let glyph: LucideGlyph
     let title: String
     let action: () -> Void
@@ -920,7 +960,7 @@ private struct BotThreadOrigin: View {
     }
 }
 
-private struct BotPendingMessage: View {
+struct BotPendingMessage: View {
     let text: String
 
     var body: some View {

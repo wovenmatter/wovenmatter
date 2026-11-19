@@ -18,6 +18,14 @@ public actor PiBotClient {
         case runtimeProgress(PiBotRuntimeProgress)
         /// A bot's container changed state (`bots.environment.changed`).
         case environmentChanged(botID: String, state: String)
+        /// A new Forum post, or one that changed (a thread's reply count, an unanswered note).
+        case forumPost(PiBotForumPost)
+        /// The bots with a turn running in one Forum room.
+        case forumThinking(roomID: Int, botIDs: [String])
+        /// What `forum.get` returns changed.
+        case forumChanged
+        /// The user's name changed.
+        case userChanged
     }
 
     public struct RemoteError: LocalizedError, Sendable {
@@ -200,6 +208,14 @@ public actor PiBotClient {
             if let botID = object["botId"]?.stringValue, let state = object["state"]?.stringValue {
                 onEvent(.environmentChanged(botID: botID, state: state))
             }
+        case "forum.post":
+            if let post = try? decode(object["post"] ?? .null, as: PiBotForumPost.self) { onEvent(.forumPost(post)) }
+        case "forum.thinking":
+            if let roomID = object["roomId"]?.intValue {
+                onEvent(.forumThinking(roomID: roomID, botIDs: object["botIds"]?.arrayValue?.compactMap(\.stringValue) ?? []))
+            }
+        case "forum.changed": onEvent(.forumChanged)
+        case "user.changed": onEvent(.userChanged)
         default: break
         }
     }
@@ -209,6 +225,8 @@ public actor PiBotClient {
         switch type {
         case "bots.restore", "bots.purge", "bots.delete", "conversation.abort": .seconds(600)
         case "bots.rebuild", "bots.stop": .seconds(600)
+        // Pausing the Forum, or switching a bot out, stops the replies running there first.
+        case "forum.setPaused", "forum.setBotActive": .seconds(600)
         default: .seconds(30)
         }
     }
@@ -411,6 +429,75 @@ public actor PiBotClient {
     }
     @discardableResult public func stopPreview(botID: String, port: Int) async throws -> Bool {
         try decode(try await call("previews.stop", ["botId": .string(botID), "port": .number(Double(port))]), as: StoppedResult.self).stopped
+    }
+
+    // MARK: Forum
+
+    private struct PostResult: Decodable { let post: PiBotForumPost? }
+    private struct PostsResult: Decodable { let posts: [PiBotForumPost]; let hasEarlier: Bool? }
+    private struct ForumThreadResult: Decodable { let thread: PiBotForumThread }
+    private struct SchedulesResult: Decodable { let schedules: [PiBotForumSchedule] }
+    private struct NameResult: Decodable { let name: String? }
+
+    public func forum() async throws -> PiBotForumState { try decode(try await call("forum.get")) }
+    /// Subscribes this socket to a room: the Forum when `roomID` is nil, else a thread.
+    public func openForumRoom(roomID: Int?) async throws -> PiBotForumRoomSnapshot {
+        try decode(try await call("forum.open", roomID.map { ["roomId": .number(Double($0))] } ?? [:]))
+    }
+    public func closeForumRoom(roomID: Int, subscriptionID: JSONValue?) async throws {
+        var fields: [String: JSONValue] = ["roomId": .number(Double(roomID))]
+        if let subscriptionID { fields["subscriptionId"] = subscriptionID }
+        _ = try await call("forum.close", fields)
+    }
+    /// Up to `limit` posts before post `before`, oldest first, and whether older ones remain.
+    public func forumPosts(roomID: Int, before: Int, limit: Int? = nil) async throws -> (posts: [PiBotForumPost], hasEarlier: Bool) {
+        var fields: [String: JSONValue] = ["roomId": .number(Double(roomID)), "before": .number(Double(before))]
+        if let limit { fields["limit"] = .number(Double(limit)) }
+        let page = try decode(try await call("forum.posts", fields), as: PostsResult.self)
+        return (page.posts, page.hasEarlier ?? false)
+    }
+    /// The user's post. `mentions` are the bots asked to reply; `everyone` asks the whole room.
+    /// `deliveryID` makes a retry safe: one the runtime already took answers without the post
+    /// (nil here), which then arrives as a push and in the next snapshot.
+    @discardableResult
+    public func postToForum(roomID: Int?, text: String, mentions: [String] = [], everyone: Bool = false,
+                            deliveryID: String? = nil) async throws -> PiBotForumPost? {
+        var fields: [String: JSONValue] = ["text": .string(text)]
+        if let roomID { fields["roomId"] = .number(Double(roomID)) }
+        if let deliveryID { fields["deliveryId"] = .string(deliveryID) }
+        if everyone { fields["everyone"] = .bool(true) }
+        else if !mentions.isEmpty { fields["mentions"] = .array(mentions.map(JSONValue.string)) }
+        return try decode(try await call("forum.post", fields), as: PostResult.self).post
+    }
+    /// The post's thread, created when it has none.
+    public func forumThread(postID: Int) async throws -> PiBotForumThread {
+        try decode(try await call("forum.thread.create", ["postId": .number(Double(postID))]), as: ForumThreadResult.self).thread
+    }
+    public func setForumThreadPinned(roomID: Int, pinned: Bool) async throws {
+        _ = try await call("forum.thread.setPinned", ["roomId": .number(Double(roomID)), "pinned": .bool(pinned)])
+    }
+    public func setForumPaused(_ paused: Bool) async throws -> PiBotForumState {
+        try decode(try await call("forum.setPaused", ["paused": .bool(paused)]))
+    }
+    public func setForumBotActive(botID: String, active: Bool) async throws -> PiBotForumState {
+        try decode(try await call("forum.setBotActive", ["botId": .string(botID), "active": .bool(active)]))
+    }
+    public func forumSchedules() async throws -> [PiBotForumSchedule] {
+        try decode(try await call("forum.schedules.list"), as: SchedulesResult.self).schedules
+    }
+    public func saveForumSchedule(_ draft: PiBotForumScheduleDraft) async throws -> [PiBotForumSchedule] {
+        try decode(try await call("forum.schedules.save", ["schedule": draft.wire]), as: SchedulesResult.self).schedules
+    }
+    public func deleteForumSchedule(id: String) async throws -> [PiBotForumSchedule] {
+        try decode(try await call("forum.schedules.delete", ["scheduleId": .string(id)]), as: SchedulesResult.self).schedules
+    }
+
+    // MARK: The user's name
+
+    /// What bots call the user; "" when unset.
+    public func userName() async throws -> String { try decode(try await call("user.get"), as: NameResult.self).name ?? "" }
+    @discardableResult public func setUserName(_ name: String) async throws -> String {
+        try decode(try await call("user.setName", ["name": .string(name)]), as: NameResult.self).name ?? ""
     }
 }
 

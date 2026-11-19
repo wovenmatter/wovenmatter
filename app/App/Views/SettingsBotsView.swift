@@ -32,12 +32,15 @@ struct SettingsBotsView: View {
         ) {
             UpdatesStatusLink(bots: bots, onOpen: onOpenUpdates)
             whereSection
+            if let session = hostSession { SettingsBotsYouAndForum(bots: session) }
             SettingsSection {
                 SettingsSummaryLink(title: "Woven MCP access", value: mcpSummary, action: onOpenWovenMCP)
             }
         }
         .task {
             await bots.refresh()
+            await hostSession?.refreshForum()
+            await hostSession?.refreshUserName()
             do { mcp = try await model.controlMCPAccess(.status) } catch { mcpUnavailable = true }
         }
         .confirmationDialog(confirmationTitle, isPresented: Binding(
@@ -68,6 +71,9 @@ struct SettingsBotsView: View {
     private var host: BotMachine? {
         running.first { $0.kind == .thisMac } ?? running.first
     }
+
+    /// The chosen machine's runtime: the user's name and the Forum live there.
+    private var hostSession: BotMachineSession? { host.flatMap { bots.session(for: $0.id) } }
 
     private var candidates: [BotMachine] {
         let others = bots.machines.filter { $0.kind != .thisMac && ($0.state != .unreachable || $0.id == host?.id) }

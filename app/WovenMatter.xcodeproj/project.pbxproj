@@ -188,11 +188,14 @@
 		250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */; };
 		CD3C49936C8DCA67D4D5B723 /* FleetUpdatesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBDA80EF9D1691A9A2D5755 /* FleetUpdatesModel.swift */; };
 		BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */; };
+		3AC39A62B615E922B8D474D4 /* ForumRoomController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A9B78E9E170074EEB3CA8CC /* ForumRoomController.swift */; };
 		86CACBAFFC7E97DB84276B1B /* BotsHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */; };
 		35C8B5B3ED7B16682519C3F1 /* SettingsBotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */; };
 		91FF8123A627781A3B7384B6 /* BotsSidebarSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 886C0F4C61627DD7DD5BE07B /* BotsSidebarSection.swift */; };
 		232888BC018146768F84ABE6 /* BotConversationSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */; };
 		479780441D5DFD4C83B18DB9 /* SettingsBotsTeams.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */; };
+		C8C7195DE400476CC4CD815D /* ForumSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 829377003FA27F2F3A3D9826 /* ForumSurface.swift */; };
+		4EDEF90F9774F65F5CA23CA1 /* SettingsBotsForum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69019DC647AB45764B09E5F0 /* SettingsBotsForum.swift */; };
 		63E3AC2E3964B416C868778C /* SettingsBotsProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */; };
 		A26173786E8E05A043C275EF /* SettingsBotsProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */; };
 		718D450CF03768E9786FFF3A /* SettingsBotsOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */; };
@@ -393,11 +396,14 @@
 		C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsModel.swift"; sourceTree = "<group>"; };
 		1EBDA80EF9D1691A9A2D5755 /* FleetUpdatesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FleetUpdatesModel.swift"; sourceTree = "<group>"; };
 		1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationController.swift"; sourceTree = "<group>"; };
+		0A9B78E9E170074EEB3CA8CC /* ForumRoomController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ForumRoomController.swift"; sourceTree = "<group>"; };
 		10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsHostController.swift"; sourceTree = "<group>"; };
 		86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsView.swift"; sourceTree = "<group>"; };
 		886C0F4C61627DD7DD5BE07B /* BotsSidebarSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsSidebarSection.swift"; sourceTree = "<group>"; };
 		D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationSurface.swift"; sourceTree = "<group>"; };
 		12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsTeams.swift"; sourceTree = "<group>"; };
+		829377003FA27F2F3A3D9826 /* ForumSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ForumSurface.swift"; sourceTree = "<group>"; };
+		69019DC647AB45764B09E5F0 /* SettingsBotsForum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsForum.swift"; sourceTree = "<group>"; };
 		D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfiles.swift"; sourceTree = "<group>"; };
 		4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfileEditor.swift"; sourceTree = "<group>"; };
 		901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsOnboarding.swift"; sourceTree = "<group>"; };
@@ -524,6 +530,7 @@
 				C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */,
 				1EBDA80EF9D1691A9A2D5755 /* FleetUpdatesModel.swift */,
 				1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */,
+				0A9B78E9E170074EEB3CA8CC /* ForumRoomController.swift */,
 				10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */,
 				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
 				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
@@ -628,6 +635,8 @@
 				886C0F4C61627DD7DD5BE07B /* BotsSidebarSection.swift */,
 				D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */,
 				12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */,
+				829377003FA27F2F3A3D9826 /* ForumSurface.swift */,
+				69019DC647AB45764B09E5F0 /* SettingsBotsForum.swift */,
 				D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */,
 				4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */,
 				901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */,
@@ -835,11 +844,14 @@
 				250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */,
 				CD3C49936C8DCA67D4D5B723 /* FleetUpdatesModel.swift in Sources */,
 				BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */,
+				3AC39A62B615E922B8D474D4 /* ForumRoomController.swift in Sources */,
 				86CACBAFFC7E97DB84276B1B /* BotsHostController.swift in Sources */,
 				35C8B5B3ED7B16682519C3F1 /* SettingsBotsView.swift in Sources */,
 				91FF8123A627781A3B7384B6 /* BotsSidebarSection.swift in Sources */,
 				232888BC018146768F84ABE6 /* BotConversationSurface.swift in Sources */,
 				479780441D5DFD4C83B18DB9 /* SettingsBotsTeams.swift in Sources */,
+				C8C7195DE400476CC4CD815D /* ForumSurface.swift in Sources */,
+				4EDEF90F9774F65F5CA23CA1 /* SettingsBotsForum.swift in Sources */,
 				63E3AC2E3964B416C868778C /* SettingsBotsProfiles.swift in Sources */,
 				A26173786E8E05A043C275EF /* SettingsBotsProfileEditor.swift in Sources */,
 				718D450CF03768E9786FFF3A /* SettingsBotsOnboarding.swift in Sources */,

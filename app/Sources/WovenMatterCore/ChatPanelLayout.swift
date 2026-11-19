@@ -29,6 +29,16 @@ public struct BotTarget: Hashable, Codable, Sendable {
     self.conversationID = conversationID
     self.showsThreadBesideMain = showsThreadBesideMain
   }
+
+  /// The Forum takes a bot's place in a target: one group chat on the bots machine.
+  /// `conversationID` is then nil for the Forum itself, or a thread's room.
+  public static let forumBotID = "forum"
+
+  public static func forum(machineID: String, roomID: Int? = nil, showsThreadBesideMain: Bool = false) -> BotTarget {
+    BotTarget(machineID: machineID, botID: forumBotID, conversationID: roomID, showsThreadBesideMain: showsThreadBesideMain)
+  }
+
+  public var isForum: Bool { botID == Self.forumBotID }
 }
 
 public struct ChatPanel: Equatable, Sendable, Identifiable {
