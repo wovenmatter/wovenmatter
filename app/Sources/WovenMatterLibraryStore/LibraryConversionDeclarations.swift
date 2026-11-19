@@ -55,17 +55,34 @@ extension WorkspaceDatabaseConnection {
       try !historyRowsUnlocked("SELECT 1 AS earlier WHERE \($0.earlier)", values: []).isEmpty
     }
     let tables = try libraryTableNamesUnlocked()
-    // Every conversation is an MCP caller; the trigger that says so only
-    // covers conversations made since the registry was created.
     if tables.isSuperset(of: ["mcp_callers", "conversations"]) {
+      // Every conversation is an MCP caller; the trigger that says so only
+      // covers conversations made since the registry was created.
       try executeUnlocked("INSERT OR IGNORE INTO mcp_callers(id) SELECT id FROM conversations")
+      // A bot hosted on another machine is named by rows peers share and
+      // has no caller here. It gets the entry the tables' own triggers give
+      // one on a write (`migrateMCPCallersUnlocked`), which authorizes nothing.
+      for (table, column) in [("session_relationships", "created_by"), ("session_relationships", "coordinator_id"), ("session_grants", "source_id")]
+      where tables.contains(table) {
+        try executeUnlocked("INSERT OR IGNORE INTO mcp_callers(id) SELECT \(column) FROM \(table) WHERE \(column) LIKE 'woven:bot:%'")
+      }
+    }
+    /// Rows of `table` that reference a row the library does not have.
+    func unresolved(_ table: String) throws -> Int {
+      try historyRowsUnlocked("PRAGMA foreign_key_check(\(Self.peerQuote(table)))", values: []).count
     }
     for entry in earlier {
+      // A library can hold a row whose reference does not resolve: peers'
+      // rows are applied with foreign keys off, and what they name may
+      // never arrive. Such a row is carried over as it is. The rebuild
+      // copies rows and only widens what a caller column may name, so it
+      // adds none; were it to, the rows are still whole and nothing reads
+      // differently, so that is logged, not refused.
+      let before = try unresolved(entry.table)
       try rebuildTableUnlocked(entry.table, from: entry.sql)
-      // The rows it kept satisfy what the table now references.
-      let broken = try historyRowsUnlocked("PRAGMA foreign_key_check(\(Self.peerQuote(entry.table)))", values: []).count
-      guard broken == 0 else {
-        throw WorkspaceDatabaseError.execute("\(broken) row(s) of \(entry.table) reference a row the library does not have.")
+      let after = try unresolved(entry.table)
+      if after > before {
+        NSLog("Rebuilding %@ left %ld row(s) with a reference that does not resolve; it had %ld.", entry.table, after, before)
       }
     }
   }

@@ -75,6 +75,8 @@ final class WorkspaceDatabaseConnection {
       upgradeReporter?.reach(.converting, 0.95, after: "peer sync records")
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
+      // With the schema current and its triggers in place.
+      finishLibraryConversionUnlocked(file: url)
       Self.removeExpiredLibraryBackups(for: url)
       try? withLock { try reclaimFreeSpaceUnlocked() }
       upgradeReporter?.finish()

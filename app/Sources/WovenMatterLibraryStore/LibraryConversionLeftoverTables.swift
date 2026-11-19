@@ -18,10 +18,30 @@ import WovenMatterCore
 /// that run on it, their runs, its journal, its native history and saved
 /// files, and the receipts of what it asked this library to do. Such a
 /// device keeps its own identity and offers its journal again when it is
-/// paired again; with these rows in place the library recognises every
-/// entry it already holds and continues after the last one. Without them
-/// it would refuse the first entry, because the chat it names is already a
+/// paired again; with these rows in place a library recognises every entry
+/// it already holds and continues after the last one. Without them it
+/// would refuse the first entry, because the chat it names is already a
 /// chat of this library that nothing says the phone runs.
+///
+/// One Mac may hold these rows and another not, so they are adopted as
+/// ordinary writes, once the schema is current and every trigger exists
+/// (`LibraryConversion.Kind.asWrites`). Each adopted or changed row is this
+/// device's new version: it reaches the other Macs, which then accept the
+/// phone's journal too, and it reaches the device change feed, the Library
+/// and the history as any write does. Two Macs that adopt the same row
+/// record two versions of one content, which is no conflict
+/// (`settleFrontierUnlocked`).
+///
+/// A chat's transcript document is as old as the tables' renaming, so it
+/// only fills. A message, activity or run the library already has keeps
+/// every value it has (its text, status, times and title, which this Mac
+/// may have changed since); the document gives the columns the row lacks
+/// (its place in the transcript, the sequence and the fields only an
+/// execution owner's projection writes) and the rows the library lacks. A
+/// tool message the owner retired is deleted, as its journal would delete
+/// it. No run is taken to be active still. The journal projection lets the
+/// owner's entry win instead, because an entry is the owner's newest word;
+/// the document is not.
 ///
 /// Everything else in these tables is dropped with them:
 /// - The earlier library ID and device identity, and the change feed
@@ -36,9 +56,8 @@ import WovenMatterCore
 /// - State of work that was in flight: uploads, scheduled callers, the
 ///   tables of roles the previous release had already removed.
 ///
-/// An adopted row is not recorded as a new version for peers: each Mac
-/// adopts its own copy of what both held, and a row travels the next time
-/// its owner changes it.
+/// The tables are dropped in the transaction that adopts from them, so an
+/// open that is interrupted before it finds them again at the next one.
 extension WorkspaceDatabaseConnection {
   private static let leftoverDeviceTable = "name LIKE 'companion\\_%' ESCAPE '\\'"
 
@@ -61,11 +80,13 @@ extension WorkspaceDatabaseConnection {
     }
     let library = "(SELECT library_id FROM library_identity WHERE singleton=1)"
 
-    // A phone's workspace, as registered with this library.
+    // A phone's workspace, as registered with this library and as this
+    // build writes a registry row.
     if has("companion_execution_workspaces", "execution_workspaces", "library_identity") {
+      let registered = "json_set(CAST(o.payload AS TEXT),'$.libraryID',\(library))"
       try executeUnlocked("""
         INSERT OR IGNORE INTO execution_workspaces(id,owner_device_id,revision,deleted,payload)
-        SELECT o.id,o.owner_device_id,o.revision,0,json_set(CAST(o.payload AS TEXT),'$.libraryID',\(library))
+        SELECT o.id,o.owner_device_id,o.revision,0,\(Self.currentWorkspacePayloadSQL(registered))
         FROM companion_execution_workspaces o
         WHERE o.deleted=0 AND json_valid(CAST(o.payload AS TEXT)) AND json_extract(CAST(o.payload AS TEXT),'$.kind')='ios'
         """)
@@ -87,11 +108,11 @@ extension WorkspaceDatabaseConnection {
       let ids = String(decoding: try JSONEncoder().encode(adopted), as: UTF8.self)
       try toolsExecuteUnlocked("""
         INSERT INTO execution_conversations(id,workspace_id,deleted,conversation)
-        SELECT o.id,o.workspace_id,o.deleted,json_set(CAST(o.conversation AS TEXT),'$.libraryID',\(library))
+        SELECT o.id,o.workspace_id,o.deleted,json_remove(json_set(CAST(o.conversation AS TEXT),'$.libraryID',\(library)),'$.activeRunID')||''
         FROM companion_execution_conversations o WHERE o.id IN (SELECT value FROM json_each(?))
         """, [ids])
       if try libraryColumnNamesUnlocked("companion_execution_conversations").contains("transcript") {
-        try moveLeftoverTranscriptsToRowsUnlocked(ids)
+        try fillRowsFromLeftoverTranscriptsUnlocked(ids)
       }
     }
     /// The chat `conversation` names runs on the workspace `workspace` names.
@@ -202,6 +223,8 @@ extension WorkspaceDatabaseConnection {
   /// chunk store and names them in the row `write` inserts: the first three
   /// columns, then the chunk's `sha256` and `byte_count`.
   private func moveLeftoverBytesToChunksUnlocked(read: String, write: String) throws {
+    // One row at a time: a saved file's chunks can be many megabytes. The
+    // rows read are a leftover table's, which no insert or trigger writes.
     let source = try prepareUnlocked(read), insert = try prepareUnlocked(write)
     defer { sqlite3_finalize(source); sqlite3_finalize(insert) }
     while true {
@@ -212,7 +235,7 @@ extension WorkspaceDatabaseConnection {
       sqlite3_reset(insert)
       try bind(text(source, column: 0), at: 1, to: insert)
       for column: Int32 in [1, 2] {
-        // A record ID is text; a part index, a revision and an offset are integers.
+        // A record ID is text; a revision, a part index and an offset are integers.
         if sqlite3_column_type(source, column) == SQLITE_INTEGER { sqlite3_bind_int64(insert, column + 1, sqlite3_column_int64(source, column)) }
         else { try bind(text(source, column: column), at: column + 1, to: insert) }
       }
@@ -227,48 +250,52 @@ extension WorkspaceDatabaseConnection {
   /// another and this build reads them. Each is stored as this build writes
   /// an entry it accepts, its record's format under the current name, with
   /// the fingerprint a repeated upload of it is compared with; the phone
-  /// uploads the rest again.
+  /// uploads the rest again. So every entry this leaves in the journal is
+  /// one this build reads.
   private func adoptLeftoverJournalsUnlocked(_ phoneWorkspace: String) throws {
     let workspaces = try libraryIDsUnlocked("""
       SELECT DISTINCT o.workspace_id FROM companion_execution_journal o
       WHERE \(phoneWorkspace) AND NOT EXISTS(SELECT 1 FROM execution_journal n WHERE n.workspace_id=o.workspace_id)
       """, bindings: [])
-    let read = try prepareUnlocked("SELECT event_id,origin_sequence,payload FROM companion_execution_journal WHERE workspace_id=? ORDER BY origin_sequence")
     let insert = try prepareUnlocked("""
       INSERT INTO execution_journal(event_id,workspace_id,origin_sequence,fingerprint,payload)
       SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS(SELECT 1 FROM execution_journal WHERE event_id=?1)
       """)
-    defer { sqlite3_finalize(read); sqlite3_finalize(insert) }
+    defer { sqlite3_finalize(insert) }
     for workspace in workspaces {
-      sqlite3_reset(read)
-      try bind(workspace, at: 1, to: read)
       var next: Int64 = 1
-      while true {
-        let code = sqlite3_step(read)
-        if code == SQLITE_DONE { break }
-        guard code == SQLITE_ROW else { throw stepError() }
-        let eventID = try text(read, column: 0)
-        guard sqlite3_column_int64(read, 1) == next,
-              var entry = try? JSONDecoder().decode(ExecutionJournalEntry.self, from: blob(read, column: 2)),
-              entry.eventID == eventID, entry.workspaceID == workspace, entry.originSequence == next else { break }
-        if let format = entry.nativeRecord?.format { entry.nativeRecord?.format = Self.currentRecordFormat(format) }
-        sqlite3_reset(insert)
-        try bind(eventID, at: 1, to: insert); try bind(workspace, at: 2, to: insert); sqlite3_bind_int64(insert, 3, next)
-        try bind(libraryFingerprint(entry), at: 4, to: insert); try bind(toolsJSON(entry), at: 5, to: insert)
-        try stepDone(insert)
-        guard changedRowCountUnlocked == 1 else { break }
-        next += 1
+      adopting: while true {
+        // A page at a time: an entry carries up to a megabyte.
+        var page: [(eventID: String, sequence: Int64, payload: Data)] = []
+        let read = try prepareUnlocked("""
+          SELECT event_id,origin_sequence,payload FROM companion_execution_journal WHERE workspace_id=? AND origin_sequence>=?
+          ORDER BY origin_sequence LIMIT 32
+          """)
+        try bind(workspace, at: 1, to: read); sqlite3_bind_int64(read, 2, next)
+        while sqlite3_step(read) == SQLITE_ROW {
+          page.append((try text(read, column: 0), sqlite3_column_int64(read, 1), try blob(read, column: 2)))
+        }
+        sqlite3_finalize(read)
+        if page.isEmpty { break }
+        for row in page {
+          guard row.sequence == next, var entry = try? JSONDecoder().decode(ExecutionJournalEntry.self, from: row.payload),
+                entry.eventID == row.eventID, entry.workspaceID == workspace, entry.originSequence == next else { break adopting }
+          if let format = entry.nativeRecord?.format { entry.nativeRecord?.format = Self.currentRecordFormat(format) }
+          sqlite3_reset(insert)
+          try bind(row.eventID, at: 1, to: insert); try bind(workspace, at: 2, to: insert); sqlite3_bind_int64(insert, 3, next)
+          try bind(libraryFingerprint(entry), at: 4, to: insert); try bind(toolsJSON(entry), at: 5, to: insert)
+          try stepDone(insert)
+          guard changedRowCountUnlocked > 0 else { break adopting }
+          next += 1
+        }
       }
     }
   }
 
-  /// Writes what each adopted chat's transcript document held into its
-  /// rows, as the projection of a phone's journal writes them now: every
-  /// message's, activity's and run's position, the fields only the document
-  /// had, its active run, and any row it held that the tables lack. A tool
-  /// message it retired is deleted. Rows that changed take their new values
-  /// in each recorded version of them.
-  private func moveLeftoverTranscriptsToRowsUnlocked(_ conversations: String) throws {
+  /// Fills each adopted chat's rows from its transcript document (see the
+  /// rule above): the columns a message, activity or run of the chat lacks,
+  /// and the rows the library lacks.
+  private func fillRowsFromLeftoverTranscriptsUnlocked(_ conversations: String) throws {
     var documents: [(id: String, transcript: LibraryTranscript)] = []
     let read = try prepareUnlocked("""
       SELECT id,transcript FROM companion_execution_conversations
@@ -280,105 +307,88 @@ extension WorkspaceDatabaseConnection {
       let code = sqlite3_step(read)
       if code == SQLITE_DONE { break }
       guard code == SQLITE_ROW else { throw stepError() }
-      // An unreadable document has nothing to move; its rows stay as they are.
+      // An unreadable document has nothing to give; the chat's rows stay as they are.
       guard let transcript = try? JSONDecoder().decode(LibraryTranscript.self, from: blob(read, column: 1)) else { continue }
       documents.append((try text(read, column: 0), transcript))
     }
-    var changed: [String: Set<String>] = [:], deleted: [String] = []
     let now = Self.timestamp(Date())
-    // Every Mac that converts the same document writes the same text.
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     func sortedJSON<T: Encodable>(_ value: T) throws -> String { String(decoding: try encoder.encode(value), as: UTF8.self) }
     func owner(_ table: String, _ id: String) throws -> String? {
       try libraryIDsUnlocked("SELECT conversation_id FROM \(table) WHERE id=?", bindings: [id]).first
     }
     for (conversationID, transcript) in documents {
-      try toolsExecuteUnlocked("UPDATE execution_conversations SET active_run_id=? WHERE id=?", [transcript.activeRunID, conversationID])
       for (index, message) in transcript.messages.enumerated() {
-        let values: [String?] = [message.sequence.map(String.init), String(index + 1), try message.attachments.map { try sortedJSON($0) },
-                                 message.status ?? "", message.createdAt, message.id]
+        let sequence = message.sequence.map(String.init), position = String(index + 1)
+        let attachments = try message.attachments.map { try sortedJSON($0) }
         switch try owner("messages", message.id) {
         case conversationID?:
-          try toolsExecuteUnlocked("UPDATE messages SET sequence=?,position=?,attachment_references=?,status=?,created_at=? WHERE id=?", values)
-          changed["messages", default: []].insert(message.id)
+          try toolsExecuteUnlocked("""
+            UPDATE messages SET sequence=COALESCE(sequence,?1),position=COALESCE(position,?2),
+              attachment_references=COALESCE(attachment_references,?3),created_at=CASE created_at WHEN '' THEN ?4 ELSE created_at END
+            WHERE id=?5 AND ((sequence IS NULL AND ?1 IS NOT NULL) OR position IS NULL
+              OR (attachment_references IS NULL AND ?3 IS NOT NULL) OR (created_at='' AND ?4<>''))
+            """, [sequence, position, attachments, message.createdAt, message.id])
         case nil:
           try toolsExecuteUnlocked("""
-            INSERT INTO messages(sequence,position,attachment_references,status,created_at,id,conversation_id,run_id,role,content,updated_at)
+            INSERT INTO messages(id,conversation_id,run_id,role,content,status,created_at,updated_at,sequence,position,attachment_references)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """, values + [conversationID, message.runID, message.role, message.content, now])
+            """, [message.id, conversationID, message.runID, message.role, message.content, message.status ?? "", message.createdAt, now,
+                  sequence, position, attachments])
         default: continue
         }
       }
       for id in transcript.removedMessageIDs ?? [] {
-        guard try federationScalarUnlocked("SELECT COUNT(*) FROM messages WHERE id=? AND conversation_id=? AND role<>'user'",
-                                           bindings: [id, conversationID]) != 0 else { continue }
-        try toolsExecuteUnlocked("DELETE FROM messages WHERE id=?", [id])
-        deleted.append(id)
+        try toolsExecuteUnlocked("DELETE FROM messages WHERE id=? AND conversation_id=? AND role<>'user'", [id, conversationID])
       }
       for (index, activity) in transcript.activities.enumerated() {
-        let present = try owner("run_activities", activity.id)
+        let present = try owner("run_activities", activity.id), position = String(index + 1)
         guard present == nil || present == conversationID else { continue }
         // An activity read from this Mac's rows into the document carries
         // only its title, detail and status, which its row already gives.
         let plain = activity.projectionJSON == nil && activity.detailsRecordID == nil && activity.isTransient == nil
           && activity.sequence == nil && activity.createdAt == nil && activity.completedAt == nil
-        if plain, present != nil {
-          try toolsExecuteUnlocked("UPDATE run_activities SET position=? WHERE id=?", [String(index + 1), activity.id])
-          changed["run_activities", default: []].insert(activity.id)
-          continue
-        }
-        let content = try activity.projectionJSON.flatMap { json in
-          (try? JSONDecoder().decode(AgentRunActivity.self, from: Data(json.utf8))).map { _ in json }
-        } ?? sortedJSON(AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status))
-        let values: [String?] = [String(index + 1), activity.title, activity.detail, activity.status, activity.detailsRecordID,
-                                 activity.isTransient.map { $0 ? "1" : "0" }, activity.sequence.map(String.init), activity.completedAt,
-                                 activity.createdAt ?? "", content, activity.id]
-        if present == nil {
+        if present != nil, plain {
+          try toolsExecuteUnlocked("UPDATE run_activities SET position=? WHERE id=? AND position IS NULL", [position, activity.id])
+        } else if present != nil {
           try toolsExecuteUnlocked("""
-            INSERT INTO run_activities(position,title,detail,status,details_record_id,is_transient,sequence,completed_at,created_at,content,id,
-              run_id,conversation_id,event_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'activity')
-            """, values + [activity.runID, conversationID])
+            UPDATE run_activities SET position=COALESCE(position,?1),title=COALESCE(title,?2),detail=COALESCE(detail,?3),
+              status=COALESCE(status,?4),details_record_id=COALESCE(details_record_id,?5),is_transient=COALESCE(is_transient,?6),
+              sequence=COALESCE(sequence,?7),completed_at=COALESCE(completed_at,?8),
+              created_at=CASE created_at WHEN '' THEN ?9 ELSE created_at END
+            WHERE id=?10 AND (position IS NULL OR title IS NULL)
+            """, [position, activity.title, activity.detail, activity.status, activity.detailsRecordID,
+                  activity.isTransient.map { $0 ? "1" : "0" }, activity.sequence.map(String.init), activity.completedAt,
+                  activity.createdAt ?? "", activity.id])
         } else {
+          let content = try activity.projectionJSON.flatMap { json in
+            (try? JSONDecoder().decode(AgentRunActivity.self, from: Data(json.utf8))).map { _ in json }
+          } ?? sortedJSON(AgentRunActivity(id: activity.id, kind: .activity, title: activity.title, detail: activity.detail, status: activity.status))
           try toolsExecuteUnlocked("""
-            UPDATE run_activities SET position=?,title=?,detail=?,status=?,details_record_id=?,is_transient=?,sequence=?,completed_at=?,
-              created_at=?,content=? WHERE id=?
-            """, values)
-          changed["run_activities", default: []].insert(activity.id)
+            INSERT INTO run_activities(id,run_id,conversation_id,event_type,content,created_at,position,title,detail,status,details_record_id,
+              is_transient,sequence,completed_at) VALUES (?,?,?,'activity',?,?,?,?,?,?,?,?,?,?)
+            """, [activity.id, activity.runID, conversationID, content, activity.createdAt ?? "", position, activity.title, activity.detail,
+                  activity.status, activity.detailsRecordID, activity.isTransient.map { $0 ? "1" : "0" },
+                  activity.sequence.map(String.init), activity.completedAt])
         }
       }
       for (index, run) in (transcript.runs ?? []).enumerated() {
-        let values: [String?] = [String(index + 1), run.userMessageID, run.assistantMessageID, run.status, run.startedAt, run.completedAt, run.id]
+        let position = String(index + 1)
         switch try owner("runs", run.id) {
         case conversationID?:
           try toolsExecuteUnlocked("""
-            UPDATE runs SET position=?,user_message_id=COALESCE(?,user_message_id),assistant_message_id=COALESCE(?,assistant_message_id),
-              status=?,started_at=COALESCE(started_at,?),completed_at=? WHERE id=?
-            """, values)
-          changed["runs", default: []].insert(run.id)
+            UPDATE runs SET position=?1,user_message_id=COALESCE(user_message_id,?2),assistant_message_id=COALESCE(assistant_message_id,?3),
+              started_at=COALESCE(started_at,?4),completed_at=COALESCE(completed_at,?5) WHERE id=?6 AND position IS NULL
+            """, [position, run.userMessageID, run.assistantMessageID, run.startedAt, run.completedAt, run.id])
         case nil:
           try toolsExecuteUnlocked("""
-            INSERT INTO runs(position,user_message_id,assistant_message_id,status,started_at,completed_at,id,conversation_id,created_at,updated_at)
+            INSERT INTO runs(id,conversation_id,status,started_at,completed_at,created_at,updated_at,user_message_id,assistant_message_id,position)
             VALUES (?,?,?,?,?,?,?,?,?,?)
-            """, values + [conversationID, run.startedAt ?? now, now])
+            """, [run.id, conversationID, run.status, run.startedAt, run.completedAt, run.startedAt ?? now, now,
+                  run.userMessageID, run.assistantMessageID, position])
         default: continue
         }
       }
-    }
-    for (table, columns) in [
-      ("messages", ["sequence", "position", "attachment_references", "status", "created_at"]),
-      ("run_activities", ["position", "title", "detail", "status", "details_record_id", "is_transient", "sequence", "completed_at",
-                          "created_at", "content"]),
-      ("runs", ["position", "user_message_id", "assistant_message_id", "status", "started_at", "completed_at"]),
-    ] {
-      try recordConvertedValuesUnlocked(table, columns: columns, ids: (changed[table] ?? []).sorted())
-    }
-    // A deleted message's recorded versions become its deletion, which
-    // every Mac that converts the same document records alike.
-    if !deleted.isEmpty, try libraryTableNamesUnlocked().contains("peer_sync_versions") {
-      try toolsExecuteUnlocked("""
-        UPDATE peer_sync_versions SET payload=json_set(payload,'$.deleted',json('true'))
-        WHERE table_name='messages' AND record_key IN (SELECT json_array(value) FROM json_each(?))
-        """, [String(decoding: try JSONEncoder().encode(deleted), as: UTF8.self)])
     }
   }
 }

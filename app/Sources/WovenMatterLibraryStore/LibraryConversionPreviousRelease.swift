@@ -26,6 +26,14 @@ import WovenMatterCore
 ///   the earlier names. They take the names this build writes, and the
 ///   search index, which holds no text of its own, has each entry's earlier
 ///   text removed and its new text added.
+/// - Capability names with a number in each execution workspace's registry
+///   row (`execution_workspaces.payload`), and members of registry rows that
+///   this build's types do not have (`journalDeviceIDs`; `kind` and the
+///   memory limits in a Linux host's saved configuration). A Mac rewrites
+///   its own row when it next registers itself, but a row a phone, a Linux
+///   host or a Mac that is gone published stays as it was written, so each
+///   row and each recorded version of it takes the current names here.
+///   Peers hold these rows alike and convert them alike.
 /// - A table for moving a chat to another machine, which nothing does any
 ///   more, and four indexes for looking a request up whatever its case,
 ///   which nothing does either. They are dropped, with what peer bookkeeping
@@ -61,6 +69,7 @@ extension WorkspaceDatabaseConnection {
   func convertPreviousReleaseContentUnlocked() throws {
     try removeNoteVersionMembersUnlocked()
     try renameEarlierRecordManifestsUnlocked()
+    try renameEarlierRegistryMembersUnlocked()
     // Last: these are what the conversion is recognised by.
     let tables = try libraryTableNamesUnlocked()
     for index in Self.removedIndexes { try executeUnlocked("DROP INDEX IF EXISTS \(Self.peerQuote(index))") }
@@ -143,6 +152,71 @@ extension WorkspaceDatabaseConnection {
           try toolsExecuteUnlocked("UPDATE \(name) SET payload=json_set(payload,'$.row.bytes.value',?1) WHERE rowid=?2",
                                    [String(count - (content.utf8.count - converted.utf8.count)), String(row)])
         }
+      }
+    }
+  }
+
+  // MARK: Registry rows
+
+  /// A registry capability's name as the previous release stored it, and
+  /// its name now; nil for one nothing offers or asks for any more.
+  /// `history.central.v1` is in rows a phone registered before that release.
+  static let earlierCapabilities: [(earlier: String, current: String?)] = [
+    ("stream.v1", StreamProtocol.capability), ("history.library.v1", ExecutionWorkspace.libraryHistoryCapability),
+    ("execution.v1", nil), ("inference.v1", nil), ("history.central.v1", nil),
+  ]
+  private static let earlierCapabilityList = earlierCapabilities.map { "'\($0.earlier)'" }.joined(separator: ",")
+
+  /// Whether the workspace registry row `payload` (JSON text) holds what
+  /// `currentWorkspacePayloadSQL` changes.
+  static func earlierWorkspacePayloadSQL(_ payload: String) -> String {
+    """
+    json_valid(\(payload)) AND (json_type(\(payload),'$.journalDeviceIDs') IS NOT NULL
+      OR EXISTS(SELECT 1 FROM json_each(\(payload),'$.capabilities') c WHERE c.value IN (\(earlierCapabilityList))))
+    """
+  }
+
+  /// SQL for the workspace registry row `payload` as this build writes one:
+  /// each capability under its current name, in the order it had, and no
+  /// member this build's `ExecutionWorkspace` lacks. Everything else in the
+  /// row stays as it was.
+  static func currentWorkspacePayloadSQL(_ payload: String) -> String {
+    let renamed = "CASE c.value " + earlierCapabilities.compactMap { entry in entry.current.map { "WHEN '\(entry.earlier)' THEN '\($0)'" } }
+      .joined(separator: " ") + " ELSE c.value END"
+    let removed = earlierCapabilities.filter { $0.current == nil }.map { "'\($0.earlier)'" }.joined(separator: ",")
+    // Text, not JSON to embed: `|| ''` drops what marks a JSON function's result.
+    return """
+      json_remove(CASE WHEN json_type(\(payload),'$.capabilities')='array' THEN json_set(\(payload),'$.capabilities',json((
+        SELECT json_group_array(name) FROM (SELECT \(renamed) AS name FROM json_each(\(payload),'$.capabilities') c
+          WHERE c.value NOT IN (\(removed)) GROUP BY 1 ORDER BY MIN(c.key))))) ELSE \(payload) END,'$.journalDeviceIDs')||''
+      """
+  }
+
+  /// Registry tables whose rows are JSON documents: the column that holds
+  /// the document, what tells an earlier one, and the document as this
+  /// build writes it. Each is a table peers share.
+  private static let registryDocuments: [(table: String, column: String, earlier: @Sendable (String) -> String, current: @Sendable (String) -> String)] = [
+    ("execution_workspaces", "payload", { earlierWorkspacePayloadSQL($0) }, { currentWorkspacePayloadSQL($0) }),
+    ("remote_workspace_configurations", "configuration",
+     { "json_valid(\($0)) AND (json_type(\($0),'$.kind') IS NOT NULL OR json_type(\($0),'$.memoryLimit') IS NOT NULL OR json_type(\($0),'$.swapLimit') IS NOT NULL)" },
+     { "json_remove(\($0),'$.kind','$.memoryLimit','$.swapLimit')||''" }),
+  ]
+
+  /// Gives registry rows the names and members this build writes, in each
+  /// row and in each recorded version of it. These tables hold a row per
+  /// machine, so each is read whole, this once.
+  private func renameEarlierRegistryMembersUnlocked() throws {
+    let tables = try libraryTableNamesUnlocked()
+    for entry in Self.registryDocuments where tables.contains(entry.table) {
+      try executeUnlocked("UPDATE \(entry.table) SET \(entry.column)=\(entry.current(entry.column)) WHERE \(entry.earlier(entry.column))")
+      // A registry row is small, so a recorded version always carries its text.
+      let document = "json_extract(payload,'$.row.\(entry.column).value')"
+      for name in ["peer_sync_versions", "peer_sync_conflicts", "peer_sync_quarantine"] where tables.contains(name) {
+        try executeUnlocked("""
+          UPDATE \(name) SET payload=json_set(payload,'$.row.\(entry.column).value',\(entry.current(document)))
+          WHERE table_name='\(entry.table)' AND json_valid(payload) AND json_type(payload,'$.row.\(entry.column).value')='text'
+            AND \(entry.earlier(document))
+          """)
       }
     }
   }

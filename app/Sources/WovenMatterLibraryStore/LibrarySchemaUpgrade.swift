@@ -5,14 +5,30 @@ import WovenMatterCore
 ///
 /// `applies` says whether the library still holds the earlier shape. It runs
 /// on every open, so it only looks things up: a table or column in the
-/// schema, or a row through an index. `convert` makes the change inside the
-/// conversion's one transaction and leaves nothing `applies` would find, so
-/// it happens once and is nothing on a current library. The earlier names
-/// appear in the conversion alone: everything that reads or writes the
-/// library knows only the current shape.
+/// schema, or a row through an index. `convert` makes the change inside one
+/// transaction and leaves nothing `applies` would find, so it happens once
+/// and is nothing on a current library. The earlier names appear in the
+/// conversion alone: everything that reads or writes the library knows only
+/// the current shape.
 struct LibraryConversion: Sendable {
+  enum Kind: Sendable {
+    /// Gives what the library holds the shape this build would have written
+    /// it in, before anything else creates schema and with no trigger in
+    /// place. It is for a change every device makes to the same content in
+    /// the same way: rows peers share and each recorded version of them
+    /// (`peer_sync_*`) are changed alike, so the devices agree afterwards
+    /// and nothing is sent as a new version.
+    case inPlace
+    /// Writes rows as the app writes them, once the schema is current and
+    /// every trigger exists. It is for content one device may hold and
+    /// another may not: each row it writes is recorded as this device's new
+    /// version and reaches peers, the device change feed and everything
+    /// else that follows a write.
+    case asWrites
+  }
   /// What it changes, for the log.
   let name: String
+  let kind: Kind
   let applies: @Sendable (WorkspaceDatabaseConnection) throws -> Bool
   let convert: @Sendable (WorkspaceDatabaseConnection) throws -> Void
 }
@@ -28,8 +44,8 @@ struct LibraryConversion: Sendable {
 ///
 /// A change to what a library already holds is a `LibraryConversion` in
 /// `libraryConversions`. The library the previous release left on a device
-/// is converted in place the first time this build opens it; nothing is kept
-/// for a library older than that, and every device updates together.
+/// is converted the first time this build opens it; nothing is kept for a
+/// library older than that, and every device updates together.
 ///
 /// To change what a library already holds:
 /// 1. Change the declaration a new library is created from.
@@ -41,55 +57,102 @@ struct LibraryConversion: Sendable {
 ///    change and copy nothing.
 /// 4. Remove the conversion in the release after every device has taken it.
 ///
-/// For a table peers share (`PairedLibraryTables`), a conversion that
-/// changes rows also changes every recorded version of them the same way
-/// (`peer_sync_versions`), so each device that converts the same library
-/// agrees and nothing is sent as a new version.
+/// A conversion never refuses a library for what its rows hold: a row that
+/// already references something the library lacks is carried over as it is.
 extension WorkspaceDatabaseConnection {
   static let libraryConversions: [LibraryConversion] = [
-    .init(name: "leftover device tables", applies: { try $0.holdsLeftoverDeviceTablesUnlocked() },
-          convert: { try $0.adoptLeftoverDeviceTablesUnlocked() }),
-    .init(name: "earlier table declarations", applies: { try $0.holdsEarlierDeclarationsUnlocked() },
+    .init(name: "earlier table declarations", kind: .inPlace, applies: { try $0.holdsEarlierDeclarationsUnlocked() },
           convert: { try $0.rebuildEarlierDeclarationsUnlocked() }),
-    .init(name: "earlier record format names", applies: { try $0.holdsEarlierRecordFormatsUnlocked() },
+    .init(name: "earlier record format names", kind: .inPlace, applies: { try $0.holdsEarlierRecordFormatsUnlocked() },
           convert: { try $0.renameEarlierRecordFormatsUnlocked() }),
-    .init(name: "what the previous release wrote and declared", applies: { try $0.holdsPreviousReleaseDeclarationsUnlocked() },
+    .init(name: "what the previous release wrote and declared", kind: .inPlace, applies: { try $0.holdsPreviousReleaseDeclarationsUnlocked() },
           convert: { try $0.convertPreviousReleaseContentUnlocked() }),
+    .init(name: "leftover device tables", kind: .asWrites, applies: { try $0.holdsLeftoverDeviceTablesUnlocked() },
+          convert: { try $0.adoptLeftoverDeviceTablesUnlocked() }),
   ]
 
-  /// Converts what the previous release left in this library, on open and
-  /// before anything else creates schema. A library with nothing to convert
-  /// is not touched and not copied.
+  /// Converts in place what the previous release left in this library, on
+  /// open and before anything else creates schema. A library with nothing
+  /// to convert is not touched and not copied.
   ///
-  /// The library is copied first. The conversions then run in one
-  /// transaction with foreign keys off, each one checked again in its turn
-  /// (an earlier one may bring in what a later one converts), so a failure
-  /// leaves the library exactly as it was. Every trigger of the library's
-  /// own tables is dropped first: tables are rebuilt and rows are moved
-  /// without recording them as new work for peers or devices, and the
-  /// regular schema creation that follows recreates each trigger.
+  /// The library is copied first, whichever conversion applies. The
+  /// conversions made in place then run in one transaction with foreign
+  /// keys off, each one checked again in its turn, so a failure leaves the
+  /// library exactly as it was. Every trigger of the library's own tables
+  /// is dropped first, and the regular schema creation that follows
+  /// recreates each one. The conversions made as writes follow that
+  /// creation (`finishLibraryConversionUnlocked`).
+  ///
+  /// A conversion in place that fails stops the open, because this build
+  /// reads and writes only the current shape. The error names the
+  /// conversion; the library is unchanged, and the next open tries again
+  /// with the copy it already has.
   func convertEarlierLibraryUnlocked(file: URL) throws {
     guard try Self.libraryConversions.contains(where: { try $0.applies(self) }) else { return }
     let reporter = LibraryUpgradeReporter(file: file)
     upgradeReporter = reporter
     backUpLibraryUnlocked(file)
     reporter.reach(.converting, 0, next: 0.3)
+    let inPlace = Self.libraryConversions.filter { $0.kind == .inPlace }
+    guard try inPlace.contains(where: { try $0.applies(self) }) else { return }
     // A rebuilt table takes its place by name: the references other tables
     // hold to it stay as they are written.
     try executeUnlocked("PRAGMA foreign_keys=OFF; PRAGMA legacy_alter_table=ON")
     defer { try? executeUnlocked("PRAGMA legacy_alter_table=OFF; PRAGMA foreign_keys=ON") }
-    try transaction {
-      for trigger in try historyRowsUnlocked("""
-        SELECT name FROM sqlite_master WHERE type='trigger' AND \(Self.libraryOwnTable("tbl_name"))
-        """, values: []).compactMap({ $0.objectValue?["name"]?.stringValue }) {
-        try executeUnlocked("DROP TRIGGER \(Self.peerQuote(trigger))")
+    var running = ""
+    do {
+      try transaction {
+        for trigger in try historyRowsUnlocked("""
+          SELECT name FROM sqlite_master WHERE type='trigger' AND \(Self.libraryOwnTable("tbl_name"))
+          """, values: []).compactMap({ $0.objectValue?["name"]?.stringValue }) {
+          try executeUnlocked("DROP TRIGGER \(Self.peerQuote(trigger))")
+        }
+        for (index, conversion) in inPlace.enumerated() {
+          running = conversion.name
+          guard try conversion.applies(self) else { continue }
+          try conversion.convert(self)
+          reporter.reach(.converting, 0.3 * Double(index + 1) / Double(inPlace.count), next: 0.3, after: conversion.name)
+        }
       }
-      let count = Double(Self.libraryConversions.count)
-      for (index, conversion) in Self.libraryConversions.enumerated() {
-        guard try conversion.applies(self) else { continue }
-        try conversion.convert(self)
-        reporter.reach(.converting, 0.3 * Double(index + 1) / count, next: 0.3, after: conversion.name)
+    } catch {
+      throw WorkspaceDatabaseError.open("""
+        This library could not be converted for this version of Woven Matter (\(running): \(Self.conversionFailure(error))). \
+        Nothing in it was changed, and a copy of it is kept in \(Self.libraryBackupDirectory(for: file).lastPathComponent).
+        """)
+    }
+  }
+
+  /// Runs the conversions made as writes, once the schema is current and
+  /// every trigger exists, in one transaction, and names the copy made
+  /// before the conversion as finished when nothing is left to convert.
+  ///
+  /// One that fails leaves the library open and usable: it is already in
+  /// the current shape, and what was not converted stays where nothing
+  /// reads it. The failure is logged, and the next open tries again with
+  /// the copy it already has.
+  func finishLibraryConversionUnlocked(file: URL) {
+    do {
+      let writes = try Self.libraryConversions.filter { try $0.kind == .asWrites && $0.applies(self) }
+      if !writes.isEmpty {
+        try transaction {
+          for conversion in writes {
+            try conversion.convert(self)
+            upgradeReporter?.reach(.converting, 0.98, after: conversion.name)
+          }
+        }
       }
+      guard upgradeReporter != nil, try !Self.libraryConversions.contains(where: { try $0.applies(self) }) else { return }
+      Self.finishLibraryBackups(for: file)
+    } catch {
+      NSLog("The library's conversion is not finished and will be tried again: %@", Self.conversionFailure(error))
+    }
+  }
+
+  private static func conversionFailure(_ error: any Error) -> String {
+    switch error {
+    case WorkspaceDatabaseError.open(let message), WorkspaceDatabaseError.execute(let message), WorkspaceDatabaseError.prepare(let message),
+         WorkspaceDatabaseError.bind(let message), WorkspaceDatabaseError.step(let message): message
+    default: error.localizedDescription
     }
   }
 
@@ -122,50 +185,101 @@ extension WorkspaceDatabaseConnection {
   static let libraryBackupRetention: TimeInterval = 30 * 24 * 60 * 60
 
   /// Copies the library as it is before the conversion changes it
-  /// (`Library Backups/before-library-conversion-<time>.sqlite`: each
-  /// conversion makes its own copy, so one that runs again, as after the
-  /// previous release wrote to the library in between, never passes for
-  /// the copy of the first). When the library folds completely into its
-  /// main file, that file is copied while a read transaction here keeps any
-  /// other connection from checkpointing into it; on a Mac that copy is a
+  /// (`Library Backups/before-library-conversion-<time>.sqlite`). The copy
+  /// is named `….unfinished.sqlite` until the conversion it was made for
+  /// has finished (`finishLibraryBackups`): a conversion that failed or was
+  /// interrupted finds that copy at the next open and makes no other, so a
+  /// conversion that keeps failing keeps one copy, the library as it was
+  /// before the first attempt.
+  ///
+  /// When the library folds completely into its main file and nothing is
+  /// written before this connection's read transaction has begun, that
+  /// file is the whole library and no other connection can checkpoint into
+  /// it during the transaction; it is copied as a file, which on a Mac is a
   /// clone that takes no time or space until the conversion changes the
-  /// original. When another connection keeps it from folding, SQLite's own
-  /// backup copies it page by page instead. A copy that cannot be made (a
-  /// full disk on a Linux host) does not stop the conversion, which is one
-  /// transaction and leaves the library as it was if it fails. Copies older
-  /// than `libraryBackupRetention` are removed on a later open.
+  /// original. Otherwise SQLite's own backup copies the library page by
+  /// page. A copy that cannot be made (a full disk on a Linux host) leaves
+  /// nothing behind and does not stop the conversion, which leaves the
+  /// library as it was if it fails. Copies older than
+  /// `libraryBackupRetention` are removed on a later open.
   private func backUpLibraryUnlocked(_ file: URL) {
     let directory = Self.libraryBackupDirectory(for: file)
-    let copy = directory.appending(path: Self.libraryBackupName(at: Date()))
-    do {
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-      let partial = directory.appending(path: copy.lastPathComponent + ".partial")
-      for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: partial.path + suffix) }
-      try? FileManager.default.removeItem(at: copy)
-      let folded = try historyRowsUnlocked("PRAGMA wal_checkpoint(TRUNCATE)", values: []).first?.objectValue?["busy"]?.intValue == 0
-      if folded {
-        // The read transaction pins this connection to the main file as it
-        // is now: nothing can move later writing into it during the copy.
+    guard Self.unfinishedLibraryBackup(in: directory) == nil else { return }
+    Self.writeLibraryBackup(named: Self.libraryBackupName(at: Date(), finished: false), in: directory) { partial in
+      var copied = false
+      if try historyRowsUnlocked("PRAGMA wal_checkpoint(TRUNCATE)", values: []).first?.objectValue?["busy"]?.intValue == 0 {
         try executeUnlocked("BEGIN")
         defer { try? executeUnlocked("COMMIT") }
         _ = try historyRowsUnlocked("SELECT count(*) AS count FROM sqlite_master", values: [])
-        try FileManager.default.copyItem(at: file, to: partial)
-      } else {
-        try copyLibraryUnlocked(to: partial)
+        // A log that is empty now was empty when the transaction began:
+        // this connection reads the main file itself, which holds every
+        // other connection's checkpoint off that file until the copy is made.
+        let log = (try? FileManager.default.attributesOfItem(atPath: file.path + "-wal")[.size] as? NSNumber)?.int64Value ?? 0
+        if log == 0 {
+          try FileManager.default.copyItem(at: file, to: partial)
+          copied = true
+        }
       }
-      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
-      try FileManager.default.moveItem(at: partial, to: copy)
-    } catch {
-      NSLog("The library was not copied before its conversion: %@", error.localizedDescription)
+      if !copied { try copyLibraryUnlocked(to: partial) }
     }
   }
 
-  /// The name of a copy made at `time`, to the second (UTC).
-  static func libraryBackupName(at time: Date) -> String {
+  /// Makes one copy named `name` in `directory` with `copy`, which writes
+  /// it to the path it is given. The copy appears under its name only when
+  /// it is whole, and is dated now whatever date the library's file has, so
+  /// it is kept for `libraryBackupRetention` from the conversion. A copy
+  /// that fails leaves nothing behind.
+  @discardableResult
+  static func writeLibraryBackup(named name: String, in directory: URL, copy: (URL) throws -> Void) -> URL? {
+    let destination = directory.appending(path: name), partial = directory.appending(path: name + ".partial")
+    func discard() { for suffix in ["", "-wal", "-shm", "-journal"] { try? FileManager.default.removeItem(atPath: partial.path + suffix) } }
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+      discard()
+      try copy(partial)
+      try FileManager.default.setAttributes([.posixPermissions: 0o600, .modificationDate: Date()], ofItemAtPath: partial.path)
+      try? FileManager.default.removeItem(at: destination)
+      try FileManager.default.moveItem(at: partial, to: destination)
+      discard()
+      return destination
+    } catch {
+      discard()
+      NSLog("The library was not copied before its conversion: %@", error.localizedDescription)
+      return nil
+    }
+  }
+
+  private static let unfinishedBackupSuffix = ".unfinished.sqlite"
+
+  /// The name of a copy made at `time`, to the second (UTC), for a
+  /// conversion that has finished or has not.
+  static func libraryBackupName(at time: Date, finished: Bool = true) -> String {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX"); format.timeZone = TimeZone(identifier: "UTC")
     format.dateFormat = "yyyyMMdd-HHmmss"
-    return "before-library-conversion-\(format.string(from: time)).sqlite"
+    return "before-library-conversion-\(format.string(from: time))" + (finished ? ".sqlite" : unfinishedBackupSuffix)
+  }
+
+  /// The copy an earlier attempt at the conversion made, while it is kept.
+  static func unfinishedLibraryBackup(in directory: URL, now: Date = Date()) -> URL? {
+    ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+      .filter { $0.lastPathComponent.hasPrefix("before-library-conversion-") && $0.lastPathComponent.hasSuffix(unfinishedBackupSuffix) }
+      .filter { copy in
+        (try? copy.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+          .map { now.timeIntervalSince($0) <= libraryBackupRetention } ?? false
+      }
+      .max { $0.lastPathComponent < $1.lastPathComponent }
+  }
+
+  /// Names each copy made for the conversion that has now finished as a finished one.
+  static func finishLibraryBackups(for file: URL) {
+    let directory = libraryBackupDirectory(for: file)
+    for copy in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+    where copy.lastPathComponent.hasPrefix("before-library-conversion-") && copy.lastPathComponent.hasSuffix(unfinishedBackupSuffix) {
+      let finished = directory.appending(path: String(copy.lastPathComponent.dropLast(unfinishedBackupSuffix.count)) + ".sqlite")
+      try? FileManager.default.removeItem(at: finished)
+      try? FileManager.default.moveItem(at: copy, to: finished)
+    }
   }
 
   /// Removes copies made before earlier conversions once they are old enough.
@@ -240,8 +354,8 @@ extension WorkspaceDatabaseConnection {
 
   /// Records what the rows of `table` that `ids` name (by `key`, the
   /// table's identity) now hold in `columns`, in each version of them this
-  /// device has applied. Each device that converts the same library changes
-  /// the same rows the same way, so the change is not sent as a new version.
+  /// device has applied. It is for a change made in place, which every
+  /// device makes to the same rows in the same way.
   func recordConvertedValuesUnlocked(_ table: String, key: String = "id", columns: [String], ids: [String]) throws {
     guard !ids.isEmpty, !columns.isEmpty, try libraryTableNamesUnlocked().contains("peer_sync_versions") else { return }
     let row = "FROM \(Self.peerQuote(table)) s WHERE s.\(Self.peerQuote(key))=json_extract(peer_sync_versions.record_key,'$[0]')"
