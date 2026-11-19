@@ -3,8 +3,8 @@ import Foundation
 import CryptoKit
 #endif
 
-/// Rebuilds display history from the native SDK snapshot, including conversations
-/// saved before structured rendering existed. Tool results are never chat messages.
+/// Rebuilds display history from the native SDK snapshot. Tool results are
+/// never chat messages.
 public enum DeviceTranscript {
   /// The run IDs a conversation's stored history already uses: the run each
   /// user message started, and the run of anything before the first user
@@ -97,17 +97,10 @@ public enum DeviceTranscript {
         }
         // Rebuild published pages from their native call/result pair. This keeps
         // device-owned replies visible after reopening and journal replication.
-        let toolName = projection["toolName"] as? String
-        let response = object(content)
-        let result = response?["htmlRender"] == nil ? response?["result"] as? [String: Any] : response
-        let input = (projection["rawInputJSON"] as? String).flatMap(object)
-        var authoredPage: [String: Any]?
-        if toolName == "woven_html_render", var input { input["action"] = "render"; authoredPage = input }
-        else if let arguments = input?["arguments"] as? [String],
-                let command = try? WovenMatterToolCommand(["html"] + arguments), let raw = command.options["json"] { authoredPage = object(raw) }
-        if status == "completed", ["wovenmatter_html", "woven_html_render"].contains(toolName ?? ""),
-           response?["success"] as? Bool != false,
-           let reference = result?["htmlRender"] as? [String: Any],
+        var authoredPage = (projection["rawInputJSON"] as? String).flatMap(object)
+        authoredPage?["action"] = "render"
+        if status == "completed", projection["toolName"] as? String == "woven_html_render",
+           let reference = object(content)?["htmlRender"] as? [String: Any],
            let referenceID = reference["id"] as? String, UUID(uuidString: referenceID) != nil,
            let title = reference["title"] as? String, title.utf8.count <= 800,
            let height = reference["height"] as? Int, (80...2000).contains(height),
@@ -122,7 +115,7 @@ public enum DeviceTranscript {
         value.status = status; value.completedAt = date; value.projectionJSON = json(projection)
         activities[index] = value
       } else {
-        // A paged/legacy snapshot can retain a result without its originating call.
+        // A paged snapshot can hold a result without the call that started it.
         let id = key.isEmpty ? "orphan-\(sequence)" : key
         activities.append(activity(id, kind: "tool", name: message["toolName"] as? String ?? "Tool result",
           content: content, output: message, date: date, status: status))

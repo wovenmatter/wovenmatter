@@ -125,7 +125,7 @@ public struct WovenMatterToolCommand: Sendable {
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
-    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "cancelled", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "clear-task", "clear-review", "needs-review", "include-layout", "at-start"]
+    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "cancelled", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "clear-task", "clear-review", "needs-review", "at-start"]
     let valueFlags: Set<String> = ["id", "details", "assignee-kind", "bot-id", "machine-id", "name", "place", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget", "interaction", "option-id", "answers", "component-revision", "subtree-revision", "parent-id", "after-id", "removal", "status", "role", "assignee", "outcome", "review", "last-change", "asset-id", "changed-since", "timeout-seconds"]
     var positional: [String] = [], options: [String: String] = [:]
     var operationArguments = Array(arguments.prefix(2))
@@ -172,7 +172,7 @@ public struct WovenMatterToolCommand: Sendable {
     case (.notes, "database-query"), (.notes, "database-execute"): allowed = ["database-id", "query"] + request; maximumPositionals = 0
     case (.notes, "page-list"): allowed = ["search", "folder"] + pagination; maximumPositionals = 0
     case (.notes, "page-create"): allowed = ["title", "purpose", "folder"] + request; maximumPositionals = 0
-    case (.notes, "page-read"): allowed = ["note-id", "status", "role", "needs-review", "changed-since", "include-layout", "offset", "limit"]; maximumPositionals = 0
+    case (.notes, "page-read"): allowed = ["note-id", "status", "role", "needs-review", "changed-since", "offset", "limit"]; maximumPositionals = 0
     case (.notes, "page-update"): allowed = ["note-id", "title", "purpose"] + revision + request; maximumPositionals = 0
     case (.notes, "page-add-component"): allowed = ["note-id", "kind", "parent-id", "after-id", "at-start", "title", "text", "asset-id", "json", "role", "status", "details", "outcome", "review", "last-change"] + request; maximumPositionals = 0
     case (.notes, "page-update-component"): allowed = ["note-id", "id", "component-revision", "title", "text", "json", "role", "status", "details", "outcome", "clear-task", "review", "clear-review", "last-change"] + request; maximumPositionals = 0

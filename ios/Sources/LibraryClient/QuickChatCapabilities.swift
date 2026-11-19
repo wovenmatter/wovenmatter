@@ -21,7 +21,7 @@ public enum QuickChatCapabilities {
   }
   public static func enabled(_ name: String, selection: [String]?) -> Bool {
     if nativeTools.contains(name) { return true }
-    let selected = MobileToolSupport.migratedMCPSelection(selection)
+    let selected = selection
     if name == webSelection || name == "web_search" || name == "web_read" {
       return selected.map { $0.contains(webSelection) || $0.contains(name) } ?? true
     }

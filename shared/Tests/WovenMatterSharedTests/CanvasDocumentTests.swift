@@ -2,11 +2,11 @@ import Foundation
 import Testing
 @testable import WovenMatterShared
 
-@Suite("Canvas document safety and collaboration")
+@Suite("Page document safety")
 struct CanvasDocumentTests {
-  @Test func layoutAndReferencesSurviveAgentEdits() throws {
+  @Test func linkedOriginalsSurviveAgentEdits() throws {
     let block = NoteRichTextBlock(text: "A shared idea")
-    let placement = CanvasCardPlacement(x: 420, y: 120, assetID: "original-asset")
+    let placement = CanvasCardPlacement(assetID: "original-asset")
     var document = NoteDocument(kind: .canvas, blocks: [.richText(block)], canvas: [block.id: placement])
     let operations: [NoteEditOperation] = [.appendText("Next step", .paragraph)]
     try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: document)
@@ -22,7 +22,8 @@ struct CanvasDocumentTests {
   @Test func replacementKeepsPlacementAndDeletionRemovesIt() throws {
     let original = NoteRichTextBlock(text: "Old")
     let replacement = NoteRichTextBlock(id: original.id, text: "Revised")
-    let placement = CanvasCardPlacement(x: 80, y: 160)
+    var placement = CanvasCardPlacement()
+    placement.title = "A label"
     var document = NoteDocument(kind: .canvas, blocks: [.richText(original)], canvas: [original.id: placement])
     _ = try document.apply([.replaceBlock(id: original.id, block: .richText(replacement))])
     #expect(document.canvas?[original.id] == placement)
@@ -32,45 +33,31 @@ struct CanvasDocumentTests {
     try document.validateEditableShape()
   }
 
-  @Test func invalidAndFutureLayoutIsReadOnly() throws {
+  @Test func invalidAndUnknownPlacementsAreReadOnly() throws {
     let block = NoteRichTextBlock(text: "Keep this")
-    var document = NoteDocument(kind: .canvas, blocks: [.richText(block)], canvas: [block.id: .init(x: -1_000_000_001, y: 0)])
+    var document = NoteDocument(kind: .canvas, blocks: [.richText(block)], canvas: [block.id: .init(height: .infinity)])
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try document.validateEditableShape() }
-    document.canvas = ["missing": .init(x: 0, y: 0)]
+    document.canvas = ["missing": .init()]
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try document.validateEditableShape() }
-    document.canvas = [block.id: .init(x: 0, y: 0)]
+    document.canvas = [block.id: .init()]
     var object = try #require(JSONSerialization.jsonObject(with: Data(document.encoded().utf8)) as? [String: Any])
-    object["canvas"] = [block.id: ["x": 0, "y": 0, "width": 360, "height": 300, "futureGroup": "preserve"]]
+    object["canvas"] = [block.id: ["height": 300, "unknownGroup": "preserve"]]
     let raw = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try NoteDocument.editableDocument(from: raw) }
     document.blocks = (0...10_000).map { _ in .richText(NoteRichTextBlock()) }
     #expect(throws: NoteDocumentSafetyError.tooLarge) { try document.validateEditableShape() }
   }
 
-  @Test func olderLayoutIsValidatedAndBelongsOnlyToPages() throws {
+  @Test func onlyAPageHasPlacementsAndComponentMetadata() throws {
     var plain = NoteDocument()
-    plain.canvasSections = [.init(title: "Bad", x: 0, y: 0)]
+    plain.boardPurpose = "Not a Page"
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try plain.validateEditableShape() }
-    let block = NoteRichTextBlock(text: "Safe")
-    var document = NoteDocument(kind: .canvas, blocks: [.richText(block)])
-    document.canvasConnections = [.init(from: block.id, to: "missing")]
-    #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try document.validateEditableShape() }
-    document.canvasConnections = nil
-    document.canvas = [block.id: .init(x: .infinity, y: 0)]
-    #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try document.validateEditableShape() }
-  }
-
-  /// The spatial editor never shipped. Its edit operations are gone, so no batch can use
-  /// them to bypass Page rules; documents it wrote still open through materialization.
-  @Test func spatialEditOperationsNoLongerDecode() throws {
-    let payloads = [
-      #"{"type":"canvas","edit":{"action":"add","id":"idea","text":"An idea","placement":{"x":0,"y":0,"width":360,"height":300}}}"#,
-      #"{"type":"canvas","edit":{"action":"connect","connection":{"id":"c","from":"a","to":"b","label":"","color":"neutral"}}}"#,
-      #"{"type":"board","edit":{"action":"addItem","id":"n"}}"#,
-    ]
-    for payload in payloads {
-      #expect(throws: DecodingError.self) { try JSONDecoder().decode(NoteEditOperation.self, from: Data(payload.utf8)) }
-    }
+    #expect(NoteDocument().pageNodes == nil)
+    // A Page always has its nesting, empty while nothing is nested, also when read.
+    #expect(NoteDocument(kind: .canvas).pageNodes == [:])
+    let read = try NoteDocument.editableDocument(from: #"{"blocks":[],"html":"","kind":"canvas"}"#)
+    #expect(read.pageNodes == [:])
+    #expect(try read.encoded().contains(#""pageNodes":{}"#))
   }
 
   @Test func ordinaryNotesRetainTheirFormat() throws {

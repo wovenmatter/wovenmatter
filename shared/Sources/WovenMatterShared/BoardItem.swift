@@ -4,7 +4,7 @@ import CryptoKit
 import Foundation
 
 public enum BoardItemRole: String, Codable, CaseIterable, Sendable { case content, instructions }
-public enum BoardTaskStatus: String, Codable, CaseIterable, Sendable { case todo, doing, blocked, done, canceled }
+public enum BoardTaskStatus: String, Codable, CaseIterable, Sendable { case todo, doing, blocked, done }
 public enum BoardReviewState: String, Codable, CaseIterable, Sendable { case needed, approved, dismissed }
 
 /// Attribution for people reading a Board. It is stamped by the writing host and
@@ -33,19 +33,16 @@ public struct BoardActor: Codable, Equatable, Sendable {
 }
 
 public extension BoardTaskStatus {
-  /// What people see. `blocked` means the task waits on the person; `canceled`
-  /// is read from older Boards only, since a task nobody needs is removed.
+  /// What people see. `blocked` means the task waits on the person. A task
+  /// nobody needs is removed, so there is no state for it.
   var displayName: String {
     switch self {
     case .todo: "To do"
     case .doing: "In progress"
     case .blocked: "Needs input"
     case .done: "Done"
-    case .canceled: "Canceled"
     }
   }
-  /// The statuses people and agents choose from.
-  static let current: [BoardTaskStatus] = [.todo, .doing, .blocked, .done]
 }
 
 /// Someone a task is assigned to: the person, an agent on one workspace, or a bot.
@@ -147,21 +144,18 @@ public struct BoardTask: Codable, Equatable, Sendable {
   public static let maximumDetailsBytes = 16 * 1_024
   public static let maximumAssignees = 16
   public var status: BoardTaskStatus
-  /// A free-text label from older Boards. New assignments use `assignees`.
-  public var assignee: String
   public var outcome: String
   /// What the task asks for, beyond its title. Sent with the task.
   public var details: String
   public var assignees: [BoardTaskAssignee]
-  public init(status: BoardTaskStatus = .todo, assignee: String = "", outcome: String = "", details: String = "",
+  public init(status: BoardTaskStatus = .todo, outcome: String = "", details: String = "",
               assignees: [BoardTaskAssignee] = []) {
-    self.status = status; self.assignee = assignee; self.outcome = outcome; self.details = details; self.assignees = assignees
+    self.status = status; self.outcome = outcome; self.details = details; self.assignees = assignees
   }
-  private enum CodingKeys: String, CodingKey { case status, assignee, outcome, details, assignees }
+  private enum CodingKeys: String, CodingKey { case status, outcome, details, assignees }
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     status = try values.decodeIfPresent(BoardTaskStatus.self, forKey: .status) ?? .todo
-    assignee = try values.decodeIfPresent(String.self, forKey: .assignee) ?? ""
     outcome = try values.decodeIfPresent(String.self, forKey: .outcome) ?? ""
     details = try values.decodeIfPresent(String.self, forKey: .details) ?? ""
     assignees = try values.decodeIfPresent([BoardTaskAssignee].self, forKey: .assignees) ?? []
@@ -171,13 +165,12 @@ public struct BoardTask: Codable, Equatable, Sendable {
   public func encode(to encoder: any Encoder) throws {
     var values = encoder.container(keyedBy: CodingKeys.self)
     try values.encode(status, forKey: .status)
-    try values.encode(assignee, forKey: .assignee)
     try values.encode(outcome, forKey: .outcome)
     if !details.isEmpty { try values.encode(details, forKey: .details) }
     if !assignees.isEmpty { try values.encode(assignees, forKey: .assignees) }
   }
   var isValid: Bool {
-    assignee.utf8.count <= 1024 && outcome.utf8.count <= Self.maximumOutcomeBytes
+    outcome.utf8.count <= Self.maximumOutcomeBytes
       && details.utf8.count <= Self.maximumDetailsBytes && assignees.count <= Self.maximumAssignees
       && Set(assignees.map(\.id)).count == assignees.count && assignees.allSatisfy(\.isValid)
   }
@@ -272,7 +265,6 @@ public struct BoardItemPatch: Codable, Equatable, Sendable {
   public var role: BoardItemRole?
   /// Supplying any task field makes the card a task when it is not already one.
   public var status: BoardTaskStatus?
-  public var assignee: String?
   public var outcome: String?
   public var details: String?
   /// Replaces the task's assignees. Hosts check who may change which assignee.
@@ -282,17 +274,17 @@ public struct BoardItemPatch: Codable, Equatable, Sendable {
   public var clearReview: Bool?
   public var lastChange: String?
   public init(title: String? = nil, text: String? = nil, role: BoardItemRole? = nil, status: BoardTaskStatus? = nil,
-              assignee: String? = nil, outcome: String? = nil, details: String? = nil, assignees: [BoardTaskAssignee]? = nil,
+              outcome: String? = nil, details: String? = nil, assignees: [BoardTaskAssignee]? = nil,
               clearTask: Bool? = nil, review: BoardReviewState? = nil,
               clearReview: Bool? = nil, lastChange: String? = nil) {
     self.title = title; self.text = text; self.role = role; self.status = status
-    self.assignee = assignee; self.outcome = outcome; self.details = details; self.assignees = assignees; self.clearTask = clearTask
+    self.outcome = outcome; self.details = details; self.assignees = assignees; self.clearTask = clearTask
     self.review = review; self.clearReview = clearReview; self.lastChange = lastChange
   }
 }
 
 extension BoardItemPatch {
-  var changesTask: Bool { status != nil || assignee != nil || outcome != nil || details != nil || assignees != nil }
+  var changesTask: Bool { status != nil || outcome != nil || details != nil || assignees != nil }
 }
 
 public extension NoteDocument {
@@ -365,7 +357,6 @@ public extension NoteDocument {
     } else if changesTask {
       var task = item.task ?? BoardTask()
       if let status = patch.status { task.status = status }
-      if let assignee = patch.assignee { task.assignee = assignee }
       if let outcome = patch.outcome { task.outcome = outcome }
       if let details = patch.details { task.details = details }
       if let assignees = patch.assignees { task.assignees = assignees }

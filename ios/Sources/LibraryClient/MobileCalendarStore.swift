@@ -43,8 +43,6 @@ public actor MobileCalendarStore {
   public init(file: URL, deviceID: String) throws {
     self.file = file; self.deviceID = deviceID
     state = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) : State()
-    // Earlier builds excluded local calendar changes; include them on open, before any edit.
-    if FileManager.default.fileExists(atPath: file.path) { try? MobileStorePersistence.applyBackupIfChanged(.include, at: file) }
   }
   public func allRecords() -> [LibraryCalendarRecord] { state.records.values.sorted { $0.id < $1.id } }
   public func records() -> [LibraryCalendarRecord] { state.records.values.filter { !$0.deleted }.sorted { $0.id < $1.id } }
@@ -123,7 +121,7 @@ public actor MobileCalendarStore {
     return record
   }
   /// Moves a task this phone owns to a Mac or Linux agent. Ownership never
-  /// changes in place: the phone no longer runs schedules, so its schedule is
+  /// changes in place: this phone does not run schedules, so its schedule is
   /// retired and a replacement with a new identity and no device owner is
   /// created. The replacement uploads only after the library accepts the
   /// retirement, so at most one runnable copy exists, and occurrences this

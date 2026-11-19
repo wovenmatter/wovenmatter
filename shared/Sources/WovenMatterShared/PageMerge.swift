@@ -27,7 +27,7 @@ public extension NoteDocument {
     guard base.kind == .canvas, local.kind == .canvas, remote.kind == .canvas else { throw NoteEditError.artifactKindMismatch }
     let remaps = pageConflictComponentRemaps(submitted: base, stored: remote)
       .filter { mapping in !local.blocks.contains(where: { $0.id == mapping.value }) }
-    var merger = PageMerger(base: base.remappingPageComponents(remaps), local: local.remappingPageComponents(remaps), remote: remote.materializedPage())
+    var merger = PageMerger(base: base.remappingPageComponents(remaps), local: local.remappingPageComponents(remaps), remote: remote)
     return try merger.merge()
   }
 
@@ -35,8 +35,8 @@ public extension NoteDocument {
   /// save kept that version as a conflict copy. Continue on that exact copy;
   /// matching text alone is ambiguous and could select an unrelated component.
   static func pageConflictComponentRemaps(submitted: NoteDocument, stored: NoteDocument) -> [String: String] {
-    let previous = PageMerger.Snapshot(submitted.materializedPage())
-    let current = PageMerger.Snapshot(stored.materializedPage())
+    let previous = PageMerger.Snapshot(submitted)
+    let current = PageMerger.Snapshot(stored)
     var result: [String: String] = [:]
     var used = Set<String>()
     for block in previous.document.blocks where !previous.isSection(block.id) {
@@ -72,14 +72,14 @@ public extension NoteDocument {
   static func mergeReplicaPage(base: NoteDocument, local: NoteDocument, remote: NoteDocument,
                                conflicts: Set<String>, localPositions: Set<String>) throws -> PageMerge {
     guard base.kind == .canvas, local.kind == .canvas, remote.kind == .canvas else { throw NoteEditError.artifactKindMismatch }
-    var merger = PageMerger(base: base, local: local.materializedPage(), remote: remote.materializedPage())
+    var merger = PageMerger(base: base, local: local, remote: remote)
     merger.forcedConflicts = conflicts
     merger.localPositions = localPositions
     return try merger.merge()
   }
 
   private func remappingPageComponents(_ mapping: [String: String]) -> NoteDocument {
-    var page = materializedPage()
+    var page = self
     guard !mapping.isEmpty else { return page }
     page.blocks = page.blocks.map { block in mapping[block.id].map { PageMerger.copyBlock(block, id: $0) } ?? block }
     func remap<T>(_ values: [String: T]?) -> [String: T]? {
@@ -213,7 +213,7 @@ private struct PageMerger {
     // writes the outcome keeps both. Making or clearing the task is one field of its own.
     if let l = localContent.task, let r = remoteContent.task {
       let b = baseContent.task ?? BoardTask()
-      merged.task = BoardTask(status: choose(b.status, l.status, r.status), assignee: choose(b.assignee, l.assignee, r.assignee),
+      merged.task = BoardTask(status: choose(b.status, l.status, r.status),
                               outcome: choose(b.outcome, l.outcome, r.outcome), details: choose(b.details, l.details, r.details),
                               assignees: BoardTask.mergeAssignees(base: b.assignees, local: l.assignees, remote: r.assignees))
     } else {
@@ -335,7 +335,7 @@ private struct PageMerger {
     extraItems[copyID] = BoardItem(role: content.role, task: isSection ? nil : content.task, review: .needed, sessions: content.sessions,
       lastChange: "Kept this version because the same component also changed elsewhere.")
     if let assetID = content.assetID {
-      var placement = CanvasCardPlacement(x: 0, y: 0, assetID: assetID)
+      var placement = CanvasCardPlacement(assetID: assetID)
       placement.title = content.title
       extraPlacements[copyID] = placement
     }
@@ -404,7 +404,7 @@ private struct PageMerger {
       else if let content = resolved[id] {
         var placement = canvas[id] ?? local.document.canvas?[id]
         if placement != nil || content.title != nil || content.assetID != nil {
-          if placement == nil { placement = CanvasCardPlacement(x: 0, y: 0) }
+          if placement == nil { placement = CanvasCardPlacement() }
           placement?.title = content.title
           placement?.assetID = content.assetID
           canvas[id] = placement
@@ -435,7 +435,6 @@ private struct PageMerger {
     canvas = canvas.filter { surviving.contains($0.key) }
     document.canvas = canvas.isEmpty && document.canvas == nil ? nil : canvas
     document.boardItems = items.isEmpty && document.boardItems == nil ? nil : items
-    document.canvasConnections = document.canvasConnections?.filter { surviving.contains($0.from) && surviving.contains($0.to) }
     try document.validateEditableShape()
     var result = PageMerge(document: document, conflictedIDs: conflicted, conflictCopyIDs: copies)
     result.conflictCopySources = copySources
@@ -479,7 +478,7 @@ public extension NoteDocument {
   /// changes, and the stored version's stay on everything else.
   static func mergeClientPage(base: NoteDocument, local: NoteDocument, remote: NoteDocument) throws -> NoteDocument {
     var merged = try mergePage(base: base, local: local, remote: remote).document
-    let stored = remote.materializedPage(), edited = local.materializedPage()
+    let stored = remote, edited = local
     merged.stampBoardChanges(from: stored, actor: BoardActor(kind: .user))
     let storedBlocks = Dictionary(stored.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     let editedBlocks = Dictionary(edited.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

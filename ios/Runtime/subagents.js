@@ -11,7 +11,7 @@ export function createSubagents(rootID,policy={}) {
     replay:'safe',
     execute:async (args,api,context) => {
       // Two total levels: the root may create children; children cannot delegate.
-      // Check ownership as well as removing the tool, including legacy recovered children.
+      // Check ownership as well as removing the tool, so a recovered child cannot delegate either.
       if (api.conversationId !== rootID()) throw new Error('Only the root session can create subagents. Grandchildren are not supported.');
       if (active >= (policy.concurrentSubagents??4)) return {isError:true,output:[{type:'text',text:'The configured child-agent capacity is in use. Complete existing child work before delegating more.'}]};
       active++;

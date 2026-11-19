@@ -8,17 +8,6 @@ import WovenMatterShared
   private var theme: WovenTheme { WovenTheme(rawValue: storedTheme) ?? .green }
   @Environment(\.scenePhase) private var scenePhase
 
-  init() {
-    // v0.4.2 saved the theme as "wovenmatter.dashboard.theme". It moves once.
-    let defaults = UserDefaults.standard, legacy = "wovenmatter.dashboard.theme"
-    if let theme = defaults.object(forKey: legacy) {
-      if defaults.object(forKey: WovenTheme.storageKey) == nil { defaults.set(theme, forKey: WovenTheme.storageKey) }
-      defaults.removeObject(forKey: legacy)
-    }
-    // v0.4.2 saved the all-devices usage view as "host". It reads "library" once.
-    if defaults.string(forKey: UsagePreferences.sourceKey) == "central" { defaults.set("library", forKey: UsagePreferences.sourceKey) }
-  }
-
   var body: some Scene {
     WindowGroup {
       ZStack {

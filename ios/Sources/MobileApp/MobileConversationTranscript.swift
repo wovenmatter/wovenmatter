@@ -134,7 +134,7 @@ struct MobileConversationProjection {
         return .init(id: activity.id, runID: runID, conversationID: transcript.conversationID,
           activity: ordered, createdAt: activity.createdAt ?? "", sequence: activity.sequence ?? Int64(offset))
       }
-      // Legacy tool messages participate in the same chronology as structured work.
+      // Tool messages take part in the same chronology as structured work.
       for (index, message) in runMessages.enumerated() where message.role == "tool" || message.role == "toolResult" {
         let activity = AgentRunActivity(id: message.id, kind: .tool, title: "Tool result",
           status: "completed", content: message.content, position: message.sequence.map(Int.init))

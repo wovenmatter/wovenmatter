@@ -81,7 +81,7 @@ struct MobilePageComponentDetails: View {
           Picker("State", selection: Binding(get: { item.task?.status ?? .todo }, set: { status in
             update("Task state") { $0.task?.status = status }
           })) {
-            ForEach(BoardTaskStatus.current + (task.status == .canceled ? [.canceled] : []), id: \.self) { status in
+            ForEach(BoardTaskStatus.allCases, id: \.self) { status in
               Text(status.mobileTitle).tag(status)
             }
           }.accessibilityIdentifier("page-details-state")

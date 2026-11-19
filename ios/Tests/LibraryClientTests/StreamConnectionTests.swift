@@ -154,6 +154,51 @@ final class StreamConnectionTests: XCTestCase {
     XCTAssertEqual(subscription.params.after, 41)
   }
 
+  func testAFirstFrameThatIsNotHelloClosesAsAProtocolViolation() async throws {
+    let server = FakeStreamServer()
+    let connection = server.connection()
+    let events = StreamEvents()
+    await connection.subscribe(.workspace, params: .init(after: 0), handler: events.handler())
+    await connection.start()
+    await eventually("socket") { !server.sockets.isEmpty }
+    let socket = server.sockets[0]
+    await socket.push(journalItem("s1", 1))
+    await eventually("closed") { await socket.closedWith != nil }
+    let code = await socket.closedWith
+    XCTAssertEqual(code, .protocolViolation)
+    XCTAssertEqual(code?.rawValue, 4400)
+    // Nothing that socket sent, or sends afterwards, is used.
+    await socket.push(.hello(streamHello))
+    await eventually("next attempt") { server.sockets.count > 1 }
+    let sent = await socket.sent
+    XCTAssertTrue(sent.isEmpty, "Nothing was sent on a socket that never said hello")
+    XCTAssertTrue(events.events.isEmpty)
+    let hello = await connection.hello
+    XCTAssertNil(hello)
+  }
+
+  func testASecondHelloIsIgnored() async throws {
+    let server = FakeStreamServer()
+    let connection = server.connection()
+    let events = StreamEvents()
+    await connection.subscribe(.workspace, params: .init(after: 0), handler: events.handler())
+    await connection.start()
+    let socket = await open(server, connection)
+    await eventually("subscription") { await socket.subscriptions.count == 1 }
+    let id = await socket.subscriptions[0].id
+    var other = streamHello; other.workspaceID = "another"
+    await socket.push(.hello(other))
+    await socket.push(journalItem(id, 1))
+    await eventually("item") { events.kinds == ["journal"] }
+    let hello = await connection.hello
+    XCTAssertEqual(hello, streamHello, "The first hello stands")
+    let closed = await socket.closedWith
+    XCTAssertNil(closed)
+    let subscriptions = await socket.subscriptions.count
+    XCTAssertEqual(subscriptions, 1, "Nothing is subscribed again")
+    XCTAssertEqual(server.sockets.count, 1)
+  }
+
   func testItemsArriveInOrderThenSynchronizedAndAdvanceAfter() async throws {
     let server = FakeStreamServer()
     let connection = server.connection()
@@ -663,11 +708,41 @@ final class StreamFixtureDecodingTests: XCTestCase {
     for fixture in fixtures.frames {
       let text = String(decoding: try JSONEncoder().encode(fixture.frame), as: UTF8.self)
       let frame = try WebSocketStreamTransport.decode(.string(text))
-      let binary = try WebSocketStreamTransport.decode(.data(Data(text.utf8)))
-      XCTAssertEqual(frame, binary, fixture.name)
       XCTAssertEqual(try object(StreamProtocol.encode(frame)), try object(Data(text.utf8)), fixture.name)
+      // A frame is a text message: the same bytes as a binary message are refused.
+      XCTAssertThrowsError(try WebSocketStreamTransport.decode(.data(Data(text.utf8))), fixture.name) {
+        XCTAssertEqual(WebSocketStreamTransport.closeCode(refusing: $0), .protocolViolation)
+      }
     }
-    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.string(#"{"t":"futureFrame","id":"x1"}"#)), "Not a frame this build defines")
+  }
+
+  /// What is not a frame this protocol defines is a violation (4400), with
+  /// every required member present; a frame over the limit is 1009.
+  func testWhatIsNotAFrameIsRefusedWithItsCloseCode() throws {
+    let violations = [
+      #"{"t":"undefinedFrame","id":"x1"}"#,
+      #"{"t":"item","id":"s1","kind":"undefinedKind","data":{}}"#,
+      #"{"t":"req","id":"r1","method":"execution.receipt"}"#,
+      #"{"t":"sub","id":"s1","stream":"workspace"}"#,
+      #"{"t":"res","id":"r1","error":{"code":"invalid","message":"No retryable member"}}"#,
+      #"{"t":"end","id":"s1","error":{"code":"resync","message":"No retryable member"}}"#,
+      #"{"id":"s1"}"#, "[]", "not JSON",
+    ]
+    for text in violations {
+      XCTAssertThrowsError(try WebSocketStreamTransport.decode(.string(text)), text) {
+        XCTAssertEqual(WebSocketStreamTransport.closeCode(refusing: $0), .protocolViolation, text)
+      }
+    }
+    for text in [#"{"t":"req","id":"r1","method":"execution.receipt","params":{}}"#, #"{"t":"sub","id":"s1","stream":"workspace","params":{}}"#,
+                 #"{"t":"end","id":"s1","error":{"code":"resync","message":"Behind","retryable":false}}"#, #"{"t":"end","id":"s1"}"#] {
+      XCTAssertNoThrow(try WebSocketStreamTransport.decode(.string(text)), text)
+    }
+    let oversized = #"{"t":"cancel","id":""# + String(repeating: "a", count: StreamProtocol.maximumFrameBytes) + #""}"#
+    XCTAssertThrowsError(try WebSocketStreamTransport.decode(.string(oversized))) {
+      XCTAssertEqual(WebSocketStreamTransport.closeCode(refusing: $0), .frameTooLarge)
+    }
+    XCTAssertEqual(WebSocketStreamTransport.closeCode(refusing: POSIXError(.EMSGSIZE)), .frameTooLarge, "URLSession's own refusal of a message over the limit")
+    XCTAssertEqual([StreamProtocol.CloseCode.normal, .goingAway, .frameTooLarge, .protocolViolation, .memberRemoved].map(\.rawValue), [1000, 1001, 1009, 4400, 4401])
   }
 
   func testTheLengthPrefixedFixtureDecodesThroughTheByteChannelPath() async throws {

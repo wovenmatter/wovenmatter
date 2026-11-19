@@ -11,8 +11,8 @@ final class QuickChatCapabilitiesTests: XCTestCase {
     }
     XCTAssertTrue(QuickChatCapabilities.enabled("woven_notes_create", selection: nil))
     XCTAssertTrue(QuickChatCapabilities.enabled("web_search", selection: nil))
-    XCTAssertFalse(QuickChatCapabilities.enabled("woven_notes_create", selection: ["read_note"]))
-    XCTAssertTrue(QuickChatCapabilities.enabled("woven_notes_read", selection: ["read_note"]))
+    XCTAssertFalse(QuickChatCapabilities.enabled("woven_notes_create", selection: ["woven_notes_read"]))
+    XCTAssertTrue(QuickChatCapabilities.enabled("woven_notes_read", selection: ["woven_notes_read"]))
     XCTAssertFalse(QuickChatCapabilities.enabled("web_search", selection: []))
   }
 

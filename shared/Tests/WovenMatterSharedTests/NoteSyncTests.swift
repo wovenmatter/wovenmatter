@@ -245,13 +245,13 @@ struct NoteSyncTests {
 
   @Test func notesAndVersionsWithoutClocksKeepWholeDocuments() throws {
     let note = try NoteDocument(kind: .note, blocks: [.richText(.init(id: "n", text: "hi"))]).encoded()
-    let legacy = try page([("a", "one")]).encoded()
-    let stamped = NoteSync.stamp(content: legacy, title: "Plan", folderID: nil, previous: nil, previousRecord: nil)
+    let unstamped = try page([("a", "one")]).encoded()
+    let stamped = NoteSync.stamp(content: unstamped, title: "Plan", folderID: nil, previous: nil, previousRecord: nil)
     func version(_ content: String, _ origin: String) -> NoteSync.Version {
       .init(content: content, title: "Plan", folderID: nil, origin: origin, clock: 2, vector: [origin: 2])
     }
     #expect(NoteSync.merge([version(note, "A"), version(note, "B")]) == nil)
-    #expect(NoteSync.merge([version(legacy, "A"), version(stamped, "B")]) == nil)
+    #expect(NoteSync.merge([version(unstamped, "A"), version(stamped, "B")]) == nil)
     #expect(NoteSync.merge([version(stamped, "A")]) == nil)
   }
 }

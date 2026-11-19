@@ -5,7 +5,7 @@ import Foundation
 
 /// Where one block of a Page sits. `blocks` stays flat and in reading order, so note
 /// tools, table tools and search keep working; a node only adds the tree. A block with
-/// no node is an ordinary root block. `pageNodes != nil` marks a migrated Page.
+/// no node is an ordinary root block.
 public struct PageNode: Codable, Equatable, Sendable {
   /// `nil` is the Page root. Otherwise an enclosing section, open at this block.
   public var parentID: String?
@@ -78,20 +78,8 @@ public struct PagePosition: Codable, Equatable, Sendable {
   }
 }
 
-/// A connection drawn on an older spatial Board. A flowing Page has no place to draw
-/// it, so it stays readable as text and is never silently dropped.
-public struct PageLegacyConnection: Equatable, Identifiable, Sendable {
-  public var id: String
-  public var fromID: String
-  public var toID: String
-  public var fromText: String
-  public var toText: String
-  public var label: String
-}
-
 public extension NoteDocument {
   static let maximumPageDepth = 8
-  static let legacyConnectionExcerpt = 120
 
   /// Rejects anything but a contiguous tree: each parent must be an enclosing open
   /// section, which also rules out cycles and split subtrees.
@@ -119,9 +107,9 @@ public extension NoteDocument {
     guard seen == pageNodes.count else { throw NoteDocumentSafetyError.unsupportedFormat }
   }
 
-  /// The Page's tree, in reading order. Projects an older Board without writing.
+  /// The Page's tree, in reading order.
   var pageSegments: [PageSegment] {
-    let document = materializedPage()
+    let document = self
     let children = document.pageChildMap()
     let tables = Set(document.blocks.compactMap { block -> String? in if case .table = block { block.id } else { nil } })
     var segments: [PageSegment] = []
@@ -167,87 +155,11 @@ public extension NoteDocument {
     return segments
   }
 
-
-  /// Converts an older spatial Board deterministically: the same document always gives
-  /// the same order and IDs on every host. Purely additive to the stored layout, so
-  /// `canvas`, `canvasSections` and `canvasConnections` stay available as references.
-  func materializedPage() -> NoteDocument {
-    guard kind == .canvas, pageNodes == nil else { return self }
-    var copy = self
-    let sections = canvasSections ?? []
-    let sectionIDs = Set(sections.map(\.id))
-    var taken = Set(blocks.map(\.id))
-    func uniqueID(_ candidate: String) -> String {
-      var value = candidate, suffix = 2
-      while !taken.insert(value).inserted { value = "\(candidate)~\(suffix)"; suffix += 1 }
-      return value
-    }
-    // Tolerates a duplicate ID, so a malformed document still reaches validation. A card
-    // with no stored placement sat in the Board's automatic five-column grid.
-    let positions = Dictionary(blocks.enumerated().map { index, block in
-      (block.id, canvas?[block.id] ?? CanvasCardPlacement(x: 24 + Double(index % 5) * 392, y: 24 + Double(index / 5) * 332))
-    }, uniquingKeysWith: { first, _ in first })
-    let byID = Dictionary(blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    func order(_ lhs: (y: Double, x: Double, id: String), _ rhs: (y: Double, x: Double, id: String)) -> Bool {
-      (lhs.y, lhs.x, lhs.id) < (rhs.y, rhs.x, rhs.id)
-    }
-    func placed(_ id: String) -> (y: Double, x: Double, id: String) {
-      let placement = positions[id]; return (placement?.y ?? 0, placement?.x ?? 0, id)
-    }
-    var members: [String: [String]] = [:]
-    var rootItems: [(y: Double, x: Double, id: String)] = sections.map { ($0.y, $0.x, $0.id) }
-    for block in blocks {
-      if let sectionID = canvas?[block.id]?.sectionID, sectionIDs.contains(sectionID) {
-        members[sectionID, default: []].append(block.id)
-      } else {
-        rootItems.append(placed(block.id))
-      }
-    }
-    rootItems.sort(by: order)
-    var result: [NoteBlock] = []
-    var nodes: [String: PageNode] = [:]
-    func appendCard(_ id: String, parentID: String?) {
-      guard var block = byID[id] else { return }
-      if let parentID { nodes[id] = PageNode(parentID: parentID) }
-      // A title has no place in a flowing document, so it joins the text. A linked
-      // original keeps its label, because its content lives elsewhere.
-      if copy.canvas?[id]?.assetID == nil, let title = copy.canvas?[id]?.title {
-        copy.canvas?[id]?.title = nil
-        if !title.isEmpty {
-          if case .richText(var text) = block, text.plainText.isEmpty {
-            text.runs = [NoteTextRun(text: title)]
-            block = .richText(text)
-          } else {
-            let titleID = uniqueID("page-title:\(id)")
-            if let parentID { nodes[titleID] = PageNode(parentID: parentID) }
-            result.append(.richText(NoteRichTextBlock(id: titleID, style: .heading3, text: title)))
-          }
-        }
-      }
-      result.append(block)
-    }
-    for item in rootItems {
-      if sectionIDs.contains(item.id), let section = sections.first(where: { $0.id == item.id }) {
-        let sectionBlockID = uniqueID("page-section:\(section.id)")
-        nodes[sectionBlockID] = PageNode(isSection: true)
-        result.append(.richText(NoteRichTextBlock(id: sectionBlockID, style: .heading2, text: section.title)))
-        for item in (members[section.id] ?? []).map(placed).sorted(by: order) {
-          appendCard(item.id, parentID: sectionBlockID)
-        }
-      } else {
-        appendCard(item.id, parentID: nil)
-      }
-    }
-    copy.blocks = result
-    copy.pageNodes = nodes
-    return copy
-  }
-
   /// The blocks of one flow as an ordinary note, for a text editor. Task, review and
   /// provenance metadata stay on this Page; retained block IDs keep them through `spliceFlow`.
   /// An empty list yields one fresh empty paragraph, so hold its ID until the first splice.
   func pageFlowDocument(blockIDs: [String]) -> NoteDocument {
-    let document = materializedPage()
+    let document = self
     let byID = Dictionary(document.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     return NoteDocument(kind: .note, blocks: blockIDs.compactMap { byID[$0] })
   }
@@ -260,7 +172,7 @@ public extension NoteDocument {
       if new.isEmpty { return }
       if new.count == 1, case .richText(let only) = new[0], only.plainText.isEmpty, only.style == .paragraph { return }
     }
-    var document = materializedPage()
+    var document = self
     if let parentID, document.pageNodes?[parentID]?.isSection != true { throw NoteEditError.pageTargetMissing(parentID) }
     let oldIDs = Set(old), newIDs = new.map(\.id), newIDSet = Set(newIDs)
     guard oldIDs.count == old.count, newIDSet.count == newIDs.count, !newIDs.contains(where: \.isEmpty) else {
@@ -333,19 +245,6 @@ public extension NoteDocument {
     return Self.pageHash(entries.joined(separator: "\u{1}"))
   }
 
-  /// Older connections, readable without any spatial view. Endpoints missing from the
-  /// document cannot occur: validation rejects them and removal prunes them. Each end
-  /// is a short excerpt that identifies it, so a read never repeats whole components.
-  var pageLegacyConnections: [PageLegacyConnection] {
-    let byID = Dictionary(blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    func text(_ id: String) -> String {
-      if let title = canvas?[id]?.title, !title.isEmpty { return String(title.prefix(Self.legacyConnectionExcerpt)) }
-      return String((byID[id]?.plainText ?? "").prefix(Self.legacyConnectionExcerpt))
-    }
-    return (canvasConnections ?? []).map {
-      PageLegacyConnection(id: $0.id, fromID: $0.from, toID: $0.to, fromText: text($0.from), toText: text($0.to), label: $0.label)
-    }
-  }
 }
 
 // MARK: - Internals shared with PageEdit and PageMerge
@@ -423,7 +322,6 @@ extension NoteDocument {
       boardItems?.removeValue(forKey: id)
       pageNodes?.removeValue(forKey: id)
     }
-    canvasConnections?.removeAll { ids.contains($0.from) || ids.contains($0.to) }
   }
 
   /// The same token as `boardItemRevision`, for a block already in hand.

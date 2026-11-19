@@ -47,18 +47,11 @@ extension MobileSyncEngine {
     try await store.verifyWorkspace(identity.libraryID)
     try await store.journal.bind(libraryID: identity.libraryID)
     let deviceID = await store.snapshot().deviceID
-    try await store.journal.prepareOwnerPublication(deviceID: deviceID)
     let local = await store.journal.snapshot()
     let registered = try await transport.executionWorkspaces()
     for id in local.pendingRegistrations.sorted() {
-      guard let workspace = local.workspaces[id] else { continue }
-      if !WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID) {
-        // Observers cache owner records and never publish or re-register them.
-        if let canonical = registered.first(where: { $0.id == id }) {
-          try await store.journal.upsertWorkspace(canonical, pending: false)
-        }
-        continue
-      }
+      // Only the device that runs a workspace registers it.
+      guard let workspace = local.workspaces[id], WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID) else { continue }
       var registration = workspace
       // After moving to another host of the library, that host may already
       // hold this registration (synced from a peer) at its own revision.
@@ -68,7 +61,6 @@ extension MobileSyncEngine {
       try await store.journal.upsertWorkspace(canonical, pending: false)
     }
     try await store.journal.mergeRegistry(registered)
-    try await store.journal.prepareOwnerPublication(deviceID: deviceID)
     for _ in 0..<100 {
       try Task.checkCancellation()
       let pending = await store.journal.pendingOwnerEntries(deviceID: deviceID)

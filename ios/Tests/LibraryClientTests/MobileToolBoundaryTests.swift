@@ -5,9 +5,9 @@ import WovenMatterShared
 
 @Suite("Mobile MCP durable boundaries")
 struct MobileToolBoundaryTests {
-  @Test func savedCancellationGrantsFollowRenamesWithoutEnablingComputerInput() {
+  @Test func aCancellationGrantDoesNotEnableComputerInput() {
     let available = WovenMCPCatalog.tools.map(\.name)
-    let permitted = MobileToolSupport.permittedMCPTools(selection: ["woven_computer_cancel", "woven_browser_cancel"], available: available)
+    let permitted = MobileToolSupport.permittedMCPTools(selection: ["woven_computer_use_cancel", "woven_browser_use_cancel"], available: available)
     #expect(permitted == ["woven_browser_use_cancel", "woven_computer_use_cancel"])
     #expect(!permitted.contains("woven_computer_use"))
   }
@@ -25,7 +25,7 @@ struct MobileToolBoundaryTests {
     let document = NoteDocument(kind: .canvas, blocks: [
       .richText(.init(id: "section", style: .heading2, text: "Launch plan")),
       .richText(.init(id: "task", text: "Task")), .richText(.init(id: "link", text: ""))],
-      canvas: ["link": .init(x: 0, y: 0, assetID: "missing-asset")], boardPurpose: "Launch",
+      canvas: ["link": .init(assetID: "missing-asset")], boardPurpose: "Launch",
       boardItems: ["task": .init(task: .init(status: .doing), review: .needed)],
       pageNodes: ["section": .init(isSection: true), "task": .init(parentID: "section"), "link": .init(parentID: "section")])
     let page = try await store.createNote(folderID: nil, title: "Plan", content: document.encoded())
@@ -90,11 +90,11 @@ struct MobileToolBoundaryTests {
     #expect(await call(store, ["notes", "append", "--note-id", pageID, "--text", "Notes from the phone"], context: context).success)
     let read = await call(store, ["pages", "read", "--note-id", pageID], context: context)
     let pageRevision = try #require(read.result?.objectValue?["revision"]?.stringValue)
-    #expect(await call(store, ["pages", "update", "--note-id", pageID, "--revision", pageRevision, "--title", "Launch v2"], context: context).success)
+    #expect(await call(store, ["pages", "update", "--note-id", pageID, "--revision", pageRevision, "--title", "Launch, revised"], context: context).success)
 
     let saved = try #require(await store.snapshot().notes[pageID])
-    #expect(saved.title == "Launch v2")
-    let document = try NoteDocument.editableDocument(from: saved.content).materializedPage()
+    #expect(saved.title == "Launch, revised")
+    let document = try NoteDocument.editableDocument(from: saved.content)
     #expect(document.blocks.first?.id == taskID, "Moved to the start, out of its section")
     #expect(document.pageNodes?[taskID]?.parentID == nil)
     let task = try #require(document.boardItems?[taskID])
@@ -201,7 +201,7 @@ struct MobileToolBoundaryTests {
     let deviceID = await store.snapshot().deviceID
     let scope = MobileToolContext(sessionID: "parent", workspaceID: deviceID, enabled: [.calendar, .sessions], nativeToolIDs: ["woven_calendar_create", "woven_sessions_create"])
     let original = try await store.calendar.save(expectedRevision: nil,
-      draft: .init(title: "Work", startsAt: MobileToolSupport.date("2026-10-10T12:00:00Z"), task: .init(prompt: "Work", workspaceID: deviceID, enabledTools: ["execute_command", "wovenmatter_calendar"])), ownerDeviceID: deviceID)
+      draft: .init(title: "Work", startsAt: MobileToolSupport.date("2026-10-10T12:00:00Z"), task: .init(prompt: "Work", workspaceID: deviceID, enabledTools: ["execute_command", "woven_calendar"])), ownerDeviceID: deviceID)
     let args = ["calendar", "copy", original.id, "--starts-at", "2026-10-15T12:00:00Z"]
     let request = WovenMatterToolRequest(arguments: args)
     _ = try await store.executeCalendarTool(WovenMatterToolCommand(args), request: request, context: scope)

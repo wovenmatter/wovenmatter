@@ -11,16 +11,14 @@ public struct WorkspaceJournalState: Codable, Equatable, Sendable {
   public var entries: [String: ExecutionJournalEntry] = [:]
   public var pendingEventIDs: Set<String> = []
   public var originSequences: [String: Int64] = [:]
-  var conversationOwners: [String: String]?
+  var conversationOwners: [String: String] = [:]
   public var directCursors: [String: Int64] = [:]
   public var conversations: [String: LibraryConversation] = [:]
   public var transcripts: [String: LibraryTranscript] = [:]
   public var deletedConversationIDs: Set<String> = []
   public var commands: [String: MobileCommandRecord] = [:]
   public init() {}
-  public var conversationWorkspaceIDs: [String: String] {
-    conversationOwners ?? Dictionary(entries.values.map { ($0.conversationID, $0.workspaceID) }, uniquingKeysWith: { first, _ in first })
-  }
+  public var conversationWorkspaceIDs: [String: String] { conversationOwners }
   public var pendingEntries: [ExecutionJournalEntry] {
     entries.values.filter { pendingEventIDs.contains($0.eventID) }.sorted {
       $0.workspaceID == $1.workspaceID ? $0.originSequence < $1.originSequence : $0.workspaceID < $1.workspaceID
@@ -53,26 +51,11 @@ public actor WorkspaceJournal {
     if FileManager.default.fileExists(atPath: file.path) {
       state = try WorkspaceJournalPersistence.load(at: file)
     } else { state = .init() }
-    if state.conversationOwners == nil { state.conversationOwners = state.conversationWorkspaceIDs }
   }
   public func snapshot() -> WorkspaceJournalState { state }
   /// The run IDs this journal already holds for a conversation: what a new
   /// projection of that conversation's native history must keep.
   public func storedRuns(conversationID: String) -> DeviceTranscript.StoredRuns { .init(state.transcripts[conversationID]) }
-  /// Cached observer history never becomes a publisher queue. Legacy relay flags
-  /// are removed atomically, without deleting any origin record or projection.
-  public func prepareOwnerPublication(deviceID: String) throws {
-    try transaction { next in
-      next.pendingEventIDs = next.pendingEventIDs.filter { id in
-        guard let entry = next.entries[id], let workspace = next.workspaces[entry.workspaceID] else { return true }
-        return Self.isLocalExecutionOwner(workspace, deviceID: deviceID)
-      }
-      next.pendingRegistrations = next.pendingRegistrations.filter { id in
-        guard let workspace = next.workspaces[id] else { return false }
-        return Self.isLocalExecutionOwner(workspace, deviceID: deviceID)
-      }
-    }
-  }
   public static func isLocalExecutionOwner(_ workspace: ExecutionWorkspace, deviceID: String) -> Bool {
     workspace.kind != .linux && workspace.ownerDeviceID == deviceID &&
       (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID
@@ -457,8 +440,7 @@ public actor WorkspaceJournal {
       next.conversations.removeValue(forKey: entry.conversationID); next.transcripts.removeValue(forKey: entry.conversationID)
     }
     next.entries[entry.eventID] = entry
-    if next.conversationOwners == nil { next.conversationOwners = [:] }
-    next.conversationOwners?[entry.conversationID] = entry.workspaceID
+    next.conversationOwners[entry.conversationID] = entry.workspaceID
     next.originSequences[entry.workspaceID] = entry.originSequence
   }
   private static func mergeTranscript(_ value: LibraryTranscript, into prior: LibraryTranscript?) -> LibraryTranscript {
@@ -569,8 +551,8 @@ public actor WorkspaceClient {
     var scoped = requested
     scoped.workspaceID = workspaceID
     let saved = await store.journal.commandRecords(workspaceID: workspaceID).first { $0.id == requested.commandID }?.command
-    // New commands carry their owner before persistence. Legacy saved commands
-    // keep their exact payload; the journal key and transport still bind them.
+    // A command carries its owner before it is saved. A saved command is sent
+    // again with its exact payload.
     let command = try await store.journal.rememberCommand(saved ?? scoped, workspaceID: workspaceID)
     if saved == nil { try? await store.analytics.recordCommand(command) }
     // An explicit retry always uses the persisted payload, even if the composer

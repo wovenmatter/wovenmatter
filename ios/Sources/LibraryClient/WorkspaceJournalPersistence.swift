@@ -10,8 +10,7 @@ enum WorkspaceJournalPersistence {
   static func load(at file: URL) throws -> WorkspaceJournalState {
     let saved = try Data(contentsOf: file)
     let earlier = EarlierPhoneFiles.isEarlierIndex(saved)
-    let data = PersistedFieldRenames.upgrade(saved, renaming: PersistedFieldRenames.journal)
-    var state = try JSONDecoder().decode(Envelope.self, from: data).state
+    var state = try JSONDecoder().decode(Envelope.self, from: saved).state
     var loaded: [String: Data] = [:]
     try transform(&state) { encodedReference in
       guard let reference = String(data: encodedReference, encoding: .utf8), reference.count == 64,
@@ -21,10 +20,6 @@ enum WorkspaceJournalPersistence {
       guard digest(data) == reference else { throw WorkspaceJournal.Failure.unreadableStore }
       loaded[reference] = data; return data
     }
-    // Earlier builds excluded the journal. History may have no other copy until
-    // the library accepts it, so include every body and the index on open, before any edit.
-    for reference in loaded.keys { try? MobileStorePersistence.applyBackupIfChanged(.include, at: directory(file).appendingPathComponent(reference)) }
-    try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
     if earlier {
       // Saved again at once in today's shape, so there is nothing to convert
       // at the next open. If the save fails, the next open converts again.

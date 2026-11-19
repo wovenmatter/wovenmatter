@@ -21,6 +21,20 @@ your computers and sync; Mac-only pages (Scheduled tasks, Databases) appear once
 paired. Pairing later uploads everything made on the phone once: notes and
 folders, Quick Chat history, calendar events, timer reminders and dictations.
 
+Every device runs the same release. The phone reads and writes one shape of
+each stored file, stream frame and request, at routes directly under
+`/wovenmatter`; a frame, record or reply it does not know is an error, not
+something to skip. What the release before this one saved on the phone is
+converted once, when the file is first opened (`EarlierPhoneFiles`).
+
+A Mac that no longer lists the phone refuses its requests. The phone then stops
+every connection, keeps the pairing and everything stored, and says it is no
+longer paired: Home shows "Pair again", and Settings → Device Connections shows
+the same notice with the pairing controls and "Forget this pairing". Pairing
+once with any Mac restores sync with every Mac and Linux machine.
+`testAPhoneItsMacNoLongerListsOffersPairingAgain` covers both screens, in the
+light and the dark theme, with `WOVENMATTER_UI_SCENARIO=not-paired`.
+
 ## Build and validate
 
 ```sh

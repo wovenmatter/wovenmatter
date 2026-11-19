@@ -257,7 +257,7 @@ struct ChatPane: View {
         }.buttonStyle(.plain).foregroundStyle(WovenPalette.success).accessibilityIdentifier("quick-chat-web-search-setup")
       }
       if let id = model.selectedConversationID, model.executionRecords[id]?.savedHistoryOnly == true {
-        Text("Earlier on-device agent chat · saved history").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
+        Text("Saved history · start a new Quick Chat to continue").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
       }
 
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
@@ -436,8 +436,8 @@ private struct MobileGoalControls: View {
   }
 }
 
-/// Files an earlier on-device agent saved in this chat's folder. They can be
-/// viewed and exported; no agent runtime or file tool is reopened.
+/// Files saved in the folder of a chat kept as history. They can be viewed
+/// and exported; no agent runtime or file tool is reopened.
 struct RetainedDeviceFilesPane: View {
   @Bindable var model: MobileModel
   let conversationID: String
@@ -452,7 +452,7 @@ struct RetainedDeviceFilesPane: View {
         }
         if files.isEmpty { Text("No files were saved in this chat.").foregroundStyle(WovenPalette.mutedForeground) }
       } footer: {
-        Text("Files saved by an earlier on-device agent stay on this device. Share one to export it.")
+        Text("Files saved in this chat stay on this device. Share one to export it.")
       }
     }.scrollIndicators(.never).mobileNavigationPage("Saved files")
       .task { files = model.retainedDeviceFiles(conversationID: conversationID) }

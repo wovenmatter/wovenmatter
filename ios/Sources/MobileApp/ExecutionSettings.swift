@@ -93,7 +93,7 @@ struct DeviceAgentSettingsPane: View {
       Section {
         ForEach(toolDefinitions, id: \.id) { tool in
           Toggle(tool.label, isOn: Binding(get: { MobileModel.deviceToolEnabled(tool.id, selection: defaults.enabledTools) }, set: { enabled in
-            var selected = Set(MobileToolSupport.migratedMCPSelection(defaults.enabledTools) ?? toolDefinitions.map(\.id).filter { MobileModel.deviceToolEnabled($0, selection: nil) })
+            var selected = Set(defaults.enabledTools ?? toolDefinitions.map(\.id).filter { MobileModel.deviceToolEnabled($0, selection: nil) })
             if enabled { selected.insert(tool.id) } else {
               selected.remove(tool.id)
               selected.subtract(MobileModel.deviceMCPTools.compactMap { $0["name"] as? String }.filter { name in
@@ -207,7 +207,6 @@ struct DeviceAgentSettingsPane: View {
     if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give this connection a name." }
     if loadingModels { return "Loading the provider’s models…" }
     if signingIn { return "Complete sign-in before saving this connection." }
-    if definition?.supportsDirect != true { return "This provider does not offer sign-in for this app. Choose its API-key connection instead." }
     if modelID.isEmpty { return "Choose a model to use with this connection." }
     if isCustomServer && endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Enter the model server’s Tailscale address." }
     if trimmedSecret.isEmpty && !storedCredentialAvailable { return isOAuth ? "Sign in on this device before saving." : "Enter an API key before saving." }
@@ -351,7 +350,7 @@ private struct InferenceConnectionEditor: View {
   private func loadModels(force: Bool = false) {
     catalogTask?.cancel()
     guard setupAllowed else { return }
-    guard state.definition?.supportsDirect == true, !state.isCustomServer else { state.loadingModels = false; return }
+    guard state.definition != nil, !state.isCustomServer else { state.loadingModels = false; return }
     let provider = state.provider, generation = state.beginCatalog()
     catalogTask = Task {
       let cached = await ProviderModelCatalog.shared.cached(provider: provider)

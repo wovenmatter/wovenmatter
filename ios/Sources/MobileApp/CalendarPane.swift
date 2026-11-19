@@ -181,7 +181,7 @@ struct CalendarEventSheet: View {
       let owner = agent.workspaceID == "host" ? "local:" + agent.runtimeKind : "remote:" + agent.workspaceID + ":" + agent.runtimeKind
       if !values.contains(where: { $0.id == owner }) { values.append(.init(id: owner, label: agent.name + " · " + agent.workspaceName)) }
     }
-    if selectedRoute == "device" { values.append(.init(id: "device", label: "Previously assigned to this phone · choose a workspace")) }
+    if selectedRoute == "device" { values.append(.init(id: "device", label: "Assigned to this phone · choose a workspace")) }
     else if !values.contains(where: { $0.id == selectedRoute }) { values.append(.init(id: selectedRoute, label: "Saved agent and workspace")) }
     return values
   }

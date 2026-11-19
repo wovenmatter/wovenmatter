@@ -618,10 +618,8 @@ public extension NoteDocument {
         guard value.utf8.count <= 4096 else { throw NoteDocumentSafetyError.tooLarge }
         title = value
       case .appendText(let text, let style):
-        self = materializedPage()
         blocks.append(.richText(NoteRichTextBlock(style: style, text: text)))
       case .insertText(let afterBlockID, let text, let style):
-        self = materializedPage()
         insertPageAware(.richText(NoteRichTextBlock(style: style, text: text)), after: afterBlockID)
       case .replaceBlock(let id, let block):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
@@ -650,7 +648,6 @@ public extension NoteDocument {
       case .createTable(let afterBlockID, let rows, let columns, let headerRow):
         guard (1...1000).contains(rows), (1...128).contains(columns),
               rows <= 50_000 / columns else { throw NoteDocumentSafetyError.unsupportedFormat }
-        self = materializedPage()
         insertPageAware(.table(NoteTableBlock(rows: rows, columns: columns, headerRow: headerRow)), after: afterBlockID)
       case .setTableCell(let tableID, let row, let column, let runs):
         try mutateTable(id: tableID) { table in

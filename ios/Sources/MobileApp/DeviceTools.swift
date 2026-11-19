@@ -59,7 +59,7 @@ extension MobileModel {
     guard resolved == rootPath || resolved.hasPrefix(rootPath + "/"), directory || resolved != rootPath else { throw DeviceExecutionError.unavailable("The file path leaves this device workspace.") }
     return candidate
   }
-  /// Files earlier on-device agents saved for a chat, for viewing and export only.
+  /// Files saved for a chat kept as history, for viewing and export only.
   /// Listing never creates the folder or reopens a runtime or tool. Links that
   /// resolve outside the chat's folder, or a folder that is itself such a link, are left out.
   func retainedDeviceFiles(conversationID: String) -> [RetainedDeviceFile] {

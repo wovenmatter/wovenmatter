@@ -41,6 +41,9 @@ public enum StreamProtocol {
   public enum CloseCode: Int, Sendable {
     case normal = 1000
     case goingAway = 1001
+    /// A frame over `maximumFrameBytes`.
+    case frameTooLarge = 1009
+    /// Anything else that is not a frame this protocol defines, in the order it defines.
     case protocolViolation = 4400
     /// The member was removed. Do not reconnect until the member list changes.
     case memberRemoved = 4401

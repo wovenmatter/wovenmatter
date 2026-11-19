@@ -135,8 +135,6 @@ final class MobileSyncEngineTests: XCTestCase {
     _ = try await store.calendar.save(expectedRevision: nil, draft: .init(title: "Offline event", startsAt: Date(), timeZoneID: "UTC"))
     try await store.journal.upsertWorkspace(.init(id: device, libraryID: "mac-a", ownerDeviceID: device, kind: .ios, name: "Phone"))
     try await store.journal.append(workspaceID: device, conversation: .init(id: "local-chat", title: "Local history"))
-    try await store.journal.upsertWorkspace(.init(id: "remote", libraryID: "mac-a", ownerDeviceID: "other", kind: .mac, name: "Other Mac"))
-    try await store.journal.append(workspaceID: "remote", conversation: .init(id: "remote-chat", title: "Cached old relay"))
     _ = try await store.artifacts.save(data: Data("saved locally".utf8), workspaceID: device, title: "Artifact", mediaType: "text/plain")
     let engine = MobileSyncEngine(store: store, transport: mac)
     do { try await engine.synchronize(); XCTFail("Expected independent lane failures") } catch { }
@@ -144,7 +142,6 @@ final class MobileSyncEngineTests: XCTestCase {
     XCTAssertEqual(syncedNotes[note.id]?.title, "Independent")
     XCTAssertEqual(local.outbox.count, 2); XCTAssertEqual(local.folders[folder.id]?.name, "Local folder")
     XCTAssertEqual(uploads.map(\.conversationID), ["local-chat"])
-    XCTAssertNotNil(local.conversations["remote-chat"], "Removing relay flags must retain cached history")
     let calendarCount = await store.calendar.pendingCount(); XCTAssertEqual(calendarCount, 0)
     let status = await engine.synchronizationStatus()
     XCTAssertEqual(status.hostReachable, true)

@@ -95,7 +95,7 @@ final class ProviderModelCatalogTests: XCTestCase {
     do { _ = try await restarted.load(provider: "openai"); XCTFail("Offline load succeeded") } catch {}
     let retained = await restarted.cached(provider: "openai")
     XCTAssertEqual(retained, cold)
-    let saved = InferenceConnection(name: "Saved", provider: "openai", route: .direct, modelID: cold[0].id, selectedModel: cold[0])
+    let saved = InferenceConnection(name: "Saved", provider: "openai", modelID: cold[0].id, selectedModel: cold[0])
     let persisted = try JSONDecoder().decode(InferenceConnection.self, from: JSONEncoder().encode(saved))
     let emptyCatalog = ProviderModelCatalog(directory: root(), transport: CatalogFixture([]))
     let service = MobileInferenceService(connection: persisted, catalogLoader: emptyCatalog)

@@ -308,7 +308,7 @@ final class MobileModelTests: XCTestCase {
     let foreign = LibraryFolder(id: UUID().uuidString, name: "Other phone", execution: .init(workspaceID: "device:" + otherPhone, rootPath: "/foreign"))
     model.state.folders = [local.id: local, foreign.id: foreign]
     model.executionWorkspaces = [.init(id: otherPhone, libraryID: "library", ownerDeviceID: otherPhone, kind: .ios, name: "My iPad")]
-    let unknown = LibraryNote(id: UUID().uuidString, title: "Legacy", content: "")
+    let unknown = LibraryNote(id: UUID().uuidString, title: "Unowned", content: "")
     model.state.notes[unknown.id] = unknown
     XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [phone, otherPhone])
     XCTAssertTrue(model.routeOwnsFolder(workspaceID: "local", folderID: local.id))
@@ -344,7 +344,7 @@ final class MobileModelTests: XCTestCase {
     model.selectedConversationID = chat.id
     XCTAssertTrue(model.isViewingRemoteQuickChat)
     XCTAssertEqual(model.conversationOwner(chat), owner)
-    XCTAssertNil(model.conversationOwner(.init(id: "legacy", title: "Unknown")))
+    XCTAssertNil(model.conversationOwner(.init(id: "unlisted", title: "Unknown")))
   }
 
   func testSharedIconLicenseIsIncludedInTheAppBundle() throws {

@@ -141,7 +141,7 @@ public struct LibraryTranscript: Codable, Equatable, Sendable {
   /// Opaque pagination cursor. Send it back as `before`; never interpret on the client.
   public var olderCursor: String?
   public var runs: [LibraryTranscriptRun]?
-  /// Exact legacy tool-message IDs superseded by structured activities. Never user messages.
+  /// Exact IDs of tool messages that structured activities replace. Never user messages.
   public var removedMessageIDs: [String]?
   public init(conversationID: String, messages: [LibraryMessage] = [], activities: [LibraryActivity] = [], activeRunID: String? = nil, olderCursor: String? = nil, runs: [LibraryTranscriptRun]? = nil, removedMessageIDs: [String]? = nil) {
     self.runs = runs; self.removedMessageIDs = removedMessageIDs

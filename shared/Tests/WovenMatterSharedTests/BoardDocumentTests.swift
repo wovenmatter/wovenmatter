@@ -2,20 +2,15 @@ import Foundation
 import Testing
 @testable import WovenMatterShared
 
-@Suite("Board collaboration metadata")
+@Suite("Page collaboration metadata")
 struct BoardDocumentTests {
-  private func board() -> (NoteDocument, a: String, b: String) {
-    let a = NoteRichTextBlock(id: "a", text: "First"), b = NoteRichTextBlock(id: "b", text: "Second")
-    var placement = CanvasCardPlacement(x: 10, y: 20); placement.title = "Ship it"
-    let document = NoteDocument(kind: .canvas, blocks: [.richText(a), .richText(b)],
-      canvas: ["a": placement, "b": .init(x: 500, y: 20)], boardPurpose: "Launch",
-      boardItems: ["a": .init(task: .init(status: .doing, assignee: "Codex")), "b": .init(review: .needed)])
-    return (document, "a", "b")
-  }
-  /// The same Board after its first write, which is how every component edit sees it.
   private func page() -> (NoteDocument, a: String, b: String) {
-    let (document, a, b) = board()
-    return (document.materializedPage(), a, b)
+    let a = NoteRichTextBlock(id: "a", text: "First"), b = NoteRichTextBlock(id: "b", text: "Second")
+    var placement = CanvasCardPlacement(); placement.title = "Ship it"
+    let document = NoteDocument(kind: .canvas, blocks: [.richText(a), .richText(b)],
+      canvas: ["a": placement, "b": .init()], boardPurpose: "Launch",
+      boardItems: ["a": .init(task: .init(status: .doing)), "b": .init(review: .needed)])
+    return (document, "a", "b")
   }
   private func update(_ id: String, in document: NoteDocument, _ patch: BoardItemPatch) -> NoteEditOperation {
     .page(.init(action: .update, id: id, expectedRevision: document.boardItemRevision(for: id), patch: patch))
@@ -23,8 +18,8 @@ struct BoardDocumentTests {
   private func text(_ id: String, in document: NoteDocument) -> String? { document.blocks.first { $0.id == id }?.plainText }
 
   @Test func everyFieldSurvivesNormalizationAndRoundTrip() throws {
-    var (document, a, _) = board()
-    document.boardItems?[a] = .init(role: .instructions, task: .init(status: .blocked, assignee: "Me", outcome: "Waiting"),
+    var (document, a, _) = page()
+    document.boardItems?[a] = .init(role: .instructions, task: .init(status: .blocked, outcome: "Waiting"),
       review: .approved, sessions: ["s1"], lastChange: "Blocked", createdBy: .init(kind: .user), createdAt: "2026-01-01T00:00:00Z",
       updatedBy: .init(kind: .session, sessionID: "s1", label: "Worker"), updatedAt: "2026-01-02T00:00:00Z")
     #expect(document.normalized() == document)
@@ -43,7 +38,7 @@ struct BoardDocumentTests {
 
   @Test func boundsAndFutureFieldsAreReadOnly() throws {
     func rejected(_ change: (inout NoteDocument) -> Void) {
-      var (document, _, _) = board(); change(&document)
+      var (document, _, _) = page(); change(&document)
       #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try document.validateEditableShape() }
     }
     rejected { $0.boardPurpose = String(repeating: "x", count: NoteDocument.maximumBoardPurposeBytes + 1) }
@@ -55,7 +50,7 @@ struct BoardDocumentTests {
     let plain = NoteDocument(blocks: [.richText(.init(id: "a", text: "Note"))], boardPurpose: "Not a Board")
     #expect(throws: NoteDocumentSafetyError.unsupportedFormat) { try plain.validateEditableShape() }
 
-    let (document, a, _) = board()
+    let (document, a, _) = page()
     var object = try #require(JSONSerialization.jsonObject(with: Data(document.encoded().utf8)) as? [String: Any])
     var items = try #require(object["boardItems"] as? [String: Any])
     var item = try #require(items[a] as? [String: Any]); item["futureField"] = "preserve"
@@ -65,7 +60,7 @@ struct BoardDocumentTests {
   }
 
   @Test func boardsCannotGrowPastTheSharedEnvelope() throws {
-    let (document, _, _) = board()
+    let (document, _, _) = page()
     let text = String(repeating: "x", count: 200 * 1_024)
     var operations: [NoteEditOperation] = (0..<6).map { .page(.init(action: .add, id: "large-\($0)", patch: .init(text: text))) }
     #expect(throws: RemoteNoteEditError.operationTooLarge) { try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: document) }
@@ -74,13 +69,11 @@ struct BoardDocumentTests {
   }
 
   @Test func deletingACardCleansItsMetadataAndChangingItsIDIsRejected() throws {
-    var (document, a, b) = board()
-    document.canvasConnections = [.init(id: "link", from: a, to: b)]
+    let (document, a, b) = page()
     var removed = document
     _ = try removed.apply([.deleteBlock(id: a)])
     #expect(removed.boardItems?[a] == nil)
-    #expect(removed.canvasConnections?.isEmpty == true)
-    removed = document.materializedPage()
+    removed = document
     _ = try removed.apply([.page(.init(action: .remove, id: a, expectedRevision: removed.boardItemRevision(for: a)))])
     #expect(removed.boardItems?[a] == nil && removed.canvas?[a] == nil && !removed.blocks.contains { $0.id == a })
     #expect(removed.boardItems?[b] == document.boardItems?[b])
@@ -95,16 +88,15 @@ struct BoardDocumentTests {
     #expect(replaced.canvas?[a] == document.canvas?[a])
   }
 
-  @Test func itemRevisionIgnoresLayoutAndTracksContent() throws {
-    let (document, a, b) = board()
+  @Test func itemRevisionIgnoresOrderAndEmbedHeightAndTracksContent() throws {
+    let (document, a, b) = page()
     let before = document.boardItemRevision(for: a)
     #expect(before.count == 32)
     #expect(document.boardItemRevision(for: "missing") == "")
     #expect(try NoteDocument.editableDocument(from: document.encoded()).boardItemRevision(for: a) == before)
 
     var moved = document
-    moved.canvasSections = [CanvasSection(id: "group", title: "Group", x: -400, y: -400)]
-    moved.canvas?[a]?.x = 900; moved.canvas?[a]?.width = 700; moved.canvas?[a]?.color = "blue"; moved.canvas?[a]?.sectionID = "group"
+    moved.canvas?[a]?.height = 700
     moved.blocks.reverse()
     try moved.validateEditableShape()
     #expect(moved.boardItemRevision(for: a) == before)
@@ -125,7 +117,7 @@ struct BoardDocumentTests {
     var (document, a, _) = page()
     _ = try document.apply([update(a, in: document, .init(outcome: "Shipped", lastChange: "Finished"))])
     let item = try #require(document.boardItems?[a])
-    #expect(item.task == .init(status: .doing, assignee: "Codex", outcome: "Shipped"))
+    #expect(item.task == .init(status: .doing, outcome: "Shipped"))
     #expect(item.lastChange == "Finished")
     #expect(text(a, in: document) == "First")
 
@@ -215,14 +207,14 @@ struct BoardDocumentTests {
     }
   }
 
-  @Test func stampingFollowsContentNotLayoutAndCannotBeForged() throws {
+  @Test func stampingFollowsContentAndCannotBeForged() throws {
     let user = BoardActor(kind: .user), agent = BoardActor(kind: .session, sessionID: "s1", label: "Worker")
-    var (old, a, b) = board()
+    var (old, a, b) = page()
     old.boardItems?[a]?.createdBy = user; old.boardItems?[a]?.createdAt = "2026-01-01T00:00:00Z"
-    old.boardItems?[a]?.lastChange = "Earlier"
+    old.boardItems?[a]?.lastChange = "First summary"
 
     var moved = old
-    moved.canvas?[a]?.x = 4_000; moved.canvas?[a]?.color = "pink"
+    moved.canvas?[a]?.height = 900
     moved.stampBoardChanges(from: old, actor: agent, at: "2026-02-02T00:00:00Z")
     #expect(moved.boardItems == old.boardItems)
 
@@ -256,7 +248,7 @@ struct BoardDocumentTests {
     let worker = BoardActor(kind: .session, sessionID: "s1", label: "Worker")
     let reviewer = BoardActor(kind: .session, sessionID: "s2", label: "Reviewer")
     let outside = BoardActor(kind: .outside)
-    var (start, a, _) = board()
+    var (start, a, _) = page()
     start.boardItems?[a]?.lastChange = nil
     /// One write: applies the change, then stamps it as the given participant.
     func write(_ document: NoteDocument, as actor: BoardActor, at time: String, _ change: (inout BoardItem) -> Void) -> NoteDocument {
@@ -299,13 +291,13 @@ struct BoardDocumentTests {
 
     // A summary with no known author is not continued by anyone.
     var unattributed = start
-    unattributed.boardItems?[a]?.lastChange = "Legacy"
+    unattributed.boardItems?[a]?.lastChange = "Unattributed"
     #expect(write(unattributed, as: user, at: "T1") { $0.task?.status = .done }.boardItems?[a]?.lastChange == nil)
 
-    // The same participant can still clear it, and layout changes nothing at all.
+    // The same participant can still clear it, and how tall an embed is shown changes nothing.
     #expect(write(byWorker, as: worker, at: "T2") { $0.lastChange = nil }.boardItems?[a]?.lastChange == nil)
     var moved = byWorker
-    moved.canvas?[a]?.x += 500
+    moved.canvas?[a]?.height += 100
     moved.stampBoardChanges(from: byWorker, actor: reviewer, at: "T2")
     #expect(moved.boardItems?[a] == byWorker.boardItems?[a])
   }
@@ -360,9 +352,9 @@ struct BoardDocumentTests {
   }
 
   @Test func readsFilterPageAndReportMissingOriginals() throws {
-    var (document, a, b) = board()
+    var (document, a, b) = page()
     document.canvas?[b]?.assetID = "gone"
-    document.canvas?["c"] = .init(x: 900, y: 0, assetID: "present")
+    document.canvas?["c"] = .init(assetID: "present")
     document.blocks.append(.richText(.init(id: "c", text: "Label")))
     document.boardItems?["c"] = .init(role: .instructions, updatedAt: "2026-03-01T00:00:00Z")
     let assets = ["present": BoardAssetSummary(id: "present", available: true, title: "Guide", kind: "note", revision: "7")]
@@ -375,28 +367,21 @@ struct BoardDocumentTests {
       #expect(value.objectValue?["notice"]?.stringValue?.contains("does not authorize") == true)
       return try #require(value.objectValue?["components"]?.arrayValue).compactMap(\.objectValue)
     }
-    // An unwritten Board reads as its migrated reading order, top to bottom. A titled
-    // card with text gets a heading before it, so nothing it showed is lost.
     let all = try components { _ in }
-    let titleID = "page-title:\(a)"
-    #expect(all.map { $0["componentID"]?.stringValue } == ["c", titleID, a, b])
-    let materialized = document.materializedPage()
-    #expect(all[0]["asset"]?.objectValue?["title"]?.stringValue == "Guide")
-    #expect(all[1]["text"]?.stringValue == "Ship it" && all[1]["style"]?.stringValue == "heading3")
-    #expect(all[2]["componentRevision"]?.stringValue == materialized.boardItemRevision(for: a))
-    #expect(all[2]["text"]?.stringValue == "First" && all[2]["kind"]?.stringValue == "task")
-    #expect(all[3]["text"] == nil && all[3]["kind"]?.stringValue == "asset")
-    #expect(all[3]["asset"]?.objectValue?["available"]?.boolValue == false)
+    #expect(all.map { $0["componentID"]?.stringValue } == [a, b, "c"])
+    #expect(all[0]["componentRevision"]?.stringValue == document.boardItemRevision(for: a))
+    #expect(all[0]["text"]?.stringValue == "First" && all[0]["kind"]?.stringValue == "task")
+    #expect(all[1]["text"] == nil && all[1]["kind"]?.stringValue == "asset")
+    #expect(all[1]["asset"]?.objectValue?["available"]?.boolValue == false)
+    #expect(all[2]["asset"]?.objectValue?["title"]?.stringValue == "Guide")
     #expect(try components { $0.status = .doing }.map { $0["componentID"]?.stringValue } == [a])
     #expect(try components { $0.needsReview = true }.map { $0["componentID"]?.stringValue } == [b])
     #expect(try components { $0.role = .instructions }.map { $0["componentID"]?.stringValue } == ["c"])
     #expect(try components { $0.changedSince = BoardReadFilter.date("2026-02-01T00:00:00Z") }.map { $0["componentID"]?.stringValue } == ["c"])
-    #expect(try components { $0.offset = 1; $0.limit = 1 }.map { $0["componentID"]?.stringValue } == [titleID])
+    #expect(try components { $0.offset = 1; $0.limit = 1 }.map { $0["componentID"]?.stringValue } == [b])
     #expect(try components { $0.offset = Int.max }.isEmpty)
-    #expect(all[0]["legacyPlacement"] == nil)
-    #expect(try components { $0.includeLayout = true }[0]["legacyPlacement"] != nil)
     var page = BoardReadFilter(); page.limit = 2
-    #expect(document.boardAssetIDs(filter: page) == ["present"])
+    #expect(document.boardAssetIDs(filter: page) == ["gone"])
     #expect(document.boardAssetIDs == ["gone", "present"])
   }
 }

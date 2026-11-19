@@ -1070,6 +1070,7 @@ import MobileInference
         await reload()
       }
       if scenario.hasPrefix("member-macs") { try await seedMemberMacsFixture(store, send: scenario == "member-macs-send") }
+      if scenario == "not-paired" { seedNotPairedFixture() }
       selectedNoteID = scenarioNoteID ?? notes.first?.id
       selectedConversationID = scenario == "member-macs-send" ? Self.memberMacsFixtureChat : "fixture-chat"
       if Self.uiScenario == "pairing" { pairingPresented = true }

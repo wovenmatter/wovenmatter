@@ -22,16 +22,14 @@ enum MobileStorePersistence {
   static func load(from file: URL) throws -> MobileStoreState {
     let saved = try Data(contentsOf: file)
     let earlier = EarlierPhoneFiles.isEarlierIndex(saved)
-    let data = PersistedFieldRenames.upgrade(saved, renaming: PersistedFieldRenames.store)
-    var state = try JSONDecoder().decode(Envelope.self, from: data).state
-    var missing = Set<BodyRole>(), roles: [String: MobileBackup] = [:]
+    var state = try JSONDecoder().decode(Envelope.self, from: saved).state
+    var missing = Set<BodyRole>()
     try transform(&state) { reference, role in
       guard reference.count == 64, reference.allSatisfy({ $0.isHexDigit }) else { throw MobileStore.Failure.unreadableStore }
       let blob = blobDirectory(file).appendingPathComponent(reference)
       guard FileManager.default.fileExists(atPath: blob.path) || role == .local else { missing.insert(role); return "" }
       let data = try Data(contentsOf: blob)
       guard digest(data) == reference, let content = String(data: data, encoding: .utf8) else { throw MobileStore.Failure.unreadableStore }
-      roles[reference] = role == .local ? .include : roles[reference] ?? .exclude
       return content
     }
     // A restored backup omits rebuildable caches. Keep their metadata and fetch the bodies again.
@@ -46,10 +44,6 @@ enum MobileStorePersistence {
       case .local: break
       }
     }
-    // Earlier builds excluded everything; include local writing without waiting for an edit.
-    // Nothing is excluded in place (see persist).
-    for (reference, backup) in roles where backup == .include { try? applyBackupIfChanged(.include, at: blobDirectory(file).appendingPathComponent(reference)) }
-    try? applyBackupIfChanged(.include, at: file)
     if earlier {
       // Saved again at once in today's shape, so there is nothing to convert
       // at the next open. If the save fails, the next open converts again.

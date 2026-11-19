@@ -343,11 +343,11 @@ public actor StreamConnection {
     await settle(Self.classify(error), generation: current)
   }
 
-  /// The open (or opening) socket is gone.
-  private func lost(_ error: any Error, generation current: Int) async {
+  /// The open (or opening) socket is gone. Nothing it sends afterwards is used.
+  private func lost(_ error: any Error, generation current: Int, closing code: StreamProtocol.CloseCode = .goingAway) async {
     guard current == generation, let socket = transport else { return }
     transport = nil
-    await socket.close(.goingAway)
+    await socket.close(code)
     await settle(Self.classify(error), generation: current)
   }
 
@@ -435,7 +435,9 @@ public actor StreamConnection {
   private func handle(_ frame: StreamFrame, socket: any StreamTransport, generation current: Int) async {
     guard greeted else {
       guard case .hello(let value) = frame else {
-        await lost(StreamConnectionError.refused(status: 101, code: "invalid", message: "The server did not say hello."), generation: current)
+        // The first frame is `hello`. Anything else is a protocol violation.
+        await lost(StreamConnectionError.refused(status: 101, code: "invalid", message: "The server did not say hello."),
+                   generation: current, closing: .protocolViolation)
         return
       }
       greeted = true; hello = value
@@ -486,6 +488,7 @@ public actor StreamConnection {
         subscription.retryTask?.cancel()
         _ = await subscription.handler(.ended(end.error))
       }
+    // A second `hello` is ignored, and so is a frame only a client sends.
     case .hello, .request, .subscribe, .cancel:
       break
     }

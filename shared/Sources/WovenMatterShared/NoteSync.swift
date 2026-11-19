@@ -52,7 +52,7 @@ public enum NoteSync {
           let data = body.data(using: .utf8),
           let document = try? JSONDecoder().decode(NoteDocument.self, from: data),
           [.canvas, .html].contains(document.kind) else { return nil }
-    return document.normalized().materializedPage()
+    return document.normalized()
   }
 
   // MARK: Stamping a local write
@@ -396,7 +396,7 @@ struct PageParts {
   let children: [String?: [String]]
 
   init(_ document: NoteDocument) {
-    self.document = document.materializedPage()
+    self.document = document
     order = self.document.blocks.map(\.id)
     blocks = Dictionary(self.document.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     children = self.document.pageChildMap()

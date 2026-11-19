@@ -72,22 +72,39 @@ public final class WebSocketStreamTransport: StreamTransport, @unchecked Sendabl
     return request
   }
 
-  /// The client's decode path for one WebSocket message.
+  /// The client's decode path for one WebSocket message. A frame is a text
+  /// message; a binary one is a protocol violation.
   public static func decode(_ message: URLSessionWebSocketTask.Message) throws -> StreamFrame {
     switch message {
     case .string(let text): try StreamProtocol.decode(Data(text.utf8))
-    case .data(let data): try StreamProtocol.decode(data)
+    case .data: throw StreamConnectionError.refused(status: 101, code: "invalid", message: "The server sent a binary message.")
     @unknown default: throw StreamConnectionError.refused(status: 101, code: "invalid", message: "The server sent a message that is not a frame.")
     }
   }
 
+  /// The close code that answers a message this client cannot use: 1009 for
+  /// one over the frame limit (which URLSession refuses itself, as "message
+  /// too long"), 4400 for anything else that is not a frame.
+  static func closeCode(refusing error: any Error) -> StreamProtocol.CloseCode {
+    if case StreamProtocolError.frameTooLarge = error { return .frameTooLarge }
+    let underlying = error as NSError
+    if underlying.domain == NSPOSIXErrorDomain, underlying.code == Int(POSIXErrorCode.EMSGSIZE.rawValue) { return .frameTooLarge }
+    return .protocolViolation
+  }
+
   public func receive() async throws -> StreamFrame {
     let message: URLSessionWebSocketTask.Message
-    do { message = try await task.receive() } catch { throw failure(error) }
+    do { message = try await task.receive() }
+    catch {
+      guard Self.closeCode(refusing: error) == .frameTooLarge else { throw failure(error) }
+      await close(.frameTooLarge)
+      throw StreamTransportClosed(code: StreamProtocol.CloseCode.frameTooLarge.rawValue, reason: "Frame over the limit.")
+    }
     do { return try Self.decode(message) }
     catch {
-      await close(.protocolViolation)
-      throw StreamTransportClosed(code: StreamProtocol.CloseCode.protocolViolation.rawValue, reason: "Unreadable frame.")
+      let code = Self.closeCode(refusing: error)
+      await close(code)
+      throw StreamTransportClosed(code: code.rawValue, reason: code == .frameTooLarge ? "Frame over the limit." : "Unreadable frame.")
     }
   }
 

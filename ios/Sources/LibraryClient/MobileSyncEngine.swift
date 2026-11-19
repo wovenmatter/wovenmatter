@@ -124,8 +124,6 @@ public actor MobileSyncEngine {
   }
   private func performSynchronization() async throws {
     verifiedThisPass = false; successfulLanes = []
-    let deviceID = await store.snapshot().deviceID
-    try await store.journal.prepareOwnerPublication(deviceID: deviceID)
     try await store.restoreExecutionProjection()
     let identity: String
     do {

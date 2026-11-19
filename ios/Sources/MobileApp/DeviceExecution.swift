@@ -5,8 +5,7 @@ import WovenMatterShared
 import MobileInference
 import PiDurableRuntime
 
-/// Quick Chat always runs with Full Access, its only permission mode. Records
-/// saved with the former Ask for Approval mode ignore that field.
+/// Quick Chat always runs with Full Access, its only permission mode.
 enum DevicePermission {
   static let id = "full"
   static let label = "Full Access"
@@ -15,8 +14,8 @@ enum DevicePermission {
 
 struct DeviceConversationRecord: Codable, Equatable {
   var id: String
-  /// True for a chat of the on-device agent that came before Quick Chat. Its
-  /// history is kept and shown; nothing resumes it or runs its saved tools.
+  /// True for a chat kept as history: it is shown, and nothing resumes it or
+  /// runs its saved tools.
   var savedHistoryOnly = false
   var goalLedger: WorkspaceGoalLedger?
   var goalUsageBaseline: Int64?
@@ -94,7 +93,7 @@ struct InferenceSetupCredential: InferenceCredentialReading {
     let previousSecret = try await credentials.read(connectionID: proposed.id)
     let supplied = secret.trimmingCharacters(in: .whitespacesAndNewlines)
     let sameAuthority = previous.map {
-      $0.provider == proposed.provider && $0.route == proposed.route && $0.baseURL == proposed.baseURL &&
+      $0.provider == proposed.provider && $0.baseURL == proposed.baseURL &&
       $0.accountID == proposed.accountID
     } ?? false
     let credential: String
@@ -210,8 +209,7 @@ extension MobileModel {
       let data = try? Data(contentsOf: executionDirectory.appendingPathComponent("agents.json")),
       let saved = try? JSONDecoder().decode(AgentCatalog.self, from: data), saved.libraryID == state.workspaceID else { return }
     providers = saved.providers; workspaceProviders = saved.workspaceProviders
-    // v0.4.2 saved the library host's agents as "central:<provider>"; they read as "host:<provider>" once.
-    knownAgentIDs = Set(saved.knownAgentIDs.map { $0.hasPrefix("central:") ? "host:" + $0.dropFirst("central:".count) : $0 })
+    knownAgentIDs = saved.knownAgentIDs
     savedAgentCatalog = saved
   }
   func saveDeviceAgentDefaults(_ defaults: DeviceAgentDefaults, connectionID: String) throws {
@@ -342,36 +340,22 @@ extension MobileModel {
         data = converted
       }
       let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: data)
-      // A connection hosted by a Mac (before v0.4.6) used that Mac's sign-in; it is dropped,
-      // and Quick Chat asks for a sign-in on this device.
-      inferenceConnections = InferenceConnectionPolicy.retainingSingleSubscriptions(saved.connections.filter { $0.route == .direct },
-        preferredID: saved.chatSettings?.connection?.id ?? saved.selectedConnectionID)
-      // A default that named a dropped connection falls back to one this device kept,
-      // a provider sign-in before a model server.
-      let fallback = inferenceConnections.first { !$0.provider.hasPrefix("local-server-") } ?? inferenceConnections.first
-      inferenceConnectionID = saved.selectedConnectionID.isEmpty || inferenceConnections.contains(where: { $0.id == saved.selectedConnectionID })
-        ? saved.selectedConnectionID : fallback?.id ?? ""
-      // v0.4.2 saved the library host's route as "central"; it reads as "host" once.
-      executionWorkspaceID = saved.workspaceID == "central" ? "host" : saved.workspaceID; executionRecords = saved.conversations
+      inferenceConnections = saved.connections; inferenceConnectionID = saved.selectedConnectionID
+      executionWorkspaceID = saved.workspaceID; executionRecords = saved.conversations
       deviceAgentDefaults = saved.agentDefaults ?? .init()
       draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
-      for (id, record) in executionRecords {
-        executionRecords[id]?.enabledTools = MobileToolSupport.migratedMCPSelection(record.enabledTools)
-      }
-      deviceAgentDefaults.enabledTools = MobileToolSupport.migratedMCPSelection(deviceAgentDefaults.enabledTools)
-      draftDeviceSettings.enabledTools = MobileToolSupport.migratedMCPSelection(draftDeviceSettings.enabledTools)
       for id in executionRecords.keys { executionRecords[id]?.goalLedger?.recover() }
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
       }
-      // A run whose connection is gone (one a Mac hosted before v0.4.6) can never
-      // continue. It is stopped, so the chat can take a device connection or go to Trash.
+      // A run whose sign-in has since been replaced can never continue. It is
+      // stopped, so the chat can take another connection or go to Trash.
       orphaned = executionRecords.values.filter { record in
         !record.savedHistoryOnly && ["interrupted", "stopping"].contains(record.status) && usableDeviceConnection(record) == nil
       }.map(\.id)
       for id in orphaned { executionRecords[id]?.status = "stopped" }
-      // Persist the retained connections before removing old device-only secrets.
-      // Historical chats keep their binding instead of switching accounts.
+      // Saved before the secret of a replaced sign-in is removed. A chat keeps
+      // its binding instead of switching accounts.
       if let connection = draftDeviceSettings.connection,
          !InferenceConnectionPolicy.isAvailable(connection, in: inferenceConnections) { draftDeviceSettings.connection = nil }
       try persistExecutionConfiguration()
@@ -537,7 +521,7 @@ extension MobileModel {
     guard let record = executionRecords[id], let root = executionDirectory else { throw InferenceError.missingCredential }
     let connection = usableDeviceConnection(record)
     guard connection != nil || cancelling else { throw InferenceError.missingCredential }
-    guard !record.savedHistoryOnly else { throw DeviceExecutionError.unavailable("This earlier on-device agent chat is saved as history. Start a new Quick Chat to continue.") }
+    guard !record.savedHistoryOnly else { throw DeviceExecutionError.unavailable("This chat is saved as history. Start a new Quick Chat to continue.") }
     let pinned = try JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8))
     let service = connection.map { MobileInferenceService(connection: $0, credentials: executionCredentialStore, model: pinned) }
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),

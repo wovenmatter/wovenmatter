@@ -11,6 +11,19 @@ import WovenMatterShared
 /// workspace takes a moment to accept each message; `member-macs-chooser`
 /// opens the New Chat menu at launch.
 extension MobileModel {
+  /// UI fixture of a phone its Mac no longer lists: the pairing is kept,
+  /// nothing syncs, and Home and Device Connections offer "Pair again".
+  func seedNotPairedFixture() {
+    let host = "e775f2b2-1e79-4bc2-b723-39b3fab2d9c5"
+    let endpoint = URL(string: "https://studio-mac.example.ts.net:10000/wovenmatter")!
+    var saved = MobileMembershipState(deviceID: state.deviceID, pairedEndpoint: endpoint, pairedHostDeviceID: host, pairedName: "Studio Mac")
+    saved.memberRejected = true
+    membership = saved; libraryHosts = nil
+    // No request ever uses this fixture credential.
+    credential = MobileCredential(endpoint: endpoint, workspaceID: "fixture", deviceID: state.deviceID, token: "", hostDeviceID: host)
+    online = false
+  }
+
   static let memberMacsFixtureChat = "0b5c7d1e-2f3a-4b5c-8d6e-7f8091a2b3c4"
   static let memberMacsAir = "0446435c-8e64-440e-b9eb-3c5dadb27e04"
   static let memberMacsMini = "b03923c3-89d1-4f29-910a-b7e3ce7b586c"
@@ -68,7 +81,7 @@ extension MobileModel {
     guard send else { await reload(); return }
 
     let id = Self.memberMacsFixtureChat
-    try await store.journal.upsertWorkspace(air)
+    try await store.journal.upsertWorkspace(air, pending: false)
     let conversation = LibraryConversation(id: id, title: "A Quick Hello", providerID: "local:default_agent",
       runtimeKind: "default_agent", preview: "Hey! What can I help with?", updatedAt: "2026-11-10T17:37:09.659Z", workspaceID: air.id)
     let earlier = LibraryTranscript(conversationID: id, messages: [

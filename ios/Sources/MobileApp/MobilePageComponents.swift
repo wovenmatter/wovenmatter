@@ -36,7 +36,6 @@ struct MobilePageItemSummary: View {
     VStack(alignment: .leading, spacing: 3) {
       HStack(spacing: 10) {
         if let statusLabel { Text(statusLabel) }
-        if let assignee = item.task?.assignee, !assignee.isEmpty, item.task?.assignees.isEmpty != false { Label(assignee, glyph: .userRound) }
         if item.role == .instructions { Label("Reference instructions", systemImage: "book.closed") }
         if item.review == .needed { Label("Needs review", systemImage: "tray") }
       }.foregroundStyle(WovenPalette.mutedForeground)
@@ -311,7 +310,7 @@ struct MobilePageEmbed<Actions: View>: View {
     switch source.kind {
     case .canvas:
       Button { open() } label: {
-        Label("Open nested Page · \(source.materializedPage().blocks.count) components", glyph: .panelsTopLeft)
+        Label("Open nested Page · \(source.blocks.count) components", glyph: .panelsTopLeft)
           .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
       }.buttonStyle(WovenQuietButtonStyle())
     case .note:

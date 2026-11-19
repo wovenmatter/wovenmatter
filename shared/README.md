@@ -10,9 +10,13 @@ or protocol number: every device updates together, an optional feature is a
 named capability in a workspace's registry row, and what the release before
 this one stored is converted once when a device first opens it.
 `NativeRecordFormat` is the one place that names the tags on native history
-records. Unknown note structures remain
-read-only through `NoteDocument.editableDocument(from:)`; unsupported content
-must survive round trips without normalization or field loss.
+records. Routes sit directly under the `/wovenmatter` mount, with no prefix.
+A stream frame, record tag or command that a device does not know fails to
+decode: nothing is skipped or guessed, because no other build is on the other
+end. A device that a Mac no longer lists is refused, and asks to be paired
+again. A note that holds structure this package cannot edit safely stays
+read-only through `NoteDocument.editableDocument(from:)`, and its content
+survives round trips without normalization or field loss.
 
 See [distributed architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md) for
 identity, ownership, replay and conflict semantics, and

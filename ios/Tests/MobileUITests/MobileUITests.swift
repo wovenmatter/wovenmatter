@@ -2,8 +2,10 @@ import XCTest
 import UIKit
 
 final class MobileUITests: XCTestCase {
-  @MainActor func launch(tab: String = "Folders", scenario: String? = nil) -> XCUIApplication {
+  @MainActor func launch(tab: String = "Folders", scenario: String? = nil, theme: String? = nil) -> XCUIApplication {
     let app = XCUIApplication()
+    // For this launch only: nothing is saved, so other tests keep the light theme.
+    if let theme { app.launchArguments += ["-wovenmatter.theme", theme] }
     app.launchEnvironment["WOVENMATTER_UI_FIXTURE_NAMESPACE"] = UUID().uuidString
     app.launchEnvironment["WOVENMATTER_UI_FIXTURE"] = "1"
     if let scenario { app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = scenario }
@@ -596,6 +598,47 @@ final class MobileUITests: XCTestCase {
     XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
   }
 
+
+  /// A phone its Mac no longer lists says so and offers pairing again, on Home
+  /// and in Device Connections, in the light and the dark theme. Nothing on
+  /// either screen claims a device is syncing.
+  @MainActor func testAPhoneItsMacNoLongerListsOffersPairingAgain() {
+    let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+    for theme in ["green", "dark"] {
+      let app = launch(tab: "Home", scenario: "not-paired", theme: theme)
+      let again = app.buttons["home-pair-again"]
+      XCTAssertTrue(again.waitForExistence(timeout: 5), theme)
+      XCTAssertTrue(again.label.contains("Pair again"), again.label)
+      let caption = app.staticTexts["home-pair-again-caption"].label
+      XCTAssertTrue(caption.contains("This \(device) is no longer paired"), caption)
+      XCTAssertTrue(caption.contains("Pair again with any Mac"), caption)
+      XCTAssertTrue(caption.contains("Your notes and chats stay on this \(device)"), caption)
+      XCTAssertFalse(app.buttons["home-connect-mac"].exists, "A kept pairing is not a fresh install")
+      XCTAssertFalse(app.staticTexts["home-no-workspaces"].exists, "Nothing is going to reconnect by itself")
+      XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].exists, "Quick Chat stays on this device")
+      saveScreenshot("not-paired-home-" + theme)
+
+      again.tap()
+      let notice = app.staticTexts["pairing-membership-notice"]
+      XCTAssertTrue(notice.waitForExistence(timeout: 5), theme)
+      XCTAssertEqual(notice.label, caption)
+      XCTAssertTrue(app.buttons["pairing-scan"].isEnabled)
+      XCTAssertTrue(app.descendants(matching: .any)["pairing-link"].exists)
+      XCTAssertTrue(app.buttons["pairing-connect"].exists)
+      XCTAssertFalse(app.buttons["pairing-connect"].isEnabled, "There is no link to pair with yet")
+      XCTAssertFalse(app.descendants(matching: .any)["pairing-library-host"].exists, "No Mac is named as syncing")
+      XCTAssertFalse(app.buttons["Unpair"].exists)
+      let forget = app.buttons["pairing-forget"]
+      XCTAssertTrue(forget.exists)
+      XCTAssertEqual(forget.label, "Forget this pairing")
+      saveScreenshot("not-paired-connections-" + theme)
+
+      forget.tap()
+      XCTAssertTrue(app.buttons["Forget"].waitForExistence(timeout: 5), theme)
+      XCTAssertTrue(app.staticTexts["Forget this pairing?"].exists)
+      app.terminate()
+    }
+  }
 
   /// Saves a screenshot when `WOVENMATTER_UI_SCREENSHOT_DIR` is set (review evidence, kept out of Git).
   @MainActor func saveScreenshot(_ name: String) {

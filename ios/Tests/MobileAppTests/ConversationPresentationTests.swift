@@ -174,7 +174,7 @@ final class ConversationPresentationTests: XCTestCase {
     XCTAssertFalse(turn.timeline.hasVisibleActivities)
   }
 
-  func testLegacyToolAndReasoningKeepCommentaryInChronologicalWork() throws {
+  func testToolMessagesAndReasoningKeepCommentaryInChronologicalWork() throws {
     let thought = AgentRunActivity(id: "reasoning", kind: .thought, status: "completed",
       content: "Checking the result", position: 3)
     let transcript = LibraryTranscript(conversationID: "c", messages: [

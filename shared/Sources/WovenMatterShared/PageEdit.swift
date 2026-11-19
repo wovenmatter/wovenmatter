@@ -62,8 +62,7 @@ public extension NoteDocument {
   mutating func applyPageEdit(_ edit: PageEdit) throws {
     guard kind == .canvas else { throw NoteEditError.artifactKindMismatch }
     guard edit.action != .requirePage else { return }
-    var document = materializedPage()
-    if document.pageNodes == nil { document.pageNodes = [:] }
+    var document = self
     switch edit.action {
     case .requirePage:
       break
@@ -175,7 +174,7 @@ private extension NoteDocument {
       guard let assetID = edit.assetID, !assetID.isEmpty else { throw NoteDocumentSafetyError.unsupportedFormat }
       guard edit.patch?.text == nil, edit.block == nil else { throw NoteEditError.boardLinkedAssetText(id) }
       block = .richText(NoteRichTextBlock(id: id))
-      var placement = CanvasCardPlacement(x: 0, y: 0, assetID: assetID)
+      var placement = CanvasCardPlacement(assetID: assetID)
       placement.title = edit.patch?.title.flatMap { $0.isEmpty ? nil : $0 }
       if canvas == nil { canvas = [:] }
       canvas?[id] = placement
@@ -183,7 +182,7 @@ private extension NoteDocument {
       guard let image = edit.image else { throw NoteDocumentSafetyError.unsupportedFormat }
       guard edit.patch?.text == nil, edit.patch?.title == nil, edit.block == nil else { throw NoteEditError.boardItemNotText(id) }
       block = .richText(NoteRichTextBlock(id: id))
-      var placement = CanvasCardPlacement(x: 0, y: 0)
+      var placement = CanvasCardPlacement()
       placement.image = image
       if canvas == nil { canvas = [:] }
       canvas?[id] = placement

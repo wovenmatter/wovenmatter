@@ -30,7 +30,7 @@ enum MobilePageEditing {
   /// change and enforces the size every participant can still edit. An edit that
   /// changes nothing leaves the stored text untouched, so opening never converts.
   static func commit(_ content: String, change: (inout NoteDocument) throws -> Void) throws -> String {
-    let before = try NoteDocument.editableDocument(from: content).materializedPage()
+    let before = try NoteDocument.editableDocument(from: content)
     guard before.kind == .canvas else { throw NoteEditError.artifactKindMismatch }
     var value = before
     try change(&value)
@@ -133,7 +133,7 @@ struct MobilePageLayout {
   let listNumbers: [String: Int]
 
   @MainActor init(page source: NoteDocument, placeholders: MobilePagePlaceholders) {
-    let page = source.materializedPage()
+    let page = source
     self.page = page
     blocks = Dictionary(page.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     var rows: [MobilePageRow] = [], flows: [String: MobilePageFlow] = [:], flowOfRow: [String: String] = [:]
@@ -209,7 +209,7 @@ extension BoardItem {
   var hasMobileSummary: Bool {
     if review == .needed || role == .instructions || lastChange?.isEmpty == false { return true }
     guard let task else { return false }
-    return ![.todo, .done].contains(task.status) || !task.assignee.isEmpty || !task.outcome.isEmpty
+    return ![.todo, .done].contains(task.status) || !task.outcome.isEmpty
       || !task.details.isEmpty || !task.assignees.isEmpty
   }
 }

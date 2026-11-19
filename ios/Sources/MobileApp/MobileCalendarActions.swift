@@ -21,8 +21,8 @@ extension MobileModel {
         let previous = await store.calendar.record(id: id)
         if let previous, let revision, previous.ownerDeviceID == state.deviceID, previous.event.draft.task != nil,
            let task = draft.task, task.workspaceID != deviceWorkspaceID {
-          // Earlier builds ran tasks on this phone. Moving one to a Mac or Linux
-          // agent replaces it rather than changing its owner in place.
+          // Moving a task this phone owns to a Mac or Linux agent replaces it
+          // rather than changing its owner in place.
           _ = try await store.calendar.reassign(id: id, expectedRevision: revision, draft: draft)
         } else {
           let owner = previous?.ownerDeviceID ?? (draft.task?.workspaceID == deviceWorkspaceID ? state.deviceID : nil)

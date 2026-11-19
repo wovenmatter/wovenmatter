@@ -129,7 +129,7 @@ private final class MacStreamServer: @unchecked Sendable {
 final class LibraryHostCommandTests: XCTestCase {
   private let hostDevice = "a0000000-0000-4000-8000-00000000000a"
   private let productionDevice = "c0000000-0000-4000-8000-00000000000c"
-  private let olderDevice = "d0000000-0000-4000-8000-00000000000d"
+  private let otherCopiedDevice = "d0000000-0000-4000-8000-00000000000d"
   private let miniDevice = "b0000000-0000-4000-8000-00000000000b"
   private let streamed = ["history.library", StreamProtocol.capability]
 
@@ -158,15 +158,15 @@ final class LibraryHostCommandTests: XCTestCase {
     // The production snapshot's copies: no endpoint, history only. One still lists the stream.
     let copied = ExecutionWorkspace(id: "33333333-3333-4333-8333-333333333333", libraryID: "library-a", ownerDeviceID: productionDevice, kind: .mac,
       name: "Studio", capabilities: streamed, executionDeviceID: productionDevice, retainedHistory: true)
-    let older = ExecutionWorkspace(id: "44444444-4444-4444-8444-444444444444", libraryID: "library-a", ownerDeviceID: olderDevice, kind: .mac,
-      name: "Studio", capabilities: ["history.library"], executionDeviceID: olderDevice, retainedHistory: true)
+    let otherCopy = ExecutionWorkspace(id: "44444444-4444-4444-8444-444444444444", libraryID: "library-a", ownerDeviceID: otherCopiedDevice, kind: .mac,
+      name: "Studio", capabilities: ["history.library"], executionDeviceID: otherCopiedDevice, retainedHistory: true)
     let dev = ExecutionWorkspace(id: "11111111-1111-4111-8111-111111111111", libraryID: "library-a", ownerDeviceID: hostDevice, kind: .mac,
       name: "Studio (Dev)", endpoint: devEndpoint, capabilities: streamed, executionDeviceID: hostDevice, developmentInstance: "snapshot")
     // Another Mac keeps its own library namespace.
     let mini = ExecutionWorkspace(id: "22222222-2222-4222-8222-222222222222", libraryID: "library-b", ownerDeviceID: miniDevice, kind: .mac,
       name: "Mini", endpoint: URL(string: "https://mini.tail1.ts.net/wovenmatter")!, capabilities: streamed, executionDeviceID: miniDevice)
     try await store.journal.bind(libraryID: "library-a")
-    for workspace in [copied, older, dev, mini] { try await store.journal.upsertWorkspace(workspace, pending: false, trustedRegistry: true) }
+    for workspace in [copied, otherCopy, dev, mini] { try await store.journal.upsertWorkspace(workspace, pending: false, trustedRegistry: true) }
     let http = MacHTTP(); http.serve(dev); http.serve(mini)
     model.httpPerformer = http
     model.memberKeyStorage = .memory()

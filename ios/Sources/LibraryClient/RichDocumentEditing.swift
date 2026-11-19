@@ -204,7 +204,7 @@ public enum RichDocumentEditing {
 
   /// The item number each list paragraph displays, matching the Mac's native lists:
   /// paragraphs with saved list identity share that list wherever it continues;
-  /// earlier flat paragraphs share one list while the same style continues.
+  /// flat paragraphs share one list while the same style continues.
   public static func listItemNumbers(_ document: NoteDocument) -> [String: Int] {
     enum Identity: Hashable { case native(NoteTextList), flat(Int) }
     var numbers: [String: Int] = [:]

@@ -47,13 +47,13 @@ extension MobileModel {
     guard let conversation = state.conversations[conversationID] else { throw MobilePageDispatchError.unavailable }
     // The editor's latest writing, before its save lands.
     guard let written = draftContents[pageID] ?? state.notes[pageID]?.content,
-          let intended = (try? NoteDocument.editableDocument(from: written))?.materializedPage().blocks.first(where: { $0.id == componentID })?.normalized
+          let intended = (try? NoteDocument.editableDocument(from: written))?.blocks.first(where: { $0.id == componentID })?.normalized
     else { throw MobilePageDispatchError.unavailable }
     await saveTask?.value
     await reload()
     // A draft still held means the save failed or newer writing is still saving.
     guard draftContents[pageID] == nil, let note = state.notes[pageID], !state.uncachedNoteIDs.contains(pageID),
-          let saved = (try? NoteDocument.editableDocument(from: note.content))?.materializedPage(), saved.kind == .canvas
+          let saved = try? NoteDocument.editableDocument(from: note.content), saved.kind == .canvas
     else { throw MobilePageDispatchError.saveFailed }
     guard let block = saved.blocks.first(where: { $0.id == componentID }) else { throw MobilePageDispatchError.unavailable }
     guard saved.boardItems?[componentID]?.sessions.contains(conversationID) == true else { throw MobilePageDispatchError.saveFailed }

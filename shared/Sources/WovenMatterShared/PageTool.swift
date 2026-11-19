@@ -109,22 +109,17 @@ public enum PageTool {
     }
     var document = current
     let updatedTitle = try document.apply(operations) ?? title
-    // Repeating an idempotent edit must not make other writers' revisions stale, and a
-    // first read-only pass over an older Board must not migrate it.
-    let unchanged = updatedTitle == title && (document == current.normalized()
-      || (document.kind == .canvas && document == current.materializedPage().normalized()))
+    // Repeating an idempotent edit must not make other writers' revisions stale.
+    let unchanged = updatedTitle == title && document == current.normalized()
     if document.kind == .canvas || document.kind == .html, unchanged {
       return Edit(title: title, document: document, changed: false, forceCheckpoint: forceCheckpoint)
     }
     if document.kind == .canvas {
-      // A first write migrates an older Board. Compare it to its own migrated form, so the
-      // migration itself is attributed to nobody and only this edit is stamped.
-      let old = document.pageNodes == nil ? current : current.materializedPage()
-      try requireNewAssets(old: old, new: document, pageID: pageID, missingAsset: missingAsset)
-      document.stampBoardChanges(from: old, actor: actor, at: timestamp)
+      try requireNewAssets(old: current, new: document, pageID: pageID, missingAsset: missingAsset)
+      document.stampBoardChanges(from: current, actor: actor, at: timestamp)
       // A Page over the limit (for example after two replicas merged) may still shrink.
       let size = try document.encoded().utf8.count
-      if size > NoteDocument.maximumBoardBytes, size >= (try old.encoded().utf8.count) { throw RemoteNoteEditError.operationTooLarge }
+      if size > NoteDocument.maximumBoardBytes, size >= (try current.encoded().utf8.count) { throw RemoteNoteEditError.operationTooLarge }
     }
     return Edit(title: updatedTitle, document: document, changed: true, forceCheckpoint: forceCheckpoint)
   }
@@ -175,8 +170,7 @@ public enum PageTool {
     var object: [String: JSONValue] = ["pageID": .string(pageID)]
     var message = componentID.map { "Page component \($0) changed since it was read." } ?? "The Page changed since it was read."
     if let stored {
-      // Reads project an unmigrated Page, so tokens here match what the write compared.
-      let document = stored.materializedPage()
+      let document = stored
       let revision = revision ?? ""
       object["currentRevision"] = .string(revision)
       message += " Current document revision: \(revision)."

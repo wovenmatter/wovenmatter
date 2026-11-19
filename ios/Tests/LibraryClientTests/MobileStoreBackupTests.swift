@@ -162,37 +162,6 @@ final class MobileStoreBackupTests: XCTestCase {
     }
   }
 
-  func testEarlierBuildsExcludedLocalWritingIsIncludedOnLaunch() async throws {
-    let file = file(), store = try MobileStore(file: file)
-    let content = try document("Written before this fix")
-    _ = try await store.createNote(folderID: nil, title: "Earlier build", content: content)
-    let note = body(content, in: file)
-    // The save just replaced the index file. An earlier build's exclusion of it was
-    // set in an earlier launch, so it is already on disk; write that state directly.
-    // (Excluding a just-replaced file through Foundation and including it again in the
-    // same process settles asynchronously; see the deadline test above. Indexes are
-    // only ever written included, so only a test creates that sequence for them.)
-    try markExcludedByEarlierLaunch(file)
-    // The body is written once and never replaced; cover the in-process Foundation
-    // exclude → include transition on it.
-    try MobileStorePersistence.applyBackup(.exclude, at: note)
-    XCTAssertTrue(try excluded(file)); XCTAssertTrue(try excluded(note))
-    MobileStorePersistence.forgetAppliedBackups()
-    _ = try MobileStore(file: file)
-    // The in-process exclude → include on the body settles asynchronously (see the
-    // deadline test above): wait a bounded time for both to read as included.
-    let deadline = ContinuousClock.now + .seconds(3)
-    while ContinuousClock.now < deadline, try excluded(file) || excluded(note) {
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTAssertFalse(try excluded(file))
-    XCTAssertFalse(try excluded(note))
-    XCTAssertFalse(try foundationExcluded(file)); XCTAssertFalse(try foundationExcluded(note))
-    try await restore(file)
-    let restored = try await MobileStore(file: file).snapshot()
-    XCTAssertEqual(restored.notes.values.first?.content, content)
-  }
-
   func testPhoneHistoryCalendarAndSavedFilesAreBackedUp() async throws {
     let file = file(), store = try MobileStore(file: file)
     let device = await store.snapshot().deviceID
@@ -214,62 +183,6 @@ final class MobileStoreBackupTests: XCTestCase {
     var fresh = URL(fileURLWithPath: url.path); fresh.removeAllCachedResourceValues()
     return try fresh.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup ?? false
   }
-  /// The backup exclusion an earlier launch completed, written directly to disk with
-  /// the exact payload Foundation itself writes: a binary property list naming backupd.
-  private func markExcludedByEarlierLaunch(_ url: URL) throws {
-    let payload = [UInt8](try PropertyListSerialization.data(fromPropertyList: "com.apple.backupd", format: .binary, options: 0))
-    XCTAssertEqual(setxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", payload, payload.count, 0, 0), 0)
-    XCTAssertTrue(try excluded(url))
-    XCTAssertTrue(try foundationExcluded(url), "Foundation reads the earlier launch's exclusion")
-  }
-  /// Every file an earlier build wrote, excluded as that build did (files only).
-  private func excludeEverything(under root: URL) throws {
-    for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])!
-      where try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true && url.pathExtension != "sqlite" {
-      try markExcludedByEarlierLaunch(url)
-    }
-    MobileStorePersistence.forgetAppliedBackups()
-  }
-
-  /// Upgrading must protect existing phone history, calendar changes and saved
-  /// files as soon as they are opened, not only after their next edit.
-  func testEarlierBuildsExcludedHistoryCalendarAndSavedFilesAreIncludedOnOpenWithoutEdits() async throws {
-    let file = file(), root = file.deletingLastPathComponent()
-    var store: MobileStore? = try MobileStore(file: file)
-    let device = await store!.snapshot().deviceID
-    let transcript = LibraryTranscript(conversationID: "quick-chat", messages: [.init(id: "m", conversationID: "quick-chat", role: "user", content: "Asked before upgrading")])
-    try await store!.adoptExecution(conversation: .init(id: "quick-chat", title: "Quick Chat"), transcript: transcript)
-    try await store!.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: NativeRecordFormat.piDurableEntry.name, data: Data("native before upgrading".utf8))
-    let event = try await store!.calendar.save(expectedRevision: nil, draft: .init(title: "Offline event", startsAt: Date(timeIntervalSince1970: 1_800_000_000)))
-    let saved = try await store!.artifacts.save(data: Data("scanned before upgrading".utf8), workspaceID: device, title: "Scan", mediaType: "text/plain")
-    store = nil
-    try excludeEverything(under: root)
-
-    _ = try MobileStore(file: file) // Open only; no edit.
-    let journalBodies = file.appendingPathExtension("execution.bodies")
-    for url in [file.appendingPathExtension("execution"), file.appendingPathExtension("calendar"),
-                file.appendingPathExtension("artifacts").appendingPathComponent("index.json"),
-                file.appendingPathExtension("artifacts").appendingPathComponent(saved.sha256 + ".blob")]
-      + (try FileManager.default.contentsOfDirectory(at: journalBodies, includingPropertiesForKeys: nil)) {
-      XCTAssertFalse(try excluded(url), url.lastPathComponent)
-    }
-
-    try await restore(file)
-    let restored = try MobileStore(file: file)
-    let journal = await restored.journal.snapshot()
-    XCTAssertTrue(journal.entries.values.contains { $0.nativeRecord?.data == Data("native before upgrading".utf8) })
-    let restoredState = await restored.snapshot()
-    XCTAssertEqual(restoredState.transcripts["quick-chat"]?.messages.first?.content, "Asked before upgrading")
-    let calendarRecord = await restored.calendar.record(id: event.id)
-    XCTAssertEqual(calendarRecord?.event.draft.title, "Offline event")
-    let pendingCalendar = await restored.calendar.pendingCount()
-    XCTAssertEqual(pendingCalendar, 1, "The unsent calendar change still waits to upload")
-    let local = await restored.artifacts.localURL(id: saved.id)
-    XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(local)), Data("scanned before upgrading".utf8))
-    let uploads = await restored.artifacts.pendingUploadCount()
-    XCTAssertEqual(uploads, 1)
-  }
-
   /// Identical bytes share one blob. Downloading a library copy of the same bytes
   /// must not exclude the source of a file saved here that has not uploaded yet.
   func testDownloadedCopyOfIdenticalBytesKeepsAPendingLocalSourceInBackups() async throws {

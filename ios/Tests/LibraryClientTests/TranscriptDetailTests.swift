@@ -5,18 +5,15 @@ import WovenMatterShared
 
 final class TranscriptDetailTests: XCTestCase {
   func testHTMLReplyRebuildsFromNativeToolResultAndSurvivesJournalReopen() async throws {
-    for legacy in [false, true] {
     let html = "<button onclick='this.textContent=42'>Calculate</button><img src='data:image/png;base64," + String(repeating: "A", count: 100_000) + "'>"
     let request: [String: Any] = ["action": "render", "html": "<img src='/device-workspace/image.png'>", "title": "Calculator", "height": 160]
     var prepared = request; prepared["html"] = html
-    let json = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
     let reference: [String: Any] = ["id": UUID().uuidString.lowercased(), "title": "Calculator", "height": 160]
-    let responseValue: [String: Any] = legacy ? ["success": true, "result": ["htmlRender": reference]] : ["htmlRender": reference]
-    let response = String(decoding: try JSONSerialization.data(withJSONObject: responseValue), as: UTF8.self)
+    let response = String(decoding: try JSONSerialization.data(withJSONObject: ["htmlRender": reference]), as: UTF8.self)
     var focused = request; focused.removeValue(forKey: "action")
     let snapshot: [String: Any] = ["entries": [
       ["id": 1, "model": [["role": "user", "content": "Calculate"]]],
-      ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "render", "name": legacy ? "wovenmatter_html" : "woven_html_render", "arguments": legacy ? ["arguments": ["call", "--json", json]] : focused]]]]],
+      ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "render", "name": "woven_html_render", "arguments": focused]]]]],
       ["id": 3, "model": [["role": "toolResult", "toolCallId": "render", "content": [["type": "text", "text": response]], "details": ["wovenHTMLPage": prepared]]]]
     ]]
     let transcript = DeviceTranscript.project(snapshot: snapshot, conversationID: "c", storedRuns: .init())
@@ -46,7 +43,6 @@ final class TranscriptDetailTests: XCTestCase {
     failedSnapshot["entries"] = entries
     let failed = DeviceTranscript.project(snapshot: failedSnapshot, conversationID: "c", storedRuns: .init())
     XCTAssertFalse(failed.activities.first?.projectionJSON?.contains("htmlRender\":") ?? true)
-    }
   }
 
   func testLinkedReasoningWaitsForChunksAndReconstructsAfterRestart() async throws {

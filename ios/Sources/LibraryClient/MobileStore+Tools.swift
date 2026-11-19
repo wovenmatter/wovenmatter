@@ -199,7 +199,7 @@ extension MobileStore {
     let componentID = command.action == "page-add-component" ? requestID : command.options["id"]
     func conflict(_ componentID: String?) throws -> WovenMatterToolResponse {
       let stored = try? NoteDocument.editableDocument(from: note.content)
-      let assets = try assetSummaries(PageTool.linkedAssetIDs(stored?.materializedPage(), componentID: componentID), state: state)
+      let assets = try assetSummaries(PageTool.linkedAssetIDs(stored, componentID: componentID), state: state)
       let reply = PageTool.conflict(pageID: id, componentID: componentID, stored: stored, revision: revision, assets: assets)
       return .init(success: false, result: reply.result, error: reply.error, code: reply.code, requestID: requestID)
     }
@@ -243,7 +243,7 @@ extension MobileStore {
         var value: [String: JSONValue] = ["id": .string(note.id), "title": .string(note.title), "revision": .string(try MobileToolSupport.fingerprint(note)), "cached": .bool(!state.uncachedNoteIDs.contains(note.id)), "updatedAt": .string(note.updatedAt)]
         if let current = document(note) {
           value["purpose"] = current.boardPurpose.map(JSONValue.string) ?? .null
-          value["components"] = .number(Double(current.materializedPage().blocks.count))
+          value["components"] = .number(Double(current.blocks.count))
           value["openTasks"] = .number(Double(items?.filter { [.todo, .doing, .blocked].contains($0.task?.status) }.count ?? 0))
           value["needsReview"] = .number(Double(items?.filter { $0.review == .needed }.count ?? 0))
         }

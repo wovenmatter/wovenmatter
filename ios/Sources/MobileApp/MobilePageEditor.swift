@@ -62,7 +62,6 @@ struct MobilePageEditor<TextRow: View>: View {
           ForEach(layout.rows.filter(visible)) { row in
             rowView(row).padding(.leading, CGFloat(row.depth) * 16)
           }
-          legacyConnections
         }.padding(.horizontal, 20).padding(.bottom, 24)
       }.scrollDismissesKeyboard(.interactively).scrollIndicators(.never)
     }
@@ -219,20 +218,6 @@ struct MobilePageEditor<TextRow: View>: View {
       parent = page.pageParentID(for: id)
     }
     return true
-  }
-
-  @ViewBuilder private var legacyConnections: some View {
-    let connections = page.pageLegacyConnections
-    if !connections.isEmpty {
-      DisclosureGroup("Retained connections") {
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(connections) { connection in
-            Text("\(connection.fromText.isEmpty ? "Component" : connection.fromText) → \(connection.toText.isEmpty ? "Component" : connection.toText)\(connection.label.isEmpty ? "" : ": " + connection.label)")
-              .font(.caption).foregroundStyle(WovenPalette.mutedForeground).textSelection(.enabled)
-          }
-        }
-      }.font(.subheadline).padding(.top, 16)
-    }
   }
 }
 

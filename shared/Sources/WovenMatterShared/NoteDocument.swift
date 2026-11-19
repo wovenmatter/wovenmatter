@@ -5,16 +5,16 @@ import Foundation
 public struct NoteDocument: Codable, Equatable, Sendable {
   public var kind: NoteArtifactKind
   public var blocks: [NoteBlock]
+  /// What a Page keeps for a component that is not text: a linked original or an image.
   public var canvas: [String: CanvasCardPlacement]?
-  public var canvasSections: [CanvasSection]?
-  public var canvasConnections: [CanvasConnection]?
   public var html: String
   public var databaseLink: DatabaseArtifactLink?
   /// What a Board is for. Project text read as data, never as authorization.
   public var boardPurpose: String?
   /// Collaboration metadata keyed by stable card (block) ID.
   public var boardItems: [String: BoardItem]?
-  /// The nesting of a Page's blocks. `nil` is a Board from before Pages flowed.
+  /// The nesting of a Page's blocks. A Page always has it, empty while nothing
+  /// is nested; every other kind has none.
   public var pageNodes: [String: PageNode]?
   /// Saved inputs and app state of an Artifact, keyed by `app:` or `form:` names.
   public var artifactState: [String: ArtifactStateEntry]?
@@ -24,8 +24,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     blocks: [NoteBlock] = [],
     html: String = "",
     canvas: [String: CanvasCardPlacement]? = nil,
-    canvasSections: [CanvasSection]? = nil,
-    canvasConnections: [CanvasConnection]? = nil,
     databaseLink: DatabaseArtifactLink? = nil,
     boardPurpose: String? = nil,
     boardItems: [String: BoardItem]? = nil,
@@ -41,18 +39,16 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       blocks
     }
     self.canvas = canvas
-    self.canvasSections = canvasSections
-    self.canvasConnections = canvasConnections
     self.html = html
     self.databaseLink = databaseLink
     self.boardPurpose = boardPurpose
     self.boardItems = boardItems
-    self.pageNodes = pageNodes
+    self.pageNodes = pageNodes ?? (kind == .canvas ? [:] : nil)
     self.artifactState = artifactState
   }
 
   private enum CodingKeys: String, CodingKey {
-    case kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
+    case kind, blocks, html, databaseLink, canvas, boardPurpose, boardItems
     case pageNodes, artifactState
   }
 
@@ -66,8 +62,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     kind = try values.decodeIfPresent(NoteArtifactKind.self, forKey: .kind) ?? .note
     blocks = try values.decodeIfPresent([NoteBlock].self, forKey: .blocks) ?? []
-    canvasSections = try values.decodeIfPresent([CanvasSection].self, forKey: .canvasSections)
-    canvasConnections = try values.decodeIfPresent([CanvasConnection].self, forKey: .canvasConnections)
     canvas = try values.decodeIfPresent([String: CanvasCardPlacement].self, forKey: .canvas)
     html = try values.decodeIfPresent(String.self, forKey: .html) ?? ""
     databaseLink = try values.decodeIfPresent(
@@ -76,7 +70,7 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     )
     boardPurpose = try values.decodeIfPresent(String.self, forKey: .boardPurpose)
     boardItems = try values.decodeIfPresent([String: BoardItem].self, forKey: .boardItems)
-    pageNodes = try values.decodeIfPresent([String: PageNode].self, forKey: .pageNodes)
+    pageNodes = try values.decodeIfPresent([String: PageNode].self, forKey: .pageNodes) ?? (kind == .canvas ? [:] : nil)
     artifactState = try values.decodeIfPresent([String: ArtifactStateEntry].self, forKey: .artifactState)
   }
 
@@ -112,8 +106,6 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       blocks: blocks.map(\.normalized),
       html: html,
       canvas: canvas,
-      canvasSections: canvasSections,
-      canvasConnections: canvasConnections,
       databaseLink: databaseLink,
       boardPurpose: boardPurpose,
       boardItems: boardItems,
@@ -237,7 +229,7 @@ extension NoteRichTextBlock {
   }
 }
 
-/// Native list structure is optional so earlier documents retain their flat-list rendering.
+/// Native list structure is optional: a list paragraph without it renders as a flat list.
 public struct NoteListFormatting: Codable, Equatable, Sendable {
   public var levels: [NoteTextList]
   public var headIndent: Double

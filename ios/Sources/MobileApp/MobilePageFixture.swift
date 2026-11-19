@@ -26,7 +26,7 @@ extension MobileModel {
         .table(table),
         .richText(.init(id: "page-note-text", text: "Notes from the plan:")),
         .richText(.init(id: "page-embed")),
-      ], canvas: ["page-embed": CanvasCardPlacement(x: 0, y: 0, assetID: Self.pageFixtureEmbeddedNoteID)],
+      ], canvas: ["page-embed": CanvasCardPlacement(assetID: Self.pageFixtureEmbeddedNoteID)],
         boardPurpose: "Weekend trip", boardItems: ["page-task": BoardItem(task: BoardTask())],
         pageNodes: ["page-section": PageNode(isSection: true), "page-child": PageNode(parentID: "page-section")])
       _ = try await store.createNote(folderID: "inbox", title: "Trip Page", content: try page.encoded(), id: id)

@@ -19,22 +19,16 @@ public enum EarlierPhoneFiles {
 
   /// Quick Chat's saved records (`preferences.json`). That release said what a
   /// record is with a number under `quickChatVersion`: 1 for a Quick Chat, 0
-  /// for a chat of the earlier on-device agent, kept as history. Today a
-  /// record says `savedHistoryOnly`. Returns the file in today's shape, or
-  /// nil when it already is. (A record with neither key was saved before
-  /// Quick Chat existed and is kept as history; that release had already
-  /// rewritten such records with a number the first time it loaded them.)
+  /// for a chat kept as history. Today a record says `savedHistoryOnly`.
+  /// Returns the file in today's shape, or nil when it already is.
   public static func convertedQuickChatPreferences(_ data: Data) -> Data? {
-    guard data.range(of: Data(#""quickChatVersion""#.utf8)) != nil || data.range(of: Data(#""savedHistoryOnly""#.utf8)) == nil,
+    guard data.range(of: Data(#""quickChatVersion""#.utf8)) != nil,
           var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           var conversations = root["conversations"] as? [String: [String: Any]] else { return nil }
     var changed = false
-    for (id, var record) in conversations where record["savedHistoryOnly"] == nil {
-      if let number = record.removeValue(forKey: "quickChatVersion") as? Int {
-        record["savedHistoryOnly"] = number != 1
-      } else {
-        record["savedHistoryOnly"] = true; record["status"] = "retained"
-      }
+    for (id, var record) in conversations {
+      guard let number = record.removeValue(forKey: "quickChatVersion") as? Int else { continue }
+      record["savedHistoryOnly"] = number != 1
       conversations[id] = record; changed = true
     }
     guard changed else { return nil }

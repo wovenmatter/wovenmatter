@@ -287,19 +287,19 @@ final class MobileWorkspaceStreamTests: XCTestCase {
     let (_, server, stream, updates) = try await make()
     await stream.start()
     let socket = await open(server, stream)
-    await stream.open(conversationID: "legacy")
+    await stream.open(conversationID: "elsewhere")
     await eventually("conversation subscription") { await socket.subscriptions.count == 2 }
     let chat = await socket.subscriptions[1]
     await socket.push(.end(.init(id: chat.id, error: .init(.notFound, "This endpoint can only control agents executing on this Mac."))))
-    await eventually("ended") { updates.all.contains { if case .conversationEnded("legacy", _) = $0 { true } else { false } } }
-    await stream.open(conversationID: "legacy")
+    await eventually("ended") { updates.all.contains { if case .conversationEnded("elsewhere", _) = $0 { true } else { false } } }
+    await stream.open(conversationID: "elsewhere")
     try await Task.sleep(for: .milliseconds(30))
     let count = await socket.subscriptions.count
     XCTAssertEqual(count, 2, "Not resubscribed on the same connection")
     await socket.serverClose(code: 1001)
     let next = await open(server, stream, socket: 1)
     await eventually("workspace resubscribed") { await next.subscriptions.count == 1 }
-    await stream.open(conversationID: "legacy")
+    await stream.open(conversationID: "elsewhere")
     await eventually("asked again on the new connection") { await next.subscriptions.count == 2 }
   }
 

@@ -271,7 +271,7 @@ struct NotePane: View {
     }
   }
   private func isPageTask(_ blockID: String) -> Bool {
-    isPage && document?.materializedPage().boardItems?[blockID]?.task != nil
+    isPage && document?.boardItems?[blockID]?.task != nil
   }
   /// A note that ends in a table, or has no blocks, offers an empty paragraph
   /// after it. It joins the document only once the user writes in it.
@@ -328,7 +328,7 @@ struct NotePane: View {
       // Return on an empty task returns to ordinary text, as on a Mac.
       if isPageTask(blockID), range.length == 0, RichDocumentEditing.containsParagraphBreak(replacement),
          replacement.trimmingCharacters(in: .newlines).isEmpty,
-         document?.materializedPage().blocks.first(where: { $0.id == blockID })?.plainText.isEmpty == true {
+         document?.blocks.first(where: { $0.id == blockID })?.plainText.isEmpty == true {
         let next = try MobilePageEditing.commit(content) { $0.boardItems?[blockID]?.task = nil }
         return applyStructure(next, before: .init(blockID: blockID, location: 0), caret: .init(blockID: blockID, location: 0),
                               typingRun: nil, action: "End task list")

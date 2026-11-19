@@ -15,7 +15,7 @@ struct PageModelTests {
   private func sample() -> NoteDocument {
     page([text("s", "Section", style: .heading2), text("a", "Alpha"), text("t", "Nested", style: .heading3), text("b", "Beta"), text("c", "Root"), text("l")],
       nodes: ["s": .init(isSection: true), "a": .init(parentID: "s"), "t": .init(parentID: "s", isSection: true), "b": .init(parentID: "t")],
-      items: ["b": .init(task: .init(status: .doing))], canvas: ["l": .init(x: 0, y: 0, assetID: "original")])
+      items: ["b": .init(task: .init(status: .doing))], canvas: ["l": .init(assetID: "original")])
   }
   private func order(_ document: NoteDocument) -> [String] { document.blocks.map(\.id) }
 
@@ -46,82 +46,18 @@ struct PageModelTests {
     }
   }
 
-  // MARK: Materialization
-
-  private func legacyBoard() -> NoteDocument {
-    var titled = CanvasCardPlacement(x: 50, y: 0); titled.title = "Empty card title"
-    var linked = CanvasCardPlacement(x: 10, y: 120, assetID: "asset-1"); linked.title = "Spec"; linked.sectionID = "s1"
-    var inSection = CanvasCardPlacement(x: 0, y: 150); inSection.sectionID = "s1"
-    var tableTitle = CanvasCardPlacement(x: 0, y: 500); tableTitle.title = "Numbers"
+  /// A task, then a section holding a linked original and text, then a heading and a table.
+  private func plan() -> NoteDocument {
+    var linked = CanvasCardPlacement(assetID: "asset-1"); linked.title = "Spec"
     return NoteDocument(kind: .canvas, blocks: [
+      text("b", "Write the plan"),
+      text("section", "Research", style: .heading2),
+      text("c"),
       text("a", "In a section"),
-      text("b"),
-      .richText(.init(id: "c", text: "")),
+      text("numbers", "Numbers", style: .heading3),
       .table(.init(id: "d", columns: [.init(id: "col")], rows: [.init(id: "row", cells: [.init(id: "cell")])])),
-    ], canvas: ["a": inSection, "b": titled, "c": linked, "d": tableTitle],
-      canvasSections: [.init(id: "s1", title: "Research", x: 0, y: 100)],
-      canvasConnections: [.init(id: "link", from: "a", to: "b", label: "supports")],
-      boardPurpose: "Plan", boardItems: ["b": .init(task: .init(status: .todo))])
-  }
-
-  @Test func materializationFollowsReadingOrderAndKeepsEverything() throws {
-    let board = legacyBoard()
-    #expect(board.pageNodes == nil)
-    let materialized = board.materializedPage()
-    #expect(order(materialized) == ["b", "page-section:s1", "c", "a", "page-title:d", "d"])
-    #expect(materialized.pageNodes?["page-section:s1"] == .init(isSection: true))
-    #expect(materialized.pageParentID(for: "a") == "page-section:s1")
-    #expect(materialized.pageParentID(for: "c") == "page-section:s1")
-    #expect(materialized.pageParentID(for: "d") == nil)
-    try materialized.validateEditableShape()
-    // Writing and its section heading become real rich text, in a flowing document.
-    #expect(materialized.blocks[0].plainText == "Empty card title")
-    #expect(materialized.boardItems?["b"]?.task?.status == .todo)
-    #expect(materialized.blocks[1].plainText == "Research")
-    #expect(materialized.blocks[4].plainText == "Numbers")
-    #expect(materialized.canvas?["b"]?.title == nil)
-    // An original keeps its link and label; its content stays at the original.
-    #expect(materialized.canvas?["c"]?.assetID == "asset-1" && materialized.canvas?["c"]?.title == "Spec")
-    // Old layout stays as a retained reference.
-    #expect(materialized.canvasSections == board.canvasSections)
-    #expect(materialized.canvasConnections == board.canvasConnections)
-    #expect(materialized.canvas?["a"]?.y == 150)
-    #expect(materialized.pageLegacyConnections.first?.fromText == "In a section")
-    #expect(materialized.pageLegacyConnections.first?.toText == "Empty card title")
-    #expect(materialized.boardPurpose == "Plan")
-  }
-
-  @Test func materializationIsDeterministicAndStable() throws {
-    let board = legacyBoard()
-    let first = board.materializedPage()
-    #expect(board.materializedPage() == first)
-    var shuffled = board
-    shuffled.blocks.reverse()
-    #expect(shuffled.materializedPage() == first)
-    // A fixed point, so a Page never migrates twice.
-    #expect(first.materializedPage() == first)
-    #expect(try NoteDocument.editableDocument(from: first.encoded()) == first.normalized())
-    // Projection never writes, and the read's tokens are good for the first write.
-    let segments = board.pageSegments
-    #expect(board.pageNodes == nil)
-    #expect(segments == first.pageSegments)
-    // The task card stands on its own, as every task on a Page does.
-    #expect(segments.first == .task(id: "b", parentID: nil, depth: 0))
-    var written = board
-    _ = try written.apply([.page(.init(action: .update, id: "b", expectedRevision: first.boardItemRevision(for: "b"), patch: .init(status: .done)))])
-    #expect(written.boardItems?["b"]?.task?.status == .done)
-    #expect(order(written) == order(first))
-  }
-
-  @Test func materializedIDsAvoidExistingBlocks() throws {
-    let board = NoteDocument(kind: .canvas, blocks: [text("page-section:s", "Occupied"), text("x")],
-      canvas: ["x": { var p = CanvasCardPlacement(x: 0, y: 500); p.sectionID = "s"; return p }()],
-      canvasSections: [.init(id: "s", title: "S", x: 0, y: 900)])
-    let materialized = board.materializedPage()
-    try materialized.validateEditableShape()
-    #expect(order(materialized).contains("page-section:s~2"))
-    #expect(materialized.pageNodes?["page-section:s~2"]?.isSection == true)
-    #expect(materialized.pageParentID(for: "x") == "page-section:s~2")
+    ], canvas: ["c": linked], boardPurpose: "Plan", boardItems: ["b": .init(task: .init(status: .todo))],
+      pageNodes: ["section": .init(isSection: true), "c": .init(parentID: "section"), "a": .init(parentID: "section")])
   }
 
   // MARK: Tree validation
@@ -139,7 +75,7 @@ struct PageModelTests {
       nodes: ["x": .init(parentID: "y", isSection: true), "y": .init(parentID: "x", isSection: true)]))
     rejected(page([text("a"), text("s")], nodes: ["a": .init(parentID: "s"), "s": .init(isSection: true)]))  // child first
     rejected(page([.table(.init(id: "s", columns: [.init(id: "c")], rows: [.init(id: "r", cells: [.init(id: "x")])]))], nodes: ["s": .init(isSection: true)]))
-    rejected(page([text("s")], nodes: ["s": .init(isSection: true)], canvas: ["s": .init(x: 0, y: 0, assetID: "a")]))
+    rejected(page([text("s")], nodes: ["s": .init(isSection: true)], canvas: ["s": .init(assetID: "a")]))
     rejected(NoteDocument(blocks: [text("a")], pageNodes: [:]))
 
     var chain: [NoteBlock] = [], nodes: [String: PageNode] = [:]
@@ -205,7 +141,7 @@ struct PageModelTests {
 
   @Test func tablesStayInTheFlowAndTasksAndImagesStandApart() throws {
     let table = NoteBlock.table(.init(id: "grid", columns: [.init(id: "c")], rows: [.init(id: "r", cells: [.init(id: "x")])]))
-    var picture = CanvasCardPlacement(x: 0, y: 0); picture.image = PageImage(mediaType: "image/png", bytes: Data([1, 2, 3]))
+    var picture = CanvasCardPlacement(); picture.image = PageImage(mediaType: "image/png", bytes: Data([1, 2, 3]))
     let document = page([text("t", "Task"), table, text("p", "After"), text("i")], items: ["t": .init(task: .init())], canvas: ["i": picture])
     #expect(document.pageSegments == [
       .task(id: "t", parentID: nil, depth: 0),
@@ -229,17 +165,15 @@ struct PageModelTests {
   @Test func spliceAssignsParentsAndPrunesMetadata() throws {
     var document = sample()
     document.boardItems?["a"] = .init(review: .needed)
-    document.canvasConnections = [.init(id: "x", from: "a", to: "c")]
     let before = document
     // Paragraphs split: a stays, and a new one inherits the section.
     try document.spliceFlow(["a"], with: [text("a", "Changed"), text("new", "Typed")], parentID: "s")
     #expect(order(document) == ["s", "a", "new", "t", "b", "c", "l"])
     #expect(document.pageParentID(for: "new") == "s")
     #expect(document.boardItems?["a"]?.review == .needed)
-    #expect(document.canvasConnections?.count == 1)
-    // Removed text takes its metadata and connections with it, and nothing else.
+    // Removed text takes its metadata with it, and nothing else.
     try document.spliceFlow(["a", "new"], with: [text("new", "Typed")], parentID: "s")
-    #expect(document.boardItems?["a"] == nil && document.canvasConnections?.isEmpty == true)
+    #expect(document.boardItems?["a"] == nil)
     #expect(document.boardItems?["b"] == before.boardItems?["b"])
     #expect(document.canvas?["l"]?.assetID == "original")
     try document.validateEditableShape()
@@ -276,14 +210,6 @@ struct PageModelTests {
     try document.spliceFlow([], with: [text("first", "Typed first")], parentID: "s")
     #expect(order(document) == ["s", "first", "a", "t", "b", "c", "l", "tail"])
     #expect(document.pageParentID(for: "first") == "s")
-  }
-
-  @Test func splicingMigratesAnOlderBoard() throws {
-    var document = NoteDocument(kind: .canvas, blocks: [text("a", "A"), text("b", "B")],
-      canvas: ["a": .init(x: 0, y: 900), "b": .init(x: 0, y: 0)])
-    try document.spliceFlow(["b", "a"], with: [text("b", "B"), text("a", "Edited")], parentID: nil)
-    #expect(document.pageNodes != nil)
-    #expect(order(document) == ["b", "a"])
   }
 
   // MARK: Component edits
@@ -426,8 +352,7 @@ struct PageModelTests {
   }
 
   @Test func removingProtectsContentAndOriginals() throws {
-    var document = sample()
-    document.canvasConnections = [.init(id: "x", from: "b", to: "c"), .init(id: "y", from: "c", to: "l")]
+    let document = sample()
     let sectionToken = document.boardItemRevision(for: "t")
     #expect(throws: NoteEditError.pageSectionNotEmpty("t")) {
       var copy = document
@@ -463,13 +388,12 @@ struct PageModelTests {
     _ = try removed.apply([.page(.init(action: .remove, id: "t", expectedSubtreeRevision: subtreeToken, removal: .removeSubtree))])
     #expect(order(removed) == ["s", "a", "c", "l"])
     #expect(removed.boardItems?["b"] == nil && removed.pageNodes?["b"] == nil && removed.pageNodes?["t"] == nil)
-    #expect(removed.canvasConnections?.map(\.id) == ["y"])
     try removed.validateEditableShape()
 
     // Removing a link only removes the link: the document has no original to touch.
     var unlinked = document
     _ = try unlinked.apply([.page(.init(action: .remove, id: "l", expectedRevision: document.boardItemRevision(for: "l")))])
-    #expect(unlinked.canvas?["l"] == nil && unlinked.canvasConnections?.map(\.id) == ["x"])
+    #expect(unlinked.canvas?["l"] == nil)
     #expect(throws: NoteEditError.boardItemConflict(id: "l", currentRevision: "")) {
       var copy = unlinked
       _ = try copy.apply([.page(.init(action: .remove, id: "l", expectedRevision: "any"))])
@@ -488,7 +412,7 @@ struct PageModelTests {
     #expect(document.pageSubtreeRevision(for: "s") != document.boardItemRevision(for: "s"))
     #expect(document.pageSubtreeIDs(of: "s") == ["s", "a", "t", "b"])
     #expect(document.pageDepth(for: "b") == 2)
-    // A plain block's token predates Pages, so its nodes cannot disturb a held revision.
+    // A plain block's token does not cover its place in the Page; a section's does.
     var withoutNodes = document; withoutNodes.pageNodes = nil
     #expect(withoutNodes.boardItemRevision(for: "a") == document.boardItemRevision(for: "a"))
     #expect(withoutNodes.boardItemRevision(for: "s") != document.boardItemRevision(for: "s"))
@@ -513,7 +437,7 @@ struct PageModelTests {
     #expect(try JSONDecoder().decode(NoteEditOperation.self, from: JSONEncoder().encode(edit)) == edit)
     let position = try JSONDecoder().decode(PagePosition.self, from: Data(#"{"parentID":"p"}"#.utf8))
     #expect(position == PagePosition(parentID: "p"))
-    var unchanged = legacyBoard()
+    var unchanged = plan()
     let copy = unchanged
     _ = try unchanged.apply([.page(.init(action: .requirePage))])
     #expect(unchanged == copy)
@@ -576,12 +500,11 @@ struct PageModelTests {
       _ = try copy.apply([.replaceBlock(id: "l", block: text("l", "Hidden copy"))])
     }
 
-    // A generic write to an unwritten Board migrates it first, so positions are real.
-    var board = legacyBoard()
-    _ = try board.apply([.insertText(afterBlockID: "a", text: "Note", style: .paragraph)])
-    #expect(board.pageNodes != nil)
-    #expect(board.pageParentID(for: board.pageChildren(of: "page-section:s1").last!) == "page-section:s1")
-    try board.validateEditableShape()
+    // A generic insert lands inside the section of the block it follows.
+    var nested = plan()
+    _ = try nested.apply([.insertText(afterBlockID: "a", text: "Note", style: .paragraph)])
+    #expect(nested.pageParentID(for: nested.pageChildren(of: "section").last!) == "section")
+    try nested.validateEditableShape()
   }
 
   // MARK: Merging
@@ -668,15 +591,15 @@ struct PageModelTests {
     func patch(_ value: BoardItemPatch) -> (inout NoteDocument) throws -> Void {
       { _ = try $0.apply([.page(.init(action: .update, id: "b", expectedRevision: $0.boardItemRevision(for: "b"), patch: value))]) }
     }
-    // A person ticks the task done while an agent records its outcome and assignee.
-    let result = try merged(sample(), local: patch(.init(status: .done)), remote: patch(.init(assignee: "Agent", outcome: "Found the cause")))
+    // A person ticks the task done while an agent records its outcome and details.
+    let result = try merged(sample(), local: patch(.init(status: .done)), remote: patch(.init(outcome: "Found the cause", details: "Check the log")))
     #expect(result.conflictedIDs.isEmpty && result.conflictCopyIDs.isEmpty)
-    #expect(result.document.boardItems?["b"]?.task == BoardTask(status: .done, assignee: "Agent", outcome: "Found the cause"))
+    #expect(result.document.boardItems?["b"]?.task == BoardTask(status: .done, outcome: "Found the cause", details: "Check the log"))
     // Two new tasks on one component combine the same way.
     let fresh = try merged(sample(), local: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(status: .doing)))]) },
-      remote: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(assignee: "Agent")))]) })
+      remote: { _ = try $0.apply([.page(.init(action: .update, id: "a", expectedRevision: $0.boardItemRevision(for: "a"), patch: .init(details: "Check the log")))]) })
     #expect(fresh.conflictedIDs.isEmpty)
-    #expect(fresh.document.boardItems?["a"]?.task == BoardTask(status: .doing, assignee: "Agent"))
+    #expect(fresh.document.boardItems?["a"]?.task == BoardTask(status: .doing, details: "Check the log"))
     // The same field changed both ways, or a cleared task against an edit, still keeps both versions.
     let outcomes = try merged(sample(), local: patch(.init(outcome: "Mine")), remote: patch(.init(outcome: "Theirs")))
     #expect(outcomes.conflictedIDs == ["b"] && outcomes.conflictCopyIDs.count == 1)
@@ -755,8 +678,8 @@ struct PageModelTests {
     #expect(plain(result.document, "child") == "C")
   }
 
-  @Test func purposesAndMigrationMerge() throws {
-    let result = try merged(legacyBoard().materializedPage(), local: {
+  @Test func purposesMerge() throws {
+    let result = try merged(plan(), local: {
       _ = try $0.apply([.page(.init(action: .setPurpose, purpose: "Local purpose"))])
     }, remote: {
       _ = try $0.apply([.page(.init(action: .setPurpose, purpose: "Remote purpose"))])
@@ -764,19 +687,8 @@ struct PageModelTests {
     #expect(result.document.boardPurpose == "Remote purpose")
     let copy = try #require(result.conflictCopyIDs.first)
     #expect(plain(result.document, copy) == "Local purpose")
-    // Bases and sides written before Pages merge through their migrated form.
-    let legacy = legacyBoard()
-    var remote = legacy
-    _ = try remote.apply([.page(.init(action: .update, id: "b", expectedRevision: legacy.materializedPage().boardItemRevision(for: "b"), patch: .init(status: .done)))])
-    var local = legacy.materializedPage()
-    try setText("a", "Local", in: &local)
-    let upgraded = try NoteDocument.mergePage(base: legacy, local: local, remote: remote)
-    #expect(upgraded.conflictedIDs.isEmpty)
-    #expect(plain(upgraded.document, "a") == "Local")
-    #expect(upgraded.document.boardItems?["b"]?.task?.status == .done)
-    #expect(upgraded.document.canvasConnections == legacy.canvasConnections)
     #expect(throws: NoteEditError.artifactKindMismatch) {
-      _ = try NoteDocument.mergePage(base: NoteDocument(), local: legacy, remote: legacy)
+      _ = try NoteDocument.mergePage(base: NoteDocument(), local: plan(), remote: plan())
     }
   }
 

@@ -39,9 +39,6 @@ public actor SavedArtifactStore {
       && !FileManager.default.fileExists(atPath: directory.appendingPathComponent(record.manifest.sha256 + ".blob").path) && record.localOrigin != true {
       state.records[id]?.complete = false; state.records[id]?.downloadedBytes = 0
     }
-    // Earlier builds excluded saved files; correct them on open, before any edit.
-    try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
-    for hash in Set(state.records.values.map(\.manifest.sha256)) { try? Self.includeBlobIfNeeded(hash, in: state, directory: directory) }
   }
   /// A blob is shared by every record with the same content. It stays in backups
   /// while any of them exists only here: saved on this device or waiting to upload.

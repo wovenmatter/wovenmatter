@@ -32,7 +32,6 @@ struct LibraryProtocolTests {
   @Test("capabilities and the peer pairing purpose are plain names")
   func capabilityNames() {
     #expect(StreamProtocol.capability == "stream")
-    #expect(LibraryWorkspaceAction.createFolderCapability == "folders.create")
     #expect(PairingPurpose.peerMac == "library.peers")
   }
 

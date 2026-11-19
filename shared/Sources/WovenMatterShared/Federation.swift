@@ -222,31 +222,3 @@ public struct NativeRecordPart: Codable, Equatable, Sendable {
     self.byteCount = byteCount; self.sha256 = sha256; self.data = data
   }
 }
-
-/// An idle existing native session moved by the Mac that ran it to a Linux host it added.
-/// Sending this value must never replay its historical user messages.
-public struct ExecutionAdoption: Codable, Equatable, Sendable {
-  public var workspaceID: String
-  public var conversation: LibraryConversation
-  public var runtimeKind: String
-  public var nativeSessionID: String
-  public var model: String?
-  public var thinking: String?
-  public var permission: String?
-  public var nativeWorkingDirectory: String?
-  public var knownRunIDs: [String]?
-  public var goal: WorkspaceGoal?
-  /// The history the adopting Mac already shows (messages and activities),
-  /// so the new owner's transcript starts with it. Sent with the request,
-  /// never kept in the saved adoption.
-  public var transcript: LibraryTranscript?
-  public init(workspaceID: String, conversation: LibraryConversation, runtimeKind: String, nativeSessionID: String,
-              model: String? = nil, thinking: String? = nil, permission: String? = nil, knownRunIDs: [String]? = nil, nativeWorkingDirectory: String? = nil, goal: WorkspaceGoal? = nil,
-              transcript: LibraryTranscript? = nil) {
-    self.transcript = transcript
-    self.workspaceID = workspaceID; self.conversation = conversation; self.runtimeKind = runtimeKind
-    self.nativeWorkingDirectory = nativeWorkingDirectory
-    self.knownRunIDs = knownRunIDs; self.goal = goal
-    self.nativeSessionID = nativeSessionID; self.model = model; self.thinking = thinking; self.permission = permission
-  }
-}

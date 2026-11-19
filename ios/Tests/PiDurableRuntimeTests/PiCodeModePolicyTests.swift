@@ -75,27 +75,10 @@ final class PiCodeModePolicyTests: XCTestCase {
     do { _ = try await task.value; XCTFail("Stopped program completed") } catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
   }
 
-  func testSavedPolicyNormalizesLegacyLimitsAndPreservesSupportedBudgets() throws {
-    let cases: [(tools: Int, depth: Int, seconds: Double, expected: Double)] = [
-      (0, 1, 30, 120), (1, 2, 120, 120), (16, 3, 240, 240), (128, 4, 240, 240),
-    ]
-    for value in cases {
-      let data = try JSONSerialization.data(withJSONObject: [
-        "unresponsiveCodeSeconds": value.seconds, "concurrentTools": value.tools,
-        "concurrentSubagents": 3, "subagentDepth": value.depth,
-      ])
-      let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: data).validated()
-      XCTAssertEqual(restored.unresponsiveCodeSeconds, value.expected)
-      XCTAssertEqual(restored.concurrentSubagents, 3)
-      XCTAssertEqual(restored.subagentDepth, 2)
-      let encodedData = try JSONEncoder().encode(restored)
-      let roundTrip = try JSONDecoder().decode(PiExecutionPolicy.self, from: encodedData).validated()
-      XCTAssertEqual(roundTrip.unresponsiveCodeSeconds, value.expected)
-      XCTAssertEqual(roundTrip.concurrentSubagents, 3)
-      XCTAssertEqual(roundTrip.subagentDepth, 2)
-      let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedData) as? [String: Any])
-      XCTAssertNil(encoded["concurrentTools"])
-    }
+  func testASavedPolicyIsReadAsWrittenAndInvalidOnesAreRefused() throws {
+    let saved = try JSONEncoder().encode(PiExecutionPolicy(unresponsiveCodeSeconds: 240, concurrentSubagents: 3, subagentDepth: 4))
+    let restored = try JSONDecoder().decode(PiExecutionPolicy.self, from: saved).validated()
+    XCTAssertEqual(restored, PiExecutionPolicy(unresponsiveCodeSeconds: 240, concurrentSubagents: 3, subagentDepth: 2))
     XCTAssertThrowsError(try PiExecutionPolicy(unresponsiveCodeSeconds: .infinity).validated())
     XCTAssertThrowsError(try PiExecutionPolicy(subagentDepth: 0).validated())
   }
