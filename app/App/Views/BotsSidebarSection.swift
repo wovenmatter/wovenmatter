@@ -18,7 +18,8 @@ enum BotThreadDisclosure {
     }
 }
 
-/// Bots from every machine: one section per machine, titled by machine when there are several.
+/// The one Bots section. Bots run on one machine, so it shows that machine's bots and Forum;
+/// machines still running bots from before that rule are named in one row that opens Settings.
 struct BotsSidebar: View {
     @Bindable var bots: BotsModel
     let selectedTarget: BotTarget?
@@ -29,7 +30,17 @@ struct BotsSidebar: View {
 
     var body: some View {
         let sessions = bots.orderedSessions
-        if sessions.isEmpty {
+        let running = sessions.filter { ![.off, .unreachable].contains($0.machine.state) }
+        if let session = running.first ?? sessions.first {
+            BotsSidebarSection(
+                bots: session,
+                alsoRunning: running.filter { $0.machineID != session.machineID }.map(\.displayName),
+                selectedTarget: selectedTarget?.machineID == session.machineID ? selectedTarget : nil,
+                isWorkspaceDestination: isWorkspaceDestination,
+                disclosureRaw: $disclosureRaw,
+                onSelect: onSelect,
+                onOpenSettings: onOpenSettings)
+        } else {
             // Collapses like a machine's section, with its own key: there is no machine yet.
             let key = "bots:section"
             let expanded = AgentDisclosureStore.isExpanded(key, in: disclosureRaw)
@@ -42,24 +53,14 @@ struct BotsSidebar: View {
                 }
             }
             .padding(.bottom, 10)
-        } else {
-            ForEach(sessions) { session in
-                BotsSidebarSection(
-                    bots: session,
-                    title: sessions.count == 1 ? "Bots" : "Bots on \(session.displayName)",
-                    selectedTarget: selectedTarget?.machineID == session.machineID ? selectedTarget : nil,
-                    isWorkspaceDestination: isWorkspaceDestination,
-                    disclosureRaw: $disclosureRaw,
-                    onSelect: onSelect,
-                    onOpenSettings: onOpenSettings)
-            }
         }
     }
 }
 
 struct BotsSidebarSection: View {
     @Bindable var bots: BotMachineSession
-    var title = "Bots"
+    /// Other machines still running bots, left over from before bots ran on one machine.
+    var alsoRunning: [String] = []
     let selectedTarget: BotTarget?
     let isWorkspaceDestination: Bool
     @Binding var disclosureRaw: String
@@ -86,7 +87,7 @@ struct BotsSidebarSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             DisclosureHeading(
-                title: title,
+                title: "Bots",
                 expanded: AgentDisclosureStore.isExpanded(sectionKey, in: disclosureRaw)
             ) {
                 AgentDisclosureStore.toggle(sectionKey, in: &disclosureRaw)
@@ -125,6 +126,8 @@ struct BotsSidebarSection: View {
     @ViewBuilder private var content: some View {
         newBotRow
         statusRow
+        alsoRunningRow
+        if bots.supportsForum { forumRow }
         ForEach(layout.pinned) { row in botRow(row) }
         ForEach(layout.groups) { group in groupSection(group) }
         ForEach(layout.ungrouped) { row in botRow(row) }
@@ -145,6 +148,90 @@ struct BotsSidebarSection: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    @ViewBuilder private var alsoRunningRow: some View {
+        if !alsoRunning.isEmpty {
+            Button(action: onOpenSettings) {
+                Text("Bots also run on \(PermissionNames.list(alsoRunning)). Choose one machine in Settings.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(WovenPalette.foreground)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: Forum
+
+    private var forumThreadsExpanded: Bool { expandedThreads.contains(BotTarget.forumBotID) }
+
+    /// The Forum sits with the bots: its row opens the channel and a chevron reveals its threads.
+    private var forumRow: some View {
+        let expanded = forumThreadsExpanded
+        let paused = bots.forum?.paused == true
+        let onForum = isWorkspaceDestination && selectedTarget?.isForum == true && selectedTarget?.conversationID == nil
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 0) {
+                RailRow(
+                    icon: .messageSquareReply,
+                    title: "Forum",
+                    hoverID: "bots:forum",
+                    trailing: paused ? "Paused" : nil,
+                    selected: onForum
+                ) {
+                    onSelect(.forum(machineID: bots.machineID))
+                }
+                .contextMenu {
+                    Button(paused ? "Resume Forum" : "Pause Forum") { Task { await bots.setForumPaused(!paused) } }
+                        .disabled(!bots.isConnected || bots.forum == nil)
+                    Button("Bot settings…", action: onOpenSettings)
+                }
+                Button { setExpanded(BotTarget.forumBotID, !expanded) } label: {
+                    LucideIcon(glyph: .chevronDown, size: 12)
+                        .rotationEffect(.degrees(expanded ? 0 : -90))
+                        .frame(width: 24, height: WovenMetrics.rowHeight)
+                }
+                .buttonStyle(WovenIconButtonStyle())
+                .help(expanded ? "Hide threads" : "Show threads")
+                .accessibilityLabel(expanded ? "Hide Forum threads" : "Show Forum threads")
+                .accessibilityAddTraits(.isButton)
+            }
+            if expanded { forumThreadRows }
+        }
+    }
+
+    @ViewBuilder private var forumThreadRows: some View {
+        let threads = PiBotForumThread.sorted(bots.forum?.threads ?? [])
+        VStack(alignment: .leading, spacing: 1) {
+            if threads.isEmpty {
+                Text(bots.forum == nil ? "Loading threads…" : "No threads yet")
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+            }
+            ForEach(threads) { thread in
+                RailRow(
+                    icon: .messageSquare,
+                    title: thread.label,
+                    hoverID: "forum-thread:\(thread.roomId)",
+                    showsPin: thread.isPinned,
+                    selected: isWorkspaceDestination && selectedTarget?.isForum == true && selectedTarget?.conversationID == thread.roomId,
+                    pinMenuTitle: thread.isPinned ? "Unpin thread" : "Pin thread",
+                    onTogglePin: {
+                        Task { await bots.setForumThreadPinned(roomID: thread.roomId, pinned: !thread.isPinned) }
+                    }
+                ) {
+                    onSelect(.forum(machineID: bots.machineID, roomID: thread.roomId))
+                }
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 24)
     }
 
     private var statusText: String? {
@@ -347,7 +434,8 @@ struct BotsSidebarSection: View {
 
     private func statusLabel(_ bot: PiBotSummary) -> String? {
         switch bot.modelStatus?.kind {
-        case "paused": "Paused"
+        // Not "Paused": that word is the Forum's, for when the user pauses it.
+        case "paused": "Out of usage"
         case "fallback": "Fallback"
         default: nil
         }

@@ -605,6 +605,8 @@ describe("websocket server", () => {
         "bots.environment",
         "runtime.update",
         "previews",
+        "forum",
+        "user.name",
       ],
     });
   });

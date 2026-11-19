@@ -42,7 +42,8 @@ final class BotsModel {
     }
 
     func name(for target: BotTarget) -> String? {
-        sessions[target.machineID]?.bots.first { $0.id == target.botID }?.name
+        if target.isForum { return "Forum" }
+        return sessions[target.machineID]?.bots.first { $0.id == target.botID }?.name
     }
 
     /// A read that changes nothing here, such as another machine's harnesses: its reply
@@ -131,8 +132,10 @@ final class BotsModel {
         return headers
     }
 
+    /// A bot's conversation; the Forum's rooms have their own controller (`forumRoom`).
     func conversation(_ target: BotTarget) -> BotConversationController? {
-        sessions[target.machineID]?.conversation(botID: target.botID, conversationID: target.conversationID)
+        guard !target.isForum else { return nil }
+        return sessions[target.machineID]?.conversation(botID: target.botID, conversationID: target.conversationID)
     }
 }
 
@@ -162,6 +165,12 @@ final class BotMachineSession: Identifiable {
     private(set) var loadError: String?
     /// Bumped when the runtime says its bots, or the settings behind them, changed.
     private(set) var settingsRevision = 0
+    /// The Forum's state; nil until it arrives, and on a runtime without the Forum.
+    private(set) var forum: PiBotForumState?
+    /// The Forum's scheduled posts; nil until asked for.
+    private(set) var forumSchedules: [PiBotForumSchedule]?
+    /// What bots call the user; "" when unset.
+    private(set) var userName = ""
     let drafts: BotDraftStore
 
     @ObservationIgnored private let report: (String) -> Void
@@ -171,8 +180,10 @@ final class BotMachineSession: Identifiable {
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var loadedThreads = Set<String>()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var forumRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var reloads = 0
     @ObservationIgnored private var conversations: [BotConversationKey: BotConversationController] = [:]
+    @ObservationIgnored private var forumRooms: [BotConversationKey: ForumRoomController] = [:]
     @ObservationIgnored private var memoryObservers: [UUID: (String) -> Void] = [:]
 
     init(machineID: String, drafts: BotDraftStore, notice: @escaping (String) -> Void = { _ in },
@@ -192,6 +203,9 @@ final class BotMachineSession: Identifiable {
     var isConnected: Bool { connection == .open }
     var isAvailable: Bool { machine.state == .ready }
     var displayName: String { machine.displayName }
+    /// An older runtime (a host not updated yet) has no Forum, and nothing about it is shown.
+    var supportsForum: Bool { health?.capabilities?.contains("forum") == true }
+    var supportsUserName: Bool { health?.capabilities?.contains("user.name") == true }
 
     func threads(for botID: String) -> [PiBotThread] { PiBotThread.sorted(threadsByBot[botID] ?? []) }
 
@@ -202,6 +216,7 @@ final class BotMachineSession: Identifiable {
         // A different socket is a different runtime: nothing on screen applies.
         disconnect()
         bots = []; groups = []; threadsByBot = [:]; loadedThreads = []; onboarding = nil; hasLoadedBots = false
+        health = nil; forum = nil; forumSchedules = nil; userName = ""
         forgetConversations()
         guard let endpoint else { return }
         clientEndpoint = endpoint
@@ -222,6 +237,7 @@ final class BotMachineSession: Identifiable {
 
     func disconnect() {
         eventTask?.cancel(); eventTask = nil
+        forumRefreshTask?.cancel(); forumRefreshTask = nil
         if let client { Task { await client.invalidate() } }
         client = nil; clientEndpoint = nil
         setConnection(.closed)
@@ -230,7 +246,10 @@ final class BotMachineSession: Identifiable {
     private func setConnection(_ state: PiBotClient.ConnectionState) {
         guard connection != state else { return }
         connection = state
-        if state != .open { conversations.values.forEach { $0.connectionLost() } }
+        if state != .open {
+            conversations.values.forEach { $0.connectionLost() }
+            forumRooms.values.forEach { $0.connectionLost() }
+        }
     }
 
     // MARK: Conversations
@@ -248,9 +267,24 @@ final class BotMachineSession: Identifiable {
         return controller
     }
 
+    /// The one state for a Forum room (nil: the Forum itself, else a thread), shared by every
+    /// panel showing it.
+    func forumRoom(roomID: Int?) -> ForumRoomController {
+        let key = BotConversationKey(machineID: machineID, botID: BotTarget.forumBotID, conversationID: roomID)
+        if let existing = forumRooms[key] { return existing }
+        if forumRooms.count >= 16 {
+            for (other, controller) in forumRooms where !controller.isAttached { forumRooms[other] = nil }
+        }
+        let controller = ForumRoomController(session: self, key: key)
+        forumRooms[key] = controller
+        return controller
+    }
+
     private func forgetConversations() {
         conversations.values.forEach { $0.forget() }
         conversations = [:]
+        forumRooms.values.forEach { $0.forget() }
+        forumRooms = [:]
     }
 
     func observeMemory(_ observer: @escaping (String) -> Void) -> UUID {
@@ -281,7 +315,9 @@ final class BotMachineSession: Identifiable {
             self.health = health
             scheduleRefresh()
             conversations.values.forEach { $0.connectionOpened() }
+            forumRooms.values.forEach { $0.connectionOpened() }
             Task { await refreshOnboarding(); await refreshRuntimeStatus() }
+            Task { await refreshForum(); await refreshUserName() }
         case .botsChanged:
             settingsRevision += 1
             scheduleRefresh()
@@ -306,6 +342,14 @@ final class BotMachineSession: Identifiable {
         case .environmentChanged(let botID, let state):
             environmentRevision += 1
             environmentStates[botID] = state
+        case .forumPost(let post):
+            forumRooms.values.forEach { $0.receive(post) }
+        case .forumThinking(let roomID, let botIDs):
+            forumRooms.values.forEach { $0.receive(thinking: botIDs, roomID: roomID) }
+        case .forumChanged:
+            scheduleForumRefresh()
+        case .userChanged:
+            Task { await refreshUserName() }
         }
     }
 
@@ -362,13 +406,13 @@ final class BotMachineSession: Identifiable {
     }
 
     private func attempt(_ work: (PiBotClient) async throws -> Void) async {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return }
+        guard let client = connectedClient else { report("Bots are not connected."); return }
         do { try await work(client) }
         catch { report(error.localizedDescription) }
     }
 
     func createBot(name: String) async -> PiBotSummary? {
-        guard let client = connectedClient else { report("Bots on \(displayName) are not connected."); return nil }
+        guard let client = connectedClient else { report("Bots are not connected."); return nil }
         do {
             let bot = try await client.createBot(name: name)
             await reload()
@@ -428,5 +472,97 @@ final class BotMachineSession: Identifiable {
     func rebuild(botID: String) async {
         await attempt { try await $0.rebuildBot(id: botID) }
         await reload()
+    }
+
+    // MARK: Forum
+
+    /// The runtime says the Forum changed after every thread post and every bot that comes
+    /// or goes, so a burst collapses into one read.
+    private func scheduleForumRefresh() {
+        forumRefreshTask?.cancel()
+        forumRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            await self?.refreshForum()
+        }
+    }
+
+    func refreshForum() async {
+        guard supportsForum, let client = connectedClient else { return }
+        do {
+            let state = try await client.forum()
+            guard client === self.client else { return }
+            forum = state
+        } catch {
+            guard client === self.client else { return }
+            loadError = error.localizedDescription
+        }
+    }
+
+    /// A change that answers with the Forum's new state.
+    private func changeForum(_ work: (PiBotClient) async throws -> PiBotForumState) async {
+        guard let client = connectedClient else { report("Bots are not connected."); return }
+        do {
+            let state = try await work(client)
+            guard client === self.client else { return }
+            forum = state
+        } catch {
+            report(error.localizedDescription)
+        }
+    }
+
+    func setForumPaused(_ paused: Bool) async { await changeForum { try await $0.setForumPaused(paused) } }
+
+    func setForumBotActive(botID: String, active: Bool) async {
+        await changeForum { try await $0.setForumBotActive(botID: botID, active: active) }
+    }
+
+    func setForumThreadPinned(roomID: Int, pinned: Bool) async {
+        await attempt { try await $0.setForumThreadPinned(roomID: roomID, pinned: pinned) }
+        await refreshForum()
+    }
+
+    /// A change that answers with every scheduled post.
+    @discardableResult
+    private func changeSchedules(_ work: (PiBotClient) async throws -> [PiBotForumSchedule]) async -> Bool {
+        guard let client = connectedClient else { report("Bots are not connected."); return false }
+        do {
+            let schedules = try await work(client)
+            guard client === self.client else { return false }
+            forumSchedules = schedules
+            return true
+        } catch {
+            report(error.localizedDescription)
+            return false
+        }
+    }
+
+    /// A read, so a socket that is down says nothing: the list loads when it is back.
+    func loadForumSchedules() async {
+        guard supportsForum, let client = connectedClient else { return }
+        if let schedules = try? await client.forumSchedules(), client === self.client { forumSchedules = schedules }
+    }
+    func saveForumSchedule(_ draft: PiBotForumScheduleDraft) async -> Bool { await changeSchedules { try await $0.saveForumSchedule(draft) } }
+    func deleteForumSchedule(id: String) async { await changeSchedules { try await $0.deleteForumSchedule(id: id) } }
+
+    // MARK: The user's name
+
+    func refreshUserName() async {
+        guard supportsUserName, let client = connectedClient else { return }
+        if let name = try? await client.userName(), client === self.client { userName = name }
+    }
+
+    /// Saves what bots call the user ("" clears it) and reports whether the runtime took it.
+    func setUserName(_ name: String) async -> Bool {
+        guard let client = connectedClient else { report("Bots are not connected."); return false }
+        do {
+            let saved = try await client.setUserName(name.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard client === self.client else { return false }
+            userName = saved
+            return true
+        } catch {
+            report(error.localizedDescription)
+            return false
+        }
     }
 }

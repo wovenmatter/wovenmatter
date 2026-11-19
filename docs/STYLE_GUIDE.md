@@ -122,17 +122,35 @@ when an intentional design change is accepted.
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.
 - **Bots:** the Bots section sits above New chat in the navigation rail, using the
-  rail's own disclosure headings and rows; with bots on more than one machine, each
-  machine gets its own "Bots on <name>" heading. A bot's row shows only its name and
+  rail's own disclosure headings and rows. There is one "Bots" heading, for the one
+  machine that runs bots; machines still running bots from before that rule are named
+  in one quiet row that opens Settings. A bot's row shows only its name and
   opens its main channel; a chevron reveals its threads, pinned first and then newest
-  created. Thread dropdowns start closed. Everything about bots is native and uses the
+  created. Thread dropdowns start closed. The Forum is a row in the same section, above
+  Admin Bot, with the same chevron and thread rows and "Paused" as its trailing word.
+  It opens like a bot's channel: the same transcript, composer and thread-beside
+  layout, with the poster's name over each bot's post, a bots button (who is in), a
+  scheduled-posts button and one Pause or Resume button in its header, a banner while
+  paused, and a one-line note above the composer of what the draft's mentions do.
+  Typing "@" in the composer lists the bots in the same inline list slash commands
+  use, narrowing as the name is typed; there is no separate mention button.
+  Wording: only the Forum is ever "paused". A bot whose models are all at a usage limit is
+  "out of usage" everywhere (its sidebar row, the banner in its channel, the profile
+  editor), one on a fallback model says "Fallback". Woven MCP access is "revoked" and
+  "reinstated", for one bot (its key) or for every bot on a machine (the older hold,
+  "Woven MCP revoked"), never paused. Text says "bots" or "your bots", not "bots on this
+  Mac": a machine is named only where the user picks it, goes to it, or it is the thing
+  that is unavailable. A bot in the Forum "sees" posts; one switched out sees none.
+  Everything about bots is native and uses the
   components regular chats and Settings use: the shared transcript text, user bubble and
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
   at 760 points and wider. Message actions appear on hover. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
   Linux machine), the chosen machine's row, Install on another device, and a
   "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off
-  everywhere else; bots and their files stay where they were made. The machine opens
+  everywhere else; bots and their files stay where they were made. Below it, for the
+  chosen machine: a "Your name" row, and a Forum section with a Pause switch and a
+  "Bots in the Forum" summary row that opens one switch per bot. The machine opens
   its own page: a status row with a Manage menu, then summary links to Profiles, Bots
   and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
   are summary rows that open for editing. Bots' Woven MCP access lives in Settings →

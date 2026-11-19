@@ -19,6 +19,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { createCompactionRegistry, NativeCompaction } from "./compaction/context.ts";
 import { type ModelRef, type Profile, parseModelRef, type RawConfig } from "./config.ts";
 import { containerTools } from "./container-tools.ts";
+import { forumTools } from "./forum-tools.ts";
 import type { BotEnvironmentAdapter } from "./env.ts";
 import type { PreviewManager } from "./environment/previews.ts";
 import {
@@ -182,12 +183,35 @@ In your first conversation, keep it short, friendly and non-technical:
 - Explain that new bots use this default model unless the user names a model or profile when they ask for one; to change bots that already exist, they can tell you or use Settings → Bots → Profiles.
 - Offer to create their first bot: ask what it should help with.
 Links: when you point the user to a page, say where it is in words (for example "Settings → Bots → Profiles") and put the links at the end of the message, each on its own line: [Subscriptions & API Keys](wovenmatter://settings/accounts) and [Bot profiles](wovenmatter://settings/bots/profiles). They open those pages in Woven Matter. End your first message with both links.
-Mention other bot features (threads, each bot's own Linux computer with a browser, previews, teams, an orchestrator, bots messaging each other) only when they are relevant or the user asks.
-Models work through profiles. A profile has a main model, which runs a bot's main channel and every thread. The main model can always hand self-contained work to subagents running on itself (run_subagent); the profile's model pool adds more models for subagents, each with optional notes, and its model preferences are the user's own words about the models, which the main model weighs together with the task, each model's capabilities and its API list prices; they are guidance, not routing rules. Separately, a profile can set a memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory; unset, the bot's active main model does it. A profile can also list up to 5 ordered fallback main models: when the main model hits a usage limit or its key runs out of credits, the bot switches to the first available fallback and back once the main model resets; with no fallbacks it pauses until then. Every bot runs one profile; new bots get the default profile, and editing a profile changes every bot on it from its next reply.
+Mention other bot features (threads, each bot's own Linux computer with a browser, previews, teams, an orchestrator, bots messaging each other, the Forum where the user and every bot share one chat) only when they are relevant or the user asks.
+Models work through profiles. A profile has a main model, which runs a bot's main channel and every thread. The main model can always hand self-contained work to subagents running on itself (run_subagent); the profile's model pool adds more models for subagents, each with optional notes, and its model preferences are the user's own words about the models, which the main model weighs together with the task, each model's capabilities and its API list prices; they are guidance, not routing rules. Separately, a profile can set a memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory; unset, the bot's active main model does it. A profile can also list up to 5 ordered fallback main models: when the main model hits a usage limit or its key runs out of credits, the bot switches to the first available fallback and back once the main model resets; with no fallbacks it is out of usage until then. Every bot runs one profile; new bots get the default profile, and editing a profile changes every bot on it from its next reply.
 Setting up models: work from what settings_status lists as signed in and available; never ask the user about subscription tiers or spending. When the user asks for a bot without naming a model or profile, put it on the default profile. When they ask for different models, propose profiles (main and pool models, which bot runs which) and apply them with the profile tools. If a needed connection is missing, send the user to Woven Matter Settings → Subscriptions & API Keys first. Save lasting preferences the user tells you about models with write_account_notes and read them back (read_account_notes) before later model decisions.`;
+
+/** Who the user is and, for a bot in the Forum, that the Forum exists. */
+async function shared(options: BotAgentOptions): Promise<string> {
+  const platform = options.platform;
+  if (!platform) return "";
+  const name = await platform.userName?.();
+  let text = "";
+  if (name) text += `\nThe user's name is ${name}.`;
+  else if (options.bot.kind === "admin" && platform.setUserName) {
+    text +=
+      "\nYou do not know the user's name yet. Ask what they would like to be called, once, and save it with set_user_name.";
+  }
+  const forum = platform.forum?.();
+  const self = forum ? await platform.manager().registry.get(options.bot.id) : undefined;
+  if (forum && self && (await forum.isActive(self))) {
+    text += `\nYou are in the Forum, a group chat ${name ?? "the user"} and every bot here share. You hear it in a conversation of its own; from any conversation, forum_post posts to it and forum_read reads it back.${options.bot.kind === "admin" ? " While you are in it you manage the user's scheduled Forum posts with forum_schedule." : ""}`;
+  }
+  return text;
+}
 
 /** The preamble, read live so team changes apply from the next request. */
 async function preamble(options: BotAgentOptions): Promise<string> {
+  return (await roles(options)) + (await shared(options));
+}
+
+async function roles(options: BotAgentOptions): Promise<string> {
   const container = options.env ? CONTAINER : "";
   if (options.bot.kind === "admin") return ADMIN_PROMPT + container;
   const platform = options.platform;
@@ -275,6 +299,10 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     ],
   });
   const tools = options.platform ? botTools(options.bot, options.platform) : undefined;
+  const platform = options.platform;
+  const forum = platform?.forum
+    ? forumTools(options.bot, platform.forum, () => platform.manager().registry)
+    : undefined;
   const identityOf = async () =>
     options.platform ? options.platform.manager().record(options.bot.id) : options.bot;
   const woven = options.woven?.extension(options.bot.id, identityOf);
@@ -296,6 +324,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     removeFromChild: [
       identity,
       ...(tools ? [tools] : []),
+      ...(forum ? [forum] : []),
       ...(woven ? [woven] : []),
       ...(container ? [container] : []),
     ],
@@ -308,6 +337,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     ...(options.env ? [CodingTools] : []),
     ...(container ? [container] : []),
     ...(tools ? [tools] : []),
+    ...(forum ? [forum] : []),
     // Subagents keep the web tools: research is typical delegated work.
     ...(web ? [web] : []),
     subagent,
@@ -319,6 +349,8 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     registry,
     settings: {
       extensions,
+      // Forum posts reach a working bot as steers: everything that queued arrives at one step.
+      steeringMode: "all",
       documentRetentionMs: 0,
       // Woven's durable-session settings: SSE transport, no hidden retries, no background compaction.
       stream: { transport: "sse", maxRetries: 0 },

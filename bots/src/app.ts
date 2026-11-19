@@ -13,6 +13,7 @@ import {
 import type { BotEnvironmentAdapter } from "./env.ts";
 import { BotEnvironment, IDLE_STOP_MS } from "./environment/container.ts";
 import { DockerEngineAPI } from "./environment/engine-api.ts";
+import { type Forum, openForum, USER_NAME } from "./forum.ts";
 import { PreviewManager, type PreviewTransport } from "./environment/previews.ts";
 import { type HostAPI, HostClient } from "./host/client.ts";
 import { HostCredentialStore } from "./host/credentials.ts";
@@ -28,9 +29,10 @@ import type { SearchProviderId } from "./settings/catalog.ts";
 import { SettingsService } from "./settings/service.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { openSharedDatabase } from "./storage/database.ts";
+import { ForumStore } from "./storage/forum.ts";
 import { BotRegistry } from "./storage/registry.ts";
 import { TitleGenerator } from "./titles.ts";
-import { type BotPlatform, forgetBotMessages } from "./tools.ts";
+import { type BotPlatform, checkUserName, forgetBotMessages } from "./tools.ts";
 import { WovenMCP } from "./woven-mcp.ts";
 
 export type BotsRuntime = {
@@ -44,6 +46,7 @@ export type BotsRuntime = {
   readonly env?: BotEnvironmentAdapter;
   readonly previews?: PreviewManager;
   readonly mirror: ConversationMirror;
+  readonly forum: Forum;
   readonly settings: SettingsStore;
   /** Startup environment reconcile (in the background; never rejects). */
   readonly reconciled: Promise<void>;
@@ -101,6 +104,7 @@ export async function startRuntime(
   let manager: BotManager | undefined;
   let memory: MemoryExtractor | undefined;
   let mirror: ConversationMirror | undefined;
+  let forum: Forum | undefined;
   const settings = options.settings ?? (await SettingsStore.open(config.paths.settings));
   const host = options.host ?? new HostClient(config.host.url, config.host.token);
   const credentials = new HostCredentialStore(host);
@@ -119,10 +123,19 @@ export async function startRuntime(
     get maxRoundsPerRequest() {
       return settings.current.bot_to_bot.max_rounds_per_request;
     },
+    forum: () => forum,
+    userName: async () => (await registry.note(USER_NAME))?.text.trim() || undefined,
+    setUserName: async (name) => {
+      const saved = checkUserName(name);
+      await registry.setNote(USER_NAME, saved);
+      server?.broadcast({ type: "user.changed" });
+      return saved;
+    },
   };
   const db = await openSharedDatabase(config.paths.database);
   const registry = new BotRegistry(db);
   await registry.migrate();
+  const forumStore = new ForumStore(db);
   let env: BotEnvironmentAdapter | undefined;
   let previews: PreviewManager | undefined;
   const woven = new WovenMCP(registry, host, options.fetch ?? fetch);
@@ -205,6 +218,28 @@ export async function startRuntime(
       );
     }
     await woven.load((await registry.list()).map((bot) => bot.id));
+    const titles = new TitleGenerator({
+      models,
+      // The title model, or else the default profile's main model; neither: no titles yet.
+      model: () => {
+        const ref = settings.current.titles.model ?? profiles.resolve(undefined).main;
+        return ref ? parseModelRef(ref) : undefined;
+      },
+      reasoning: () => settings.current.titles.reasoning,
+    });
+    forum = await openForum({
+      store: forumStore,
+      registry,
+      manager: platform.manager,
+      titles,
+      events: {
+        post: (post) => server?.forumPost(post),
+        thinking: (roomId, botIds) => server?.forumThinking(roomId, botIds),
+        changed: () => server?.broadcast({ type: "forum.changed" }),
+      },
+      log,
+    });
+    const room = forum;
     const opened = await BotManager.open({
       db,
       ensureAdmin: true,
@@ -242,13 +277,21 @@ export async function startRuntime(
           memory: async () => memorySection((await self.registry.memory(bot.id)).facts),
         });
       },
-      onBotOpened: (bot) => mirror?.attach(bot),
+      onBotOpened: (bot) => {
+        mirror?.attach(bot);
+        void room.botOpened(bot).catch((error: unknown) => log(`forum: ${String(error)}`));
+      },
+      forumConversations: (botId) => room.conversationsOf(botId),
       onBotClosed: (bot, reason) => {
         if (reason !== "closed") log(`bot ${bot.id} harness ${reason}`);
       },
-      ...(env ? { onBotDeleted: (bot) => env.dispose(bot.id) } : {}),
+      onBotDeleted: async (bot) => {
+        await room.botDeleted(bot.id).catch((error: unknown) => log(`forum: ${String(error)}`));
+        await env?.dispose(bot.id);
+      },
       onBotPurged: async (botId) => {
         forgetBotMessages(platform, botId);
+        await room.botPurged(botId).catch((error: unknown) => log(`forum: ${String(error)}`));
         await previews?.unshareAll(botId).catch(() => {});
         await woven.revoke(botId).catch((error: unknown) => log(`bot ${botId}: revoke MCP key: ${String(error)}`));
         if (!env) return undefined;
@@ -256,15 +299,7 @@ export async function startRuntime(
         await env.purge(botId);
         return { removed: true };
       },
-      titles: new TitleGenerator({
-        models,
-        // The title model, or else the default profile's main model; neither: no titles yet.
-        model: () => {
-          const ref = settings.current.titles.model ?? profiles.resolve(undefined).main;
-          return ref ? parseModelRef(ref) : undefined;
-        },
-        reasoning: () => settings.current.titles.reasoning,
-      }),
+      titles,
       onReport: (error) => log(`thread title: ${String(error)}`),
       onRecovered: (bot, report) => {
         const parts = [
@@ -305,6 +340,7 @@ export async function startRuntime(
       ...(env ? { env } : {}),
       ...(previews ? { previews } : {}),
       notify: (message) => server?.broadcast(message),
+      forum: room,
       log,
     });
     server = await startServer({
@@ -318,8 +354,14 @@ export async function startRuntime(
       port: options.port ?? config.listen.port,
       onActivity: (botId) => env?.touch?.(botId),
       ...(previews ? { previews } : {}),
+      forum: room,
+      user: {
+        name: async () => (await platform.userName?.()) ?? "",
+        setName: (name) => platform.setUserName?.(name) ?? Promise.resolve(""),
+      },
       log,
     });
+    await room.start();
     memory?.start();
     const activeIds = async () => ({
       active: (await opened.list()).map((bot) => bot.id),
@@ -340,10 +382,12 @@ export async function startRuntime(
       ...(env ? { env } : {}),
       ...(previews ? { previews } : {}),
       mirror,
+      forum: room,
       settings,
       reconciled,
       async close() {
         await server?.close();
+        await room.close();
         previews?.close();
         await mirror?.close();
         await memory?.close();
@@ -357,6 +401,7 @@ export async function startRuntime(
     };
   } catch (error) {
     await server?.close().catch(() => {});
+    await forum?.close().catch(() => {});
     previews?.close();
     await mirror?.close().catch(() => {});
     await memory?.close().catch(() => {});

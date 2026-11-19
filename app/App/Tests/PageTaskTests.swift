@@ -25,4 +25,16 @@ import WovenMatterCore
         #expect(BotTarget(pageTaskLink: main.pageTaskLink) == main)
         #expect(BotTarget(pageTaskLink: UUID().uuidString) == nil)
     }
+
+    /// The Forum is a target like a bot: it survives the same link and names its own rooms.
+    @Test func theForumIsATargetOfItsOwn() {
+        let forum = BotTarget.forum(machineID: "machine")
+        #expect(forum.isForum && forum.botID == BotTarget.forumBotID && forum.conversationID == nil)
+        #expect(BotTarget(pageTaskLink: forum.pageTaskLink) == forum)
+        let thread = BotTarget.forum(machineID: "machine", roomID: 4)
+        #expect(BotTarget(pageTaskLink: thread.pageTaskLink) == thread)
+        #expect(thread.isForum && thread.conversationID == 4)
+        #expect(!BotTarget(machineID: "machine", botID: UUID().uuidString).isForum)
+        #expect(BotTarget.forum(machineID: "m", roomID: 4, showsThreadBesideMain: true).showsThreadBesideMain)
+    }
 }

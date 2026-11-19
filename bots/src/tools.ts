@@ -1,6 +1,7 @@
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { BotManager } from "./bots.ts";
+import type { Forum } from "./forum.ts";
 import { describeProfile, type ProfileStore } from "./profiles.ts";
 import type { SettingsService } from "./settings/service.ts";
 import type { BotRecord } from "./storage/registry.ts";
@@ -17,7 +18,20 @@ export type BotPlatform = {
   readonly maxMessagesPerHourPerPair?: number;
   /** `[bot_to_bot] max_rounds_per_request`: bot-to-bot hops after one user message. */
   readonly maxRoundsPerRequest?: number;
+  /** The Forum, once it is open (it opens after the bots do). */
+  readonly forum?: () => Forum | undefined;
+  /** What bots call the user; undefined: no name yet. */
+  readonly userName?: () => Promise<string | undefined>;
+  /** Save what bots call the user ("" clears it). Returns the saved name. */
+  readonly setUserName?: (name: string) => Promise<string>;
 };
+
+/** The user's name as stored: trimmed, at most 80 characters, "" for none. */
+export function checkUserName(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  if (trimmed.length > 80) throw new Error("that name is too long (80 characters at most)");
+  return trimmed;
+}
 
 type Result = { output: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -459,7 +473,7 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
     }),
     defineTool({
       name: "save_profile",
-      description: `Create (create: true) or replace a model profile. main runs the main channel and threads of every bot on it; fallbacks (optional, ordered, at most 5) are main models to switch to when main hits a usage limit or runs out of credits (none: the bot pauses until the limit resets); pool lists additional models for subagents (run_subagent; the main model can always run subagents on itself, so pool may be empty); guidance is the model preferences: the user's own words about the models (e.g. "Opus writes nicer code", "double-check Astra"), weighed by the main model, never enforced; memoryModel (optional) is the memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory on the extraction schedule and when idle; omit it to use the active main model. It never affects chat or subagents. Models must be listed by settings_status. Changes apply from each bot's next reply. ${confirm}`,
+      description: `Create (create: true) or replace a model profile. main runs the main channel and threads of every bot on it; fallbacks (optional, ordered, at most 5) are main models to switch to when main hits a usage limit or runs out of credits (none: the bot is out of usage until the limit resets); pool lists additional models for subagents (run_subagent; the main model can always run subagents on itself, so pool may be empty); guidance is the model preferences: the user's own words about the models (e.g. "Opus writes nicer code", "double-check Astra"), weighed by the main model, never enforced; memoryModel (optional) is the memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory on the extraction schedule and when idle; omit it to use the active main model. It never affects chat or subagents. Models must be listed by settings_status. Changes apply from each bot's next reply. ${confirm}`,
       parameters: Type.Object({
         id: Type.String({ description: "lowercase letters, digits, - and _" }),
         name: Type.String(),
@@ -539,6 +553,21 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
         run(async () => {
           const record = await platform.manager().setProfile(args.botId, args.profileId);
           return `${record.name} now runs profile "${store().resolve(record.profile).id}".`;
+        }),
+    }),
+    defineTool({
+      name: "set_user_name",
+      description:
+        "Save what the user wants to be called. Every bot is told this name. Call it when the user tells you their name or asks to be called something else.",
+      parameters: Type.Object({
+        name: Type.String({ description: "The name (80 characters at most)" }),
+      }),
+      execute: (args) =>
+        run(async () => {
+          const save = platform.setUserName;
+          if (!save) throw new Error("the user's name can't be saved on this server");
+          const saved = await save(args.name);
+          return saved ? `Saved: every bot now calls the user ${saved}.` : "Cleared the user's name.";
         }),
     }),
     defineTool({

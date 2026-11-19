@@ -7,6 +7,14 @@ import { Type } from "typebox";
 import { SEARCH_PROVIDERS, type SearchProviderId } from "./settings/catalog.ts";
 import { run } from "./tools.ts";
 
+/**
+ * How `fetch_url` names itself to the sites it reads: the product and a public page about it, in
+ * the form user-triggered fetchers use. No version: bots have none of their own, they come with
+ * Woven Matter. It never carries anything about the user.
+ */
+export const FETCH_USER_AGENT =
+  "Mozilla/5.0 (compatible; WovenMatter-Bot; +https://github.com/wovenmatter/wovenmatter)";
+
 /** IPv4 addresses from their parts (the public-tree scan keeps literals out of the tree). */
 const ip = (...parts: number[]) => parts.join(".");
 
@@ -432,7 +440,7 @@ export async function fetchUrl(
           redirect: "manual",
           signal,
           headers: {
-            "user-agent": "Pi Bot (fetch_url)",
+            "user-agent": FETCH_USER_AGENT,
             accept: "text/html, application/json, text/plain;q=0.9, */*;q=0.5",
           },
           ...(dispatcher ? { dispatcher } : {}),

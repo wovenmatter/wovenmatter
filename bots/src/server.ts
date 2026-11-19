@@ -7,6 +7,7 @@ import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type { BotManager, ModelStatus } from "./bots.ts";
 import { NotFoundError } from "./bots.ts";
 import { isLoopbackHost } from "./config.ts";
+import type { Forum } from "./forum.ts";
 import { CAPABILITIES, PROTOCOL } from "./identity.ts";
 import { entryId as toEntryId } from "./ids.ts";
 import { editFacts, type MemoryEdit } from "./memory.ts";
@@ -14,6 +15,7 @@ import { describeProfile, type ProfileStore } from "./profiles.ts";
 import {
   type BotSummary,
   type ConversationSnapshot,
+  type ForumPost,
   type OnboardingStatus,
   type ProfilesList,
   type Request,
@@ -49,6 +51,10 @@ export type BotServerOptions = {
   /** Settings backend; without it the settings requests fail. */
   readonly settings?: SettingsService;
   readonly woven?: WovenMCP;
+  /** The Forum; without it the `forum.*` requests fail. */
+  readonly forum?: Forum;
+  /** What bots call the user ("" for none); without it the `user.*` requests fail. */
+  readonly user?: { name(): Promise<string>; setName(name: string): Promise<string> };
 };
 
 export type BotServer = {
@@ -62,6 +68,10 @@ export type BotServer = {
   /** Tell every client a bot's memory changed (an extraction added facts). */
   memoryChanged(botId: string): void;
   broadcast(message: ServerMessage): void;
+  /** Tell the clients that have the post's Forum room open about a new or changed post. */
+  forumPost(post: ForumPost): void;
+  /** Tell the clients that have a Forum room open which bots are working there. */
+  forumThinking(roomId: number, botIds: string[]): void;
   /** Whether any client has one of the bot's conversations open now. */
   viewing(botId: string): boolean;
   close(): Promise<void>;
@@ -194,6 +204,8 @@ class Connection {
   readonly #server: Server;
   readonly #subscriptions = new Map<string, ConversationWatch>();
   readonly #subscriptionIds = new Map<string, string | number>();
+  /** Forum rooms this client has open, with the request that opened each. */
+  readonly #forumRooms = new Map<number, string | number>();
 
   constructor(socket: WebSocket, server: Server) {
     this.#socket = socket;
@@ -211,6 +223,7 @@ class Connection {
     const streams = [...this.#subscriptions.values()];
     this.#subscriptions.clear();
     this.#subscriptionIds.clear();
+    this.#forumRooms.clear();
     this.#server.connections.delete(this);
     await Promise.all(streams.map((stream) => stream.stop().catch(() => {})));
   }
@@ -219,6 +232,11 @@ class Connection {
   watching(botId: string): boolean {
     for (const key of this.#subscriptions.keys()) if (key.startsWith(`${botId}:`)) return true;
     return false;
+  }
+
+  /** Whether this client has the Forum room open. */
+  inForumRoom(roomId: number): boolean {
+    return this.#forumRooms.has(roomId);
   }
 
   async unsubscribeBot(botId: string): Promise<void> {
@@ -264,6 +282,18 @@ class Connection {
     const settings = this.#server.settings;
     if (!settings) throw new Error("settings are not available on this server");
     return settings;
+  }
+
+  #user(): NonNullable<BotServerOptions["user"]> {
+    const user = this.#server.user;
+    if (!user) throw new Error("the user's name is not available on this server");
+    return user;
+  }
+
+  #forum(): Forum {
+    const forum = this.#server.forum;
+    if (!forum) throw new Error("the Forum is not available on this server");
+    return forum;
   }
 
   async #handle(request: Request, afterReply: (() => void)[]): Promise<unknown> {
@@ -548,6 +578,82 @@ class Connection {
       }
       case "conversation.open":
         return this.#open(request.botId, request.conversationId, afterReply, request.id);
+
+      case "forum.get":
+        return this.#forum().state();
+      case "forum.open": {
+        const forum = this.#forum();
+        const roomId = request.roomId ?? (await forum.store.mainRoom()).id;
+        // Subscribed before the snapshot is read: a post made meanwhile arrives as a push, and
+        // clients merge posts by id.
+        const prior = this.#forumRooms.get(roomId);
+        this.#forumRooms.set(roomId, request.id);
+        try {
+          return { ...(await forum.snapshot(roomId)), subscriptionId: request.id };
+        } catch (error) {
+          if (this.#forumRooms.get(roomId) === request.id) {
+            if (prior === undefined) this.#forumRooms.delete(roomId);
+            else this.#forumRooms.set(roomId, prior);
+          }
+          throw error;
+        }
+      }
+      case "forum.close": {
+        const current = this.#forumRooms.get(request.roomId);
+        if (
+          current === undefined ||
+          (request.subscriptionId !== undefined && current !== request.subscriptionId)
+        )
+          return { closed: false };
+        this.#forumRooms.delete(request.roomId);
+        return { closed: true };
+      }
+      case "forum.posts":
+        return this.#forum().posts(request.roomId, request.before, request.limit);
+      case "forum.post": {
+        const forum = this.#forum();
+        const submit = async () => ({
+          post: await forum.postAsUser({
+            ...(request.roomId !== undefined ? { roomId: request.roomId } : {}),
+            text: request.text,
+            ...(request.mentions ? { mentions: request.mentions } : {}),
+            ...(request.everyone ? { everyone: true } : {}),
+          }),
+        });
+        return request.deliveryId ? this.#server.delivery(request.deliveryId, submit) : submit();
+      }
+      case "forum.thread.create":
+        return { thread: await this.#forum().createThread(request.postId) };
+      case "forum.thread.setPinned":
+        return { thread: await this.#forum().setThreadPinned(request.roomId, request.pinned) };
+      case "forum.setPaused":
+        return this.#forum().setPaused(request.paused);
+      case "forum.setBotActive":
+        return this.#forum().setBotActive(request.botId, request.active);
+      case "forum.schedules.list":
+        return { schedules: await this.#forum().schedules() };
+      case "forum.schedules.save": {
+        const { schedule } = request;
+        return {
+          schedules: await this.#forum().saveSchedule({
+            ...(schedule.id !== undefined ? { id: schedule.id } : {}),
+            text: schedule.text,
+            ...(schedule.mentions ? { mentions: schedule.mentions } : {}),
+            ...(schedule.everyone ? { everyone: true } : {}),
+            repeat: schedule.repeat,
+            ...(schedule.time !== undefined ? { time: schedule.time } : {}),
+            ...(schedule.weekday !== undefined ? { weekday: schedule.weekday } : {}),
+            ...(schedule.at !== undefined ? { at: schedule.at } : {}),
+            timeZone: schedule.timeZone,
+          }),
+        };
+      }
+      case "forum.schedules.delete":
+        return { schedules: await this.#forum().deleteSchedule(request.scheduleId) };
+      case "user.get":
+        return { name: await this.#user().name() };
+      case "user.setName":
+        return { name: await this.#user().setName(request.name) };
     }
   }
 
@@ -712,6 +818,8 @@ class Server {
   };
   readonly #deliveries = new Map<string, Promise<unknown>>();
   readonly woven: WovenMCP | undefined;
+  forum: Forum | undefined;
+  user: BotServerOptions["user"];
   log: (message: string) => void = () => {};
 
   constructor(
@@ -784,6 +892,8 @@ export async function startServer(
     options.environment,
   );
   if (options.log) state.log = options.log;
+  state.forum = options.forum;
+  state.user = options.user;
   const previews = options.previews;
   if (previews) {
     state.previewList = (botId) =>
@@ -858,6 +968,18 @@ export async function startServer(
     threadsChanged: (botId) => state.threadsChanged(botId),
     memoryChanged: (botId) => state.memoryChanged(botId),
     broadcast: (message) => state.broadcast(message),
+    forumPost(post) {
+      for (const connection of state.connections) {
+        if (connection.inForumRoom(post.roomId)) connection.send({ type: "forum.post", post });
+      }
+    },
+    forumThinking(roomId, botIds) {
+      for (const connection of state.connections) {
+        if (connection.inForumRoom(roomId)) {
+          connection.send({ type: "forum.thinking", roomId, botIds });
+        }
+      }
+    },
     viewing: (botId) => state.viewing(botId),
     async close() {
       await Promise.all([...state.connections].map((connection) => connection.dispose()));

@@ -6,6 +6,8 @@ const botId = z.string().uuid();
 const conversationId = z.number().int().nonnegative();
 const modelRefText = z.string().min(3).max(200);
 const requestId = z.union([z.string().max(64), z.number().int()]);
+const roomId = z.number().int().positive();
+const postId = z.number().int().positive();
 const factText = z.string().min(1).max(MAX_EDITED_FACT_CHARS);
 
 /** Client → server requests. Every request carries an `id` echoed in its result or error. */
@@ -230,6 +232,74 @@ export const requestSchema = z.discriminatedUnion("type", [
     botIds: z.array(botId).max(1000).optional(),
   }),
   z.strictObject({ id: requestId, type: z.literal("runtime.status") }),
+  // The Forum: one group chat of the user and every bot, with threads (`forum.ts`).
+  z.strictObject({ id: requestId, type: z.literal("forum.get") }),
+  z.strictObject({ id: requestId, type: z.literal("forum.open"), roomId: roomId.optional() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.close"),
+    roomId,
+    subscriptionId: requestId.optional(),
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.posts"),
+    roomId,
+    before: postId,
+    limit: z.number().int().min(1).max(200).optional(),
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.post"),
+    /** The Forum itself when omitted, otherwise a thread. */
+    roomId: roomId.optional(),
+    text: z.string().min(1).max(100_000),
+    /** Bots the user asks for a reply. */
+    mentions: z.array(botId).max(1000).optional(),
+    /** Ask every bot in the room. */
+    everyone: z.boolean().optional(),
+    deliveryId: z.string().min(1).max(128).optional(),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("forum.thread.create"), postId }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.thread.setPinned"),
+    roomId,
+    pinned: z.boolean(),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("forum.setPaused"), paused: z.boolean() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.setBotActive"),
+    botId,
+    active: z.boolean(),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("forum.schedules.list") }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.schedules.save"),
+    schedule: z.strictObject({
+      id: z.string().min(1).max(64).optional(),
+      text: z.string().min(1).max(100_000),
+      mentions: z.array(botId).max(1000).optional(),
+      everyone: z.boolean().optional(),
+      repeat: z.enum(["once", "daily", "weekdays", "weekly"]),
+      /** `HH:MM` in `timeZone`, for a repeating post. */
+      time: z.string().max(5).optional(),
+      weekday: z.number().int().min(0).max(6).optional(),
+      /** Epoch ms, for `once`. */
+      at: z.number().int().positive().optional(),
+      timeZone: z.string().min(1).max(64),
+    }),
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.schedules.delete"),
+    scheduleId: z.string().min(1).max(64),
+  }),
+  // What bots call the user ("" clears it).
+  z.strictObject({ id: requestId, type: z.literal("user.get") }),
+  z.strictObject({ id: requestId, type: z.literal("user.setName"), name: z.string().max(80) }),
 ]);
 
 export type Request = z.infer<typeof requestSchema>;
@@ -313,6 +383,79 @@ export type ThreadSummary = {
   createdAt: string;
 };
 
+/** One Forum post, in the Forum itself or in a thread. */
+export type ForumPost = {
+  /** Grows across every room; a post never changes its id or text. */
+  id: number;
+  roomId: number;
+  author: "user" | "bot";
+  botId?: string;
+  /** The author's name when it posted ("" for a user without one). */
+  name: string;
+  text: string;
+  /** Bots the user asked for a reply. */
+  mentions?: string[];
+  /** Posted by the runtime at a time the user set. */
+  scheduled?: true;
+  /** A bot's final message, posted for it because it owed the user a reply. */
+  auto?: true;
+  createdAt: string;
+  /** A Forum post's thread and how many posts it holds. */
+  thread?: { roomId: number; replies: number };
+  /** Mentioned bots that could not answer, and why. */
+  unanswered?: { botId: string; name: string; reason: string; issue?: "signIn" | "limit" }[];
+};
+
+export type ForumThreadSummary = {
+  roomId: number;
+  parentPostId: number;
+  /** Generated from the thread's first post (absent until then). */
+  title?: string;
+  /** The start of the thread's first post, or of the post it came from while it is empty. */
+  preview: string;
+  createdAt: string;
+  pinned?: true;
+  replies: number;
+  /** Bots that hear the thread. */
+  botIds: string[];
+};
+
+export type ForumState = {
+  mainRoomId: number;
+  paused: boolean;
+  latestPostId: number;
+  /** Every live bot and whether it is in the Forum. */
+  bots: { botId: string; active: boolean }[];
+  threads: ForumThreadSummary[];
+};
+
+export type ForumRoomSnapshot = {
+  subscriptionId?: string | number;
+  roomId: number;
+  mainRoomId: number;
+  /** A thread's starting post. */
+  parent?: ForumPost;
+  /** The newest posts, oldest first. */
+  posts: ForumPost[];
+  hasEarlier: boolean;
+  /** Bots with a turn running in this room. */
+  thinking: string[];
+};
+
+export type ForumScheduleSummary = {
+  id: string;
+  text: string;
+  mentions?: string[];
+  everyone?: true;
+  repeat: "once" | "daily" | "weekdays" | "weekly";
+  time?: string;
+  weekday?: number;
+  at?: number;
+  timeZone: string;
+  /** Epoch ms of the next post, when there is one. */
+  nextAt?: number;
+};
+
 export type ConversationSnapshot = {
   subscriptionId?: string | number;
   botId: string;
@@ -353,6 +496,14 @@ export type ServerMessage =
   | { type: "threads.changed"; botId: string }
   /** A bot's memory changed (a user edit or an extraction): clients refetch `memory.list`. */
   | { type: "memory.changed"; botId: string }
+  /** A Forum post is new, or changed (a thread's reply count, an `unanswered` note). */
+  | { type: "forum.post"; post: ForumPost }
+  /** The bots with a turn running in a Forum room changed. */
+  | { type: "forum.thinking"; roomId: number; botIds: string[] }
+  /** What `forum.get` returns changed: clients refetch it. */
+  | { type: "forum.changed" }
+  /** The user's name changed: clients refetch `user.get`. */
+  | { type: "user.changed" }
   /** A bot's container changed state (started, stopped, updated, rebuilt). */
   | { type: "bots.environment.changed"; botId: string; state: EnvironmentState }
   /** Progress of `runtime.update`, per bot, then `phase: "done"` once for the whole run. */

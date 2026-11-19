@@ -74,7 +74,7 @@ public enum PiBotStreamEvent: Equatable, Sendable {
         case "entry":
             guard let entry = wire.entry else { return nil }
             self = .entry(entry)
-        case "error": self = .error(wire.message ?? "Pi Bot returned an error.")
+        case "error": self = .error(wire.message ?? "The bots returned an error.")
         default: return nil
         }
     }
@@ -523,7 +523,7 @@ public struct PiBotModelStatusText: Equatable, Sendable {
 
     static func reset(_ limit: PiBotSummary.ModelStatus.Limit, timeZone: TimeZone) -> String {
         if let resets = limit.resetsAt { return "Resets \(localTime(resets, timeZone: timeZone))." }
-        return "Reset time not reported; Pi Bot tries again around \(localTime(limit.retryAt, timeZone: timeZone))."
+        return "Reset time not reported; Woven Matter tries again around \(localTime(limit.retryAt, timeZone: timeZone))."
     }
 
     public init(status: PiBotSummary.ModelStatus, botName: String, timeZone: TimeZone = .current) {
@@ -531,7 +531,7 @@ public struct PiBotModelStatusText: Equatable, Sendable {
         if status.kind == "returned" {
             tone = .success
             title = "\(botName) is back on \(primaryModel)."
-            lines = ["Its usage limit reset, so Pi Bot switched back from the fallback."]
+            lines = ["Its usage limit reset, so it switched back from the fallback."]
             return
         }
         let limits = status.limits ?? []
@@ -545,8 +545,8 @@ public struct PiBotModelStatusText: Equatable, Sendable {
         }
         if status.kind == "paused" {
             lines.append(others.isEmpty
-                ? "\(botName) is paused: this profile has no fallback. Add one under Settings → Bots → Profiles."
-                : "\(botName) is paused: every fallback is out too.")
+                ? "\(botName) is out of usage: this profile has no fallback. Add one under Settings → Bots → Profiles."
+                : "\(botName) is out of usage: every fallback is out too.")
         } else {
             lines.append("\(botName) is now using \(status.active ?? primaryModel) until then.")
         }
