@@ -12,6 +12,12 @@ with that name under the managed workspace root: `~/.woven-matter` on your Mac
 while a native Linux host uses
 `~/.local/share/wovenmatter/workspace` under its SSH account.
 
+A folder for another paired Mac is created by that Mac, in its own
+`~/.woven-matter`, and appears on every device as soon as they synchronize.
+That Mac must be on and reachable; if it runs an older version, Woven asks you
+to update Woven Matter on it first. Any of your Macs can create a folder on a
+Linux host, whichever Mac set the host up.
+
 **Link Existing** lets you choose an existing project directory on the owning
 execution machine, including an accessible directory on a native Linux host.
 Woven preserves its files and project instructions. New projects receive no
@@ -21,7 +27,9 @@ The workspace and root are fixed at creation. **Rename** changes the folder's
 name in Woven without renaming its directory. **Remove folder** asks whether to
 remove only the UI folder or also its directory and contents. The directory
 choice is available only for managed roots; external project directories are
-preserved. Conversations and notes remain in Woven.
+preserved. A folder on another Mac, or on a Linux host another Mac set up, can
+only be removed from Woven here; delete its directory on the machine that
+holds it. Conversations and notes remain in Woven.
 
 ## Chats and reference locations
 

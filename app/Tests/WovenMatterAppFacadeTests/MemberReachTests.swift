@@ -256,6 +256,120 @@ struct MemberReachTests {
         #expect(linux.created.first?.deviceID == signer.deviceID && linux.created.first?.runtimeKind == "codex")
     }
 
+    /// A folder creation names no session, so a Mac's execution gate admits it
+    /// from a member; every other library-data action is still refused there,
+    /// and a session action still needs a session that Mac runs.
+    @Test func theExecutionGateAdmitsFolderCreationAndStillRefusesOtherLibraryData() async throws {
+        let macB = try await FacadeFixture(); defer { macB.remove() }
+        let macA = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
+        let bDevice = try await macB.database.libraryIdentity().hostDeviceID
+        let directory = MemberDirectory(database: macB.database, identity: MemberIdentity(deviceID: bDevice, kind: .mac, key: .init()), cacheLifetime: 0)
+        try await directory.ensureSelf(name: "Mac B", endpoints: [])
+        try await directory.add(deviceID: macA.deviceID, kind: .mac, name: "Mac A", publicKey: macA.publicKey, endpoints: [])
+        let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
+            ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
+            capabilities: ["execution.v1", "history.library.v1", LibraryWorkspaceAction.createFolderCapability], executionDeviceID: bDevice)
+        let commands = ReachMacCommands()
+        let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
+        let transport = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: macA.signer, send: Self.route { request in await api.handle(request) })
+        func command(_ action: LibraryWorkspaceAction) -> LibraryCommand {
+            .init(deviceID: macA.deviceID, kind: .workspace, workspaceAction: action, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
+        }
+        let folder = UUID().uuidString.lowercased()
+        #expect(try await transport.command(command(.createFolder(id: folder, name: "Field notes"))).status == .completed)
+        #expect(commands.executed.map(\.workspaceAction) == [.createFolder(id: folder, name: "Field notes")])
+        #expect(commands.devices == [macA.deviceID])
+
+        let unknown = UUID().uuidString.lowercased()
+        let refused: [LibraryWorkspaceAction] = [
+            .note(id: unknown, action: "trash", revision: "1", title: nil, folderID: nil), .retryLibrary(id: unknown),
+            .deleteCalendar(id: unknown, revision: 1, occurrence: nil),
+            .conversation(id: unknown, action: "trash", title: nil, folderID: nil),
+            .configureSession(id: unknown, model: nil, thinking: nil, permission: nil)
+        ]
+        for action in refused {
+            await #expect(throws: MobileConnectionError.self, "\(action)") { _ = try await transport.command(command(action)) }
+        }
+        #expect(commands.executed.count == 1)
+    }
+
+    /// A Mac from before folder creation lists no capability for it, so it is
+    /// asked to update and is sent nothing: it could not decode the action.
+    /// Rows that are not a live machine are no destination either.
+    @Test func aMacWithoutTheFolderCapabilityIsNamedForAnUpdateAndSentNothing() async throws {
+        let macA = try await FacadeFixture(); defer { macA.remove() }
+        func row(_ name: String, kind: ExecutionWorkspace.Kind = .mac, capabilities: [String], retained: Bool? = nil, deleted: Bool = false) async throws -> ExecutionWorkspace {
+            let device = UUID().uuidString.lowercased()
+            return try await macA.database.receiveSyncedWorkspace(.init(id: UUID().uuidString.lowercased(), libraryID: UUID().uuidString.lowercased(),
+                ownerDeviceID: device, kind: kind, name: name, endpoint: URL(string: "https://mac-mini.fixture.ts.net:8443/wovenmatter")!,
+                capabilities: capabilities, executionDeviceID: device, deleted: deleted, retainedHistory: retained))
+        }
+        let current = ["execution.v1", "history.library.v1", StreamProtocol.capability, LibraryWorkspaceAction.createFolderCapability]
+        let older = try await row("Mac mini", capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability])
+        let copied = try await row("Copied Mac", capabilities: current, retained: true)
+        let removed = try await row("Removed Mac", capabilities: current, deleted: true)
+        let phone = try await row("iPhone", kind: .ios, capabilities: [])
+        final class Signed { var count = 0 }; let signed = Signed()
+        let journal = macA.directory.appending(path: "commands.json")
+        macA.model.federatedExecutionClient = try MemberExecutionClient(database: macA.database, commandJournalURL: journal,
+            makeSignedTransport: { _ in signed.count += 1; return nil })
+
+        #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: older.id) == nil)
+        #expect(macA.model.folderMutationError == "Update Woven Matter on Mac mini to create folders there.")
+        for unavailable in [copied.id, removed.id, UUID().uuidString.lowercased()] {
+            #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: unavailable) == nil)
+            #expect(macA.model.folderMutationError == "This workspace is no longer available for new folders.")
+        }
+        #expect(await macA.model.createFolder(name: "Field notes", onWorkspace: phone.id) == nil)
+        #expect(macA.model.folderMutationError == "Create this folder on iPhone.")
+
+        #expect(signed.count == 0)
+        #expect(await (try WorkspaceJournal(file: journal)).snapshot().commands.isEmpty)
+        #expect(try await macA.database.workspaceOverview().folders.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: macA.directory.appending(path: "Field notes").path))
+    }
+
+    /// A Linux host another Mac set up: this Mac holds no SSH configuration
+    /// for it, so its member signature creates the directory there and the
+    /// folder is recorded here, bound to that host at the path it returned.
+    @Test func aFolderOnALinuxHostAnotherMacAddedIsCreatedWithThisMacsSignature() async throws {
+        let macB = try await FacadeFixture(); defer { macB.remove() }
+        let identity = try await macB.database.libraryIdentity()
+        let signer = MemberIdentity(deviceID: identity.hostDeviceID, kind: .mac, key: .init())
+        let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
+                                   libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
+        let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
+        #expect(macB.model.remoteWorkspaces.configuration(id: try #require(UUID(uuidString: workspace.id))) == nil)
+        macB.model.federatedExecutionClient = try MemberExecutionClient(database: macB.database,
+            commandJournalURL: macB.directory.appending(path: "commands.json"),
+            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
+
+        let id = try #require(await macB.model.createFolder(name: "Field notes", onWorkspace: workspace.id), "\(macB.model.folderMutationError ?? "")")
+        #expect(linux.projects == ["Field notes"])
+        #expect(try await macB.database.folderExecutionLocation(id: id)
+            == .init(workspaceID: "remote:" + workspace.id, rootPath: ReachLinuxHost.workspaceRoot + "/Field notes", managed: true))
+        #expect(macB.model.workspaceOverview?.folders.contains { $0.id == id && $0.name == "Field notes" } == true)
+        // The directory is the host's: nothing was made under this Mac's workspace root.
+        #expect(!FileManager.default.fileExists(atPath: macB.directory.appending(path: "Field notes").path))
+
+        // A taken name is the host's refusal in its own words, and records nothing.
+        #expect(await macB.model.createFolder(name: "Field notes", onWorkspace: workspace.id) == nil)
+        #expect(macB.model.folderMutationError == "A directory with that name already exists in this workspace.")
+        #expect(try await macB.database.workspaceOverview().folders.map(\.id) == [id])
+
+        // A window asks the background server, which makes the same call and answers with the folder or the refusal.
+        let backend = BackendApplicationService(model: macB.model)
+        func fromWindow(_ name: String) async throws -> BackendRPCResponse {
+            await backend.handle(.init(method: "application.command", payload: try JSONEncoder().encode(
+                BackendApplicationCommand.workspaceMutation(.createFolderOnWorkspace(name: name, registryID: workspace.id)))))
+        }
+        let created = try #require(try await fromWindow("From a window").result)
+        let windowFolder = try #require(try JSONDecoder().decode(BackendApplicationResult.self, from: created).entityID)
+        #expect(linux.projects == ["Field notes", "From a window"])
+        #expect(try await macB.database.folderExecutionLocation(id: windowFolder)?.rootPath == ReachLinuxHost.workspaceRoot + "/From a window")
+        #expect(try await fromWindow("Field notes").error?.contains("already exists in this workspace") == true)
+    }
+
     @Test func anotherMacManagesALinuxHostItDidNotAdd() async throws {
         let macB = try await FacadeFixture(); defer { macB.remove() }
         let identity = try await macB.database.libraryIdentity()
@@ -474,6 +588,10 @@ final class ReachLinuxHost: @unchecked Sendable {
     private let lock = NSLock()
     private var _commands: [LibraryCommand] = [], _receipts: [String: LibraryCommandReceipt] = [:]
     private var _hostRequests: [String] = [], _botsBody: NSDictionary?, _botsRequests: [String] = [], _uploaded: Data?
+    /// The directories `POST /v1/projects` made in the host's managed workspace root.
+    private var _projects: [String] = []
+    var projects: [String] { lock.withLock { _projects } }
+    static let workspaceRoot = "/home/woven/.local/share/wovenmatter/workspace"
     var commands: [LibraryCommand] { lock.withLock { _commands } }
     var created: [LibraryCommand] { commands.filter { $0.kind == .createSession } }
     var hostRequests: [String] { lock.withLock { _hostRequests } }
@@ -588,6 +706,16 @@ final class ReachLinuxHost: @unchecked Sendable {
             case ("POST", "/v1/host/bots-configure"):
                 lock.withLock { _botsBody = try? JSONSerialization.jsonObject(with: body) as? NSDictionary }
                 return try reply(200, ["configured": true])
+            case ("POST", "/v1/projects"):
+                // As `remote/src/projects.mjs`: a blank directory, or 409 for a taken name.
+                struct Project: Decodable { let name: String; let reuseExisting: Bool }
+                let project = try JSONDecoder().decode(Project.self, from: body)
+                let taken = lock.withLock { () -> Bool in
+                    if _projects.contains(project.name) { return true }
+                    _projects.append(project.name); return false
+                }
+                if taken { return try reply(409, ["error": "A directory with that name already exists in this workspace."]) }
+                return try reply(201, ["path": Self.workspaceRoot + "/" + project.name])
             case ("POST", "/v1/execution/devices"):
                 struct Enrollment: Decodable { let deviceID: String }
                 let enrollment = try JSONDecoder().decode(Enrollment.self, from: body)

@@ -44,4 +44,22 @@ struct LibraryProtocolTests {
     #expect(message.attachments?.first?.byteCount == 3)
   }
 
+  @Test("a folder creation crosses the wire whole, and an action a build does not know fails to decode")
+  func createFolderAction() throws {
+    let id = UUID().uuidString.lowercased()
+    let command = LibraryCommand(commandID: id, deviceID: "d", kind: .workspace,
+      workspaceAction: .createFolder(id: id, name: "Field notes"), libraryID: "l", workspaceID: "w")
+    let data = try JSONEncoder().encode(command)
+    #expect(try JSONDecoder().decode(LibraryCommand.self, from: data) == command)
+    let action = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["workspaceAction"] as? [String: [String: String]]
+    #expect(action == ["createFolder": ["id": id, "name": "Field notes"]])
+    #expect(command.conversationID == nil)
+    #expect(LibraryWorkspaceAction.createFolderCapability == "folders.create.v1")
+    #expect(!LibraryWorkspaceAction.createFolder(id: id, name: "Field notes").qualifiesForAnalytics)
+    // A Mac from before the action reads it as this build reads a later one:
+    // the whole command is refused, so only a Mac that lists the capability is sent it.
+    let later = Data(#"{"commandID":"c","deviceID":"d","kind":"workspace","workspaceAction":{"aLaterAction":{"id":"w"}}}"#.utf8)
+    #expect(throws: DecodingError.self) { try JSONDecoder().decode(LibraryCommand.self, from: later) }
+  }
+
 }

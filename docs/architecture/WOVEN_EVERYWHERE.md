@@ -894,6 +894,50 @@ hands them to the macOS job, which checks them with
   registry refresh). A row without the field (an older Mac) leaves its
   folders out of that Mac's section on the iPhone; they stay in All
   Workspaces and Recents.
+- **New folders on another machine.** Only the owner knows its disk, so a
+  Mac never writes a folder bound to another Mac. A Mac creates a folder on
+  a registry workspace that is live (not deleted, not `retainedHistory`) with
+  `ApplicationModel.createFolder(name:onWorkspace:)`; a window sends it to the
+  background server (`BackendWorkspaceMutation.createFolderOnWorkspace`):
+  - Another Mac: the workspace command
+    `LibraryWorkspaceAction.createFolder {id, name}` (`execution.command`, or
+    `POST v1/execution/commands` without a stream), with no conversation.
+    `id` is a lowercase UUID the requester picks, and it is the command ID
+    too, so a retry replays the receipt and a request whose outcome is
+    unknown is asked again under the same ID. The owning Mac applies a local
+    "Create New": a blank `~/.woven-matter/<name>` by the same name rules,
+    and its own `folders` and `folder_execution_roots` rows (`device:<its
+    device id>`, managed) under `id`; a folder it already made under that ID
+    answers again without creating anything, and an `id` that is not a
+    lowercase UUID is refused. A refusal (an invalid or taken name) is a
+    `rejected` receipt carrying the owner's message. The rows reach every
+    device by library sync; the requester asks that Mac for an exchange at
+    once and waits up to 5 s for them, and a folder still on its way was
+    created all the same. A Mac that accepts the command lists
+    `folders.create.v1` (`LibraryWorkspaceAction.createFolderCapability`) in
+    its registry row's `capabilities`. A Mac whose row lacks it is sent
+    nothing, since it could not decode the action, and the requester says
+    "Update Woven Matter on <name> to create folders there." It is the one
+    workspace action a Mac's execution API accepts that names no session;
+    note, calendar and Library changes still only synchronize. The phone's
+    host route (`POST /v1/commands`) runs the same action on the Mac it
+    reaches, which creates the folder on itself; the iPhone app does not
+    send it.
+  - A Linux host: `POST v1/projects {name, reuseExisting: false}` creates a
+    blank directory in the host's managed workspace root and answers `201
+    {path}`; a name that is already there answers `409` with a message, an
+    invalid one `400`. It is an administrator route, so any Mac member's
+    signature reaches it: the Mac that set the host up uses its own
+    connection, and every other Mac signs the request at the workspace's
+    execution endpoint. The requesting Mac then records `folders` and
+    `folder_execution_roots` (`remote:<workspace id>`, the returned path,
+    managed) itself.
+  - This Mac's own row is a local folder. An iPhone's workspace is no
+    destination.
+  Removing a folder from Woven is a shared edit from any device. Deleting its
+  managed directory is offered only where the directory is reachable: on its
+  own Mac, or for a Linux workspace from the Mac that set it up. Another
+  Mac's path is never resolved on this Mac's disk.
 - **Listed workspaces.** The iPhone's Home, Folders, New Chat and Calendar
   list Quick Chat plus only the Mac and Linux workspaces that are paired and
   reachable now (`MobileModel.workspaceIsActive`, `agentGroupIsActive`):

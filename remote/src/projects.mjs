@@ -42,7 +42,11 @@ export async function createProject(root, name, { reuseExisting = false } = {}) 
   }
   const path = join(await realpath(root), cleanName);
   try { await mkdir(path); } // No recursive creation, normalization, or project instructions.
-  catch (error) { if (!reuseExisting || error.code !== 'EEXIST') throw error; }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    // A taken name is the caller's to change: named, not an internal error.
+    if (!reuseExisting) throw Object.assign(new Error('A directory with that name already exists in this workspace.'), { statusCode: 409 });
+  }
   const info = await lstat(path);
   if (!info.isDirectory() || info.isSymbolicLink()) throw Object.assign(new Error('Project roots must be ordinary directories.'), { statusCode: 400 });
   return { path };

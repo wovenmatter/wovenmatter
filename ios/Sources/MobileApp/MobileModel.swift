@@ -1087,6 +1087,7 @@ extension LibraryWorkspaceAction {
     case .note(let id, _, _, _, _): "note:" + id
     case .saveCalendar(let id, _, _), .deleteCalendar(let id, _, _): "calendar:" + id
     case .retryLibrary(let id): "library:" + id
+    case .createFolder(let id, _): "folder:" + id
     }
   }
 }

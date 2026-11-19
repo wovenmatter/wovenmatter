@@ -1585,7 +1585,10 @@ final class ApplicationModel {
         }
     }
 
-    func createFolder(name: String, workspaceID: UUID? = nil, externalRoot: URL? = nil) async -> String? {
+    /// `id` is the folder ID a caller already chose (another Mac asking for a
+    /// folder here); asking again for a folder this Mac made under it succeeds
+    /// without creating anything.
+    func createFolder(name: String, workspaceID: UUID? = nil, externalRoot: URL? = nil, id: UUID? = nil) async -> String? {
         folderMutationError = nil
         do {
             if isBackendFrontend {
@@ -1600,6 +1603,10 @@ final class ApplicationModel {
                 throw ApplicationModelError.libraryStoreUnavailable
             }
             let owner = try await executionWorkspaceIdentity(workspaceID: workspaceID)
+            if let id, let existing = try await libraryStore.database.folderExecutionLocation(id: id.uuidString.lowercased()) {
+                guard existing.workspaceID == owner else { throw WorkspaceToolError.invalid("Another folder already uses this ID.") }
+                return id.uuidString.lowercased()
+            }
             let path: String
             let managed: Bool
             if let workspaceID {
@@ -1630,8 +1637,62 @@ final class ApplicationModel {
                     managed = true
                 }
             }
-            let folderID = try await libraryStore.createFolder(name: name,
+            let folderID = try await libraryStore.createFolder(id: id ?? UUID(), name: name,
                 location: .init(workspaceID: owner, rootPath: path, managed: managed))
+            await refreshWorkspace()
+            if LocalExecutionRole.current != .backend { await analytics.record(.active) }
+            return folderID
+        } catch {
+            folderMutationError = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Creates a blank folder on another member's workspace, named by its
+    /// registry ID, and returns the folder's ID; nil with `folderMutationError`
+    /// set, as `createFolder` reports. Only the owner knows its disk, so this
+    /// Mac never writes a folder bound to another Mac: that Mac creates the
+    /// directory and its own rows, and they arrive here by library sync. A
+    /// Linux host creates the directory and this Mac records the folder, as the
+    /// Mac that set the host up does.
+    func createFolder(name: String, onWorkspace registryID: String) async -> String? {
+        folderMutationError = nil
+        do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.createFolderOnWorkspace(name: name, registryID: registryID)))
+                await refreshWorkspace()
+                if result.entityID != nil, LocalExecutionRole.current != .backend { await analytics.record(.active) }
+                return result.entityID
+            }
+            guard let libraryStore else { throw ApplicationModelError.libraryStoreUnavailable }
+            let database = libraryStore.database
+            guard let workspace = try await database.libraryExecutionWorkspaces().first(where: { $0.id == registryID }),
+                  !workspace.deleted, workspace.retainedHistory != true else {
+                throw WorkspaceToolError.invalid("This workspace is no longer available for new folders.")
+            }
+            let folderID: String
+            switch workspace.kind {
+            case .mac:
+                if try await workspace.ownerDeviceID == database.libraryIdentity().hostDeviceID { return await createFolder(name: name) }
+                folderID = try await memberExecutionClient().createFolder(name: name, on: workspace)
+                // The owner's rows come by library sync: ask for them now
+                // instead of waiting for its announcement, and give them a few
+                // seconds. A folder still on its way was created all the same.
+                await libraryHost.peerSync.exchange(withOwnerOf: workspace)
+                for _ in 0..<50 {
+                    if (try? await database.folderExecutionLocation(id: folderID)) != nil { break }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            case .linux:
+                guard let id = UUID(uuidString: workspace.id) else { throw WorkspaceToolError.invalid("This workspace is no longer available for new folders.") }
+                if remoteWorkspaces.configuration(id: id) != nil { return await createFolder(name: name, workspaceID: id) }
+                // A host another Mac set up: a Mac member's signature administers it.
+                let project = try await memberExecutionClient().memberRoutes(for: workspace).createProject(name: name)
+                folderID = try await libraryStore.createFolder(name: name,
+                    location: .init(workspaceID: Self.remoteDatabaseSourceID(id), rootPath: project.path, managed: true))
+            case .ios:
+                throw WorkspaceToolError.invalid("Create this folder on \(workspace.name).")
+            }
             await refreshWorkspace()
             if LocalExecutionRole.current != .backend { await analytics.record(.active) }
             return folderID
@@ -1742,8 +1803,11 @@ final class ApplicationModel {
                    let configuration = remoteWorkspaces.configuration(id: workspaceID) {
                     try await remoteWorkspaces.deleteProject(path: path, in: configuration)
                 } else {
-                    guard owner == (try await executionWorkspaceIdentity(workspaceID: nil)),
-                          let root = localACPWorkspaceLaunchConfiguration?.rootURL else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                    // Another machine's path is never resolved on this Mac's disk.
+                    guard owner == (try await executionWorkspaceIdentity(workspaceID: nil)) else {
+                        throw WorkspaceToolError.invalid("This directory is on another machine. Remove the folder only, or delete its directory from that machine.")
+                    }
+                    guard let root = localACPWorkspaceLaunchConfiguration?.rootURL else { throw ApplicationModelError.localACPRuntimeUnavailable }
                     let target = URL(fileURLWithPath: path).standardizedFileURL
                     let managed = root.standardizedFileURL.resolvingSymlinksInPath()
                     guard target.resolvingSymlinksInPath().deletingLastPathComponent() == managed,

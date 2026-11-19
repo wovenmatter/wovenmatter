@@ -206,6 +206,15 @@ extension DeviceCommandService {
         case let .deleteCalendar(id, revision, occurrence):
             try await store.database.deleteCalendarEvent(id: id, occurrence: occurrence, expectedRevision: revision)
         case .retryLibrary(let id): try await store.library.retry(id: id)
+        case let .createFolder(id, name):
+            // Another member asks for a folder on this Mac: its own directory
+            // and rows, by the rules of a local "Create New", under the ID the
+            // requester chose. A phone's host route creates it here as well.
+            guard let folderID = UUID(uuidString: id), folderID.uuidString.lowercased() == id else { throw CommandError.invalidCommand }
+            guard await model.createFolder(name: name, id: folderID) != nil else {
+                throw LibraryAPIError(code: "rejected", message: model.folderMutationError ?? "The folder could not be created.")
+            }
+            return
         }
         await model.refreshWorkspace()
     }

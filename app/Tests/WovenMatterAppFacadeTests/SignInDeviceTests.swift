@@ -108,6 +108,7 @@ actor FakeLinuxSignInHost: MemberExecutionRoutes {
         }
         return try view()
     }
+    func createProject(name: String) throws -> RemoteProjectDirectory { throw LibraryAPIError(code: "unavailable", message: "") }
     func startDefaultAgentControl(_ request: Data) throws -> DefaultAgentControlSession {
         let body = try JSONSerialization.jsonObject(with: request) as! [String: Any]
         controlRequests.append(request)

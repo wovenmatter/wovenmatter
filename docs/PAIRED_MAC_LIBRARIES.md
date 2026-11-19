@@ -28,7 +28,12 @@ Rename and pin are shared edits from any Mac; a rename stored as a title overrid
 applies whichever row arrives last. Trash, restore and draft folder moves change
 runtime state, so the app sends them for another Mac's chat to that Mac, which
 applies its own checks and effects; with that Mac unreachable they fail rather
-than apply locally. These actions need positive authority on the Mac applying
+than apply locally. A new folder on another Mac is asked of that Mac the same
+way (`createFolder`, for a Mac that lists `folders.create.v1`): it creates the
+directory in its own managed workspace root and its own folder rows, which
+synchronize to every device. No Mac writes a folder bound to another Mac's
+disk, resolves another Mac's path on its own, or offers to delete another
+Mac's directory. The chat actions need positive authority on the Mac applying
 them: it runs the chat natively, or the chat belongs to a known independent Linux
 or iOS workspace. A chat adopted into such a workspace keeps the projection
 semantics it already had: trash and restore apply to this library's projection

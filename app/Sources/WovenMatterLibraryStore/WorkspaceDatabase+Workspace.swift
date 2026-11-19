@@ -561,6 +561,10 @@ extension WorkspaceDatabase {
     try await write { try $0.createFolder(id: id, name: name, location: location, createdAt: createdAt) }
   }
 
+  public func folderExecutionLocation(id: String) async throws -> WorkspaceFolderLocation? {
+    try await read { try $0.folderExecutionLocation(id: id) }
+  }
+
   @discardableResult
   public func renameFolder(
     id: String,
@@ -655,6 +659,17 @@ extension WorkspaceDatabaseConnection {
     try toolsExecuteUnlocked("INSERT INTO execution_workspace_defaults(workspace_id,default_path) VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET default_path=excluded.default_path", [location.workspaceID,defaultPath])
     try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path) VALUES(?,?,?)", [id,location.workspaceID,location.rootPath])
     try toolsExecuteUnlocked("UPDATE conversations SET folder_id=? WHERE id=?", [folderID,id])
+  }
+
+  /// Where an existing folder's files are; nil when no folder has this ID or
+  /// it has no bound directory.
+  public func folderExecutionLocation(id: String) throws -> WorkspaceFolderLocation? {
+    guard let row = try historyRowsUnlocked("""
+      SELECT workspace_id,root_path,managed FROM folder_execution_roots
+      WHERE folder_id=? AND EXISTS(SELECT 1 FROM folders WHERE id=folder_id)
+      """, values: [id]).first?.objectValue,
+          let owner = row["workspace_id"]?.stringValue, let path = row["root_path"]?.stringValue else { return nil }
+    return .init(workspaceID: owner, rootPath: path, managed: row["managed"]?.intValue == 1)
   }
 
   public func setFolderReferences(id: String, paths: [String]) throws {

@@ -332,8 +332,8 @@ public actor LibraryStore {
   }
 
   @discardableResult
-  public func createFolder(name: String, location: WorkspaceFolderLocation) async throws -> String {
-    try await database.createFolder(name: name, location: location)
+  public func createFolder(id: UUID = UUID(), name: String, location: WorkspaceFolderLocation) async throws -> String {
+    try await database.createFolder(id: id, name: name, location: location)
   }
 
   public func renameFolder(id: String, name: String) async throws {

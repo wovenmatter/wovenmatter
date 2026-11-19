@@ -910,7 +910,7 @@ struct SidebarNavigationPage: View {
                 deletingFolder = nil
                 actions.onDeleteFolder(folder.id, false)
             }
-            if folder.managedRoot {
+            if canDeleteDirectory(of: folder) {
                 Button("Delete Folder and Directory", role: .destructive) {
                     deletingFolder = nil
                     actions.onDeleteFolder(folder.id, true)
@@ -918,12 +918,21 @@ struct SidebarNavigationPage: View {
             }
             Button("Cancel", role: .cancel) { deletingFolder = nil }
         } message: {
-            if folder.managedRoot, let rootPath = folder.rootPath {
+            if canDeleteDirectory(of: folder), let rootPath = folder.rootPath {
                 Text("Remove the folder from Woven, or also delete its directory and every file in it: \(rootPath). Chats and notes remain in Woven.")
             } else {
                 Text("Remove the folder from Woven. Its directory, files, chats and notes are preserved.")
             }
         }
+    }
+
+    /// A managed directory is deleted only from where this Mac reaches it: its
+    /// own disk, or a Linux workspace it set up. Another Mac's folder, or a
+    /// host another Mac set up, offers removal from Woven alone.
+    private func canDeleteDirectory(of folder: WorkspaceFolderRecord) -> Bool {
+        guard folder.managedRoot, let owner = folder.executionWorkspaceID else { return false }
+        if owner == localExecutionWorkspaceID { return true }
+        return ApplicationModel.remoteWorkspaceID(sourceID: owner).map { remoteWorkspaces.configuration(id: $0) != nil } ?? false
     }
 
     private var recentsSection: some View {

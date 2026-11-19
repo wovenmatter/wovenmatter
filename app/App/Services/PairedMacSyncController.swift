@@ -210,6 +210,13 @@ final class PairedMacSyncController {
         await host.model?.refreshWorkspace()
     }
 
+    /// Exchanges now with the member that serves `workspace`, for a change
+    /// this Mac just asked it to make, instead of waiting for its announcement.
+    func exchange(withOwnerOf workspace: ExecutionWorkspace) async {
+        guard let librarySync, let deviceID = await memberDirectory?.audience(for: workspace) else { return }
+        await librarySync.scheduleSync(deviceID, reason: "request")
+    }
+
     private func mergeMembership(_ membership: PeerMembership) async throws {
         guard let host else { return }
         try await host.peerAuthentication().mergeMembership(membership, own: identity())

@@ -26,6 +26,9 @@ protocol MemberExecutionRoutes: Sendable {
     func signIns() async throws -> DeviceSignIns
     /// `POST v1/sign-ins`: one change, saved only on the host.
     func changeSignIns(_ change: DeviceSignInChange) async throws -> DeviceSignIns
+    /// `POST v1/projects`: a blank directory in the host's managed workspace
+    /// root, for a new folder. The host refuses a name that is already there.
+    func createProject(name: String) async throws -> RemoteProjectDirectory
 }
 
 /// A file an agent wrote on the host, read for Library retention.
@@ -153,5 +156,16 @@ extension SignedExecutionWorkspaceTransport: MemberExecutionRoutes {
     func changeSignIns(_ change: DeviceSignInChange) async throws -> DeviceSignIns {
         // A local model server check can take two 20-second requests on the host.
         try await member("v1/sign-ins", method: "POST", body: JSONEncoder().encode(change), timeout: 60)
+    }
+
+    func createProject(name: String) async throws -> RemoteProjectDirectory {
+        do {
+            return try await member("v1/projects", method: "POST",
+                body: JSONSerialization.data(withJSONObject: ["name": name, "reuseExisting": false], options: [.sortedKeys]))
+        } catch let error as LibraryAPIError where error.code == "http_500" {
+            // A host from before this route named a taken name answers it,
+            // like any failed `mkdir`, with a bare 500.
+            throw LibraryAPIError(code: error.code, message: "The host could not create this directory. A directory with that name may already exist.")
+        }
     }
 }

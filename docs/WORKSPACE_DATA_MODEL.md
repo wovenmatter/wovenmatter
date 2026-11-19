@@ -3,7 +3,11 @@
 A folder is a display name plus one fixed execution workspace and root directory.
 Local folders create a blank named directory in the managed workspace, or link an
 existing directory. Remote folders create a blank directory on the connected
-owner. Woven never initializes or normalizes a linked project, copies instruction
+owner: a Linux host makes it in its managed workspace root for any Mac, and
+another Mac makes it in its own `~/.woven-matter` and records the folder
+itself, so the rows reach this Mac by library sync (see "Folder owners" in
+[Woven everywhere](architecture/WOVEN_EVERYWHERE.md)). A Mac never writes a
+folder bound to another Mac's disk. Woven never initializes or normalizes a linked project, copies instruction
 files into it, or renames its directory when its display name changes.
 
 Draft chats can choose a folder in their agent's workspace or All Workspaces. The first
@@ -24,7 +28,9 @@ session permissions and do not inject instruction files from every location.
 Unlinking removes the reference, not OS permissions. There are no cross-device
 mounts or directory synchronization. Folder removal can optionally trash/delete
 its root only when that root is a managed direct child; external roots never have
-that option. These operations require the normal destructive confirmation.
+that option, and neither does a folder whose directory this Mac does not reach:
+one on another Mac, or on a Linux host another Mac set up. Those are removed
+from Woven only. These operations require the normal destructive confirmation.
 
 ## Databases
 

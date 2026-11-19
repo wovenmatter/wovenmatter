@@ -24,6 +24,15 @@ public enum LibraryWorkspaceAction: Codable, Equatable, Sendable {
   case saveCalendar(id: String, revision: Int?, draft: LibraryCalendarDraft)
   case deleteCalendar(id: String, revision: Int, occurrence: Int?)
   case retryLibrary(id: String)
+  /// Asks a Mac for a new folder of its own: a blank `~/.woven-matter/<name>`
+  /// and that Mac's `folders` and `folder_execution_roots` rows under `id`
+  /// (a lowercase UUID the requester picks, so a retry is exact). Sent only to
+  /// a Mac whose registry row lists `createFolderCapability`: an older build
+  /// cannot decode this case.
+  case createFolder(id: String, name: String)
+
+  /// The registry capability of a Mac that accepts `createFolder`.
+  public static let createFolderCapability = "folders.create.v1"
 }
 
 public struct FileContents: Codable, Equatable, Sendable {

@@ -425,4 +425,5 @@ actor LinuxMemberFake: ExecutionWorkspaceTransport, MemberExecutionRoutes {
     func cancelDefaultAgentControl(id: String) {}
     func signIns() throws -> DeviceSignIns { throw LibraryAPIError(code: "unavailable", message: "") }
     func changeSignIns(_ change: DeviceSignInChange) throws -> DeviceSignIns { throw LibraryAPIError(code: "unavailable", message: "") }
+    func createProject(name: String) throws -> RemoteProjectDirectory { throw LibraryAPIError(code: "unavailable", message: "") }
 }

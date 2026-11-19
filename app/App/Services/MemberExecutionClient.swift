@@ -359,6 +359,27 @@ final class MemberExecutionClient {
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .workspace, conversationID: conversationID,
             workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
+    /// Asks the Mac that serves `workspace` for a new folder of its own and
+    /// returns the folder's ID, which is also the command's: a retry replays
+    /// the receipt, and a request whose outcome is still unknown is asked again
+    /// under its first ID instead of as a second folder. A Mac that does not
+    /// list the capability is never sent the action, which it could not decode.
+    func createFolder(name: String, on workspace: ExecutionWorkspace) async throws -> String {
+        guard workspace.kind == .mac, workspace.capabilities.contains(LibraryWorkspaceAction.createFolderCapability) else {
+            throw LibraryAPIError(code: "update_required", message: "Update Woven Matter on \(workspace.name) to create folders there.")
+        }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identity = try await database.libraryIdentity()
+        let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).lazy.compactMap { record -> String? in
+            guard record.receipt == nil || record.receipt?.status == .outcomeUnknown,
+                  case .createFolder(let id, name)? = record.command.workspaceAction else { return nil }
+            return id
+        }.first
+        let id = unresolved ?? UUID().uuidString.lowercased()
+        try await submit(.init(commandID: id, deviceID: identity.hostDeviceID, kind: .workspace,
+            workspaceAction: .createFolder(id: id, name: name), libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
+        return id
+    }
     private func requiredWorkspace(_ id: String) async throws -> ExecutionWorkspace {
         guard let workspace = try await workspace(conversationID: id), !workspace.deleted else {
             throw LibraryAPIError(code: "unknown_workspace", message: "This conversation's execution workspace is unavailable.")

@@ -7,6 +7,7 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case saveSurfaceProfile(SurfaceProfile)
     case markConversationRead(id: String)
     case createFolder(name: String, workspaceID: UUID?, externalRoot: URL?)
+    case createFolderOnWorkspace(name: String, registryID: String)
     case renameFolder(id: String, name: String)
     case pinFolder(id: String, isPinned: Bool)
     case moveFolder(id: String, up: Bool)
@@ -37,6 +38,9 @@ extension BackendApplicationService {
             result.accepted = try await store.markConversationRead(id: id)
         case let .createFolder(name, workspaceID, externalRoot):
             result.entityID = await model.createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot)
+            if result.entityID == nil { throw BackendRPCError.remote(model.folderMutationError ?? "Folder creation failed.") }
+        case let .createFolderOnWorkspace(name, registryID):
+            result.entityID = await model.createFolder(name: name, onWorkspace: registryID)
             if result.entityID == nil { throw BackendRPCError.remote(model.folderMutationError ?? "Folder creation failed.") }
         case let .renameFolder(id, name):
             try await store.renameFolder(id: id, name: name)

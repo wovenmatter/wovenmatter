@@ -159,6 +159,8 @@ public final class MacExecutionAPI: ExecutionStreamSource {
       guard let action = command.workspaceAction else { throw notLocal }
       switch action {
       case .goal(let id, _), .conversation(let id, _, _, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): try await requireLocal(id)
+      // A new folder on this Mac's own disk: there is no session to own it.
+      case .createFolder: break
       default: throw LibraryAPIError(code: "unsupported", message: "This app-data change syncs through the library.")
       }
     } else {

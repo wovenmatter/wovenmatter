@@ -549,6 +549,8 @@ final class LibraryHostController {
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
         ]
+        // Other Macs send a folder creation here only when this row offers it.
+        desired[0].capabilities.append(LibraryWorkspaceAction.createFolderCapability)
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
             let prior = existing.first { $0.id == id }
