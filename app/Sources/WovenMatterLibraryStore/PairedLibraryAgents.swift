@@ -23,11 +23,13 @@ public struct AgentPlacements: Equatable, Sendable {
 extension ExecutionWorkspace {
   /// The registry row that stands for the Mac whose library host is `owner`.
   /// A Mac can have more than one (its Dev instances register beside it):
-  /// the one paired devices connect to wins, then one that is not copied
-  /// history, then any.
+  /// the one paired devices connect to wins, then one that is still listed
+  /// (a stopped Dev instance is not), then one that is not copied history,
+  /// then any.
   public static func macWorkspace(ownedBy owner: String, in registry: [ExecutionWorkspace]) -> ExecutionWorkspace? {
     let rows = registry.filter { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }
-    return rows.first { $0.isVisibleInConnections && $0.endpoint != nil } ?? rows.first { $0.retainedHistory != true } ?? rows.first
+    return rows.first { $0.isVisibleInConnections && $0.endpoint != nil } ?? rows.first(where: \.isVisibleInConnections)
+      ?? rows.first { $0.retainedHistory != true } ?? rows.first
   }
 }
 
