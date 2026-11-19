@@ -711,6 +711,11 @@ export class BotManager {
     return this.#reapplying;
   }
 
+  /** Re-apply a bot's model now (a conversation was just created for it). */
+  async applyProfile(id: string): Promise<void> {
+    await this.#applyProfile(await this.get(id));
+  }
+
   async #applyProfile(bot: Bot): Promise<void> {
     const profiles = this.#options.profiles;
     if (!profiles) return;

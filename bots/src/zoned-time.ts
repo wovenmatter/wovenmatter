@@ -56,8 +56,9 @@ export function zonedTime(at: number, timeZone: string): ZonedTime {
 }
 
 /**
- * The epoch ms at which the clock in `timeZone` shows the given date and time. A time a
- * daylight-saving change skips resolves to the moment the clock jumps past it.
+ * The epoch ms at which the clock in `timeZone` shows the given date and time. A time the clock
+ * shows twice (clocks going back) is the first of the two. A time it skips (clocks going forward)
+ * is the moment the old clock would have reached it: 02:30 on a day 02:00 jumps to 03:00 is 03:30.
  */
 export function zonedEpoch(
   year: number,
@@ -68,15 +69,16 @@ export function zonedEpoch(
   timeZone: string,
 ): number {
   const wanted = Date.UTC(year, month - 1, day, hour, minute);
-  let guess = wanted;
-  for (let pass = 0; pass < 3; pass += 1) {
-    const shown = zonedTime(guess, timeZone);
-    const difference =
-      wanted - Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute);
-    if (difference === 0) break;
-    guess += difference;
-  }
-  return guess;
+  /** What the zone's clock shows at `at`, read as if it were UTC. */
+  const shownAt = (at: number) => {
+    const shown = zonedTime(at, timeZone);
+    return Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute);
+  };
+  // The zone's offset just before and just after decides; they differ only around a change.
+  const first = wanted - (shownAt(wanted) - wanted);
+  const second = wanted - (shownAt(first) - first);
+  const exact = [first, second].filter((at) => shownAt(at) === wanted);
+  return exact.length ? Math.min(...exact) : Math.max(first, second);
 }
 
 /** `HH:MM` as hour and minute, or undefined when it is not a time of day. */

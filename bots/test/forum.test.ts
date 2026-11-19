@@ -1,7 +1,10 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Bot } from "../src/bots.ts";
+import type { Bot, BotManager } from "../src/bots.ts";
+import type { BotEnvironmentAdapter } from "../src/env.ts";
 import { ForumError, nextScheduledAt } from "../src/forum.ts";
+import { FORUM_SPEAKER, MemoryExtractor } from "../src/memory.ts";
+import { RuntimeOperations } from "../src/operations.ts";
 import type { ForumSchedule } from "../src/storage/forum.ts";
 import { type ForumTest, type Move, openForumTest, type Turn } from "./forum-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -140,6 +143,71 @@ describe("the Forum", () => {
     expect((await t.forum.snapshot()).posts[0]?.unanswered).toHaveLength(1);
   });
 
+  it("posts the answer to the turn that was shown the mention, not a later turn's", async () => {
+    // Each bot answers its first input in text, slowly, and has nothing to add after that.
+    await start({
+      tokensPerSecond: 40,
+      brain: (turn) => ({
+        say:
+          turn.users.length === 1
+            ? `${turn.bot}'s real answer, long enough to still be streaming when more arrives`
+            : `${turn.bot} has nothing to add`,
+      }),
+    });
+    await t.forum.postAsUser({ text: "@everyone status?", everyone: true });
+    await t.forum.idle();
+    // Arrives while both still answer: it starts a second turn in each seat.
+    await t.forum.postAsUser({ text: "also: lunch?" });
+    await t.settle();
+    const log = await t.log();
+    expect(log.filter((line) => line.includes("real answer")).sort()).toEqual([
+      "Ada: Ada's real answer, long enough to still be streaming when more arrives",
+      "Max: Max's real answer, long enough to still be streaming when more arrives",
+    ]);
+    expect(log.filter((line) => line.includes("nothing to add"))).toEqual([]);
+    expect((await t.forum.snapshot()).posts[0]?.unanswered).toBeUndefined();
+    expect(await t.forum.store.owed(1, ada.id)).toEqual([]);
+  });
+
+  it("settles a failed turn that left a later post queued, and hands that post out again", async () => {
+    let fail!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      fail = resolve;
+    });
+    await start({
+      brain: (turn) =>
+        turn.bot === "Ada" && turn.users.length === 1
+          ? { error: "You have hit your ChatGPT usage limit.", after: gate }
+          : { say: `${turn.bot} is fine` },
+    });
+    await t.forum.postAsUser({ text: "@Ada?", mentions: [ada.id] });
+    await t.forum.idle();
+    // Queued behind Ada's request, which then fails.
+    await t.forum.postAsUser({ text: "second" });
+    await t.forum.idle();
+    fail();
+    await t.settle();
+    expect((await t.forum.snapshot()).posts[0]?.unanswered).toEqual([
+      { botId: ada.id, name: "Ada", reason: "You have hit your ChatGPT usage limit.", issue: "limit" },
+    ]);
+    expect(await t.forum.store.owed(1, ada.id)).toEqual([]);
+    expect(t.forum.thinking(1)).toEqual([]);
+    expect((await ada.harness.inspect(ctx)).submissions).toEqual([]);
+    // The post that was stuck behind the failure reached Ada in a turn of its own.
+    expect((await t.heard(ada)).at(-1)).toBe("[Forum] New posts:\n#2 The user: second");
+    expect(await t.log()).toEqual(["user: @Ada?", "user: second"]);
+  });
+
+  it("tells every client when a post changes the newest post", async () => {
+    await start();
+    await t.settle();
+    const before = t.changes;
+    await t.forum.postAsUser({ text: "hello" });
+    expect(t.changes).toBe(before + 1);
+    expect((await t.forum.state()).latestPostId).toBe(1);
+    await t.settle();
+  });
+
   it("drops mentions of bots that are not in the Forum", async () => {
     await start();
     const admin = await t.manager.admin();
@@ -252,6 +320,49 @@ describe("the Forum", () => {
     await t.forum.release(max.id, "[Your environment was updated.]");
     await t.settle();
     expect((await t.heard(max)).filter((input) => input.includes("environment was updated"))).toEqual([]);
+  });
+
+  it("releases every bot when an update fails part-way, and settles a turn that ended as it began", async () => {
+    let answer!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    await start({
+      brain: (turn) => (turn.bot === "Ada" ? { say: "Ada's answer", after: gate } : { say: "ok" }),
+    });
+    const updated: string[] = [];
+    const env = {
+      kind: "none",
+      updateBot: async (botId: string) => {
+        updated.push(botId);
+        return { botId, ok: true };
+      },
+    } as unknown as BotEnvironmentAdapter;
+    const operations = new RuntimeOperations({ manager: t.manager, env, forum: t.forum });
+    await t.forum.postAsUser({ text: "@Ada?", mentions: [ada.id] });
+    await t.forum.idle();
+    // The hold begins while Ada's turn is ending: its answer lands, but is not settled yet.
+    const held = t.forum.hold(ada.id);
+    answer();
+    await held;
+    await t.forum.release(ada.id, "[Updated.]");
+    await t.settle();
+    expect(await t.log()).toEqual(["user: @Ada?", "Ada: Ada's answer"]);
+
+    // An update naming a bot that is gone fails after Ada was held: she must hear again.
+    await expect(
+      operations.update([ada.id, "00000000-0000-4000-8000-000000000000"]),
+    ).rejects.toThrow("no bot");
+    expect(updated).toEqual([]);
+    await t.forum.postAsUser({ text: "still there?" });
+    await t.settle();
+    expect((await t.heard(ada)).at(-1)).toBe("[Forum] New posts:\n#3 The user: still there?");
+    // And a whole update holds, updates and releases.
+    await operations.update([ada.id]);
+    expect(updated).toEqual([ada.id]);
+    await t.forum.postAsUser({ text: "after the update" });
+    await t.settle();
+    expect((await t.heard(ada)).at(-1)).toBe("[Forum] New posts:\n#4 The user: after the update");
   });
 
   it("tells bots the user's name and that they are in the Forum, and Admin Bot asks for the name", async () => {
@@ -468,6 +579,31 @@ describe("the Forum", () => {
     expect((await t.forum.snapshot()).posts[1]).toMatchObject({ name: "Max", text: "Max was here." });
   });
 
+  it("does not let a deleted bot's stopped turn finish after it is restored", async () => {
+    let answer!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    await start({
+      brain: (turn) =>
+        turn.bot === "Max" && !turn.afterTool && turn.user.includes("@Max one")
+          ? { post: "late reply from Max", after: gate }
+          : { say: "ok" },
+    });
+    await t.forum.postAsUser({ text: "@Max one", mentions: [max.id] });
+    await t.forum.idle();
+    await t.manager.delete(max.id);
+    await t.forum.postAsUser({ text: "two" });
+    await t.manager.restore(max.id);
+    max = await t.manager.get(max.id);
+    answer();
+    await t.settle();
+    expect(await t.log()).toEqual(["user: @Max one", "user: two"]);
+    await t.forum.postAsUser({ text: "three" });
+    await t.settle();
+    expect((await t.heard(max)).at(-1)).toBe("[Forum] New posts:\n#3 The user: three");
+  });
+
   it("says a mentioned bot has no model, and catches it up once it has one", async () => {
     let main = "";
     await start({ main: () => main });
@@ -500,6 +636,23 @@ describe("the Forum", () => {
     const seat = await t.forum.store.seat(1, ada.id);
     expect((await ada.memoryConversations()).map((item) => item.conversationId)).toContain(seat?.conversationId);
     expect((await ada.conversations()).map((item) => item.conversationId)).not.toContain(seat?.conversationId);
+    // Memory extraction reads the seat, with its input marked as the group's, not the user's.
+    const prompts: string[] = [];
+    t.setBrain((turn) => {
+      prompts.push(turn.user);
+      return { say: "NONE" };
+    });
+    // The test manager has no profiles: name the extraction model directly.
+    const manager = {
+      get: (id: string) => t.manager.get(id),
+      list: () => t.manager.list(),
+      registry: t.manager.registry,
+      memoryModels: () => ["faux/faux-1"],
+    } as unknown as BotManager;
+    const extractor = new MemoryExtractor({ manager, models: t.models, idleMs: 0 });
+    await extractor.extract(ada.id);
+    await extractor.close();
+    expect(prompts.at(-1)).toContain(`${FORUM_SPEAKER}: [Forum] New posts:\n#1 The user: ping max directly`);
     // message_bot works from a seat: the direct message reached Max's main channel.
     const received: string[] = [];
     for await (const entry of max.ownEntries((await max.main()).id)) {
@@ -556,12 +709,43 @@ describe("the Forum", () => {
       expect(await t.log()).toEqual(["user: once"]);
       // The one-time post is gone; the daily one waits for tomorrow.
       expect((await t.forum.schedules()).map((item) => item.text)).toEqual(["daily"]);
-      now = at("2026-11-19T00:02:00Z");
       await t.forum.saveSchedule({ text: "late night", repeat: "daily", time: "23:59", timeZone: "UTC" });
+      now = at("2026-11-19T00:02:00Z");
       await t.forum.tick();
       await t.settle();
       // Due a minute before midnight, checked just after it: still fired.
       expect(await t.log()).toEqual(["user: once", "user: late night"]);
+    });
+
+    it("waits for the next day when saved or edited just after its time", async () => {
+      let now = at("2026-11-18T09:03:00Z");
+      await start({ now: () => now });
+      const [saved] = await t.forum.saveSchedule({ text: "standup", repeat: "daily", time: "09:00", timeZone: "UTC" });
+      expect(saved?.nextAt).toBe(at("2026-11-19T09:00:00Z"));
+      await t.forum.tick();
+      now = at("2026-11-18T09:04:00Z");
+      await t.forum.saveSchedule({ id: saved?.id ?? "", text: "standup!", repeat: "daily", time: "09:00", timeZone: "UTC" });
+      await t.forum.tick();
+      expect(await t.log()).toEqual([]);
+      now = at("2026-11-19T09:00:30Z");
+      await t.forum.tick();
+      await t.settle();
+      expect(await t.log()).toEqual(["user: standup!"]);
+    });
+
+    it("fires a daily post once on the days clocks change", async () => {
+      // 02:30 New York: skipped on 8 March 2026, shown twice on 1 November 2026.
+      let now = at("2026-03-07T12:00:00Z");
+      await start({ now: () => now });
+      await t.forum.saveSchedule({ text: "night", repeat: "daily", time: "02:30", timeZone: "America/New_York" });
+      const fired = async (from: string, to: string) => {
+        const before = (await t.forum.store.postsAfter(1, 0)).length;
+        for (now = at(from); now <= at(to); now += 60_000) await t.forum.tick();
+        return (await t.forum.store.postsAfter(1, 0)).length - before;
+      };
+      expect(await fired("2026-03-08T05:00:00Z", "2026-03-08T09:00:00Z")).toBe(1);
+      expect(await fired("2026-11-01T04:00:00Z", "2026-11-01T09:00:00Z")).toBe(1);
+      await t.settle();
     });
 
     it("refuses schedules it could never fire, and removes them", async () => {

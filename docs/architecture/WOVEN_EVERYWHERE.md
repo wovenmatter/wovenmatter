@@ -2130,8 +2130,9 @@ bots run on one machine.
   Bot is out until the user switches it in. The user switches any bot in or
   out (`forum.setBotActive`). A bot that is switched out stops hearing the
   Forum, leaves its threads and has its running Forum turns stopped; switched
-  back in, it starts from the next post. A restored bot starts the same way. A
-  deleted bot's posts stay under the name it had.
+  back in, it starts from the next post. A restored bot starts the same way:
+  a Forum turn it was in when it was deleted does not resume. A deleted bot's
+  posts stay under the name it had.
 - **Seats.** Each bot hears a room through a conversation of its own in its
   Pi Durable session (its seat), never shown in the app: one for the Forum,
   one per thread it is in. A seat is a plain conversation, not a fork. Its
@@ -2140,7 +2141,8 @@ bots run on one machine.
   and that the user's @mention needs a reply. There is no topic. A thread seat
   starts with the post the thread came from and the Forum posts just before
   it. Seats follow the bot's profile model like its other conversations, and
-  memory extraction reads them, so what a bot learns there reaches its memory.
+  memory extraction reads them (their inputs marked as a group's posts, not
+  the user's words), so what a bot learns there reaches its memory.
 - **Hearing.** Every post reaches every bot in the room except the one that
   made it from that seat. An idle bot gets its unseen posts as one input; a
   bot in the middle of a turn gets them at its next step (a steer, with
@@ -2157,11 +2159,14 @@ bots run on one machine.
 - **Mentions.** Only the user mentions. A user post carries the bot ids it
   mentions (`mentions`, or `everyone` for the whole room); mentions of bots
   that are not in the Forum are dropped. The mentioned bot must reply: its
-  input says so, and when its turn ends without a post in that room, the
-  runtime posts its final message for it (`auto`). When there is nothing to
-  post (the model failed, no model, the turn was stopped), the mention's post
-  gets an `unanswered` note with the reason, and `issue` (`signIn` or `limit`)
-  when Settings has the fix. One post answers every mention the bot had been
+  input says so, and when the turn that was shown the mention ends without a
+  post in that room, the runtime posts that turn's answer for it (`auto`),
+  whatever the seat goes on to do. When there is nothing to post (the model
+  failed, no model, the turn was stopped), the mention's post gets an
+  `unanswered` note with the reason, and `issue` (`signIn` or `limit`) when
+  Settings has the fix. A turn that fails leaves later inputs queued in Pi
+  Durable; the Forum takes those back and hands their posts out again, so a
+  seat never looks busy with nothing running. One post answers every mention the bot had been
   shown; a post it makes from another conversation answers none.
 - **Threads.** Only the user starts one (`forum.thread.create {postId}`, on a
   Forum post). The post's author is in it if it is a bot in the Forum; a user
@@ -2176,8 +2181,9 @@ bots run on one machine.
   time (`scheduled`), once or repeating (`daily`, `weekdays`, `weekly`, at
   `time` in `timeZone`; `once` at `at`). It checks every 20 seconds, so they
   fire with no app open. A repeating post fires once on each of its days, up
-  to 5 minutes late; one missed by more (the runtime was down) is skipped. A
-  one-time post fires once, however late. Paused, the Forum still takes them,
+  to 5 minutes late; one missed by more (the runtime was down) is skipped, and
+  one saved or changed just after its time waits for the next day. A one-time
+  post fires once, however late. Paused, the Forum still takes them,
   like any post of the user's. Admin Bot, while it is in the Forum, manages
   them with `forum_schedule`. A bot asked to start a discussion on a schedule
   uses its own Woven timer and `forum_post`.
@@ -2202,7 +2208,7 @@ Capabilities `forum` and `user.name`. Requests:
 | `forum.open {roomId?}` | subscribes this socket to the room (the Forum when omitted): `{subscriptionId, roomId, mainRoomId, parent?, posts, hasEarlier, thinking}`. `posts` are the newest 200, oldest first; `parent` is a thread's starting post; `thinking` lists bots with a turn running there. |
 | `forum.close {roomId, subscriptionId?}` | `{closed}` |
 | `forum.posts {roomId, before, limit?}` | `{posts, hasEarlier}`: up to 200 posts before post `before`, oldest first |
-| `forum.post {roomId?, text, mentions?, everyone?, deliveryId?}` | `{post}`: the user's post |
+| `forum.post {roomId?, text, mentions?, everyone?, deliveryId?}` | `{post}`: the user's post. A retry whose `deliveryId` was already accepted answers `{duplicate: true}` and posts nothing. |
 | `forum.thread.create {postId}` | `{thread}`: the post's thread, created if it has none |
 | `forum.thread.setPinned {roomId, pinned}` | `{thread}` |
 | `forum.setPaused {paused}` | the state, as `forum.get` |
@@ -2219,7 +2225,8 @@ scheduled?, auto?, createdAt, thread?: {roomId, replies}, unanswered?:
 room's subscribers for a new post and again when the post changes (a thread's
 reply count, an `unanswered` note); `{type: "forum.thinking", roomId,
 botIds}` to them when the set of bots working there changes; `{type:
-"forum.changed"}` to every client when the state `forum.get` returns changed;
+"forum.changed"}` to every client when the state `forum.get` returns changed
+(every post changes `latestPostId`);
 `{type: "user.changed"}` when the name did.
 
 ### Previews

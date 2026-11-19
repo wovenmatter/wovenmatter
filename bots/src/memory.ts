@@ -3,6 +3,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { BotManager } from "./bots.ts";
 import { parseModelRef } from "./config.ts";
 import { type CronSchedule, parseCron, zonedParts } from "./cron.ts";
+import { DELIVERY_KIND } from "./storage/forum.ts";
 import { displayEntry } from "./transcript.ts";
 
 /** What the memory extractor sees before a compaction replaces part of a conversation's context. */
@@ -50,6 +51,9 @@ export function memorySection(facts: readonly string[]): string | undefined {
     ...facts.map((fact) => `- ${fact}`),
   ].join("\n");
 }
+
+/** How a Forum seat's input is labelled in the extraction transcript. */
+export const FORUM_SPEAKER = "group chat (posts by the user and by other bots, each named)";
 
 /** The request sent to the extraction model. */
 export function extractionPrompt(existing: readonly string[], transcript: string): string {
@@ -288,7 +292,10 @@ export class MemoryExtractor {
         if (!shown || !text) continue;
         const clipped =
           text.length > MAX_MESSAGE_CHARS ? `${text.slice(0, MAX_MESSAGE_CHARS)}…` : text;
-        lines.push({ id: entry.id, text: `${shown.role}: ${clipped}` });
+        // A Forum seat's input holds posts by the user and by other bots, each under its
+        // author's name: it must not read as the user speaking.
+        const who = entry.kind === DELIVERY_KIND ? FORUM_SPEAKER : shown.role;
+        lines.push({ id: entry.id, text: `${who}: ${clipped}` });
       }
     }
     if (checkpoint === memory.checkpoint) return 0;

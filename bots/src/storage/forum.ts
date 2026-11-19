@@ -10,6 +10,9 @@ export const FORUM_OWED_TABLE = "pibot_forum_owed";
 export const FORUM_UNANSWERED_TABLE = "pibot_forum_unanswered";
 export const FORUM_SCHEDULES_TABLE = "pibot_forum_schedules";
 
+/** The entry kind of a seat's inputs; its data says how far the input takes the seat. */
+export const DELIVERY_KIND = "forum.delivery";
+
 /** The place of a seat that hears nothing: its bot was switched out or deleted. */
 export const AWAY = Number.MAX_SAFE_INTEGER;
 

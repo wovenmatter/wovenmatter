@@ -28,6 +28,14 @@ describe("zoned time", () => {
     expect(zonedEpoch(2026, 7, 1, 9, 0, "Asia/Kolkata")).toBe(Date.parse("2026-07-01T03:30:00Z"));
   });
 
+  it("resolves a skipped time an hour on, and a repeated time to its first showing", () => {
+    // New York, 8 March 2026: 02:00 jumps to 03:00. Berlin, 29 March 2026: 02:00 jumps to 03:00.
+    expect(zonedEpoch(2026, 3, 8, 2, 30, "America/New_York")).toBe(Date.parse("2026-03-08T07:30:00Z"));
+    expect(zonedEpoch(2026, 3, 29, 2, 30, "Europe/Berlin")).toBe(Date.parse("2026-03-29T01:30:00Z"));
+    // New York, 1 November 2026: 01:30 is shown twice; the first is still on summer time.
+    expect(zonedEpoch(2026, 11, 1, 1, 30, "America/New_York")).toBe(Date.parse("2026-11-01T05:30:00Z"));
+  });
+
   it("parses times of day, dates and zone names", () => {
     expect(parseTimeOfDay("09:05")).toEqual({ hour: 9, minute: 5 });
     expect(parseTimeOfDay("23:59")).toEqual({ hour: 23, minute: 59 });

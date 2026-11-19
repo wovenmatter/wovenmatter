@@ -132,19 +132,20 @@ export class RuntimeOperations {
     const ids = requested?.length ? [...requested] : (await this.#manager.list()).map((bot) => bot.id);
     // Stop running work first, everywhere, so nothing writes while snapshots are taken.
     const interrupted = new Map<string, number[]>();
-    for (const botId of ids) {
-      this.#notify({ type: "runtime.update", botId, phase: "stopping" });
-      const conversations = await this.#running(botId).catch(() => []);
-      const bot = await this.#manager.get(botId);
-      for (const conversationId of conversations) await bot.abort(conversationId).catch(() => {});
-      if (conversations.length) interrupted.set(botId, conversations);
-      await this.#forum
-        ?.hold(botId)
-        .catch((error: unknown) => this.#log(`bot ${botId}: forum hold: ${String(error)}`));
-    }
     try {
+      for (const botId of ids) {
+        this.#notify({ type: "runtime.update", botId, phase: "stopping" });
+        const conversations = await this.#running(botId).catch(() => []);
+        const bot = await this.#manager.get(botId);
+        for (const conversationId of conversations) await bot.abort(conversationId).catch(() => {});
+        if (conversations.length) interrupted.set(botId, conversations);
+        await this.#forum
+          ?.hold(botId)
+          .catch((error: unknown) => this.#log(`bot ${botId}: forum hold: ${String(error)}`));
+      }
       return await this.#updateStopped(env, ids, interrupted);
     } finally {
+      // Whatever stopped the update, no bot stays held.
       for (const botId of ids) {
         await this.#forum
           ?.release(botId, INTERRUPTED_NOTE)

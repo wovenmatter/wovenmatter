@@ -1,9 +1,15 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
-import { type Conversation, type Cursor, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import {
+  type Conversation,
+  type Cursor,
+  InboxDoc,
+  LiveDoc,
+  type SettledSubmissionRecord,
+} from "@earendil-works/pi-durable";
 import { type Bot, type BotManager, NO_MODEL_MESSAGE, NotFoundError } from "./bots.ts";
-import { conversationId as toConversationId } from "./ids.ts";
+import { conversationId as toConversationId, entryId as toEntryId } from "./ids.ts";
 import { errorIssue } from "./issues.ts";
 import type {
   ForumPost,
@@ -14,6 +20,7 @@ import type {
 } from "./protocol.ts";
 import {
   AWAY,
+  DELIVERY_KIND,
   type ForumPostRecord,
   type ForumRepeat,
   type ForumRoom,
@@ -31,8 +38,7 @@ const ctx = BACKGROUND_CONTEXT;
 /** What bots call the user (`pibot_notes`); unset: "the user". */
 export const USER_NAME = "user.name";
 const PAUSED = "forum.paused";
-/** The entry kind of a seat's inputs; its data says how far the input takes the seat. */
-export const DELIVERY_KIND = "forum.delivery";
+export { DELIVERY_KIND };
 
 const HISTORY_LIMIT = 200;
 /** A bot that fell further behind gets the newest of what it missed and a count. */
@@ -91,7 +97,14 @@ type SeatState = {
   waiting: number;
   /** The stored place was checked against the conversation since this process started. */
   checked: boolean;
+  /** The answer last posted for the bot, so two inputs one answer settles post it once. */
+  posted?: number;
 };
+
+/** How a turn that owed the user a reply ended: with a message to post, or without one. */
+type Outcome =
+  | { readonly text: string }
+  | { readonly reason: string; readonly issue?: "signIn" | "limit" };
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
@@ -267,17 +280,22 @@ export class Forum {
 
   /**
    * Give every bot in the Forum its seat. A new bot, and one that was away (deleted, then
-   * restored), hears the Forum from the next post.
+   * restored), hears the Forum from the next post. Returns the bots that were away.
    */
-  async #seatBots(): Promise<void> {
+  async #seatBots(): Promise<string[]> {
     const main = await this.store.mainRoom();
     const latest = await this.store.latestPostId(main.id);
     const seats = new Map((await this.store.seats(main.id)).map((seat) => [seat.botId, seat]));
+    const back: string[] = [];
     for (const record of await this.#activeBots()) {
       const seat = seats.get(record.id);
       if (!seat) await this.store.addSeat(main.id, record.id, latest);
-      else if (seat.baseline === AWAY) await this.store.reseat(main.id, record.id, latest);
+      else if (seat.baseline === AWAY) {
+        await this.store.reseat(main.id, record.id, latest);
+        back.push(record.id);
+      }
     }
+    return back;
   }
 
   /** The conversations a bot hears the Forum through (memory extraction reads them). */
@@ -292,7 +310,16 @@ export class Forum {
   /** A bot's harness opened: a new bot is seated, and turns it was running are picked up. */
   async botOpened(bot: Bot): Promise<void> {
     if (!this.#started || this.#closed) return;
-    await this.#seatBots();
+    const back = await this.#seatBots();
+    if (back.includes(bot.id)) {
+      // Deleting it closed its harness mid-turn: that turn must not pick up where it left off.
+      const seats = await this.store.seatsOf(bot.id);
+      await Promise.all(
+        seats.map((seat) =>
+          this.#enqueue(seat.roomId, bot.id, async () => void (await this.#stop(seat))),
+        ),
+      );
+    }
     await this.#adopt(bot);
     this.#events.changed?.();
   }
@@ -322,25 +349,52 @@ export class Forum {
     for (const roomId of rooms) this.#emitThinking(roomId);
   }
 
-  /** Watch the seats' turns that are already running, settle what ended, deliver what waits. */
+  /**
+   * After a start: follow the inputs a seat's conversation still holds (queued or in a running
+   * turn) to their end, settle what ended while nobody watched, and deliver what waits.
+   */
   async #adopt(bot: Bot): Promise<void> {
     const seats = await this.store.seatsOf(bot.id);
     if (!seats.length) return;
     const live = await bot.harness.inspect(ctx).catch(() => undefined);
-    const busy = new Set<number>();
-    for (const submission of live?.submissions ?? []) busy.add(submission.conversationId);
-    for (const task of live?.tasks ?? []) busy.add(task.record.conversationId);
     for (const seat of seats) {
-      if (seat.conversationId !== undefined && busy.has(seat.conversationId)) {
-        const conversation = await bot.harness
-          .conversation(toConversationId(seat.conversationId), ctx)
-          .catch(() => undefined);
-        if (conversation) this.#watch(seat.roomId, bot.id, conversation.waitForIdle(ctx));
-      } else {
-        void this.#enqueue(seat.roomId, bot.id, () => this.#settle(seat.roomId, bot.id));
+      const id = seat.conversationId;
+      const conversation =
+        id === undefined
+          ? undefined
+          : await bot.harness.conversation(toConversationId(id), ctx).catch(() => undefined);
+      let watched = false;
+      for (const record of live?.submissions ?? []) {
+        if (!conversation || record.conversationId !== id || record.type !== "input") continue;
+        const to = await this.#deliveredTo(bot, conversation, record.id, record.entry);
+        const submission = to ? await bot.harness.submission(record.id, ctx) : undefined;
+        if (!submission || !to) continue;
+        this.#watch(seat.roomId, bot.id, to, submission.wait(ctx));
+        watched = true;
       }
+      if (!watched) void this.#enqueue(seat.roomId, bot.id, () => this.#settleIdle(seat.roomId, bot.id));
       void this.#deliver(seat.roomId, bot.id);
     }
+  }
+
+  /** How far a seat input takes the seat: from its entry once placed, else from the inbox. */
+  async #deliveredTo(
+    bot: Bot,
+    conversation: Conversation,
+    submissionId: number,
+    entry: number | undefined,
+  ): Promise<number> {
+    if (entry !== undefined) {
+      const id = toEntryId(entry);
+      const page = await conversation.entries({ minEntryId: id, maxEntryId: id }, 1, undefined, ctx);
+      const found = page.items[0];
+      return found?.kind === DELIVERY_KIND ? deliveryTo(found.data) : 0;
+    }
+    const inbox = await bot.harness.snapshot(InboxDoc, conversation.id, ctx);
+    const item = (inbox?.items ?? []).find((queued) => queued.id === submissionId);
+    return item && item.mode !== "write" && item.entry?.kind === DELIVERY_KIND
+      ? deliveryTo(item.entry.data)
+      : 0;
   }
 
   // MARK: State for clients
@@ -618,11 +672,12 @@ export class Forum {
   async #published(record: ForumPostRecord, room: ForumRoom): Promise<void> {
     await this.#emitPost(record);
     if (room.parentPostId !== undefined) {
-      // The parent's reply count, and the thread list's.
+      // The parent's reply count.
       await this.#emitPost(await this.store.post(room.parentPostId));
-      this.#events.changed?.();
       this.#title(room, record);
     }
+    // The newest post's id, and a thread's reply count in the thread list.
+    this.#events.changed?.();
     for (const hearer of await this.#hearers(room)) void this.#deliver(room.id, hearer.id);
   }
 
@@ -776,7 +831,13 @@ export class Forum {
     if (!stopped) return;
     this.#held.delete(botId);
     for (const seat of await this.store.seatsOf(botId)) {
-      void this.#deliver(seat.roomId, botId, stopped.has(seat.roomId) ? { note } : {});
+      if (stopped.has(seat.roomId)) {
+        void this.#deliver(seat.roomId, botId, { note });
+        continue;
+      }
+      // A turn that ended just as the hold began was not settled then.
+      void this.#enqueue(seat.roomId, botId, () => this.#settleIdle(seat.roomId, botId));
+      void this.#deliver(seat.roomId, botId);
     }
   }
 
@@ -810,20 +871,25 @@ export class Forum {
     return next;
   }
 
-  /** Count a turn from the input that starts it until it ends, then settle what the bot owes. */
-  #watch(roomId: number, botId: string, done: Promise<unknown>): void {
+  /**
+   * Follow one seat input (it took the seat to post `to`) until its turn ends, then settle what
+   * the bot owes from how that turn ended.
+   */
+  #watch(roomId: number, botId: string, to: number, done: Promise<SettledSubmissionRecord>): void {
     const state = this.#seatState(roomId, botId);
     state.waiting += 1;
     if (state.waiting === 1) this.#emitThinking(roomId);
     void done
-      .catch(() => {})
-      .finally(() => {
+      .then(
+        (record) => record,
+        () => undefined,
+      )
+      .then((record) => {
         // A deleted bot's seat state is gone; its count no longer matters.
         if (this.#seats.get(this.#key(roomId, botId)) !== state) return;
         state.waiting -= 1;
-        if (state.waiting > 0) return;
-        this.#emitThinking(roomId);
-        void this.#enqueue(roomId, botId, () => this.#settle(roomId, botId));
+        if (state.waiting === 0) this.#emitThinking(roomId);
+        void this.#enqueue(roomId, botId, () => this.#ended(roomId, botId, to, record));
       });
   }
 
@@ -842,6 +908,8 @@ export class Forum {
     // A plain conversation of the bot's own, not a fork: it starts empty and follows its profile.
     const created = await bot.harness.createConversation({ ownership: { kind: "ownerless" } }, ctx);
     await this.store.setSeatConversation(seat.roomId, bot.id, created.id);
+    // Created on the profile's main model: move it to the fallback the bot runs now, if any.
+    await this.#manager().applyProfile(bot.id);
     state.checked = true;
     return created;
   }
@@ -956,7 +1024,7 @@ export class Forum {
         ctx,
       );
       await this.store.setSeatCursor(roomId, botId, to);
-      this.#watch(roomId, botId, submission.wait(ctx));
+      this.#watch(roomId, botId, to, submission.wait(ctx));
     });
   }
 
@@ -1043,16 +1111,179 @@ export class Forum {
   }
 
   /**
-   * After a seat's turn ends: when the bot still owes the user a reply it had been shown, post its
-   * final message for it, or note on the user's post why there is none.
+   * One seat input's turn ended (`record`; undefined when its wait failed with the harness).
+   * Inputs a failed turn left queued are taken back, and the replies the bot owes for posts up
+   * to `to` are settled from that turn: its answer is posted for it, or the user's post gets a
+   * note saying why there is none.
    */
-  async #settle(roomId: number, botId: string): Promise<void> {
+  async #ended(
+    roomId: number,
+    botId: string,
+    to: number,
+    record: SettledSubmissionRecord | undefined,
+  ): Promise<void> {
+    // Paused or held, the stop already took queued inputs back, and resuming reminds the bot.
+    if (this.#closed || this.#held.has(botId) || (await this.paused())) return;
+    const seat = await this.store.seat(roomId, botId);
+    const bot = await this.#manager()
+      .get(botId)
+      .catch(() => undefined);
+    const conversation =
+      seat?.conversationId === undefined
+        ? undefined
+        : await bot?.harness.conversation(toConversationId(seat.conversationId), ctx);
+    if (!seat || !bot || !conversation) return;
+    // A turn that failed leaves later inputs queued until the next one arrives. Take them back,
+    // so nothing looks busy, and hand those posts out again.
+    const stranded = await this.#stranded(bot, conversation);
+    if (stranded) {
+      await conversation.abort(ctx).catch(() => {});
+      await this.#reconcile(bot, conversation, seat);
+    }
+    // An input that was never placed showed the bot nothing: its posts are unseen again.
+    if (record?.entry !== undefined) await this.#settleInput(bot, conversation, roomId, to, record);
+    if (stranded) void this.#deliver(roomId, botId);
+  }
+
+  /** No turn is running, yet seat inputs are still queued: the turn before them failed. */
+  async #stranded(bot: Bot, conversation: Conversation): Promise<boolean> {
+    const live = await bot.harness.snapshot(LiveDoc, conversation.id, ctx);
+    if (live?.run !== undefined) return false;
+    const inbox = await bot.harness.snapshot(InboxDoc, conversation.id, ctx);
+    return (inbox?.items ?? []).some(
+      (item) => item.mode !== "write" && item.entry?.kind === DELIVERY_KIND,
+    );
+  }
+
+  async #settleInput(
+    bot: Bot,
+    conversation: Conversation,
+    roomId: number,
+    to: number,
+    record: SettledSubmissionRecord,
+  ): Promise<void> {
+    if (!(await this.store.owed(roomId, bot.id)).some((id) => id <= to)) return;
+    const state = this.#seatState(roomId, bot.id);
+    if (record.status === "done") {
+      const answer = record.type === "input" ? record.answer : undefined;
+      // One answer may settle two inputs (a steer placed mid-turn): it is posted once.
+      if (answer !== undefined && state.posted === answer) {
+        await this.store.clearOwed(roomId, bot.id, to);
+        return;
+      }
+      const page =
+        answer === undefined
+          ? undefined
+          : await conversation.entries({ minEntryId: answer, maxEntryId: answer }, 1, undefined, ctx);
+      const message = (page?.items[0]?.model ?? []).find(
+        (item): item is AssistantMessage => item.role === "assistant",
+      );
+      const text = assistantText(message).trim();
+      if (text && answer !== undefined) state.posted = answer;
+      await this.#settleOwed(
+        bot,
+        conversation,
+        roomId,
+        to,
+        text ? { text } : { reason: "its turn ended without a message" },
+      );
+      return;
+    }
+    await this.#settleOwed(bot, conversation, roomId, to, await this.#failure(bot, conversation, record));
+  }
+
+  /** Why an input went unanswered, in words for the user, with the fix Settings has for it. */
+  async #failure(
+    bot: Bot,
+    conversation: Conversation,
+    record: Extract<SettledSubmissionRecord, { status: "unanswered" }>,
+  ): Promise<Exclude<Outcome, { readonly text: string }>> {
+    if (record.reason === "no_model") return { reason: NO_MODEL_MESSAGE };
+    if (record.reason === "aborted") return { reason: "its reply was stopped" };
+    // The failed response itself says more than the settlement: what the provider attached.
+    const detail = typeof record.detail === "string" ? record.detail : undefined;
+    const failed = await this.#lastAssistant(conversation, record.entry ?? 0);
+    if (failed?.stopReason === "error") {
+      const issue = errorIssue(failed);
+      const reason = failed.errorMessage ?? detail ?? "the model failed";
+      return { reason, ...(issue ? { issue } : {}) };
+    }
+    const live = await bot.harness.snapshot(LiveDoc, conversation.id, ctx);
+    return { reason: detail ?? live?.runFailure?.detail ?? record.reason };
+  }
+
+  /** The newest assistant message after entry `after` that is not a tool call. */
+  async #lastAssistant(
+    conversation: Conversation,
+    after: number,
+  ): Promise<AssistantMessage | undefined> {
+    let cursor: Cursor | undefined;
+    do {
+      const page = await conversation.entries({ order: "descending" }, 100, cursor, ctx);
+      for (const entry of page.items) {
+        if (entry.id <= after) return undefined;
+        const message = (entry.model ?? []).find(
+          (item): item is AssistantMessage => item.role === "assistant",
+        );
+        // Text before a tool call is not the turn's message.
+        if (message && message.stopReason !== "toolUse") return message;
+      }
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return undefined;
+  }
+
+  /** Store the outcome for every reply the bot owes for posts up to `to`, and tell clients. */
+  async #settleOwed(
+    bot: Bot,
+    conversation: Conversation,
+    roomId: number,
+    to: number,
+    outcome: Outcome,
+  ): Promise<void> {
+    const name = bot.record.name;
+    const settled = await this.store.settleOwed(
+      roomId,
+      bot.id,
+      to,
+      "text" in outcome
+        ? {
+            post: {
+              roomId,
+              author: "bot",
+              botId: bot.id,
+              name,
+              text: outcome.text,
+              mentions: [],
+              scheduled: false,
+              auto: true,
+              origin: conversation.id,
+            },
+          }
+        : {
+            unanswered: {
+              name,
+              reason: outcome.reason,
+              ...(outcome.issue ? { issue: outcome.issue } : {}),
+            },
+          },
+    );
+    const room = await this.store.room(roomId);
+    if (settled.post && room) await this.#published(settled.post, room);
+    for (const postId of settled.noted) await this.#emitPost(await this.store.post(postId));
+  }
+
+  /**
+   * Settle from the transcript alone, for a turn that ended while nothing followed it (a restart,
+   * an update's hold): once the seat is idle, the bot's newest message since its newest input is
+   * its reply to what that input and the ones before it asked.
+   */
+  async #settleIdle(roomId: number, botId: string): Promise<void> {
     if (this.#closed || this.#held.has(botId) || (await this.paused())) return;
     const owed = await this.store.owed(roomId, botId);
     if (!owed.length) return;
-    const record = await this.#registry.get(botId);
     const seat = await this.store.seat(roomId, botId);
-    if (!record || seat?.conversationId === undefined) return;
+    if (seat?.conversationId === undefined) return;
     const bot = await this.#manager()
       .get(botId)
       .catch(() => undefined);
@@ -1063,71 +1294,25 @@ export class Forum {
     if (!bot || !conversation || (await this.#busy(bot, conversation))) return;
     const delivery = await this.#newestDelivery(conversation);
     if (!delivery || !owed.some((id) => id <= delivery.to)) return;
-    const answer = await this.#answer(bot, conversation, delivery.entryId);
-    const settled = await this.store.settleOwed(
-      roomId,
-      botId,
-      delivery.to,
-      "text" in answer
-        ? {
-            post: {
-              roomId,
-              author: "bot",
-              botId,
-              name: record.name,
-              text: answer.text,
-              mentions: [],
-              scheduled: false,
-              auto: true,
-              origin: conversation.id,
-            },
-          }
-        : {
-            unanswered: {
-              name: record.name,
-              reason: answer.reason,
-              ...(answer.issue ? { issue: answer.issue } : {}),
-            },
-          },
-    );
-    const room = await this.store.room(roomId);
-    if (settled.post && room) await this.#published(settled.post, room);
-    for (const postId of settled.noted) await this.#emitPost(await this.store.post(postId));
-  }
-
-  /** The bot's final message since entry `after`, or why its turn left none. */
-  async #answer(
-    bot: Bot,
-    conversation: Conversation,
-    after: number,
-  ): Promise<
-    | { readonly text: string }
-    | { readonly reason: string; readonly issue?: "signIn" | "limit" }
-  > {
-    let cursor: Cursor | undefined;
-    scan: do {
-      const page = await conversation.entries({ order: "descending" }, 100, cursor, ctx);
-      for (const entry of page.items) {
-        if (entry.id <= after) break scan;
-        const message = (entry.model ?? []).find(
-          (item): item is AssistantMessage => item.role === "assistant",
-        );
-        if (!message) continue;
-        if (message.stopReason === "error") {
-          const issue = errorIssue(message);
-          const reason = message.errorMessage ?? "the model failed";
-          return { reason, ...(issue ? { issue } : {}) };
-        }
-        if (message.stopReason === "aborted") return { reason: "its reply was stopped" };
-        const text = assistantText(message).trim();
-        return text ? { text } : { reason: "its turn ended without a message" };
-      }
-      cursor = page.next;
-    } while (cursor !== undefined);
-    const failure = (await bot.harness.snapshot(LiveDoc, conversation.id, ctx))?.runFailure;
-    if (failure?.reason === "no_model") return { reason: NO_MODEL_MESSAGE };
-    if (failure?.reason === "aborted") return { reason: "its reply was stopped" };
-    return { reason: failure?.detail ?? failure?.reason ?? "its turn ended without a message" };
+    const message = await this.#lastAssistant(conversation, delivery.entryId);
+    let outcome: Outcome;
+    if (message?.stopReason === "error") {
+      const issue = errorIssue(message);
+      outcome = { reason: message.errorMessage ?? "the model failed", ...(issue ? { issue } : {}) };
+    } else if (message?.stopReason === "aborted") {
+      outcome = { reason: "its reply was stopped" };
+    } else {
+      const text = message ? assistantText(message).trim() : "";
+      const failure = (await bot.harness.snapshot(LiveDoc, conversation.id, ctx))?.runFailure;
+      outcome = text
+        ? { text }
+        : failure?.reason === "no_model"
+          ? { reason: NO_MODEL_MESSAGE }
+          : failure?.reason === "aborted"
+            ? { reason: "its reply was stopped" }
+            : { reason: failure?.detail ?? failure?.reason ?? "its turn ended without a message" };
+    }
+    await this.#settleOwed(bot, conversation, roomId, delivery.to, outcome);
   }
 
   // MARK: Scheduled posts
@@ -1170,7 +1355,7 @@ export class Forum {
     if (input.id !== undefined && !known.some((item) => item.id === input.id)) {
       throw new NotFoundError("no such scheduled post");
     }
-    await this.store.saveSchedule({
+    const saved = await this.store.saveSchedule({
       ...(input.id !== undefined ? { id: input.id } : {}),
       text: input.text,
       mentions: input.everyone ? [] : [...new Set(input.mentions ?? [])],
@@ -1180,6 +1365,9 @@ export class Forum {
       ...(input.repeat === "weekly" ? { weekday: input.weekday as number } : {}),
       timeZone: input.timeZone,
     });
+    // Saved just after its time of day, it waits for the next one instead of posting at once.
+    const due = once ? undefined : dueDay(saved, this.#now());
+    if (due) await this.store.claimScheduleRun(saved.id, due);
     return this.schedules();
   }
 

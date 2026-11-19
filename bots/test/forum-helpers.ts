@@ -35,12 +35,16 @@ export type Turn = {
   readonly json: string;
 };
 
-/** What a scripted bot does with a request: call a tool, fail, or answer (privately in a seat). */
-export type Move =
+/**
+ * What a scripted bot does with a request: call a tool, fail, or answer (privately in a seat).
+ * With `after`, the model takes until that promise resolves to respond.
+ */
+export type Move = (
   | { readonly post: string; readonly threadId?: number }
   | { readonly tool: string; readonly args: Record<string, string | number | boolean | string[]> }
   | { readonly error: string }
-  | { readonly say: string };
+  | { readonly say: string }
+) & { readonly after?: Promise<unknown> };
 
 type ContextLike = { messages?: readonly { role: string; content: unknown }[] };
 
@@ -84,10 +88,11 @@ export async function openForumTest(dir: string, options: ForumTestOptions = {})
   const faux = fauxProvider({ tokensPerSecond: options.tokensPerSecond ?? 5000 });
   const turns: Turn[] = [];
   let brain = options.brain ?? (() => ({ say: "noted" }) as Move);
-  const step = (context: unknown) => {
+  const step = async (context: unknown) => {
     const turn = turnOf(context);
     turns.push(turn);
     const move = brain(turn);
+    await move.after;
     if ("post" in move) {
       return fauxAssistantMessage(
         [
@@ -223,6 +228,7 @@ export async function openForumTest(dir: string, options: ForumTestOptions = {})
     posts,
     thinking,
     platform,
+    models,
     get changes() {
       return changes;
     },
