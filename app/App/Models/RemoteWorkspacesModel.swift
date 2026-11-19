@@ -1806,8 +1806,7 @@ final class RemoteWorkspacesModel {
     /// rotate-token`), keeps the new one in Keychain and returns it. Whatever
     /// held the old one, on any Mac, no longer administers the host with it.
     private func renewInstallerBearer(_ configuration: RemoteWorkspaceConfiguration) async throws -> String {
-        let ssh = sshClient
-        let token = try await Task.detached(priority: .userInitiated) { try ssh.renewInstallerBearer(configuration: configuration) }.value
+        let token = try await sshClient.renewInstallerBearer(configuration: configuration)
         try await credentials.save(token: token, for: configuration.id)
         return token
     }
