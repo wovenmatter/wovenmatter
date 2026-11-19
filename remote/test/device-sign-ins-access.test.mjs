@@ -43,7 +43,7 @@ test('only a Mac administers a Linux host\'s sign-ins', async t => {
     headers: { authorization: 'Bearer ' + value, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
   let audience = null
   for (let i = 0; i < 200 && !audience; i++) {
-    try { audience = (await (await bearer(token, '/v1/health')).json()).memberIdentity?.deviceID ?? null } catch {}
+    try { audience = (await (await bearer(token, '/health')).json()).memberIdentity?.deviceID ?? null } catch {}
     if (!audience) await new Promise(r => setTimeout(r, 50))
   }
   assert.ok(audience, output)
@@ -55,28 +55,28 @@ test('only a Mac administers a Linux host\'s sign-ins', async t => {
   const change = { action: 'saveKey', provider: 'openrouter', key: 'fixture-provider-secret' }
 
   // Unsigned, or with an unknown bearer: 401.
-  assert.equal((await fetch(base + '/v1/sign-ins')).status, 401)
-  assert.equal((await fetch(base + '/v1/sign-ins', { method: 'POST', body: JSON.stringify(change) })).status, 401)
-  assert.equal((await bearer('wrong', '/v1/sign-ins')).status, 401)
+  assert.equal((await fetch(base + '/sign-ins')).status, 401)
+  assert.equal((await fetch(base + '/sign-ins', { method: 'POST', body: JSON.stringify(change) })).status, 401)
+  assert.equal((await bearer('wrong', '/sign-ins')).status, 401)
   // A phone's device grant: 403 for both.
-  const grant = await (await bearer(token, '/v1/execution/devices', { libraryID: randomUUID(), workspaceID: randomUUID(), deviceID: randomUUID(), ownerDeviceID: randomUUID(), scopes: ['execution', 'inference'] })).json()
+  const grant = await (await bearer(token, '/execution/devices', { libraryID: randomUUID(), workspaceID: randomUUID(), deviceID: randomUUID(), ownerDeviceID: randomUUID(), scopes: ['execution'] })).json()
   assert.ok(grant.token, JSON.stringify(grant))
-  assert.equal((await bearer(grant.token, '/v1/sign-ins')).status, 403)
-  assert.equal((await bearer(grant.token, '/v1/sign-ins', change)).status, 403)
+  assert.equal((await bearer(grant.token, '/sign-ins')).status, 403)
+  assert.equal((await bearer(grant.token, '/sign-ins', change)).status, 403)
   // Phone and Linux (bots) members: 403 for both.
   for (const who of [phone, linux]) {
-    assert.equal((await signed(who, '/v1/sign-ins')).status, 403, who.kind)
-    assert.equal((await signed(who, '/v1/sign-ins', change)).status, 403, who.kind)
+    assert.equal((await signed(who, '/sign-ins')).status, 403, who.kind)
+    assert.equal((await signed(who, '/sign-ins', change)).status, 403, who.kind)
   }
   // Nothing they sent was saved; a Mac member reads and changes them.
-  const listed = await signed(mac, '/v1/sign-ins')
+  const listed = await signed(mac, '/sign-ins')
   assert.equal(listed.status, 200)
   assert.deepEqual((await listed.json()).accounts.openrouter, [])
-  const saved = await signed(mac, '/v1/sign-ins', change)
+  const saved = await signed(mac, '/sign-ins', change)
   assert.equal(saved.status, 200)
   assert.equal((await saved.json()).accounts.openrouter.length, 1)
   // The installing Mac's bearer on its tunnel administers the host too.
-  assert.equal((await bearer(token, '/v1/sign-ins')).status, 200)
+  assert.equal((await bearer(token, '/sign-ins')).status, 200)
 })
 
 function freePort() {

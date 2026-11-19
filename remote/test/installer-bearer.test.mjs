@@ -55,19 +55,19 @@ test('a host update upload is removed unless the update took it', async t => {
 
   // A bad fingerprint, a missing installation and a failed start all remove it.
   let file = await upload()
-  await assert.rejects(handle('/v1/host/update?fingerprint=bad', file), /fingerprint/)
+  await assert.rejects(handle('/host/update?fingerprint=bad', file), /fingerprint/)
   assert.deepEqual(streams(), [])
   file = await upload(); detachFails = true
-  await assert.rejects(handle('/v1/host/update?fingerprint=' + 'a'.repeat(64), file), /systemd_run_failed/)
+  await assert.rejects(handle('/host/update?fingerprint=' + 'a'.repeat(64), file), /systemd_run_failed/)
   assert.deepEqual(streams(), [])
   assert.equal((await admin.lastUpdate()).state, 'none', 'an update that never started is not reported as running')
   // A started update owns it (its unit removes it when done)…
   file = await upload(); detachFails = false
-  await handle('/v1/host/update?fingerprint=' + 'a'.repeat(64), file)
+  await handle('/host/update?fingerprint=' + 'a'.repeat(64), file)
   assert.equal(replies.pop().status, 202); assert.equal(file.owned, true); assert.deepEqual(streams(), [file.path.split('/').at(-1)])
   // …and a second one while it runs is refused and removed.
   const second = await upload()
-  await assert.rejects(handle('/v1/host/update?fingerprint=' + 'a'.repeat(64), second), /host_update_running/)
+  await assert.rejects(handle('/host/update?fingerprint=' + 'a'.repeat(64), second), /host_update_running/)
   assert.deepEqual(streams(), [file.path.split('/').at(-1)])
 })
 
@@ -99,7 +99,7 @@ test('the server refuses the installer bearer through Serve and any Mac rotates 
   let output = ''
   child.stdout.on('data', data => { output += data }); child.stderr.on('data', data => { output += data })
   const base = 'http://127.0.0.1:' + port
-  const bearer = (value, path = '/v1/health', headers = {}, method = 'GET') => fetch(base + path, { method, headers: { authorization: 'Bearer ' + value, ...headers } })
+  const bearer = (value, path = '/health', headers = {}, method = 'GET') => fetch(base + path, { method, headers: { authorization: 'Bearer ' + value, ...headers } })
   let audience = null
   for (let i = 0; i < 200 && !audience; i++) {
     try { audience = (await (await bearer(token)).json()).memberIdentity?.deviceID ?? null } catch {}
@@ -110,29 +110,29 @@ test('the server refuses the installer bearer through Serve and any Mac rotates 
 
   // Through Serve the bearer is refused, wherever the request goes.
   for (const headers of [{ 'x-forwarded-for': 'fd7a:115c:a1e0::9', 'x-forwarded-host': 'host.tail.ts.net' }, { 'tailscale-user-login': 'someone@example.com' }]) {
-    assert.equal((await bearer(token, '/v1/health', headers)).status, 401)
-    assert.equal((await bearer(token, '/v1/host/installer-bearer', headers, 'POST')).status, 401)
+    assert.equal((await bearer(token, '/health', headers)).status, 401)
+    assert.equal((await bearer(token, '/host/installer-bearer', headers, 'POST')).status, 401)
   }
   assert.equal((await bearer(token)).status, 200, 'the SSH tunnel path keeps working')
   // A phone member cannot rotate it; a Mac member can, and learns nothing.
-  assert.equal((await signed(phone, 'POST', '/v1/host/installer-bearer')).status, 403)
-  const rotated = await signed(mac, 'POST', '/v1/host/installer-bearer')
+  assert.equal((await signed(phone, 'POST', '/host/installer-bearer')).status, 403)
+  const rotated = await signed(mac, 'POST', '/host/installer-bearer')
   assert.equal(rotated.status, 200); assert.deepEqual(await rotated.json(), { rotated: true })
   assert.equal(readFileSync(rotations, 'utf8'), 'rotate-token studio\n')
   assert.equal((await bearer(token)).status, 401, 'the replaced bearer stops working')
   const first = 'rotated-1-' + 'c'.repeat(40)
   assert.equal((await bearer(first)).status, 200)
   // The installer rotating its own bearer over its tunnel receives the new one.
-  const own = await (await bearer(first, '/v1/host/installer-bearer', {}, 'POST')).json()
+  const own = await (await bearer(first, '/host/installer-bearer', {}, 'POST')).json()
   assert.deepEqual(own, { rotated: true, bearer: 'rotated-2-' + 'c'.repeat(40) })
   assert.equal((await bearer(first)).status, 401); assert.equal((await bearer(own.bearer)).status, 200)
   // Signed Mac requests never depended on it.
-  assert.equal((await signed(mac, 'GET', '/v1/health')).status, 200)
+  assert.equal((await signed(mac, 'GET', '/health')).status, 200)
 
   // Host administration exists on native Linux hosts only: a phone's signed
   // upload is refused before any of it is written.
   if (process.platform === 'linux') {
-    const body = Buffer.alloc(1024 * 1024, 7), path = '/v1/host/update?fingerprint=' + 'a'.repeat(64)
+    const body = Buffer.alloc(1024 * 1024, 7), path = '/host/update?fingerprint=' + 'a'.repeat(64)
     const headers = signMemberRequest({ deviceID: phone.deviceID, privateKey: phone.key, audience, method: 'POST', target: path, body })
     const refused = await fetch(base + path, { method: 'POST', headers: { ...headers, 'content-type': 'application/octet-stream' }, body })
     assert.equal(refused.status, 403)

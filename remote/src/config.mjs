@@ -40,7 +40,7 @@ export function loadRuntimeConfiguration(environment = process.env) {
     harnessPath: environment.WOVENMATTER_HARNESS_PATH ?? '',
     serviceFingerprint: environment.WOVENMATTER_SERVICE_FINGERPRINT ?? null,
     // The Woven Matter version that shipped this host release (remote-host.sh reads it
-    // from the bundle manifest); empty or missing for releases that predate it.
+    // from the bundle manifest); a checkout has none.
     releaseVersion: environment.WOVENMATTER_RELEASE_VERSION || null,
     // One server per machine: a Linux host may run bots with the workspace off.
     workspaceEnabled: environment.WOVENMATTER_WORKSPACE_ENABLED !== '0',

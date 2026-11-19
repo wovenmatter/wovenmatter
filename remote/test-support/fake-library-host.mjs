@@ -1,6 +1,6 @@
 // A stand-in for `wovenmatter-library` in tests: the same command line, files,
 // ready line and local API shapes (docs: "Library host"), with an in-memory
-// notes store. FAKE_LIBRARY_MEMBERS names a JSON file served as /v1/members;
+// notes store. FAKE_LIBRARY_MEMBERS names a JSON file served as /members;
 // FAKE_LIBRARY_LOG appends one JSON line per local API request.
 import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -59,14 +59,14 @@ const local = createServer(async (request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname
   log({ method: request.method, path, headers: Object.fromEntries(Object.entries(request.headers).filter(([key]) => key.startsWith('x-woven-'))), body })
   if (request.headers.authorization !== 'Bearer ' + token) return reply(response, 401, { code: 'unauthorized', message: 'A valid library API token is required.' })
-  if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', deviceID, uptimeSeconds: 1 })
-  if (path === '/v1/identity' && process.env.FAKE_LIBRARY_IDENTITY !== '0') return reply(response, 200, { deviceID, kind: 'linux', name: 'Fake Linux', publicKey: memberPublicKey, endpoints: [] })
-  if (path === '/v1/members') {
+  if (path === '/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', deviceID, uptimeSeconds: 1 })
+  if (path === '/identity') return reply(response, 200, { deviceID, kind: 'linux', name: 'Fake Linux', publicKey: memberPublicKey, endpoints: [] })
+  if (path === '/members') {
     if (!process.env.FAKE_LIBRARY_MEMBERS) return reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
     return reply(response, 200, JSON.parse(readFileSync(process.env.FAKE_LIBRARY_MEMBERS, 'utf8')))
   }
   // Signing for the Node server: the exact message of member-auth.mjs.
-  if (path === '/v1/members/sign') {
+  if (path === '/members/sign') {
     if (!/^[0-9a-f]{64}$/.test(body?.bodySHA256 ?? '') || !String(body?.target).startsWith('/')
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body?.audience ?? '')) return reply(response, 400, { code: 'invalid_request', message: 'Invalid signature request.' })
     const time = String(Date.now()), nonce = randomBytes(16).toString('base64url'), method = String(body.method).toUpperCase()
@@ -76,23 +76,23 @@ const local = createServer(async (request, response) => {
     return reply(response, 200, { headers: { 'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Audience': body.audience, 'X-Woven-Member-Time': time, 'X-Woven-Member-Nonce': nonce,
       'X-Woven-Member-Signature': sign(null, Buffer.from(message), memberKey).toString('base64url') } })
   }
-  if (path === '/v1/workspaces') return reply(response, 200, { workspaces: readJSONFile('FAKE_LIBRARY_WORKSPACES', []) })
-  if (path === '/v1/sync/status') return reply(response, 200, readJSONFile('FAKE_LIBRARY_SYNC', { deviceID, peers: [] }))
-  if (path === '/v1/members/self') { selfUpdates.push(body); return reply(response, 200, readJSONFile('FAKE_LIBRARY_MEMBERS', { revision: '0', members: [] })) }
-  if (path === '/v1/members/adopt') {
+  if (path === '/workspaces') return reply(response, 200, { workspaces: readJSONFile('FAKE_LIBRARY_WORKSPACES', []) })
+  if (path === '/sync/status') return reply(response, 200, readJSONFile('FAKE_LIBRARY_SYNC', { deviceID, peers: [] }))
+  if (path === '/members/self') { selfUpdates.push(body); return reply(response, 200, readJSONFile('FAKE_LIBRARY_MEMBERS', { revision: '0', members: [] })) }
+  if (path === '/members/adopt') {
     adoptions.push(createHash('sha256').update(raw).digest('hex'))
     if (!body?.anchor) return reply(response, 400, { code: 'invalid_member', message: 'An adoption needs an anchor.' })
     return reply(response, 200, readJSONFile('FAKE_LIBRARY_MEMBERS', { revision: '1', members: [] }))
   }
-  if (path === '/v1/callers') { callers.set(body.conversationID, body); return reply(response, 200, { conversationID: body.conversationID, enabledGroups: (body.enabledGroups ?? []).sort().join(',') }) }
-  if (path === '/v1/mcp') {
+  if (path === '/callers') { callers.set(body.conversationID, body); return reply(response, 200, { conversationID: body.conversationID, enabledGroups: (body.enabledGroups ?? []).sort().join(',') }) }
+  if (path === '/mcp') {
     const bot = request.headers['x-woven-caller'], groups = (request.headers['x-woven-enabled-groups'] ?? '').split(',').filter(Boolean)
     if (bot && (request.headers['x-woven-conversation-id'] || !bot.endsWith(':' + request.headers['x-woven-bot-id']))) return reply(response, 400, { code: 'invalid_request', message: 'Invalid bot caller.' })
     const caller = bot ?? request.headers['x-woven-conversation-id']
     if (!caller) return reply(response, 400, { code: 'invalid_request', message: 'MCP requires a conversation binding and its current tool selection.' })
     return reply(response, 200, mcp(body, caller, groups))
   }
-  if (path === '/v1/timers/due') {
+  if (path === '/timers/due') {
     const now = Date.now(), occurrences = []
     for (const timer of timers.values()) {
       if (timer.paused || timer.at > now) continue
@@ -104,7 +104,7 @@ const local = createServer(async (request, response) => {
     const next = Math.min(...[...timers.values()].filter(timer => !timer.paused && timer.at > now).map(timer => timer.at))
     return reply(response, 200, { occurrences, ...(Number.isFinite(next) ? { nextFireAt: new Date(next).toISOString() } : {}) })
   }
-  if (path === '/v1/timers/settle') {
+  if (path === '/timers/settle') {
     const timer = timers.get(body.timerID)
     settlements.push(body)
     if (!timer || timer.deliveryID !== body.deliveryID) return reply(response, 200, { settled: true })
@@ -114,23 +114,23 @@ const local = createServer(async (request, response) => {
     }
     return reply(response, 200, { settled: true })
   }
-  if (path === '/v1/publisher/journal') {
+  if (path === '/publisher/journal') {
     journal.push(...body.entries)
     return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID), cursor: journal.length })
   }
-  if (path === '/v1/publisher/retained/settle') return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID) })
-  const deletion = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/conversations$/)
+  if (path === '/publisher/retained/settle') return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID) })
+  const deletion = path.match(/^\/bots\/([0-9a-f-]{36})\/conversations$/)
   if (deletion && request.method === 'DELETE' && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push({ deleted: deletion[1] }); return reply(response, 200, { deleted: true }) }
-  const bots = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/entries$/)
+  const bots = path.match(/^\/bots\/([0-9a-f-]{36})\/entries$/)
   if (bots && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push(body); return reply(response, 200, { conversations: body.conversations.length, entries: body.entries.length }) }
   // A change a phone syncs: the next library change cursor, announced on stdout as the real host does.
-  if (path === '/v1/debug/library-change') { libraryCursor += 1; process.stdout.write(JSON.stringify({ event: 'library', cursor: libraryCursor }) + '\n'); return reply(response, 200, { cursor: libraryCursor }) }
-  if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], timers: [...timers.values()], settlements, callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })
+  if (path === '/debug/library-change') { libraryCursor += 1; process.stdout.write(JSON.stringify({ event: 'library', cursor: libraryCursor }) + '\n'); return reply(response, 200, { cursor: libraryCursor }) }
+  if (path === '/debug/state') return reply(response, 200, { notes: [...notes.values()], timers: [...timers.values()], settlements, callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })
   reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
 })
 const network = createServer((request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname.replace(/^\/wovenmatter(?=\/)/, '')
-  if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', deviceID, uptimeSeconds: 1 })
+  if (path === '/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', deviceID, uptimeSeconds: 1 })
   reply(response, 404, { code: 'not_found' })
 })
 rmSync(socketPath, { force: true })

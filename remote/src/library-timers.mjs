@@ -1,9 +1,9 @@
 // Timers on this machine (docs/architecture/WOVEN_EVERYWHERE.md, "Timers on a
 // library host"). Woven timers live in this machine's library copy, which is
 // not shared with other devices, so they fire here with every Mac offline: the
-// library host returns each due occurrence (`POST /v1/timers/due`), this server
+// library host returns each due occurrence (`POST /timers/due`), this server
 // delivers it to its own session or to one of its bots, then settles it
-// (`POST /v1/timers/settle`). The occurrence's delivery ID is the idempotency
+// (`POST /timers/settle`). The occurrence's delivery ID is the idempotency
 // key on both sides, so a retry after a crash never delivers twice.
 //
 // There is no constant polling: the dispatcher sleeps until the next timer

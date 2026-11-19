@@ -57,7 +57,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     configurationQueue = pending.catch(() => {});
     return pending;
   }
-  // After another device changed this host's sign-ins (`v1/sign-ins`): the
+  // After another device changed this host's sign-ins (`sign-ins`): the
   // sign-ins file is read on use; local model servers are registered again.
   function reloadSignIns() {
     const pending = configurationQueue.then(async () => {

@@ -81,9 +81,9 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if (channels.has(native.channelID) && !channels.get(native.channelID).stopped) return channels.get(native.channelID)
     channels.delete(native.channelID)
     let recovered=false
-    let page = await durableACP.handle('POST','/v1/durable-acp/attach',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentTokens:true})
+    let page = await durableACP.handle('POST','/durable-acp/attach',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentTokens:true})
     if (page.state === 'stopped' && native.sessionID) {
-      page=await durableACP.handle('POST','/v1/durable-acp/recover',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentTokens:true})
+      page=await durableACP.handle('POST','/durable-acp/recover',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentTokens:true})
       recovered=true
     }
     if (page.state !== 'running') throw fail('This native session was interrupted. Reopen it on the execution host before sending again.')
@@ -92,13 +92,13 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     let cursor=0, history=page
     while(history.events.length) {
       cursor=history.events.at(-1).sequence
-      history=await durableACP.handle('POST','/v1/durable-acp/poll',{channelID:native.channelID,after:cursor,attachmentToken:page.attachmentToken})
+      history=await durableACP.handle('POST','/durable-acp/poll',{channelID:native.channelID,after:cursor,attachmentToken:page.attachmentToken})
     }
     const channel = { native, runtimeKind, token:page.attachmentToken, cursor, busy:false, pendingInputs:0, pending:new Map(), callbacks:new Map(), run:null, stopped:false }
     channels.set(native.channelID,channel)
     channel.pump = (async () => {
       while (!closed && !channel.stopped) {
-        const current = await durableACP.handle('POST','/v1/durable-acp/poll',{channelID:native.channelID,after:channel.cursor,attachmentToken:channel.token})
+        const current = await durableACP.handle('POST','/durable-acp/poll',{channelID:native.channelID,after:channel.cursor,attachmentToken:channel.token})
         for (const event of current.events) {
           if (event.sequence <= channel.cursor) continue
           receive(channel,event.message); channel.cursor=event.sequence
@@ -155,7 +155,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     }
   }
   async function write(channel,message,deliveryID) {
-    return durableACP.handle('POST','/v1/durable-acp/message',{channelID:channel.native.channelID,attachmentToken:channel.token,deliveryID,message})
+    return durableACP.handle('POST','/durable-acp/message',{channelID:channel.native.channelID,attachmentToken:channel.token,deliveryID,message})
   }
   async function rpc(channel,method,params={},deliveryID=randomUUID()) {
     const id=randomUUID(), pending=deferred();channel.pending.set(id,pending)
@@ -242,7 +242,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
         throw error
       }
     }
-    const page=await durableACP.handle('POST','/v1/durable-acp/adopt',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:runtimeKind==='grok_build'?grokPermission(native):native.permission,attachmentTokens:true,expectedNativeSessionID:native.sessionID})
+    const page=await durableACP.handle('POST','/durable-acp/adopt',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:runtimeKind==='grok_build'?grokPermission(native):native.permission,attachmentTokens:true,expectedNativeSessionID:native.sessionID})
     const actual=page.snapshot.session?.sessionId
     if(actual!==native.sessionID)throw fail('The durable channel belongs to a different native session.')
     const result={nativeWorkingDirectory:native.nativeWorkingDirectory,sessionID:native.sessionID,channelID:native.channelID,...(runtimeKind==='grok_build'?{permission:grokPermission(native)}:{}),configuration:page.snapshot.session,steeringSupported:page.snapshot.initialized?._meta?.steering?.supported===true}
@@ -290,14 +290,14 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       finally {nativeJobs.delete(command.runID)}
     }
     const channel=await attach(native,runtimeKind),completion=deferred()
-    if(command.mcpConnection)await durableACP.handle('POST','/v1/durable-acp/mcp',{channelID:native.channelID,attachmentToken:channel.token,context:command.mcpConnection})
+    if(command.mcpConnection)await durableACP.handle('POST','/durable-acp/mcp',{channelID:native.channelID,attachmentToken:channel.token,context:command.mcpConnection})
     if(channel.run)throw fail('This native conversation is already running.')
     // Read the native admission state before assigning this run's projection.
     // An uncertain old command must not have its remaining output attributed
     // to a newer run while the native service refuses that new prompt.
     let before
     do {
-      before=await durableACP.handle('POST','/v1/durable-acp/poll',{channelID:native.channelID,after:channel.cursor,attachmentToken:channel.token})
+      before=await durableACP.handle('POST','/durable-acp/poll',{channelID:native.channelID,after:channel.cursor,attachmentToken:channel.token})
       for(const event of before.events)if(event.sequence>channel.cursor){receive(channel,event.message);channel.cursor=event.sequence}
     } while(before.events.length)
     channel.busy=before.snapshot.busy
@@ -396,8 +396,8 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
       ...(typeof item.description==='string'&&item.description?{detail:item.description}:{}),...(typeof item.input?.hint==='string'&&item.input.hint?{argumentHint:item.input.hint}:{})}]:[])}:{})}
   }
   // A harness's choices before any session exists (the calendar editor, the
-  // new-chat pickers): a short-lived native session with no Woven tools, as
-  // the Mac used to launch over SSH. `model` selects a model first, since
+  // new-chat pickers): a short-lived native session with no Woven tools.
+  // `model` selects a model first, since
   // thinking levels can depend on it.
   async function sessionOptions({runtimeKind,workingDirectory,model}) {
     const cwd=workingDirectory??workspaceRoot

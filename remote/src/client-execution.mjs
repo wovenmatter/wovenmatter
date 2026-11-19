@@ -84,6 +84,18 @@ function openExecutionStore(path) {
       db.exec(tables.has('publication_lanes') ? 'DROP TABLE central_publication_lanes' : 'ALTER TABLE central_publication_lanes RENAME TO publication_lanes')
     if (tables.has('saved_execution_artifacts') && db.prepare('PRAGMA table_info(saved_execution_artifacts)').all().some(column => column.name === 'uploaded'))
       db.exec('ALTER TABLE saved_execution_artifacts DROP COLUMN uploaded')
+    // The journal is replayed to every device as it is stored, and they read a native
+    // record by the name of its format. Records the current release journaled carry its
+    // names for the two formats this server writes; they take today's names here. One
+    // build writes one set of names, so the newest native record says whether any is left.
+    if (tables.has('events')) {
+      const renamed = { 'woven-native-update-v1': 'woven-native-update', 'wovenmatter.activity.v2': 'wovenmatter.activity.chained' }
+      const newest = db.prepare("SELECT json_extract(body,'$.nativeRecord.format') AS format FROM events WHERE json_extract(body,'$.kind')='nativeRecord' ORDER BY sequence DESC LIMIT 1").get()
+      if (newest && Object.hasOwn(renamed, newest.format)) {
+        const rename = db.prepare("UPDATE events SET body=json_set(body,'$.nativeRecord.format',?) WHERE json_extract(body,'$.nativeRecord.format')=?")
+        for (const [stored, current] of Object.entries(renamed)) rename.run(current, stored)
+      }
+    }
     db.exec(`CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
@@ -237,10 +249,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   // library host's identity), so other members address it from the registry
   // alone; without a library host it gets its own random ID.
   function provision(body, { executionDeviceID = null } = {}) {
-    // An older Mac also asks for `inference`, which this host no longer serves; it is dropped.
-    const scopes = Array.isArray(body.scopes) ? [...new Set(body.scopes.filter(scope => scope !== 'inference'))] : []
+    // A device grant conveys execution and nothing else.
+    const scopes = ['execution']
     if (!identifier(body.libraryID) || !identifier(body.workspaceID) || !identifier(body.deviceID) || !identifier(body.ownerDeviceID)
-      || !scopes.length || scopes.some(scope => scope !== 'execution')) throw fail(400, 'Invalid device enrollment.')
+      || !Array.isArray(body.scopes) || body.scopes.length !== 1 || body.scopes[0] !== 'execution') throw fail(400, 'Invalid device enrollment.')
     if (identity && (identity.id !== body.workspaceID || identity.libraryID !== body.libraryID)) throw fail(409, 'This workspace already belongs to a different library.')
     const token = randomBytes(32).toString('base64url')
     let nextIdentity
@@ -1123,7 +1135,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const { path, ...stored } = await attachments.store(value)
       return stored
     },
-    // An uploaded attachment's bytes (`GET v1/execution/attachments/<sha256>`).
+    // An uploaded attachment's bytes (`GET execution/attachments/<sha256>`).
     async readAttachment(value) {
       assertIdentity()
       if (!attachments) throw fail(404, 'This workspace holds no message attachments.')

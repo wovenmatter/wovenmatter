@@ -79,9 +79,9 @@ describe("host API client", () => {
   it("calls every route with the host bearer and the documented bodies", async () => {
     const client = new HostClient(base, "host-secret");
     reply = (request) => {
-      if (request.url === "/v1/bots-host/mcp-keys") return { status: 200, body: { endpoint: "http://127.0.0.1:1/mcp", token: "bot-key" } };
-      if (request.url === "/v1/bots-host/previews") return { status: 200, body: { url: "https://h.ts.net:8443/" } };
-      if (request.url === "/v1/bots-host/inference-credentials") {
+      if (request.url === "/bots-host/mcp-keys") return { status: 200, body: { endpoint: "http://127.0.0.1:1/mcp", token: "bot-key" } };
+      if (request.url === "/bots-host/previews") return { status: 200, body: { url: "https://h.ts.net:8443/" } };
+      if (request.url === "/bots-host/inference-credentials") {
         return { status: 200, body: { credential: { type: "oauth", access: "a", expires: 5, accountId: "acct" }, searchProvider: "brave" } };
       }
       return { status: request.method === "DELETE" ? 204 : 200 };
@@ -96,12 +96,12 @@ describe("host API client", () => {
     });
     await client.mirror("b1", { bot: { id: "b1", name: "Bot One" }, conversations: [], entries: [] });
     expect(seen.map((call) => `${call.method} ${call.url}`)).toEqual([
-      "POST /v1/bots-host/mcp-keys",
-      "DELETE /v1/bots-host/mcp-keys/b1",
-      "POST /v1/bots-host/previews",
-      "DELETE /v1/bots-host/previews/b1/40123",
-      "POST /v1/bots-host/inference-credentials",
-      "POST /v1/bots-host/conversations/b1/entries",
+      "POST /bots-host/mcp-keys",
+      "DELETE /bots-host/mcp-keys/b1",
+      "POST /bots-host/previews",
+      "DELETE /bots-host/previews/b1/40123",
+      "POST /bots-host/inference-credentials",
+      "POST /bots-host/conversations/b1/entries",
     ]);
     expect(seen.every((call) => call.auth === "Bearer host-secret")).toBe(true);
     expect(seen[0]?.body).toEqual({ botID: "b1", botName: "Bot One" });

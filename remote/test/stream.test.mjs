@@ -21,7 +21,7 @@ import { enroll } from './fixtures/execution.mjs'
 
 const fixturesPath = new URL('../../shared/Tests/WovenMatterSharedTests/StreamProtocolFixtures.json', import.meta.url)
 const prefix = '/wovenmatter-execution/box'
-const streamTarget = prefix + '/v1/stream'
+const streamTarget = prefix + '/stream'
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 async function eventually(condition, message, timeout = 10_000) {
@@ -102,7 +102,7 @@ async function fixture(t, { clock, limits, timings, refreshMilliseconds = 15_000
   const command = (kind, values = {}) => ({ commandID: randomUUID(), deviceID: mac.deviceID, libraryID: enrollment.libraryID, workspaceID: enrollment.workspaceID, kind, ...values })
   const device = { id: mac.deviceID }
   function connect(headers = signed(), options = {}) {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/v1/stream`, { headers, ...options })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/stream`, { headers, ...options })
     sockets.push(socket)
     return frameReader(socket)
   }
@@ -138,7 +138,7 @@ function frameReader(socket) {
 }
 
 // A raw upgrade request: the refusal's status and JSON body, or 101.
-function handshake(port, { path = '/v1/stream', headers = {} } = {}) {
+function handshake(port, { path = '/stream', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const request = httpRequest({ host: '127.0.0.1', port, path, headers: { connection: 'Upgrade', upgrade: 'websocket',
       'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13', ...headers } })
@@ -221,14 +221,14 @@ test('the stream upgrade refuses a query, stale clocks, bearers and browsers bef
   // The stream takes no query at all, whatever it says and however it is signed.
   let refused
   for (const query of ['?stream=workspace', '?x=1', '?']) {
-    refused = await handshake(f.port, { path: '/v1/stream' + query, headers: f.signed(prefix + '/v1/stream' + query) })
+    refused = await handshake(f.port, { path: '/stream' + query, headers: f.signed(prefix + '/stream' + query) })
     assert.deepEqual([refused.status, refused.body.code], [400, 'bad_request'], query)
   }
   const stale = await handshake(f.port, { headers: f.signed(streamTarget, { time: Date.now() - 400_000 }) })
   assert.deepEqual([stale.status, stale.body.code, typeof stale.body.serverTime], [401, 'member_time_stale', 'number'])
   assert.ok(Math.abs(stale.body.serverTime - Date.now()) < 60_000)
   for (const headers of [{}, { authorization: 'Bearer ' + 'i'.repeat(43) }, f.signed(streamTarget, { audience: randomUUID() }),
-    f.signed(prefix + '/v1/streams')]) {
+    f.signed(prefix + '/streams')]) {
     const result = await handshake(f.port, { headers })
     assert.deepEqual([result.status, result.body.code], [401, 'unauthorized'], JSON.stringify(Object.keys(headers)))
   }
@@ -247,7 +247,7 @@ test('the stream upgrade refuses a query, stale clocks, bearers and browsers bef
   }
   // Signed for the path the member sent, or as this server saw it.
   assert.equal((await handshake(f.port, { headers: f.signed() })).status, 101)
-  assert.equal((await handshake(f.port, { headers: f.signed('/v1/stream') })).status, 101)
+  assert.equal((await handshake(f.port, { headers: f.signed('/stream') })).status, 101)
   const replay = f.signed()
   assert.equal((await handshake(f.port, { headers: replay })).status, 101)
   assert.equal((await handshake(f.port, { headers: replay })).status, 401, 'an upgrade cannot be replayed')
@@ -541,7 +541,7 @@ test('a removed member’s stream and bots relay close with 4401', async t => {
   await stream.next(frame => frame.t === 'hello')
   const kept = f.connect(f.signed(streamTarget, {}, phone))
   await kept.next(frame => frame.t === 'hello')
-  const relay = new WebSocket(`ws://127.0.0.1:${f.port}/v1/bots/ws`, { headers: f.signed(prefix + '/v1/bots/ws') })
+  const relay = new WebSocket(`ws://127.0.0.1:${f.port}/bots/ws`, { headers: f.signed(prefix + '/bots/ws') })
   f.sockets.push(relay)
   const relayed = frameReader(relay)
   await relayed.opened
@@ -780,13 +780,13 @@ test('the bots relay dials no runtime for a bad handshake, and a bearer rotation
 
   // A signed request whose WebSocket handshake cannot be completed: refused before any upstream exists.
   for (const headers of [{ 'sec-websocket-key': 'short' }, { 'sec-websocket-version': '12' }]) {
-    const refused = await handshake(f.port, { path: '/v1/bots/ws', headers: { ...f.signed(prefix + '/v1/bots/ws'), ...headers } })
+    const refused = await handshake(f.port, { path: '/bots/ws', headers: { ...f.signed(prefix + '/bots/ws'), ...headers } })
     assert.equal(refused.status, 400)
   }
   assert.equal(dialled, 0)
 
-  const open = headers => { const socket = new WebSocket(`ws://127.0.0.1:${f.port}/v1/bots/ws`, { headers }); f.sockets.push(socket); return frameReader(socket) }
-  const installer = open({ authorization: 'Bearer ' + token }), member = open(f.signed(prefix + '/v1/bots/ws'))
+  const open = headers => { const socket = new WebSocket(`ws://127.0.0.1:${f.port}/bots/ws`, { headers }); f.sockets.push(socket); return frameReader(socket) }
+  const installer = open({ authorization: 'Bearer ' + token }), member = open(f.signed(prefix + '/bots/ws'))
   await installer.opened; await member.opened
   installer.send({ t: 'echo' })
   assert.deepEqual(await installer.next(), { t: 'echo' })
@@ -795,7 +795,7 @@ test('the bots relay dials no runtime for a bad handshake, and a bearer rotation
   assert.equal((await installer.closed).code, 4401)
   assert.equal(member.socket.readyState, WebSocket.OPEN, 'a member relay is not the installer\'s')
   // The old bearer opens nothing; the new one does.
-  assert.equal((await handshake(f.port, { path: '/v1/bots/ws', headers: { authorization: 'Bearer ' + token } })).status, 401)
+  assert.equal((await handshake(f.port, { path: '/bots/ws', headers: { authorization: 'Bearer ' + token } })).status, 401)
   const renewed = open({ authorization: 'Bearer ' + next })
   await renewed.opened
   await eventually(() => runtimeSockets.clients.size === 2, 'the closed relay left no runtime socket behind')

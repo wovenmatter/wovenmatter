@@ -36,7 +36,7 @@ async function startedLibrary(t, directory, environment = {}) {
   assert.ok(await library.whenReady(10_000), 'the library host became ready')
   return library
 }
-const debugState = library => library.client.json('GET', '/v1/debug/state')
+const debugState = library => library.client.json('GET', '/debug/state')
 
 test('library binaries resolve per architecture inside the release', () => {
   assert.equal(libraryBinaryPath('/release', 'x64'), '/release/host/library/linux-x86_64/wovenmatter-library')
@@ -72,13 +72,13 @@ test('the supervisor follows the library change cursor the host announces on std
   for (let i = 0; i < 200 && library.libraryCursor() === null; i++) await new Promise(r => setTimeout(r, 10))
   assert.equal(library.libraryCursor(), 7)
   const unwatch = library.watchLibrary(cursor => seen.push(cursor))
-  await library.client.json('POST', '/v1/debug/library-change')
-  await library.client.json('POST', '/v1/debug/library-change')
+  await library.client.json('POST', '/debug/library-change')
+  await library.client.json('POST', '/debug/library-change')
   for (let i = 0; i < 200 && seen.length < 2; i++) await new Promise(r => setTimeout(r, 10))
   assert.deepEqual(seen, [8, 9])
   assert.equal(library.libraryCursor(), 9)
   unwatch()
-  await library.client.json('POST', '/v1/debug/library-change')
+  await library.client.json('POST', '/debug/library-change')
   for (let i = 0; i < 200 && library.libraryCursor() !== 10; i++) await new Promise(r => setTimeout(r, 10))
   assert.deepEqual(seen, [8, 9], 'an unsubscribed listener hears nothing')
 })
@@ -139,7 +139,7 @@ test('a Linux session reads and edits notes in its own library with no Mac reach
   const state = await debugState(library)
   assert.equal(state.notes[0].author, f.id, 'edits are attributed to the session')
   assert.equal(state.callers[f.id].runtimeKind, 'default_agent')
-  const calls = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.path === '/v1/mcp')
+  const calls = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.path === '/mcp')
   for (const call of calls) {
     assert.equal(call.headers['x-woven-conversation-id'], f.id)
     assert.ok(call.headers['x-woven-enabled-groups'].split(',').every(group => ['notes', 'history', 'calendar', 'library', 'timers', 'sessions'].includes(group)), call.headers['x-woven-enabled-groups'])
@@ -272,17 +272,17 @@ test('host administration runs lifecycle commands for administrators and detache
   const request = (method, path, body) => Object.assign(Readable.from(body ? [Buffer.from(body)] : []), { method, headers: {} })
   const { Readable } = await import('node:stream')
   const handle = (method, path, { administrator = true, body } = {}) => admin.handle(request(method, path, body), {}, new URL(path, 'http://localhost'), { json, readJSON: async () => JSON.parse(body ?? '{}'), administrator })
-  await handle('GET', '/v1/host/status', { administrator: false })
+  await handle('GET', '/host/status', { administrator: false })
   assert.deepEqual(replies.pop(), { status: 403, value: { error: 'administrator_required' } })
-  await handle('GET', '/v1/host/status')
+  await handle('GET', '/host/status')
   assert.deepEqual(replies.pop().value, { ok: true, command: 'status', memberIdentity: { deviceID: 'x' } })
-  await handle('GET', '/v1/host/logs?lines=50')
+  await handle('GET', '/host/logs?lines=50')
   assert.deepEqual(ran.at(-1), ['/release/host/remote-host.sh', 'logs', 'studio', '50'])
-  await handle('POST', '/v1/host/bots-configure', { body: JSON.stringify({ poolBytes: 8 * 1024 ** 3, diskBytes: null }) })
+  await handle('POST', '/host/bots-configure', { body: JSON.stringify({ poolBytes: 8 * 1024 ** 3, diskBytes: null }) })
   assert.deepEqual(ran.at(-1), ['/release/host/remote-host.sh', 'bots-configure', 'studio', String(8 * 1024 ** 3), 'none'])
-  await handle('POST', '/v1/host/restart')
+  await handle('POST', '/host/restart')
   assert.equal(replies.pop().status, 202); assert.deepEqual(detached.at(-1).command, ['/bin/bash', '/release/host/remote-host.sh', 'restart', 'studio'])
-  await handle('POST', '/v1/host/update?fingerprint=' + 'a'.repeat(64), { body: 'bundle bytes' })
+  await handle('POST', '/host/update?fingerprint=' + 'a'.repeat(64), { body: 'bundle bytes' })
   assert.equal(replies.pop().status, 202)
   const update = detached.at(-1).command
   assert.deepEqual(update.slice(3, 9), ['wovenmatter-update', '/release/host/remote-host.sh', 'studio', '7337', 'user', 'a'.repeat(64)])
@@ -326,7 +326,7 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   let identity
   for (const deadline = Date.now() + 20_000; Date.now() < deadline;) {
     // identity.json is written beside the health report; wait for both.
-    try { identity = await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity && existsSync(join(home, 'state/library/identity.json'))) break } catch {}
+    try { identity = await (await fetch(base + '/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity && existsSync(join(home, 'state/library/identity.json'))) break } catch {}
     await new Promise(r => setTimeout(r, 50))
   }
   assert.ok(identity?.memberIdentity, output)
@@ -337,44 +337,39 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   audience = identity.memberIdentity.deviceID
 
   // A Mac member administers the host; a phone member does not.
-  assert.equal((await signed(mac, 'GET', '/v1/health')).status, 200)
-  assert.equal((await signed(phone, 'GET', '/v1/health')).status, 403)
+  assert.equal((await signed(mac, 'GET', '/health')).status, 200)
+  assert.equal((await signed(phone, 'GET', '/health')).status, 403)
   // Any member may use execution routes: this workspace is not enrolled yet.
-  assert.equal((await signed(phone, 'GET', '/v1/execution')).status, 409)
+  assert.equal((await signed(phone, 'GET', '/execution')).status, 409)
   // A signed JSON body is checked byte for byte and still parsed by the route.
   const provision = JSON.stringify({ libraryID: randomUUID(), workspaceID: randomUUID(), deviceID: randomUUID(), ownerDeviceID: mac.deviceID, scopes: ['execution'] })
-  const enrolled = await signed(mac, 'POST', '/v1/execution/devices', provision)
+  const enrolled = await signed(mac, 'POST', '/execution/devices', provision)
   assert.equal(enrolled.status, 201)
   // The workspace's execution device is this host's member device ID, so
   // members address it from the registry alone.
   assert.equal((await enrolled.json()).workspace.executionDeviceID, audience)
-  // This host never lends its sign-ins: an older phone's hosted connection is refused, never served.
-  for (const [who, method, path, body] of [[phone, 'GET', '/v1/inference/catalog'], [phone, 'POST', '/v1/inference/stream', '{"model":{}}'], [mac, 'GET', '/v1/inference/catalog']]) {
-    const refusal = await signed(who, method, path, body)
-    assert.equal(refusal.status, 403); assert.equal((await refusal.json()).error, 'inference_not_served')
-  }
-  assert.equal((await signed(phone, 'GET', '/v1/execution')).status, 200)
+  assert.equal((await signed(phone, 'GET', '/execution')).status, 200)
 
   const stranger = { deviceID: phone.deviceID, key: privateKeyFromSeed(strangerSeed) }
   const refused = async (response, code) => { assert.equal(response.status, 401); assert.equal((await response.json()).error, code) }
-  await refused(await signed(stranger, 'GET', '/v1/execution'), 'member_signature_mismatch')
-  await refused(await signed({ deviceID: randomUUID(), key: mac.key }, 'GET', '/v1/execution'), 'member_unknown')
-  await refused(await signed(phone, 'GET', '/v1/execution', null, { time: Date.now() - 301_000 }), 'member_time_stale')
+  await refused(await signed(stranger, 'GET', '/execution'), 'member_signature_mismatch')
+  await refused(await signed({ deviceID: randomUUID(), key: mac.key }, 'GET', '/execution'), 'member_unknown')
+  await refused(await signed(phone, 'GET', '/execution', null, { time: Date.now() - 301_000 }), 'member_time_stale')
   const nonce = Buffer.alloc(16, 9).toString('base64url')
-  assert.equal((await signed(phone, 'GET', '/v1/execution', null, { nonce })).status, 200)
-  await refused(await signed(phone, 'GET', '/v1/execution', null, { nonce }), 'member_nonce_replayed')
+  assert.equal((await signed(phone, 'GET', '/execution', null, { nonce })).status, 200)
+  await refused(await signed(phone, 'GET', '/execution', null, { nonce }), 'member_nonce_replayed')
   // A body that differs from the signed one is refused.
-  const headers = signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'POST', target: '/v1/execution/devices', body: Buffer.from(provision) })
-  await refused(await fetch(base + '/v1/execution/devices', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: provision.replace('execution', 'inference') }), 'member_signature_mismatch')
+  const headers = signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'POST', target: '/execution/devices', body: Buffer.from(provision) })
+  await refused(await fetch(base + '/execution/devices', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: provision.replace('execution', 'inference') }), 'member_signature_mismatch')
   // A Mac signs the execution endpoint's full path, which Serve strips.
-  assert.equal((await signed(phone, 'GET', '/v1/execution', null, { target: '/wovenmatter-execution/studio/v1/execution' })).status, 200)
-  await refused(await signed(phone, 'GET', '/v1/execution', null, { target: '/wovenmatter-execution/other/v1/execution' }), 'member_signature_mismatch')
+  assert.equal((await signed(phone, 'GET', '/execution', null, { target: '/wovenmatter-execution/studio/execution' })).status, 200)
+  await refused(await signed(phone, 'GET', '/execution', null, { target: '/wovenmatter-execution/other/execution' }), 'member_signature_mismatch')
   // A request addressed to another member (captured on its way there) is
   // refused here even though its nonce is new to this host.
-  await refused(await signed(phone, 'GET', '/v1/execution', null, { audience: randomUUID() }), 'member_audience_mismatch')
+  await refused(await signed(phone, 'GET', '/execution', null, { audience: randomUUID() }), 'member_audience_mismatch')
   // (Revocation is applied on the next member list refresh; member-auth.test.mjs covers it.)
   // The installer's bearer still works during the transition.
-  assert.equal((await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).status, 200)
+  assert.equal((await fetch(base + '/health', { headers: { authorization: 'Bearer ' + token } })).status, 200)
   assert.equal(memberHeaders.signature, 'x-woven-member-signature')
   // Stopping the server stops the library host it supervises.
   const libraryPid = identity.library.pid

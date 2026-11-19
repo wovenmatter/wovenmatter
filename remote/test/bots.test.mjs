@@ -313,59 +313,59 @@ async function serviceFixture(t, overrides = {}) {
 
 test('the runtime host API requires its own bearer and serves keys, previews, credentials and entries', async t => {
   const f = await serviceFixture(t), botID = randomUUID()
-  assert.equal((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', token: 'admin', body: { botID, botName: 'x' } })).status, 401)
-  const key = await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })
+  assert.equal((await f.call('/bots-host/mcp-keys', { method: 'POST', token: 'admin', body: { botID, botName: 'x' } })).status, 401)
+  const key = await f.call('/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })
   assert.equal(key.status, 201)
   assert.deepEqual(key.body, { endpoint: 'http://127.0.0.1:1/mcp', token: 'bot-token', principal: `woven:bot:${f.machine.deviceID}:${botID}` })
   // Before the runtime deletes the bot, its conversations are live in this library copy.
-  await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [] } })
+  await f.call(`/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [] } })
   assert.equal(f.memory.bot(botID).deleted, false)
-  assert.equal((await f.call('/v1/bots-host/mcp-keys/' + botID, { method: 'DELETE' })).body.revoked, true)
+  assert.equal((await f.call('/bots-host/mcp-keys/' + botID, { method: 'DELETE' })).body.revoked, true)
   assert.equal(f.memory.bot(botID).deleted, true, 'deleting the bot marks its library conversations deleted')
-  const preview = await f.call('/v1/bots-host/previews', { method: 'POST', body: { botID, port: 41000 } })
+  const preview = await f.call('/bots-host/previews', { method: 'POST', body: { botID, port: 41000 } })
   assert.equal(preview.body.url, 'https://host.example.ts.net:17000/'); assert.deepEqual(f.publishCalls, [{ botID, port: 41000, containerPort: undefined }])
-  assert.equal((await f.call(`/v1/bots-host/previews/${botID}/41000`, { method: 'DELETE' })).body.removed, true)
-  const credentials = await f.call('/v1/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })
+  assert.equal((await f.call(`/bots-host/previews/${botID}/41000`, { method: 'DELETE' })).body.removed, true)
+  const credentials = await f.call('/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })
   assert.equal(credentials.body.credential.type, 'api_key'); assert.deepEqual(f.credentialsCalls, [{ provider: 'anthropic' }])
-  const entries = await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [{ id: 7, conversationId: 1, role: 'assistant', text: 'hi' }] } })
+  const entries = await f.call(`/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [{ id: 7, conversationId: 1, role: 'assistant', text: 'hi' }] } })
   assert.deepEqual(entries.body, { conversations: 1, entries: 1 })
   assert.deepEqual(f.memory.entries(botID).map(entry => entry.id), [7])
 })
 
 test('the user revoke route sticks and the runtime cannot get a new key until reinstated', async t => {
   const f = await serviceFixture(t), botID = randomUUID()
-  assert.equal((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })).status, 201)
-  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID, { method: 'DELETE', token: 'device' })).status, 403)
-  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID, { method: 'DELETE', token: 'admin' })).status, 200)
-  assert.deepEqual((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })), { status: 403, body: { error: 'revoked', message: 'revoked' } })
-  assert.deepEqual((await f.call('/v1/bots/mcp', { token: 'admin' })).body.revoked, [{ botID }])
-  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID + '/reinstate', { method: 'POST', token: 'device' })).status, 403)
-  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID + '/reinstate', { method: 'POST', token: 'admin' })).body.reinstated, true)
-  assert.equal((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })).status, 201)
+  assert.equal((await f.call('/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })).status, 201)
+  assert.equal((await f.call('/bots/mcp/keys/' + botID, { method: 'DELETE', token: 'device' })).status, 403)
+  assert.equal((await f.call('/bots/mcp/keys/' + botID, { method: 'DELETE', token: 'admin' })).status, 200)
+  assert.deepEqual((await f.call('/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })), { status: 403, body: { error: 'revoked', message: 'revoked' } })
+  assert.deepEqual((await f.call('/bots/mcp', { token: 'admin' })).body.revoked, [{ botID }])
+  assert.equal((await f.call('/bots/mcp/keys/' + botID + '/reinstate', { method: 'POST', token: 'device' })).status, 403)
+  assert.equal((await f.call('/bots/mcp/keys/' + botID + '/reinstate', { method: 'POST', token: 'admin' })).body.reinstated, true)
+  assert.equal((await f.call('/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })).status, 201)
 })
 
 test('client routes read with device grants, change only as administrator, and report resources', async t => {
   const f = await serviceFixture(t)
-  assert.equal((await f.call('/v1/bots/status', { token: 'nobody' })).status, 401)
-  const status = await f.call('/v1/bots/status', { token: 'device' })
+  assert.equal((await f.call('/bots/status', { token: 'nobody' })).status, 401)
+  const status = await f.call('/bots/status', { token: 'device' })
   assert.equal(status.body.enabled, true); assert.equal(status.body.workspaceEnabled, false); assert.equal(status.body.engine.installed, true)
   // The shape every Woven server that hosts bots answers, as the apps decode it.
   assert.deepEqual(status.body.machine, { ...f.machine, kind: 'linux' })
   assert.equal(status.body.state, 'starting'); assert.equal(status.body.paused, false)
-  // A release that recorded nothing reports nulls; apps then treat it as out of date.
+  // A server started with no release (a checkout) reports nulls; apps then treat it as out of date.
   assert.deepEqual(status.body.versions, { app: null, fingerprint: null, librarySchema: null })
   assert.equal(status.body.runtimeInstalled, false, 'this fixture release has no bots package')
   assert.deepEqual(status.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 4 * 1024 ** 3, diskBytes: null })
   assert.ok(status.body.capacity === null || Number.isSafeInteger(status.body.capacity.memoryBytes))
-  const resources = await f.call('/v1/bots/resources', { token: 'device' })
+  const resources = await f.call('/bots/resources', { token: 'device' })
   assert.equal(resources.body.memory.botBytes, 4 * 1024 ** 3)
-  assert.equal((await f.call('/v1/bots/resources', { token: 'device', method: 'POST', body: { resources: { perBotBytes: 1024 ** 3 } } })).status, 403)
-  assert.equal((await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { resources: { perBotBytes: 64 * 1024 ** 3 } } })).status, 400, 'per-bot RAM must fit the pool')
-  assert.equal((await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { botMemoryBytes: 2 * 1024 ** 3 } })).status, 400, 'the body is {resources}')
-  const changed = await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { resources: { poolBytes: 8 * 1024 ** 3, perBotBytes: 2 * 1024 ** 3, diskBytes: null } } })
+  assert.equal((await f.call('/bots/resources', { token: 'device', method: 'POST', body: { resources: { perBotBytes: 1024 ** 3 } } })).status, 403)
+  assert.equal((await f.call('/bots/resources', { token: 'admin', method: 'POST', body: { resources: { perBotBytes: 64 * 1024 ** 3 } } })).status, 400, 'per-bot RAM must fit the pool')
+  assert.equal((await f.call('/bots/resources', { token: 'admin', method: 'POST', body: { botMemoryBytes: 2 * 1024 ** 3 } })).status, 400, 'the body is {resources}')
+  const changed = await f.call('/bots/resources', { token: 'admin', method: 'POST', body: { resources: { poolBytes: 8 * 1024 ** 3, perBotBytes: 2 * 1024 ** 3, diskBytes: null } } })
   assert.equal(changed.status, 200)
   assert.deepEqual(changed.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 2 * 1024 ** 3, diskBytes: null })
-  assert.equal((await f.call('/v1/bots/status', { token: 'device' })).body.settings.botMemoryBytes, 2 * 1024 ** 3)
+  assert.equal((await f.call('/bots/status', { token: 'device' })).body.settings.botMemoryBytes, 2 * 1024 ** 3)
 })
 
 test('bots turn off and on again as they move between machines, and the choice is saved', async t => {
@@ -374,18 +374,18 @@ test('bots turn off and on again as they move between machines, and the choice i
   const f = await serviceFixture(t, { runtime })
   await f.service.start()
   assert.deepEqual(calls, ['start'])
-  assert.equal((await f.call('/v1/bots/enabled', { token: 'device', method: 'POST', body: { enabled: false } })).status, 403)
-  assert.equal((await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: {} })).status, 400)
-  const off = await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: false } })
+  assert.equal((await f.call('/bots/enabled', { token: 'device', method: 'POST', body: { enabled: false } })).status, 403)
+  assert.equal((await f.call('/bots/enabled', { token: 'admin', method: 'POST', body: {} })).status, 400)
+  const off = await f.call('/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: false } })
   assert.equal(off.status, 200)
   assert.equal(off.body.enabled, false); assert.equal(off.body.state, 'off')
   assert.deepEqual(calls, ['start', 'stop'])
-  assert.equal((await f.call('/v1/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })).status, 409, 'a turned-off host serves its runtime nothing')
-  const on = await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: true } })
+  assert.equal((await f.call('/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })).status, 409, 'a turned-off host serves its runtime nothing')
+  const on = await f.call('/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: true } })
   assert.equal(on.status, 200); assert.equal(on.body.enabled, true)
   assert.deepEqual(calls, ['start', 'stop', 'start'])
-  await f.call('/v1/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: false } })
-  assert.equal((await f.call('/v1/bots/status', { token: 'device' })).body.settings.botsOff, true, 'saved with the bots settings')
+  await f.call('/bots/enabled', { token: 'admin', method: 'POST', body: { enabled: false } })
+  assert.equal((await f.call('/bots/status', { token: 'device' })).body.settings.botsOff, true, 'saved with the bots settings')
 })
 
 test('the bots status names the host release, its fingerprint and the library schema', async t => {
@@ -433,7 +433,7 @@ test('the runtime starts once the engine finishes installing, and lowering the p
   assert.equal(starts, 1)
   const json = (response, status, value) => { response.statusCode = status; response.value = value }
   const response = {}
-  await service.handleClient({ method: 'POST', headers: {} }, response, new URL('http://x/v1/bots/resources'), { readJSON: async () => ({ resources: { poolBytes: 2 * 1024 ** 3 } }), json, administrator: true, device: null })
+  await service.handleClient({ method: 'POST', headers: {} }, response, new URL('http://x/bots/resources'), { readJSON: async () => ({ resources: { poolBytes: 2 * 1024 ** 3 } }), json, administrator: true, device: null })
   assert.equal(response.statusCode, 200)
   assert.equal(response.value.resources.perBotBytes, 2 * 1024 ** 3)
 })
@@ -449,7 +449,7 @@ async function echoRuntime(t, seen = []) {
   return { seen, runtime: { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) } }
 }
 // Opens the bots socket and sends one message: the echo, or the HTTP refusal.
-function botsSocket(port, headers, path = '/v1/bots/ws') {
+function botsSocket(port, headers, path = '/bots/ws') {
   return new Promise(resolve => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers })
     socket.on('unexpected-response', (_, response) => { resolve({ status: response.statusCode }); socket.terminate() })
@@ -470,7 +470,7 @@ test('a signed member upgrade opens the bots socket only at the member it names'
   const authorizeClient = async request => (await authenticateMemberUpgrade(request, { members: verifier, servedTargets: async target => [prefix + target] })).member
   const f = await serviceFixture(t, { runtime, authorizeClient })
   // The Mac signs the full execution path it sends; Serve strips the prefix before this server.
-  const signed = (audience, options = {}) => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'GET', target: prefix + '/v1/bots/ws', ...options })
+  const signed = (audience, options = {}) => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'GET', target: prefix + '/bots/ws', ...options })
   const fresh = signed(here)
   assert.deepEqual(await botsSocket(f.port, fresh), { status: 101, echo: 'echo' })
   assert.equal((await botsSocket(f.port, fresh)).status, 401, 'an upgrade cannot be replayed')
@@ -490,16 +490,16 @@ test('the bots socket accepts only signed members and reaches the runtime with t
   const installerBearer = createInstallerBearer({ token: installer, rotate: async () => installer })
   const authorizeClient = request => authorizeBotsUpgrade(request, { members: verifier, installerBearer })
   const f = await serviceFixture(t, { runtime, authorizeClient })
-  const signed = () => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience: here, method: 'GET', target: '/v1/bots/ws?client=mac' })
-  assert.equal((await botsSocket(f.port, { authorization: 'Bearer device' }, '/v1/bots/ws?client=mac')).status, 401)
-  assert.equal((await botsSocket(f.port, { authorization: 'Bearer ' + installer, 'x-forwarded-host': 'host.example.ts.net' }, '/v1/bots/ws?client=mac')).status, 401, 'the installer bearer never opens the socket through Tailscale Serve')
-  assert.deepEqual(await botsSocket(f.port, { authorization: 'Bearer ' + installer }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' }, 'the installing Mac reaches a bots-only host over its SSH tunnel')
-  assert.equal((await botsSocket(f.port, { ...signed(), origin: 'https://evil.example' }, '/v1/bots/ws?client=mac')).status, 403)
-  assert.deepEqual(await botsSocket(f.port, { ...signed(), authorization: 'Bearer device', cookie: 'secret' }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' })
+  const signed = () => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience: here, method: 'GET', target: '/bots/ws?client=mac' })
+  assert.equal((await botsSocket(f.port, { authorization: 'Bearer device' }, '/bots/ws?client=mac')).status, 401)
+  assert.equal((await botsSocket(f.port, { authorization: 'Bearer ' + installer, 'x-forwarded-host': 'host.example.ts.net' }, '/bots/ws?client=mac')).status, 401, 'the installer bearer never opens the socket through Tailscale Serve')
+  assert.deepEqual(await botsSocket(f.port, { authorization: 'Bearer ' + installer }, '/bots/ws?client=mac'), { status: 101, echo: 'echo' }, 'the installing Mac reaches a bots-only host over its SSH tunnel')
+  assert.equal((await botsSocket(f.port, { ...signed(), origin: 'https://evil.example' }, '/bots/ws?client=mac')).status, 403)
+  assert.deepEqual(await botsSocket(f.port, { ...signed(), authorization: 'Bearer device', cookie: 'secret' }, '/bots/ws?client=mac'), { status: 101, echo: 'echo' })
   // Exactly what the Mac's URLSessionWebSocketTask sends besides the fields above (captured
   // from CFNetwork; PiBotHandshakeTests checks the Mac side): no Origin, so it is accepted.
   const cfNetwork = { 'accept-encoding': 'gzip, deflate', 'user-agent': 'Woven Matter CFNetwork/3896.200.61 Darwin/27.2.0', 'sec-websocket-extensions': 'permessage-deflate', accept: '*/*', 'accept-language': 'en-US,en;q=0.9' }
-  assert.deepEqual(await botsSocket(f.port, { ...signed(), ...cfNetwork }, '/v1/bots/ws?client=mac'), { status: 101, echo: 'echo' })
+  assert.deepEqual(await botsSocket(f.port, { ...signed(), ...cfNetwork }, '/bots/ws?client=mac'), { status: 101, echo: 'echo' })
   assert.deepEqual(seen, [{ url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined },
     { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined },
     { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined, signature: undefined }])

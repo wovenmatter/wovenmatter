@@ -3,7 +3,7 @@
 // message per frame. `decodeFrame` keeps only the fields a frame type defines,
 // as the Swift decoder does, so encoding a decoded frame gives the same JSON.
 
-export const streamPath = '/v1/stream'
+export const streamPath = '/stream'
 export const streamCapability = 'stream'
 export const maximumFrameBytes = 8 * 1024 * 1024
 // Client frames are requests, subscriptions and cancels: small.

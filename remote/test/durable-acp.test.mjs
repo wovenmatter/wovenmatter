@@ -18,7 +18,7 @@ async function fixture(t) {
   const options = { directory, workspaceRoot: directory, catalog: new Map([['test', { transport: 'acp', command: 'test' }]]),
     environment: () => ({}), isEnabled: async () => enabled, spawnProcess: () => { launches++; return child } }
   const relay = createDurableACP(options)
-  const call = (op, body = {}) => relay.handle('POST', '/v1/durable-acp/' + op, { channelID: 'session', harnessID: 'test', ...body })
+  const call = (op, body = {}) => relay.handle('POST', '/durable-acp/' + op, { channelID: 'session', harnessID: 'test', ...body })
   return { call, relay, child, options, launches: () => launches, received: () => received, disable: () => { enabled = false } }
 }
 
@@ -66,9 +66,9 @@ test('restart refuses prompt replay; busy sessions reject competing prompts', as
   await assert.rejects(f.call('message', { deliveryID: 'twice', message }), /still running/)
   const restarted = createDurableACP(f.options)
   const body = { channelID: 'session', harnessID: 'test' }
-  assert.equal((await restarted.handle('POST', '/v1/durable-acp/attach', body)).state, 'interrupted')
+  assert.equal((await restarted.handle('POST', '/durable-acp/attach', body)).state, 'interrupted')
   assert.equal(f.launches(), 1)
-  await assert.rejects(restarted.handle('POST', '/v1/durable-acp/message', { ...body, deliveryID: 'another', message }), /interrupted/)
+  await assert.rejects(restarted.handle('POST', '/durable-acp/message', { ...body, deliveryID: 'another', message }), /interrupted/)
 })
 
 test('only pending server callbacks survive attachment; duplicate replies never reach child', async t => {
@@ -91,7 +91,7 @@ test('disabling during asynchronous admission fences process creation and stopAl
   const gate = new Promise(resolve => { release = resolve })
   const entered = new Promise(resolve => { reached = resolve })
   const relay = createDurableACP({ ...f.options, isHarnessEnabled: async () => { reached(); await gate; return true } })
-  const attaching = relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'racing', harnessID: 'test' })
+  const attaching = relay.handle('POST', '/durable-acp/attach', { channelID: 'racing', harnessID: 'test' })
   const rejected = assert.rejects(attaching, /disabled/)
   await entered
   f.disable()
@@ -114,7 +114,7 @@ test('stream output batches disk sync while terminal receipt flushes the complet
         sync: async () => { syncs++; await file.sync() }}
     },
   })
-  const call = (op, body = {}) => relay.handle('POST', '/v1/durable-acp/' + op, {channelID:'batch',harnessID:'test',...body})
+  const call = (op, body = {}) => relay.handle('POST', '/durable-acp/' + op, {channelID:'batch',harnessID:'test',...body})
   await call('attach')
   await call('message', {deliveryID:'input',message:{jsonrpc:'2.0',id:1,method:'session/prompt',params:{sessionId:'native',_meta:{wovenRunID:'batch-run'}}}})
   const initialSyncs = syncs, started = performance.now()
@@ -130,7 +130,7 @@ test('stream output batches disk sync while terminal receipt flushes the complet
   assert.ok(syncs-initialSyncs < 20, `stream used ${syncs-initialSyncs} syncs`)
   t.diagnostic(`1000 chunks: ${syncs-initialSyncs} journal syncs, ${(performance.now()-started).toFixed(1)}ms`)
   const restarted = createDurableACP(f.options)
-  const restored = await restarted.handle('POST','/v1/durable-acp/attach',{channelID:'batch',harnessID:'test'})
+  const restored = await restarted.handle('POST','/durable-acp/attach',{channelID:'batch',harnessID:'test'})
   assert.equal(restored.snapshot.recoveredRuns[0].content,'x'.repeat(1000))
 })
 
@@ -196,7 +196,7 @@ test('natural process exit settles interrupted prompts and survives service rest
   assert.equal(stopped.snapshot.recoveredRuns[0].runID, 'run')
   assert.match(stopped.snapshot.recoveredRuns[0].error, /stopped before completion/)
   const restarted = createDurableACP(f.options)
-  const restored = await restarted.handle('POST', '/v1/durable-acp/attach', {
+  const restored = await restarted.handle('POST', '/durable-acp/attach', {
     channelID: 'session', harnessID: 'test',
   })
   assert.equal(restored.state, 'stopped')
@@ -209,7 +209,7 @@ test('native host durable sessions permit linked external folders', async t => {
   t.after(() => rm(external, { recursive: true, force: true }))
   const f = await fixture(t)
   const relay = createDurableACP(f.options)
-  const attached = await relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'external-project', harnessID: 'test', cwd: external })
+  const attached = await relay.handle('POST', '/durable-acp/attach', { channelID: 'external-project', harnessID: 'test', cwd: external })
   assert.equal(attached.state, 'running')
   assert.equal(f.launches(), 1)
   await relay.stopAll()
@@ -220,8 +220,8 @@ test('full-root durable relay enforces its workspace permission on stale client 
   const relay = createDurableACP({ ...f.options,
     configuration: loadRuntimeConfiguration({ WOVENMATTER_ACCESS_MODE: 'fullRoot' }),
     catalog: new Map([['codex', { transport: 'acp', command: 'codex-acp', arguments: [] }]]) })
-  await relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'root-session', harnessID: 'codex', cwd: f.options.workspaceRoot })
-  await relay.handle('POST', '/v1/durable-acp/message', { channelID: 'root-session', deliveryID: 'config',
+  await relay.handle('POST', '/durable-acp/attach', { channelID: 'root-session', harnessID: 'codex', cwd: f.options.workspaceRoot })
+  await relay.handle('POST', '/durable-acp/message', { channelID: 'root-session', deliveryID: 'config',
     message: { jsonrpc: '2.0', id: 1, method: 'session/set_config_option', params: { sessionId: 'native', configId: 'mode', value: 'ask' } } })
   assert.equal(JSON.parse(f.received()).params.value, 'agent-full-access')
   await relay.stopAll()
@@ -246,7 +246,7 @@ test('recovery replaces assistant snapshots atomically, preserves suffixes and r
     assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns,recovered)
     await f.relay.stopAll()
     const restarted = createDurableACP(f.options)
-    const attached = await restarted.handle('POST','/v1/durable-acp/attach',{channelID:'session',harnessID:'test'})
+    const attached = await restarted.handle('POST','/durable-acp/attach',{channelID:'session',harnessID:'test'})
     assert.deepEqual(attached.snapshot.recoveredRuns,recovered)
   }
 })

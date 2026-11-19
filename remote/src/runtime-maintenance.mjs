@@ -352,13 +352,6 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const path = await commandPath(command)
       return { path, source: await componentSource(path) }
     },
-    /** What an install would run, for apps that still show it before installing. */
-    installPreview(h) {
-      const installer = nativeInstaller(h)
-      return { harnessID: h.id, source: installer.source, sha256: null, bytes: null, packageSpec: null,
-        command: `curl -fsSL ${installer.source} | ${installer.interpreter}${installer.arguments.length ? ' -s -- ' + installer.arguments.join(' ') : ''}`,
-        verification: 'official-installer' }
-    },
     async recordFailure(h, action, error) {
       const s = await state(h.id)
       if (operations.get(h.id) && !operations.get(h.id).finishedAt) return

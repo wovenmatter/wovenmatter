@@ -76,12 +76,12 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     const get = (path, signal, timeout) => transport.json(memberURL(workspace.endpoint, path), { headers: headers(workspace), signal, audience: workspace, ...(timeout ? { timeout } : {}) })
     return {
       workspace,
-      providers: (signal, timeout) => get('v1/execution/providers', signal, timeout),
-      conversations: signal => get('v1/execution/conversations', signal),
-      transcript: (id, before, signal) => get(`v1/execution/conversations/${id}/transcript` + (before ? '?before=' + encodeURIComponent(before) : ''), signal),
-      interactions: signal => get('v1/execution/interactions', signal),
-      capabilities: (id, signal) => get(`v1/execution/conversations/${id}/capabilities`, signal),
-      command: (body, signal) => transport.json(memberURL(workspace.endpoint, 'v1/execution/commands'), { method: 'POST', headers: headers(workspace), signal, audience: workspace,
+      providers: (signal, timeout) => get('execution/providers', signal, timeout),
+      conversations: signal => get('execution/conversations', signal),
+      transcript: (id, before, signal) => get(`execution/conversations/${id}/transcript` + (before ? '?before=' + encodeURIComponent(before) : ''), signal),
+      interactions: signal => get('execution/interactions', signal),
+      capabilities: (id, signal) => get(`execution/conversations/${id}/capabilities`, signal),
+      command: (body, signal) => transport.json(memberURL(workspace.endpoint, 'execution/commands'), { method: 'POST', headers: headers(workspace), signal, audience: workspace,
         body: { ...body, deviceID: deviceID(), libraryID: workspace.libraryID, workspaceID: workspace.id } }),
     }
   }

@@ -34,10 +34,10 @@ async function call(path,method='GET',body) {
  assert.equal(response.ok,true,'Native service request failed: '+path+' ('+response.status+')');
  return response.json();
 }
-const initial=await call('/v1/health');
+const initial=await call('/health');
 assert.equal(initial.runtimeKind,'host'); assert.equal(initial.serviceFingerprint,installation.fingerprint);
 assert.equal(initial.workspaceRoot,join(root,'workspace')); assert.equal(initial.accessMode,installation.accessMode);
-const selftest=await call('/v1/browser/selftest'); assert.equal(selftest.ok,true,JSON.stringify(selftest));
+const selftest=await call('/browser/selftest'); assert.equal(selftest.ok,true,JSON.stringify(selftest));
 const npmRoot=realpathSync(join(root,'current/tooling/lib/node_modules/npm'));
 assert.equal(realpathSync(join(root,'current/default-agent/lib/npm')),npmRoot,'SDK updates must use the private patched npm.');
 const npmVersion=JSON.parse(readFileSync(join(npmRoot,'package.json'),'utf8')).version;
@@ -52,7 +52,7 @@ const { chromium }=await import(pathToFileURL(join(root,'current/default-agent/n
 const connections=[];
 try {
  for(const profile of ['verification-a','verification-b']) {
-  const connected=await call('/v1/browser/connect?profile='+profile,'POST');
+  const connected=await call('/browser/connect?profile='+profile,'POST');
   assert.match(connected.endpoint,/^ws:\/\/127\.0\.0\.1:/);
   connections.push(await chromium.connectOverCDP(connected.endpoint));
  }
@@ -63,7 +63,7 @@ try {
  assert.equal((await b.cookies()).some(c=>c.name==='woven-profile-fixture'),false);
  const page=await a.newPage(); await page.goto('data:text/html,<title>Native host verification</title><p>Sandboxed Chromium</p>');
  assert.equal(await page.title(),'Native host verification');
- const tabs=await call('/v1/browser/tabs?profile=verification-a');
+ const tabs=await call('/browser/tabs?profile=verification-a');
  assert.ok(tabs.tabs.some(tab=>tab.title==='Native host verification'));
  await page.close();
 } finally { for(const browser of connections) await browser.close(); }
@@ -77,7 +77,7 @@ if(installation.accessMode==='fullRoot') {
 execFileSync('systemctl',['--user','restart','wovenmatter.service']);
 let recovered;
 for(let retry=0;retry<100;retry++) {
- try { recovered=await call('/v1/health'); break; } catch { await new Promise(resolve=>setTimeout(resolve,300)); }
+ try { recovered=await call('/health'); break; } catch { await new Promise(resolve=>setTimeout(resolve,300)); }
 }
 assert.equal(recovered?.serviceFingerprint,initial.serviceFingerprint);
 assert.equal(execFileSync('loginctl',['show-user',String(process.getuid()),'--property=Linger','--value'],{encoding:'utf8'}).trim(),'yes');

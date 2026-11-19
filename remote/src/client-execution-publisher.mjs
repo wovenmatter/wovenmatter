@@ -8,7 +8,7 @@ const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount
 // This is an origin outbox, not a client relay. Its only source is the service's
 // own SQLite journal. Publication failures never control agent execution.
 // History goes into this machine's own library copy (`localLibrary`, its
-// library host) through the socket's `/v1/publisher/*` routes and reaches
+// library host) through the socket's `/publisher/*` routes and reaches
 // other devices by peer sync. Without a library host nothing is published.
 export function createClientExecutionPublisher({ db, identity, events, flush = () => {}, intervalMilliseconds = 5000, localLibrary = null }) {
   // A v0.4.2 store's single-Mac publication tables are converted when

@@ -42,13 +42,13 @@ export const contracts = [
     coverage: 'Real SDK tool discovery and scoped grants; exclusive saved-port restart recovery, stable persistent endpoints and revocation.' },
   { id: 'shared-detail-chain', runtime: 'swift', packagePath: 'shared', buildSystem: 'native', scratchDirectory: 'SharedSwiftPM',
     files: ['shared/Tests/WovenMatterSharedTests/LibraryActivityDetailsTests.swift'],
-    coverage: 'Shared v1/v2 reconstruction preserves Unicode and head metadata and rejects malformed or cyclic detail chains.' },
+    coverage: 'Shared complete and chained activity reconstruction preserves Unicode and head metadata and rejects malformed or cyclic detail chains.' },
   { id: 'mobile-detail-chain', runtime: 'swift', packagePath: 'ios', buildSystem: 'native', scratchDirectory: 'IOS/package', moduleDirectory: 'IOS/modules', disableSandbox: true,
     files: ['ios/Tests/LibraryClientTests/TranscriptDetailTests.swift'],
-    coverage: 'Actual mobile journal resolves complete linked reasoning after pending chunks, restart and replication; legacy tool/HTML details remain intact.' },
+    coverage: 'Actual mobile journal resolves complete linked reasoning after pending chunks, restart and replication; complete tool/HTML details remain intact.' },
   { id: 'federated-detail-chain', runtime: 'swift', packagePath: 'integration', buildSystem: 'native', scratchDirectory: 'Integration/SwiftPM', moduleDirectory: 'Integration/ModuleCache', disableSandbox: true,
     files: ['integration/Tests/CrossDeviceIntegrationTests/FederationTests.swift'],
-    coverage: 'Federated source archive and legacy v1 remain searchable while derived v2 revisions retain verified retrieval without duplicate search hits.' },
+    coverage: 'Federated source archive and complete activities remain searchable while chained revisions retain verified retrieval without duplicate search hits.' },
 ];
 
 const args = process.argv.slice(2);

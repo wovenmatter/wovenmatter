@@ -42,7 +42,7 @@ test('a Mac member creates a project directory with its signature; other members
   const base = 'http://127.0.0.1:' + port
   let audience = null
   for (let i = 0; i < 200 && !audience; i++) {
-    try { audience = (await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json()).memberIdentity?.deviceID ?? null } catch {}
+    try { audience = (await (await fetch(base + '/health', { headers: { authorization: 'Bearer ' + token } })).json()).memberIdentity?.deviceID ?? null } catch {}
     if (!audience) await new Promise(r => setTimeout(r, 50))
   }
   assert.ok(audience, output)
@@ -50,11 +50,11 @@ test('a Mac member creates a project directory with its signature; other members
   // `/wovenmatter-execution/<id>` prefix: the signature covers the path as sent.
   const create = (who, name) => {
     const data = Buffer.from(JSON.stringify({ name, reuseExisting: false }))
-    return fetch(base + '/v1/projects', { method: 'POST', body: data, headers: { 'content-type': 'application/json',
-      ...signMemberRequest({ deviceID: who.deviceID, privateKey: who.key, audience, method: 'POST', target: '/v1/projects', body: data }) } })
+    return fetch(base + '/projects', { method: 'POST', body: data, headers: { 'content-type': 'application/json',
+      ...signMemberRequest({ deviceID: who.deviceID, privateKey: who.key, audience, method: 'POST', target: '/projects', body: data }) } })
   }
 
-  assert.equal((await fetch(base + '/v1/projects', { method: 'POST', body: JSON.stringify({ name: 'Unsigned' }) })).status, 401)
+  assert.equal((await fetch(base + '/projects', { method: 'POST', body: JSON.stringify({ name: 'Unsigned' }) })).status, 401)
   for (const who of [phone, linux]) assert.equal((await create(who, 'Refused ' + who.kind)).status, 403, who.kind)
   assert.equal(existsSync(join(workspace, 'Refused ios')) || existsSync(join(workspace, 'Refused linux')) || existsSync(join(workspace, 'Unsigned')), false)
 

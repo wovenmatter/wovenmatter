@@ -92,7 +92,7 @@ export function createJournalBotLibraryAdapter(directory) {
 
 /**
  * The production adapter: batches go to the local library host's
- * `POST /v1/bots/{botID}/entries`. While the host is down (or refuses a
+ * `POST /bots/{botID}/entries`. While the host is down (or refuses a
  * batch), they are kept in the journal outbox above and accepted; `drain()`
  * replays the outbox in order once the host is ready and removes each file.
  * Per-bot order holds because writes and drains share one queue.

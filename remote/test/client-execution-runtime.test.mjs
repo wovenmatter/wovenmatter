@@ -105,17 +105,17 @@ test('direct clients run an actual fixture ACP process, answer approvals and rep
   assert.equal(service.transcript(opened.conversationID).messages.at(-1).content,'before approval after approval')
   assert.equal(service.interactions().length,0)
   assert.ok(service.events().entries.some(entry=>entry.nativeRecord))
-  const legacyID=randomUUID(),legacy=await relay.handle('POST','/v1/durable-acp/attach',{channelID:legacyID,harnessID:'fixture',cwd:workspaceRoot,attachmentTokens:true})
-  const legacySend=message=>relay.handle('POST','/v1/durable-acp/message',{channelID:legacyID,attachmentToken:legacy.attachmentToken,deliveryID:randomUUID(),message})
+  const legacyID=randomUUID(),legacy=await relay.handle('POST','/durable-acp/attach',{channelID:legacyID,harnessID:'fixture',cwd:workspaceRoot,attachmentTokens:true})
+  const legacySend=message=>relay.handle('POST','/durable-acp/message',{channelID:legacyID,attachmentToken:legacy.attachmentToken,deliveryID:randomUUID(),message})
   await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
   await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'session/new',params:{cwd:workspaceRoot}})
-  const legacySession=(await until(()=>relay.handle('POST','/v1/durable-acp/poll',{channelID:legacyID,after:0}),value=>!!value.snapshot.session?.sessionId)).snapshot.session.sessionId
+  const legacySession=(await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:legacyID,after:0}),value=>!!value.snapshot.session?.sessionId)).snapshot.session.sessionId
   const oldRun=randomUUID(),adoption={workspaceID:ids.workspaceID,conversation:{id:legacyID,title:'Existing desktop conversation',preview:'',updatedAt:'',runtimeKind:'fixture'},runtimeKind:'fixture',nativeSessionID:legacySession,knownRunIDs:[oldRun],nativeWorkingDirectory:workspaceRoot}
   await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'session/prompt',params:{sessionId:legacySession,prompt:[{type:'text',text:'existing run'}],_meta:{wovenRunID:oldRun}}})
-  await until(()=>relay.handle('POST','/v1/durable-acp/poll',{channelID:legacyID,after:0}),value=>value.snapshot.pendingRequests.length>0)
+  await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:legacyID,after:0}),value=>value.snapshot.pendingRequests.length>0)
   await assert.rejects(service.adopt(adoption),/not idle/)
   await legacySend({jsonrpc:'2.0',id:'approval',result:{outcome:{outcome:'selected',optionId:'once'}}})
-  await until(()=>relay.handle('POST','/v1/durable-acp/poll',{channelID:legacyID,after:0}),value=>!value.snapshot.busy)
+  await until(()=>relay.handle('POST','/durable-acp/poll',{channelID:legacyID,after:0}),value=>!value.snapshot.busy)
   await assert.rejects(service.adopt({...adoption,nativeSessionID:'different-session'}),/different native session/)
   await legacySend({jsonrpc:'2.0',id:randomUUID(),method:'initialize',params:{protocolVersion:1}})
   const adopted=await service.adopt(adoption)

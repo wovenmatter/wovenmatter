@@ -76,25 +76,25 @@ export function createLibraryClient({ socket, token, timeoutMilliseconds = 120_0
   }
   return {
     request, json,
-    health: () => json('GET', '/v1/health', { timeout: 5000 }),
-    identity: () => json('GET', '/v1/identity', { timeout: 5000 }),
-    members: () => json('GET', '/v1/members', { timeout: 10_000 }),
+    health: () => json('GET', '/health', { timeout: 5000 }),
+    identity: () => json('GET', '/identity', { timeout: 5000 }),
+    members: () => json('GET', '/members', { timeout: 10_000 }),
     // The adding Mac's signed records, forwarded byte for byte.
-    adoptMembers: body => json('POST', '/v1/members/adopt', { body: Buffer.from(body), timeout: 30_000 }),
-    updateSelf: body => json('POST', '/v1/members/self', { body, timeout: 10_000 }),
+    adoptMembers: body => json('POST', '/members/adopt', { body: Buffer.from(body), timeout: 30_000 }),
+    updateSelf: body => json('POST', '/members/self', { body, timeout: 10_000 }),
     // Signs one outgoing request with this machine's member key, which stays in the host.
     // `audience` is the destination member's device ID (it is signed too).
-    sign: ({ method, target, bodySHA256, audience }) => json('POST', '/v1/members/sign', { body: { method, target, bodySHA256, audience }, timeout: 5000 }),
-    workspaces: () => json('GET', '/v1/workspaces', { timeout: 10_000 }),
-    syncStatus: () => json('GET', '/v1/sync/status', { timeout: 10_000 }),
-    registerCaller: body => json('POST', '/v1/callers', { body, timeout: 30_000 }),
-    mcp: (message, headers, options = {}) => request('POST', '/v1/mcp', { body: message, headers, ...options }),
-    publisher: (path, body, headers = {}, options = {}) => json('POST', '/v1/publisher/' + path, { body, headers, timeout: 30_000, ...options }),
-    timersDue: () => json('POST', '/v1/timers/due', { body: {}, timeout: 30_000 }),
-    settleTimer: body => json('POST', '/v1/timers/settle', { body, timeout: 15_000 }),
-    botEntries: (botID, batch) => json('POST', '/v1/bots/' + encodeURIComponent(botID) + '/entries', { body: batch, timeout: 30_000 }),
+    sign: ({ method, target, bodySHA256, audience }) => json('POST', '/members/sign', { body: { method, target, bodySHA256, audience }, timeout: 5000 }),
+    workspaces: () => json('GET', '/workspaces', { timeout: 10_000 }),
+    syncStatus: () => json('GET', '/sync/status', { timeout: 10_000 }),
+    registerCaller: body => json('POST', '/callers', { body, timeout: 30_000 }),
+    mcp: (message, headers, options = {}) => request('POST', '/mcp', { body: message, headers, ...options }),
+    publisher: (path, body, headers = {}, options = {}) => json('POST', '/publisher/' + path, { body, headers, timeout: 30_000, ...options }),
+    timersDue: () => json('POST', '/timers/due', { body: {}, timeout: 30_000 }),
+    settleTimer: body => json('POST', '/timers/settle', { body, timeout: 15_000 }),
+    botEntries: (botID, batch) => json('POST', '/bots/' + encodeURIComponent(botID) + '/entries', { body: batch, timeout: 30_000 }),
     // Marks a deleted bot's conversations deleted in this library copy (entries stay).
-    deleteBotConversations: botID => json('DELETE', '/v1/bots/' + encodeURIComponent(botID) + '/conversations', { timeout: 30_000 }),
+    deleteBotConversations: botID => json('DELETE', '/bots/' + encodeURIComponent(botID) + '/conversations', { timeout: 30_000 }),
   }
 }
 

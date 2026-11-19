@@ -10,7 +10,7 @@ import { enroll } from './fixtures/execution.mjs'
 
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await tick()}assert.fail('owner publisher did not retry')}
-// History goes into this machine's library host through its `/v1/publisher/*`
+// History goes into this machine's library host through its `/publisher/*`
 // socket routes; `online` stands for the host answering them.
 function fixture(t,{automatic=false}={}) {
   const directory=mkdtempSync(join(tmpdir(),'wm-owner-publish-')),events=new Map(),artifacts=new Map(),requests=[]

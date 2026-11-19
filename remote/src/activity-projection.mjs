@@ -9,7 +9,7 @@ import { nativeRecordFormats } from './native-record-formats.mjs'
 // (`LocalACPClient.projectedEvent`). A transcript row carries the bounded
 // presentation summary (`AgentRunActivity.presentationSummary`); the full
 // projection stays on this machine, is read on disclosure
-// (`GET v1/execution/conversations/<id>/activity`), and is journaled once
+// (`GET execution/conversations/<id>/activity`), and is journaled once
 // the activity settles so library history can disclose it too.
 
 const preview = 280

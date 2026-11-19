@@ -11,7 +11,7 @@ const toolGroups = new Set([...libraryServedGroups, 'sessions'])
 /**
  * The one adapter between Woven MCP and the local library socket: it registers
  * a session as a library caller once, then sends stateless JSON-RPC to
- * `POST /v1/mcp` with the caller's current tool selection. `callerInfo(id)`
+ * `POST /mcp` with the caller's current tool selection. `callerInfo(id)`
  * supplies the session's title, harness and working directory.
  */
 export function createLocalLibraryTools({ client, available, callerInfo = () => ({}), maximumReplyBytes = 4 * 1024 * 1024 }) {
@@ -20,7 +20,7 @@ export function createLocalLibraryTools({ client, available, callerInfo = () => 
     if (registered.has(conversationID)) return
     let info = {}
     try { info = callerInfo(conversationID) ?? {} } catch {}
-    // Registration names the session; `/v1/mcp` also registers on first use,
+    // Registration names the session; `/mcp` also registers on first use,
     // so a failure here is not fatal.
     try { await client.registerCaller({ conversationID, ...info, enabledGroups: groups }); registered.add(conversationID) } catch {}
   }

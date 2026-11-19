@@ -69,9 +69,9 @@ test('session and outside-agent MCP credentials preserve caller scope, readonly 
   const f=await fixture(t)
   assert.equal(f.service.mcp.resolvePrincipal('Bearer unrelated'),null)
   const client=f.service.mcp.provisionClient({conversationID:f.id,label:'Outside reviewer'})
-  // A tool group a newer Mac names and this host does not have is left out, not refused.
-  const newer=f.service.mcp.provisionClient({conversationID:f.id,label:'From a newer Mac',enabledGroups:['notes','a-later-group']})
-  assert.deepEqual(newer.enabledGroups,['notes'])
+  // A tool group this host does not have is left out, not refused.
+  const narrowed=f.service.mcp.provisionClient({conversationID:f.id,label:'Names another group',enabledGroups:['notes','a-group-not-here']})
+  assert.deepEqual(narrowed.enabledGroups,['notes'])
   assert.throws(()=>f.service.mcp.provisionClient({conversationID:f.id,label:'Malformed',enabledGroups:['notes',7]}),{statusCode:400})
   const principal=f.service.mcp.resolvePrincipal('Bearer '+client.connection.bearerToken)
   const denied=await f.call('woven_goals_set',{objective:'Must be denied'},principal)

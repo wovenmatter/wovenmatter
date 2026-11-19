@@ -98,7 +98,7 @@ export function createExecutionAttachments({ directory, storeLimits = attachment
     return files
   }
   // An uploaded attachment's bytes, for a member opening its chip
-  // (`GET v1/execution/attachments/<sha256>?name=`). Only a regular file
+  // (`GET execution/attachments/<sha256>?name=`). Only a regular file
   // directly in `<directory>/<sha256>/`, reached without a symbolic link and
   // inside the store; at most the upload limit; and only while its bytes still
   // match the digest (an agent may have edited the staged copy). Without a
@@ -171,7 +171,7 @@ const knownTypes = { '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.zip': 'application/zip' }
 
 // One explicitly shared regular file, for Library retention of a file an
-// agent wrote, read by a Mac through `POST v1/execution/library-file`. The
+// agent wrote, read by a Mac through `POST execution/library-file`. The
 // file must be inside `root`, /tmp or /mnt/data, is opened without following
 // its final symlink, and must not change while it is read.
 // `sharedRoots` are the scratch places an agent may also leave a file (`/tmp`, `/mnt/data`).

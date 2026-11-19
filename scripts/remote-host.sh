@@ -452,7 +452,7 @@ def prepare(authorization,mode='user',roles=None):
 
 def health(port,token):
     try:
-        request=urllib.request.Request('http://127.0.0.1:'+str(port)+'/v1/health',headers={'Authorization':'Bearer '+token})
+        request=urllib.request.Request('http://127.0.0.1:'+str(port)+'/health',headers={'Authorization':'Bearer '+token})
         with urllib.request.urlopen(request,timeout=3) as response: return json.load(response)
     except (OSError,ValueError): return None
 
@@ -941,7 +941,7 @@ def wait_healthy(port,fingerprint):
     deadline=time.monotonic()+HEALTH_SECONDS
     while time.monotonic()<deadline:
         response=health(port,TOKEN)
-        if response and response.get('serviceFingerprint')==fingerprint and response.get('runtimeKind')=='host': return True
+        if response and response.get('serviceFingerprint')==fingerprint: return True
         time.sleep(.3)
     return False
 

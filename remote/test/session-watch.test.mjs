@@ -96,14 +96,14 @@ async function hosts(t, prefix) {
       const member = await verifier.verify({ method: request.method, target: url.pathname + url.search, alternateTargets: [mounted + url.pathname + url.search], headers: request.headers, body: raw })
       reads.push(request.method + ' ' + path)
       const device = { id: member.deviceID, scopes: ['execution'] }
-      if (path === '/v1/execution/providers') return send(response, 200, await m.service.providers())
-      if (path === '/v1/execution/conversations') return send(response, 200, m.service.conversations())
-      if (path === '/v1/execution/interactions') return send(response, 200, m.service.interactions())
-      const transcript = path.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/transcript$/)
+      if (path === '/execution/providers') return send(response, 200, await m.service.providers())
+      if (path === '/execution/conversations') return send(response, 200, m.service.conversations())
+      if (path === '/execution/interactions') return send(response, 200, m.service.interactions())
+      const transcript = path.match(/^\/execution\/conversations\/([0-9a-f-]+)\/transcript$/)
       if (transcript) return send(response, 200, m.service.transcript(transcript[1], url.searchParams.get('before')))
-      const capabilities = path.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/capabilities$/)
+      const capabilities = path.match(/^\/execution\/conversations\/([0-9a-f-]+)\/capabilities$/)
       if (capabilities) return send(response, 200, await m.service.capabilities(capabilities[1]))
-      if (path === '/v1/execution/commands' && request.method === 'POST') return send(response, 200, await m.service.command(JSON.parse(raw), device))
+      if (path === '/execution/commands' && request.method === 'POST') return send(response, 200, await m.service.command(JSON.parse(raw), device))
       send(response, 404, { error: 'not_found' })
     } catch (error) { send(response, error.statusCode ?? 500, { message: error.message }) }
   })
@@ -198,7 +198,7 @@ test('a wait on another workspace resolves through the destination\'s stream wit
   await until(() => stream.connections() === 1, 'L holds one stream to M')
 
   // While it waits, M is only read once more: when the stream says the turn ended.
-  const listReads = () => reads.filter(entry => entry === 'GET /v1/execution/conversations').length
+  const listReads = () => reads.filter(entry => entry === 'GET /execution/conversations').length
   const before = listReads()
   const waiting = caller.call('woven_sessions_wait', { id: child.id, until: 'idle', timeoutSeconds: 20 })
   await until(() => listReads() === before + 1, 'the wait read the session when it began')
@@ -208,7 +208,7 @@ test('a wait on another workspace resolves through the destination\'s stream wit
   const finished = resultOf(await waiting)
   assert.equal(finished.state, 'idle'); assert.equal(finished.timedOut, false)
   assert.equal(finished.session.id, child.id)
-  assert.equal(reads.filter(entry => entry === 'GET /v1/execution/conversations').length, before + 2)
+  assert.equal(reads.filter(entry => entry === 'GET /execution/conversations').length, before + 2)
   assert.equal(stream.connections(), 1, 'still one stream')
 })
 
@@ -286,7 +286,7 @@ test('a bot is woken through the bots runtime', async t => {
   const child = resultOf(await call('woven_sessions_create', { workspace: mWorkspace.id, title: 'Remote job', text: 'Work remotely', purpose: 'p', requestID: randomUUID() })).session
   await until(() => m.runs.length === 1, 'M runs it')
   // The wait has begun (its first read reaches M) before the session finishes.
-  const listReads = () => reads.filter(entry => entry === 'GET /v1/execution/conversations').length
+  const listReads = () => reads.filter(entry => entry === 'GET /execution/conversations').length
   const before = listReads()
   const waited = call('woven_sessions_wait', { id: child.id, until: 'idle', timeoutSeconds: 10 })
   await until(() => listReads() > before, 'the wait began')

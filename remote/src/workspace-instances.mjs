@@ -9,7 +9,7 @@ import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } f
 import { loadRuntimeConfiguration } from './config.mjs'
 
 const { installOpenCode } = await import(harnessResource('mcp/install.mjs'))
-const prefix = '/v1/workspace-instances/opencode'
+const prefix = '/workspace-instances/opencode'
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const executeFile = promisify(execFile)
 const delay = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -201,7 +201,7 @@ export function createWorkspaceInstances(options) {
   }
   async function handle(request, response, url) {
     if (url.pathname.startsWith(`${prefix}/api/`)) { await proxy(request, response, url); return true }
-    const match = url.pathname.match(/^\/v1\/workspace-instances\/(opencode)(?:\/(start|stop))?$/)
+    const match = url.pathname.match(/^\/workspace-instances\/(opencode)(?:\/(start|stop))?$/)
     if (!match) return false
     const [, kind, verb] = match
     if ((!verb && request.method !== 'GET') || (verb && request.method !== 'POST')) throw fail(405, 'method_not_allowed')

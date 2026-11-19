@@ -6,7 +6,7 @@ import { hasMemberSignature } from './member-auth.mjs'
 // removal closes it.
 
 export const memberRemovedCloseCode = 4401
-// What `/v1/execution/*` accepts: every kind of member.
+// What `/execution/*` accepts: every kind of member.
 export const executionMemberKinds = Object.freeze(['mac', 'ios', 'linux'])
 
 /**

@@ -73,7 +73,7 @@ export function signMemberRequest({ deviceID, privateKey, audience, method, targ
 export const hasMemberSignature = headers => Object.values(memberHeaders).some(name => headers[name] !== undefined)
 
 /**
- * `loadMembers()` returns the library host's `GET /v1/members` reply:
+ * `loadMembers()` returns the library host's `GET /members` reply:
  * `{revision, members: [{deviceID, kind, name, publicKey, endpoints, revoked}]}`.
  * The list is cached by revision, refreshed every `refreshMilliseconds`, and
  * reloaded early (at most once per `missRefreshMilliseconds`) when an unknown

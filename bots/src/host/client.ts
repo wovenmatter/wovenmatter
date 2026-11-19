@@ -120,7 +120,7 @@ export class HostClient implements HostAPI {
   async mcpKey(botID: string, botName: string) {
     const reply = await this.#call<{ endpoint?: unknown; token?: unknown }>(
       "POST",
-      "/v1/bots-host/mcp-keys",
+      "/bots-host/mcp-keys",
       { botID, botName },
     );
     if (typeof reply?.endpoint !== "string" || typeof reply.token !== "string" || !reply.token) {
@@ -130,11 +130,11 @@ export class HostClient implements HostAPI {
   }
 
   async revokeMcpKey(botID: string): Promise<void> {
-    await this.#call("DELETE", `/v1/bots-host/mcp-keys/${encodeURIComponent(botID)}`);
+    await this.#call("DELETE", `/bots-host/mcp-keys/${encodeURIComponent(botID)}`);
   }
 
   async publishPreview(botID: string, port: number, containerPort: number) {
-    const reply = await this.#call<{ url?: unknown }>("POST", "/v1/bots-host/previews", {
+    const reply = await this.#call<{ url?: unknown }>("POST", "/bots-host/previews", {
       botID,
       port,
       containerPort,
@@ -144,28 +144,28 @@ export class HostClient implements HostAPI {
   }
 
   async unpublishPreview(botID: string, port: number): Promise<void> {
-    await this.#call("DELETE", `/v1/bots-host/previews/${encodeURIComponent(botID)}/${port}`);
+    await this.#call("DELETE", `/bots-host/previews/${encodeURIComponent(botID)}/${port}`);
   }
 
   async inferenceCredential(provider: string): Promise<InferenceCredentialResponse> {
     const reply = await this.#call<InferenceCredentialResponse>(
       "POST",
-      "/v1/bots-host/inference-credentials",
+      "/bots-host/inference-credentials",
       { provider },
     );
     return { credential: validCredential(reply?.credential), ...searchField(reply) };
   }
 
   async mirror(botID: string, batch: MirrorBatch): Promise<void> {
-    await this.#call("POST", `/v1/bots-host/conversations/${encodeURIComponent(botID)}/entries`, batch);
+    await this.#call("POST", `/bots-host/conversations/${encodeURIComponent(botID)}/entries`, batch);
   }
 
   async gitSetup(botID: string): Promise<GitSetup> {
-    return validGitSetup(await this.#call<unknown>("POST", "/v1/bots-host/git", { botID }));
+    return validGitSetup(await this.#call<unknown>("POST", "/bots-host/git", { botID }));
   }
 
   async sshAgent(botID: string, message: Buffer): Promise<Buffer> {
-    const reply = await this.#call<{ message?: unknown }>("POST", "/v1/bots-host/ssh-agent", { botID, message: message.toString("base64") });
+    const reply = await this.#call<{ message?: unknown }>("POST", "/bots-host/ssh-agent", { botID, message: message.toString("base64") });
     return typeof reply?.message === "string" && reply.message ? Buffer.from(reply.message, "base64") : Buffer.from([5]);
   }
 }

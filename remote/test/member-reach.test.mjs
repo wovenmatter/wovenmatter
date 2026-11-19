@@ -90,8 +90,8 @@ test('a Linux host creates a session on another Linux host with every Mac offlin
     const member = await verifier.verify({ method: request.method, target: path, alternateTargets: ['/wovenmatter-execution/m' + path], headers: request.headers, body: raw })
     seen.push({ path, device: member.deviceID })
     const device = { id: member.deviceID, scopes: ['execution'] }
-    if (path === '/v1/execution/providers') return send(response, 200, await m.service.providers())
-    if (path === '/v1/execution/commands' && request.method === 'POST') return send(response, 200, await m.service.command(JSON.parse(raw), device))
+    if (path === '/execution/providers') return send(response, 200, await m.service.providers())
+    if (path === '/execution/commands' && request.method === 'POST') return send(response, 200, await m.service.command(JSON.parse(raw), device))
     send(response, 404, { error: 'not_found' })
   })
   const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
@@ -188,7 +188,7 @@ test('bots use this host’s library as app-wide callers and never get Mac-only 
   const note = await call('woven_notes_create', { title: 'From a bot' })
   assert.equal(note.result.isError, false, JSON.stringify(note))
   const { readFileSync } = await import('node:fs')
-  const request = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(entry => entry.path === '/v1/mcp')
+  const request = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(entry => entry.path === '/mcp')
   assert.equal(request.headers['x-woven-caller'], `woven:bot:${machine}:${botID}`)
   assert.equal(request.headers['x-woven-bot-id'], botID)
   assert.equal(decodeURIComponent(request.headers['x-woven-bot-name']), 'Ops Bot')
@@ -210,7 +210,7 @@ test('member adoption takes the installer bearer only until the host was adopted
   async function adopt(context) {
     const reply = {}
     const request = { method: 'POST', wovenBody: payload }
-    await admin.handle(request, null, new URL('http://localhost/v1/host/members/adopt'), { json: (_, status, value) => Object.assign(reply, { status, value }),
+    await admin.handle(request, null, new URL('http://localhost/host/members/adopt'), { json: (_, status, value) => Object.assign(reply, { status, value }),
       readJSON: async () => ({}), readBody: async () => payload, administrator: true, ...context })
     return reply.status
   }
@@ -224,24 +224,24 @@ test('member adoption takes the installer bearer only until the host was adopted
   assert.equal(await adopt({ installer: true }), 403, 'the bearer never re-adopts')
 })
 
-// A Linux host's registry row names its Node server's own execution device ID; the
-// audience is the member serving that endpoint's host, from synced records only.
+// A workspace's registry row names the member that serves it.
 test('the audience of a workspace comes from the member list and registry, never the endpoint', async () => {
   const id = n => `0000000${n}-0000-4000-8000-00000000000${n}`
   let members = [{ deviceID: id(1), kind: 'mac', endpoints: ['https://studio.tail1.ts.net:8443/wovenmatter'], revoked: false },
     { deviceID: id(2), kind: 'linux', endpoints: ['https://box.tail1.ts.net:8443/wovenmatter/'], revoked: false }]
   const transport = createMemberTransport({ library: { members: async () => ({ members }) } })
-  const box = { id: 'w', kind: 'linux', executionDeviceID: id(3), endpoint: 'https://box.tail1.ts.net/wovenmatter-execution/w' }
+  const box = { id: 'w', kind: 'linux', executionDeviceID: id(2), endpoint: 'https://box.tail1.ts.net/wovenmatter-execution/w' }
   assert.equal(await transport.audienceFor(box), id(2))
-  assert.equal(await transport.audienceFor({ ...box, endpoint: 'https://other.tail1.ts.net/wovenmatter-execution/w' }), null)
+  assert.equal(await transport.audienceFor({ ...box, endpoint: 'https://other.tail1.ts.net/wovenmatter-execution/w' }), id(2), 'whatever endpoint the row names')
+  assert.equal(await transport.audienceFor({ ...box, executionDeviceID: id(3) }), null, 'an execution device that is not a member serves nothing, whichever member advertises its host')
   assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(1), endpoint: 'https://studio.tail1.ts.net:8443/wovenmatter' }), id(1))
   assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(5), endpoint: 'https://mini.tail1.ts.net:8443/wovenmatter' }), id(5), 'a Mac workspace names its member ID')
   assert.equal(await transport.audienceFor({ ...box, kind: 'ios' }), null)
-  members = [...members, { deviceID: id(4), kind: 'linux', endpoints: ['https://box.tail1.ts.net/wovenmatter/'], revoked: false }]
-  assert.equal(await transport.audienceFor(box), null, 'two members claiming one host serve nothing')
+  members = [members[0], { ...members[1], revoked: true }]
+  assert.equal(await transport.audienceFor(box), null, 'a removed Linux member is not addressed')
   members = [{ ...members[0], revoked: true }]
   assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(1) }), null, 'a removed Mac is not addressed')
-  await assert.rejects(transport.request('https://box.tail1.ts.net/wovenmatter-execution/w/v1/execution', { audience: box }), error => error.code === 'member_audience_unknown')
+  await assert.rejects(transport.request('https://box.tail1.ts.net/wovenmatter-execution/w/execution', { audience: box }), error => error.code === 'member_audience_unknown')
 })
 
 // A scheduled task's prepare record is not synced, so its calls must reach a

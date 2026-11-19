@@ -41,8 +41,8 @@ async function writePrivateJSON(path, value) {
 
 /**
  * The Woven server's side of bots on a Linux machine: it supervises the
- * runtime, serves the runtime host API on /v1/bots-host/* with its own bearer,
- * reports resources, and proxies /v1/bots/ws for Woven apps.
+ * runtime, serves the runtime host API on /bots-host/* with its own bearer,
+ * reports resources, and proxies /bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, defaultAgentDirectory = null, serverPort, library, libraryHost, engine, runtime, previews,
   authorizeClient, registry = null, installerBearer = null, machine, memberIdentity, release, github = null, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
@@ -122,12 +122,12 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
 
   // Runtime host API: only the supervised runtime holds this bearer.
   async function handleHost(request, response, url, { readJSON, json }) {
-    if (!url.pathname.startsWith('/v1/bots-host/')) return false
+    if (!url.pathname.startsWith('/bots-host/')) return false
     if (!hostAuthorized(request)) { json(response, 401, { error: 'unauthorized' }); return true }
     await loadedTurnedOff
     if (!active()) { json(response, 409, { error: 'bots_disabled' }); return true }
     const path = url.pathname, method = request.method
-    if (path === '/v1/bots-host/mcp-keys' && method === 'POST') {
+    if (path === '/bots-host/mcp-keys' && method === 'POST') {
       const body = await readJSON(request, 16384)
       if (!mcp) throw fail(503, 'woven_mcp_unavailable')
       let key
@@ -135,7 +135,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
       catch (error) { if (error.code !== 'revoked') throw error; json(response, 403, { error: 'revoked', message: error.message }); return true }
       json(response, 201, { endpoint: key.endpointURL, token: key.bearerToken, principal: key.principal }); return true
     }
-    const revoke = path.match(/^\/v1\/bots-host\/mcp-keys\/([0-9a-fA-F-]{36})$/)
+    const revoke = path.match(/^\/bots-host\/mcp-keys\/([0-9a-fA-F-]{36})$/)
     // The runtime deleted the bot; a user's revoke is the client route below. Its
     // library conversations are marked deleted too, as on a Mac, so the transcript
     // stops syncing as a live conversation.
@@ -144,29 +144,29 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
       await library.deleteBot(revoke[1])
       json(response, 200, result); return true
     }
-    if (path === '/v1/bots-host/previews' && method === 'POST') {
+    if (path === '/bots-host/previews' && method === 'POST') {
       const body = await readJSON(request, 16384)
       json(response, 201, await previews.publish({ botID: body.botID, port: body.port, containerPort: body.containerPort })); return true
     }
-    if (path === '/v1/bots-host/previews' && method === 'GET') { json(response, 200, { previews: previews.list() }); return true }
-    const preview = path.match(/^\/v1\/bots-host\/previews\/([0-9a-fA-F-]{36})\/(\d{1,5})$/)
+    if (path === '/bots-host/previews' && method === 'GET') { json(response, 200, { previews: previews.list() }); return true }
+    const preview = path.match(/^\/bots-host\/previews\/([0-9a-fA-F-]{36})\/(\d{1,5})$/)
     if (preview && method === 'DELETE') { json(response, 200, await previews.unpublish({ botID: preview[1], port: Number(preview[2]) })); return true }
-    if (path === '/v1/bots-host/inference-credentials' && method === 'POST') {
+    if (path === '/bots-host/inference-credentials' && method === 'POST') {
       const body = await readJSON(request, 16384)
       json(response, 200, await defaultAgent.botCredentials({ provider: body.provider })); return true
     }
     // Settings → GitHub (github-identity.mjs): a bot's files hold only the public key, and its
     // git signs through this host's agent, which checks the bot is on at every request.
-    if ((path === '/v1/bots-host/git' || path === '/v1/bots-host/ssh-agent') && method === 'POST') {
+    if ((path === '/bots-host/git' || path === '/bots-host/ssh-agent') && method === 'POST') {
       const body = await readJSON(request, 1024 * 1024)
       const botID = typeof body?.botID === 'string' && /^[0-9a-fA-F-]{36}$/.test(body.botID) ? body.botID : null
       if (!botID) { json(response, 400, { error: 'invalid_bot' }); return true }
-      if (path === '/v1/bots-host/git') { json(response, 200, github?.botSetup(botID) ?? { publicKey: null, identity: null }); return true }
+      if (path === '/bots-host/git') { json(response, 200, github?.botSetup(botID) ?? { publicKey: null, identity: null }); return true }
       const message = typeof body.message === 'string' ? Buffer.from(body.message, 'base64') : Buffer.alloc(0)
       if (!message.length || message.length > 256 * 1024) { json(response, 400, { error: 'invalid_agent_request' }); return true }
       json(response, 200, { message: (github ? github.botAgent(botID, message) : Buffer.from([5])).toString('base64') }); return true
     }
-    const entries = path.match(/^\/v1\/bots-host\/conversations\/([0-9a-fA-F-]{36})\/entries$/)
+    const entries = path.match(/^\/bots-host\/conversations\/([0-9a-fA-F-]{36})\/entries$/)
     if (entries && method === 'POST') {
       const body = await readJSON(request, 8 * 1024 * 1024 + 65536)
       json(response, 200, await library.writeBotEntries(entries[1], body)); return true
@@ -213,13 +213,13 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
 
   // App-facing routes. Reads accept device grants; changes need administration.
   async function handleClient(request, response, url, { readJSON, json, administrator, device }) {
-    if (!url.pathname.startsWith('/v1/bots/')) return false
+    if (!url.pathname.startsWith('/bots/')) return false
     const path = url.pathname, method = request.method
     if (!administrator && !device) { json(response, 401, { error: 'unauthorized' }); return true }
-    if (path === '/v1/bots/status' && method === 'GET') { json(response, 200, await status()); return true }
-    if (path === '/v1/bots/resources' && method === 'GET') { json(response, 200, await engine.resources(await settings())); return true }
+    if (path === '/bots/status' && method === 'GET') { json(response, 200, await status()); return true }
+    if (path === '/bots/resources' && method === 'GET') { json(response, 200, await engine.resources(await settings())); return true }
     if (!administrator) { json(response, 403, { error: 'administrator_required' }); return true }
-    if (path === '/v1/bots/resources' && method === 'POST') {
+    if (path === '/bots/resources' && method === 'POST') {
       // `{resources: {poolBytes, perBotBytes, diskBytes}}`: null is no cap; a
       // missing field stays as it is.
       const requested = (await readJSON(request, 4096))?.resources
@@ -241,7 +241,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
       }
       json(response, 200, await status()); return true
     }
-    if (path === '/v1/bots/enabled' && method === 'POST') {
+    if (path === '/bots/enabled' && method === 'POST') {
       // `{enabled}`: bots run on one machine, so the apps turn them off here when
       // they move elsewhere. Bots, their files and conversations stay.
       const enabled = (await readJSON(request, 1024))?.enabled
@@ -259,15 +259,15 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
       }
       json(response, 200, await status()); return true
     }
-    if (path === '/v1/bots/mcp' && method === 'GET') { json(response, 200, { settings: mcp.settings().botMCP, keys: mcp.botKeys(), revoked: mcp.revokedBots?.() ?? [] }); return true }
-    if (path === '/v1/bots/mcp' && method === 'POST') {
+    if (path === '/bots/mcp' && method === 'GET') { json(response, 200, { settings: mcp.settings().botMCP, keys: mcp.botKeys(), revoked: mcp.revokedBots?.() ?? [] }); return true }
+    if (path === '/bots/mcp' && method === 'POST') {
       const body = await readJSON(request, 4096)
       json(response, 200, mcp.configureBots({ ...(typeof body.isEnabled === 'boolean' ? { isEnabled: body.isEnabled } : {}), ...(body.groups ? { groups: body.groups } : {}) })); return true
     }
     // The user's revoke sticks until reinstated, as on a Mac.
-    const key = path.match(/^\/v1\/bots\/mcp\/keys\/([0-9a-fA-F-]{36})$/)
+    const key = path.match(/^\/bots\/mcp\/keys\/([0-9a-fA-F-]{36})$/)
     if (key && method === 'DELETE') { json(response, 200, mcp.revokeBotKey(key[1], { sticky: true })); return true }
-    const reinstate = path.match(/^\/v1\/bots\/mcp\/keys\/([0-9a-fA-F-]{36})\/reinstate$/)
+    const reinstate = path.match(/^\/bots\/mcp\/keys\/([0-9a-fA-F-]{36})\/reinstate$/)
     if (reinstate && method === 'POST') { json(response, 200, mcp.reinstateBot(reinstate[1])); return true }
     json(response, 404, { error: 'not_found' }); return true
   }
@@ -280,7 +280,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, defaultAge
     handleProtocols: (_, request) => request.wovenUpstreamProtocol || false })
   function upgrade(request, socket, head) {
     const url = new URL(request.url, 'http://localhost')
-    if (url.pathname !== '/v1/bots/ws') return false
+    if (url.pathname !== '/bots/ws') return false
     socket.on('error', () => {})
     const refuse = (status, text) => { if (socket.writable) socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); else socket.destroy() }
     if (request.headers.origin) { refuse(403, 'Forbidden'); return true }

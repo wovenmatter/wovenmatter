@@ -74,8 +74,8 @@ describe("Settings → GitHub for bots", () => {
       expect(init?.method).toBe("POST");
       const body = JSON.parse(String(init?.body)) as { botID: string; message?: string };
       expect(body.botID).toBe(BOT);
-      if (String(url) === "http://127.0.0.1:1/v1/bots-host/git") return new Response(JSON.stringify(SETUP), { status: 200 });
-      expect(String(url)).toBe("http://127.0.0.1:1/v1/bots-host/ssh-agent");
+      if (String(url) === "http://127.0.0.1:1/bots-host/git") return new Response(JSON.stringify(SETUP), { status: 200 });
+      expect(String(url)).toBe("http://127.0.0.1:1/bots-host/ssh-agent");
       expect(body.message).toBe(Buffer.from([11]).toString("base64"));
       return new Response(JSON.stringify({ message: Buffer.from([12, 0, 0, 0, 0]).toString("base64") }), { status: 200 });
     });

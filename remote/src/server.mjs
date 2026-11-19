@@ -117,8 +117,7 @@ const taskGateway = runningAsService ? createTaskGateway({
     defaultAgent,instances,prepareMCP:context=>clientExecution.prepareTaskMCP(context),
     isEnabled:id => maintenance.isInstalled(id)}),
   // Turning background execution off stops scheduled tasks. Sessions this
-  // server owns keep running; a channel no session owns (left by an older
-  // Mac's SSH relay) stops.
+  // server owns keep running; a channel no session owns stops.
   onDisable:async () => {
     const owned = id => clientExecution?.ownsConversation(id) === true
     await durableACP.stopAll({ except: owned })
@@ -244,7 +243,7 @@ function hostRelease() {
 // Settings → GitHub (github-identity.mjs): this host's copy of the key, from its library, served
 // to its sessions and bots through the signing agent. Without a library there is no copy.
 const github = library ? createGitHubService({ directory: githubDirectory(configuration),
-  fetchCopy: () => library.client.json('GET', '/v1/github', { timeout: 10_000 }),
+  fetchCopy: () => library.client.json('GET', '/github', { timeout: 10_000 }),
   log: message => process.stderr.write(message + '\n') }) : null
 const bots = nativeLinuxHost ? createBotsService({
   configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, defaultAgentDirectory, serverPort: () => server.address()?.port ?? listenPort,
@@ -252,7 +251,7 @@ const bots = nativeLinuxHost ? createBotsService({
   // Signed members, or the installer bearer on the SSH tunnel only; device grants open nothing.
   authorizeClient: request => authorizeBotsUpgrade(request, { members, servedTargets, installerBearer }),
 }) : null
-// The live stream at the execution endpoint (`GET /v1/stream`).
+// The live stream at the execution endpoint (`GET /stream`).
 // Its `workspace` stream also carries the library host's change cursor, so
 // phones sync this machine's library when it changes.
 const stream = clientExecution && members ? createStreamServer({ members, servedTargets, execution: clientExecution, registry: memberSockets,
@@ -260,8 +259,8 @@ const stream = clientExecution && members ? createStreamServer({ members, served
   workspaceEnabled: () => configuration.workspaceEnabled !== false, log: message => process.stderr.write(message + '\n') }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
-const workspaceRoutes = ['/v1/execution/commands', '/v1/execution/attachments', '/v1/task-gateway',
-  '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
+const workspaceRoutes = ['/execution/commands', '/execution/attachments', '/task-gateway',
+  '/projects', '/scratch', '/directories', '/databases', '/browser/', '/harnesses/', '/runtime-maintenance', '/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
 // Usage on this machine: its harnesses, its Pi Durable agent and its bots.
 const usageScanner = createUsageScanner({ workspaceRoot, defaultAgentDirectory, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
@@ -280,7 +279,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     let member = null
     if (hasMemberSignature(request.headers)) {
       if (!members) return json(response, 401, { error: 'member_auth_unavailable' })
-      const upload = url.pathname === '/v1/host/update' && request.method === 'POST' && hostAdmin
+      const upload = url.pathname === '/host/update' && request.method === 'POST' && hostAdmin
       // Only an administrator's upload is received: the claimed member is
       // known by now, and its signature is checked against the received body.
       const receiveUpload = async () => {
@@ -329,7 +328,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       : clientExecution?.principal(request.headers.authorization, 'execution')
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
-    if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
+    if (url.pathname === '/host/installer-bearer' && request.method === 'POST') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
       const installer = authorized(request), bearer = await installerBearer.rotate()
       // Only the installing Mac, on its own SSH tunnel, learns the new value.
@@ -337,7 +336,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (hostAdmin && await hostAdmin.handle(request, response, url, { readJSON, readBody, json, administrator, bodyFile, member, installer: authorized(request) })) return
     if (!configuration.workspaceEnabled && workspaceRoute(url.pathname)) return json(response, 409, { error: 'workspace_disabled' })
-    if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
+    if (url.pathname === '/runtime/inspection' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,{ownerID:'remote',observedAt:Date.now()/1000-978307200,items:await inspectProcesses([
         {id:'server:remote',kind:'service',title:'Workspace server',state:'running',processID:process.pid,
@@ -347,70 +346,70 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
          state:taskGateway.status().activeRuns?'working':'idle',detail:`${taskGateway.status().activeRuns} active runs`},
       ])})
     }
-    if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
+    if (url.pathname === '/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,201,clientExecution.provision(await readJSON(request),{executionDeviceID:(await memberIdentity())?.deviceID??null}))
     }
-    if(url.pathname==='/v1/execution/mcp-settings') {
+    if(url.pathname==='/execution/mcp-settings') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       if(request.method==='GET')return json(response,200,clientExecution.mcp.settings())
       if(request.method==='POST')return json(response,200,clientExecution.mcp.configureSettings(await readJSON(request)))
     }
-    if (url.pathname === '/v1/mcp/clients') {
+    if (url.pathname === '/mcp/clients') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       if(request.method==='GET')return json(response,200,{clients:clientExecution.mcp.clients()})
       if(request.method==='POST')return json(response,201,clientExecution.mcp.provisionClient(await readJSON(request)))
     }
-    const revokeMCP=url.pathname.match(/^\/v1\/mcp\/clients\/([0-9a-f-]+)$/)
+    const revokeMCP=url.pathname.match(/^\/mcp\/clients\/([0-9a-f-]+)$/)
     if(revokeMCP&&request.method==='DELETE') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
       return json(response,200,clientExecution.mcp.revokeClient(revokeMCP[1]))
     }
-    if (url.pathname === '/v1/execution/artifacts' && request.method === 'POST') {
+    if (url.pathname === '/execution/artifacts' && request.method === 'POST') {
       const body=await readJSON(request,8*1024*1024)
       if(typeof body.data!=='string')return json(response,400,{error:'artifact_data_required'})
       return json(response,200,clientExecution.saveArtifact({...body,data:Buffer.from(body.data,'base64')}))
     }
-    if (url.pathname === '/v1/execution/adopt' && request.method === 'POST') {
+    if (url.pathname === '/execution/adopt' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,await clientExecution.adopt(await readJSON(request,8*1024*1024)))
     }
-    const revokeDevice = url.pathname.match(/^\/v1\/execution\/devices\/([0-9a-f-]+)$/)
+    const revokeDevice = url.pathname.match(/^\/execution\/devices\/([0-9a-f-]+)$/)
     if (revokeDevice && request.method === 'DELETE') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       clientExecution.revoke(revokeDevice[1]); return json(response,200,{revoked:true})
     }
-    if (url.pathname === '/v1/execution/retained-history' && request.method === 'GET') {
+    if (url.pathname === '/execution/retained-history' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'scope_not_granted'})
 
       return json(response,200,retainedExecution.status())
     }
-    if (url.pathname === '/v1/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
-    if (url.pathname === '/v1/execution/commands' && request.method === 'POST') {
+    if (url.pathname === '/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
+    if (url.pathname === '/execution/commands' && request.method === 'POST') {
       const body = await readJSON(request)
       // Without a device this is the installer bearer: an administrator.
       return json(response,200,await clientExecution.command(body,device ?? {id:body.deviceID,administrator:true}))
     }
-    const executionReceipt = url.pathname.match(/^\/v1\/execution\/commands\/([0-9a-f-]+)$/)
+    const executionReceipt = url.pathname.match(/^\/execution\/commands\/([0-9a-f-]+)$/)
     if (executionReceipt && request.method === 'GET') return json(response,200,clientExecution.receipt(executionReceipt[1],device?.id ?? url.searchParams.get('deviceID')))
-    if (url.pathname === '/v1/execution/events' && request.method === 'GET') return json(response,200,clientExecution.events(url.searchParams.get('after') ?? 0))
-    if (url.pathname === '/v1/execution/conversations' && request.method === 'GET') return json(response,200,clientExecution.conversations())
-    const executionTranscript = url.pathname.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/transcript$/)
+    if (url.pathname === '/execution/events' && request.method === 'GET') return json(response,200,clientExecution.events(url.searchParams.get('after') ?? 0))
+    if (url.pathname === '/execution/conversations' && request.method === 'GET') return json(response,200,clientExecution.conversations())
+    const executionTranscript = url.pathname.match(/^\/execution\/conversations\/([0-9a-f-]+)\/transcript$/)
     if (executionTranscript && request.method === 'GET') return json(response,200,clientExecution.transcript(executionTranscript[1],url.searchParams.get('before')))
-    const executionCapabilities = url.pathname.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/capabilities$/)
+    const executionCapabilities = url.pathname.match(/^\/execution\/conversations\/([0-9a-f-]+)\/capabilities$/)
     if (executionCapabilities && request.method === 'GET') return json(response,200,await clientExecution.capabilities(executionCapabilities[1]))
     // One activity's complete projection, read when its disclosure opens.
-    const executionActivity = url.pathname.match(/^\/v1\/execution\/conversations\/([0-9a-f-]+)\/activity$/)
+    const executionActivity = url.pathname.match(/^\/execution\/conversations\/([0-9a-f-]+)\/activity$/)
     if (executionActivity && request.method === 'GET') return json(response,200,clientExecution.activityDetails(executionActivity[1],url.searchParams.get('id') ?? ''))
-    if (url.pathname === '/v1/execution/workspace-read' && request.method === 'POST') return json(response,200,await clientExecution.readWorkspace(await readJSON(request)))
-    if (url.pathname === '/v1/execution/providers' && request.method === 'GET') return json(response,200,await clientExecution.providers())
+    if (url.pathname === '/execution/workspace-read' && request.method === 'POST') return json(response,200,await clientExecution.readWorkspace(await readJSON(request)))
+    if (url.pathname === '/execution/providers' && request.method === 'GET') return json(response,200,await clientExecution.providers())
     // A harness's model, thinking and permission choices before a session exists.
-    const providerOptions = url.pathname.match(/^\/v1\/execution\/providers\/([a-z0-9_-]{1,64})\/options$/)
+    const providerOptions = url.pathname.match(/^\/execution\/providers\/([a-z0-9_-]{1,64})\/options$/)
     if (providerOptions && request.method === 'GET') return json(response,200,await clientExecution.sessionOptions(providerOptions[1],
       { workingDirectory: url.searchParams.get('workingDirectory') ?? undefined, model: url.searchParams.get('model') ?? undefined }))
     // A message attachment, uploaded before the send that names it: the raw
     // bytes, addressed by their SHA-256, with `name` and `mimeType` in the query.
-    const attachmentUpload = url.pathname.match(/^\/v1\/execution\/attachments\/([0-9a-f]{64})$/)
+    const attachmentUpload = url.pathname.match(/^\/execution\/attachments\/([0-9a-f]{64})$/)
     if (attachmentUpload && request.method === 'PUT') {
       const bytes = request.wovenBody ?? await readBody(request, 26 * 1024 * 1024)
       return json(response,200,await clientExecution.uploadAttachment({ id: attachmentUpload[1], name: url.searchParams.get('name') ?? 'attachment',
@@ -426,14 +425,11 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       response.end(file.bytes); return
     }
     // A file an agent wrote, for a Mac's Library retention.
-    if (url.pathname === '/v1/execution/library-file' && request.method === 'POST') {
+    if (url.pathname === '/execution/library-file' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,await clientExecution.readLibraryFile(await readJSON(request,16384)))
     }
-    if (url.pathname === '/v1/execution/interactions' && request.method === 'GET') return json(response,200,clientExecution.interactions())
-    // This host's sign-ins serve only this host. An older phone that saved a
-    // hosted connection is refused, never served.
-    if (url.pathname === '/v1/inference' || url.pathname.startsWith('/v1/inference/')) return json(response,403,{error:'inference_not_served'})
+    if (url.pathname === '/execution/interactions' && request.method === 'GET') return json(response,200,clientExecution.interactions())
     // Device grants never convey workspace administration, credentials, SDK
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})
@@ -441,7 +437,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     // A native host uses its existing administrative connection after checking
     // its bound caller's current tools and trusted remote workspace selection.
     // Device credentials and public MCP arguments cannot choose this principal.
-    if (['/v1/browser/mcp', '/v1/browser/mcp/cancel'].includes(url.pathname) && request.method === 'POST') {
+    if (['/browser/mcp', '/browser/mcp/cancel'].includes(url.pathname) && request.method === 'POST') {
       const body = await readJSON(request, 4 * 1024 * 1024)
       if (typeof body.callerID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.callerID)
         || Object.keys(body).some(key => !['callerID', 'input'].includes(key))) return json(response,400,{error:'invalid_browser_mcp_caller'})
@@ -459,43 +455,43 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       } catch (error) { return json(response,200,{success:false,error:error.message,code:controller.signal.aborted?'cancelled':'automation_failed',requestID:input.requestID}) }
       finally {response.off('close',disconnected)}
     }
-    if (url.pathname === '/v1/browser/selftest' && request.method === 'GET') {
+    if (url.pathname === '/browser/selftest' && request.method === 'GET') {
       browserSelfTestPending ??= browserSelfTest().finally(() => { browserSelfTestPending = undefined })
       return json(response,200,await browserSelfTestPending)
     }
-    if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
+    if (url.pathname === '/browser/stream' && request.method === 'GET') {
       await streamBrowserFrames(workspaceBrowser.forProfile(url.searchParams.get('profile') ?? 'default'), url.searchParams.get('tabID'), response); return
     }
-    if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') {
+    if (url.pathname === '/browser/tabs' && request.method === 'GET') {
       const profile = url.searchParams.get('profile') ?? 'default'
       return json(response,200,{...await workspaceBrowser.forProfile(profile).tabs(),...await workspaceBrowser.profiles(),profile})
     }
-    if (url.pathname === '/v1/browser/connect' && request.method === 'POST') {
+    if (url.pathname === '/browser/connect' && request.method === 'POST') {
       return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? 'default').connect())
     }
-    if (url.pathname === '/v1/browser/actions' && request.method === 'POST') {
+    if (url.pathname === '/browser/actions' && request.method === 'POST') {
       const body = await readJSON(request, 65536)
       return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').actions(body.actions))
     }
-    if (url.pathname === '/v1/browser/action' && request.method === 'POST') {
+    if (url.pathname === '/browser/action' && request.method === 'POST') {
       const body = await readJSON(request, 131072)
       return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').action(body))
     }
-    if (url.pathname === '/v1/browser/frame' && request.method === 'POST') {
+    if (url.pathname === '/browser/frame' && request.method === 'POST') {
       const body = await readJSON(request, 1024)
       return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').frame(body.tabID, body.previousFrameID))
     }
 
-    if (url.pathname === '/v1/usage/export' && request.method === 'GET') {
+    if (url.pathname === '/usage/export' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,await usageScanner.page({since:Number(url.searchParams.get('since'))||0,offset:Number(url.searchParams.get('offset'))||0}))
     }
-    if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
-    if (url.pathname === '/v1/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
-    if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())
-    if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'PUT') return json(response,200,taskGateway.publish(await readJSON(request)))
-    if (url.pathname === '/v1/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
-    if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
+    if (url.pathname === '/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
+    if (url.pathname === '/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
+    if (url.pathname === '/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())
+    if (url.pathname === '/task-gateway/schedules' && request.method === 'PUT') return json(response,200,taskGateway.publish(await readJSON(request)))
+    if (url.pathname === '/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
+    if (url.pathname === '/sign-in-status' && request.method === 'GET') {
       const agent = await defaultAgent.status();
       // The check runs the CLI at the path found with the harness PATH, not the
       // service's own PATH, which predates CLIs installed after the service.
@@ -507,22 +503,22 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       statuses.unshift(...agent.providers.map(p => ({ ...p, name: 'Pi Durable · ' + p.name })));
       return json(response, 200, { statuses });
     }
-    if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
+    if (url.pathname === '/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
       return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent, { onActivated: () => bots?.piDurableSDKUpdated() }))
     }
-    if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
+    if (url.pathname === '/default-agent/configuration'  && request.method === 'POST') {
       const payload = await readJSON(request)
       // Chat settings only: this host keeps its own sign-ins.
       return json(response, 200, await defaultAgent.configure(payload))
     }
-    if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
+    if (url.pathname === '/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
     // This host's own sign-ins, for a signed Mac's Settings → Subscriptions &
     // API Keys. A key arrives once in the request and is stored only here.
-    if (url.pathname === '/v1/sign-ins' && request.method === 'GET') {
+    if (url.pathname === '/sign-ins' && request.method === 'GET') {
       await openDeviceSignIns()
       return json(response, 200, listSignIns(await deviceSignIns.read()))
     }
-    if (url.pathname === '/v1/sign-ins' && request.method === 'POST') {
+    if (url.pathname === '/sign-ins' && request.method === 'POST') {
       await openDeviceSignIns()
       const result = await changeSignIns(deviceSignIns, await readJSON(request, 65_536))
       await defaultAgent.reloadSignIns().catch(() => {})
@@ -530,39 +526,39 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     // Pi Durable settings: sign-in status, the model catalog, sign-in and
     // sign-out, as `wm-exec default-agent --control` answered them over SSH.
-    if (url.pathname === '/v1/default-agent/control' && request.method === 'POST') {
+    if (url.pathname === '/default-agent/control' && request.method === 'POST') {
       return json(response, 200, { result: await defaultAgentControl.run(await readJSON(request, 1_048_576)) })
     }
-    if (url.pathname === '/v1/default-agent/control-sessions' && request.method === 'POST') {
+    if (url.pathname === '/default-agent/control-sessions' && request.method === 'POST') {
       return json(response, 201, defaultAgentControl.start(await readJSON(request, 1_048_576)))
     }
-    const controlSession = url.pathname.match(/^\/v1\/default-agent\/control-sessions\/([0-9a-f-]{36})(\/answer)?$/)
+    const controlSession = url.pathname.match(/^\/default-agent\/control-sessions\/([0-9a-f-]{36})(\/answer)?$/)
     if (controlSession && !controlSession[2] && request.method === 'GET') return json(response, 200, defaultAgentControl.status(controlSession[1]))
     if (controlSession && !controlSession[2] && request.method === 'DELETE') return json(response, 200, defaultAgentControl.cancel(controlSession[1]))
     if (controlSession && controlSession[2] && request.method === 'POST') return json(response, 200, defaultAgentControl.answer(controlSession[1], await readJSON(request, 8192)))
 
-    if (request.method === 'GET' && url.pathname === '/v1/directories') {
+    if (request.method === 'GET' && url.pathname === '/directories') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
       return json(response, 200, await listHostDirectories(url.searchParams.get('path') ?? workspaceRoot))
     }
-    if (request.method === 'POST' && url.pathname === '/v1/projects/link') {
+    if (request.method === 'POST' && url.pathname === '/projects/link') {
       if (!administrator) return json(response, 403, { error: 'administrator_required' })
       return json(response, 200, await linkHostProject((await readJSON(request, 8192)).path))
     }
-    if (request.method === 'POST' && url.pathname === '/v1/projects') {
+    if (request.method === 'POST' && url.pathname === '/projects') {
       const body = await readJSON(request)
       return json(response, 201, await createProject(workspaceRoot, body.name, { reuseExisting: body.reuseExisting === true }))
     }
-    if (request.method === 'POST' && url.pathname === '/v1/scratch') {
+    if (request.method === 'POST' && url.pathname === '/scratch') {
       return json(response, 200, await ensureScratchDirectory(workspaceRoot, (await readJSON(request)).path))
     }
-    if (request.method === 'POST' && url.pathname === '/v1/projects/delete') {
+    if (request.method === 'POST' && url.pathname === '/projects/delete') {
       return json(response, 200, await deleteProject(workspaceRoot, (await readJSON(request)).path))
     }
-    if (request.method === 'GET' && url.pathname === '/v1/databases') {
+    if (request.method === 'GET' && url.pathname === '/databases') {
       return json(response, 200, await databaseOperation(managedDataRoot, { action: 'list' }))
     }
-    const databaseActions = { 'POST /v1/databases': 'create', 'POST /v1/databases/data': 'data', 'POST /v1/databases/query': 'query', 'POST /v1/databases/execute': 'execute', 'POST /v1/databases/snapshot': 'snapshot', 'POST /v1/databases/copy': 'copy' }
+    const databaseActions = { 'POST /databases': 'create', 'POST /databases/data': 'data', 'POST /databases/query': 'query', 'POST /databases/execute': 'execute', 'POST /databases/snapshot': 'snapshot', 'POST /databases/copy': 'copy' }
     const databaseAction = databaseActions[`${request.method} ${url.pathname}`]
     if (databaseAction) {
       const body = await readJSON(request, databaseAction === 'copy' ? 48 * 1024 * 1024 : 1_048_576)
@@ -570,25 +566,23 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
 
     if (await instances.handle(request, response, url)) return
-    if (request.method === 'GET' && url.pathname === '/v1/runtime-maintenance') {
+    if (request.method === 'GET' && url.pathname === '/runtime-maintenance') {
       return json(response, 200, await maintenance.list())
     }
-    if (request.method === 'POST' && url.pathname === '/v1/runtime-maintenance/check') {
+    if (request.method === 'POST' && url.pathname === '/runtime-maintenance/check') {
       return json(response, 200, await maintenance.check())
     }
-    const maintenanceMatch = url.pathname.match(/^\/v1\/runtime-maintenance\/([^/]+)(?:\/(install|update|check))?$/)
+    const maintenanceMatch = url.pathname.match(/^\/runtime-maintenance\/([^/]+)(?:\/(install|update|check))?$/)
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
       if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }
 
-    if (request.method === 'GET' && url.pathname === '/v1/health') {
+    if (request.method === 'GET' && url.pathname === '/health') {
       return json(response, 200, {
         status: 'ready',
         workspaceRoot,
-        // Installers and older apps confirm the native host by this field.
-        runtimeKind: 'host',
         serviceFingerprint: configuration.serviceFingerprint,
         release: hostRelease(),
         databasesDirectory: managedDataRoot,
@@ -603,20 +597,13 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       })
     }
 
-    if (request.method === 'GET' && url.pathname === '/v1/harnesses') {
+    if (request.method === 'GET' && url.pathname === '/harnesses') {
       const statuses = await Promise.all([...catalog.values()].map(harnessStatus))
       statuses.unshift({ id: 'default_agent', displayName: 'Pi Durable', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', source: 'managed', path: process.execPath, installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
       return json(response, 200, { harnesses: statuses })
     }
 
-    const installPreview = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/install-preview$/)
-    if (request.method === 'GET' && installPreview) {
-      const harness = requireHarness(installPreview[1])
-      try { return json(response, 200, await installerPreview(harness)) }
-      catch (error) { await maintenance.recordFailure(harness, 'install-preview', error); throw error }
-    }
-
-    const harnessAction = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/(install|update|recheck)$/)
+    const harnessAction = url.pathname.match(/^\/harnesses\/([^/]+)\/(install|update|recheck)$/)
     if (request.method === 'POST' && harnessAction) {
       const harness = requireHarness(harnessAction[1])
       const body = await readJSON(request)
@@ -629,14 +616,14 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 202, operationView(operation))
     }
 
-    const operationMatch = url.pathname.match(/^\/v1\/operations\/([^/]+)$/)
+    const operationMatch = url.pathname.match(/^\/operations\/([^/]+)$/)
     if (request.method === 'GET' && operationMatch) {
       const operation = maintenance.operation(operationMatch[1])
       if (!operation) return json(response, 404, { error: 'operation_not_found' })
       return json(response, 200, operationView(operation))
     }
 
-    const signInMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-in$/)
+    const signInMatch = url.pathname.match(/^\/harnesses\/([^/]+)\/sign-in$/)
     if (request.method === 'POST' && signInMatch) {
       const harness = requireHarness(signInMatch[1])
       // An install or update replaces the CLI a sign-in would run.
@@ -647,7 +634,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response, 201, authenticationSessionView(session))
     }
 
-    const signOutMatch = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/sign-out$/)
+    const signOutMatch = url.pathname.match(/^\/harnesses\/([^/]+)\/sign-out$/)
     if (request.method === 'POST' && signOutMatch) {
       const harness = requireHarness(signOutMatch[1])
       if (maintenance.isBusy(harness.id)) return json(response, 409, { error: 'runtime_maintenance_in_progress' })
@@ -661,7 +648,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
 
     const authorizationCodeMatch = url.pathname.match(
-      /^\/v1\/authentication-sessions\/([^/]+)\/authorization-code$/
+      /^\/authentication-sessions\/([^/]+)\/authorization-code$/
     )
     if (request.method === 'POST' && authorizationCodeMatch) {
       const session = requireAuthenticationSession(authorizationCodeMatch[1])
@@ -670,7 +657,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
 
     const authenticationSessionMatch = url.pathname.match(
-      /^\/v1\/authentication-sessions\/([^/]+)$/
+      /^\/authentication-sessions\/([^/]+)$/
     )
     if (request.method === 'GET' && authenticationSessionMatch) {
       return json(
@@ -754,12 +741,10 @@ async function libraryReady(ready) {
   await github?.start().catch(error => process.stderr.write('The GitHub signing agent could not start: ' + error.message + '\n'))
 }
 
-// The machine's member identity is the library host's (`GET /v1/identity`);
-// until that route exists, its device ID comes from `/v1/health`.
+// The machine's member identity is the library host's (`GET /identity`).
 async function refreshMemberIdentity(endpoint) {
-  let value = await library.client.identity().catch(() => null)
-  if (!value?.deviceID) value = { deviceID: (await library.client.health()).deviceID }
-  if (typeof value.deviceID !== 'string') return null
+  const value = await library.client.identity()
+  if (typeof value?.deviceID !== 'string') return null
   const libraryEndpoint = endpoint ?? (await libraryServe?.recorded().catch(() => null))?.endpoint ?? memberIdentityRecord?.libraryEndpoint ?? null
   const record = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
     endpoints: Array.isArray(value.endpoints) ? value.endpoints : [], libraryEndpoint, updatedAt: new Date().toISOString() }
@@ -1239,12 +1224,6 @@ function commandSucceeded(command, timeoutMilliseconds) {
     child.on('error', () => finish(false))
     child.on('close', (code) => finish(code === 0))
   })
-}
-
-// Older desktop apps still ask for a preview before installing. Installs now run
-// the vendor's official installer without a review step, so this only describes it.
-async function installerPreview(harness) {
-  return maintenance.installPreview(harness)
 }
 
 // Downloads the vendor's official installer for one run, from the vendor's own

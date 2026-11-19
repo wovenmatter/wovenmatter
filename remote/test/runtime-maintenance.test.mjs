@@ -72,8 +72,6 @@ test('a missing OpenCode installs with its official v2 installer, never npm or a
   const calls = f.calls.length
   assert.equal(await f.service.isInstalled('opencode'), true)
   assert.equal(f.calls.length, calls, 'execution checks reuse verified inventory')
-  const preview = f.service.installPreview(opencode)
-  assert.equal(preview.sha256, null); assert.equal(preview.packageSpec, null); assert.equal(preview.verification, 'official-installer')
 })
 
 test('OpenCode v1 is never replaced silently: installing v2 needs the person to agree', async t => {

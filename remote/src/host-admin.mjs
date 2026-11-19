@@ -91,14 +91,14 @@ export function createHostAdministration({ serviceRoot, dataRoot, stateDirectory
   }
 
   async function handle(request, response, url, { json, readJSON, readBody, administrator, bodyFile, member = null, installer = false }) {
-    if (!url.pathname.startsWith('/v1/host/')) return false
+    if (!url.pathname.startsWith('/host/')) return false
     const path = url.pathname, method = request.method
     // Adopting members: the installer's bearer only before this host was
     // ever adopted (the first adoption, when it cannot verify any Mac); a
     // signed Mac member after that, even once every Mac was removed. The body
     // reaches the library host unchanged, which accepts a later adoption only
     // from a Mac it already trusts and never adds an anchor for it.
-    if (path === '/v1/host/members/adopt') {
+    if (path === '/host/members/adopt') {
       if (method !== 'POST') { json(response, 405, { error: 'method_not_allowed' }); return true }
       if (!adoptMembers) { json(response, 503, { error: 'library_unavailable' }); return true }
       if (member?.kind !== 'mac' && !(installer && !await adopted())) { json(response, 403, { error: 'mac_member_required' }); return true }
@@ -107,27 +107,27 @@ export function createHostAdministration({ serviceRoot, dataRoot, stateDirectory
       json(response, 200, await adoptMembers(body)); return true
     }
     if (!administrator) { json(response, 403, { error: 'administrator_required' }); return true }
-    if (path === '/v1/host/status' && method === 'GET') {
+    if (path === '/host/status' && method === 'GET') {
       const current = await installation()
       json(response, 200, { ...await run(script, ['status', current.id]), ...await extra() }); return true
     }
-    if (path === '/v1/host/logs' && method === 'GET') {
+    if (path === '/host/logs' && method === 'GET') {
       const lines = url.searchParams.get('lines') ?? '100'
       if (!/^\d{1,4}$/.test(lines) || Number(lines) < 1 || Number(lines) > 1000) throw fail(400, 'Choose between 1 and 1000 log lines.')
       json(response, 200, await run(script, ['logs', (await installation()).id, lines])); return true
     }
-    if (path === '/v1/host/restart' && method === 'POST') {
+    if (path === '/host/restart' && method === 'POST') {
       const current = await installation()
       await detach('restart', ['/bin/bash', script, 'restart', current.id], { delaySeconds: 1 })
       json(response, 202, { restarting: true }); return true
     }
-    if (path === '/v1/host/bots-configure' && method === 'POST') {
+    if (path === '/host/bots-configure' && method === 'POST') {
       const body = await readJSON(request, 4096), pool = sizeArgument(body.poolBytes), disk = sizeArgument(body.diskBytes)
       if (!pool || !disk) throw fail(400, 'Choose a positive RAM pool and disk cap in bytes, or null for no cap.')
       json(response, 200, await run(script, ['bots-configure', (await installation()).id, pool, disk])); return true
     }
-    if (path === '/v1/host/update' && method === 'GET') { json(response, 200, await lastUpdate()); return true }
-    if (path === '/v1/host/update' && method === 'POST') { json(response, 202, await startUpdate(request, url, bodyFile)); return true }
+    if (path === '/host/update' && method === 'GET') { json(response, 200, await lastUpdate()); return true }
+    if (path === '/host/update' && method === 'POST') { json(response, 202, await startUpdate(request, url, bodyFile)); return true }
     json(response, 404, { error: 'not_found' }); return true
   }
 

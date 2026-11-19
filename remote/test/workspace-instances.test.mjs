@@ -92,7 +92,7 @@ test('streaming proxy uses host Basic auth, strips client bearer and cookies, pr
     const chunks = [], headers = {}
     const response = new Writable({ write(chunk, _encoding, done) { chunks.push(chunk); done() } })
     response.setHeader = (key, value) => { headers[key] = value }
-    await instances.handle(request, response, new URL('http://host/v1/workspace-instances/opencode/api/event?cursor=17'))
+    await instances.handle(request, response, new URL('http://host/workspace-instances/opencode/api/event?cursor=17'))
     assert.equal(recorded.url, '/api/event?cursor=17')
     assert.equal(recorded.headers.authorization, 'Basic ' + Buffer.from('opencode:host-secret').toString('base64'))
     assert.equal(recorded.headers.cookie, undefined)
@@ -102,7 +102,7 @@ test('streaming proxy uses host Basic auth, strips client bearer and cookies, pr
     fileRequest.method = 'GET'; fileRequest.headers = {}
     const fileResponse = new Writable({ write(_chunk, _encoding, done) { done() } })
     fileResponse.setHeader = () => {}
-    await instances.handle(fileRequest, fileResponse, new URL('http://host/v1/workspace-instances/opencode/api/fs/read/%2Fremote%2Ffile%2Etxt'))
+    await instances.handle(fileRequest, fileResponse, new URL('http://host/workspace-instances/opencode/api/fs/read/%2Fremote%2Ffile%2Etxt'))
     assert.equal(recorded.url, '/api/fs/read/%2Fremote%2Ffile%2Etxt')
   } finally { await new Promise((done) => upstream.close(done)) }
 })
@@ -121,7 +121,7 @@ test('the proxy forwards a signed member body that was read to verify its signat
     request.method = 'POST'; request.headers = { 'content-type': 'application/json' }; request.wovenBody = Buffer.from('{"text":"signed"}')
     const response = new Writable({ write(_chunk, _encoding, done) { done() } })
     response.setHeader = () => {}
-    await instances.handle(request, response, new URL('http://host/v1/workspace-instances/opencode/api/session/ses_x/prompt'))
+    await instances.handle(request, response, new URL('http://host/workspace-instances/opencode/api/session/ses_x/prompt'))
     assert.equal(received, '{"text":"signed"}')
   } finally { await new Promise((done) => upstream.close(done)) }
 })

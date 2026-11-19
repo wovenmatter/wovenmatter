@@ -361,7 +361,7 @@ test('member sessions run, and their channels survive, with background execution
   await until(() => service.receipt(input.commandID, enrollment.deviceID), receipt => receipt.status === 'completed')
   assert.equal(service.transcript(opened.conversationID).messages.at(-1).content, 'still works')
   // Turning background execution off stops other channels, not this one.
-  const other = await relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'relay-' + randomUUID().slice(0, 8), harnessID: 'fixture', cwd: workspaceRoot })
+  const other = await relay.handle('POST', '/durable-acp/attach', { channelID: 'relay-' + randomUUID().slice(0, 8), harnessID: 'fixture', cwd: workspaceRoot })
   await relay.stopAll({ except: id => service.ownsConversation(id) })
   assert.equal((await relay.peek(other.channelID)).state, 'stopped')
   assert.equal((await relay.peek(opened.conversationID)).state, 'running')
@@ -403,11 +403,11 @@ test('adoption reopens a stopped or missing durable channel and never leaves a f
   assert.equal(service.ownsConversation(failing), false)
   // A channel a host restart stopped is recovered and reloaded.
   const stopped = randomUUID()
-  const page = await relay.handle('POST', '/v1/durable-acp/attach', { channelID: stopped, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
-  const message = value => relay.handle('POST', '/v1/durable-acp/message', { channelID: stopped, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
+  const page = await relay.handle('POST', '/durable-acp/attach', { channelID: stopped, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
+  const message = value => relay.handle('POST', '/durable-acp/message', { channelID: stopped, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'initialize', params: { protocolVersion: 1 } })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'session/load', params: { sessionId: 'native-second', cwd: workspaceRoot } })
-  await until(() => relay.handle('POST', '/v1/durable-acp/poll', { channelID: stopped, after: 0 }), value => value.snapshot.session?.sessionId === 'native-second')
+  await until(() => relay.handle('POST', '/durable-acp/poll', { channelID: stopped, after: 0 }), value => value.snapshot.session?.sessionId === 'native-second')
   await relay.stopAll({ except: id => id !== stopped })
   assert.equal((await relay.peek(stopped)).state, 'stopped')
   await assert.rejects(service.adopt(body(stopped, 'another-session')), /different native session/)
@@ -422,11 +422,11 @@ test('adoption reopens a durable channel its owner left interrupted, never one a
   // The former owner ran the channel and died without recording a stop.
   const former = createDurableACP({ catalog, workspaceRoot, environment: () => process.env })
   const channelID = randomUUID()
-  const page = await former.handle('POST', '/v1/durable-acp/attach', { channelID, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
-  const message = value => former.handle('POST', '/v1/durable-acp/message', { channelID, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
+  const page = await former.handle('POST', '/durable-acp/attach', { channelID, harnessID: 'fixture', cwd: workspaceRoot, attachmentTokens: true })
+  const message = value => former.handle('POST', '/durable-acp/message', { channelID, attachmentToken: page.attachmentToken, deliveryID: randomUUID(), message: value })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'initialize', params: { protocolVersion: 1 } })
   await message({ jsonrpc: '2.0', id: randomUUID(), method: 'session/load', params: { sessionId: 'native-left', cwd: workspaceRoot } })
-  await until(() => former.handle('POST', '/v1/durable-acp/poll', { channelID, after: 0 }), value => value.snapshot.session?.sessionId === 'native-left')
+  await until(() => former.handle('POST', '/durable-acp/poll', { channelID, after: 0 }), value => value.snapshot.session?.sessionId === 'native-left')
   await former.stopAll()
   await former.peek(channelID) // after the stop its process exit queued
   const path = join(workspaceRoot, '.wovenmatter/durable-acp', channelID + '.jsonl')

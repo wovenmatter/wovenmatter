@@ -321,8 +321,8 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     })
   }
   async function handle(method, path, body) {
-    if (method !== 'POST' || !path.startsWith('/v1/durable-acp/')) return null
-    const operation = path.slice('/v1/durable-acp/'.length)
+    if (method !== 'POST' || !path.startsWith('/durable-acp/')) return null
+    const operation = path.slice('/durable-acp/'.length)
     const result = await serialize(async () => {
       if (!await isEnabled()) throw new Error('Background execution is disabled')
       if (!['attach', 'adopt', 'message', 'poll', 'recover', 'mcp'].includes(operation)) throw new Error('Unknown relay operation')

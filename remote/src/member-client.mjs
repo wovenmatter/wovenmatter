@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 // Outgoing signed requests from this Linux host to other members
 // (docs/architecture/WOVEN_EVERYWHERE.md, "Membership and device keys",
 // "Sessions across devices"). The library host holds this machine's member key
-// and signs each request over the socket (`POST /v1/members/sign`); Node never
+// and signs each request over the socket (`POST /members/sign`); Node never
 // reads the key. Nothing is issued or cached for the destination.
 
 const fail = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, ...(code ? { code } : {}) })
@@ -30,10 +30,7 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
    * The member a request is addressed to, from synced records only, never
    * from what the endpoint says about itself (Swift `MemberAudience.serving`):
    * a device ID from the member list, or a registry workspace, served by its
-   * execution device when that is an active member (or a Mac's own ID), else
-   * by the one active Linux member advertising the endpoint's host (a workspace
-   * a host registered with a random ID before v0.4.0 names its Node server's
-   * own execution device ID).
+   * execution device when that is an active member (or a Mac's own ID).
    */
   async function audienceFor(audience) {
     const id = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null
@@ -43,11 +40,7 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
     const active = list.filter(item => !item.revoked && item.kind !== 'ios'), execution = id(audience.executionDeviceID)
     if (execution && active.some(item => item.deviceID === execution)) return execution
     if (audience.kind === 'mac' && execution && !list.some(item => item.deviceID === execution && (item.revoked || item.kind !== 'mac'))) return execution
-    let host = null
-    try { host = audience.kind === 'linux' && audience.endpoint ? new URL(audience.endpoint).hostname.toLowerCase() : null } catch {}
-    if (!host?.endsWith('.ts.net')) return null
-    const matches = active.filter(item => item.kind === 'linux' && (item.endpoints ?? []).some(endpoint => { try { return new URL(endpoint).hostname.toLowerCase() === host } catch { return false } }))
-    return matches.length === 1 ? matches[0].deviceID : null
+    return null
   }
 
   /**

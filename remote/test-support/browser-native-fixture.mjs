@@ -35,9 +35,9 @@ try {
     response.setHeader('Cache-Control', 'no-store')
     try {
       const url = new URL(request.url, 'http://localhost')
-      if (url.pathname === '/v1/browser/stream') { await streamBrowserFrames(browser, url.searchParams.get('tabID'), response); return }
+      if (url.pathname === '/browser/stream') { await streamBrowserFrames(browser, url.searchParams.get('tabID'), response); return }
       let result
-      if (url.pathname === '/v1/browser/tabs') result = await browser.tabs()
+      if (url.pathname === '/browser/tabs') result = await browser.tabs()
       else if (url.pathname === '/fixture/state') result = await page.evaluate(() => ({
         name: document.querySelector('#name').value, output: document.querySelector('output').textContent,
         level: document.querySelector('#range').value, held: String(window.held), moves: String(window.moves), releases: String(window.releases),
@@ -53,9 +53,9 @@ try {
       } else {
         let body = ''; for await (const chunk of request) { body += chunk; if (body.length > 65536) throw Error('body too large') }
         const value = JSON.parse(body)
-        if (url.pathname === '/v1/browser/frame') result = await browser.frame(value.tabID, value.previousFrameID)
-        else if (url.pathname === '/v1/browser/action') result = await browser.action(value)
-        else if (url.pathname === '/v1/browser/actions') result = await browser.actions(value.actions)
+        if (url.pathname === '/browser/frame') result = await browser.frame(value.tabID, value.previousFrameID)
+        else if (url.pathname === '/browser/action') result = await browser.action(value)
+        else if (url.pathname === '/browser/actions') result = await browser.actions(value.actions)
         else throw Error('unknown route')
       }
       response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(result))

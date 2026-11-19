@@ -6,11 +6,10 @@ const fail = (statusCode, message) => Object.assign(new Error(message), { status
 const actions = new Set(['status', 'catalog', 'login', 'logout', 'refresh', 'sign-in-status', 'claude-status', 'probe-server'])
 const maximumOutputBytes = 4 * 1024 * 1024
 
-// Pi Durable's settings actions, on this host, for a Mac that used to run
-// `wm-exec default-agent --control` over SSH. The same one-line request (the
-// Mac's `DefaultAgentPayload` plus `action`, `provider`, `profile`, `force`)
-// goes to the same control helper, started here. Its payload stays in that
-// helper's memory, as it did over SSH; this server keeps none of it.
+// Pi Durable's settings actions, on this host, for a Mac. Its one-line request
+// (the Mac's `DefaultAgentPayload` plus `action`, `provider`, `profile`,
+// `force`) goes to the control helper, started here. The payload stays in that
+// helper's memory; this server keeps none of it.
 //
 // A control session is one helper run: it reports sign-in `notifications`
 // (a link and code), a `prompt` the caller answers, then its `result` or

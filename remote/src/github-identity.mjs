@@ -105,7 +105,7 @@ export function ensureGitHubStaticFiles(directory) {
 const identityOf = value => value && (value.name || value.email) ? { name: String(value.name ?? ''), email: String(value.email ?? '') } : null
 
 /**
- * This host's Settings → GitHub: its copy from the library (`GET /v1/github` on the library's
+ * This host's Settings → GitHub: its copy from the library (`GET /github` on the library's
  * local socket, `{deviceID, sshKey, identity, access, revision}`), asked again every
  * `intervalMs`. The key stays in this process; sessions and bots reach it only through the
  * agent, which checks the host (and the bot) is on at every request. A library that is
@@ -142,11 +142,11 @@ export function createGitHubService({ directory, fetchCopy, intervalMs = 5_000, 
     },
     refresh,
     stop() { clearInterval(timer); timer = null; server?.close(); server = null },
-    /** What a bot's container receives (`POST /v1/bots-host/git`). */
+    /** What a bot's container receives (`POST /bots-host/git`). */
     botSetup(botID) {
       return { publicKey: botOn(botID) ? String(copy.sshKey.publicKey).trim() : null, identity: identityOf(copy?.identity) }
     },
-    /** One agent request from a bot's container (`POST /v1/bots-host/ssh-agent`). */
+    /** One agent request from a bot's container (`POST /bots-host/ssh-agent`). */
     botAgent(botID, message) { return agentReply(message, botOn(botID) ? key : null) },
   }
 }

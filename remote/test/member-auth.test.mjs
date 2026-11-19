@@ -57,16 +57,16 @@ test('a wrong key, a stale or future time and a replayed nonce are refused', asy
 })
 
 test('the /wovenmatter mount is not part of the signed path, and a stripped Serve prefix can be supplied', async () => {
-  assert.equal(canonicalTarget('/wovenmatter/v1/peers/sync?x=1'), '/v1/peers/sync?x=1')
+  assert.equal(canonicalTarget('/wovenmatter/peers/sync?x=1'), '/peers/sync?x=1')
   assert.equal(canonicalTarget('/wovenmatter'), '/'); assert.equal(canonicalTarget('/wovenmatter?x'), '/?x')
-  assert.equal(canonicalTarget('/wovenmatter-execution/studio/v1/execution'), '/wovenmatter-execution/studio/v1/execution')
+  assert.equal(canonicalTarget('/wovenmatter-execution/studio/execution'), '/wovenmatter-execution/studio/execution')
   const item = vectors.cases[0]
   assert.ok(await verifierAt(item.time).verify({ ...requestFor(item), target: '/wovenmatter' + item.target }))
   // A Mac signs the execution endpoint's full path; Serve strips it before Node.
   const time = item.time, nonce = 'QEFCQ0RFRkdISUpLTE1OTw'
-  const headers = signMemberRequest({ deviceID: vectors.deviceID, privateKey: key, audience: vectors.audience, method: 'GET', target: '/wovenmatter-execution/studio/v1/execution', time, nonce })
-  await assert.rejects(verifierAt(time).verify({ method: 'GET', target: '/v1/execution', headers, body: Buffer.alloc(0) }), error => error.code === 'member_signature_mismatch')
-  assert.ok(await verifierAt(time).verify({ method: 'GET', target: '/v1/execution', alternateTargets: ['/wovenmatter-execution/studio/v1/execution'], headers, body: Buffer.alloc(0) }))
+  const headers = signMemberRequest({ deviceID: vectors.deviceID, privateKey: key, audience: vectors.audience, method: 'GET', target: '/wovenmatter-execution/studio/execution', time, nonce })
+  await assert.rejects(verifierAt(time).verify({ method: 'GET', target: '/execution', headers, body: Buffer.alloc(0) }), error => error.code === 'member_signature_mismatch')
+  assert.ok(await verifierAt(time).verify({ method: 'GET', target: '/execution', alternateTargets: ['/wovenmatter-execution/studio/execution'], headers, body: Buffer.alloc(0) }))
 })
 
 test('revoked and unknown members are refused, and a newly synced member is picked up', async () => {

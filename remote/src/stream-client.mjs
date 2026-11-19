@@ -14,7 +14,7 @@ import { WebSocket } from './websocket.mjs'
 
 const fail = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra })
 
-/** The signed upgrade target: `<endpoint>/v1/stream`, with no query. */
+/** The signed upgrade target: `<endpoint>/stream`, with no query. */
 export const streamURL = endpoint => memberURL(endpoint, streamPath.slice(1))
 
 /**

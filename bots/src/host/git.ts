@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 /**
  * Settings → GitHub for bots (docs/architecture/GITHUB_IDENTITY.md): the public half of the
  * user's GitHub SSH key while the bot is on, and the commit identity, from the Woven server that
- * runs this runtime (`POST /v1/bots-host/git`). The key itself never enters the container: git
+ * runs this runtime (`POST /bots-host/git`). The key itself never enters the container: git
  * there signs through the in-container relay (helper/ssh-agent.mjs), which asks the machine's
  * signing agent. The runtime writes the files below; git reads them through the container's
  * environment. Keep the contents identical to remote/src/github-identity.mjs and the Mac's

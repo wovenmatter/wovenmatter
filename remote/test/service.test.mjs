@@ -20,16 +20,16 @@ test('internal remote browser MCP permits only administrator forwarding and vali
   context.after(() => stopService(service.child))
   const body = {callerID:randomUUID(),input:{action:'tabs',requestID:randomUUID()}}
   const request = (path, bearer, input) => fetch(service.url+path,{method:'POST',headers:{Authorization:'Bearer '+bearer,'Content-Type':'application/json'},body:JSON.stringify(input)})
-  assert.equal((await request('/v1/browser/mcp','unrelated',body)).status,401)
-  const forwarded = await request('/v1/browser/mcp',token,body)
+  assert.equal((await request('/browser/mcp','unrelated',body)).status,401)
+  const forwarded = await request('/browser/mcp',token,body)
   assert.equal(forwarded.status,200)
   const reply = await forwarded.json()
   assert.equal(reply.success,true);assert.equal(reply.requestID,body.input.requestID)
   assert.deepEqual(JSON.parse(reply.result.content[0].text),[])
-  assert.equal((await request('/v1/browser/mcp',token,{...body,workspace:'forged'})).status,400)
-  assert.equal((await request('/v1/browser/mcp',token,{...body,input:{...body.input,endpoint:'forged'}})).status,400)
-  const device = await (await request('/v1/execution/devices',token,{libraryID:randomUUID(),workspaceID:randomUUID(),deviceID:randomUUID(),ownerDeviceID:randomUUID(),scopes:['execution']})).json()
-  assert.equal((await request('/v1/browser/mcp',device.token,body)).status,403)
+  assert.equal((await request('/browser/mcp',token,{...body,workspace:'forged'})).status,400)
+  assert.equal((await request('/browser/mcp',token,{...body,input:{...body.input,endpoint:'forged'}})).status,400)
+  const device = await (await request('/execution/devices',token,{libraryID:randomUUID(),workspaceID:randomUUID(),deviceID:randomUUID(),ownerDeviceID:randomUUID(),scopes:['execution']})).json()
+  assert.equal((await request('/browser/mcp',device.token,body)).status,403)
 })
 
 test('runtime inspection is authenticated and never starts a Pi worker', async context => {
@@ -37,13 +37,13 @@ test('runtime inspection is authenticated and never starts a Pi worker', async c
   const token = 'inspection-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   const service = await startService({workspace:root, home:root, catalog:catalogPath, token})
   context.after(() => stopService(service.child))
-  assert.equal((await fetch(service.url+'/v1/runtime/inspection')).status,401)
+  assert.equal((await fetch(service.url+'/runtime/inspection')).status,401)
   // observedAt is seconds since 2001 (Apple's reference date), taken while the
   // request is served. Bracket the request rather than allow a fixed skew,
   // which a loaded machine exceeds.
   const reference = () => Date.now()/1000-978307200
   const requested = reference()
-  const response = await fetch(service.url+'/v1/runtime/inspection', {headers:{Authorization:'Bearer '+token}})
+  const response = await fetch(service.url+'/runtime/inspection', {headers:{Authorization:'Bearer '+token}})
   assert.equal(response.status,200)
   const snapshot = await response.json()
   const answered = reference()
@@ -154,14 +154,14 @@ test('native sign-in reports a real handoff and verifies provider state', async 
     authorization: 'Bearer sign-in-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'content-type': 'application/json',
   }
-  const started = await fetch(`${service.url}/v1/harnesses/codex/sign-in`, {
+  const started = await fetch(`${service.url}/harnesses/codex/sign-in`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ methodID: 'chatgpt' }),
   })
   assert.equal(started.status, 201)
   const session = await waitFor(
-    `${service.url}/v1/authentication-sessions/${(await started.json()).id}`,
+    `${service.url}/authentication-sessions/${(await started.json()).id}`,
     headers,
     (value) => value.state !== 'waiting_for_user'
   )
@@ -169,13 +169,13 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   assert.equal(session.verificationURL, 'https://example.test/device')
   assert.equal(session.userCode, 'ABCD-EFGH')
   const harnessDocument = await waitFor(
-    `${service.url}/v1/harnesses`,
+    `${service.url}/harnesses`,
     headers,
     (value) => value.harnesses.find(h => h.id === 'codex').state === 'ready'
   )
   assert.equal(harnessDocument.harnesses.find(h => h.id === 'codex').authenticationStatus, 'configured')
   const terminalAuthorizationCode = await fetch(
-    `${service.url}/v1/authentication-sessions/${session.id}/authorization-code`,
+    `${service.url}/authentication-sessions/${session.id}/authorization-code`,
     { method: 'POST', headers, body: JSON.stringify({ code: 'too-late' }) }
   )
   assert.equal(terminalAuthorizationCode.status, 409)
@@ -184,15 +184,15 @@ test('native sign-in reports a real handoff and verifies provider state', async 
     'authentication_session_not_active'
   )
   const terminalCancellation = await fetch(
-    `${service.url}/v1/authentication-sessions/${session.id}`,
+    `${service.url}/authentication-sessions/${session.id}`,
     { method: 'DELETE', headers }
   )
   assert.equal(terminalCancellation.status, 409)
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
-  const signedOut = await fetch(`${service.url}/v1/harnesses/codex/sign-out`, { method: 'POST', headers, body: '{}' })
+  const signedOut = await fetch(`${service.url}/harnesses/codex/sign-out`, { method: 'POST', headers, body: '{}' })
   assert.equal(signedOut.status, 200)
   assert.notEqual((await signedOut.json()).authenticationStatus, 'configured')
-  assert.equal((await fetch(`${service.url}/v1/harnesses/opencode/sign-out`, { method: 'POST', headers, body: '{}' })).status, 404)
+  assert.equal((await fetch(`${service.url}/harnesses/opencode/sign-out`, { method: 'POST', headers, body: '{}' })).status, 404)
 })
 
 test('sign-in status finds a CLI installed after the service started, outside its PATH', async (context) => {
@@ -206,7 +206,7 @@ test('sign-in status finds a CLI installed after the service started, outside it
   const token = 'sign-in-status-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   const service = await startService({ workspace, home, catalog: catalogPath, token })
   context.after(() => stopService(service.child))
-  const response = await fetch(`${service.url}/v1/sign-in-status`, { headers: { authorization: 'Bearer ' + token } })
+  const response = await fetch(`${service.url}/sign-in-status`, { headers: { authorization: 'Bearer ' + token } })
   assert.equal(response.status, 200)
   const { statuses } = await response.json()
   assert.equal(statuses.find(s => s.id === 'grok_build').state, 'verified')
@@ -232,19 +232,19 @@ test('sign-in and sign-out wait while that harness installs or updates; others a
   context.after(() => stopService(service.child))
   const headers = { authorization: 'Bearer ' + token, 'content-type': 'application/json' }
   const post = (path, body = {}) => fetch(service.url + path, { method: 'POST', headers, body: JSON.stringify(body) })
-  const started = await post('/v1/harnesses/grok_build/update', { confirmed: true })
+  const started = await post('/harnesses/grok_build/update', { confirmed: true })
   assert.equal(started.status, 202)
   const operation = await started.json()
-  for (const path of ['/v1/harnesses/grok_build/sign-in', '/v1/harnesses/grok_build/sign-out']) {
+  for (const path of ['/harnesses/grok_build/sign-in', '/harnesses/grok_build/sign-out']) {
     const refused = await post(path, { methodID: 'grok-account' })
     assert.equal(refused.status, 409)
     assert.deepEqual(await refused.json(), { error: 'runtime_maintenance_in_progress' })
   }
-  assert.equal((await post('/v1/harnesses/codex/sign-out')).status, 200)
+  assert.equal((await post('/harnesses/codex/sign-out')).status, 200)
   await writeFile(release, '')
-  const done = await waitFor(`${service.url}/v1/operations/${operation.id}`, headers, value => value.status !== 'running')
+  const done = await waitFor(`${service.url}/operations/${operation.id}`, headers, value => value.status !== 'running')
   assert.equal(done.status, 'succeeded', done.error)
-  assert.equal((await post('/v1/harnesses/grok_build/sign-out')).status, 200)
+  assert.equal((await post('/harnesses/grok_build/sign-out')).status, 200)
 })
 
 async function temporaryFixture(context, prefix) {
@@ -265,24 +265,24 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
     method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
-  assert.equal((await request('/v1/sign-ins', undefined, 'wrong')).status, 401);
-  let status = await (await request('/v1/default-agent/status')).json();
+  assert.equal((await request('/default-agent/status', undefined, 'wrong')).status, 401);
+  assert.equal((await request('/sign-ins', undefined, 'wrong')).status, 401);
+  let status = await (await request('/default-agent/status')).json();
   assert.ok(Array.isArray(status.providers));
   // The SSH relay's Pi route is gone; members reach Pi Durable through execution commands.
-  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 404);
+  assert.equal((await request('/default-agent/rpc', { method: 'initialize' })).status, 404);
   // Chat settings arrive alone; credentials in a request are never stored.
-  const receipt = await (await request('/v1/default-agent/configuration', { workspace: 'fixture-workspace', revision: 'fixture-revision', config: { providers: ['openrouter'] },
+  const receipt = await (await request('/default-agent/configuration', { workspace: 'fixture-workspace', revision: 'fixture-revision', config: { providers: ['openrouter'] },
     credentials: { openrouter: { type: 'api_key', key: 'relayed-provider-secret' } } })).json();
   assert.equal(receipt.revision, 'fixture-revision');
-  status = await (await request('/v1/default-agent/status')).json();
+  status = await (await request('/default-agent/status')).json();
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'sign_in_required');
   // A key typed on another device arrives once and is saved here.
-  const saved = await (await request('/v1/sign-ins', { action: 'saveKey', provider: 'openrouter', key: 'fixture-provider-secret', label: 'Router' })).json();
+  const saved = await (await request('/sign-ins', { action: 'saveKey', provider: 'openrouter', key: 'fixture-provider-secret', label: 'Router' })).json();
   assert.deepEqual(saved.accounts.openrouter.map(a => [a.label, a.isSelected]), [['Router', true]]);
   assert.ok(!JSON.stringify(saved).includes('fixture-provider-secret'));
-  assert.equal((await request('/v1/sign-ins', { action: 'saveKey', provider: 'shell', key: 'x' })).status, 400);
-  status = await (await request('/v1/default-agent/status')).json();
+  assert.equal((await request('/sign-ins', { action: 'saveKey', provider: 'shell', key: 'x' })).status, 400);
+  status = await (await request('/default-agent/status')).json();
   assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'credentials_present');
   assert.ok(!JSON.stringify(status).includes('fixture-provider-secret'));
   // A plain private file (0600) in a private folder (0700); nothing relayed is in it.
@@ -296,9 +296,9 @@ test('a Linux host keeps its own sign-ins: configuration carries no credentials 
   // It survives a restart.
   await stopService(service.child);
   service = await startService({ workspace, home, catalog: catalogPath, token });
-  const listed = await (await request('/v1/sign-ins')).json();
+  const listed = await (await request('/sign-ins')).json();
   assert.deepEqual(listed.accounts.openrouter.map(a => a.label), ['Router']);
-  assert.equal((await (await request('/v1/default-agent/status')).json()).providers.find(p => p.id === 'openrouter').state, 'credentials_present');
+  assert.equal((await (await request('/default-agent/status')).json()).providers.find(p => p.id === 'openrouter').state, 'credentials_present');
 });
 
 async function stopService(child) {
@@ -553,30 +553,30 @@ createInterface({ input: process.stdin }).on('line', line => {
   const id = () => globalThis.crypto.randomUUID()
   const device = { libraryID: id(), workspaceID: id(), ownerDeviceID: id(), deviceID: id(), scopes: ['execution'] }
   const request = (path, method, body, headers = admin) => fetch(service.url + path, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) })
-  const enrolled = await request('/v1/execution/devices', 'POST', device)
+  const enrolled = await request('/execution/devices', 'POST', device)
   assert.equal(enrolled.status, 201)
   const grant = await enrolled.json()
   const headers = { ...admin, authorization: 'Bearer ' + grant.token }
-  const create = await request('/v1/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', runtimeKind: 'codex' }, headers)
+  const create = await request('/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', runtimeKind: 'codex' }, headers)
   assert.equal(create.status, 200)
   const opened = await create.json()
-  assert.equal(opened.status, 'completed', JSON.stringify({ receipt: opened, harnesses: opened.status !== 'completed' ? await (await request('/v1/harnesses', 'GET')).json() : undefined }))
+  assert.equal(opened.status, 'completed', JSON.stringify({ receipt: opened, harnesses: opened.status !== 'completed' ? await (await request('/harnesses', 'GET')).json() : undefined }))
   const input = { commandID: id(), deviceID: device.deviceID, kind: 'send', conversationID: opened.conversationID, text: 'Hello 🌱' }
   // Intentionally discard the acknowledgement; retry the identical command ID.
-  await (await request('/v1/execution/commands', 'POST', input, headers)).arrayBuffer()
-  const retry = await request('/v1/execution/commands', 'POST', input, headers)
+  await (await request('/execution/commands', 'POST', input, headers)).arrayBuffer()
+  const retry = await request('/execution/commands', 'POST', input, headers)
   assert.equal(retry.status, 200)
-  await waitFor(service.url + '/v1/execution/commands/' + input.commandID, headers, receipt => receipt.status === 'completed')
-  const historyPath = '/v1/execution/conversations/' + opened.conversationID + '/transcript'
+  await waitFor(service.url + '/execution/commands/' + input.commandID, headers, receipt => receipt.status === 'completed')
+  const historyPath = '/execution/conversations/' + opened.conversationID + '/transcript'
   const historyResponse = await request(historyPath, 'GET', null, headers)
   assert.equal(historyResponse.status, 200)
   const history = await historyResponse.json()
   assert.deepEqual(history.messages.map(message => [message.role, message.content]), [['user', input.text], ['assistant', output]])
   assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
   // The first message's chat gets a title from this host's Codex.
-  await waitFor(service.url + '/v1/execution/conversations', headers, list => list.find(item => item.id === opened.conversationID)?.title === 'Fixture title')
-  assert.equal((await request('/v1/execution/devices/' + device.deviceID, 'DELETE')).status, 200)
-  assert.equal((await request('/v1/execution/commands', 'POST', { ...input, commandID: id() }, headers)).status, 401)
+  await waitFor(service.url + '/execution/conversations', headers, list => list.find(item => item.id === opened.conversationID)?.title === 'Fixture title')
+  assert.equal((await request('/execution/devices/' + device.deviceID, 'DELETE')).status, 200)
+  assert.equal((await request('/execution/commands', 'POST', { ...input, commandID: id() }, headers)).status, 401)
   const retained = await request(historyPath, 'GET')
   assert.equal(retained.status, 200)
   assert.deepEqual(await retained.json(), history)
@@ -621,28 +621,28 @@ createInterface({ input: process.stdin }).on('line', line => {
   const id = () => globalThis.crypto.randomUUID()
   const request = (path, method, body, headers = admin) => fetch(service.url + path, { method, headers, ...(body ? { body: typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body) } : {}) })
   // Background execution off: sessions still run; the SSH relay route is gone.
-  assert.equal((await request('/v1/task-gateway', 'PATCH', { enabled: false })).status, 200)
-  assert.equal((await request('/v1/durable-acp/attach', 'POST', { channelID: 'relay', harnessID: 'codex' })).status, 404)
+  assert.equal((await request('/task-gateway', 'PATCH', { enabled: false })).status, 200)
+  assert.equal((await request('/durable-acp/attach', 'POST', { channelID: 'relay', harnessID: 'codex' })).status, 404)
   const device = { libraryID: id(), workspaceID: id(), ownerDeviceID: id(), deviceID: id(), scopes: ['execution'] }
-  const grant = await (await request('/v1/execution/devices', 'POST', device)).json()
+  const grant = await (await request('/execution/devices', 'POST', device)).json()
   const headers = { ...admin, authorization: 'Bearer ' + grant.token }
-  const providers = await (await request('/v1/execution/providers', 'GET', null, headers)).json()
+  const providers = await (await request('/execution/providers', 'GET', null, headers)).json()
   assert.equal(providers.find(item => item.id === 'codex').available, true, JSON.stringify(providers))
   // Options before a session exists.
-  const options = await request('/v1/execution/providers/codex/options', 'GET', null, headers)
+  const options = await request('/execution/providers/codex/options', 'GET', null, headers)
   assert.equal(options.status, 200)
   const settings = await options.json()
   assert.equal(settings.conversationID, '')
   assert.deepEqual(settings.permissions.map(item => item.label), ['Full access'], 'Read only is not offered')
   // An attachment, then a message that names it.
   const image = Buffer.from('fixture image bytes'), digest = createHash('sha256').update(image).digest('hex')
-  const upload = await fetch(service.url + '/v1/execution/attachments/' + digest + '?name=photo.png&mimeType=image%2Fpng', { method: 'PUT', headers: { authorization: headers.authorization, 'content-type': 'image/png' }, body: image })
+  const upload = await fetch(service.url + '/execution/attachments/' + digest + '?name=photo.png&mimeType=image%2Fpng', { method: 'PUT', headers: { authorization: headers.authorization, 'content-type': 'image/png' }, body: image })
   assert.equal(upload.status, 200)
   assert.deepEqual(await upload.json(), { id: digest, name: 'photo.png', mimeType: 'image/png', byteCount: image.length })
-  const wrong = await fetch(service.url + '/v1/execution/attachments/' + 'a'.repeat(64) + '?name=x', { method: 'PUT', headers: { authorization: headers.authorization }, body: image })
+  const wrong = await fetch(service.url + '/execution/attachments/' + 'a'.repeat(64) + '?name=x', { method: 'PUT', headers: { authorization: headers.authorization }, body: image })
   assert.equal(wrong.status, 400)
   // Its bytes come back from the attachment store, with their type.
-  const attachmentURL = (id, query = '') => service.url + '/v1/execution/attachments/' + id + query
+  const attachmentURL = (id, query = '') => service.url + '/execution/attachments/' + id + query
   const read = await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: headers.authorization } })
   assert.equal(read.status, 200)
   assert.equal(read.headers.get('content-type'), 'image/png')
@@ -658,7 +658,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const escaped = await fetch(attachmentURL(digest, '?name=' + encodeURIComponent(name)), { headers: { authorization: headers.authorization } })
     assert.equal(escaped.status, 404, name)
   }
-  const traversal = await fetch(service.url + '/v1/execution/attachments/..%2F..%2Fsecret.txt', { headers: { authorization: headers.authorization } })
+  const traversal = await fetch(service.url + '/execution/attachments/..%2F..%2Fsecret.txt', { headers: { authorization: headers.authorization } })
   assert.notEqual(traversal.status, 200, 'only a digest names an attachment route')
   assert.doesNotMatch(await traversal.text(), /not an attachment/)
   // A staged copy replaced by a link out of the store is refused, as is one an agent edited.
@@ -672,20 +672,20 @@ createInterface({ input: process.stdin }).on('line', line => {
   await writeFile(edited, 'edited by an agent')
   assert.equal((await fetch(attachmentURL(digest, '?name=photo.png'), { headers: { authorization: headers.authorization } })).status, 409)
   await writeFile(edited, image)
-  const opened = await (await request('/v1/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', providerID: 'codex' }, headers)).json()
+  const opened = await (await request('/execution/commands', 'POST', { commandID: id(), deviceID: device.deviceID, kind: 'createSession', providerID: 'codex' }, headers)).json()
   assert.equal(opened.status, 'completed', JSON.stringify(opened))
   const input = { commandID: id(), deviceID: device.deviceID, kind: 'send', conversationID: opened.conversationID, text: 'What is this?', attachments: [{ id: digest, name: 'photo.png', mimeType: 'image/png' }] }
-  assert.equal((await (await request('/v1/execution/commands', 'POST', input, headers)).json()).status, 'accepted')
-  await waitFor(service.url + '/v1/execution/commands/' + input.commandID, headers, receipt => receipt.status === 'completed')
+  assert.equal((await (await request('/execution/commands', 'POST', input, headers)).json()).status, 'accepted')
+  await waitFor(service.url + '/execution/commands/' + input.commandID, headers, receipt => receipt.status === 'completed')
   const prompt = JSON.parse((await readFile(marker, 'utf8')).trim())
   assert.deepEqual(prompt.map(block => block.type), ['text', 'image'])
   assert.equal(prompt[1].data, image.toString('base64'))
   // Library retention reads a file an agent wrote, for administrators only.
   await writeFile(resolve(root, 'result.txt'), 'agent output')
-  assert.equal((await request('/v1/execution/library-file', 'POST', { path: 'result.txt' }, headers)).status, 403)
-  const file = await (await request('/v1/execution/library-file', 'POST', { path: 'result.txt' })).json()
+  assert.equal((await request('/execution/library-file', 'POST', { path: 'result.txt' }, headers)).status, 403)
+  const file = await (await request('/execution/library-file', 'POST', { path: 'result.txt' })).json()
   assert.equal(Buffer.from(file.data, 'base64').toString(), 'agent output')
-  assert.equal((await request('/v1/default-agent/control', 'POST', { action: 'shell' })).status, 400)
+  assert.equal((await request('/default-agent/control', 'POST', { action: 'shell' })).status, 400)
 })
 
 test('host health reports native paths and source inventory without exposing its token', async context => {
@@ -700,22 +700,22 @@ test('host health reports native paths and source inventory without exposing its
   } })
   context.after(() => stopService(service.child))
   const headers = { Authorization: 'Bearer ' + token }
-  const health = await (await fetch(service.url + '/v1/health', { headers })).json()
+  const health = await (await fetch(service.url + '/health', { headers })).json()
   assert.deepEqual(health, { status: 'ready', workspaceRoot: workspace, harnessCount: 4,
-    runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
+    serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
     // What apps compare to tell an out-of-date host (no library host here, so no schema).
     release: { version: '1.4.0', fingerprint: 'a'.repeat(64), librarySchema: null },
     attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot',
     workspaceEnabled: true, botsEnabled: false, library: null, memberIdentity: null })
-  const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
+  const body = await (await fetch(service.url + '/harnesses', { headers })).json()
   assert.ok(body.harnesses.every(row => ['system', 'managed', 'missing'].includes(row.source)))
   assert.equal(body.harnesses.find(row => row.id === 'default_agent').source, 'managed')
   assert.ok(!JSON.stringify({ health, body }).includes(token))
   const external = await temporaryFixture(context, 'woven-link-existing-')
-  const linked = await fetch(service.url + '/v1/projects/link', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: external }) })
+  const linked = await fetch(service.url + '/projects/link', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: external }) })
   assert.equal(linked.status, 200)
   assert.equal((await linked.json()).path, await (await import('node:fs/promises')).realpath(external))
-  const listed = await fetch(service.url + '/v1/directories?' + new URLSearchParams({ path: home }), { headers })
+  const listed = await fetch(service.url + '/directories?' + new URLSearchParams({ path: home }), { headers })
   assert.equal(listed.status, 200)
   assert.ok((await listed.json()).directories.some(item => item.name === 'workspace'))
 })
@@ -780,14 +780,14 @@ test('installation never replaces an OpenCode v1 the person installed without as
     authorization: 'Bearer install-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'content-type': 'application/json',
   }
-  const response = await fetch(`${service.url}/v1/harnesses/opencode/install`, {
+  const response = await fetch(`${service.url}/harnesses/opencode/install`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ confirmed: true, packageSpec: "@opencode/cli@2.1.0" }),
   })
   assert.equal(response.status, 202)
   const operation = await waitFor(
-    `${service.url}/v1/operations/${(await response.json()).id}`,
+    `${service.url}/operations/${(await response.json()).id}`,
     headers,
     (value) => value.status !== 'running'
   )

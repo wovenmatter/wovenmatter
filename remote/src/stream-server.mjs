@@ -5,7 +5,7 @@ import { decodeFrame, encodeFrame, maximumClientFrameBytes, maximumFrameBytes, s
   streamPath, streamQueueLimits, streamTimings } from './stream-protocol.mjs'
 
 // The Linux host's live stream (docs/architecture/WOVEN_EVERYWHERE.md,
-// "Streaming"): `GET /v1/stream` at the execution endpoint,
+// "Streaming"): `GET /stream` at the execution endpoint,
 // member-signed, upgraded to a WebSocket that carries `workspace` and
 // `conversation` subscriptions and `execution.*` calls. The stream reads the
 // stored execution state as it changes (`execution.watch`); it never writes
@@ -133,7 +133,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
   const unwatch = execution.watch(change => { for (const connection of connections) connection.changed(change) })
   const unwatchLibrary = library?.watch(cursor => { for (const connection of connections) connection.changed({ kind: 'library', cursor }) }) ?? (() => {})
 
-  /** Handles `/v1/stream` upgrades; returns false for any other path. */
+  /** Handles `/stream` upgrades; returns false for any other path. */
   function upgrade(request, socket, head) {
     const url = new URL(request.url, 'http://localhost')
     if (url.pathname !== streamPath) return false
@@ -226,7 +226,7 @@ export function createStreamServer({ members, servedTargets = async () => [], ex
     }
 
     // The same handlers, idempotent command IDs and receipts as
-    // `POST v1/execution/commands` and `GET v1/execution/commands/<id>`.
+    // `POST execution/commands` and `GET execution/commands/<id>`.
     async function perform(method, params) {
       if (method === 'execution.command') {
         if (!isObject(params) || !isObject(params.command)) throw failure('invalid', 'Send {command}.')

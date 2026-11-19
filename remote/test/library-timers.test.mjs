@@ -43,7 +43,7 @@ async function workspace(t, library, { onTimersChanged } = {}) {
   return { service, runs, id: opened.conversationID }
 }
 const call = (service, scope, name, input) => service.mcp.handle(scope, { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: input } })
-const state = library => library.client.json('GET', '/v1/debug/state')
+const state = library => library.client.json('GET', '/debug/state')
 const until = async (check, what) => { for (let i = 0; i < 200; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 10)) } assert.fail(what) }
 
 test('a Linux session’s timer fires here and is delivered to the session with every Mac offline', async t => {

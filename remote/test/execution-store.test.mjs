@@ -76,6 +76,36 @@ test('reopening a current execution store changes nothing', async t => {
   assert.equal(leftNumber(path), 0)
 })
 
+test('native records the current release journaled take today\'s format names, once', async t => {
+  const path = directory(t)
+  const first = open(path)
+  const { enrollment, principal } = enroll(first)
+  const created = await first.command({ commandID: randomUUID(), deviceID: enrollment.deviceID, kind: 'createSession' }, principal)
+  await first.close()
+  // As the current release wrote them: an update in two parts, an activity, and an ordinary entry between.
+  const record = (format, partIndex, partCount) => ({ eventID: randomUUID(), recordedAt: '2026-11-18T10:00:00.000Z', workspaceID: enrollment.workspaceID,
+    conversationID: created.conversationID, kind: 'nativeRecord', runID: randomUUID(),
+    nativeRecord: { recordID: 'r-' + format, format, partIndex, partCount, byteCount: 5.0, sha256: 'ab'.repeat(32), data: Buffer.from('héllo "quoted" \\ 1e3').toString('base64') } })
+  const stored = [record('woven-native-update-v1', 0, 2), record('woven-native-update-v1', 1, 2),
+    { eventID: randomUUID(), recordedAt: '2026-11-18T10:00:01.000Z', workspaceID: enrollment.workspaceID, conversationID: created.conversationID, kind: 'receipt', note: 'format "woven-native-update-v1" in prose stays' },
+    record('wovenmatter.activity.v2', 0, 1)]
+  const bodies = () => inspect(path, db => db.prepare("SELECT body FROM events WHERE json_extract(body,'$.eventID') IN (" + stored.map(() => '?').join(',') + ') ORDER BY sequence').all(...stored.map(entry => entry.eventID)).map(row => row.body))
+  inspect(path, db => { for (const entry of stored) db.prepare('INSERT INTO events(body) VALUES (?)').run(JSON.stringify(entry)) })
+  const second = open(path)
+  const replayed = second.events(0).entries.filter(entry => stored.some(item => item.eventID === entry.eventID))
+  await second.close()
+  assert.deepEqual(replayed.map(entry => entry.nativeRecord?.format ?? null), ['woven-native-update', 'woven-native-update', null, 'wovenmatter.activity.chained'])
+  // Nothing but the name changed, byte for byte.
+  const expected = stored.map(entry => JSON.stringify(entry.nativeRecord ? { ...entry, nativeRecord: { ...entry.nativeRecord,
+    format: { 'woven-native-update-v1': 'woven-native-update', 'wovenmatter.activity.v2': 'wovenmatter.activity.chained' }[entry.nativeRecord.format] } } : entry))
+  const converted = bodies()
+  assert.deepEqual(converted, expected)
+  // Nothing is left to find: the next open leaves every row as it is, and so does one after new records.
+  await open(path).close()
+  assert.deepEqual(bodies(), converted)
+  assert.equal(inspect(path, db => db.prepare("SELECT count(*) AS n FROM events WHERE body LIKE '%\"format\":\"woven-native-update-v1\"%' OR body LIKE '%\"format\":\"wovenmatter.activity.v2\"%'").get().n), 0)
+})
+
 test('a v0.4.2 execution store is converted once, by its shape, whatever number the file carries', async t => {
   for (const number of [0, 1, 7]) {
     const path = directory(t)

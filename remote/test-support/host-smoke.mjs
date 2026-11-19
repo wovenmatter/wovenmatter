@@ -67,7 +67,7 @@ async function deployedSmoke() {
   const report = { ok: false, mode: verify ? 'verify-persistence' : 'initial', checks: [] }
   const completed = name => report.checks.push(name)
 
-  const health = await request('/v1/health')
+  const health = await request('/health')
   assert.equal(health.status, 'ready')
   assert.equal(health.runtimeKind, 'host')
   check(['fullRoot', 'user'].includes(health.accessMode), 'Unknown workspace access mode')
@@ -81,13 +81,13 @@ async function deployedSmoke() {
   report.accessMode = health.accessMode
   report.fingerprint = health.serviceFingerprint
   completed('authenticated-host-health-and-absolute-paths')
-  await request('/v1/health', { bearer: 'deliberately-invalid-native-host-validation', status: 401 })
-  const inspection = await request('/v1/runtime/inspection')
+  await request('/health', { bearer: 'deliberately-invalid-native-host-validation', status: 401 })
+  const inspection = await request('/runtime/inspection')
   check(inspection.items.some(item => item.kind === 'service' && Number.isInteger(item.processID)), 'Missing service process inspection')
   check(!JSON.stringify(inspection).includes(token), 'Inspection exposed the administrative credential')
   completed('authentication-and-service-inspection')
 
-  const sandbox = await request('/v1/browser/selftest')
+  const sandbox = await request('/browser/selftest')
   assert.equal(sandbox.ok, true, `Native browser sandbox failed: ${sandbox.reason ?? 'unknown'}`)
   check(sandbox.evidence?.rendererPIDs?.length > 0, 'Sandbox check did not identify actual renderer processes')
   assert.deepEqual(sandbox.evidence.namespaces, ['user', 'pid'])
@@ -96,17 +96,17 @@ async function deployedSmoke() {
   report.sandbox = sandbox.evidence
   completed('native-renderer-sandbox-proof')
 
-  const harnesses = (await request('/v1/harnesses')).harnesses
+  const harnesses = (await request('/harnesses')).harnesses
   check(harnesses.some(harness => harness.id === 'default_agent'), 'Pi Durable is missing')
   for (const harness of harnesses) check(['system', 'managed', 'missing'].includes(harness.source), `Missing installation source for ${harness.id}`)
   report.harnesses = harnesses.map(({ id, state, source }) => ({ id, state, source }))
-  await request('/v1/default-agent/status') // Status must not start a provider run.
-  const inventory = await request('/v1/runtime-maintenance')
+  await request('/default-agent/status') // Status must not start a provider run.
+  const inventory = await request('/runtime-maintenance')
   const rows = Array.isArray(inventory) ? inventory : inventory.harnesses ?? inventory.runtimes ?? []
   for (const row of rows) for (const component of row.components ?? []) check(['system', 'managed', 'missing'].includes(component.source), `Missing component source for ${row.id}`)
   completed('existing-harness-inventory-and-pi-status')
 
-  const existing = await request('/v1/execution', { status: state.enrollment ? 200 : undefined, raw: true }).catch(error => {
+  const existing = await request('/execution', { status: state.enrollment ? 200 : undefined, raw: true }).catch(error => {
     if (error.code === 'ERR_ASSERTION' && /returned HTTP 409/.test(error.message)) return null
     throw error
   })
@@ -120,38 +120,37 @@ async function deployedSmoke() {
     assert.equal(identity.libraryID, state.enrollment.libraryID, 'Library identity did not survive restart')
   }
   const deviceID = randomUUID()
-  const enrolled = await request('/v1/execution/devices', { method: 'POST', status: 201, body: {
+  const enrolled = await request('/execution/devices', { method: 'POST', status: 201, body: {
     workspaceID: identity.id, libraryID: identity.libraryID, ownerDeviceID: identity.ownerDeviceID,
     deviceID, name: 'Disposable native-host validation', scopes: ['execution'],
   } })
   state.enrollment = { id: enrolled.workspace.id, libraryID: enrolled.workspace.libraryID }
   try {
-    const descriptor = await request('/v1/execution', { bearer: enrolled.token })
+    const descriptor = await request('/execution', { bearer: enrolled.token })
     assert.equal(descriptor.id, enrolled.workspace.id)
-    for (const path of ['/v1/browser/selftest', '/v1/browser/tabs', '/v1/default-agent/status', '/v1/runtime/inspection']) await request(path, { bearer: enrolled.token, status: 403 })
-    await request('/v1/execution/events?after=0', { bearer: enrolled.token })
-    await request('/v1/inference/catalog', { bearer: enrolled.token, status: 403 })
+    for (const path of ['/browser/selftest', '/browser/tabs', '/default-agent/status', '/runtime/inspection']) await request(path, { bearer: enrolled.token, status: 403 })
+    await request('/execution/events?after=0', { bearer: enrolled.token })
   } finally {
-    await request('/v1/execution/devices/' + deviceID, { method: 'DELETE' })
+    await request('/execution/devices/' + deviceID, { method: 'DELETE' })
   }
-  await request('/v1/execution', { bearer: enrolled.token, status: 401 })
+  await request('/execution', { bearer: enrolled.token, status: 401 })
   completed('scoped-device-enrollment-authority-and-revocation')
 
   if (!verify) {
     state.projectName = 'native-host-validation-' + state.runID.slice(0, 8)
-    state.projectPath = (await request('/v1/projects', { method: 'POST', status: 201, body: { name: state.projectName } })).path
-    state.databaseID = (await request('/v1/databases', { method: 'POST', body: { name: state.projectName } })).id
-    await request('/v1/databases/execute', { method: 'POST', body: {
+    state.projectPath = (await request('/projects', { method: 'POST', status: 201, body: { name: state.projectName } })).path
+    state.databaseID = (await request('/databases', { method: 'POST', body: { name: state.projectName } })).id
+    await request('/databases/execute', { method: 'POST', body: {
       databaseID: state.databaseID,
       sql: `CREATE TABLE host_validation(value TEXT NOT NULL); INSERT INTO host_validation VALUES('${state.marker}');`,
     } })
   }
-  const reused = await request('/v1/projects', { method: 'POST', status: 201, body: { name: state.projectName, reuseExisting: true } })
+  const reused = await request('/projects', { method: 'POST', status: 201, body: { name: state.projectName, reuseExisting: true } })
   assert.equal(reused.path, state.projectPath)
   assert.equal(state.projectPath, health.workspaceRoot + '/' + state.projectName)
-  const database = await request('/v1/databases/query', { method: 'POST', body: { databaseID: state.databaseID, sql: 'SELECT value FROM host_validation' } })
+  const database = await request('/databases/query', { method: 'POST', body: { databaseID: state.databaseID, sql: 'SELECT value FROM host_validation' } })
   assert.deepEqual(database.query.rows, [[state.marker]])
-  const snapshot = await request('/v1/databases/snapshot', { method: 'POST', body: { databaseID: state.databaseID } })
+  const snapshot = await request('/databases/snapshot', { method: 'POST', body: { databaseID: state.databaseID } })
   assert.equal(Buffer.from(snapshot.sqliteBase64, 'base64').subarray(0, 16).toString(), 'SQLite format 3\0')
   completed('managed-folders-and-sqlite-persistence')
 
@@ -160,16 +159,16 @@ async function deployedSmoke() {
   assert.equal(browserOrigin.protocol, 'http:')
   check(browserOrigin.hostname === '127.0.0.1' && !browserOrigin.username && !browserOrigin.password, 'Browser fixture origin must be host loopback')
   const call = async input => {
-    const envelope = await request('/v1/browser/mcp', { method: 'POST', body: { callerID: state.callerID, input: { ...input, requestID: input.requestID ?? randomUUID() } } })
+    const envelope = await request('/browser/mcp', { method: 'POST', body: { callerID: state.callerID, input: { ...input, requestID: input.requestID ?? randomUUID() } } })
     assert.equal(envelope.success, true, `Browser ${input.action} failed: ${envelope.code ?? 'unknown'} ${envelope.error ?? ''}`)
     return envelope.result
   }
   const tabs = []
   try {
     for (const profile of state.profiles) {
-      const connected = await request('/v1/browser/connect?profile=' + profile, { method: 'POST', body: {} })
+      const connected = await request('/browser/connect?profile=' + profile, { method: 'POST', body: {} })
       check(/^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//.test(connected.endpoint), 'CDP escaped host loopback')
-      const opened = parseText(await call({ action: 'open', profile, url: new URL('/v1/health', browserOrigin).href }))
+      const opened = parseText(await call({ action: 'open', profile, url: new URL('/health', browserOrigin).href }))
       check(typeof opened.tabId === 'string', 'Browser did not create a tab')
       tabs.push({ profile, tabId: opened.tabId })
     }
@@ -197,16 +196,16 @@ async function deployedSmoke() {
     const screenshot = await call({ ...a, action: 'screenshot' })
     const image = screenshot.content.find(block => block.type === 'image')
     check(image?.mimeType === 'image/jpeg' && Buffer.from(image.data, 'base64').readUInt16BE() === 0xffd8, 'Browser screenshot is not JPEG')
-    const viewerTabs = await request('/v1/browser/tabs?profile=' + a.profile)
+    const viewerTabs = await request('/browser/tabs?profile=' + a.profile)
     assert.equal(viewerTabs.profile, a.profile)
     check(viewerTabs.profiles.includes(a.profile) && viewerTabs.profiles.includes(b.profile), 'Viewer cannot discover both profiles')
     check(viewerTabs.tabs.some(tab => tab.id === a.tabId), 'Viewer and MCP have different tab identities')
-    const wrongProfile = await request('/v1/browser/frame?profile=' + b.profile, { method: 'POST', status: 410, body: { tabID: a.tabId } })
+    const wrongProfile = await request('/browser/frame?profile=' + b.profile, { method: 'POST', status: 410, body: { tabID: a.tabId } })
     check(wrongProfile.error, 'Cross-profile tab lookup did not fail')
-    const frame = await request('/v1/browser/frame?profile=' + a.profile, { method: 'POST', body: { tabID: a.tabId } })
+    const frame = await request('/browser/frame?profile=' + a.profile, { method: 'POST', body: { tabID: a.tabId } })
     assert.equal(frame.tabID, a.tabId)
     assert.equal(Buffer.from(frame.imageBase64, 'base64').readUInt16BE(), 0xffd8)
-    const stream = await request('/v1/browser/stream?profile=' + a.profile + '&tabID=' + a.tabId, { raw: true })
+    const stream = await request('/browser/stream?profile=' + a.profile + '&tabID=' + a.tabId, { raw: true })
     const reader = stream.body.getReader()
     try {
       let line = ''

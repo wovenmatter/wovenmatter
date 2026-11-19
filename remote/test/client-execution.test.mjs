@@ -54,19 +54,15 @@ test('per-device bearer grants never expose administration or another device rec
   assert.equal(f.service.principal('Bearer '+f.grant.token,'execution'),null)
 })
 
-test('grants and workspaces enrolled with the old inference scope keep working for execution only',async t=>{
+test('a device grant is for execution alone, and a stored workspace that also recorded inference serves execution only',async t=>{
   const f=fixture(t)
-  // An older Mac still asks for `inference`; it is dropped and execution is granted.
-  const legacy={...f.enrollment,deviceID:randomUUID(),scopes:['execution','inference']},grant=f.service.provision(legacy)
-  assert.deepEqual(f.service.principal('Bearer '+grant.token,'execution').scopes,['execution'])
-  assert.equal(f.service.principal('Bearer '+grant.token,'inference'),null)
-  assert.equal(grant.workspace.capabilities.includes('inference'),false)
-  assert.throws(()=>f.service.provision({...f.enrollment,deviceID:randomUUID(),scopes:['inference']}),{statusCode:400})
-  // A grant and workspace stored before the upgrade, with both scopes.
+  for(const scopes of [['execution','inference'],['inference'],[],undefined])
+    assert.throws(()=>f.service.provision({...f.enrollment,deviceID:randomUUID(),scopes}),{statusCode:400})
+  // A grant and workspace stored with both scopes.
   const {DatabaseSync}=await import('node:sqlite'),{createHash,randomBytes}=await import('node:crypto')
   const db=new DatabaseSync(join(f.directory,'execution.sqlite'))
   const token=randomBytes(32).toString('base64url'),id=randomUUID(),scopes=['execution','inference']
-  db.prepare('INSERT INTO devices VALUES (?,?,?)').run(id,createHash('sha256').update(token).digest('hex'),JSON.stringify({id,name:'Older Mac',scopes,createdAt:new Date().toISOString()}))
+  db.prepare('INSERT INTO devices VALUES (?,?,?)').run(id,createHash('sha256').update(token).digest('hex'),JSON.stringify({id,name:'Mac',scopes,createdAt:new Date().toISOString()}))
   const identity=JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get().body)
   db.prepare('UPDATE identity SET body=? WHERE id=1').run(JSON.stringify({...identity,capabilities:[...identity.capabilities,'inference']}))
   db.close()
