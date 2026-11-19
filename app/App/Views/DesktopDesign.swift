@@ -398,7 +398,7 @@ enum RemoteWorkspaceSidebarModel {
         let id = ExecutionWorkspace.displayID(owner)
         guard !registry.contains(where: { ExecutionWorkspace.displayID($0.id) == id }) else { return id }
         let listed = registry.filter { $0.isVisibleInConnections && $0.folderOwnerID.map(ExecutionWorkspace.displayID) == id }
-        if let row = listed.first(where: { $0.endpoint != nil }) ?? listed.first { return ExecutionWorkspace.displayID(row.id) }
+        if let row = ExecutionWorkspace.preferred(among: listed) { return ExecutionWorkspace.displayID(row.id) }
         return ExecutionWorkspace.displayOwner(of: owner, in: registry) ?? id
     }
 

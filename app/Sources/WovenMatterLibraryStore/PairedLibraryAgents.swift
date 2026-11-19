@@ -22,14 +22,27 @@ public struct AgentPlacements: Equatable, Sendable {
 
 extension ExecutionWorkspace {
   /// The registry row that stands for the Mac whose library host is `owner`.
-  /// A Mac can have more than one (its Dev instances register beside it):
-  /// the one paired devices connect to wins, then one that is still listed
-  /// (a stopped Dev instance is not), then one that is not copied history,
-  /// then any.
+  /// A Mac can have more than one: its Dev instances register beside it, and
+  /// a live Dev build shares its library host. See `preferred(among:)`.
   public static func macWorkspace(ownedBy owner: String, in registry: [ExecutionWorkspace]) -> ExecutionWorkspace? {
-    let rows = registry.filter { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted }
-    return rows.first { $0.isVisibleInConnections && $0.endpoint != nil } ?? rows.first(where: \.isVisibleInConnections)
-      ?? rows.first { $0.retainedHistory != true } ?? rows.first
+    preferred(among: registry.filter { $0.kind == .mac && $0.ownerDeviceID == owner && !$0.deleted })
+  }
+
+  /// Of several rows for one machine, the one its agents, chats and folders
+  /// belong to, the same wherever one is chosen. A row still listed in
+  /// connections comes before one that is not (a stopped Dev instance), one
+  /// with an address before one without, and at each step the production
+  /// row before a Dev instance's: a live Dev build that quit without
+  /// withdrawing keeps its address, and must not take the Mac's agents and
+  /// folders from the row its user sees as that Mac. Then a row that is not
+  /// copied history, then any; the registry's order breaks a tie.
+  public static func preferred(among rows: [ExecutionWorkspace]) -> ExecutionWorkspace? {
+    func rank(_ row: ExecutionWorkspace) -> Int {
+      let development = row.developmentInstance == nil ? 0 : 1
+      if row.isVisibleInConnections { return (row.endpoint != nil ? 0 : 2) + development }
+      return row.retainedHistory != true ? 4 : 5
+    }
+    return rows.enumerated().min { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }?.element
   }
 }
 

@@ -107,9 +107,12 @@ only while that device is active (`ExecutionWorkspace.connections`), the same
 projection the library host gives Settings → Workspaces, so a Dev instance
 that quit without withdrawing its row drops out of the sidebar, New Chat and
 Settings together. Folders are grouped under the row that names their
-owner (`ExecutionWorkspace.displayOwner`; when a Mac registered several rows
-for one device, such as a Dev instance beside it, the listed one), agents under
-the row their owner record leads to. Each harness on a workspace is one row,
+owner (`ExecutionWorkspace.displayOwner`), agents under the row their owner
+record leads to. When a Mac registered several rows for one device, such as a
+Dev instance beside it, both use one choice (`ExecutionWorkspace.preferred`): a
+listed row before a hidden one, one with an address before one without, and the
+production row before a Dev instance's, so a live Dev build that quit without
+withdrawing never takes the Mac's agents and folders. Each harness on a workspace is one row,
 and one function picks the agent that stands for it everywhere
 (`RemoteWorkspaceSidebarModel.choices`): this Mac's own while this Mac has
 the harness ready there, else another member's, else this Mac's own. A chat

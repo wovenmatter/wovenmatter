@@ -274,15 +274,16 @@ extension ApplicationModel {
         // Other members' workspaces, one row per workspace and harness: a task
         // is assigned to a harness on a workspace, not to one member's agent,
         // so this needs no choice among agents. Those this Mac already offers
-        // through a Linux host it manages are skipped; Macs first, then by name.
+        // through a Linux host it manages are skipped; in the sidebar's order, by title.
         var seen = Set(configured.map { $0.configuration.id.uuidString.lowercased() + ":" + $0.harness.id.rawValue })
         let peers = remoteWorkspaceAgents.compactMap { agent -> (workspace: ExecutionWorkspace, runtimeKind: AgentRuntimeKind)? in
             guard let workspace = peerAgentWorkspaces[agent.id], !workspace.deleted, workspace.kind == .mac || workspace.kind == .linux,
                   seen.insert(ExecutionWorkspace.displayID(workspace.id) + ":" + agent.runtimeKind.rawValue).inserted else { return nil }
             return (workspace, agent.runtimeKind)
         }.sorted {
-            ($0.workspace.kind == .mac ? 0 : 1, $0.workspace.name.lowercased(), $0.runtimeKind.displayName)
-                < ($1.workspace.kind == .mac ? 0 : 1, $1.workspace.name.lowercased(), $1.runtimeKind.displayName)
+            let order = workspaceDisplayName($0.workspace).localizedStandardCompare(workspaceDisplayName($1.workspace))
+            if order != .orderedSame { return order == .orderedAscending }
+            return ($0.workspace.id, $0.runtimeKind.presentationRank) < ($1.workspace.id, $1.runtimeKind.presentationRank)
         }
         for peer in peers where peer.workspace.id != own?.id {
             let owner = peer.workspace.folderOwnerID ?? peer.workspace.id

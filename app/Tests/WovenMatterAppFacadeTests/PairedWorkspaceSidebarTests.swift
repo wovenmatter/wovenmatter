@@ -808,7 +808,7 @@ struct PairedWorkspaceSidebarTests {
             }
             try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
         }
-        let folder = try await database.createFolder(name: "Theirs", location: .init(workspaceID: otherFolderOwner, rootPath: "/Users/james/.woven-matter/Theirs", managed: false))
+        let folder = try await database.createFolder(name: "Theirs", location: .init(workspaceID: otherFolderOwner, rootPath: "/Volumes/Other/.woven-matter/Theirs", managed: false))
         await fixture.model.refreshWorkspace()
 
         let registry = try await database.libraryExecutionWorkspaces()
@@ -898,5 +898,53 @@ struct PairedWorkspaceSidebarTests {
         try await host.refreshExecutionRegistry()
         let renamed = try await own()
         #expect(renamed.name == "Studio" && renamed.endpoint == sharing.endpoint && renamed.revision == sharing.revision + 1)
+    }
+
+    /// A live Dev build shares its Mac's library host and keeps its address
+    /// when it quits without withdrawing. That row must not take the Mac's
+    /// agents or folders from its production row, whichever the registry
+    /// reads first.
+    @Test(arguments: [true, false])
+    func aMacsProductionRowComesBeforeADevRowThatKeptItsAddress(devRowFirst: Bool) throws {
+        let host = UUID().uuidString.lowercased(), folderOwner = "device:" + UUID().uuidString.lowercased()
+        let ids = [UUID().uuidString.lowercased(), UUID().uuidString.lowercased()].sorted()
+        let devID = devRowFirst ? ids[0] : ids[1], productionID = devRowFirst ? ids[1] : ids[0]
+        func row(_ id: String, endpoint: String?, instance: String?) throws -> ExecutionWorkspace {
+            .init(id: id, libraryID: "library", ownerDeviceID: host, kind: .mac, name: "James’s Mac mini",
+                  endpoint: try endpoint.map { try #require(URL(string: $0)) }, capabilities: ["execution.v1"], executionDeviceID: host,
+                  developmentInstance: instance, folderOwnerID: folderOwner)
+        }
+        func ordered(_ rows: [ExecutionWorkspace]) -> [ExecutionWorkspace] { rows.sorted { $0.id < $1.id } }
+        let production = try row(productionID, endpoint: "https://jamess-mac-mini.tail1234.ts.net:8443/wovenmatter", instance: nil)
+        let dev = try row(devID, endpoint: "https://jamess-mac-mini.tail1234.ts.net:10000/wovenmatter", instance: "live")
+        let both = ordered([production, dev])
+        #expect(ExecutionWorkspace.macWorkspace(ownedBy: host, in: both)?.id == productionID)
+        #expect(RemoteWorkspaceSidebarModel.workspaceID(ofFolderOwner: folderOwner, in: both) == productionID)
+
+        // Without an address the production row still stands for the Mac, before a Dev row that has one or not.
+        let quiet = try row(productionID, endpoint: nil, instance: nil)
+        #expect(ExecutionWorkspace.macWorkspace(ownedBy: host, in: ordered([quiet, try row(devID, endpoint: nil, instance: "live")]))?.id == productionID)
+        // A Dev instance that is running is the only row with an address: it is where that Mac answers now.
+        #expect(ExecutionWorkspace.macWorkspace(ownedBy: host, in: ordered([quiet, dev]))?.id == devID)
+        #expect(ExecutionWorkspace.preferred(among: []) == nil)
+    }
+
+    /// Paired Macs' agents share a codename. A chat that names an agent this
+    /// Mac does not list (the other Mac's, before its owner record arrives or
+    /// while that Mac has not updated) is not given this Mac's agent of that
+    /// codename; only a chat that names no agent is found by codename.
+    @Test func aChatThatNamesAnUnlistedAgentIsNotGivenThisMacsAgentOfThatCodename() throws {
+        let mine = WorkspaceAgent(codename: "codex", displayName: "Codex", iconKey: "codex", executionLocation: .local, runtimeKind: .codex)
+        let byID = [mine.id.uuidString.lowercased(): mine], byCodename = [mine.codename: mine]
+        func chat(agentID: String?) throws -> WorkspaceConversationRecord {
+            var fields: [String: Any] = ["id": UUID().uuidString.lowercased(), "agent_codename": "codex", "title": "Chat",
+                                         "unread": 0, "is_pinned": 0, "is_archived": 0]
+            if let agentID { fields["agent_id"] = agentID }
+            return try JSONDecoder().decode(WorkspaceConversationRecord.self, from: JSONSerialization.data(withJSONObject: fields))
+        }
+        #expect(ConversationListMeta.agent(for: try chat(agentID: mine.id.uuidString.lowercased()), byID: byID, byCodename: byCodename)?.id == mine.id)
+        let theirs = try chat(agentID: UUID().uuidString.lowercased())
+        #expect(ConversationListMeta.agent(for: theirs, byID: byID, byCodename: byCodename) == nil)
+        #expect(ConversationListMeta.agent(for: try chat(agentID: nil), byID: byID, byCodename: byCodename)?.id == mine.id)
     }
 }

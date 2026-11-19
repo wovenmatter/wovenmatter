@@ -343,7 +343,7 @@ struct MemberReachTests {
         let unbound = UUID().uuidString.lowercased(), elsewhere = UUID()
         try await mac.database.write { try $0.toolsExecuteUnlocked("INSERT INTO folders(id,name,created_at,updated_at) VALUES(?,'Unbound','','')", [unbound]) }
         try await mac.database.createFolder(id: elsewhere, name: "Elsewhere",
-            location: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/Users/other/.woven-matter/Elsewhere", managed: true))
+            location: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/Volumes/Other/.woven-matter/Elsewhere", managed: true))
         for (id, name) in [(unbound, "Orphan"), (elsewhere.uuidString.lowercased(), "Elsewhere")] {
             let taken = try await ask(id, name)
             #expect(taken.status == .rejected && taken.message == "Another folder already uses this ID.", "\(name)")

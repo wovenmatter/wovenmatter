@@ -2244,6 +2244,17 @@ struct ConversationListMeta: Equatable, Sendable {
     /// `workspaceTitles` names remote workspaces by registry ID. Several
     /// machines list the same harness, so a remote agent's chat says which
     /// one runs it, as the sidebar titles that workspace.
+    /// A chat's agent among those listed. A chat that names an agent is found
+    /// by ID only: paired Macs' agents share a codename, so a chat whose agent
+    /// is not listed (another Mac's, before its owner record has arrived, or
+    /// while that Mac has not updated) must not be given this Mac's agent of
+    /// that codename. The codename serves a chat that names no agent.
+    static func agent(for conversation: WorkspaceConversationRecord, byID: [String: WorkspaceAgent],
+                      byCodename: [String: WorkspaceAgent]) -> WorkspaceAgent? {
+        if let id = conversation.agentID { return byID[id] }
+        return conversation.agentCodename.flatMap { byCodename[$0] }
+    }
+
     static func resolve(
         conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
@@ -2554,8 +2565,7 @@ struct RightRailContent: Equatable, Sendable {
             if Task.isCancelled { break }
             guard readFilter?.includes(unread: conversation.unread) != false else { continue }
 
-            let agent = conversation.agentID.flatMap { agentsByID[$0] }
-                ?? conversation.agentCodename.flatMap { agentsByCodename[$0] }
+            let agent = ConversationListMeta.agent(for: conversation, byID: agentsByID, byCodename: agentsByCodename)
             let meta = ConversationListMeta.resolve(
                 conversation: conversation,
                 agent: agent,

@@ -308,7 +308,7 @@ when an intentional design change is accepted.
   Remote workspaces is one list of every other machine, paired Macs and Linux
   hosts together by name, listed whether or not it is online, then paired
   iPhones and iPads. A Linux host that was uninstalled leaves the list on every
-  Mac, and another device's Dev instance is listed only while it runs, as in
+  Mac, and another device's Dev instance is listed only while that device is active, as in
   Settings → Workspaces. Agents under a remote workspace go by their harness name
   alone ("Codex"); the heading says where. Each harness is one row, and the
   same agent stands for it in the sidebar, in New Chat and as the row a chat
