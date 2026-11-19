@@ -671,24 +671,42 @@ final class LibraryHostController {
         var credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
             libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
             deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
-        guard credential.deviceID == identity.hostDeviceID, credential.workspace.id == id,
-              credential.workspace.libraryID == identity.libraryID,
-              registered.map({ original in
-                  original.ownerDeviceID == credential.workspace.ownerDeviceID && original.kind == credential.workspace.kind
-                      && (original.kind != .mac || original.endpoint == credential.workspace.endpoint)
-                      && (original.executionDeviceID == nil || original.executionDeviceID == credential.workspace.executionDeviceID)
-              }) ?? true else {
-            throw LibraryAPIError(code: "wrong_workspace", message: "The execution workspace returned a different identity.")
-        }
-        let prior = try await database.libraryExecutionWorkspaces().first { $0.id == id }
-        credential.workspace.journalDeviceIDs = Array(Set((prior?.journalDeviceIDs ?? []) + [identity.hostDeviceID])).sorted()
-        credential.workspace.revision = prior?.revision ?? 0
-        credential.workspace = try await database.registerExecutionWorkspace(
-            .init(workspace: credential.workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
+        credential.workspace = try await registerLinuxEnrollment(credential, configuration: configuration, registered: registered)
         if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) {
             try? await ensureExecutionToolSettings(workspace: credential.workspace, configuration: configuration)
         }
         return credential
+    }
+
+    /// Records what a Linux host answered its enrollment with (`registered`
+    /// is its row from before): the row's endpoint, execution device and
+    /// capabilities. Its name is not the host's to say, which answers with
+    /// the one it was first enrolled under: it stays the name this Mac
+    /// publishes (`refreshExecutionRegistry`), the chosen one or else the one
+    /// from setup, so an enrollment never reverts a rename, even for one
+    /// revision, on the devices that read only the registry.
+    func registerLinuxEnrollment(_ credential: ExecutionCredential, configuration: RemoteWorkspaceConfiguration,
+                                 registered: ExecutionWorkspace?) async throws -> ExecutionWorkspace {
+        guard let database = model?.libraryStore?.database else {
+            throw LibraryAPIError(code: "unavailable", message: "This Mac is not ready to set up that Linux host yet. It retries automatically.")
+        }
+        let identity = try await database.libraryIdentity(), id = configuration.id.uuidString.lowercased()
+        var workspace = credential.workspace
+        guard credential.deviceID == identity.hostDeviceID, workspace.id == id,
+              workspace.libraryID == identity.libraryID,
+              registered.map({ original in
+                  original.ownerDeviceID == workspace.ownerDeviceID && original.kind == workspace.kind
+                      && (original.kind != .mac || original.endpoint == workspace.endpoint)
+                      && (original.executionDeviceID == nil || original.executionDeviceID == workspace.executionDeviceID)
+              }) ?? true else {
+            throw LibraryAPIError(code: "wrong_workspace", message: "The execution workspace returned a different identity.")
+        }
+        let prior = try await database.libraryExecutionWorkspaces().first { $0.id == id }
+        workspace.name = try await database.executionWorkspaceNames()[id] ?? configuration.name
+        workspace.journalDeviceIDs = Array(Set((prior?.journalDeviceIDs ?? []) + [identity.hostDeviceID])).sorted()
+        workspace.revision = prior?.revision ?? 0
+        return try await database.registerExecutionWorkspace(
+            .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
     }
 
     func withdrawDevelopmentWorkspace() async throws {

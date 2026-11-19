@@ -3,7 +3,7 @@ import Foundation
 import Testing
 import WovenMatterClient
 import WovenMatterCore
-import WovenMatterLibraryStore
+@testable import WovenMatterLibraryStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -104,6 +104,53 @@ struct HarnessMaintenanceTests {
         // A failed refresh (no inventory) must not remove or rewrite known agents.
         await reopened.synchronizeRemoteAgentCatalog()
         #expect(reopened.remoteWorkspaceAgents == saved)
+    }
+
+    /// A Linux host's agent is listed by its owner record like any other:
+    /// this Mac's as stored; another Mac's under the host's workspace by the
+    /// plain harness name; and nowhere while its owner record or the host's
+    /// registry row has not arrived, when it could only be listed under its
+    /// stored name for a host this Mac may not manage.
+    @Test func aLinuxAgentOfUnknownOwnerIsNotListed() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let database = fixture.database, identity = try await database.libraryIdentity()
+        await fixture.model.synchronizeRemoteAgentCatalog()
+        let own = Set(fixture.model.remoteWorkspaceAgents.map(\.id))
+        #expect(!own.isEmpty && fixture.model.remoteWorkspaceAgents.allSatisfy { $0.runtimeDeviceID == fixture.remote.id })
+
+        // Another Mac's agent for a host it added, as synchronization delivers its row.
+        let otherMac = UUID().uuidString.lowercased(), otherHost = UUID()
+        let agent = try await database.ensureRemoteHarnessAgent(runtimeKind: .codex, remoteWorkspaceID: otherHost,
+            remoteWorkspaceName: "Their host", ownerDeviceID: UUID())
+        func arrive(_ sql: String, _ values: [String]) async throws {
+            try await database.write { connection in
+                try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+                try connection.toolsExecuteUnlocked(sql, values)
+                try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
+            }
+            await fixture.model.refreshWorkspace()
+        }
+        func listed() -> WorkspaceAgent? { fixture.model.remoteWorkspaceAgents.first { $0.id == agent } }
+        let key = agent.uuidString.lowercased()
+        // Neither its owner record nor its host's registry row is here.
+        try await arrive("DELETE FROM agent_owners WHERE id=?", [key])
+        #expect(listed() == nil && Set(fixture.model.remoteWorkspaceAgents.map(\.id)) == own)
+        #expect(!fixture.model.localCLIAgents.contains { $0.id == agent })
+        // Its owner record alone places it nowhere yet.
+        try await arrive("INSERT INTO agent_owners VALUES(?,?)", [key, otherMac])
+        #expect(listed() == nil)
+        // With the host's registry row it is listed under that workspace, by the plain name.
+        let workspace = ExecutionWorkspace(id: otherHost.uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: otherMac,
+            kind: .linux, name: "Their host", executionDeviceID: UUID().uuidString.lowercased())
+        _ = try await database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
+        await fixture.model.refreshWorkspace()
+        #expect(listed()?.displayName == AgentRuntimeKind.codex.displayName && listed()?.runtimeDeviceID == otherHost)
+        #expect(fixture.model.peerAgentWorkspaces[agent]?.id == workspace.id)
+        #expect(Set(fixture.model.remoteWorkspaceAgents.map(\.id)) == own.union([agent]))
+        // The pure rule: only an agent this Mac owns, or one placed on a workspace, is presented.
+        let stored = try await database.workspaceAgents()
+        #expect(ApplicationModel.presentedAgents(stored, own: [], peerWorkspaces: [:]).isEmpty)
+        #expect(Set(ApplicationModel.presentedAgents(stored, own: own, peerWorkspaces: [:]).map(\.id)) == own)
     }
 
     @Test func updatesOverlapAndKeepProgressAndFailuresIndependent() async throws {

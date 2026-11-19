@@ -3138,15 +3138,15 @@ final class ApplicationModel {
     /// as stored. Another member's agent is remote from here whatever its row
     /// says: it runs on the workspace its owner record leads to
     /// (`runtimeDeviceID` is that registry ID) under its harness's plain name,
-    /// since the workspace it is listed under already says where. A local
-    /// agent that is neither (no owner record, or its Mac is not registered
-    /// here yet) is not listed: it must never look like this Mac's.
+    /// since the workspace it is listed under already says where. An agent
+    /// that is neither (no owner record, or its workspace is not registered
+    /// here yet) is not listed, local or for a Linux host: a local one must
+    /// never look like this Mac's, and a host's would be listed under a
+    /// stored "Harness · Host" name for a host this Mac may not manage.
     nonisolated static func presentedAgents(_ agents: [WorkspaceAgent], own: Set<UUID>,
                                             peerWorkspaces: [UUID: ExecutionWorkspace]) -> [WorkspaceAgent] {
         agents.compactMap { agent in
-            guard let workspace = peerWorkspaces[agent.id] else {
-                return agent.executionLocation == .local && !own.contains(agent.id) ? nil : agent
-            }
+            guard let workspace = peerWorkspaces[agent.id] else { return own.contains(agent.id) ? agent : nil }
             return WorkspaceAgent(id: agent.id, codename: agent.codename,
                 displayName: agent.runtimeKind.displayName, iconKey: agent.iconKey,
                 executionLocation: .remote, ownerDeviceID: agent.ownerDeviceID, runtimeKind: agent.runtimeKind,

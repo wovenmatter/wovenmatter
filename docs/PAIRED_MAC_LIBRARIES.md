@@ -53,9 +53,11 @@ record stays read-only, including across restarts. Agents are listed the same
 way (`AgentPlacements`): a Mac lists as its own only the agents whose owner
 record names it, and lists another member's agent under the workspace that
 record leads to, by its plain harness name. An agent whose owner record, or
-whose Mac's registry row, has not arrived is listed nowhere, never under this
-Mac. Owner records, registry rows and workspace names advance the workspace
-change counter, so each view follows one that arrives on its own.
+whose workspace's registry row (its Mac's, or its Linux host's), has not
+arrived is listed nowhere, never under this Mac. Owner records, registry rows,
+workspace names, and the workspace and trash flag of a chat's execution
+projection advance the workspace change counter, so each view follows one
+that arrives on its own.
 Imported observations do not
 fire native-history, library-indexing or capture triggers, or dispatch commands.
 Native workspace files are outside library sync; an observer downloads the
@@ -275,11 +277,17 @@ unowned rows it has local evidence of having run, and nothing else.
 
 - A conversation with a native session on this Mac (`harness_sessions`, which
   never synchronizes and is written only where the chat was created) and no
-  execution projection.
-- A schedule this Mac has run (`calendar_runs`, also local), unless its
-  executor record assigns it to another device. In a library that has never
-  received peer data every other schedule is claimed too, and one assigned to
-  a phone keeps that executor.
+  independent execution: no projection onto a Linux host's or an iPhone's
+  workspace. A projection onto a Mac's workspace is only paired-Mac routing
+  and does not prevent the claim; one left by an earlier build, which guessed
+  owners from who edited a chat, is removed when the Mac that owns the chat
+  opens its library.
+- A schedule with a run this Mac reserved for itself or sent (`calendar_runs`
+  and the run's delivery, both local), unless its executor record assigns it
+  to another device. A run a Linux host reported to the Mac that manages it
+  is not evidence: such a schedule may be any Mac's. In a library that has
+  never received peer data every other schedule is claimed too, and one
+  assigned to a phone keeps that executor.
 - Agents, once the Mac's device ID is known at startup: the ones that device
   ID created, and each agent the Mac ensures for itself.
 
@@ -288,6 +296,10 @@ is never evidence, because any Mac may edit it; and a row without evidence
 stays unclaimed and read-only until its owner's record arrives. Claims are
 ordinary shared records, so two Macs claim disjoint rows and each learns the
 other's on the next exchange, which also routes the other Mac's chats to it.
+Once a library has received peer data, a schedule without that evidence on
+any Mac stays unowned: no Mac runs it, and editing it does not claim it (only
+creating a schedule does). A Linux host that a workspace's schedules are
+handed to keeps running them whoever owns them.
 
 Provider credentials remain in their original local storage. A fresh Dev snapshot drops copied peer routes,
 membership state, counters and cursors, retaining source history without

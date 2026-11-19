@@ -1603,11 +1603,204 @@ extension PairedLibraryTests {
     #expect(try await changed("an owner record", "INSERT INTO agent_owners VALUES(?,?)", [agent, other]))
     #expect(try await changed("a changed owner", "UPDATE agent_owners SET device_id=? WHERE id=?", [mac.id, agent]))
     #expect(try await changed("a removed owner", "DELETE FROM agent_owners WHERE id=?", [agent]))
-    // Of a chat's execution projection, only where it runs.
+    // Of a chat's execution projection, only where it runs and whether it is trashed there.
     #expect(try await changed("a projection", "INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [chat, workspace.id]))
     #expect(try await !changed("projected content", "UPDATE execution_conversations SET conversation='{\"title\":\"Observed\"}',active_run_id='run' WHERE id=?", [chat]))
     #expect(try await !changed("the same workspace", "UPDATE execution_conversations SET workspace_id=workspace_id WHERE id=?", [chat]))
     #expect(try await changed("another workspace", "UPDATE execution_conversations SET workspace_id=? WHERE id=?", [other, chat]))
+    #expect(try await changed("a trashed projection", "UPDATE execution_conversations SET deleted=1 WHERE id=?", [chat]))
+    #expect(try await !changed("the same trash flag", "UPDATE execution_conversations SET deleted=1,conversation='{}' WHERE id=?", [chat]))
+    #expect(try await changed("a restored projection", "UPDATE execution_conversations SET deleted=0 WHERE id=?", [chat]))
     #expect(try await changed("a removed projection", "DELETE FROM execution_conversations WHERE id=?", [chat]))
+  }
+
+  /// A library an earlier build opened has the projection's change-counter
+  /// trigger for its workspace alone. Opening it replaces that trigger.
+  @Test func aProjectionTriggerAnEarlierBuildWroteIsReplacedWhenTheLibraryOpens() async throws {
+    let mac = try await Mac(); defer { mac.remove() }
+    let name = "execution_conversations_workspace_revision_update"
+    func stored(_ database: WorkspaceDatabase) async throws -> String? {
+      try await database.read { try $0.historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", values: [name]).first?.objectValue?["sql"]?.stringValue }
+    }
+    let current = try #require(try await stored(mac.database))
+    #expect(current.contains("UPDATE OF workspace_id,deleted"))
+    try await mac.database.write { connection in
+      try connection.executeUnlocked("""
+        DROP TRIGGER \(name);
+        CREATE TRIGGER \(name)
+        AFTER UPDATE OF workspace_id ON execution_conversations WHEN OLD.workspace_id IS NOT NEW.workspace_id
+        BEGIN
+          UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
+        END;
+        """)
+    }
+    let chat = UUID().uuidString.lowercased()
+    func trashing(_ database: WorkspaceDatabase, _ deleted: String) async throws -> Bool {
+      let before = try await database.workspaceRevision()
+      try await database.write { connection in
+        try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+        try connection.toolsExecuteUnlocked("UPDATE execution_conversations SET deleted=CAST(? AS INTEGER) WHERE id=?", [deleted, chat])
+        try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
+      }
+      return try await database.workspaceRevision() != before
+    }
+    try await mac.database.write { try $0.toolsExecuteUnlocked("INSERT INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,'{}')", [chat, UUID().uuidString.lowercased()]) }
+    #expect(try await !trashing(mac.database, "1"))
+    let reopened = try await WorkspaceDatabase(url: mac.database.fileURL)
+    #expect(try await stored(reopened) == current)
+    #expect(try await trashing(reopened, "0"))
+    let again = try await WorkspaceDatabase(url: mac.database.fileURL)
+    #expect(try await stored(again) == current)
+  }
+}
+
+
+/// What claims an unowned row: review of the evidence each rule accepts.
+extension PairedLibraryTests {
+  /// A row as a receive or a projection writes it: no version to send.
+  private func derived(_ database: WorkspaceDatabase, _ sql: String, _ values: [String]) async throws {
+    try await database.write { connection in
+      try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=1")
+      try connection.toolsExecuteUnlocked(sql, values)
+      try connection.executeUnlocked("UPDATE peer_sync_clock SET applying=0")
+    }
+  }
+  /// Routes `chat` to `workspace` as paired-Mac routing or an execution owner's projection does.
+  private func project(_ database: WorkspaceDatabase, _ chat: String, onto workspace: String) async throws {
+    let conversation = LibraryConversation(id: chat, title: "Projected", providerID: "local:codex", routeID: "local:codex",
+      runtimeKind: "codex", libraryID: try await database.libraryID(), workspaceID: workspace)
+    try await derived(database, "INSERT OR REPLACE INTO execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+      [chat, workspace, String(decoding: try JSONEncoder().encode(conversation), as: UTF8.self)])
+  }
+
+  /// Earlier builds guessed a chat's owner from who edited it and routed it
+  /// there. Mac A's own chat, routed to Mac B with no owner record anywhere:
+  /// B has no native session and never claims it, so A must, and A's stale
+  /// routing goes with the claim, since no receive follows a local claim.
+  @Test func aMacClaimsItsOwnChatThatAnEarlierBuildRoutedToAnotherMac() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let chat = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Routed away", ownerDeviceID: UUID())
+    let workspaceA = try await registerMacWorkspace(a), workspaceB = try await registerMacWorkspace(b)
+    try await forgetOwners(a); try await forgetOwners(b)
+    try await a.send(to: b); try await b.send(to: a)
+    for mac in [a, b] { try await project(mac.database, chat, onto: workspaceB.id) }
+    #expect(try await !a.database.read { try $0.locallyOwnsConversationUnlocked(chat) })
+
+    let reopened = try await WorkspaceDatabase(url: a.database.fileURL)
+    #expect(try await owner(reopened, "conversation_owners", chat) == a.id)
+    #expect(try await projectedWorkspace(reopened, chat) == nil)
+    #expect(try await reopened.read { try $0.locallyOwnsConversationUnlocked(chat) })
+    // The claim is sent. The routing was derived state: its removal is not a deletion to send.
+    let sent = try await journal(reopened).filter { $0.row["id"]?.value == chat && ["conversation_owners", "execution_conversations"].contains($0.table) }
+    #expect(sent.map(\.table) == ["conversation_owners"] && sent.allSatisfy { $0.origin == a.id && !$0.deleted })
+
+    // B holds the same stale routing to itself and no native session: it claims nothing.
+    let other = try await WorkspaceDatabase(url: b.database.fileURL)
+    #expect(try await owner(other, "conversation_owners", chat) == nil)
+    #expect(try await projectedWorkspace(other, chat) == workspaceB.id)
+    // A's record then routes the chat to A there.
+    try await a.send(to: b); try await b.send(to: a)
+    #expect(try await owner(b.database, "conversation_owners", chat) == a.id)
+    #expect(try await projectedWorkspace(b.database, chat) == workspaceA.id)
+    #expect(try await !b.database.read { try $0.locallyOwnsConversationUnlocked(chat) })
+    #expect(try await projectedWorkspace(a.database, chat) == nil)
+    #expect(try await a.database.read { try $0.locallyOwnsConversationUnlocked(chat) })
+    // Later opens change nothing.
+    let heads = [try await lastChange(a.database), try await lastChange(b.database)]
+    for mac in [a, b] { _ = try await WorkspaceDatabase(url: mac.database.fileURL) }
+    #expect([try await lastChange(a.database), try await lastChange(b.database)] == heads)
+    #expect(try await projectedWorkspace(b.database, chat) == workspaceA.id)
+  }
+
+  /// What the claim must leave alone: a chat another Mac was asked to create
+  /// (its placeholder has no native session here), a chat an owner record
+  /// already gives to another Mac, and a chat with a native session here
+  /// that a Linux host, an iPhone or a workspace not registered here runs.
+  @Test func aPlaceholderAndAnIndependentExecutionAreNeverClaimed() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let workspaceB = try await registerMacWorkspace(b)
+    try await b.send(to: a)
+    let library = try await a.database.libraryID()
+    // Placeholders for a chat on B, the second as a library from before owner records holds it.
+    let placeholder = UUID().uuidString.lowercased(), unowned = UUID().uuidString.lowercased()
+    for id in [placeholder, unowned] {
+      try await a.database.installPairedConversationPlaceholder(id: id, agentID: UUID(), workspace: workspaceB, runtimeKind: "codex")
+    }
+    try await derived(a.database, "DELETE FROM conversation_owners WHERE id=?", [unowned])
+    // A chat with a native session here that an owner record gives to B.
+    let theirs = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owned by B", ownerDeviceID: UUID())
+    try await derived(a.database, "INSERT OR REPLACE INTO conversation_owners VALUES(?,?)", [theirs, b.id])
+    try await project(a.database, theirs, onto: workspaceB.id)
+    // Chats with a native session here and an independent execution.
+    var independent: [String: String] = [:]
+    for (kind, owner) in [(ExecutionWorkspace.Kind.linux, a.id), (.ios, UUID().uuidString.lowercased())] {
+      let workspace = try await a.database.registerExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(),
+        libraryID: library, ownerDeviceID: owner, kind: kind, name: kind.rawValue, executionDeviceID: UUID().uuidString.lowercased())), deviceID: a.id)
+      let chat = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "On " + kind.rawValue, ownerDeviceID: UUID())
+      independent[chat] = workspace.id
+    }
+    independent[try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "On an unknown workspace", ownerDeviceID: UUID())] = UUID().uuidString.lowercased()
+    for chat in independent.keys { try await derived(a.database, "DELETE FROM conversation_owners WHERE id=?", [chat]) }
+    for (chat, workspace) in independent { try await project(a.database, chat, onto: workspace) }
+    let head = try await lastChange(a.database)
+
+    let reopened = try await WorkspaceDatabase(url: a.database.fileURL)
+    #expect(try await owners(reopened, "conversation_owners") == [placeholder: b.id, theirs: b.id])
+    for id in [placeholder, unowned, theirs] { #expect(try await projectedWorkspace(reopened, id) == workspaceB.id) }
+    for (chat, workspace) in independent { #expect(try await projectedWorkspace(reopened, chat) == workspace) }
+    for id in [placeholder, unowned, theirs] + Array(independent.keys) {
+      #expect(try await !reopened.read { try $0.locallyOwnsConversationUnlocked(id) })
+    }
+    #expect(try await lastChange(reopened) == head)
+  }
+
+  /// A Mac that manages a Linux host holds the runs the host reported, for
+  /// schedules any Mac created. Those are not evidence that it runs them:
+  /// only a run it reserved for itself or sent is. Once peer data has been
+  /// received a schedule without that evidence stays unowned, and editing it
+  /// claims nothing.
+  @Test func aScheduleIsNotClaimedByTheMacThatImportedItsLinuxHostsRuns() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let host = UUID(), unmanaged = UUID(), start = Date().addingTimeInterval(-30)
+    func hostSchedule(_ mac: Mac, _ title: String, on workspace: UUID) async throws -> String {
+      let task = WorkspaceCalendarTask(prompt: "Fixture", configuration: .init(runtimeKind: .codex, workspaceID: workspace, title: "Fixture",
+        model: "fixture", permission: "agent", nativeWorkingDirectory: "/tmp/fixture"))
+      return try await mac.database.saveCalendarEvent(draft: .init(title: title, startsAt: start, timeZoneID: "UTC", task: task), creating: true, now: start)
+    }
+    // On A: a task it runs itself, and two for a Linux workspace it drives itself, one sent and one only reserved.
+    let ranHere = try await schedule(a, "Ran here")
+    let sentHere = try await hostSchedule(a, "Sent from here", on: unmanaged), reservedHere = try await hostSchedule(a, "Reserved here", on: unmanaged)
+    let due = try await a.database.dueCalendarRuns()
+    #expect(Set(due.map(\.eventID)) == [ranHere, sentHere, reservedHere])
+    let sent = try #require(due.first { $0.eventID == sentHere })
+    _ = try await a.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: unmanaged, remoteWorkspaceName: "Unmanaged",
+      title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: sent.sessionID))
+    _ = try await a.database.prepareCalendarDelivery(runID: sent.id)
+    // On B: a task for the Linux host A manages. The host runs it and reports the run to A.
+    let hostRan = try await hostSchedule(b, "Host ran", on: host)
+    try await forgetOwners(a); try await forgetOwners(b)
+    try await b.send(to: a); try await a.send(to: b)
+    try await a.database.setRemoteCalendarExecutionOwnership(workspaceID: host, state: .pending)
+    try await a.database.setRemoteCalendarExecutionOwnership(workspaceID: host, state: .remote)
+    let item = try #require(try await a.database.calendarItems().first { $0.id == hostRan })
+    try await a.database.importRemoteCalendarRun(.init(id: UUID().uuidString.lowercased(), eventID: hostRan, occurrenceIndex: 0, scheduledAt: start,
+      sessionID: UUID().uuidString.lowercased(), task: try #require(item.calendar.task), status: "accepted", title: item.title),
+      workspaceID: host, eventRevision: item.calendar.revision)
+    #expect(Set(try await a.database.calendarRuns().map(\.eventID)) == [ranHere, sentHere, reservedHere, hostRan])
+
+    let reopened = try await WorkspaceDatabase(url: a.database.fileURL)
+    #expect(try await owners(reopened, "calendar_item_owners") == [ranHere: a.id, sentHere: a.id])
+    // B ran nothing, so the host's schedule has no owner on either Mac, and no Mac runs it.
+    let other = try await WorkspaceDatabase(url: b.database.fileURL)
+    #expect(try await owners(other, "calendar_item_owners").isEmpty)
+    var draft = WorkspaceCalendarDraft(try #require(try await other.calendarItems().first { $0.id == hostRan }))
+    draft.title = "Edited on the Mac that created it"
+    try await other.saveCalendarEvent(id: hostRan, draft: draft, creating: false)
+    #expect(try await other.calendarItems().first { $0.id == hostRan }?.title == draft.title)
+    #expect(try await owner(other, "calendar_item_owners", hostRan) == nil)
+    #expect(try await other.dueCalendarRuns().isEmpty)
+    // Creating a schedule is what claims one.
+    let recreated = try await hostSchedule(b, "Created again", on: host)
+    #expect(try await owner(b.database, "calendar_item_owners", recreated) == b.id)
   }
 }

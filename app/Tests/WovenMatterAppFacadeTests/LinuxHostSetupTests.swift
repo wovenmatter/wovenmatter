@@ -66,4 +66,42 @@ struct LinuxHostSetupTests {
         #expect(steps.adopted == [bots.id.uuidString.lowercased()])
         #expect(steps.enrolled.isEmpty)
     }
+
+    /// A host answers its enrollment with its endpoint and execution device,
+    /// under the name it was first enrolled with. The row keeps the name this
+    /// Mac publishes, the chosen one or else the one from setup, so the next
+    /// registry refresh has nothing to put back.
+    @Test(arguments: ["Build box", nil])
+    func enrollingAHostKeepsTheNameThisMacPublishes(chosen: String?) async throws {
+        // Publishing a host's tool settings looks for its token: never in the user's Keychain.
+        let keychain = SignInKeychainFixture()
+        let f = try await KeychainAccess.$testOperations.withValue(keychain.operations) { try await FacadeFixture() }
+        defer { f.remove() }
+        let host = f.model.libraryHost, id = f.remote.id.uuidString.lowercased()
+        try await host.refreshExecutionRegistry()
+        #expect(await f.model.renameWorkspace(registryID: id, name: chosen))
+        try await host.refreshExecutionRegistry()
+        func row() async throws -> ExecutionWorkspace { try #require(try await f.database.libraryExecutionWorkspaces().first { $0.id == id }) }
+        let published = try await row(), identity = try await f.database.libraryIdentity()
+        #expect(published.name == chosen ?? f.remote.name && published.executionDeviceID == nil)
+
+        let endpoint = try #require(URL(string: "https://fixture.tail1234.ts.net/wovenmatter-execution/fixture"))
+        let answer = ExecutionCredential(workspace: .init(id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+            kind: .linux, name: "First enrolled as", endpoint: endpoint, capabilities: ["execution", "historyReplay"],
+            executionDeviceID: UUID().uuidString.lowercased(), revision: 2), deviceID: identity.hostDeviceID, token: "fixture")
+        let enrolled = try await host.registerLinuxEnrollment(answer, configuration: f.remote, registered: published)
+        #expect(enrolled.name == published.name && enrolled.revision == published.revision + 1)
+        #expect(enrolled.endpoint == endpoint && enrolled.executionDeviceID == answer.workspace.executionDeviceID)
+        #expect(enrolled.journalDeviceIDs == [identity.hostDeviceID])
+        #expect(try await row() == enrolled)
+
+        let head = try await f.database.peerSyncHead()
+        try await host.refreshExecutionRegistry()
+        #expect(try await row() == enrolled)
+        #expect(try await f.database.peerSyncHead() == head)
+        // A different identity is still refused, and changes nothing.
+        var foreign = answer; foreign.workspace.executionDeviceID = UUID().uuidString.lowercased()
+        await #expect(throws: LibraryAPIError.self) { try await host.registerLinuxEnrollment(foreign, configuration: f.remote, registered: enrolled) }
+        #expect(try await row() == enrolled)
+    }
 }

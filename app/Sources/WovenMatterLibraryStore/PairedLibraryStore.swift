@@ -154,19 +154,27 @@ extension WorkspaceDatabaseConnection {
       // Where an agent or a chat is placed is decided by owner records, the
       // registry and its names, which arrive on their own: each advances the
       // workspace overview's change counter like the rows they place. Of a
-      // chat's execution projection only its workspace counts; its content is
-      // rewritten with every observed message.
+      // chat's execution projection only its workspace and its trash flag
+      // count (the flag decides whether the chat is listed for its
+      // workspace); its content is rewritten with every observed message.
       for table in ["agent_owners", "execution_workspaces", "execution_workspace_names"] {
         try createWorkspaceRevisionTriggersUnlocked(table)
       }
       try createWorkspaceRevisionTriggersUnlocked("execution_conversations", operations: ["INSERT", "DELETE"])
-      try executeUnlocked("""
-        CREATE TRIGGER IF NOT EXISTS execution_conversations_workspace_revision_update
-        AFTER UPDATE OF workspace_id ON execution_conversations WHEN OLD.workspace_id IS NOT NEW.workspace_id
+      // SQLite stores the statement as written, without its semicolon. A
+      // trigger an earlier build wrote for other columns is replaced.
+      let projectionUpdate = """
+        CREATE TRIGGER execution_conversations_workspace_revision_update
+        AFTER UPDATE OF workspace_id,deleted ON execution_conversations
+        WHEN OLD.workspace_id IS NOT NEW.workspace_id OR OLD.deleted IS NOT NEW.deleted
         BEGIN
           UPDATE workspace_revision SET revision = revision + 1 WHERE singleton = 1;
         END
-        """)
+        """
+      if try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='execution_conversations_workspace_revision_update'", values: [])
+        .first?.objectValue?["sql"]?.stringValue != projectionUpdate {
+        try executeUnlocked("DROP TRIGGER IF EXISTS execution_conversations_workspace_revision_update;\n" + projectionUpdate + ";")
+      }
       // Replaying observed rows must not manufacture fresh native history or
       // derived library work. FTS indexing still runs on the original, stable
       // incoming event IDs.
@@ -859,8 +867,8 @@ extension WorkspaceDatabaseConnection {
       SELECT 1 AS owned FROM conversation_owners o WHERE o.id=?1 AND o.device_id=?2
         AND NOT EXISTS(SELECT 1 FROM execution_adoptions a WHERE a.conversation_id=?1)
         AND NOT EXISTS(SELECT 1 FROM retained_execution_history r WHERE r.conversation_id=?1)
-        AND NOT EXISTS(SELECT 1 FROM execution_conversations x WHERE x.id=?1 AND NOT EXISTS(
-          SELECT 1 FROM execution_workspaces w WHERE w.id=x.workspace_id AND json_extract(w.payload,'$.kind')='mac'))
+        AND NOT EXISTS(SELECT 1 FROM execution_conversations x WHERE x.id=?1
+          AND NOT \(PairedLibraryOwnership.macWorkspace("x.workspace_id")))
       """, values: [conversation, local]).isEmpty == false
   }
 
