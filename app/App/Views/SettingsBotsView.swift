@@ -312,10 +312,11 @@ struct SettingsBotsMCPAccessSection: View {
                     SettingsNote("Goals and visual replies are included. Sessions reach only your Woven workspaces, under each workspace's own permissions.")
                 }
             }
-            // The pause switch is gone; a pause set before then can still be lifted.
+            // The switch that set this is gone; access revoked before then can still be given back.
+            // It reads like a bot's revoked key below: revoked, and Reinstate brings it back.
             if bots.thisMachine?.paused == true {
-                SettingsRow(title: "Woven MCP is paused for bots on this Mac", detail: "Their Woven MCP calls are refused until you resume. The bots themselves keep running.") {
-                    Button("Resume") { Task { await bots.attempt(.setPaused(false)) } }
+                SettingsRow(title: "Woven MCP access is revoked for bots on this Mac", detail: "Their Woven MCP calls are refused until you reinstate it. The bots themselves keep running.") {
+                    Button("Reinstate") { Task { await bots.attempt(.setPaused(false)) } }
                         .buttonStyle(SettingsQuietButtonStyle())
                         .disabled(bots.busy)
                 }
@@ -379,7 +380,7 @@ enum BotMachineText {
         switch machine.state {
         case .off: "Off"
         case .starting: "Starting"
-        case .ready: machine.paused ? "Woven MCP paused" : "Running"
+        case .ready: machine.paused ? "Woven MCP revoked" : "Running"
         case .unreachable: "Unavailable"
         case .needsUpdate: "Needs update"
         case .failed: "Failed"
