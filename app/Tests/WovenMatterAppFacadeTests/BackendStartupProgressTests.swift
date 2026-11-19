@@ -50,7 +50,6 @@ struct BackendStartupProgressTests {
         #expect(converting.title == "Upgrading your library")
         #expect(converting.detail.contains("2.13 GB"))
         #expect(converting.fraction == 0.4)
-        #expect(progress(.compacting, 0.9).detail.contains("last step"))
         #expect(progress(.backingUp, 1.4).fraction == 1)
     }
 

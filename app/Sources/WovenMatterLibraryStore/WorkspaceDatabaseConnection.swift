@@ -23,7 +23,7 @@ final class WorkspaceDatabaseConnection {
   private var connection: OpaquePointer?
   public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
-  /// Publishes how far an upgrade of an earlier release's library is, while one runs.
+  /// Publishes how far the conversion of the previous release's library is, while one runs.
   var upgradeReporter: LibraryUpgradeReporter?
 
   init(url: URL, readOnlyProjection: Bool = false, workerQueue: DispatchQueue) throws {
@@ -53,10 +53,10 @@ final class WorkspaceDatabaseConnection {
       // the first table is created, or at a VACUUM, and only before WAL.
       try execute("PRAGMA auto_vacuum = INCREMENTAL")
       try execute("PRAGMA journal_mode = WAL")
-      // A library an earlier release wrote is recognised by its shape and
-      // brought to this schema; a current one goes straight to the
+      // What the previous release left in a library is recognised by its
+      // shape and converted; a current library goes straight to the
       // idempotent creation below. The library carries no version number.
-      let converted = try convertEarlierLibraryUnlocked(file: url)
+      try convertEarlierLibraryUnlocked(file: url)
       try execute("PRAGMA foreign_keys = ON")
       try migrate()
       try migrateWorkspaceHistory()
@@ -76,16 +76,7 @@ final class WorkspaceDatabaseConnection {
       try migrateExecutionStreamChanges()
       try migrateDeviceSyncWakes()
       Self.removeExpiredLibraryBackups(for: url)
-      // The conversion leaves the space of the bookkeeping it compacted and
-      // the tables it rebuilt free inside the file; give it back once. Nothing
-      // else has the library open yet, and a failure only keeps the space.
-      // VACUUM writes the whole file through the WAL; truncate it after.
-      if converted {
-        // An empty WAL first, so its growth measures how far VACUUM is.
-        try? execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        upgradeReporter?.compacting(output: URL(fileURLWithPath: url.path + "-wal"), expectedBytes: try withLock { try usedBytesUnlocked() })
-        if (try? execute("VACUUM")) != nil { try? execute("PRAGMA wal_checkpoint(TRUNCATE)") }
-      } else { try? withLock { try reclaimFreeSpaceUnlocked() } }
+      try? withLock { try reclaimFreeSpaceUnlocked() }
       upgradeReporter?.finish()
       upgradeReporter = nil
       // Planner statistics for the tables that have grown, within SQLite's

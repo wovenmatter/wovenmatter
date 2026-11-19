@@ -8,6 +8,8 @@ import CSQLite
 extension WorkspaceDatabaseConnection {
   /// The execution projection's tables. Chunk and part rows name their
   /// bytes in `LibraryFileStore`'s chunk store by `sha256` and `byte_count`.
+  /// Native history is read by format and workspace
+  /// (`execution_native_history_format`).
   static let federationTablesSQL = """
       CREATE TABLE IF NOT EXISTS library_identity (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1), host_device_id TEXT NOT NULL, library_id TEXT NOT NULL
@@ -49,6 +51,7 @@ extension WorkspaceDatabaseConnection {
         sha256 TEXT NOT NULL, complete INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY(workspace_id, record_id)
       );
+      CREATE INDEX IF NOT EXISTS execution_native_history_format ON execution_native_history(format, workspace_id);
       CREATE TABLE IF NOT EXISTS execution_native_history_parts (
         workspace_id TEXT NOT NULL, record_id TEXT NOT NULL, part_index INTEGER NOT NULL,
         sha256 TEXT NOT NULL, byte_count INTEGER NOT NULL,

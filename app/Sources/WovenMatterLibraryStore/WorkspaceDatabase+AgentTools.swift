@@ -54,71 +54,73 @@ extension WorkspaceDatabaseConnection {
       defaults_applied INTEGER NOT NULL DEFAULT 0);
     """
 
+  /// The tables agent tools keep. A source (`source_id`, `created_by`,
+  /// `coordinator_id`) is any MCP caller: a conversation or an app-wide
+  /// caller such as a bot. A target is always a conversation.
+  static let agentToolsSQL = """
+    CREATE TABLE IF NOT EXISTS mcp_callers(id TEXT PRIMARY KEY, display_name TEXT, machine_id TEXT,
+      revoked INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS mcp_bot_machines(machine_id TEXT PRIMARY KEY, active INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS input_contexts(
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
+      note_id TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS tool_mutations(
+      source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
+      operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,
+      PRIMARY KEY(source_id,request_id));
+    CREATE TABLE IF NOT EXISTS tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS opencode_input_contexts(
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
+    CREATE TABLE IF NOT EXISTS automation_requests(
+      source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
+      input_digest TEXT NOT NULL, PRIMARY KEY(source_id,request_id));
+    CREATE TABLE IF NOT EXISTS automation_cancellations(
+      source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
+      PRIMARY KEY(source_id,request_id));
+    \(sessionToolsSQL)
+    CREATE TABLE IF NOT EXISTS session_executor_profiles(
+      session_id TEXT PRIMARY KEY REFERENCES conversations(id), profiles_json TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS session_grants(
+      source_id TEXT NOT NULL REFERENCES mcp_callers(id),
+      target_id TEXT NOT NULL REFERENCES conversations(id),
+      kind TEXT NOT NULL CHECK(kind IN ('attachment','approved')),
+      PRIMARY KEY(source_id,target_id,kind));
+    CREATE TABLE IF NOT EXISTS session_relationships(
+      session_id TEXT PRIMARY KEY REFERENCES conversations(id),
+      created_by TEXT REFERENCES mcp_callers(id),
+      coordinator_id TEXT REFERENCES mcp_callers(id),
+      purpose TEXT, notifications_enabled INTEGER NOT NULL DEFAULT 1,
+      coordination_epoch TEXT, coordination_since TEXT,
+      CHECK(session_id != created_by), CHECK(session_id != coordinator_id));
+    CREATE INDEX IF NOT EXISTS session_relationships_coordinator ON session_relationships(coordinator_id);
+    -- A timer's target is a conversation or a bot principal (a bot's own
+    -- schedule), so it references neither. Timers of a missing conversation
+    -- are never listed or fired.
+    CREATE TABLE IF NOT EXISTS session_timers(
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+      instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
+      is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX IF NOT EXISTS session_timers_due ON session_timers(is_paused,next_fire_at);
+    CREATE INDEX IF NOT EXISTS session_timers_session ON session_timers(session_id);
+    CREATE TABLE IF NOT EXISTS coordination_access_requests(
+      id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
+      target_id TEXT NOT NULL REFERENCES conversations(id), purpose TEXT NOT NULL,
+      notifications INTEGER NOT NULL, state TEXT NOT NULL, error TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), coordination_epoch TEXT);
+    CREATE INDEX IF NOT EXISTS coordination_access_requests_state ON coordination_access_requests(state,created_at);
+    CREATE TABLE IF NOT EXISTS coordination_observations(
+      epoch TEXT NOT NULL, event_key TEXT NOT NULL, PRIMARY KEY(epoch,event_key));
+    CREATE TABLE IF NOT EXISTS session_creations(
+      id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
+      target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
+      purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned',
+      configuration_json TEXT, configuration_applied INTEGER NOT NULL DEFAULT 0);
+    CREATE UNIQUE INDEX IF NOT EXISTS session_deliveries_event ON session_deliveries(event_key) WHERE event_key IS NOT NULL;
+    """
+
   func migrateAgentTools() throws {
     try transaction {
-      // A source (`source_id`, `created_by`, `coordinator_id`) is any MCP
-      // caller: a conversation or an app-wide caller such as a bot. A target
-      // is always a conversation.
-      try executeUnlocked("""
-        CREATE TABLE IF NOT EXISTS mcp_callers(id TEXT PRIMARY KEY, display_name TEXT, machine_id TEXT,
-          revoked INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS mcp_bot_machines(machine_id TEXT PRIMARY KEY, active INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS input_contexts(
-          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),
-          note_id TEXT, created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS tool_mutations(
-          source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
-          operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,
-          PRIMARY KEY(source_id,request_id));
-        CREATE TABLE IF NOT EXISTS tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS opencode_input_contexts(
-          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
-        CREATE TABLE IF NOT EXISTS automation_requests(
-          source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
-          input_digest TEXT NOT NULL, PRIMARY KEY(source_id,request_id));
-        CREATE TABLE IF NOT EXISTS automation_cancellations(
-          source_id TEXT NOT NULL REFERENCES mcp_callers(id), request_id TEXT NOT NULL,
-          PRIMARY KEY(source_id,request_id));
-        \(Self.sessionToolsSQL)
-        CREATE TABLE IF NOT EXISTS session_executor_profiles(
-          session_id TEXT PRIMARY KEY REFERENCES conversations(id), profiles_json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS session_grants(
-          source_id TEXT NOT NULL REFERENCES mcp_callers(id),
-          target_id TEXT NOT NULL REFERENCES conversations(id),
-          kind TEXT NOT NULL CHECK(kind IN ('attachment','approved')),
-          PRIMARY KEY(source_id,target_id,kind));
-        CREATE TABLE IF NOT EXISTS session_relationships(
-          session_id TEXT PRIMARY KEY REFERENCES conversations(id),
-          created_by TEXT REFERENCES mcp_callers(id),
-          coordinator_id TEXT REFERENCES mcp_callers(id),
-          purpose TEXT, notifications_enabled INTEGER NOT NULL DEFAULT 1,
-          coordination_epoch TEXT, coordination_since TEXT,
-          CHECK(session_id != created_by), CHECK(session_id != coordinator_id));
-        CREATE INDEX IF NOT EXISTS session_relationships_coordinator ON session_relationships(coordinator_id);
-        -- A timer's target is a conversation or a bot principal (a bot's own
-        -- schedule), so it references neither. Timers of a missing conversation
-        -- are never listed or fired.
-        CREATE TABLE IF NOT EXISTS session_timers(
-          id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-          instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
-          is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
-        CREATE INDEX IF NOT EXISTS session_timers_due ON session_timers(is_paused,next_fire_at);
-        CREATE INDEX IF NOT EXISTS session_timers_session ON session_timers(session_id);
-        CREATE TABLE IF NOT EXISTS coordination_access_requests(
-          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
-          target_id TEXT NOT NULL REFERENCES conversations(id), purpose TEXT NOT NULL,
-          notifications INTEGER NOT NULL, state TEXT NOT NULL, error TEXT,
-          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), coordination_epoch TEXT);
-        CREATE INDEX IF NOT EXISTS coordination_access_requests_state ON coordination_access_requests(state,created_at);
-        CREATE TABLE IF NOT EXISTS coordination_observations(
-          epoch TEXT NOT NULL, event_key TEXT NOT NULL, PRIMARY KEY(epoch,event_key));
-        CREATE TABLE IF NOT EXISTS session_creations(
-          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES mcp_callers(id),
-          target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
-          purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned',
-          configuration_json TEXT, configuration_applied INTEGER NOT NULL DEFAULT 0);
-        CREATE UNIQUE INDEX IF NOT EXISTS session_deliveries_event ON session_deliveries(event_key) WHERE event_key IS NOT NULL;
-        """)
+      try executeUnlocked(Self.agentToolsSQL)
       for table in [ToolReceiptTable.mutations, .deliveries, .creations, .coordination] {
         let columns = table == .mutations ? "source_id,request_id COLLATE NOCASE" : "id COLLATE NOCASE"
         try executeUnlocked("CREATE INDEX IF NOT EXISTS \(table.rawValue)_request_case ON \(table.rawValue)(\(columns))")

@@ -9,8 +9,8 @@ import CSQLite
 extension WorkspaceDatabaseConnection {
   /// Conversations, their transcripts and runs, agents, folders, notes,
   /// calendar items and the local harness sessions. Every table is created
-  /// in its current shape; `upgradeLibrarySchemaUnlocked` brings an older
-  /// library to it first.
+  /// in its current shape; `convertEarlierLibraryUnlocked` brings the
+  /// previous release's library to it first.
   ///
   /// A conversation's transcript (`libraryTranscriptUnlocked`) is its rows.
   /// The columns only an execution owner's projection writes, NULL in rows

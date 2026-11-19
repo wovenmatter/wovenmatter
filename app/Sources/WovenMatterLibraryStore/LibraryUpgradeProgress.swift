@@ -1,18 +1,16 @@
 import Foundation
 
-/// How far opening a library is in bringing an earlier release's library to
-/// the current schema (`convertEarlierLibraryUnlocked`). An upgrade rewrites the whole
-/// file once and takes minutes for a library of a few gigabytes, so whoever
-/// waits on the open (the background service's readiness reply) can say what
-/// is happening instead of timing out.
+/// How far opening a library is in converting what the previous release
+/// left in it (`convertEarlierLibraryUnlocked`). A conversion can take a
+/// while on a library of a few gigabytes, so whoever waits on the open (the
+/// background service's readiness reply) can say what is happening instead
+/// of timing out.
 public struct LibraryUpgradeProgress: Sendable, Equatable, Codable {
   public enum Stage: String, Sendable, Codable {
     /// Copying the library before the conversion rewrites it.
     case backingUp
-    /// Converting tables and recorded versions to the current schema.
+    /// Converting tables and rows, then creating the current schema.
     case converting
-    /// Writing the converted library out compactly (VACUUM).
-    case compacting
   }
 
   public var stage: Stage
@@ -61,15 +59,12 @@ public enum LibraryUpgradeMonitor {
 ///
 /// The steps report milestones (`reach`); between two, a timer moves the
 /// fraction a little toward the next one so a long statement still shows
-/// movement. While compacting, the fraction follows how much of the
-/// expected output VACUUM has written. The timer runs on its own queue:
-/// SQLite calls nothing back while VACUUM copies pages.
+/// movement. The timer runs on its own queue: SQLite calls nothing back
+/// while a statement runs.
 final class LibraryUpgradeReporter: @unchecked Sendable {
-  /// Each stage's share of the whole, measured on a 2.1 GB library from
-  /// v0.3.5: the copy is a clone, and converting and compacting took about
-  /// as long as each other.
+  /// Each stage's share of the whole: the copy is a clone on a Mac.
   static let spans: [LibraryUpgradeProgress.Stage: ClosedRange<Double>] = [
-    .backingUp: 0...0.02, .converting: 0.02...0.52, .compacting: 0.52...1,
+    .backingUp: 0...0.02, .converting: 0.02...1,
   ]
 
   let file: URL
@@ -80,9 +75,6 @@ final class LibraryUpgradeReporter: @unchecked Sendable {
   private var target: Double
   private var stageStarted = ContinuousClock.now
   private var lastMilestone = ContinuousClock.now
-  /// While compacting: the file whose growth measures VACUUM, and how large
-  /// it becomes when VACUUM is done.
-  private var compaction: (output: URL, expectedBytes: Int64)?
 
   init(file: URL) {
     self.file = file
@@ -90,7 +82,7 @@ final class LibraryUpgradeReporter: @unchecked Sendable {
     progress = .init(stage: .backingUp, fraction: 0, libraryBytes: bytes, startedAt: Date())
     target = Self.spans[.backingUp]!.upperBound
     LibraryUpgradeMonitor.publish(progress, for: file)
-    NSLog("Converting an earlier release's library (%lld bytes) to the current schema.", bytes)
+    NSLog("Converting the previous release's library (%lld bytes) to the current schema.", bytes)
     timer.setEventHandler { [weak self] in self?.tick() }
     timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
     timer.resume()
@@ -118,13 +110,6 @@ final class LibraryUpgradeReporter: @unchecked Sendable {
     }
   }
 
-  /// Compaction writes the library into `output` until it is about
-  /// `expectedBytes` long.
-  func compacting(output: URL, expectedBytes: Int64) {
-    reach(.compacting, 0)
-    lock.withLock { compaction = (output, max(expectedBytes, 1)) }
-  }
-
   func finish() {
     timer.cancel()
     let elapsed = Date().timeIntervalSince(progress.startedAt)
@@ -135,21 +120,9 @@ final class LibraryUpgradeReporter: @unchecked Sendable {
 
   private func tick() {
     lock.withLock {
-      if let compaction {
-        // VACUUM first copies the library into a temporary database, which
-        // nothing outside SQLite sees, then writes that copy back through
-        // the WAL: about half its time each. The first half creeps; the
-        // second follows the WAL toward the expected size.
-        let span = Self.spans[.compacting]!
-        let written = (try? FileManager.default.attributesOfItem(atPath: compaction.output.path)[.size] as? NSNumber)?.int64Value ?? 0
-        let creeping = progress.fraction + (span.lowerBound + (span.upperBound - span.lowerBound) * 0.45 - progress.fraction) * 0.03
-        let writing = span.lowerBound + (span.upperBound - span.lowerBound) * (0.45 + 0.55 * min(Double(written) / Double(compaction.expectedBytes), 0.99))
-        progress.fraction = max(progress.fraction, creeping, written > 1 << 20 ? writing : 0)
-      } else {
-        // A fifth of the way to the next milestone every couple of seconds:
-        // it keeps moving and never passes the milestone before it is reached.
-        progress.fraction += (target - progress.fraction) * 0.03
-      }
+      // A fifth of the way to the next milestone every couple of seconds:
+      // it keeps moving and never passes the milestone before it is reached.
+      progress.fraction += (target - progress.fraction) * 0.03
       LibraryUpgradeMonitor.publish(progress, for: file)
     }
   }

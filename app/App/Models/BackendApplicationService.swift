@@ -129,7 +129,6 @@ struct BackendStartupProgress: Codable, Sendable, Equatable {
         let detail = switch upgrade.stage {
         case .backingUp: "Saving a copy of your library before the upgrade changes it."
         case .converting: "This update stores your \(size) library in a new format. It happens once and can take a few minutes."
-        case .compacting: "Writing the upgraded library out compactly. This is the last step."
         }
         self.init(title: "Upgrading your library", detail: detail, fraction: min(max(upgrade.fraction, 0), 1))
     }
