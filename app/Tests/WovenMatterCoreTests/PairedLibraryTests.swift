@@ -1015,8 +1015,9 @@ extension PairedLibraryTests {
   }
 }
 
-/// Peers exchange whatever each has, and each keeps what a newer one adds
-/// until it updates (`PairedLibraryRecord`). The schema hash peers report
+/// Peers exchange whatever each has. A record that names a shared table or
+/// column a device does not have waits there until it has (`PairedLibraryRecord`):
+/// the minutes between updating one device and the next. The schema hash peers report
 /// is derived from column names and declared types, never physical order, so
 /// a library migrated over many releases and a freshly created one (a Linux
 /// host's) report the same.
@@ -1049,118 +1050,118 @@ extension PairedLibraryTests {
     try await mac.database.write { try $0.toolsExecuteUnlocked("UPDATE notes SET shade=? WHERE id=?", [value, id]) }
   }
 
-  /// A later release adds a shared column. A device that has not updated
+  /// A shared column one device has and another does not yet. The one without it
   /// keeps each record carrying it exactly as received, relays it to devices
   /// that have, keeps synchronizing everything else, and applies it once it
-  /// updates. Nothing is rejected, and the new column's value is never cut off.
-  @Test func aNewerPeersColumnWaitsIsRelayedAndAppliesAfterThisDeviceUpdates() async throws {
-    let newer = try await Mac(), older = try await Mac(), other = try await Mac()
-    defer { newer.remove(); older.remove(); other.remove() }
-    try await addShade(newer); try await addShade(other)
-    #expect(try await newer.database.pairedLibrarySchema() != older.database.pairedLibrarySchema())
+  /// has the column. Nothing is rejected, and the new column's value is never cut off.
+  @Test func aColumnThisDeviceLacksWaitsIsRelayedAndAppliesOnceItHasIt() async throws {
+    let ahead = try await Mac(), behind = try await Mac(), other = try await Mac()
+    defer { ahead.remove(); behind.remove(); other.remove() }
+    try await addShade(ahead); try await addShade(other)
+    #expect(try await ahead.database.pairedLibrarySchema() != behind.database.pairedLibrarySchema())
     let id = UUID().uuidString.lowercased()
-    try await newer.note(id, title: "Shaded")
-    try await setShade(newer, id, "blue")
-    var settings = try await newer.database.toolSettings(); settings.maximumManagedSessions = 5
-    try await newer.database.saveToolSettings(settings)
+    try await ahead.note(id, title: "Shaded")
+    try await setShade(ahead, id, "blue")
+    var settings = try await ahead.database.toolSettings(); settings.maximumManagedSessions = 5
+    try await ahead.database.saveToolSettings(settings)
 
-    try await newer.send(to: older)
+    try await ahead.send(to: behind)
     // The note waits; a table whose shape both know applied in the same pages.
-    #expect(try await older.database.libraryNote(id: id) == nil)
-    #expect(try await older.database.toolSettings().maximumManagedSessions == 5)
-    #expect(try await older.database.peerSyncWaitingForUpdate() == 1)
-    #expect(try await older.database.peerSyncQuarantineCount() == 0)
-    #expect(try await older.database.peerSyncCursors(newer.id).pulled == newer.database.peerSyncHead())
+    #expect(try await behind.database.libraryNote(id: id) == nil)
+    #expect(try await behind.database.toolSettings().maximumManagedSessions == 5)
+    #expect(try await behind.database.peerSyncWaitingForUpdate() == 1)
+    #expect(try await behind.database.peerSyncQuarantineCount() == 0)
+    #expect(try await behind.database.peerSyncCursors(ahead.id).pulled == ahead.database.peerSyncHead())
     // Retrying changes nothing while this build still lacks the column.
-    try await older.database.materializePendingPeerRecords()
-    #expect(try await older.database.peerSyncWaitingForUpdate() == 1)
+    try await behind.database.materializePendingPeerRecords()
+    #expect(try await behind.database.peerSyncWaitingForUpdate() == 1)
 
     // Relayed through the device that cannot read it, the column survives.
-    try await older.send(to: other)
+    try await behind.send(to: other)
     #expect(try await other.database.libraryNote(id: id)?.title == "Shaded")
     #expect(try await shade(other, id) == "blue")
 
     // The update arrives: the waiting record applies.
-    try await addShade(older)
-    try await older.database.materializePendingPeerRecords()
-    #expect(try await older.database.libraryNote(id: id)?.title == "Shaded")
-    #expect(try await shade(older, id) == "blue")
-    #expect(try await older.database.peerSyncWaitingForUpdate() == 0)
+    try await addShade(behind)
+    try await behind.database.materializePendingPeerRecords()
+    #expect(try await behind.database.libraryNote(id: id)?.title == "Shaded")
+    #expect(try await shade(behind, id) == "blue")
+    #expect(try await behind.database.peerSyncWaitingForUpdate() == 0)
   }
 
-  /// A row a newer build keeps rewriting waits as its latest version only.
-  @Test func supersededWaitingVersionsOfARowFromANewerBuildAreNotKept() async throws {
-    let newer = try await Mac(), older = try await Mac(); defer { newer.remove(); older.remove() }
-    try await addShade(newer)
+  /// A waiting row that keeps being rewritten waits as its latest version only.
+  @Test func supersededWaitingVersionsOfARowAreNotKept() async throws {
+    let ahead = try await Mac(), behind = try await Mac(); defer { ahead.remove(); behind.remove() }
+    try await addShade(ahead)
     let id = UUID().uuidString.lowercased()
-    try await newer.note(id, title: "Shaded")
+    try await ahead.note(id, title: "Shaded")
     for value in ["blue", "green", "red"] {
-      try await setShade(newer, id, value)
-      try await newer.send(to: older)
+      try await setShade(ahead, id, value)
+      try await ahead.send(to: behind)
     }
-    #expect(try await older.database.peerSyncWaitingForUpdate() == 1)
-    try await addShade(older)
-    try await older.database.materializePendingPeerRecords()
-    #expect(try await shade(older, id) == "red")
+    #expect(try await behind.database.peerSyncWaitingForUpdate() == 1)
+    try await addShade(behind)
+    try await behind.database.materializePendingPeerRecords()
+    #expect(try await shade(behind, id) == "red")
   }
 
-  /// An edit made here while a newer build's version of the same row waits is
-  /// concurrent with it: both survive once this device updates.
-  @Test func aLocalEditWhileANewerBuildsVersionWaitsKeepsBothVersions() async throws {
-    let newer = try await Mac(), older = try await Mac(); defer { newer.remove(); older.remove() }
+  /// An edit made here while a version of the same row waits is concurrent
+  /// with it: both survive once the waiting one applies.
+  @Test func aLocalEditWhileAVersionOfTheRowWaitsKeepsBothVersions() async throws {
+    let ahead = try await Mac(), behind = try await Mac(); defer { ahead.remove(); behind.remove() }
     let id = UUID().uuidString.lowercased()
-    try await newer.note(id, title: "Shared")
-    try await newer.send(to: older); try await older.send(to: newer)
-    try await addShade(newer)
-    try await newer.note(id, title: "Newer edit", revision: newer.database.libraryNote(id: id)?.revision)
-    try await newer.send(to: older)
-    #expect(try await older.database.libraryNote(id: id)?.title == "Shared")
-    try await older.note(id, title: "Older edit", revision: older.database.libraryNote(id: id)?.revision)
-    try await addShade(older)
-    try await older.database.materializePendingPeerRecords()
-    try await older.send(to: newer); try await newer.send(to: older)
-    #expect(try await newer.database.libraryNote(id: id)?.title == older.database.libraryNote(id: id)?.title)
-    for mac in [newer, older] {
+    try await ahead.note(id, title: "Shared")
+    try await ahead.send(to: behind); try await behind.send(to: ahead)
+    try await addShade(ahead)
+    try await ahead.note(id, title: "Edit with the column", revision: ahead.database.libraryNote(id: id)?.revision)
+    try await ahead.send(to: behind)
+    #expect(try await behind.database.libraryNote(id: id)?.title == "Shared")
+    try await behind.note(id, title: "Edit without it", revision: behind.database.libraryNote(id: id)?.revision)
+    try await addShade(behind)
+    try await behind.database.materializePendingPeerRecords()
+    try await behind.send(to: ahead); try await ahead.send(to: behind)
+    #expect(try await ahead.database.libraryNote(id: id)?.title == behind.database.libraryNote(id: id)?.title)
+    for mac in [ahead, behind] {
       let names = try await titles(mac)
-      #expect(names.contains("Newer edit") || names.contains("Newer edit (Recovered edit)"))
-      #expect(names.contains("Older edit") || names.contains("Older edit (Recovered edit)"))
+      #expect(names.contains("Edit with the column") || names.contains("Edit with the column (Recovered edit)"))
+      #expect(names.contains("Edit without it") || names.contains("Edit without it (Recovered edit)"))
     }
   }
 
   /// A device that knows more columns than a record carries applies the ones
   /// it has: a new row takes the column's default, and an existing row keeps
   /// the value this device holds.
-  @Test func anOlderPeersRowsApplyAndKeepTheColumnsOnlyThisDeviceKnows() async throws {
-    let newer = try await Mac(), older = try await Mac(); defer { newer.remove(); older.remove() }
-    try await addShade(newer)
+  @Test func rowsWithoutAColumnThisDeviceHasApplyAndKeepItsValue() async throws {
+    let ahead = try await Mac(), behind = try await Mac(); defer { ahead.remove(); behind.remove() }
+    try await addShade(ahead)
     let id = UUID().uuidString.lowercased()
-    try await older.note(id, title: "From the older build")
-    try await older.send(to: newer)
-    #expect(try await newer.database.libraryNote(id: id)?.title == "From the older build")
-    #expect(try await shade(newer, id) == nil)
-    try await setShade(newer, id, "blue")
-    // The older build has not seen that write; its later edits outrank it.
-    for title in ["Second", "Third", "Latest from the older build"] {
-      try await older.note(id, title: title, revision: older.database.libraryNote(id: id)?.revision)
+    try await behind.note(id, title: "From the device without it")
+    try await behind.send(to: ahead)
+    #expect(try await ahead.database.libraryNote(id: id)?.title == "From the device without it")
+    #expect(try await shade(ahead, id) == nil)
+    try await setShade(ahead, id, "blue")
+    // The other device has not seen that write; its later edits outrank it.
+    for title in ["Second", "Third", "Latest from the device without it"] {
+      try await behind.note(id, title: title, revision: behind.database.libraryNote(id: id)?.revision)
     }
-    try await older.send(to: newer)
-    #expect(try await newer.database.libraryNote(id: id)?.title == "Latest from the older build")
-    #expect(try await shade(newer, id) == "blue")
-    #expect(try await newer.database.peerSyncQuarantineCount() == 0)
+    try await behind.send(to: ahead)
+    #expect(try await ahead.database.libraryNote(id: id)?.title == "Latest from the device without it")
+    #expect(try await shade(ahead, id) == "blue")
+    #expect(try await ahead.database.peerSyncQuarantineCount() == 0)
 
     // Every device arrives at that row, whatever order the versions came in:
-    // one that received the older build's edits first, and the older device
+    // one that received the behind build's edits first, and the behind device
     // itself once it updates and applies the write it had kept waiting.
     let other = try await Mac(); defer { other.remove() }
     try await addShade(other)
-    try await older.send(to: other)
+    try await behind.send(to: other)
     #expect(try await shade(other, id) == nil)
-    try await newer.send(to: other)
-    try await newer.send(to: older)
-    try await addShade(older)
-    try await older.database.materializePendingPeerRecords()
-    for mac in [newer, other, older] {
-      #expect(try await mac.database.libraryNote(id: id)?.title == "Latest from the older build")
+    try await ahead.send(to: other)
+    try await ahead.send(to: behind)
+    try await addShade(behind)
+    try await behind.database.materializePendingPeerRecords()
+    for mac in [ahead, other, behind] {
+      #expect(try await mac.database.libraryNote(id: id)?.title == "Latest from the device without it")
       #expect(try await shade(mac, id) == "blue")
     }
   }

@@ -168,7 +168,8 @@ final class PairedMacSyncController {
                 model.github.attach(GitHubIdentitySync(database: database, directory: directory))
                 await model.github.reconcile()
             }
-            await sync.start { [weak self] in await self?.peersChanged() }
+            await sync.start(onChange: { [weak self] in await self?.peersChanged() },
+                             onRefused: { [weak self] device in await self?.host?.linuxHostRefusedThisMac(memberID: device) })
             // After sleep every peer may have changed; catch up at once
             // instead of waiting out the offline backoff.
             NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
@@ -242,9 +243,9 @@ final class PairedMacSyncController {
         conflicts = (try? await database.peerSyncConflicts()) ?? conflicts
         if status.quarantined > 0 { errors["quarantine"] = "\(status.quarantined) shared record\(status.quarantined == 1 ? "" : "s") could not be applied. Local data is retained; update Woven Matter on every device." }
         else { errors.removeValue(forKey: "quarantine") }
-        // Additions from a newer version are kept and relayed; they show here once this Mac updates.
+        // Records naming a table or column this Mac does not have are kept and relayed until it has.
         if let waiting = status.waitingForUpdate, waiting > 0 {
-            errors["waiting"] = "\(waiting) change\(waiting == 1 ? "" : "s") from a newer Woven Matter will appear once this Mac is updated. Nothing is lost."
+            errors["waiting"] = "\(waiting) change\(waiting == 1 ? "" : "s") from a Mac that was updated first will appear once this Mac is updated too. Nothing is lost."
         } else { errors.removeValue(forKey: "waiting") }
         for peer in status.peers { if let date = peer.lastSynchronized { lastSynchronized[peer.deviceID] = date } }
     }

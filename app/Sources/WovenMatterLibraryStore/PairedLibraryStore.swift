@@ -383,8 +383,18 @@ extension WorkspaceDatabaseConnection {
       guard entry.addedBy != entry.deviceID || entry.verifies(with: entry.publicKey) else {
         throw PeerRecordRejected(message: "A member's own entry is not signed with its key.")
       }
-      guard let existing = try historyRowsUnlocked("SELECT added_at,payload FROM library_members WHERE device_id=? AND added_by=?",
-                                                  values: [entry.deviceID, entry.addedBy]).first?.objectValue else { return true }
+      let existing = try historyRowsUnlocked("SELECT added_at,payload FROM library_members WHERE device_id=? AND added_by=?",
+                                             values: [entry.deviceID, entry.addedBy]).first?.objectValue
+      // Only this device writes its own entry (`MemberDirectory.ensureSelf`).
+      // A peer's copy of it that is not what this device holds is never
+      // applied: an older or newer one after a restore, or one another key
+      // signed and dated ahead, which would otherwise hold back everything
+      // this device signs later.
+      if entry.addedBy == entry.deviceID, existing?["payload"]?.stringValue != payload,
+         entry.deviceID == (try historyRowsUnlocked("SELECT device_id FROM peer_sync_clock WHERE singleton=1", values: []).first?.objectValue?["device_id"]?.stringValue) {
+        return false
+      }
+      guard let existing else { return true }
       let time = existing["added_at"]?.intValue.map(Int64.init) ?? 0
       if time > entry.addedAt { return false }
       if time == entry.addedAt, existing["payload"]?.stringValue != payload { throw PeerRecordRejected(message: "A member entry was rewritten.") }

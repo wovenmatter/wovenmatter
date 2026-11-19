@@ -684,6 +684,9 @@ final class ApplicationModel {
             remoteWorkspaces.onHostInstalled = { [weak self] configuration in
                 self?.libraryHost.setUpLinuxHost(configuration, restart: true)
             }
+            remoteWorkspaces.onHostRefusedMember = { [weak self] workspaceID in
+                self?.libraryHost.linuxHostRefusedThisMac(workspaceID: workspaceID)
+            }
             // A Linux host's files, settings and Pi sign-in go through its server.
             await libraryStore.library.setRemoteFileReader { [weak self] workspaceID, conversationID, path, underRoot in
                 guard let self else { throw CancellationError() }

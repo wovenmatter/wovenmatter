@@ -56,6 +56,9 @@ extension ApplicationModel {
             },
             memberRevision: { [weak self] in try? await self?.libraryHost.peerSync.members().list().revision })
         client.onLive = { [weak self] ids in self?.federatedLiveChanged(ids) }
+        client.onRefused = { [weak self] workspace in
+            if workspace.kind == .linux { self?.libraryHost.linuxHostRefusedThisMac(workspaceID: workspace.id) }
+        }
         federatedExecutionClient = client
         return titled(client)
     }

@@ -55,8 +55,9 @@ public struct LibrarySyncStatus: Codable, Equatable, Sendable {
   public let peers: [LibraryPeerStatus]
   public let conflicts: Int
   public let quarantined: Int
-  /// Changes from a newer Woven Matter that this device keeps, relays and
-  /// applies once it updates.
+  /// Records that name a shared table or column this device does not have,
+  /// while one device was updated minutes before another: kept as received,
+  /// relayed, and applied once this device has that table or column.
   public var waitingForUpdate: Int?
 }
 
@@ -104,9 +105,9 @@ private extension URL {
 ///   is caught up once.
 /// - A slow presence check (60 s, backing off for offline peers) replaces
 ///   constant polling.
-/// - Every request is a signed member request. Additions a newer peer has
-///   (a shared table or column this device lacks) wait here until this device
-///   updates, and everything else keeps synchronizing (`PairedLibraryRecord`).
+/// - Every request is a signed member request. A record that names a shared
+///   table or column this device does not have waits here until it has, and
+///   everything else keeps synchronizing (`PairedLibraryRecord`).
 public actor LibraryPeerSync {
   /// Optional per-exchange side channel (see `LibraryPeerExchange.attachment`).
   /// `incoming` runs before the page is applied and may throw to refuse it.
@@ -160,6 +161,7 @@ public actor LibraryPeerSync {
   /// caught up as soon as its entry arrives.
   private var known: Set<String> = []
   private var onChange: (@Sendable () async -> Void)?
+  private var onRefused: (@Sendable (String) async -> Void)?
   private var lastTick = Date()
   private var networkFingerprint: String?
   private var pathSeen = false
@@ -178,11 +180,15 @@ public actor LibraryPeerSync {
   }
 
   /// `onChange` runs after rows from a peer were applied (refresh views,
-  /// apply member removals to local grants).
-  public func start(onChange: (@Sendable () async -> Void)? = nil) {
+  /// apply member removals to local grants). `onRefused` runs when a peer
+  /// answers that this device is not a member of its library, with the
+  /// peer's device ID: a Linux host that cleared its pairing does, and the
+  /// Mac that manages it adopts it again.
+  public func start(onChange: (@Sendable () async -> Void)? = nil, onRefused: (@Sendable (String) async -> Void)? = nil) {
     guard !started else { return }
     started = true
     self.onChange = onChange
+    self.onRefused = onRefused
     observer = database.observePeerChanges { [weak self] _ in
       guard let self else { return }
       Task { await self.localChanged() }
@@ -488,6 +494,10 @@ public actor LibraryPeerSync {
     let error = (try? JSONDecoder().decode(LibraryAPIError.self, from: response.body))
       ?? LibraryAPIError(code: "peer_sync", message: "The peer refused synchronization (HTTP \(response.status)).")
     offline(member, error)
+    if response.status == 401, error.code == "unauthorized", let onRefused {
+      let device = member.deviceID
+      Task { await onRefused(device) }
+    }
   }
 
   /// Applies waiting records whose bytes have arrived, or that an update

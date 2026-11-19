@@ -403,6 +403,7 @@ struct SettingsWorkspacesView: View {
         let busy = model.busyWorkspaceIDs.contains(workspace.id)
         let maintaining = maintainingHarnesses(workspace)
         return SettingsSection {
+            if let problem = model.memberProblems[workspace.id] { SettingsError(problem) }
             SettingsRow(title: "Status") {
                 SettingsStatus(statusLabel(workspace), tone: status?.running == true ? .good : .warning)
                 Button("Reconnect") { model.reconnect(workspace) }

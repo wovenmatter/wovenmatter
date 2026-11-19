@@ -27,12 +27,14 @@ public actor MemberDirectory {
     try await database.saveLibraryMemberAnchor(identity.anchor, replacing: true)
     let records = try await database.libraryMemberRecords()
     let clean = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(128))
+    // Kept only while it says the same and this device's key signed it.
     if let current = records.entries.first(where: { $0.deviceID == identity.deviceID && $0.addedBy == identity.deviceID }),
-       current.publicKey == identity.publicKey, current.name == (clean.isEmpty ? "Device" : clean), current.endpoints == endpoints, current.kind == identity.kind {
+       current.publicKey == identity.publicKey, current.name == (clean.isEmpty ? "Device" : clean), current.endpoints == endpoints, current.kind == identity.kind,
+       current.verifies(with: identity.publicKey) {
       return
     }
-    try await database.saveLibraryMemberEntries([try .signed(deviceID: identity.deviceID, kind: identity.kind, name: name,
-      publicKey: identity.publicKey, endpoints: endpoints, by: identity, at: Self.after(records, identity.deviceID))])
+    try await database.saveOwnLibraryMemberEntry(try .signed(deviceID: identity.deviceID, kind: identity.kind, name: name,
+      publicKey: identity.publicKey, endpoints: endpoints, by: identity, at: Self.after(records, identity.deviceID)))
     invalidate()
   }
 

@@ -88,10 +88,17 @@ final class LibraryHostController {
     private var revokingDeviceIDs: Set<String> = []
     var mcpSettingsFingerprints: [String: String] = [:]
     private var registryRefreshInProgress = false
-    /// Linux hosts this Mac finished setting up this launch, and those whose
-    /// setup is retrying (`setUpLinuxHost`).
+    /// Linux hosts this Mac has set up and that have not stopped recognizing
+    /// it since, and those whose setup is retrying (`setUpLinuxHost`). A host
+    /// leaves the first when it is installed or updated again, when it
+    /// answers that it does not know this Mac (`linuxHostRefusedThisMac`),
+    /// and when this Mac's service stops.
     @ObservationIgnored private var readyLinuxHosts: Set<String> = []
     @ObservationIgnored private var linuxHostSetups: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    /// Each configured host's member device ID, as it last answered
+    /// (`ensureLinuxMember`): what its workspace's `executionDeviceID` must be.
+    @ObservationIgnored var linuxHostMemberIDs: [String: String] = [:]
+    @ObservationIgnored private var linuxHostRefusals: [String: ContinuousClock.Instant] = [:]
     /// Test seam: the first retry delay, doubled after each failure up to ten minutes.
     @ObservationIgnored var linuxHostSetupRetry: Duration = .seconds(5)
     /// Test seam: adoption and enrollment of a Linux host. A test process sets
@@ -383,6 +390,8 @@ final class LibraryHostController {
         model?.executionStreamChanged = nil
         for setup in linuxHostSetups.values { setup.task.cancel() }
         linuxHostSetups.removeAll()
+        // Nothing checked a host while this Mac was not serving: each is set up again at the next start.
+        readyLinuxHosts.removeAll()
         if let serve {
             serve.stop()
             if !stoppingExposures.contains(where: { $0 === serve }) { stoppingExposures.append(serve) }
@@ -630,9 +639,10 @@ final class LibraryHostController {
     /// anchor and signs its member entry, `ensureLinuxMember`), then exposes and
     /// enrolls its workspace (`enrollLinuxWorkspace`, which sets
     /// the registry row's endpoint and `executionDeviceID`). It starts as soon
-    /// as the host is installed or gains its workspace (`restart`), and on each
-    /// launch, and retries with backoff until both steps succeed. A bots-only
-    /// host is only adopted.
+    /// as the host is installed, updated or gains its workspace (`restart`),
+    /// when the host stops recognizing this Mac, and each time this Mac's
+    /// service starts, and retries with backoff until both steps succeed. A
+    /// bots-only host is only adopted.
     func setUpLinuxHost(_ configuration: RemoteWorkspaceConfiguration, restart: Bool = false) {
         guard let model, !model.isBackendFrontend, linuxHostSetupSteps != nil || !PairedMacDeviceStorage.isTestProcess else { return }
         let id = configuration.id.uuidString.lowercased()
@@ -653,6 +663,30 @@ final class LibraryHostController {
         }
         linuxHostSetups[id] = (token, task)
     }
+
+    /// A Linux host answered a request this Mac signed with "not a member":
+    /// it cleared its pairing (as its own update does when an earlier build
+    /// made it) or was set up anew, so what this Mac recorded as set up no
+    /// longer is. A host this Mac manages is set up again at once, with no
+    /// one asking; a host another Mac manages is that Mac's to adopt. The
+    /// host is named by its member device ID or by its workspace's registry
+    /// ID. One answer starts one setup: while it runs, or within a minute of
+    /// the last, further refusals change nothing.
+    func linuxHostRefusedThisMac(memberID: String? = nil, workspaceID: String? = nil) {
+        guard let model, !model.isBackendFrontend else { return }
+        for configuration in model.remoteWorkspaces.workspaces {
+            let id = configuration.id.uuidString.lowercased()
+            let named = id == workspaceID?.lowercased() || (memberID != nil && (linuxHostMemberIDs[id] == memberID?.lowercased()
+                || executionWorkspaces.contains { $0.id == id && $0.kind == .linux && $0.executionDeviceID == memberID?.lowercased() }))
+            guard named, readyLinuxHosts.contains(id) else { continue }
+            let now = ContinuousClock.now
+            if let last = linuxHostRefusals[id], now - last < linuxHostRefusalInterval { continue }
+            linuxHostRefusals[id] = now
+            setUpLinuxHost(configuration, restart: true)
+        }
+    }
+    /// Test seam: the shortest time between two setups a refusal starts.
+    @ObservationIgnored var linuxHostRefusalInterval: Duration = .seconds(60)
 
     /// True once the host is set up, false to retry, nil when the host was
     /// removed or this Mac's service restarted (which sets it up again).
@@ -679,7 +713,11 @@ final class LibraryHostController {
         if configuration.workspaceID != RemoteHostInstallMode.botsOnlyWorkspaceID {
             let id = configuration.id.uuidString.lowercased()
             let registered = try await model?.libraryStore?.database.libraryExecutionWorkspaces().first { $0.id == id && !$0.deleted }
-            if registered?.endpoint == nil || registered?.executionDeviceID == nil {
+            // Also a row that names another execution device than the host's
+            // member ID, which no one can address (`MemberAudience.serving`).
+            // A host that cannot say who it is yet refuses, and this is tried again.
+            if registered?.endpoint == nil || registered?.executionDeviceID == nil
+                || linuxHostMemberIDs[id].map({ $0 != registered?.executionDeviceID }) == true {
                 do { try await steps.enroll(id) } catch { failure = failure ?? error }
             }
             if failure == nil {
@@ -729,7 +767,8 @@ final class LibraryHostController {
         var credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
             libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
             deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
-        credential.workspace = try await registerLinuxEnrollment(credential, configuration: configuration, registered: registered)
+        let memberID = try await linuxHostMemberID(configuration)
+        credential.workspace = try await registerLinuxEnrollment(credential, configuration: configuration, registered: registered, memberID: memberID)
         if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) {
             try? await ensureExecutionToolSettings(workspace: credential.workspace, configuration: configuration)
         }
@@ -738,26 +777,31 @@ final class LibraryHostController {
 
     /// Records what a Linux host answered its enrollment with (`registered`
     /// is its row from before): the row's endpoint, execution device and
-    /// capabilities. Its name is not the host's to say, which answers with
+    /// capabilities. The execution device is the host's member device ID
+    /// (`memberID`) and nothing else: every member addresses the workspace
+    /// through the member that serves it (`MemberAudience.serving`), so a
+    /// row naming any other ID would be one no one can reach. A row that
+    /// named another ID changes to the member ID, and only to it. Its name
+    /// is not the host's to say, which answers with
     /// the one it was first enrolled under: it stays the name this Mac
     /// publishes (`refreshExecutionRegistry`), the chosen one or else the one
     /// from setup, so an enrollment never reverts a rename, even for one
     /// revision, on the devices that read only the registry.
     func registerLinuxEnrollment(_ credential: ExecutionCredential, configuration: RemoteWorkspaceConfiguration,
-                                 registered: ExecutionWorkspace?) async throws -> ExecutionWorkspace {
+                                 registered: ExecutionWorkspace?, memberID: String) async throws -> ExecutionWorkspace {
         guard let database = model?.libraryStore?.database else {
             throw LibraryAPIError(code: "unavailable", message: "This Mac is not ready to set up that Linux host yet. It retries automatically.")
         }
         let identity = try await database.libraryIdentity(), id = configuration.id.uuidString.lowercased()
         var workspace = credential.workspace
         guard credential.deviceID == identity.hostDeviceID, workspace.id == id,
-              workspace.libraryID == identity.libraryID,
-              registered.map({ original in
-                  original.ownerDeviceID == workspace.ownerDeviceID && original.kind == workspace.kind
-                      && (original.kind != .mac || original.endpoint == workspace.endpoint)
-                      && (original.executionDeviceID == nil || original.executionDeviceID == workspace.executionDeviceID)
-              }) ?? true else {
+              workspace.libraryID == identity.libraryID, workspace.kind == .linux,
+              registered.map({ $0.ownerDeviceID == workspace.ownerDeviceID && $0.kind == workspace.kind }) ?? true else {
             throw LibraryAPIError(code: "wrong_workspace", message: "The execution workspace returned a different identity.")
+        }
+        guard MemberRequestSignature.isDeviceID(memberID), workspace.executionDeviceID == memberID else {
+            throw LibraryAPIError(code: "wrong_workspace",
+                message: "\(configuration.name) did not enroll under its own member identity yet. This Mac tries again.")
         }
         let prior = try await database.libraryExecutionWorkspaces().first { $0.id == id }
         workspace.name = try await database.executionWorkspaceNames()[id] ?? configuration.name
@@ -924,7 +968,8 @@ final class LibraryHostController {
             let file = try (supportDirectory ?? ApplicationModel.librarySupportDirectory()).appendingPathComponent(DeviceAuthentication.fileName)
             authentication = try DeviceAuthentication(fileURL: file)
         }
-        try await clearUnverifiablePairing()
+        // Nothing from the file is shown as paired before it was checked.
+        guard try await clearUnverifiablePairing() else { return }
         pairedDevices = await authentication?.devices() ?? []
         showsPairingResetNotice = await authentication?.showsPairingResetNotice() ?? false
     }
@@ -955,10 +1000,15 @@ final class LibraryHostController {
     /// hosts this Mac added and its enrollment on them, which it adopts
     /// again by itself (`ensureLinuxMember`); synchronization cursors; and
     /// revocations and installer rotations still owed to a workspace.
-    private func clearUnverifiablePairing() async throws {
-        guard !pairingChecked, let model, !model.isBackendFrontend, let authentication,
-              let database = model.libraryStore?.database, !database.isReadOnlyProjection else { return }
-        if let pairingCheck { return try await pairingCheck.value }
+    ///
+    /// Returns whether the pairing here has been checked, which it cannot be
+    /// before the library is open. A window's process checks nothing and
+    /// shows what the background service reports.
+    private func clearUnverifiablePairing() async throws -> Bool {
+        if pairingChecked { return true }
+        guard let model, !model.isBackendFrontend, let authentication,
+              let database = model.libraryStore?.database, !database.isReadOnlyProjection else { return false }
+        if let pairingCheck { try await pairingCheck.value; return true }
         let peerSync = peerSync, defaults = defaults
         let check = Task { @MainActor in
             guard try await database.holdsUnverifiablePairing() else { return }
@@ -971,6 +1021,7 @@ final class LibraryHostController {
         defer { pairingCheck = nil }
         try await check.value
         pairingChecked = true
+        return true
     }
 
     func dismissPairingResetNotice() async {

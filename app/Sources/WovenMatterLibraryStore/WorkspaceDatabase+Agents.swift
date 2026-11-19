@@ -22,11 +22,15 @@ extension WorkspaceDatabaseConnection {
   /// be: where it runs, the device that created it, the harness, and the
   /// Linux workspace if any. A row in use comes before a retired one and the
   /// earliest before a later one, so the same row is chosen at every open
-  /// and a retired one is put back in use rather than doubled. A row whose
-  /// owner record names another library host is that host's and is passed
-  /// over, as `reconcileLocalCLIAgentCatalog` leaves it unclaimed. Only when
+  /// and a retired one is put back in use rather than doubled. Only when
   /// there is no row is an ID made, from the same four facts, so two starts
   /// of one device that both find none make the same row.
+  ///
+  /// Who an owner record names does not enter into it. A device ID is kept
+  /// in one support directory and a Dev snapshot gets its own, so a row this
+  /// device's ID created is this device's whichever library host it was
+  /// first recorded under; the claim that follows moves the owner record to
+  /// the host that opens it (`claimAgentUnlocked`).
   private func agentIDUnlocked(ownerDeviceID: UUID, runtimeKind: AgentRuntimeKind, runtimeDeviceID: UUID?) throws -> String? {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else { return nil }
     let owner = ownerDeviceID.uuidString.lowercased(), workspace = runtimeDeviceID?.uuidString.lowercased()
@@ -34,8 +38,6 @@ extension WorkspaceDatabaseConnection {
       SELECT a.id FROM agents a
       WHERE a.execution_location=? AND lower(a.owner_device_id)=? AND a.runtime_kind=?
         AND \(workspace == nil ? "a.runtime_device_id IS NULL" : "lower(a.runtime_device_id)=?")
-        AND NOT EXISTS(SELECT 1 FROM agent_owners o WHERE o.id=a.id
-          AND o.device_id<>(SELECT device_id FROM peer_sync_clock WHERE singleton=1))
       ORDER BY a.deleted_at IS NOT NULL, a.created_at, a.id LIMIT 1
       """, values: [workspace == nil ? "local" : "remote", owner, runtimeKind.rawValue] + (workspace.map { [$0] } ?? []))
     if let id = existing.first?.objectValue?["id"]?.stringValue { return id }
@@ -112,14 +114,22 @@ extension WorkspaceDatabaseConnection {
     return id
   }
 
-  /// This device owns the agents it ensures. The insert trigger claims a new
-  /// row but never fires for one that was already there without an owner
-  /// record, so the claim is made here too. An owner record that exists, or
-  /// was received, stays.
+  /// This library host owns the agents its device ensures. The insert
+  /// trigger claims a new row but never fires for one that was already
+  /// there, so the claim is made here too: a row without an owner record
+  /// gains one, and one recorded under another library host (this device's
+  /// directory held another library before) moves to this one. Either is an
+  /// ordinary local version, sent like any other writing.
   private func claimAgentUnlocked(_ id: String) throws {
-    try toolsExecuteUnlocked(
-      "INSERT OR IGNORE INTO agent_owners(id,device_id) SELECT ?,device_id FROM peer_sync_clock WHERE singleton=1", [id])
+    try toolsExecuteUnlocked(Self.claimAgentsSQL + " WHERE a.id=?" + Self.claimAgentsConflictSQL, [id])
   }
+  private static let claimAgentsSQL = """
+    INSERT INTO agent_owners(id,device_id)
+      SELECT a.id,(SELECT device_id FROM peer_sync_clock WHERE singleton=1) FROM agents a
+    """
+  private static let claimAgentsConflictSQL = """
+     ON CONFLICT(id) DO UPDATE SET device_id=excluded.device_id WHERE lower(agent_owners.device_id)<>lower(excluded.device_id)
+    """
 
   @discardableResult
   public func ensureRemoteHarnessAgent(
@@ -230,14 +240,11 @@ extension WorkspaceDatabaseConnection {
           updatedAt: updatedAt
         )
       }
-      // Every agent row this Mac's device ID created is this Mac's, including
-      // harnesses no longer in the catalog and its agents for Linux hosts. A
-      // Dev snapshot has a new device ID, so it claims nothing it copied.
-      try toolsExecuteUnlocked("""
-        INSERT OR IGNORE INTO agent_owners(id,device_id)
-          SELECT a.id,(SELECT device_id FROM peer_sync_clock WHERE singleton=1) FROM agents a
-          WHERE lower(a.owner_device_id)=? AND NOT EXISTS(SELECT 1 FROM agent_owners o WHERE o.id=a.id)
-        """, [ownerDeviceID.uuidString.lowercased()])
+      // Every agent row this device's ID created is this library host's,
+      // including harnesses no longer in the catalog and its agents for
+      // Linux hosts. A Dev snapshot has a new device ID, so it claims nothing it copied.
+      try toolsExecuteUnlocked(Self.claimAgentsSQL + " WHERE lower(a.owner_device_id)=?" + Self.claimAgentsConflictSQL,
+                               [ownerDeviceID.uuidString.lowercased()])
     }
   }
 

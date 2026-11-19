@@ -61,7 +61,12 @@ final class RemoteWorkspacesModel {
     var onRuntimeMaintenanceChanged: (@MainActor () async -> Void)?
     /// A Linux host was installed (workspace or bots-only) or gained its
     /// workspace: the Mac adopts it as a member and enrolls its workspace.
+    /// A host's server was installed, gained a role or was updated: this Mac
+    /// sets the host up again (a host may clear its pairing when its own
+    /// update starts, and then no longer knows this Mac).
     var onHostInstalled: (@MainActor (RemoteWorkspaceConfiguration) -> Void)?
+    /// A host answered a signed request with "not a member", by its registry ID.
+    var onHostRefusedMember: (@MainActor (String) -> Void)?
     private var browserFeeds: [UUID: RemoteBrowserFrameFeed] = [:]
     private var credentialEpoch = UUID()
     private var authorizingWorkspaceIDs: Set<UUID> = []
@@ -73,6 +78,12 @@ final class RemoteWorkspacesModel {
     private(set) var checkingRuntimeIDs: [UUID: Set<AgentRuntimeKind>] = [:]
     private(set) var runtimeCheckErrors: [UUID: [AgentRuntimeKind: String]] = [:]
     private(set) var runtimeErrors: [UUID: String] = [:]
+    /// Why this Mac cannot be the Mac that manages a host it has configured
+    /// (`LibraryHostController.ensureLinuxMember`), by configuration.
+    private(set) var memberProblems: [UUID: String] = [:]
+    func setMemberProblem(_ problem: String?, for id: UUID) {
+        if memberProblems[id] != problem { memberProblems[id] = problem }
+    }
     private(set) var actionErrors: [UUID: [AgentRuntimeKind: String]] = [:]
     private(set) var workspaceInstances: [UUID: [AgentRuntimeKind: RemoteWorkspaceInstanceStatus]] = [:]
     private(set) var operations: [UUID: RemoteHarnessOperation] = [:]
@@ -985,7 +996,9 @@ final class RemoteWorkspacesModel {
             let status = try await self.sshClient.deployHost(configuration: configuration, update: true) { [weak self] message in
                 Task { @MainActor [weak self] in self?.progress = message }
             }
-            await self.refreshService(self.recordStatus(status, for: configuration))
+            let resolved = self.recordStatus(status, for: configuration)
+            await self.refreshService(resolved)
+            self.onHostInstalled?(resolved)
         }
     }
 
@@ -1720,7 +1733,9 @@ final class RemoteWorkspacesModel {
         let status = try await sshClient.deployHost(configuration: configuration, update: true) { message in
             Task { @MainActor in progress(message) }
         }
-        await refreshService(recordStatus(status, for: configuration))
+        let resolved = recordStatus(status, for: configuration)
+        await refreshService(resolved)
+        onHostInstalled?(resolved)
     }
 
     private func serviceClient(
@@ -1741,6 +1756,9 @@ final class RemoteWorkspacesModel {
         readinessConfiguration.timeoutIntervalForRequest = 1
         readinessConfiguration.timeoutIntervalForResource = 1
         let readinessSession = URLSession(configuration: readinessConfiguration)
+        // The host's server answers, and refuses this Mac's installer bearer:
+        // the tunnel is up all the same, and the bearer is renewed below.
+        let refused = InstallerBearerRefusal()
         try await tunnel.start(
             configuration: configuration,
             localPort: localPort
@@ -1750,13 +1768,27 @@ final class RemoteWorkspacesModel {
                 token: token,
                 session: readinessSession
             )
-            guard let health = try? await candidate.health() else { return false }
-            return health.status == "ready"
+            do {
+                refused.value = false
+                return try await candidate.health().status == "ready"
+            } catch {
+                refused.value = RemoteWorkspaceServiceClient.refusedInstallerBearer(error)
+                return refused.value
+            }
         }
         guard let activePort = await tunnel.localPort else {
             throw RemoteWorkspaceClientError.invalidResponse(
                 "The SSH loopback tunnel did not report a local port."
             )
+        }
+        if refused.value {
+            // Another Mac replaced the bearer (it does when the Mac that added a
+            // host is removed), or the host did. This Mac reaches the host over
+            // SSH, which needs no bearer and no membership, and takes a new one.
+            try requireCurrent(identity)
+            let renewed = try await renewInstallerBearer(configuration)
+            try requireCurrent(identity)
+            return RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:\(activePort)")!, token: renewed)
         }
         do { try requireCurrent(identity) }
         catch {
@@ -1768,6 +1800,25 @@ final class RemoteWorkspacesModel {
             baseURL: URL(string: "http://127.0.0.1:\(activePort)")!,
             token: token
         )
+    }
+
+    /// Replaces the host's installer bearer over SSH (`remote-host.sh
+    /// rotate-token`), keeps the new one in Keychain and returns it. Whatever
+    /// held the old one, on any Mac, no longer administers the host with it.
+    private func renewInstallerBearer(_ configuration: RemoteWorkspaceConfiguration) async throws -> String {
+        let ssh = sshClient
+        let token = try await Task.detached(priority: .userInitiated) { try ssh.renewInstallerBearer(configuration: configuration) }.value
+        try await credentials.save(token: token, for: configuration.id)
+        return token
+    }
+
+    private final class InstallerBearerRefusal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var refused = false
+        var value: Bool {
+            get { lock.withLock { refused } }
+            set { lock.withLock { refused = newValue } }
+        }
     }
 
     private func load() {
@@ -1802,6 +1853,7 @@ final class RemoteWorkspacesModel {
         let checkingRuntimeIDs: [UUID: Set<AgentRuntimeKind>]
         let runtimeCheckErrors: [UUID: [AgentRuntimeKind: String]]
         let runtimeErrors: [UUID: String]
+        let memberProblems: [UUID: String]
         let actionErrors: [UUID: [AgentRuntimeKind: String]]
         let workspaceInstances: [UUID: [AgentRuntimeKind: RemoteWorkspaceInstanceStatus]]
         let operations: [UUID: RemoteHarnessOperation]
@@ -1845,6 +1897,7 @@ final class RemoteWorkspacesModel {
             checkingRuntimeIDs: checkingRuntimeIDs,
             runtimeCheckErrors: runtimeCheckErrors,
             runtimeErrors: runtimeErrors,
+            memberProblems: memberProblems,
             actionErrors: actionErrors,
             workspaceInstances: workspaceInstances,
             operations: operations,
@@ -1888,6 +1941,7 @@ final class RemoteWorkspacesModel {
         checkingRuntimeIDs = snapshot.checkingRuntimeIDs
         runtimeCheckErrors = snapshot.runtimeCheckErrors
         runtimeErrors = snapshot.runtimeErrors
+        memberProblems = snapshot.memberProblems
         actionErrors = snapshot.actionErrors
         workspaceInstances = snapshot.workspaceInstances
         operations = snapshot.operations

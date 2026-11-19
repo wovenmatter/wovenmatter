@@ -76,11 +76,21 @@ extension RemoteWorkspacesModel {
                 while clock.now < deadline {
                     try await Task.sleep(for: pollInterval)
                     // The host restarts during an update; unanswered polls retry.
-                    guard let state = try? await client.updateState().objectValue else { continue }
+                    // One that no longer knows this Mac is adopted again by the
+                    // Mac that manages it, and answers once it is.
+                    let state: [String: JSONValue]
+                    do {
+                        guard let answered = try await client.updateState().objectValue else { continue }
+                        state = answered
+                    } catch {
+                        if case MemberSignedHTTPError.http(status: 401, _, _) = error { onHostRefusedMember?(workspaceID) }
+                        continue
+                    }
                     switch state["state"]?.stringValue {
                     case "succeeded":
                         sharedHosts[workspaceID]?.status = (try? await client.status()) ?? state["result"]
                         sharedHosts[workspaceID]?.updatedAt = Date()
+                        if let configuration = UUID(uuidString: workspaceID).flatMap(configuration(id:)) { onHostInstalled?(configuration) }
                         return
                     case "failed":
                         let detail = state["error"]?.objectValue?["error"]?.stringValue ?? "The host update failed and was rolled back."

@@ -353,19 +353,29 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
-  /// Whether the pairing this library holds was made by a build that signed
+  /// Whether the pairing this library holds was made by a build that signs
   /// its records differently: this device's own member entry, which it
-  /// signed itself, does not verify under the key it names. One row is read
-  /// by its key. A device that signs as this build does always holds an own
-  /// entry that verifies (`MemberDirectory.ensureSelf`), and a peer cannot
-  /// store one here that does not (`peerRecordAllowed`), so this is true
-  /// exactly until `clearPairingRecords` has run.
+  /// signed itself, is a complete entry that does not verify under the key
+  /// it names. One row is read by its key.
+  ///
+  /// It is true whenever such a build wrote the entry last, so also when
+  /// one opens this library again later: the pairing is then mixed again,
+  /// and clearing it again is what leaves it whole. Only this device writes
+  /// its own entry (`saveLibraryMemberEntries` stores none that does not
+  /// verify, and a peer's copy of it is never applied, `peerRecordAllowed`),
+  /// so no other device can make this true.
+  ///
+  /// A row that does not read as an entry at all is not evidence of that. No
+  /// writer here stores one, and whatever damaged it says nothing about how
+  /// the other records were signed, which still verify or not on their own;
+  /// clearing every pairing for it would destroy what may be sound. It is
+  /// left, and the resolver ignores it like any record it cannot read.
   public func holdsUnverifiablePairing() async throws -> Bool {
     try await read { connection in
       let own = try connection.libraryIdentityUnlocked().hostDeviceID.lowercased()
       guard let payload = try connection.historyRowsUnlocked("SELECT payload FROM library_members WHERE device_id=? AND added_by=?",
-                                                             values: [own, own]).first?.objectValue?["payload"]?.stringValue else { return false }
-      guard let entry = try? JSONDecoder().decode(LibraryMemberEntry.self, from: Data(payload.utf8)), entry.isWellFormed else { return true }
+                                                             values: [own, own]).first?.objectValue?["payload"]?.stringValue,
+            let entry = try? JSONDecoder().decode(LibraryMemberEntry.self, from: Data(payload.utf8)), entry.isWellFormed else { return false }
       return !entry.verifies(with: entry.publicKey)
     }
   }
@@ -411,12 +421,29 @@ extension WorkspaceDatabase {
     return .init(members: members, revision: String(revision.prefix(32)), adopted: adopted)
   }
   /// Keeps the newest entry per (device, adder). An older copy never replaces
-  /// a newer one, so retries and relays are harmless.
+  /// a newer one, so retries and relays are harmless. Two kinds of own entry
+  /// (signed by the device it is for) are never stored, whoever hands them
+  /// over (an adoption, a relay):
+  /// - one that does not verify under the key it names, which is nobody's
+  ///   record;
+  /// - this device's, which only this device writes (`saveOwnLibraryMemberEntry`).
+  ///   Another's copy of it could read as pairing another build made
+  ///   (`holdsUnverifiablePairing`), or, signed with another key and dated
+  ///   ahead, hold back everything this device signs later.
   public func saveLibraryMemberEntries(_ entries: [LibraryMemberEntry]) async throws {
-    let rows = try entries.filter(\.isWellFormed).map { ($0, try WorkspaceDatabaseConnection.memberJSON($0)) }
+    try await saveLibraryMemberEntries(entries, own: false)
+  }
+  /// This device's entry for itself, signed with its key (`MemberDirectory.ensureSelf`).
+  func saveOwnLibraryMemberEntry(_ entry: LibraryMemberEntry) async throws {
+    try await saveLibraryMemberEntries([entry], own: true)
+  }
+  private func saveLibraryMemberEntries(_ entries: [LibraryMemberEntry], own: Bool) async throws {
+    let rows = try entries.filter { $0.isWellFormed && ($0.addedBy != $0.deviceID || $0.verifies(with: $0.publicKey)) }
+      .map { ($0, try WorkspaceDatabaseConnection.memberJSON($0)) }
     try await write { connection in
       try connection.transaction {
-        for (entry, payload) in rows {
+        let device = try connection.libraryIdentityUnlocked().hostDeviceID.lowercased()
+        for (entry, payload) in rows where own == (entry.addedBy == entry.deviceID && entry.deviceID == device) {
           try connection.toolsExecuteUnlocked("""
             INSERT INTO library_members VALUES(?,?,?,?) ON CONFLICT(device_id,added_by) DO UPDATE SET
               added_at=excluded.added_at,payload=excluded.payload WHERE excluded.added_at>library_members.added_at

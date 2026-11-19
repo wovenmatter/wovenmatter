@@ -566,6 +566,20 @@ public actor RemoteWorkspaceSSHClient {
         )
     }
 
+    /// Replaces the host's installer bearer and returns the new one, over
+    /// SSH as the account that owns the installation. It needs neither the
+    /// old bearer nor membership, so the Mac that manages a host can always
+    /// take a bearer again; the running server switches to it at once.
+    public func renewInstallerBearer(configuration: RemoteWorkspaceConfiguration) throws -> String {
+        struct Rotation: Decodable { let rotated: Bool; let token: String }
+        let rotation = try decode(Rotation.self, from: runScript(hostName: configuration.hostName, userName: configuration.userName,
+                                                                arguments: ["rotate-token", configuration.workspaceID]))
+        guard rotation.rotated, rotation.token.wholeMatch(of: /^[A-Za-z0-9+\/=_-]{32,256}$/) != nil else {
+            throw RemoteWorkspaceClientError.invalidResponse("The host did not return a new service credential.")
+        }
+        return rotation.token
+    }
+
     public nonisolated static func validateConfiguration(
         _ configuration: RemoteWorkspaceConfiguration
     ) throws {
@@ -1087,6 +1101,21 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func health() async throws -> RemoteWorkspaceHealth {
         try await request(path: "health", method: "GET", body: nil)
+    }
+
+    /// Whether `error` is the host's server refusing the bearer a request
+    /// carried (`{"error":"unauthorized"}`), as opposed to not answering.
+    public static func refusedInstallerBearer(_ error: any Error) -> Bool {
+        hostErrorCode(error) == "unauthorized"
+    }
+    /// Whether `error` is an adopted host refusing an adoption from a Mac it
+    /// does not list (`mac_member_required`).
+    public static func refusedAdoption(_ error: any Error) -> Bool {
+        hostErrorCode(error) == "mac_member_required"
+    }
+    private static func hostErrorCode(_ error: any Error) -> String? {
+        guard case RemoteWorkspaceClientError.invalidResponse(let detail) = error else { return nil }
+        return (try? JSONDecoder().decode([String: String].self, from: Data(detail.utf8)))?["error"]
     }
 
     public func harnesses() async throws -> [RemoteHarnessStatus] {

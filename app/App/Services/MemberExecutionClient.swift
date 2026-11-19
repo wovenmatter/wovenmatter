@@ -33,6 +33,8 @@ final class MemberExecutionClient {
     private let memberRevision: (@MainActor () async -> String?)?
     /// Live state pushed by a stream changed for these conversations.
     var onLive: @MainActor (Set<String>) -> Void = { _ in }
+    /// A workspace's machine answered that this Mac is not a member of its library.
+    var onRefused: @MainActor (ExecutionWorkspace) -> Void = { _ in }
     /// What a workspace is called in this client's messages. The model sets
     /// the title the desktop shows (`ApplicationModel.workspaceDisplayName`),
     /// so an error names a machine as its sidebar section does; the registry
@@ -205,6 +207,7 @@ final class MemberExecutionClient {
             return signed
         } catch MobileConnectionError.revoked {
             // The peer has not synchronized this Mac's membership yet, or it removed this Mac.
+            onRefused(workspace)
             throw unrecognized
         }
     }
@@ -753,6 +756,7 @@ extension MemberExecutionClient {
             Task { _ = try? await StreamCommands.resolveUnknown(workspaceID: id, journal: journal, connection: connection) }
         case .waiting(let error):
             onlineWorkspaces.remove(id); errors[id] = Self.streamProblem(error, workspace: stream.workspace, name: workspaceTitle(stream.workspace))
+            if case .unauthorized = error { onRefused(stream.workspace) }
             stream.synchronizedConversations = []; stream.releaseAll()
         case .memberRemoved:
             onlineWorkspaces.remove(id); errors[id] = Self.streamProblem(.memberRemoved, workspace: stream.workspace, name: workspaceTitle(stream.workspace))

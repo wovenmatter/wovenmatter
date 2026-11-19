@@ -51,12 +51,13 @@ struct SettingsAppleDevicesView: View {
         }
     }
 
-    /// Shown after this update cleared the pairings this Mac held, until it is
-    /// dismissed or a device is paired.
+    /// Shown after this Mac cleared pairings it held because another build
+    /// had made them (the release before this one, or an older build that
+    /// opened this library since), until it is dismissed or a device is paired.
     private var pairingResetNotice: some View {
         SettingsSection {
-            SettingsRow(title: "Pairing was reset by this update",
-                        detail: "Pair your other Macs, iPhone, and iPad with this Mac again. Your chats, notes, and workspaces are unchanged.") {
+            SettingsRow(title: "Pairing was reset",
+                        detail: "Another version of Woven Matter made the pairing here, and this one cannot use it. Pair your other Macs, iPhone, and iPad with this Mac again. Your chats, notes, and workspaces are unchanged.") {
                 Button("Dismiss") { Task { await host.dismissPairingResetNotice() } }
                     .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("devices.pairing-reset.dismiss")
             }
