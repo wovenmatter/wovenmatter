@@ -218,7 +218,7 @@ case "$mode" in
     run_step 1800 "Installing Docker Engine $DOCKER_CE_VERSION" install_docker
     run_step 300 "Applying network rules" configure
     run_step 300 "Starting Docker Engine" start_docker
-    printf '{"guestVersion": %s, "at": "%s"}\n' "$WOVEN_GUEST_VERSION" "$(date -Is)" >"$state/provisioned"
+    printf '{"at": "%s"}\n' "$(date -Is)" >"$state/provisioned"
     status ready "Ready"
     ;;
   upgrade)
@@ -230,7 +230,7 @@ case "$mode" in
     run_step 900 "Removing unused packages" remove_unused_packages
     run_step 300 "Applying network rules" configure
     run_step 300 "Starting Docker Engine" start_docker
-    printf '{"guestVersion": %s, "at": "%s"}\n' "$WOVEN_GUEST_VERSION" "$(date -Is)" >"$state/provisioned"
+    printf '{"at": "%s"}\n' "$(date -Is)" >"$state/provisioned"
     status ready "Updated"
     ;;
   *)

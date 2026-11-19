@@ -125,7 +125,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let suite = "native-host-bots-placeholder-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(try JSONEncoder().encode([placeholder]), forKey: "wovenmatter.remote-workspaces.v1")
+        defaults.set(try JSONEncoder().encode([placeholder]), forKey: RemoteWorkspacesModel.storageKey)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.checkHost(hostName: placeholder.hostName, userName: "trey", accessMode: .fullRoot)
         try await settled(model)
@@ -141,7 +141,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = RemoteWorkspaceConfiguration(name: "Native", workspaceID: "native", hostName: "native.invalid", userName: "trey", kind: .host, accessMode: .fullRoot)
-        defaults.set(try JSONEncoder().encode([existing]), forKey: "wovenmatter.remote-workspaces.v1")
+        defaults.set(try JSONEncoder().encode([existing]), forKey: RemoteWorkspacesModel.storageKey)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.checkHost(hostName: existing.hostName, userName: "trey", accessMode: .fullRoot)
         try await settled(model)
@@ -186,7 +186,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
-        defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
+        defaults.set(try JSONEncoder().encode([workspace]), forKey: RemoteWorkspacesModel.storageKey)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.refreshRuntimeMaintenanceAtStartup()
         _ = try await pollUntil(attempts: 300, interval: .milliseconds(10)) { !model.busyWorkspaceIDs.contains(workspace.id) }
@@ -206,7 +206,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         defer { defaults.removePersistentDomain(forName: suite) }
         let existing = RemoteWorkspaceConfiguration(name: "Studio", workspaceID: "studio", hostName: "studio.invalid", userName: "trey",
                                                     remotePort: 7400, kind: .host, accessMode: .fullRoot)
-        defaults.set(try JSONEncoder().encode([existing]), forKey: "wovenmatter.remote-workspaces.v1")
+        defaults.set(try JSONEncoder().encode([existing]), forKey: RemoteWorkspacesModel.storageKey)
         let host = BotsHostFixture(root: root, installation: #"{"id":"studio","port":7400,"accessMode":"fullRoot","roles":{"workspace":true,"bots":false}}"#)
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: host.client)
         var steps: [String] = []

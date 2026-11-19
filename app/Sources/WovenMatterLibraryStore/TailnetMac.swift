@@ -50,7 +50,6 @@ public struct MacInstallation: Equatable, Sendable {
     public let installed: Bool
     public let version: String?
     public let build: Int?
-    public let supportsSetup: Bool
     public let running: Bool
     public let architecture: String
     public let macOSVersion: String
@@ -59,16 +58,16 @@ public struct MacInstallation: Equatable, Sendable {
 
     public init(data: Data) throws {
         let fields = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
-        guard fields.count >= 9, fields[0] == "woven-mac-inspection-v1",
+        guard fields.count >= 8, fields[0] == "woven-mac-inspection",
               ["installed", "missing"].contains(fields[1]),
-              fields.prefix(9).enumerated().allSatisfy({ index, value in value.utf8.count <= (index == 8 ? 4096 : 512) && !value.unicodeScalars.contains(where: { $0.value < 32 || (127...159).contains($0.value) }) }) else {
+              fields.prefix(8).enumerated().allSatisfy({ index, value in value.utf8.count <= (index == 7 ? 4096 : 512) && !value.unicodeScalars.contains(where: { $0.value < 32 || (127...159).contains($0.value) }) }) else {
             throw LibraryAPIError(code: "invalid_response", message: "This Mac returned invalid installation details.")
         }
         installed = fields[1] == "installed"; version = fields[2].isEmpty ? nil : fields[2]
-        build = Int(fields[3]); supportsSetup = fields[4] == "1"; running = fields[5] == "1"
-        architecture = fields[6]; macOSVersion = fields[7]
-        setupResult = try? JSONDecoder().decode(MacSetupStatus.self, from: Data(fields[8].utf8))
-        deviceID = fields.count > 9 && UUID(uuidString: fields[9]) != nil ? fields[9] : nil
+        build = Int(fields[3]); running = fields[4] == "1"
+        architecture = fields[5]; macOSVersion = fields[6]
+        setupResult = try? JSONDecoder().decode(MacSetupStatus.self, from: Data(fields[7].utf8))
+        deviceID = fields.count > 8 && UUID(uuidString: fields[8]) != nil ? fields[8] : nil
     }
 }
 
@@ -79,9 +78,7 @@ public struct MacRelease: Decodable, Equatable, Sendable {
     public let minimumMacOS: String
     public let downloadURL: URL
     public let sha256: String
-    public let deviceSetupVersion: Int?
-    public var supportsRemoteSetup: Bool { deviceSetupVersion == 1 }
-    enum CodingKeys: String, CodingKey { case version, build, architecture, minimumMacOS = "minimum_macos", downloadURL = "download_url", sha256, deviceSetupVersion = "device_setup_version" }
+    enum CodingKeys: String, CodingKey { case version, build, architecture, minimumMacOS = "minimum_macos", downloadURL = "download_url", sha256 }
 
     public func validate() throws {
         let parts = version.split(separator: ".", omittingEmptySubsequences: false)

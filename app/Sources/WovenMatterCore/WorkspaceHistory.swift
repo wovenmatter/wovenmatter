@@ -127,9 +127,8 @@ public enum WorkspaceHistoryPrivacy {
   }
 }
 
-/// Versioned, read-only query contract. No caller-supplied SQL is executed.
+/// A read-only history query. No caller-supplied SQL is executed.
 public struct WorkspaceHistoryQuery: Codable, Sendable {
-  public var schemaVersion: Int = 1
   public var command: String
   public var id: String?
   public var search: String?
@@ -154,13 +153,12 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var message: String?
   public var requestID: String?
   enum CodingKeys: String, CodingKey {
-    case schemaVersion, command, id, search, conversationID, runID, harness, folderID, kind, since, until
+    case command, id, search, conversationID, runID, harness, folderID, kind, since, until
     case sourceID, nativeSessionID, nativeRecordID, nativeConversationID
     case after, limit, offset, characters, sort, callerConversationID, message, requestID
   }
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
-    schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
     command = try c.decode(String.self, forKey: .command)
     id = try c.decodeIfPresent(String.self, forKey: .id)
     search = try c.decodeIfPresent(String.self, forKey: .search)

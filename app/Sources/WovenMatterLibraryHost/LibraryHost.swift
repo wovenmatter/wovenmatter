@@ -14,7 +14,14 @@ import WovenMatterLibraryStore
 ///   member list, local session-history publishing and bot conversations.
 /// See docs/architecture/WOVEN_EVERYWHERE.md, "Library host".
 public final class LibraryHost: @unchecked Sendable {
-  public static let version = "1"
+  /// The Woven Matter release this host was installed from, for display:
+  /// the host installer sets `WOVENMATTER_RELEASE_VERSION` for the Node
+  /// server, whose environment this daemon inherits. `development` outside
+  /// an installed release.
+  public static var releaseVersion: String {
+    let value = ProcessInfo.processInfo.environment["WOVENMATTER_RELEASE_VERSION"] ?? ""
+    return value.isEmpty ? "development" : value
+  }
   /// Groups whose tools run entirely against the library database. Note
   /// artifacts (spreadsheet and HTML notes) are part of notes. Rendering an
   /// HTML reply needs the caller's active run, which the Node server owns until
@@ -78,7 +85,7 @@ public final class LibraryHost: @unchecked Sendable {
     timers = LibraryHostTimers(database: database, machineID: identity.deviceID)
     github = GitHubIdentitySync(database: database, directory: members)
     try await members.ensureSelf(name: name ?? ProcessInfo.processInfo.hostName, endpoints: endpoints)
-    var configuration = LibraryPeerSync.Configuration(version: "wovenmatter-library " + Self.version)
+    var configuration = LibraryPeerSync.Configuration(version: Self.releaseVersion)
     configuration.presenceInterval = presenceInterval
     sync = LibraryPeerSync(directory: members, transport: transport, configuration: configuration)
     let sync = sync
@@ -365,12 +372,12 @@ public final class LibraryHost: @unchecked Sendable {
   private func health(_ request: LibraryHTTPRequest) async -> LibraryHTTPResponse {
     guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
     struct Health: Encodable {
-      let status: String; let service: String; let version: String
+      let status: String; let service: String
       let deviceID: String; let uptimeSeconds: Int
     }
     do {
       _ = try await database.toolSettings()
-      return try .json(Health(status: "ok", service: "wovenmatter-library", version: Self.version,
+      return try .json(Health(status: "ok", service: "wovenmatter-library",
         deviceID: identity.deviceID, uptimeSeconds: Int(Date().timeIntervalSince(startedAt))))
     } catch {
       return .error("unavailable", "The library database is unavailable: \(error.localizedDescription)", status: 503)

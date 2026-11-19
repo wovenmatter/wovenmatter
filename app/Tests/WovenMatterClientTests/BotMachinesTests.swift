@@ -100,20 +100,20 @@ struct BotMachinesTests {
 
     // MARK: Machines and versions
 
-    private func machine(_ id: String, kind: BotMachine.Kind, app: String? = "1.4.0", runtime: String? = "0.2.0",
+    private func machine(_ id: String, kind: BotMachine.Kind, app: String? = "1.4.0",
                          state: BotMachine.State = .ready) -> BotMachine {
-        BotMachine(id: id, name: id, kind: kind, state: state, versions: .init(app: app, runtime: runtime, protocol: 1))
+        BotMachine(id: id, name: id, kind: kind, state: state, versions: .init(app: app), runtimeInstalled: true)
     }
 
     @Test func remoteStatusBecomesAMachineAndFlagsAVersionMismatch() {
         let status = BotsRemoteStatus(machine: .init(deviceID: "D1", name: "box", kind: "linux"), enabled: true, state: "ready",
-                                      versions: .init(app: "1.3.0", runtime: "0.2.0", protocol: 1))
+                                      versions: .init(app: "1.3.0"), runtimeInstalled: true)
         let socket = BotSocketEndpoint(url: URL(string: "ws://127.0.0.1:4000/v1/bots/ws")!, bearer: "secret")
         let mismatched = status.machine(kind: .linux, socket: socket, thisMacVersion: "1.4.0")
         #expect(mismatched.state == .needsUpdate)
         #expect(mismatched.message?.contains("Settings → Updates") == true)
         let matched = status.machine(kind: .linux, socket: socket, thisMacVersion: "1.3.0")
-        #expect(matched.state == .ready && matched.socket == socket)
+        #expect(matched.state == .ready && matched.socket == socket && matched.runtimeInstalled == true)
         var off = status; off.enabled = false; off.state = "off"
         #expect(off.machine(kind: .linux, socket: socket, thisMacVersion: "1.3.0").socket == nil)
     }
@@ -122,14 +122,14 @@ struct BotMachinesTests {
     @Test func linuxServerStatusDecodes() throws {
         let body = """
         {"machine":{"deviceID":"0b6f8c2e-6a51-4f7e-9d8a-2f9f6c1d3e4a","name":"box","kind":"linux"},"enabled":true,
-         "state":"starting","message":"Waiting for the bot engine.","versions":{"app":null,"runtime":"0.1.0","protocol":1},
+         "state":"starting","message":"Waiting for the bot engine.","versions":{"app":null,"fingerprint":null,"librarySchema":null},"runtimeInstalled":true,
          "resources":{"poolBytes":8589934592,"perBotBytes":4294967296,"diskBytes":null},
          "capacity":{"memoryBytes":34359738368,"diskTotalBytes":1000000000000,"diskFreeBytes":500000000000,"diskUsedByBotsBytes":null},
          "paused":false,"workspaceEnabled":false,"runtimeAvailable":true,"engine":{"installed":false},"runtime":null,"settings":{}}
         """
         let status = try JSONDecoder().decode(BotsRemoteStatus.self, from: Data(body.utf8))
         #expect(status.resources == .init(poolBytes: 8 * gib, perBotBytes: 4 * gib, diskBytes: nil))
-        #expect(status.capacity?.memoryBytes == 32 * gib && status.paused == false)
+        #expect(status.capacity?.memoryBytes == 32 * gib && status.paused == false && status.runtimeInstalled == true)
         // No app version on Linux, so it never reads as a mismatch.
         #expect(status.machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0").state == .starting)
     }
@@ -139,19 +139,15 @@ struct BotMachinesTests {
         #expect(!String(describing: socket).contains("secret-token"))
     }
 
-    @Test func versionReportNamesOutdatedPartsAndStoppedSync() {
-        let machines = [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0"), machine("mini", kind: .mac, runtime: "0.1.0")]
+    @Test func versionReportNamesOutdatedParts() {
+        let machines = [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0"), machine("mini", kind: .mac)]
         let report = BotVersionReport(thisMacVersion: "1.4.0", machines: machines)
         // Bots have no version of their own: only the Woven Matter versions count.
         #expect(report.outdated.map(\.id) == ["box"])
         #expect(report.message?.contains("Update everything in Settings → Updates") == true)
-        let stopped = BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)],
-                                       syncErrors: ["Update both Macs to the same Woven Matter version before synchronizing."])
-        #expect(stopped.syncStopped && stopped.needsUpdate)
-        #expect(stopped.message?.contains("sync stopped") == true)
         #expect(!BotVersionReport(thisMacVersion: "1.4.0", machines: [machine("this", kind: .thisMac)]).needsUpdate)
         let both = BotVersionReport(thisMacVersion: "1.4.0",
-                                    machines: [machine("this", kind: .thisMac, runtime: "0.2.0"), machine("box", kind: .linux, app: "1.3.0", runtime: "0.1.0")])
+                                    machines: [machine("this", kind: .thisMac), machine("box", kind: .linux, app: "1.3.0")])
         #expect(both.outdated.map(\.id) == ["box"])
         #expect(both.message?.hasPrefix("box runs a different version.") == true)
     }
@@ -175,7 +171,7 @@ struct BotMachinesTests {
         let ours = String(repeating: "a", count: 64), theirs = String(repeating: "b", count: 64)
         func status(app: String?, fingerprint: String?) -> BotsRemoteStatus {
             BotsRemoteStatus(machine: .init(deviceID: "D1", name: "box", kind: "linux"), enabled: true, state: "ready",
-                             versions: .init(app: app, runtime: "0.2.0", protocol: 1, fingerprint: fingerprint, librarySchema: "s1"))
+                             versions: .init(app: app, fingerprint: fingerprint, librarySchema: "s1"), runtimeInstalled: true)
         }
         // Same version name, different release (a development build): still out of date.
         let other = status(app: "1.4.0", fingerprint: theirs).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0", expectedHostFingerprint: ours)
@@ -240,13 +236,13 @@ struct BotMachinesTests {
     @Test func linuxStatusWithReleaseAndEngineUpdateFieldsDecodes() throws {
         let body = """
         {"machine":{"deviceID":"D1","name":"box","kind":"linux"},"enabled":true,"state":"ready",
-         "versions":{"app":"1.4.0","runtime":"0.1.0","protocol":1,"fingerprint":"\(String(repeating: "c", count: 64))","librarySchema":null},
-         "paused":false,"updating":true,"engineUpdateFailure":"rolled back"}
+         "versions":{"app":"1.4.0","fingerprint":"\(String(repeating: "c", count: 64))","librarySchema":null},
+         "runtimeInstalled":false,"paused":false,"updating":true,"engineUpdateFailure":"rolled back"}
         """
         let status = try JSONDecoder().decode(BotsRemoteStatus.self, from: Data(body.utf8))
         #expect(status.versions.fingerprint?.count == 64 && status.versions.librarySchema == nil)
         let machine = status.machine(kind: .mac, socket: nil, thisMacVersion: "1.4.0")
-        #expect(machine.updating && machine.engineUpdateFailure == "rolled back")
+        #expect(machine.updating && machine.engineUpdateFailure == "rolled back" && machine.runtimeInstalled == false)
     }
 
     @Test func discoveryIncludesMacsOnlyWhenAsked() throws {

@@ -8,8 +8,8 @@ import WovenMatterCore
 struct MacManagementTests {
     private static func fixtureIP(_ last: Int) -> String { [100, 64, 0, last].map(String.init).joined(separator: ".") }
     static let status = Data(#"{"BackendState":"Running","Self":{"DNSName":"air.tail.ts.net."},"Peer":{"mini":{"Online":true,"OS":"macOS","HostName":"Mac mini","DNSName":"mini.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(2))"]},"offline":{"Online":false,"OS":"darwin","DNSName":"offline.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(2))"]},"linux":{"Online":true,"OS":"linux","DNSName":"linux.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(3))"]},"self":{"Online":true,"OS":"macOS","DNSName":"air.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(4))"]},"expired":{"Online":true,"Expired":true,"OS":"macOS","DNSName":"expired.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(5))"]},"public":{"Online":true,"OS":"macOS","DNSName":"bad.tail.ts.net.","TailscaleIPs":["\#([192, 0, 2, 1].map(String.init).joined(separator: "."))"]}}}"#.utf8)
-    static let installed = Data("woven-mac-inspection-v1\ninstalled\n0.3.2\n900\n\n0\narm64\n27.2\n\n\n".utf8)
-    static let missing = Data("woven-mac-inspection-v1\nmissing\n\n\n\n0\narm64\n27.2\n\n\n".utf8)
+    static let installed = Data("woven-mac-inspection\ninstalled\n0.3.2\n900\n0\narm64\n27.2\n\n\n".utf8)
+    static let missing = Data("woven-mac-inspection\nmissing\n\n\n0\narm64\n27.2\n\n\n".utf8)
     private var mini: TailnetMac { get throws { try #require(TailnetMac.decode(Self.status).first { $0.id == "mini" }) } }
 
     @Test func inventoryIncludesStoppedUninstalledAndOfflineMacsWithoutAServiceProbe() throws {
@@ -47,7 +47,7 @@ struct MacManagementTests {
     }
     @Test func stoppedAppHasAVersionAndIsDistinctFromMissingOrUninspectable() throws {
         let stopped = try MacInstallation(data: Self.installed)
-        #expect(stopped.installed && !stopped.running && !stopped.supportsSetup)
+        #expect(stopped.installed && !stopped.running)
         #expect(stopped.version == "0.3.2" && stopped.build == 900)
         #expect(try !MacInstallation(data: Self.missing).installed)
         #expect(throws: (any Error).self) { try MacInstallation(data: Data("permission denied".utf8)) }
@@ -89,7 +89,7 @@ struct MacManagementTests {
         #expect(release.isNewer(than: try MacInstallation(data: Self.installed)))
         #expect(throws: (any Error).self) { try decodeRelease(url: "https://attacker.example/app.dmg").validate() }
         #expect(throws: (any Error).self) { try decodeRelease(hash: "bad").validate() }
-        let same = try MacInstallation(data: Data("woven-mac-inspection-v1\ninstalled\n0.3.6\n999\n1\n1\narm64\n27.2\n\n\n".utf8))
+        let same = try MacInstallation(data: Data("woven-mac-inspection\ninstalled\n0.3.6\n999\n1\narm64\n27.2\n\n\n".utf8))
         #expect(!release.isNewer(than: same))
     }
     @Test func setupIntentExpiresAndCannotContainAnArbitraryEndpoint() throws {
@@ -108,20 +108,6 @@ struct MacManagementTests {
         do { try await manager.install(mini, connection: .init(alias: "mini"), release: decodeRelease()); Issue.record("Expected checksum failure") }
         catch { #expect(error.localizedDescription == "The download checksum did not match.") }
     }
-    @Test func oldPublishedReleasesCannotStartDownloadAndPair() async throws {
-        let calls = MacManagementCalls()
-        let manager = MacManagement(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, _, _ in
-            await calls.append(executable.lastPathComponent)
-            return Self.status
-        })
-        let old = try decodeRelease(setupVersion: nil)
-        #expect(!old.supportsRemoteSetup)
-        #expect(try decodeRelease().supportsRemoteSetup)
-        await #expect(throws: (any Error).self) {
-            try await manager.install(mini, connection: .init(alias: "mini"), release: old, requirePairingSupport: true)
-        }
-        #expect(await calls.items.isEmpty)
-    }
     @Test @MainActor func completingAnOldIntentCannotRemoveANewerOne() throws {
         let suite = "device-intent-fixture-\(UUID())", old = try MacSetupRequest(action: .update).json()
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -136,10 +122,12 @@ struct MacManagementTests {
     @Test func setupResultsCarryTheSpecificRequestIdentity() throws {
         let request = MacSetupRequest(action: .update)
         let status = MacSetupStatus(requestID: request.id, phase: .failed, message: "Finish active work first.")
-        let data = Data("woven-mac-inspection-v1\ninstalled\n0.3.6\n999\n1\n1\narm64\n27.2\n\(try status.json())\n\n".utf8)
+        let data = Data("woven-mac-inspection\ninstalled\n0.3.6\n999\n1\narm64\n27.2\n\(try status.json())\n\(request.id.uuidString)\n".utf8)
         let result = try MacInstallation(data: data)
         #expect(result.setupResult?.requestID == request.id)
         #expect(result.setupResult?.phase == .failed)
+        #expect(result.running && result.architecture == "arm64" && result.macOSVersion == "27.2")
+        #expect(result.deviceID == request.id.uuidString)
     }
     @Test func scriptsAreValidBashAndInspectionPreservesEmptyFields() throws {
         for script in [MacRemoteScripts.inspect, MacRemoteScripts.pair, MacRemoteScripts.install] {
@@ -159,9 +147,8 @@ struct MacManagementTests {
         process.waitUntilExit()
         #expect(!state.installed && state.version == nil && state.build == nil)
     }
-    private func decodeRelease(url: String = "https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg", hash: String = String(repeating: "a", count: 64), setupVersion: Int? = 1) throws -> MacRelease {
-        var value: [String: Any] = ["version": "0.3.6", "build": 999, "architecture": "arm64", "minimum_macos": "26.0", "download_url": url, "sha256": hash]
-        value["device_setup_version"] = setupVersion
+    private func decodeRelease(url: String = "https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg", hash: String = String(repeating: "a", count: 64)) throws -> MacRelease {
+        let value: [String: Any] = ["version": "0.3.6", "build": 999, "architecture": "arm64", "minimum_macos": "26.0", "download_url": url, "sha256": hash]
         return try JSONDecoder().decode(MacRelease.self, from: JSONSerialization.data(withJSONObject: value))
     }
 }

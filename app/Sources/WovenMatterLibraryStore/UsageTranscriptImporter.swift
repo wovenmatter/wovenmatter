@@ -21,7 +21,6 @@ actor UsageTranscriptImporter {
     let failures: Int
     static let empty = Outcome(failures: 0)
   }
-  private static let parserVersion = "usage-index-v4"
   let homeDirectory: URL
   /// This Mac's library database, which also holds the default agent's Pi Durable stores.
   /// Bots keep theirs beside it, in `Bots/data/bots.sqlite`.
@@ -466,7 +465,7 @@ actor UsageTranscriptImporter {
       let stored = try await store.source(sourceID)
       let prepared = try await prepare { check -> PreparedSource? in
         guard FileManager.default.fileExists(atPath: databaseURL.path) else { return nil }
-        let fingerprint = try (fingerprint.map { Self.parserVersion + ":" + (try $0(check)) }
+        let fingerprint = try (fingerprint.map { try $0(check) }
           ?? Self.databaseFingerprint(databaseURL)) + ":" + providerFilterSignature
         let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
         guard stored?.fingerprint != fingerprint || stored?.indexedAfter == nil
@@ -489,10 +488,14 @@ actor UsageTranscriptImporter {
     }
   }
 
+  /// A source is read again when its size or modification time changed. A
+  /// stored fingerprint in any other form (an earlier build put a label in
+  /// front) differs too, and replacing a source's events is idempotent
+  /// (`UsageStore.replace` deletes them first), so that source is read once
+  /// more the next time its file is looked at.
   nonisolated private static func fileFingerprint(_ url: URL) throws -> String {
     let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
     return [
-      Self.parserVersion,
       String(values.fileSize ?? 0),
       String(values.contentModificationDate?.timeIntervalSince1970 ?? 0),
     ].joined(separator: ":")

@@ -3,7 +3,7 @@ import WovenMatterCore
 
 public enum LocalModelServerStore {
     public static let maximumServers = 12
-    private static let storageKey = "wovenmatter.connections.local-servers.v1"
+    public static let storageKey = "wovenmatter.connections.local-servers"
     /// Only public server addresses/catalogs are preferences. Keys use the same
     /// Keychain store and encrypted remote vault as other provider connections.
     public private(set) static var servers: [LocalModelServer] {

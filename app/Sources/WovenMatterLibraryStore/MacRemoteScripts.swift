@@ -14,9 +14,9 @@ enum MacRemoteScripts {
 
     static let inspect = locate + #"""
 
-    printf 'woven-mac-inspection-v1\n'
+    printf 'woven-mac-inspection\n'
     if [ -d "$app" ]; then printf 'installed\n'; else printf 'missing\n'; fi
-    printf '%s\n' "$(field CFBundleShortVersionString)" "$(field CFBundleVersion)" "$(field WovenMatterDeviceSetupVersion)"
+    printf '%s\n' "$(field CFBundleShortVersionString)" "$(field CFBundleVersion)"
     if running; then printf '1\n'; else printf '0\n'; fi
     uname -m
     sw_vers -productVersion
@@ -27,7 +27,6 @@ enum MacRemoteScripts {
     static let pair = locate + #"""
 
     [ -d "$app" ] || fail 'Woven Matter is not installed. Download it before pairing.'
-    [ "$(field WovenMatterDeviceSetupVersion)" = 1 ] || fail 'Update Woven Matter on this Mac to pair it from here.'
     [ "$(stat -f %Su /dev/console)" = "$(id -un)" ] || fail 'Sign in to this Mac with the SSH user before pairing.'
     /usr/bin/defaults delete wovenmatter.desktop wovenmatter.device-setup.status 2>/dev/null || true
     /usr/bin/defaults write wovenmatter.desktop wovenmatter.device-setup.request -string "$1"
@@ -94,9 +93,6 @@ enum MacRemoteScripts {
     [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$candidate/Contents/Info.plist")" = "$4" ] || fail 'The downloaded app build does not match this release.'
     candidate_minimum=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$candidate/Contents/Info.plist")
     version_at_least "$(sw_vers -productVersion)" "$candidate_minimum" || fail 'The downloaded app requires a newer macOS version.'
-    if [ "$7" = 1 ]; then
-      [ "$(/usr/libexec/PlistBuddy -c 'Print :WovenMatterDeviceSetupVersion' "$candidate/Contents/Info.plist" 2>/dev/null || true)" = 1 ] || fail 'This download does not support remote pairing. The existing app was preserved.'
-    fi
     # Never downgrade an installation that changed since inspection.
     current=$(field CFBundleVersion)
     if [ -n "$current" ]; then [ "$current" -le "$4" ] || fail 'A newer app is already installed. Refresh this Mac before continuing.'; fi

@@ -122,7 +122,6 @@ extension ApplicationModel {
                 let _: BotsRemoteStatus = try await self.botsClient(for: workspace).request("v1/bots/engine/update", method: "POST",
                                                                                             body: Data("{}".utf8))
             },
-            syncErrors: { [weak self] in self.map { Array($0.libraryHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.libraryHost.peerSync.syncStatus) } ?? [] },
             signSocket: { [weak self] url, audience in
                 guard let self else { throw CancellationError() }
                 return try await self.signMemberSocket(url: url, audience: audience)

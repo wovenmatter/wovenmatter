@@ -69,7 +69,7 @@ private final class HostFixture {
         let bundleRoot = directory.appending(path: "bundle")
         try FileManager.default.createDirectory(at: bundleRoot.appending(path: "src"), withIntermediateDirectories: true)
         try Data("export {}".utf8).write(to: bundleRoot.appending(path: "src/cli.ts"))
-        try Data(#"{"name":"bots","version":"0.3.1"}"#.utf8).write(to: bundleRoot.appending(path: "package.json"))
+        try Data(#"{"name":"bots"}"#.utf8).write(to: bundleRoot.appending(path: "package.json"))
         let bundle = BotsRuntimeBundle(node: URL(fileURLWithPath: "/usr/bin/true"), root: bundleRoot, defaultAgent: defaultAgent)
         engine = FakeEngine(socket: directory.appending(path: "docker.sock").path)
         let state = directory.appending(path: "Bots")
@@ -179,7 +179,7 @@ struct BotsHostTests {
         #expect(machine.kind == .thisMac && machine.state == .ready && machine.id == "d3vice-0001")
         #expect(machine.socket?.url.absoluteString == "ws://127.0.0.1:\(listen["port"] as? Int ?? 0)/ws")
         #expect(machine.socket?.bearer == config["runtimeToken"] as? String)
-        #expect(machine.versions.runtime == "0.3.1" && machine.capacity?.diskUsedByBotsBytes == 2 * BotResourceSettings.gib)
+        #expect(machine.runtimeInstalled == true && machine.capacity?.diskUsedByBotsBytes == 2 * BotResourceSettings.gib)
 
         _ = try await fixture.host.perform(.setEnabled(false))
         #expect(fixture.engine.stopped == 1 && fixture.supervisor.phase == .stopped)
@@ -638,9 +638,9 @@ struct UpdatesVersionTests {
         let image = PiBotImageStatus(tag: "wovenmatter-bots:abc", base: "ubuntu:26.04", node: "26.13.1", playwright: "1.65.1", staleBots: 2)
         #expect(image.tools == "Ubuntu 26.04 · Node 26.13.1 · Playwright 1.65.1 with Chromium")
         let decoded = try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(
-            #"{"version":"0.1.0","environment":"mac-vm","bots":3,"image":{"tag":"t","node":"26.13.1","playwright":"1.65.1","staleBots":1}}"#.utf8))
+            #"{"environment":"mac-vm","bots":3,"image":{"tag":"t","node":"26.13.1","playwright":"1.65.1","staleBots":1}}"#.utf8))
         #expect(decoded?.image?.staleBots == 1 && decoded?.image?.base == nil)
-        // A runtime from before image reporting still decodes.
-        #expect((try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"version":"0.1.0"}"#.utf8)))?.image == nil)
+        // A runtime that reports no image still decodes.
+        #expect((try? JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"environment":"none"}"#.utf8)))?.image == nil)
     }
 }

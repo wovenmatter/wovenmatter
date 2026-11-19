@@ -91,14 +91,14 @@ public actor DeviceAuthentication {
     /// A phone's member key, signed into its member entry at confirmation.
     var memberPublicKey: Data?
   }
+  /// The file holds exactly these keys. A key an earlier build left in it
+  /// (`version`, `admissionVersion`) is not read and is gone at the next save.
   private struct State: Codable {
-    var version = 1
     var devices: [PairedDevice] = []
     var approvals: [Approval]?
     var pendingQRPairings: [PendingQRPairing]?
     /// Immutable device-UUID pins for paired Macs' signing keys. Local only.
     var pins: [String: PeerPin]?
-    var admissionVersion: Int?
     /// Replicated identity: Mac admissions and mobile names. Authenticates nothing.
     var roster: [String: RosterRecord]?
     /// Every known unpair event, signed by the Mac that made it.
@@ -126,26 +126,14 @@ public actor DeviceAuthentication {
       let size = (try fileURL.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
       guard size <= 16_777_216 else { throw Self.error("credential_store", "The paired-device store exceeds its safety limit.") }
       state = try JSONDecoder().decode(State.self, from: Data(contentsOf: fileURL))
-      guard state.version == 1 else { throw Self.error("credential_store", "This paired-device store requires a newer Woven Matter.") }
     } else { state = State() }
-    // Before paired-Mac identity existed every grant here was issued locally
-    // through explicit approval; such Mac grants may complete one signed join.
-    // An unreleased v2 store mixed replicated bearers into this ledger, so its
-    // grants are revoked and those devices pair again.
-    // A store a newer Woven Matter wrote is refused like a newer `version`:
-    // this upgrade would otherwise demote every paired Mac in it.
-    guard (state.admissionVersion ?? 0) <= 3 else { throw Self.error("credential_store", "This paired-device store requires a newer Woven Matter.") }
-    if state.admissionVersion != 3 {
-      var upgraded = state
-      let previous = upgraded.admissionVersion
-      for index in upgraded.devices.indices {
-        let device = upgraded.devices[index]
-        if previous == 2, !device.isDevelopment, device.revokedAt == nil { upgraded.devices[index].revokedAt = now() }
-        upgraded.devices[index].role = device.kind == .mac && !device.isDevelopment && previous == nil ? .peerCandidate : .client
-      }
-      if previous == 2 { upgraded.pins = nil }
-      upgraded.admissionVersion = 3
-      state = upgraded
+    // A grant without a role was issued before paired-Mac identity existed,
+    // locally and through explicit approval; such a Mac grant may complete
+    // one signed join. Every grant issued since carries its role, so this
+    // changes nothing in a store that has them.
+    for index in state.devices.indices where state.devices[index].role == nil {
+      let device = state.devices[index]
+      state.devices[index].role = device.kind == .mac && !device.isDevelopment ? .peerCandidate : .client
     }
     lastSeenSaved = state.devices.reduce(into: [:]) { $0[$1.id] = $1.lastSeenAt }
   }

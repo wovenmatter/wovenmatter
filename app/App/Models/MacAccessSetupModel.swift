@@ -39,7 +39,7 @@ final class MacAccessSetupModel {
     enum AutomationResult: Equatable, Sendable { case allowed, notAsked, denied }
 
     static let shared = MacAccessSetupModel(observesActivation: true)
-    static let storageKey = "wovenmatter.mac-access.v1"
+    nonisolated static let storageKey = "wovenmatter.mac-access"
     /// Posted to open Settings → Permissions & Access from anywhere in the app.
     nonisolated static let openSettingsNotification = Notification.Name("wovenmatter.open-permissions-settings")
     nonisolated static func openSettings() { NotificationCenter.default.post(name: openSettingsNotification, object: nil) }

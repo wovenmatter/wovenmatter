@@ -116,11 +116,6 @@ private struct MacTailnetDeviceRow: View {
             if row.mac.online && !row.checking { actions.disabled(row.busy).padding(.leading, 36) }
             if let message = row.message { Text(message).font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground) }
             if let error = row.error { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
-            if row.installation?.installed == true, row.installation?.supportsSetup == false,
-               !canUseService, release?.supportsRemoteSetup != true {
-                Text("Pair in Apple Devices on that Mac. Setup from here will be available when a release with remote pairing support is published.")
-                    .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
-            }
             if row.mac.online {
                 DisclosureGroup("Connection settings", isExpanded: $showConnection) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -148,7 +143,7 @@ private struct MacTailnetDeviceRow: View {
     @ViewBuilder private var actions: some View {
         HStack(spacing: 8) {
             if !paired {
-                if canUseService || row.installation?.supportsSetup == true || row.installation?.installed == true {
+                if canUseService || row.installation?.installed == true {
                     Button("Pair") { onAction(.pair) }.buttonStyle(SettingsQuietButtonStyle())
                 } else if let installation = row.installation, let release,
                           !installation.installed || release.isNewer(than: installation) {

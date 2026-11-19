@@ -1,11 +1,9 @@
 import Foundation
 
 public struct HarnessCatalogDocument: Codable, Equatable, Sendable {
-  public let schemaVersion: Int
   public let harnesses: [HarnessDefinition]
 
-  public init(schemaVersion: Int, harnesses: [HarnessDefinition]) {
-    self.schemaVersion = schemaVersion
+  public init(harnesses: [HarnessDefinition]) {
     self.harnesses = harnesses
   }
 }
@@ -69,9 +67,6 @@ public enum HarnessCatalog {
       HarnessCatalogDocument.self,
       from: Data(contentsOf: url)
     )
-    guard document.schemaVersion == 4 else {
-      throw HarnessCatalogError.unsupportedSchema(document.schemaVersion)
-    }
     guard document.harnesses.count == AgentRuntimeKind.allCases.filter({ $0 != .defaultAgent }).count,
           Set(document.harnesses.map(\.id)) == Set(AgentRuntimeKind.allCases.filter { $0 != .defaultAgent })
     else {
@@ -112,15 +107,12 @@ public enum HarnessCatalog {
 
 public enum HarnessCatalogError: LocalizedError, Equatable, Sendable {
   case unavailable
-  case unsupportedSchema(Int)
   case incompleteCatalog
 
   public var errorDescription: String? {
     switch self {
     case .unavailable:
       "The shared harness catalog is unavailable."
-    case .unsupportedSchema(let version):
-      "Harness catalog schema version \(version) is unsupported."
     case .incompleteCatalog:
       "The harness catalog must contain each supported harness exactly once."
     }

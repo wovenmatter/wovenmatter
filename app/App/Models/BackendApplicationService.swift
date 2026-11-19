@@ -87,8 +87,13 @@ struct BackendApplicationResult: Codable, Sendable {
     var bots: BotsCommandResult?
 }
 
+/// What the background server tells a window before the window uses it. A
+/// window and a server are the same build: installing an update stops the
+/// running server first (`WovenMatterLifecycleDelegate`), and the window that
+/// opens afterwards starts the new one. A server that still answers from
+/// another build is told apart by what it can do, never by a number: the
+/// window requires the `capabilities` it relies on and `completeClientRouting`.
 struct BackendApplicationReadiness: Codable, Sendable {
-    let protocolVersion: Int
     let instanceID: UUID
     let ready: Bool
     /// Core command support is not proof that every frontend mutation is routed.
@@ -191,7 +196,7 @@ final class BackendApplicationService {
                 let startupError: String?
                 if case .failed(let message) = model.state { startupError = message }
                 else { startupError = nil }
-                return try response(request, BackendApplicationReadiness(protocolVersion: 1,
+                return try response(request, BackendApplicationReadiness(
                     instanceID: instanceID, ready: model.readyForBackendClients,
                     completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",

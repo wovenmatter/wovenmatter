@@ -559,7 +559,7 @@ final class LibraryHostController {
         var desired: [ExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: chosenNames[localID] ?? DevelopmentLaunch.deviceName(), endpoint: address,
-                  capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  capabilities: ["history.library", StreamProtocol.capability], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
                   macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
                   folderOwnerID: folderOwnerID)
@@ -571,8 +571,8 @@ final class LibraryHostController {
             let prior = existing.first { $0.id == id }
             return .init(id: id, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                 kind: .linux, name: chosenNames[id] ?? configuration.name, endpoint: prior?.endpoint,
-                // Linux hosts no longer serve inference; a record from before v0.4.6 drops it.
-                capabilities: (prior?.capabilities ?? ["execution.v1"]).filter { $0 != "inference.v1" },
+                // What the host itself answered its enrollment with (`registerLinuxEnrollment`).
+                capabilities: prior?.capabilities ?? [],
                 executionDeviceID: prior?.executionDeviceID)
         }
         for var workspace in desired {

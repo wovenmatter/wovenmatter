@@ -64,7 +64,7 @@ public final class MacExecutionAPI: ExecutionStreamSource {
             return try .json(try await events(cursor))
           }
           // This Mac's library already holds these records: it advertises
-          // history.library.v1, and members read the library change feed instead.
+          // `history.library`, and members read the library change feed instead.
           guard query("after") == nil || query("after") == "0" else { return .error("invalid_cursor", "This Mac's history comes from the library change feed.", status: 400) }
           return try .json(ExecutionJournalPage(libraryID: descriptor.libraryID, cursor: 0))
         default: break

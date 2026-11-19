@@ -13,7 +13,6 @@ final class BotsModel {
     private(set) var thisMacVersion: String?
     private(set) var callers: [WovenBotCaller] = []
     private(set) var devices: [BotDiscoveredDevice]?
-    private(set) var syncErrors: [String] = []
     private(set) var botMCP: WorkspaceExternalMCPSettings?
     /// Long commands (installs and Linux host updates) and how each last ended.
     private(set) var jobs: [BotsJob] = []
@@ -32,7 +31,7 @@ final class BotsModel {
     var orderedSessions: [BotMachineSession] { botMachines.compactMap { sessions[$0.id] } }
     /// A development build's version is a placeholder, so it compares no devices with its own.
     var versionReport: BotVersionReport {
-        .init(thisMacVersion: DevelopmentLaunch.mode == nil ? thisMacVersion : nil, machines: machines, syncErrors: syncErrors)
+        .init(thisMacVersion: DevelopmentLaunch.mode == nil ? thisMacVersion : nil, machines: machines)
     }
 
     func session(for machineID: String) -> BotMachineSession? { sessions[machineID] }
@@ -106,7 +105,6 @@ final class BotsModel {
         thisMacVersion = result.thisMacVersion
         callers = result.callers
         if let devices = result.devices { self.devices = devices }
-        syncErrors = result.syncErrors
         botMCP = result.botMCP
         jobs = result.jobs
         let live = Dictionary(uniqueKeysWithValues: botMachines.map { ($0.id, $0) })

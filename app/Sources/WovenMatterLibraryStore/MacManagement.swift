@@ -34,13 +34,10 @@ public struct MacManagement: Sendable {
     public func inspect(_ mac: TailnetMac, connection: MacSSHConnection) async throws -> MacInstallation {
         try await MacInstallation(data: execute(mac, connection: connection, script: MacRemoteScripts.inspect))
     }
-    public func install(_ mac: TailnetMac, connection: MacSSHConnection, release: MacRelease, requirePairingSupport: Bool = false) async throws {
+    public func install(_ mac: TailnetMac, connection: MacSSHConnection, release: MacRelease) async throws {
         try release.validate()
-        guard !requirePairingSupport || release.supportsRemoteSetup else {
-            throw LibraryAPIError(code: "setup_unavailable", message: "This published release does not support pairing from another Mac yet. Update or download it separately, then pair in Apple Devices on that Mac.")
-        }
         _ = try await execute(mac, connection: connection, script: MacRemoteScripts.install,
-            arguments: [release.downloadURL.absoluteString, release.sha256, release.version, String(release.build), try MacSetupRequest(action: .update).json(), release.minimumMacOS, requirePairingSupport ? "1" : "0"], timeout: 600)
+            arguments: [release.downloadURL.absoluteString, release.sha256, release.version, String(release.build), try MacSetupRequest(action: .update).json(), release.minimumMacOS], timeout: 600)
     }
     @discardableResult public func requestPairing(_ mac: TailnetMac, connection: MacSSHConnection, endpoint: URL) async throws -> UUID {
         guard PairingPayload.isValidEndpoint(endpoint) else {

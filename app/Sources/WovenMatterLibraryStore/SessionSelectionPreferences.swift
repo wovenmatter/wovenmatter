@@ -5,7 +5,7 @@ import WovenMatterCore
 /// Reads check UserDefaults so a second store instance cannot overwrite stale state.
 @MainActor
 public final class SessionSelectionPreferences {
-  public static let storageKey = "wovenmatter.session-selections.v1"
+  public nonisolated static let storageKey = "wovenmatter.session-selections"
 
   private let userDefaults: UserDefaults
   private var cachedData: Data?
@@ -249,7 +249,6 @@ public final class SessionSelectionPreferences {
   }
 
   private struct Document: Codable {
-    var version = 1
     var harnessDefaults: [String: SessionSelections] = [:]
     var workspaceDefaults: [String: [String: SessionSelections]] = [:]
     var conversations: [String: SessionSelectionSnapshot] = [:]
@@ -259,13 +258,8 @@ public final class SessionSelectionPreferences {
   private func read() -> Document {
     let data = userDefaults.data(forKey: Self.storageKey)
     if data == cachedData, let cachedDocument { return cachedDocument }
-    let decoded = data.flatMap { try? JSONDecoder().decode(Document.self, from: $0) }
-    let document: Document
-    if let decoded, decoded.version == 1 {
-      document = Self.withoutUnsupportedPermissions(decoded)
-    } else {
-      document = Document()
-    }
+    let document = data.flatMap { try? JSONDecoder().decode(Document.self, from: $0) }
+      .map(Self.withoutUnsupportedPermissions) ?? Document()
     cachedData = data
     cachedDocument = document
     return document

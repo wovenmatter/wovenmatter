@@ -57,35 +57,30 @@ extension WorkspaceDatabaseConnection {
     }
   }
   private func peerError(_ message: String) -> LibraryAPIError { .init(code: "peer_sync", message: message) }
-  /// A page in another exchange format (`PairedLibraryFormat.exchange`), or
-  /// from a build before it. Nothing is applied and no cursor moves, so the
-  /// exchange resumes where it stopped once both devices run the same format.
-  static let peerUpdateRequired = LibraryAPIError(code: "update_required",
-    message: "Update Woven Matter on every device before synchronizing.")
-
-  /// Whether this build can apply `record`: it knows the record's table and
-  /// every column the record carries, and can read its content
-  /// (`PairedLibraryFormat`). A record that fails this comes from a newer
-  /// build. It is kept waiting exactly as received and relayed, and applies
-  /// once this device updates; it is never rejected or cut down to the
-  /// columns this build knows, which would lose the rest on every device
-  /// the cut-down row reached.
+  /// Whether this build can apply `record`: it has the record's table and
+  /// every column the record carries. A record that fails this comes from a
+  /// build that has a table or column this one lacks. It is kept waiting
+  /// exactly as received and relayed, and applies once this device updates;
+  /// it is never rejected or cut down to the columns this build knows, which
+  /// would lose the rest on every device the cut-down row reached.
   private func peerRecordUnderstood(_ record: PairedLibraryRecord, _ tables: [String: PeerTable]) -> Bool {
-    guard (record.needs ?? 0) <= PairedLibraryFormat.content, let table = tables[record.table] else { return false }
+    guard let table = tables[record.table] else { return false }
     return record.row.keys.allSatisfy { table.types[$0] != nil }
   }
   private func peerJSON<T: Encodable>(_ value: T) throws -> String {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     return String(decoding: try encoder.encode(value), as: UTF8.self)
   }
-  /// The shared-table identity peers must agree on: per table, its column
-  /// names with their declared types, sorted by name, and its key columns in
-  /// key order. Physical column order is not part of it.
+  /// The shared tables this build has, hashed: per table, its column names
+  /// with their declared types, sorted by name, and its key columns in key
+  /// order. Physical column order is not part of it. Two builds with the
+  /// same hash exchange every record; with different hashes, one keeps the
+  /// other's additions waiting.
   private func peerSchema() throws -> String {
     let graph = try peerTables().map { table in
       table.name + ":" + table.columns.map { $0 + " " + (table.types[$0] ?? "") }.joined(separator: ",") + ":" + table.keys.joined(separator: ",")
     }.joined(separator: "\n")
-    return SHA256.hash(data: Data(("v3\n" + graph).utf8)).hexString
+    return SHA256.hash(data: Data(graph.utf8)).hexString
   }
 
   /// The local peer-sync bookkeeping (`peer_sync_*`).
@@ -98,8 +93,8 @@ extension WorkspaceDatabaseConnection {
   ///   sequence and every version it supersedes is deleted, so paging by
   ///   cursor returns each row's current versions once.
   ///   `waits_for_update` marks a waiting version this build cannot apply
-  ///   yet (`peerRecordUnderstood`); it is retried once the schema or the
-  ///   content level this build reads has changed, not on every pass.
+  ///   yet (`peerRecordUnderstood`); it is retried once this build's shared
+  ///   tables or columns have changed (`peerSchema`), not on every pass.
   /// - `peer_sync_conflicts` keeps losing versions while they are still
   ///   concurrent; `peer_sync_quarantine` keeps rejected records until a
   ///   version covering them applies.
@@ -233,8 +228,8 @@ extension WorkspaceDatabaseConnection {
       // After the capture triggers, so each claim is an ordinary local version.
       try claimEvidencedOwnershipUnlocked()
       // What this build understands changed (an update added a table or a
-      // column, or reads newer content): versions kept for it are tried again.
-      let understands = try peerSchema() + ":" + String(PairedLibraryFormat.content)
+      // column): versions kept for it are tried again.
+      let understands = try peerSchema()
       if try peerSyncStateUnlocked("understands") != understands {
         try executeUnlocked("UPDATE peer_sync_versions SET waits_for_update=0 WHERE waits_for_update=1")
         try setPeerSyncStateUnlocked("understands", understands)
@@ -348,7 +343,7 @@ extension WorkspaceDatabaseConnection {
       bytes += payload.utf8.count; next = sqlite3_column_int64(query, 0)
     }
     let more = try historyRowsUnlocked("SELECT 1 AS present FROM peer_sync_versions WHERE cursor>? LIMIT 1", values: [String(next)]).isEmpty == false
-    return try .init(format: PairedLibraryFormat.exchange, schema: peerSchema(), entries: entries, cursor: next, hasMore: more)
+    return try .init(schema: peerSchema(), entries: entries, cursor: next, hasMore: more)
   }
 
   /// The page and its receive cursor commit together. Records merge through a
@@ -356,7 +351,6 @@ extension WorkspaceDatabaseConnection {
   /// converge on the same winner without executing a command or creating a
   /// second conflict/recovery copy.
   func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String, sender: PairedLibrarySender? = nil) throws {
-    guard page.format == PairedLibraryFormat.exchange else { throw Self.peerUpdateRequired }
     guard UUID(uuidString: peer) != nil, page.entries.count <= 100, page.cursor >= 0 else { throw peerError("Invalid shared page.") }
     try applyPeerRecords(page.entries.map { ($0, nil) }, from: peer, cursor: page.cursor, senders: sender.map { [peer.lowercased(): $0] })
   }
@@ -482,7 +476,7 @@ extension WorkspaceDatabaseConnection {
                 received.vector.allSatisfy({ UUID(uuidString: $0.key) != nil && $0.value > 0 && $0.value <= received.clock }) else {
             throw PeerRecordRejected(message: "Invalid shared record in " + received.table + ".")
           }
-          // A table, column or content this build does not know yet: the
+          // A table or column this build does not have yet: the
           // record waits as received and is relayed (`peerRecordUnderstood`).
           guard peerRecordUnderstood(received, tables), let known = tables[received.table] else {
             if let pending { try toolsExecuteUnlocked("UPDATE peer_sync_versions SET waits_for_update=1 WHERE cursor=?", [String(pending)]) }
@@ -795,7 +789,7 @@ extension WorkspaceDatabaseConnection {
               let peer = fields["pending_peer"]?.stringValue else { continue }
         scanned += 1; after = Int64(cursor)
         let record = try decodePeerRecord(payload)
-        // A record from a newer build stays until this build understands it.
+        // A record this build lacks a table or column for stays until it has them.
         guard peerRecordUnderstood(record, tables) else {
           try toolsExecuteUnlocked("UPDATE peer_sync_versions SET waits_for_update=1 WHERE cursor=?", [String(cursor)])
           continue
@@ -1058,7 +1052,7 @@ extension WorkspaceDatabaseConnection {
     row["id"] = .init(type: "text", value: copyID)
     row["title"] = .init(type: "text", value: (row["title"]?.value ?? "Untitled note") + " (Recovered edit)")
     row["deleted_at"] = .init(type: "null")
-    let copy = PairedLibraryRecord(table: "notes", key: try peerJSON([copyID]), row: row, deleted: false, clock: record.clock, origin: record.origin, vector: record.vector, needs: record.needs)
+    let copy = PairedLibraryRecord(table: "notes", key: try peerJSON([copyID]), row: row, deleted: false, clock: record.clock, origin: record.origin, vector: record.vector)
     // Every Mac derives the same copy; one received from a peer is not recreated.
     if try frontierMembersUnlocked(table: copy.table, key: copy.key).isEmpty,
        let table = try peerTables().first(where: { $0.name == "notes" }) {
@@ -1124,6 +1118,6 @@ extension WorkspaceDatabase {
     try await read { Int64(try $0.historyRowsUnlocked("SELECT seq FROM sqlite_sequence WHERE name='peer_sync_versions'", values: []).first?.objectValue?["seq"]?.doubleValue ?? 0) }
   }
   /// The shared-table graph, hashed. Peers report it; a difference means one
-  /// of them has additions the other keeps waiting (`PairedLibraryFormat`).
+  /// of them has additions the other keeps waiting (`peerRecordUnderstood`).
   public func pairedLibrarySchema() async throws -> String { try await read { try $0.pairedLibrarySchemaUnlocked() } }
 }

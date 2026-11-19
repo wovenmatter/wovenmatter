@@ -294,18 +294,45 @@ struct GitHubIdentitySyncTests {
     #expect(mac.store.value == saved)
   }
 
-  /// Records from a newer format are left for the Macs that understand them.
-  @Test func recordsFromANewerFormatAreLeftAlone() async throws {
-    let mac = try await Device(.mac)
-    defer { mac.persistence.remove() }
-    let saved = try await mac.sync.change { $0.identity = .init(name: "Ada") }
-    var newer = try #require(try await mac.database.gitHubSharedIdentity())
-    newer.version = 2
-    newer.revision = saved.revision - 10
-    try await mac.database.setGitHubSharedIdentity(newer)
-    #expect(try await !mac.sync.reconcile())
-    #expect(try await mac.database.gitHubSharedIdentity()?.version == 2)
-    await #expect(throws: GitHubIdentityError.self) { try await mac.sync.change { $0.identity = .init(name: "Grace") } }
+  /// A record an earlier build signed has `"version":1` inside the signed bytes. It still
+  /// verifies, byte for byte, here and after it reaches another Mac, and a record signed now
+  /// leaves the key out.
+  @Test func aRecordAnEarlierBuildSignedStillVerifies() async throws {
+    let mac1 = try await Device(.mac), mac2 = try await Device(.mac)
+    defer { for device in [mac1, mac2] { device.persistence.remove() } }
+    try await mac1.add(mac2); try await mac2.add(mac1)
+    try await mac2.sync.reconcile()
+    try await copyRecords(from: mac2, to: mac1)
+    let saved = try await mac1.sync.change { $0.key = gitHubFixtureKey; $0.identity = .init(name: "Ada", email: "ada@example.com") }
+
+    // The same record as the earlier build stored it: signed over sorted JSON that ends with the key.
+    var current = try #require(try await mac1.database.gitHubSharedIdentity())
+    current.signature = nil
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let unsigned = String(decoding: try encoder.encode(current), as: UTF8.self)
+    #expect(!unsigned.contains("\"version\""))
+    let signedBytes = Data("woven.github.identity.v1".utf8) + Data([0]) + Data((unsigned.dropLast() + ",\"version\":1}").utf8)
+    let signature = try mac1.identity.sign(signedBytes).base64EncodedString()
+    let stored = unsigned.dropLast() + ",\"signature\":\"\(signature)\",\"version\":1}"
+    try await mac1.database.write { connection in
+      try connection.withLock { try connection.toolsExecuteUnlocked("UPDATE github_identity SET payload=? WHERE singleton=1", [String(stored)]) }
+    }
+    let earlier = try #require(try await mac1.database.gitHubSharedIdentity())
+    #expect(earlier.statement == signedBytes)
+    #expect(earlier.verifies(publicKey: mac1.identity.publicKey))
+    #expect(try await !mac1.sync.reconcile())
+
+    // Another Mac stores it again and still trusts it.
+    try await copyRecords(from: mac1, to: mac2)
+    #expect(try await mac2.database.gitHubSharedIdentity()?.statement == signedBytes)
+    #expect(try await mac2.sync.reconcile())
+    #expect(mac2.store.value == saved)
+
+    try await mac2.sync.change { $0.identity = .init(name: "Grace") }
+    let changed = try #require(try await mac2.database.gitHubSharedIdentity())
+    #expect(!String(decoding: try encoder.encode(changed), as: UTF8.self).contains("\"version\""))
+    #expect(changed.verifies(publicKey: mac2.identity.publicKey))
   }
 
   @Test func removalReachesEveryMac() async throws {

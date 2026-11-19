@@ -69,13 +69,6 @@ struct BotsRuntimeBundle: Equatable, Sendable {
         defaultAgent.map { .init(bundle: $0.path, directory: Self.piDurableDirectory().path) }
     }
 
-    /// The package version, which also names the bot image it was tested with.
-    var version: String? {
-        guard let data = try? Data(contentsOf: root.appending(path: "package.json")),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object["version"] as? String
-    }
-
     /// An untagged name: the runtime tags it with the content hash of `bots/image` and
     /// builds it through the Engine API when missing.
     var imageTag: String { "wovenmatter-bots" }
@@ -194,6 +187,8 @@ final class BotsRuntimeSupervisor {
             "TMPDIR": NSTemporaryDirectory(),
             "NODE_ENV": "production",
             "LANG": "en_US.UTF-8",
+            // What the runtime names itself by (its `--version`, its agent SDK client name).
+            "WOVENMATTER_RELEASE_VERSION": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development",
         ]
         do {
             child = try launch(bundle.node, [bundle.entry.path, "serve", "--config", configURL.path], environment, logURL) { [weak self] status in

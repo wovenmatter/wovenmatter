@@ -1,12 +1,27 @@
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
+import WovenMatterLibraryStore
 
-/// Through v0.4.2 the window, sidebar and theme settings were saved under
-/// "wovenmatter.dashboard." keys. Each moves once at launch, so this Mac keeps
-/// its layout, theme, pinned agents and sidebar choices.
+/// Settings saved under an earlier name move to their current one, once, at
+/// launch. Through v0.4.2 the window, sidebar and theme settings were saved
+/// under "wovenmatter.dashboard." keys; through v0.4.6 the Linux hosts, Mac
+/// access, session choices, built-in agent settings, local model servers and
+/// the pending update receipt were saved under names ending in a number. The
+/// left side names stored data and appears nowhere else.
+///
+/// The window and the background server share one defaults domain and both
+/// run this before reading anything. Each move writes the value that is
+/// already stored, so two processes moving at once store the same thing.
 enum WindowPreferenceUpgrade {
     static let renamedKeys: [String: String] = [
+        "wovenmatter.remote-workspaces.v1": RemoteWorkspacesModel.storageKey,
+        "wovenmatter.remote-workspaces.removed.v1": RemoteWorkspacesModel.removedKey,
+        "wovenmatter.mac-access.v1": MacAccessSetupModel.storageKey,
+        "wovenmatter.session-selections.v1": SessionSelectionPreferences.storageKey,
+        "wovenmatter.analytics.pending-update.v1": ProductAnalyticsModel.updateReceiptKey,
+        "wovenmatter.default-agent.settings.v1": DefaultAgentSupport.settingsKey,
+        "wovenmatter.connections.local-servers.v1": LocalModelServerStore.storageKey,
         "wovenmatter.dashboard.theme": WovenTheme.storageKey,
         "wovenmatter.dashboard.sidebar-style": SidebarStyle.storageKey,
         "wovenmatter.dashboard.single-sidebar-side": SidebarSide.storageKey,
@@ -30,7 +45,14 @@ enum WindowPreferenceUpgrade {
             if defaults.object(forKey: current) == nil { defaults.set(value, forKey: current) }
             defaults.removeObject(forKey: legacy)
         }
+        // A cache is read again, not moved.
+        for key in defaults.dictionaryRepresentation().keys where removedCachePrefixes.contains(where: key.hasPrefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
+
+    /// Cached display data saved under an earlier name.
+    static let removedCachePrefixes = ["wovenmatter.built-in.enabled-metadata.v2."]
 }
 
 enum NewChatSource: String, CaseIterable, Identifiable {
@@ -212,9 +234,10 @@ struct RemoteWorkspaceAgentChoice: Equatable, Identifiable {
 enum RemoteFolderCreation {
     /// Nil when the workspace can be asked. Only for a workspace whose owner
     /// creates the folder: another Mac, or a Linux host this Mac did not set
-    /// up. A Mac takes a folder request only once it runs a version that
-    /// lists `folders.create.v1`; the client refuses the same way if asked
-    /// anyway (`MemberExecutionClient.createFolder`). A Linux host needs only
+    /// up. A Mac takes a folder request only when its registry row lists the
+    /// capability (`LibraryWorkspaceAction.createFolderCapability`); the
+    /// client refuses the same way if asked anyway
+    /// (`MemberExecutionClient.createFolder`). A Linux host needs only
     /// an address: any member administers it by signed request.
     static func problem(for link: RemoteWorkspaceSidebarLink) -> String? {
         guard link.configuration == nil else { return nil }

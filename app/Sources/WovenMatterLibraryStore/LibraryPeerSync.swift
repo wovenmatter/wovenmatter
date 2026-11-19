@@ -33,17 +33,8 @@ public struct LibraryPeerNotice: Codable, Sendable {
   public init(deviceID: String, cursor: Int64) { self.deviceID = deviceID; self.cursor = cursor }
 }
 
-/// Reply to an exchange in another format (`PairedLibraryFormat.exchange`):
-/// both versions, so every device can say which part needs updating.
-public struct LibraryPeerUpdateRequired: Codable, Sendable, Equatable {
-  public let code: String
-  public let message: String
-  public let version: String
-  public let schema: String
-}
-
 public struct LibraryPeerStatus: Codable, Equatable, Sendable, Identifiable {
-  public enum State: String, Codable, Sendable { case online, offline, updateRequired, failing }
+  public enum State: String, Codable, Sendable { case online, offline, failing }
   public var id: String { deviceID }
   public let deviceID: String
   public let name: String
@@ -55,8 +46,8 @@ public struct LibraryPeerStatus: Codable, Equatable, Sendable, Identifiable {
   public var error: String?
 }
 
-/// What the Mac UI and the phone show: each peer's state, and whether some
-/// device needs an update before everything can synchronize again.
+/// What the Mac UI and the phone show: each peer's state, and how much this
+/// device keeps waiting for an update of its own.
 public struct LibrarySyncStatus: Codable, Equatable, Sendable {
   public let deviceID: String
   public let version: String
@@ -65,9 +56,8 @@ public struct LibrarySyncStatus: Codable, Equatable, Sendable {
   public let conflicts: Int
   public let quarantined: Int
   /// Changes from a newer Woven Matter that this device keeps, relays and
-  /// applies once it updates. Absent from a build before it.
+  /// applies once it updates.
   public var waitingForUpdate: Int?
-  public var updateRequired: Bool { peers.contains { $0.state == .updateRequired } }
 }
 
 /// Sends one signed request to a member endpoint. Production uses URLSession;
@@ -114,10 +104,9 @@ private extension URL {
 ///   is caught up once.
 /// - A slow presence check (60 s, backing off for offline peers) replaces
 ///   constant polling.
-/// - Every request is a signed member request. Peers must share the exchange
-///   format (`PairedLibraryFormat`); a mismatch is reported as "update
-///   required". Additions a newer peer has wait here until this device
-///   updates, and everything else keeps synchronizing.
+/// - Every request is a signed member request. Additions a newer peer has
+///   (a shared table or column this device lacks) wait here until this device
+///   updates, and everything else keeps synchronizing (`PairedLibraryRecord`).
 public actor LibraryPeerSync {
   /// Optional per-exchange side channel (see `LibraryPeerExchange.attachment`).
   /// `incoming` runs before the page is applied and may throw to refuse it.
@@ -479,7 +468,7 @@ public actor LibraryPeerSync {
     backoff[member.deviceID] = nil
     nextPresence[member.deviceID] = Date().addingTimeInterval(configuration.presenceInterval)
     update(member) { status in
-      if status.state != .updateRequired || synchronized { status.state = .online }
+      status.state = .online
       status.lastContact = Date()
       if synchronized { status.lastSynchronized = Date(); status.error = nil }
     }
@@ -496,12 +485,6 @@ public actor LibraryPeerSync {
   }
 
   private func failed(_ member: LibraryMember, _ response: LibraryHTTPResponse) {
-    if response.status == 409, let mismatch = try? JSONDecoder().decode(LibraryPeerUpdateRequired.self, from: response.body),
-       mismatch.code == "update_required" {
-      nextPresence[member.deviceID] = Date().addingTimeInterval(configuration.presenceInterval)
-      update(member) { $0.state = .updateRequired; $0.version = mismatch.version; $0.error = mismatch.message; $0.lastContact = Date() }
-      return
-    }
     let error = (try? JSONDecoder().decode(LibraryAPIError.self, from: response.body))
       ?? LibraryAPIError(code: "peer_sync", message: "The peer refused synchronization (HTTP \(response.status)).")
     offline(member, error)
@@ -592,14 +575,6 @@ public actor LibraryPeerSync {
         let exchange = try JSONDecoder().decode(LibraryPeerExchange.self, from: request.body)
         guard exchange.deviceID == member.deviceID, exchange.after >= 0 else {
           return .error("wrong_peer", "This exchange names another device.", status: 403)
-        }
-        guard exchange.page.format == PairedLibraryFormat.exchange else {
-          let schema = try await database.pairedLibrarySchema()
-          update(resolved) { $0.state = .updateRequired; $0.version = exchange.version; $0.lastContact = Date()
-            $0.error = "\(resolved.name) runs Woven Matter \(exchange.version); this device runs \(self.configuration.version). Update everything in Settings → Updates to synchronize." }
-          return try .json(LibraryPeerUpdateRequired(code: "update_required",
-            message: "Update Woven Matter on every device: this device runs \(configuration.version), \(resolved.name) runs \(exchange.version).",
-            version: configuration.version, schema: schema), status: 409)
         }
         // While this library's recovery backup is still being written, the
         // caller retries later; this device's own exchange with it follows

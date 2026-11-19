@@ -614,19 +614,18 @@ public struct PiBotAttachmentDraft: Equatable, Identifiable, Sendable {
     }
 }
 
-// MARK: - Runtime (Woven additions to protocol 1)
+// MARK: - Runtime (Woven's additions to Pi Bot's protocol)
 
 /// `runtime.status`.
 public struct PiBotRuntimeStatus: Codable, Equatable, Sendable {
-    public let version: String
     /// `none`, `linux-dockerd` or `mac-vm`.
     public let environment: String?
     /// How many bots this runtime has.
     public let bots: Int?
     /// The bot container image: its tools, and how many bots are still on an older one.
     public let image: PiBotImageStatus?
-    public init(version: String, environment: String? = nil, bots: Int? = nil, image: PiBotImageStatus? = nil) {
-        self.version = version; self.environment = environment; self.bots = bots; self.image = image
+    public init(environment: String? = nil, bots: Int? = nil, image: PiBotImageStatus? = nil) {
+        self.environment = environment; self.bots = bots; self.image = image
     }
 }
 

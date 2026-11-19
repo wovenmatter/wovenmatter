@@ -787,9 +787,9 @@ struct PairedWorkspaceSidebarTests {
             _ = try await database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
         }
         try await register(.init(id: productionID, libraryID: identity.libraryID, ownerDeviceID: otherHost, kind: .mac, name: "James’s Mac mini",
-            capabilities: ["execution.v1"], executionDeviceID: otherHost, folderOwnerID: otherFolderOwner))
+            capabilities: [], executionDeviceID: otherHost, folderOwnerID: otherFolderOwner))
         try await register(.init(id: devID, libraryID: identity.libraryID, ownerDeviceID: otherHost, kind: .mac, name: "James’s Mac mini (Dev) · pairing",
-            capabilities: ["execution.v1"], executionDeviceID: otherHost, developmentInstance: "pairing", folderOwnerID: otherFolderOwner))
+            capabilities: [], executionDeviceID: otherHost, developmentInstance: "pairing", folderOwnerID: otherFolderOwner))
         try await database.saveMacRoute(.init(deviceID: otherHost, libraryID: UUID().uuidString.lowercased(),
             endpoint: try #require(URL(string: "https://jamess-mac-mini.tail1234.ts.net:8443/wovenmatter")), name: "James’s Mac mini"))
 
@@ -861,7 +861,7 @@ struct PairedWorkspaceSidebarTests {
         // A Mac that has not updated lists no folder capability.
         #expect(try problem(fleet.other) == "Update Woven Matter on jamess-mac-mini to create folders there.")
         #expect(try problem(fleet.other, names: [fleet.other.id: "Studio"]) == "Update Woven Matter on Studio to create folders there.")
-        var current = fleet.other; current.capabilities = ["execution.v1", LibraryWorkspaceAction.createFolderCapability]
+        var current = fleet.other; current.capabilities = [LibraryWorkspaceAction.createFolderCapability]
         #expect(try problem(current) == nil)
         current.endpoint = nil
         #expect(try problem(current) == "Connect this workspace before creating a folder.")
@@ -911,7 +911,7 @@ struct PairedWorkspaceSidebarTests {
         let devID = devRowFirst ? ids[0] : ids[1], productionID = devRowFirst ? ids[1] : ids[0]
         func row(_ id: String, endpoint: String?, instance: String?) throws -> ExecutionWorkspace {
             .init(id: id, libraryID: "library", ownerDeviceID: host, kind: .mac, name: "James’s Mac mini",
-                  endpoint: try endpoint.map { try #require(URL(string: $0)) }, capabilities: ["execution.v1"], executionDeviceID: host,
+                  endpoint: try endpoint.map { try #require(URL(string: $0)) }, capabilities: [], executionDeviceID: host,
                   developmentInstance: instance, folderOwnerID: folderOwner)
         }
         func ordered(_ rows: [ExecutionWorkspace]) -> [ExecutionWorkspace] { rows.sorted { $0.id < $1.id } }

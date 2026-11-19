@@ -10,7 +10,6 @@ import WovenMatterClient
 import WovenMatterCore
 
 private struct ConversationRunExport: Encodable {
-  let schemaVersion = 1
   let historicalCoverage = "Exports retained history. Earlier raw events may not have been captured; attachment files are represented by metadata."
   let exportedAt: String
   let conversation: JSONValue
@@ -34,7 +33,7 @@ extension WorkspaceDatabaseConnection {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     func write(_ value: String) throws { try output.write(contentsOf: Data(value.utf8)) }
-    try write("{\"schemaVersion\":2,\"format\":\"woven-native-run-archive\",\"exportedAt\":")
+    try write("{\"format\":\"woven-native-run-archive\",\"exportedAt\":")
     try output.write(contentsOf: encoder.encode(Self.timestamp(Date())))
     try write(",\"conversation\":")
     try output.write(contentsOf: encoder.encode(conversation))

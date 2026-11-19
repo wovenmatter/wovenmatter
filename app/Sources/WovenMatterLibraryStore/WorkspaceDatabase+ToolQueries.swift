@@ -10,10 +10,10 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       var query = input
       query.callerConversationID = callerID
-      guard query.schemaVersion == 1, (1...200).contains(query.limit), query.after >= 0,
+      guard (1...200).contains(query.limit), query.after >= 0,
             query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters),
             ["oldest", "newest"].contains(query.sort) else {
-        throw WorkspaceToolError.invalid("Unsupported schema or invalid pagination.")
+        throw WorkspaceToolError.invalid("Invalid pagination.")
       }
       let groups = try sessionToolsUnlocked(callerID).enabled
       switch query.command {

@@ -83,7 +83,7 @@ struct HarnessMaintenanceTests {
         #expect(fixture.model.remoteWorkspaceAgents == saved)
 
         // A new database/model instance has no SSH results, tokens or network calls.
-        fixture.defaults.set(try JSONEncoder().encode([fixture.remote]), forKey: "wovenmatter.remote-workspaces.v1")
+        fixture.defaults.set(try JSONEncoder().encode([fixture.remote]), forKey: RemoteWorkspacesModel.storageKey)
         let reopenedStore = try await LibraryStore(supportDirectory: fixture.directory)
         let reopened = ApplicationModel(applicationDefaults: fixture.defaults, libraryStore: reopenedStore,
                                         startsAutomatically: false, localUsageService: fixture.usageService)

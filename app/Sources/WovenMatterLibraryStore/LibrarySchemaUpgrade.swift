@@ -71,11 +71,11 @@ extension WorkspaceDatabaseConnection {
   /// build's row by the columns it carries), and must leave recorded peer
   /// versions (`peer_sync_versions`) as they are: devices on the older
   /// release keep such records waiting until they update, and apply older
-  /// records by the columns they carry (`PairedLibraryFormat`). Renaming,
+  /// records by the columns they carry (`PairedLibraryRecord`). Renaming,
   /// retyping or removing something shared also has to rewrite the recorded
-  /// versions, as the v0.4.2 conversion does, and raise
-  /// `PairedLibraryFormat.exchange`, after which every device must update
-  /// before synchronizing.
+  /// versions, as the v0.4.2 conversion does, and every device takes that
+  /// release together: a device still on the earlier shape and one on the
+  /// new shape each keep the other's records of that table waiting.
   ///
   /// Returns whether the library was rewritten: only that leaves enough
   /// free space behind to be worth a VACUUM.

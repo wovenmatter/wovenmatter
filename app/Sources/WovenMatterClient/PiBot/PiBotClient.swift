@@ -2,7 +2,7 @@
 #if os(macOS)
 import Foundation
 
-/// One WebSocket to one machine's bots runtime (Pi Bot protocol 1 with Woven's additions),
+/// One WebSocket to one machine's bots runtime (Pi Bot's protocol with Woven's additions),
 /// with request correlation and reconnects. The sidebar, conversations and Settings use it.
 public actor PiBotClient {
     public enum ConnectionState: String, Sendable { case connecting, open, closed }
@@ -174,7 +174,7 @@ public actor PiBotClient {
             update(.open)
             if let data = try? JSONEncoder().encode(value),
                let hello = try? JSONDecoder().decode(PiBotHello.self, from: data) {
-                onEvent(.hello(PiBotHealth(ok: true, version: hello.version, protocol: hello.protocol,
+                onEvent(.hello(PiBotHealth(ok: true,
                     installationId: hello.installationId, capabilities: hello.capabilities, environment: hello.environment)))
             }
         case "result":
@@ -415,8 +415,6 @@ public actor PiBotClient {
 }
 
 private struct PiBotHello: Decodable {
-    let version: String
-    let `protocol`: Int?
     let installationId: String?
     let capabilities: [String]?
     let environment: String?

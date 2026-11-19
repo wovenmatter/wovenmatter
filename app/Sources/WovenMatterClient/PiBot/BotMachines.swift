@@ -18,20 +18,16 @@ public struct BotSocketEndpoint: Codable, Equatable, Sendable, CustomStringConve
 
 public struct BotMachineVersions: Codable, Equatable, Sendable {
     /// The Woven Matter app on a Mac. On Linux, the Woven Matter version whose app shipped
-    /// the host release (nil for a release that predates recording it).
+    /// the host release.
     public var app: String?
-    public var runtime: String?
-    public var `protocol`: Int?
     /// A Linux host's release fingerprint: the SHA-256 `remote-host.sh install` verified.
     /// It changes with any host source, the library binaries included.
     public var fingerprint: String?
     /// The library host's paired-library schema hash, when its library reports one. Sync
     /// between two devices needs equal schemas.
     public var librarySchema: String?
-    public init(app: String? = nil, runtime: String? = nil, protocol: Int? = nil,
-                fingerprint: String? = nil, librarySchema: String? = nil) {
-        self.app = app; self.runtime = runtime; self.protocol = `protocol`
-        self.fingerprint = fingerprint; self.librarySchema = librarySchema
+    public init(app: String? = nil, fingerprint: String? = nil, librarySchema: String? = nil) {
+        self.app = app; self.fingerprint = fingerprint; self.librarySchema = librarySchema
     }
 }
 
@@ -58,6 +54,8 @@ public struct BotMachine: Codable, Equatable, Identifiable, Sendable {
     public var message: String?
     public var socket: BotSocketEndpoint?
     public var versions: BotMachineVersions
+    /// The machine's Woven Matter includes the bots runtime, so it can have bots.
+    public var runtimeInstalled: Bool?
     public var resources: BotResourceSettings?
     public var capacity: BotMachineCapacity?
     /// Every bot here is paused from Woven MCP.
@@ -71,10 +69,11 @@ public struct BotMachine: Codable, Equatable, Identifiable, Sendable {
     public var workspaceID: String?
 
     public init(id: String, name: String, kind: Kind, state: State, message: String? = nil, socket: BotSocketEndpoint? = nil,
-                versions: BotMachineVersions = .init(), resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil,
+                versions: BotMachineVersions = .init(), runtimeInstalled: Bool? = nil,
+                resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil,
                 paused: Bool = false, updating: Bool = false) {
         self.id = id; self.name = name; self.kind = kind; self.state = state; self.message = message; self.socket = socket
-        self.versions = versions; self.resources = resources; self.capacity = capacity; self.paused = paused; self.updating = updating
+        self.versions = versions; self.runtimeInstalled = runtimeInstalled; self.resources = resources; self.capacity = capacity; self.paused = paused; self.updating = updating
     }
 
     public var displayName: String { kind == .thisMac ? "This Mac" : name }
@@ -96,6 +95,8 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
     public var state: String
     public var message: String?
     public var versions: BotMachineVersions
+    /// The machine's Woven Matter includes the bots runtime.
+    public var runtimeInstalled: Bool?
     public var resources: BotResourceSettings?
     public var capacity: BotMachineCapacity?
     public var paused: Bool
@@ -105,8 +106,10 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
     public var engineUpdateFailure: String?
 
     public init(machine: Machine, enabled: Bool, state: String, message: String? = nil, versions: BotMachineVersions,
+                runtimeInstalled: Bool? = nil,
                 resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil, paused: Bool = false) {
         self.machine = machine; self.enabled = enabled; self.state = state; self.message = message; self.versions = versions
+        self.runtimeInstalled = runtimeInstalled
         self.resources = resources; self.capacity = capacity; self.paused = paused
     }
 
@@ -122,7 +125,8 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
                                      expectedHostFingerprint: expectedHostFingerprint, thisMacLibrarySchema: thisMacLibrarySchema)
         var result = BotMachine(id: machine.deviceID, name: machine.name, kind: kind, state: mismatch == nil ? base : .needsUpdate,
                                 message: mismatch ?? message,
-                                socket: enabled ? socket : nil, versions: versions, resources: resources, capacity: capacity,
+                                socket: enabled ? socket : nil, versions: versions, runtimeInstalled: runtimeInstalled,
+                                resources: resources, capacity: capacity,
                                 paused: paused, updating: updating ?? false)
         result.engineUpdateFailure = engineUpdateFailure
         return result
@@ -316,10 +320,8 @@ public struct BotVersionReport: Equatable, Sendable {
     }
     /// Parts whose version differs from this Mac's.
     public let outdated: [Part]
-    /// Library sync stopped because of a schema mismatch.
-    public let syncStopped: Bool
 
-    public init(thisMacVersion: String?, machines: [BotMachine], syncErrors: [String] = []) {
+    public init(thisMacVersion: String?, machines: [BotMachine]) {
         var parts: [Part] = []
         for machine in machines where machine.kind != .thisMac {
             if let app = machine.versions.app, let thisMacVersion, app != thisMacVersion {
@@ -335,25 +337,16 @@ public struct BotVersionReport: Equatable, Sendable {
         // Bots are part of Woven Matter: a machine's bots are on its Woven Matter version, so
         // they are never compared on a version of their own.
         outdated = parts
-        syncStopped = syncErrors.contains { Self.isVersionMismatch($0) }
     }
 
-    public var needsUpdate: Bool { !outdated.isEmpty || syncStopped }
+    public var needsUpdate: Bool { !outdated.isEmpty }
 
     public var message: String? {
         guard needsUpdate else { return nil }
-        if syncStopped {
-            return "Library sync stopped because your devices run different versions. Update everything in Settings → Updates to resume it."
-        }
         var names: [String] = []
         for part in outdated where !names.contains(part.name) { names.append(part.name) }
         let list = names.count <= 2 ? names.joined(separator: " and ") : names.dropLast().joined(separator: ", ") + " and " + names.last!
         return "\(list) \(names.count == 1 ? "runs" : "run") a different version. Update everything in Settings → Updates so every device matches."
-    }
-
-    /// Peer sync rejects a schema mismatch with this wording (`PairedLibraryStore`).
-    public static func isVersionMismatch(_ error: String) -> Bool {
-        error.localizedCaseInsensitiveContains("same Woven Matter version") || error.localizedCaseInsensitiveContains("schema")
     }
 }
 

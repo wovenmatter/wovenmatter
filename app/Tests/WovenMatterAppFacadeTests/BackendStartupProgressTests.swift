@@ -54,13 +54,13 @@ struct BackendStartupProgressTests {
         #expect(progress(.backingUp, 1.4).fraction == 1)
     }
 
-    /// A service from before this report answers without it, and a newer
-    /// one's report survives the round trip.
+    /// A service with nothing to report answers without it, and a report
+    /// survives the round trip.
     @Test func readinessCarriesTheReportWhenThereIsOne() throws {
-        let older = #"{"protocolVersion":1,"instanceID":"\#(UUID().uuidString)","ready":false,"completeClientRouting":true,"capabilities":[]}"#
-        #expect(try JSONDecoder().decode(BackendApplicationReadiness.self, from: Data(older.utf8)).startupProgress == nil)
+        let without = #"{"instanceID":"\#(UUID().uuidString)","ready":false,"completeClientRouting":true,"capabilities":[]}"#
+        #expect(try JSONDecoder().decode(BackendApplicationReadiness.self, from: Data(without.utf8)).startupProgress == nil)
         let report = BackendStartupProgress(title: "Upgrading your library", detail: "Detail", fraction: 0.5)
-        let readiness = BackendApplicationReadiness(protocolVersion: 1, instanceID: UUID(), ready: false,
+        let readiness = BackendApplicationReadiness(instanceID: UUID(), ready: false,
                                                     completeClientRouting: true, capabilities: [], startupProgress: report)
         #expect(try JSONDecoder().decode(BackendApplicationReadiness.self, from: JSONEncoder().encode(readiness)).startupProgress == report)
     }

@@ -280,7 +280,7 @@ struct PiBotAttachmentTests {
 @Suite("Runtime additions")
 struct PiBotRuntimeAdditionsTests {
     @Test func runtimeStatusAndUpdateProgressDecode() throws {
-        let status = try JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"version":"0.1.0","environment":"mac-vm","bots":3,"extra":true}"#.utf8))
+        let status = try JSONDecoder().decode(PiBotRuntimeStatus.self, from: Data(#"{"environment":"mac-vm","bots":3,"extra":true}"#.utf8))
         #expect(status.environment == "mac-vm" && status.bots == 3)
         let rolled = try JSONDecoder().decode(PiBotRuntimeProgress.self, from: Data(#"{"type":"runtime.update","botId":"b","phase":"rolledBack","error":"Health check failed"}"#.utf8))
         #expect(rolled.botId == "b" && !rolled.isFinished && rolled.text.contains("Health check failed"))
@@ -289,7 +289,7 @@ struct PiBotRuntimeAdditionsTests {
     }
 
     @Test func helloAndEnvironmentDecode() throws {
-        let health = try JSONDecoder().decode(PiBotHealth.self, from: Data(#"{"ok":true,"version":"0.1.0","protocol":1,"installationId":"i","environment":"mac-vm","capabilities":["groups","message.context","bots.environment","runtime.update","previews"]}"#.utf8))
+        let health = try JSONDecoder().decode(PiBotHealth.self, from: Data(#"{"ok":true,"installationId":"i","environment":"mac-vm","capabilities":["groups","message.context","bots.environment","runtime.update","previews"]}"#.utf8))
         #expect(health.environment == "mac-vm" && health.capabilities?.contains("runtime.update") == true)
         let environment = try JSONDecoder().decode(PiBotEnvironment.self, from: Data(#"{"botId":"b","state":"running","busy":"a turn is running","lastActivity":1,"services":[],"previews":[{"port":3000,"url":"https://mac.tail.ts.net:8443/"}]}"#.utf8))
         #expect(environment.previews.first?.port == 3000 && environment.stateText.contains("turn"))

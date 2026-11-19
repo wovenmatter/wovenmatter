@@ -434,7 +434,6 @@ public struct RemoteHarnessAuthenticationSession: Codable, Equatable, Identifiab
 
 public struct RemoteWorkspaceHealth: Codable, Equatable, Sendable {
     public let status: String
-    public let version: String
     public let workspaceRoot: String
     public let harnessCount: Int
     public var runtimeKind: RemoteWorkspaceKind? = nil

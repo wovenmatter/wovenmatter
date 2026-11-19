@@ -10,7 +10,7 @@ import Crypto
 import WovenMatterCore
 
 public enum DefaultAgentSupport {
-    public static let settingsKey = "wovenmatter.default-agent.settings.v1"
+    public static let settingsKey = "wovenmatter.default-agent.settings"
     private static let settingsLock = NSLock()
     private static func readSettings() -> DefaultAgentSettingsScope {
         var value = UserDefaults.standard.data(forKey: settingsKey).flatMap {

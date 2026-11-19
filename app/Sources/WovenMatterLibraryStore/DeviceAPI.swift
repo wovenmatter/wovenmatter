@@ -462,7 +462,7 @@ public final class DeviceAPI {
                 case "/v1/hello":
                     return try .json(LibraryHello(workspaceID: workspaceID,
                         hostName: await hostName() ?? Self.machineName,
-                        capabilities: [FederationProtocol.capability, "notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "calendar.replicas.v1", "workspace.management.v1", "workspace.tools.v1"]))
+                        capabilities: []))
                 case "/v1/snapshot": return try .json(try await database.librarySnapshot())
                 case "/v1/changes":
                     guard let after = Int64(query("after") ?? query("cursor") ?? "0"), after >= 0 else {

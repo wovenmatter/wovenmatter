@@ -30,7 +30,7 @@ import WovenMatterClient
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let configuration = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
-        defaults.set(try JSONEncoder().encode([configuration]), forKey: "wovenmatter.remote-workspaces.v1")
+        defaults.set(try JSONEncoder().encode([configuration]), forKey: RemoteWorkspacesModel.storageKey)
         let owner = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         let projection = RemoteWorkspacesModel(defaults: defaults, backendProjection: true)
         let oldSnapshot = owner.backendSnapshot()
@@ -43,7 +43,7 @@ import WovenMatterClient
         let loading = Task { try await projection.browserFrame(tabID: "first", for: configuration) }
         for _ in 0..<100 where pending == nil { await Task.yield() }
         let completion = try #require(pending)
-        defaults.set(try JSONEncoder().encode([RemoteWorkspaceConfiguration]()), forKey: "wovenmatter.remote-workspaces.v1")
+        defaults.set(try JSONEncoder().encode([RemoteWorkspaceConfiguration]()), forKey: RemoteWorkspacesModel.storageKey)
         let removed = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         projection.applyBackendSnapshot(removed.backendSnapshot())
         completion.resume(returning: try JSONEncoder().encode(BackendRemoteWorkspaceResponse(

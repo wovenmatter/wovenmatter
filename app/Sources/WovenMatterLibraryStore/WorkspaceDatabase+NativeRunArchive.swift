@@ -95,7 +95,7 @@ extension WorkspaceDatabaseConnection {
   func recordNativeRunRecordsUnlocked(_ batch: WorkspaceNativeRunRecordBatch,
     conversationID: String? = nil, runID: String? = nil, agentID: String? = nil,
     harness: String, sourceConnectionID: String? = nil, pendingRunID: String? = nil) throws {
-    guard batch.schemaVersion == 1, !batch.sourceID.isEmpty, !batch.nativeSessionID.isEmpty else {
+    guard !batch.sourceID.isEmpty, !batch.nativeSessionID.isEmpty else {
       throw WorkspaceDatabaseError.open("Invalid native archive source")
     }
     let sourceID = batch.sourceID

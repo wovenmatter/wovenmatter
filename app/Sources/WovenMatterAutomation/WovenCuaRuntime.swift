@@ -109,7 +109,8 @@ final class WovenCuaRuntime {
         clients[callerID] = client
         let initialized = try await client.call(method: "initialize", params: .object([
             "protocolVersion": .string("2025-06-18"), "capabilities": .object([:]),
-            "clientInfo": .object(["name": .string("woven"), "version": .string("1")])
+            "clientInfo": .object(["name": .string("woven"), "version": .string(
+                Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development")])
         ]))
         guard initialized.objectValue?["protocolVersion"]?.stringValue == "2025-06-18" else {
             throw WorkspaceToolError.invalid("Cua Driver selected an unsupported MCP protocol.")

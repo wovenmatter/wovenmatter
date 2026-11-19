@@ -409,22 +409,21 @@ struct MemberSyncTests {
     #expect(try await a.database.peerSyncCursors(b.id).pushed == a.database.peerSyncHead())
   }
 
-  @Test func anotherExchangeFormatReportsUpdateRequired() async throws {
+  /// A peer whose shared tables differ still exchanges: nothing about a page
+  /// says which build sent it, and what it carries is judged record by record.
+  @Test func aPeerWithOtherSharedTablesStillExchangesAndUnsignedOrReplayedRequestsAreRefused() async throws {
     let network = Network()
     let a = try await Member("a.test", kind: .mac, network: network), b = try await Member("b.test", kind: .mac, network: network)
     defer { Task { await a.remove(); await b.remove() } }
     try await a.add(b); try await b.add(a)
-    // A build before the exchange format sends none.
-    let page = PairedLibraryPage(format: nil, schema: "older", entries: [], cursor: 0, hasMore: false)
+    let page = PairedLibraryPage(schema: "another", entries: [], cursor: 0, hasMore: false)
     let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 0, page: page, version: "0.9"))
     var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
     let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
-    #expect(response.status == 409)
-    let mismatch = try JSONDecoder().decode(LibraryPeerUpdateRequired.self, from: response.body)
-    #expect(mismatch.code == "update_required" && mismatch.version == "test")
+    #expect(response.status == 200)
     let status = await a.sync.status()
-    #expect(status.updateRequired && status.peers.first?.version == "0.9")
+    #expect(status.peers.first?.state == .online)
     // Unsigned or replayed requests are refused.
     #expect(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: [:], body: body)) == nil)
     let replay = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))

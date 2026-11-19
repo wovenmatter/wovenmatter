@@ -126,14 +126,6 @@ extension ApplicationModel {
         return rows
     }
 
-    /// Peers that refused library sync with `update_required`, worded so the
-    /// devices' "Versions don't match" notice offers Update everything.
-    nonisolated static func libraryUpdateNotices(_ status: LibrarySyncStatus?) -> [String] {
-        (status?.peers ?? []).filter { $0.state == .updateRequired }.map { peer in
-            "\(peer.name) needs the same Woven Matter version to synchronize" + (peer.version.map { " (it runs \($0))." } ?? ".")
-        }
-    }
-
     /// A stable UUID for one step of one agent request.
     nonisolated static func memberToolID(_ sourceID: String, _ requestID: String, _ step: String) -> String {
         var bytes = Array(PortableSHA256.hash(data: Data("woven-member-tool-v1\0\(sourceID)\0\(requestID)\0\(step)".utf8)).prefix(16))

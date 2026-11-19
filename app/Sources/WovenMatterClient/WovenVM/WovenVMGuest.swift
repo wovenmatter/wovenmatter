@@ -26,7 +26,6 @@ public struct WovenVMGuestVersion: Codable, Sendable, Equatable {
             return String(epochless.prefix { $0 != "-" })
         }
     }
-    public var guestVersion: Int
     public var image: Image
     public var docker: Docker
 }
@@ -57,7 +56,6 @@ public enum WovenVMGuestFiles {
         // Values are single-quoted for the shell; none of the pinned strings
         // contain quotes, and the record is reviewed in maintenance.
         """
-        WOVEN_GUEST_VERSION='\(version.guestVersion)'
         DOCKER_REPOSITORY='\(version.docker.repository.absoluteString)'
         DOCKER_SUITE='\(version.docker.suite)'
         DOCKER_CE_VERSION='\(version.docker.dockerCE)'

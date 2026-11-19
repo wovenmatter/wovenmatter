@@ -20,7 +20,7 @@ final class ProductAnalyticsModel {
   private var pendingLocalChoice = false
   var enabled: Bool { !locallyDisabled && (preference?.enabled ?? true) }
   private var session = URLSession(configuration: .ephemeral)
-  static let updateReceiptKey = "wovenmatter.analytics.pending-update.v1"
+  nonisolated static let updateReceiptKey = "wovenmatter.analytics.pending-update"
   static let projectToken = "phc_ukNR3Tu7AjaLmAVjbapvKsyaB8LdhFwM3vUjM5Jfxpeh"
   func configure(database: WorkspaceDatabase, publisher: Bool) {
     self.database = database

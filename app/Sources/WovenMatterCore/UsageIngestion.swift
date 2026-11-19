@@ -1,12 +1,8 @@
 import Foundation
 
-/// The append-only contract used by Woven Matter.
-/// A cursor is opaque to clients and advances only
-/// after every preceding event has been durably persisted by the producer.
-public enum UsageIngestionProtocolName {
-  public static let version = "wovenmatter.usage-ingestion.v1"
-}
-
+/// The append-only usage contract used by Woven Matter. A cursor is opaque to
+/// clients and advances only after every preceding event has been durably
+/// persisted by the producer.
 public enum UsageIngestionLimits {
   public static let eventsPerPage = 100
   public static let identifierBytes = 1_024
@@ -160,7 +156,6 @@ public struct UsageIngestionEvent: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct UsageIngestionPage: Codable, Equatable, Sendable {
-  public let protocolName: String
   public let source: UsageIngestionSource
   public let events: [UsageIngestionEvent]
   public let nextCursor: String
@@ -168,14 +163,12 @@ public struct UsageIngestionPage: Codable, Equatable, Sendable {
   public let generatedAt: Date
 
   public init(
-    protocolName: String = UsageIngestionProtocolName.version,
     source: UsageIngestionSource,
     events: [UsageIngestionEvent],
     nextCursor: String,
     hasMore: Bool,
     generatedAt: Date = Date()
   ) {
-    self.protocolName = protocolName
     self.source = source
     self.events = events
     self.nextCursor = nextCursor
@@ -184,8 +177,7 @@ public struct UsageIngestionPage: Codable, Equatable, Sendable {
   }
 
   public func validate(after cursor: String?) throws {
-    guard protocolName == UsageIngestionProtocolName.version,
-          Self.valid(source.id, maximumBytes: UsageIngestionLimits.identifierBytes),
+    guard Self.valid(source.id, maximumBytes: UsageIngestionLimits.identifierBytes),
           Self.valid(source.displayName, maximumBytes: UsageIngestionLimits.labelBytes),
           Self.valid(source.location, maximumBytes: UsageIngestionLimits.labelBytes),
           Self.valid(source.installationID, maximumBytes: UsageIngestionLimits.identifierBytes),
@@ -247,7 +239,6 @@ public struct UsageIngestionPage: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case protocolName = "protocol"
     case source, events
     case nextCursor = "next_cursor"
     case hasMore = "has_more"

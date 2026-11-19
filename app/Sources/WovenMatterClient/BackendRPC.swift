@@ -43,7 +43,6 @@ public struct BackendRPCResponse: Codable, Sendable {
 }
 
 public struct BackendRPCIdentity: Codable, Sendable {
-    public let protocolVersion: Int
     public let processID: Int32
 }
 
@@ -209,7 +208,7 @@ public final class BackendRPCServer: @unchecked Sendable {
                         Task {
                             let response: BackendRPCResponse
                             if request.method == "backend.ping" {
-                                let identity = BackendRPCIdentity(protocolVersion: 1, processID: getpid())
+                                let identity = BackendRPCIdentity(processID: getpid())
                                 response = BackendRPCResponse(id: request.id, result: (try? JSONEncoder().encode(identity)) ?? Data())
                             } else {
                                 response = await handler(request)

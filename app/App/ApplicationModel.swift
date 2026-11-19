@@ -4842,7 +4842,7 @@ extension ApplicationModel {
                     showStartupProgress(status.ready ? nil : status.startupProgress)
                     if !status.ready, status.startupProgress != nil { readyDeadline = Date().addingTimeInterval(60) }
                     if status.ready {
-                        guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
+                        guard status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                         guard status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
                             throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
                         }
@@ -5045,7 +5045,7 @@ extension ApplicationModel {
                 let status = try JSONDecoder().decode(BackendApplicationReadiness.self, from: data)
                 self.showStartupProgress(status.ready ? nil : status.startupProgress)
                 if let error = status.startupError { throw BackendRPCError.remote(error) }
-                guard status.protocolVersion == 1, status.completeClientRouting,
+                guard status.completeClientRouting,
                       status.capabilities.contains("session.dispatch-epochs"),
                       status.capabilities.contains(BackendApplicationReadiness.windowStreamCapability) else {
                     throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")

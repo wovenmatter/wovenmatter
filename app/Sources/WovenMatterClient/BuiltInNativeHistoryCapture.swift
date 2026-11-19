@@ -9,7 +9,7 @@ enum BuiltInNativeHistoryCapture {
                           sourcePrefix: String = "") throws -> Data {
         var batch = try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self,
             from: JSONEncoder().encode(value))
-        guard batch.schemaVersion == 1, batch.nativeSessionID == sessionID,
+        guard batch.nativeSessionID == sessionID,
               !sessionID.isEmpty, !batch.sourceID.isEmpty,
               batch.records.allSatisfy({
                   !$0.id.isEmpty && !$0.kind.isEmpty && ["event", "delta", "snapshot"].contains($0.contentMode)

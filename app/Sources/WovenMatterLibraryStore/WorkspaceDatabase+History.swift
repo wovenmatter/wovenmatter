@@ -205,11 +205,11 @@ extension WorkspaceDatabaseConnection {
         ]), as: UTF8.self)))
     do {
       return try transaction {
-        guard query.schemaVersion == 1, (1...200).contains(query.limit), query.after >= 0,
+        guard (1...200).contains(query.limit), query.after >= 0,
           query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters),
           ["oldest", "newest"].contains(query.sort)
         else {
-          throw WorkspaceDatabaseError.open("Unsupported history schema or invalid pagination")
+          throw WorkspaceDatabaseError.open("Invalid history pagination")
         }
         let result = try queryHistoryUnlocked(query)
         let rowIDs = (result.objectValue?["rows"]?.arrayValue ?? []).compactMap {
@@ -402,7 +402,7 @@ extension WorkspaceDatabaseConnection {
     if more { rows.removeLast() }
     let cursor = rows.last?.objectValue?["sequence"] ?? .number(Double(query.after))
     return .object([
-      "schemaVersion": .number(1), "rows": .array(rows), "hasMore": .bool(more),
+      "rows": .array(rows), "hasMore": .bool(more),
       "nextCursor": cursor,
       "historicalCoverage": .string("Retained native records and app projections; each record identifies its source and observed coverage."),
     ])

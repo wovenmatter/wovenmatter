@@ -33,8 +33,10 @@ public struct GitHubSharedIdentity: Codable, Equatable, Sendable {
     /// Base64: ChaChaPoly combined box of the `GitHubSSHKey` JSON.
     public var box: String
   }
-  /// Record format; a Mac leaves records from a newer format alone. Absent means 1.
-  public var version: Int?
+  /// A key earlier records carry inside their signature (`"version"`).
+  /// Nothing reads it and no record signed now has it; it is kept only so a
+  /// stored record re-encodes to the bytes that were signed.
+  var earlierSignedKey: Int?
   public var revision: Int64
   public var author: String
   public var identity: GitHubGitIdentity
@@ -43,6 +45,11 @@ public struct GitHubSharedIdentity: Codable, Equatable, Sendable {
   public var access: GitHubAccess?
   public var sealed: [Sealed]
   public var signature: String?
+
+  enum CodingKeys: String, CodingKey {
+    case earlierSignedKey = "version"
+    case revision, author, identity, key, access, sealed, signature
+  }
 
   static let domain = "woven.github.identity.v1"
 
@@ -180,8 +187,6 @@ public actor GitHubIdentitySync {
 
   private var own: String { directory.identity.deviceID }
 
-  static let format = 1
-
   /// One change or reconcile at a time: each reads Keychain, then writes it after awaiting.
   private var locked = false
   private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -204,9 +209,6 @@ public actor GitHubIdentitySync {
   public func change(replacesKey: Bool = false, _ update: (inout GitHubConfiguration) throws -> Void) async throws -> GitHubConfiguration {
     await acquire()
     defer { release() }
-    if let raw = try await database.gitHubSharedIdentity(), (raw.version ?? 1) > Self.format {
-      throw GitHubIdentityError.message("Another Mac uses a newer Woven Matter. Update this Mac to change GitHub settings.")
-    }
     try await publishSealingKey()
     var before = try loadLocal() ?? .init()
     let shared = try await verifiedShared()
@@ -279,8 +281,6 @@ public actor GitHubIdentitySync {
 
   private func reconcileNow() async throws -> Bool {
     try await publishSealingKey()
-    // A record in a newer format is left alone until this Mac is updated.
-    if let raw = try await database.gitHubSharedIdentity(), (raw.version ?? 1) > Self.format { return false }
     let local = try loadLocal()
     let shared = try await verifiedShared()
     if let shared, shared.revision > (local?.revision ?? 0) {
@@ -312,7 +312,6 @@ public actor GitHubIdentitySync {
     await acquire()
     defer { release() }
     try await publishSealingKey()
-    if let raw = try await database.gitHubSharedIdentity(), (raw.version ?? 1) > Self.format { return nil }
     guard let shared = try await verifiedShared() else { return nil }
     if let opened = try open(shared) { return opened }
     return GitHubConfiguration(identity: (try? shared.identity.validated()) ?? .init(), revision: shared.revision, access: shared.access ?? .init())
@@ -364,7 +363,7 @@ public actor GitHubIdentitySync {
   }
 
   private func share(_ value: GitHubConfiguration) async throws {
-    var record = GitHubSharedIdentity(version: Self.format, revision: value.revision, author: own, identity: value.identity,
+    var record = GitHubSharedIdentity(revision: value.revision, author: own, identity: value.identity,
                                       key: value.key?.summary, access: value.access, sealed: [], signature: nil)
     if let key = value.key {
       for recipient in try await recipients() {
@@ -392,6 +391,7 @@ public actor GitHubIdentitySync {
   private func write(_ record: GitHubSharedIdentity) async throws {
     var record = record
     record.sealed.sort { $0.device < $1.device }
+    record.earlierSignedKey = nil
     record.signature = nil
     record.signature = try directory.identity.sign(record.statement).base64EncodedString()
     try await database.setGitHubSharedIdentity(record)

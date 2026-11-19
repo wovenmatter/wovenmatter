@@ -62,7 +62,9 @@ enum DevelopmentLaunch {
             throw WorkspaceToolError.invalid("Development storage must be an independent directory without symbolic links.")
         }
         let marker = try Data(contentsOf: directory.appending(path: "development-snapshot.json"))
-        guard let value = try JSONSerialization.jsonObject(with: marker) as? [String: Any], value["version"] as? Int == 1 else {
+        // The launcher marks a snapshot it made with the snapshot's own ID.
+        guard let value = try JSONSerialization.jsonObject(with: marker) as? [String: Any],
+              (value["id"] as? String)?.isEmpty == false else {
             throw WorkspaceToolError.invalid("Create this snapshot with the development launcher before opening it.")
         }
         #endif

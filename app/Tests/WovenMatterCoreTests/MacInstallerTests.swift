@@ -11,7 +11,7 @@ import WovenMatterClient
 @testable import WovenMatterLibraryStore
 
 struct MacInstallerTests {
-    @Test(arguments: ["checksum", "signature", "replacement", "success", "unsupported-pairing", "busy-lock", "interrupt"])
+    @Test(arguments: ["checksum", "signature", "replacement", "success", "busy-lock", "interrupt"])
     func stagedInstallerVerifiesBeforeReplacingAndRestoresOnFailure(_ scenario: String) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("woven-mac-installer-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -20,8 +20,7 @@ struct MacInstallerTests {
         let source = root.appendingPathComponent("candidate.app")
         for (path, version, build) in [(app, "0.3.2", "906"), (source, "0.3.6", "999")] {
             try FileManager.default.createDirectory(at: path.appendingPathComponent("Contents"), withIntermediateDirectories: true)
-            var values: [String: Any] = ["CFBundleShortVersionString": version, "CFBundleVersion": build, "LSMinimumSystemVersion": "26.0"]
-            if path == source && scenario != "unsupported-pairing" { values["WovenMatterDeviceSetupVersion"] = 1 }
+            let values: [String: Any] = ["CFBundleShortVersionString": version, "CFBundleVersion": build, "LSMinimumSystemVersion": "26.0"]
             let plist = try PropertyListSerialization.data(fromPropertyList: values, format: .xml, options: 0)
             try plist.write(to: path.appendingPathComponent("Contents/Info.plist"))
         }
@@ -68,7 +67,7 @@ struct MacInstallerTests {
         let hash = scenario == "checksum" ? String(repeating: "a", count: 64) : SHA256.hash(data: Data("payload".utf8)).hexString
         let process = Process(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", script, "--", "https://fixture.invalid/app.dmg", hash, "0.3.6", "999", try MacSetupRequest(action: .update).json(), "26.0", scenario == "unsupported-pairing" ? "1" : "0"]
+        process.arguments = ["-c", script, "--", "https://fixture.invalid/app.dmg", hash, "0.3.6", "999", try MacSetupRequest(action: .update).json(), "26.0"]
         process.standardOutput = output; process.standardError = FileHandle.nullDevice
         try process.run()
         if scenario == "interrupt" {

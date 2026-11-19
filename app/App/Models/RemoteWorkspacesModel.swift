@@ -120,8 +120,9 @@ final class RemoteWorkspacesModel {
     private let credentials = RemoteWorkspaceCredentialStore()
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
     private let defaults: UserDefaults
-    private let storageKey = "wovenmatter.remote-workspaces.v1"
-    private let removedKey = "wovenmatter.remote-workspaces.removed.v1"
+    /// Every Linux host's configuration, in the app's defaults.
+    nonisolated static let storageKey = "wovenmatter.remote-workspaces"
+    nonisolated static let removedKey = "wovenmatter.remote-workspaces.removed"
     /// Workspaces uninstalled from their hosts here whose registry rows this
     /// Mac has not yet marked deleted. Kept until it has
     /// (`LibraryHostController.withdrawRemovedLinuxWorkspaces`), so the other
@@ -201,7 +202,7 @@ final class RemoteWorkspacesModel {
         // Configured workspaces are always available. Keychain reads remain silent;
         // explicit reconnect or General settings handles permission recovery.
         load()
-        removedWorkspaceIDs = (defaults.stringArray(forKey: removedKey) ?? []).compactMap(UUID.init(uuidString:))
+        removedWorkspaceIDs = (defaults.stringArray(forKey: Self.removedKey) ?? []).compactMap(UUID.init(uuidString:))
         pendingHarnessSetupIDs = Set((defaults.stringArray(forKey: harnessSetupKey) ?? []).compactMap(UUID.init(uuidString:)))
             .intersection(workspaces.map(\.id))
     }
@@ -1807,16 +1808,16 @@ final class RemoteWorkspacesModel {
     }
 
     private func load() {
-        guard let data = defaults.data(forKey: storageKey),
+        guard let data = defaults.data(forKey: Self.storageKey),
               let decoded = try? RemoteWorkspaceConfiguration.decodeSaved(data) else { return }
         workspaces = decoded
     }
 
     private func save() {
         guard !isBackendProjection else { return }
-        defaults.set(removedWorkspaceIDs.map(\.uuidString), forKey: removedKey)
+        defaults.set(removedWorkspaceIDs.map(\.uuidString), forKey: Self.removedKey)
         guard let data = try? JSONEncoder().encode(workspaces) else { return }
-        defaults.set(data, forKey: storageKey)
+        defaults.set(data, forKey: Self.storageKey)
     }
 
 

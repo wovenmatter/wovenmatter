@@ -99,7 +99,7 @@ public enum LibraryHostCommand {
     let options: LibraryHostOptions
     do {
       guard let parsed = try LibraryHostOptions.parse(arguments) else {
-        FileHandle.standardOutput.write(Data("wovenmatter-library \(LibraryHost.version)\n".utf8)); return 0
+        FileHandle.standardOutput.write(Data("wovenmatter-library \(LibraryHost.releaseVersion)\n".utf8)); return 0
       }
       options = parsed
     } catch {
@@ -131,9 +131,9 @@ public enum LibraryHostCommand {
       let port = try host.listen(port: options.port, socket: socket)
       // `schema` is the paired-library schema hash: the Node server reports it as
       // `librarySchema`, so apps can tell a host whose library cannot sync with theirs.
-      struct Ready: Encodable { let event = "ready"; let pid: Int32; let port: UInt16; let socket: String; let version: String; let schema: String }
+      struct Ready: Encodable { let event = "ready"; let pid: Int32; let port: UInt16; let socket: String; let schema: String }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-      let ready = try encoder.encode(Ready(pid: getpid(), port: port, socket: socket.path, version: LibraryHost.version,
+      let ready = try encoder.encode(Ready(pid: getpid(), port: port, socket: socket.path,
                                            schema: try await host.database.pairedLibrarySchema()))
       try? FileManager.default.removeItem(at: layout.endpointFile)
       guard FileManager.default.createFile(atPath: layout.endpointFile.path, contents: ready + Data([10]), attributes: [.posixPermissions: 0o600]) else {

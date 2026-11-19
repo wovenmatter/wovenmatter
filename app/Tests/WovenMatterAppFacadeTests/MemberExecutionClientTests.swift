@@ -30,7 +30,7 @@ struct MemberExecutionClientTests {
         let workspace = try await fixture.database.registerExecutionWorkspace(.init(workspace: .init(
             id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
             kind: .linux, name: "Build server", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"),
-            capabilities: ["execution.v1"], executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
+            capabilities: [], executionDeviceID: UUID().uuidString.lowercased())), deviceID: identity.hostDeviceID)
         let conversation = LibraryConversation(id: UUID().uuidString.lowercased(), title: "Remote", providerID: "pi-durable", routeID: workspace.id,
             libraryID: identity.libraryID, workspaceID: workspace.id)
         let origin = ExecutionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation.id,

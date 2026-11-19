@@ -349,7 +349,7 @@ extension PairedLibraryTests {
     let libraryID = try await manager.database.libraryID()
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: libraryID,
       ownerDeviceID: manager.id, kind: .linux, name: "Linux owner", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1", StreamProtocol.capability], executionDeviceID: linux.id)
+      capabilities: [StreamProtocol.capability], executionDeviceID: linux.id)
     _ = try await manager.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: manager.id)
     try await manager.send(to: linux); try await manager.send(to: observer)
     let id = UUID().uuidString.lowercased()
@@ -593,7 +593,7 @@ extension PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await a.database.libraryID(),
       ownerDeviceID: a.id, kind: .mac, name: "Air", endpoint: URL(string: "https://air.fixture.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1"], executionDeviceID: a.id)
+      capabilities: [], executionDeviceID: a.id)
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: a.id)
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's chat", ownerDeviceID: UUID())
     try await a.send(to: b)
@@ -660,7 +660,7 @@ extension PairedLibraryTests {
   private func registerMacWorkspace(_ mac: Mac) async throws -> ExecutionWorkspace {
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await mac.database.libraryID(),
       ownerDeviceID: mac.id, kind: .mac, name: "Mac", endpoint: URL(string: "https://m\(mac.id.prefix(6)).fixture.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1"], executionDeviceID: mac.id)
+      capabilities: [], executionDeviceID: mac.id)
     return try await mac.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: mac.id)
   }
   private func projectedWorkspace(_ database: WorkspaceDatabase, _ id: String) async throws -> String? {
@@ -794,7 +794,7 @@ extension PairedLibraryTests {
     let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Before adoption"))
     let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await a.database.libraryID(),
       ownerDeviceID: a.id, kind: .linux, name: "Linux", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1"], executionDeviceID: UUID().uuidString.lowercased())
+      capabilities: [], executionDeviceID: UUID().uuidString.lowercased())
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
     // The chat is adopted into the Linux workspace on A.
     try await a.database.write { connection in
@@ -843,7 +843,7 @@ extension PairedLibraryTests {
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Moved to Linux", ownerDeviceID: UUID())
     let linux = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await a.database.libraryID(),
       ownerDeviceID: a.id, kind: .linux, name: "Linux", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter")!,
-      capabilities: ["execution.v1"], executionDeviceID: UUID().uuidString.lowercased())
+      capabilities: [], executionDeviceID: UUID().uuidString.lowercased())
     _ = try await a.database.registerExecutionWorkspace(.init(workspace: linux), deviceID: a.id)
     try await a.send(to: b)
     await #expect(throws: WorkspaceConversationActionError.ownedByAnotherMac) { try await b.database.mutateConversation(id: session, mutation: .moveToTrash) }
@@ -1017,8 +1017,8 @@ extension PairedLibraryTests {
   }
 }
 
-/// Peers agree on the exchange format (`PairedLibraryFormat`), and each
-/// keeps what a newer one adds until it updates. The schema hash peers report
+/// Peers exchange whatever each has, and each keeps what a newer one adds
+/// until it updates (`PairedLibraryRecord`). The schema hash peers report
 /// is derived from column names and declared types, never physical order, so
 /// a library migrated over many releases and a freshly created one (a Linux
 /// host's) report the same.
@@ -1049,32 +1049,6 @@ extension PairedLibraryTests {
   }
   private func setShade(_ mac: Mac, _ id: String, _ value: String) async throws {
     try await mac.database.write { try $0.toolsExecuteUnlocked("UPDATE notes SET shade=? WHERE id=?", [value, id]) }
-  }
-
-  /// Peers agree on the exchange format, not on an identical schema. A page
-  /// in another format, or from a build before the format, is refused whole:
-  /// nothing applies and the cursor stays, so the exchange resumes after the
-  /// update.
-  @Test func aPageInAnotherExchangeFormatIsRefusedWhole() async throws {
-    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
-    let id = UUID().uuidString.lowercased()
-    try await a.note(id, title: "Shared")
-    let page = try await a.database.pairedLibraryPage(after: 0)
-    #expect(page.format == PairedLibraryFormat.exchange)
-    for format in [nil, PairedLibraryFormat.exchange + 1] {
-      let other = PairedLibraryPage(format: format, schema: page.schema, entries: page.entries, cursor: page.cursor, hasMore: page.hasMore)
-      do {
-        try await b.database.receivePairedLibrary(other, from: a.id)
-        Issue.record("A page in format \(String(describing: format)) was accepted")
-      } catch let error as LibraryAPIError { #expect(error.code == "update_required") }
-    }
-    #expect(try await b.database.libraryNote(id: id) == nil)
-    #expect(try await b.database.peerSyncCursors(a.id).pulled == 0)
-    // A build before the format sent no `format` at all.
-    let old = try JSONDecoder().decode(PairedLibraryPage.self, from: Data(#"{"schema":"x","entries":[],"cursor":0,"hasMore":false}"#.utf8))
-    #expect(old.format == nil)
-    try await b.database.receivePairedLibrary(page, from: a.id)
-    #expect(try await b.database.libraryNote(id: id)?.title == "Shared")
   }
 
   /// A later release adds a shared column. A device that has not updated
@@ -1235,30 +1209,54 @@ extension PairedLibraryTests {
     #expect(try await mac.database.peerSyncWaitingForUpdate() == 0)
   }
 
-  /// A record for a table this build does not have, or whose content needs a
-  /// newer build (`PairedLibraryRecord.needs`), waits and is relayed with
-  /// that marker intact; it is not quarantined.
-  @Test func recordsForAnUnknownTableOrNewerContentWaitAndAreRelayedUnchanged() async throws {
+  /// A record for a table this build does not have waits and is relayed as
+  /// received; it is not quarantined.
+  @Test func aRecordForAnUnknownTableWaitsAndIsRelayedUnchanged() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let id = UUID().uuidString.lowercased()
     try await a.note(id, title: "Shared")
     let valid = try #require(try await journal(a.database).last { $0.table == "notes" && $0.key == "[\"\(id)\"]" })
-    var row = valid.row; row["title"] = .init(type: "text", value: "Needs a newer build")
-    let content = PairedLibraryRecord(table: valid.table, key: valid.key, row: row, deleted: false, clock: valid.clock + 10,
-      origin: a.id, vector: [a.id: valid.clock + 10], needs: PairedLibraryFormat.content + 1)
     let table = PairedLibraryRecord(table: "moods", key: "[\"m\"]", row: ["id": .init(type: "text", value: "m")], deleted: false,
       clock: valid.clock + 11, origin: a.id, vector: [a.id: valid.clock + 11])
-    try await deliver([valid, content, table], to: b.database, from: a.id)
+    try await deliver([valid, table], to: b.database, from: a.id)
     #expect(try await b.database.libraryNote(id: id)?.title == "Shared")
     #expect(try await b.database.peerSyncQuarantineCount() == 0)
-    #expect(try await b.database.peerSyncWaitingForUpdate() == 2)
-    let relayed = try await journal(b.database)
-    #expect(relayed.contains(content) && relayed.contains(table))
-    // The marker survives a page built for the next peer.
+    #expect(try await b.database.peerSyncWaitingForUpdate() == 1)
+    #expect(try await journal(b.database).contains(table))
     let page = try await b.database.pairedLibraryPage(after: 0)
-    #expect(page.entries.first { $0.clock == content.clock && $0.origin == a.id }?.needs == PairedLibraryFormat.content + 1)
-    // A record without the marker encodes without it, as every capture does.
-    #expect(!String(decoding: try JSONEncoder().encode(valid), as: UTF8.self).contains("needs"))
+    #expect(page.entries.contains(table))
+  }
+
+  /// What a build can apply is marked by the hash of its shared tables alone.
+  /// A waiting record is tried again when that hash changes and not before;
+  /// the marker an earlier build stored (the hash of its tables and a number)
+  /// differs from this build's, so waiting records are tried once more after
+  /// the update and the marker becomes the hash.
+  @Test func waitingRecordsAreRetriedWhenTheSharedTablesChange() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    func marker() async throws -> String? { try await b.database.read { try $0.peerSyncStateUnlocked("understands") } }
+    func held() async throws -> Int {
+      try await b.database.read { try $0.historyRowsUnlocked("SELECT 1 AS held FROM peer_sync_versions WHERE pending_peer IS NOT NULL", values: []).count }
+    }
+    let schema = try await b.database.pairedLibrarySchema()
+    #expect(try await marker() == schema)
+    let table = PairedLibraryRecord(table: "moods", key: "[\"m\"]", row: ["id": .init(type: "text", value: "m")], deleted: false,
+      clock: 7, origin: a.id, vector: [a.id: 7])
+    try await deliver([table], to: b.database, from: a.id)
+    #expect(try await b.database.peerSyncWaitingForUpdate() == 1)
+    // Nothing changed: the record keeps waiting and is not scanned again.
+    try await b.database.write { try $0.migratePeerSync() }
+    #expect(try await b.database.peerSyncWaitingForUpdate() == 1)
+
+    // The marker as the earlier build stored it.
+    try await b.database.write { try $0.setPeerSyncStateUnlocked("understands", "0123abcd:1") }
+    try await b.database.write { try $0.migratePeerSync() }
+    #expect(try await marker() == schema)
+    #expect(try await b.database.peerSyncWaitingForUpdate() == 0)
+    // Tried again, it still has no table here: it waits again, and is kept.
+    try await b.database.materializePendingPeerRecords()
+    #expect(try await b.database.peerSyncWaitingForUpdate() == 1)
+    #expect(try await held() == 1)
   }
 
   /// The registry refresh saves remote workspace configurations every few

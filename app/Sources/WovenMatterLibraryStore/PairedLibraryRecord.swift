@@ -9,33 +9,19 @@ public struct PairedLibraryValue: Codable, Equatable, Sendable {
   public init(type: String, value: String? = nil) { self.type = type; self.value = value }
 }
 
-/// What two peers must agree on exactly, and what they need not.
+/// One version of one shared row, as peers exchange it.
 ///
-/// `exchange` is the format of a page and its records: how values and
-/// identities are encoded, how concurrent versions are ordered, which
-/// columns a deletion carries, and the name, type and key of every shared
-/// column that exists today. Peers synchronize only at the same `exchange`.
-/// It changes when a release renames, retypes or removes something shared,
-/// or changes one of those rules; every device then updates before
-/// synchronizing again.
-///
-/// A release that only ADDS a shared table or column leaves `exchange`
-/// alone. A device that does not know the addition yet keeps each record it
-/// cannot apply, exactly as received, relays it, and applies it once it
-/// updates (`peerRecordUnderstood`); a device that knows more columns than
-/// a record carries applies the ones it has.
-///
-/// `content` is what this build can read inside values whose shape did not
-/// change (a new case of a stored enum, a new field a validator requires).
-/// A release that starts writing such a value stamps the records carrying
-/// it with the level they need (`PairedLibraryRecord.needs`); a device
-/// below that level keeps them waiting instead of applying or rejecting
-/// them.
-public enum PairedLibraryFormat {
-  public static let exchange = 1
-  public static let content = 1
-}
-
+/// Peers carry no number saying what they can exchange. A record names its
+/// table and the columns it carries, and a device applies it when it has that
+/// table and every one of those columns (`peerRecordUnderstood`). A device
+/// that lacks one keeps the record exactly as received, relays it, and
+/// applies it once an update gives it the table or column; a device that
+/// knows more columns than a record carries applies the ones it has. So a
+/// release may add a shared table, or a shared column that is nullable or has
+/// a default, and devices that have not updated keep synchronizing everything
+/// else. Renaming, retyping or removing something shared is a change every
+/// device takes together, with a conversion of the library that has the
+/// earlier shape (`convertEarlierLibraryUnlocked`).
 public struct PairedLibraryRecord: Codable, Equatable, Sendable {
   public let table: String
   public let key: String
@@ -44,19 +30,16 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
   public let clock: Int64
   public let origin: String
   public let vector: [String: Int64]
-  /// The `PairedLibraryFormat.content` level a device needs to apply this
-  /// record; absent for a record every build can apply. Relayed unchanged.
-  public let needs: Int?
 
   public init(table: String, key: String, row: [String: PairedLibraryValue], deleted: Bool, clock: Int64, origin: String,
-              vector: [String: Int64], needs: Int? = nil) {
+              vector: [String: Int64]) {
     self.table = table; self.key = key; self.row = row; self.deleted = deleted; self.clock = clock; self.origin = origin
-    self.vector = vector; self.needs = needs
+    self.vector = vector
   }
 
   /// The same version with other values, as a device holds or sends it.
   func with(row: [String: PairedLibraryValue], deleted: Bool? = nil) -> Self {
-    .init(table: table, key: key, row: row, deleted: deleted ?? self.deleted, clock: clock, origin: origin, vector: vector, needs: needs)
+    .init(table: table, key: key, row: row, deleted: deleted ?? self.deleted, clock: clock, origin: origin, vector: vector)
   }
 
   /// Deterministic order among concurrent maximal versions only.
@@ -107,9 +90,6 @@ public struct PairedLibrarySender: Sendable {
 }
 
 public struct PairedLibraryPage: Codable, Sendable {
-  /// `PairedLibraryFormat.exchange` of the sender; absent from a build
-  /// before it, which synchronizes only after updating.
-  public let format: Int?
   /// The sender's shared tables, columns and keys, hashed. Peers whose
   /// hashes differ still synchronize; the difference says one of them has
   /// additions the other keeps waiting.
@@ -117,8 +97,8 @@ public struct PairedLibraryPage: Codable, Sendable {
   public let entries: [PairedLibraryRecord]
   public let cursor: Int64
   public let hasMore: Bool
-  public init(format: Int? = PairedLibraryFormat.exchange, schema: String, entries: [PairedLibraryRecord], cursor: Int64, hasMore: Bool) {
-    self.format = format; self.schema = schema; self.entries = entries; self.cursor = cursor; self.hasMore = hasMore
+  public init(schema: String, entries: [PairedLibraryRecord], cursor: Int64, hasMore: Bool) {
+    self.schema = schema; self.entries = entries; self.cursor = cursor; self.hasMore = hasMore
   }
 }
 

@@ -123,7 +123,7 @@ private final class ReachWorld: @unchecked Sendable {
     let linuxLibrary = try await linux.database.libraryIdentity()
     let workspace = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: linuxLibrary.libraryID,
       ownerDeviceID: linuxLibrary.hostDeviceID, kind: .linux, name: "Box", endpoint: URL(string: "https://box.tail1.ts.net:9443/wovenmatter")!,
-      capabilities: ["execution.v1"], executionDeviceID: linuxLibrary.hostDeviceID)
+      capabilities: [], executionDeviceID: linuxLibrary.hostDeviceID)
     self.workspace = workspace
     _ = try await linux.database.registerExecutionWorkspace(.init(workspace: workspace), deviceID: linuxLibrary.hostDeviceID)
     let sessions = await MainActor.run { LinuxSessions() }

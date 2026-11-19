@@ -397,7 +397,7 @@ struct WovenVMTests {
         var status: [String: Any] = ["agent": 1, "boot_id": boot]
         if let provision { status["provision"] = provision }
         if let update { status["update"] = update }
-        if provisioned { status["provisioned"] = ["guestVersion": 1] }
+        if provisioned { status["provisioned"] = ["at": "2026-11-19T00:00:00+00:00"] }
         if docker { status["docker"] = "29.9.3" }
         return status
     }

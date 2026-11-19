@@ -21,7 +21,7 @@ struct MemberReachTests {
         try await directory.ensureSelf(name: "Mac B", endpoints: [])
         let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
             ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
-            capabilities: ["execution.v1", "history.library.v1"], executionDeviceID: bDevice)
+            capabilities: ["history.library"], executionDeviceID: bDevice)
         let commands = ReachMacCommands()
         let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
         let send = Self.route { request in await api.handle(request) }
@@ -268,7 +268,7 @@ struct MemberReachTests {
         try await directory.add(deviceID: macA.deviceID, kind: .mac, name: "Mac A", publicKey: macA.publicKey, endpoints: [])
         let descriptor = ExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await macB.database.libraryIdentity().libraryID,
             ownerDeviceID: bDevice, kind: .mac, name: "Mac B", endpoint: URL(string: "https://mac-b.fixture.ts.net:8443/wovenmatter")!,
-            capabilities: ["execution.v1", "history.library.v1", LibraryWorkspaceAction.createFolderCapability], executionDeviceID: bDevice)
+            capabilities: ["history.library", LibraryWorkspaceAction.createFolderCapability], executionDeviceID: bDevice)
         let commands = ReachMacCommands()
         let api = MacExecutionAPI(database: macB.database, commands: commands, descriptor: descriptor, isActive: { true }, members: directory)
         let transport = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: macA.signer, send: Self.route { request in await api.handle(request) })
@@ -382,8 +382,8 @@ struct MemberReachTests {
                 ownerDeviceID: device, kind: kind, name: name, endpoint: URL(string: "https://mac-mini.fixture.ts.net:8443/wovenmatter")!,
                 capabilities: capabilities, executionDeviceID: device, deleted: deleted, retainedHistory: retained))
         }
-        let current = ["execution.v1", "history.library.v1", StreamProtocol.capability, LibraryWorkspaceAction.createFolderCapability]
-        let older = try await row("Mac mini", capabilities: ["execution.v1", "history.library.v1", StreamProtocol.capability])
+        let current = ["history.library", StreamProtocol.capability, LibraryWorkspaceAction.createFolderCapability]
+        let older = try await row("Mac mini", capabilities: ["history.library", StreamProtocol.capability])
         let copied = try await row("Copied Mac", capabilities: current, retained: true)
         let removed = try await row("Removed Mac", capabilities: current, deleted: true)
         let phone = try await row("iPhone", kind: .ios, capabilities: [])
@@ -627,16 +627,6 @@ struct MemberReachTests {
         await #expect(throws: BotsError.self) { _ = try await macB.model.signMemberSocket(url: stream, audience: UUID().uuidString.lowercased()) }
     }
 
-    @Test func updateRequiredPeersRaiseTheUpdateEverythingNotice() {
-        let status = LibrarySyncStatus(deviceID: "a", version: "1", schema: "2", peers: [
-            .init(deviceID: "b", name: "Mini", kind: .mac, state: .updateRequired, version: "0.9"),
-            .init(deviceID: "c", name: "Box", kind: .linux, state: .online)
-        ], conflicts: 0, quarantined: 0)
-        let notices = ApplicationModel.libraryUpdateNotices(status)
-        #expect(notices.count == 1)
-        #expect(BotVersionReport(thisMacVersion: "1", machines: [], syncErrors: notices).needsUpdate)
-    }
-
     /// Carries a signed `URLRequest` to an in-process handler exactly as the
     /// server would receive it: path with query, lowercased header names.
     static func route(_ handle: @escaping @MainActor @Sendable (LibraryHTTPRequest) async -> LibraryHTTPResponse) -> MemberSignedHTTPClient.Send {
@@ -788,7 +778,7 @@ final class ReachLinuxHost: @unchecked Sendable {
             case ("GET", "/v1/host/update"): return try reply(200, ["state": "succeeded", "result": ["state": "running"]])
             case ("GET", "/v1/bots/status"):
                 let status = BotsRemoteStatus(machine: .init(deviceID: memberID, name: "Linux L", kind: "linux"),
-                                              enabled: true, state: "ready", versions: .init(runtime: "0.1.0", protocol: 1, librarySchema: librarySchema))
+                                              enabled: true, state: "ready", versions: .init(librarySchema: librarySchema), runtimeInstalled: true)
                 return (try JSONEncoder().encode(status), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("POST", "/v1/host/bots-configure"):
                 lock.withLock { _botsBody = try? JSONSerialization.jsonObject(with: body) as? NSDictionary }

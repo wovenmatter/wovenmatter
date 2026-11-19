@@ -69,21 +69,21 @@ enum NativeHarnessArchive {
     }
 
     private struct FileChunk: Encodable {
-        let format = "woven-native-file-chunk/v1"
+        let format = "woven-native-file-chunk"
         let encoding = "base64"
         let sha256: String
         let dataBase64: String
     }
     private struct FilePart: Encodable { let byteOffset: Int; let byteCount: Int; let chunkID: String }
     private struct FileManifest: Encodable {
-        let format = "woven-native-file-manifest/v1"
+        let format = "woven-native-file-manifest"
         let sha256: String
         let byteFidelity: String
         let totalBytes: Int
         let parts: [FilePart]
     }
     private struct RecordReference: Encodable {
-        let format = "woven-native-record-reference/v1"
+        let format = "woven-native-record-reference"
         let manifestID: String
         let frameSHA256: String
         let recordSHA256: String
@@ -92,7 +92,7 @@ enum NativeHarnessArchive {
         let nativeRecordID: String
     }
     private struct TextFragment: Encodable {
-        let format = "woven-native-text-fragment/v1"
+        let format = "woven-native-text-fragment"
         let nativeRecordID: String
         let byteOffsetWithinRecord: Int
         let byteCount: Int

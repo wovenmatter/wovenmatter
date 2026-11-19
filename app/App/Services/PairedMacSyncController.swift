@@ -96,7 +96,7 @@ final class PairedMacSyncController {
         guard let self else { throw CancellationError() }
         try await self.acceptPairing(endpoint: endpoint, response: response)
     }, loadClaim: storage.loadClaim, saveClaim: storage.saveClaim)
-    nonisolated static let capability = "library.peers.v2"
+    nonisolated static let capability = "library.peers"
 
     /// This Mac's signing identity. The key is created once and persisted in
     /// device-only storage before it signs anything.
@@ -230,7 +230,6 @@ final class PairedMacSyncController {
         syncStatus = status
         for peer in status.peers {
             switch peer.state {
-            case .updateRequired: errors[peer.deviceID] = peer.error ?? "Update Woven Matter on every device to synchronize with \(peer.name)."
             case .failing: errors[peer.deviceID] = peer.error
             case .online, .offline: errors.removeValue(forKey: peer.deviceID)
             }

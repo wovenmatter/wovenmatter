@@ -46,14 +46,11 @@ public struct WorkspaceNativeRunRecord: Codable, Equatable, Sendable {
 /// Conversation, run, agent and harness attribution come from the trusted app
 /// connection rather than the supplied native payload.
 public struct WorkspaceNativeRunRecordBatch: Codable, Equatable, Sendable {
-  public var schemaVersion: Int
   public var sourceID: String
   public var nativeSessionID: String
   public var records: [WorkspaceNativeRunRecord]
 
-  public init(schemaVersion: Int = 1, sourceID: String, nativeSessionID: String,
-    records: [WorkspaceNativeRunRecord]) {
-    self.schemaVersion = schemaVersion; self.sourceID = sourceID
-    self.nativeSessionID = nativeSessionID; self.records = records
+  public init(sourceID: String, nativeSessionID: String, records: [WorkspaceNativeRunRecord]) {
+    self.sourceID = sourceID; self.nativeSessionID = nativeSessionID; self.records = records
   }
 }

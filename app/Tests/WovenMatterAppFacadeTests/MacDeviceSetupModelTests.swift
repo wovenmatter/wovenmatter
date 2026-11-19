@@ -36,7 +36,7 @@ struct MacDeviceSetupModelTests {
         let input = status
         let model = MacDeviceSetupModel(management: .init(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, _, _ in
             executable.lastPathComponent == "ssh"
-                ? Data("woven-mac-inspection-v1\ninstalled\n0.3.2\n900\n\n0\narm64\n27.2\n\n\n".utf8) : input
+                ? Data("woven-mac-inspection\ninstalled\n0.3.2\n900\n0\narm64\n27.2\n\n\n".utf8) : input
         }), getRelease: { throw MacDeviceSetupError("No release fixture") })
         await model.discover()
         #expect(model.rows.first?.installation?.version == "0.3.2")
@@ -61,13 +61,13 @@ struct MacDeviceSetupModelTests {
         _ = NSApplication.shared
         let input = Data(#"{"BackendState":"Running","Peer":{"mini":{"Online":true,"OS":"macOS","DNSName":"mini.tail.ts.net.","HostName":"Studio Mac mini","TailscaleIPs":["\#(Self.fixtureIP(2))"]},"fresh":{"Online":true,"OS":"macOS","DNSName":"fresh.tail.ts.net.","HostName":"New MacBook Pro","TailscaleIPs":["\#(Self.fixtureIP(3))"]},"offline":{"Online":false,"OS":"macOS","DNSName":"offline.tail.ts.net.","HostName":"Office Mac","TailscaleIPs":["\#(Self.fixtureIP(4))"]}}}"#.utf8)
         let release = try JSONDecoder().decode(MacRelease.self, from: Data("""
-            {"version":"0.3.6","build":999,"architecture":"arm64","minimum_macos":"26.0","device_setup_version":1,"download_url":"https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg","sha256":"\(String(repeating: "a", count: 64))"}
+            {"version":"0.3.6","build":999,"architecture":"arm64","minimum_macos":"26.0","download_url":"https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg","sha256":"\(String(repeating: "a", count: 64))"}
             """.utf8))
         let devices = MacDeviceSetupModel(management: .init(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, args, _ in
             guard executable.lastPathComponent == "ssh" else { return input }
             return Data((args.contains("fresh")
-                ? "woven-mac-inspection-v1\nmissing\n\n\n\n0\narm64\n27.2\n\n\n"
-                : "woven-mac-inspection-v1\ninstalled\n0.3.2\n906\n\n0\narm64\n27.2\n\n\n").utf8)
+                ? "woven-mac-inspection\nmissing\n\n\n0\narm64\n27.2\n\n\n"
+                : "woven-mac-inspection\ninstalled\n0.3.2\n906\n0\narm64\n27.2\n\n\n").utf8)
         }), getRelease: { release })
         await devices.discover()
         let suite = "mac-device-layout-\(UUID())"
@@ -108,7 +108,7 @@ private actor SetupResultFixture {
     func run(executable: URL, args: [String]) throws -> Data {
         guard executable.lastPathComponent == "ssh" else { return status }
         let command = args.last ?? ""
-        if command.contains("woven-mac-inspection-v1") {
+        if command.contains("woven-mac-inspection") {
             var result = ""
             if let requestID {
                 polls += 1
@@ -116,7 +116,7 @@ private actor SetupResultFixture {
                     phase: polls == 1 ? .paired : .waiting,
                     message: polls == 1 ? "Old request succeeded" : "Current request accepted").json()
             }
-            return Data("woven-mac-inspection-v1\ninstalled\n0.3.6\n999\n1\n0\narm64\n27.2\n\(result)\n\n".utf8)
+            return Data("woven-mac-inspection\ninstalled\n0.3.6\n999\n0\narm64\n27.2\n\(result)\n\n".utf8)
         }
         let delimiter = try #require(command.range(of: " -- '", options: .backwards))
         let json = String(command[delimiter.upperBound...].dropLast())

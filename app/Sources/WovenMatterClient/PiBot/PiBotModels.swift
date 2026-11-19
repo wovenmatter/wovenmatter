@@ -93,16 +93,14 @@ public struct PiBotGroup: Codable, Equatable, Identifiable, Sendable {
 /// The runtime's `hello` (and `GET /health`).
 public struct PiBotHealth: Codable, Equatable, Sendable {
     public let ok: Bool
-    public let version: String
-    public let `protocol`: Int?
     public let installationId: String?
     public let capabilities: [String]?
     /// Where bots' tools run: `none`, `linux-dockerd` or `mac-vm`.
     public let environment: String?
 
-    public init(ok: Bool, version: String, protocol: Int? = nil, installationId: String? = nil, capabilities: [String]? = nil,
+    public init(ok: Bool, installationId: String? = nil, capabilities: [String]? = nil,
                 environment: String? = nil) {
-        self.ok = ok; self.version = version; self.protocol = `protocol`
+        self.ok = ok
         self.installationId = installationId; self.capabilities = capabilities; self.environment = environment
     }
 }

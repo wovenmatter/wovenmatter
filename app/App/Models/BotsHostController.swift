@@ -51,7 +51,6 @@ struct BotsCommandResult: Codable, Sendable {
     var thisMacVersion: String?
     var callers: [WovenBotCaller] = []
     var devices: [BotDiscoveredDevice]?
-    var syncErrors: [String] = []
     var botMCP: WorkspaceExternalMCPSettings?
     /// The reply to `signSocket`.
     var socketHeaders: [String: String]?
@@ -117,7 +116,6 @@ struct BotsHostDependencies {
     var updateRemoteEngine: @MainActor (_ machineID: String) async throws -> Void = { _ in
         throw BotsError.unavailable("That machine is unavailable.")
     }
-    var syncErrors: @MainActor () -> [String] = { [] }
     var signSocket: @MainActor (_ url: URL, _ audience: String) async throws -> [String: String] = { _, _ in
         throw BotsError.unavailable("This Mac cannot sign bots connections yet.")
     }
@@ -347,7 +345,7 @@ final class BotsHostController {
         }
         return BotsCommandResult(machines: machines, thisMachineID: identity?.deviceID, thisMacVersion: dependencies.appVersion,
                                  callers: (try? await dependencies.callers()) ?? [], devices: Self.devices(devices, showing: Array(jobs.values)),
-                                 syncErrors: dependencies.syncErrors(), botMCP: await dependencies.botMCP(),
+                                 botMCP: await dependencies.botMCP(),
                                  jobs: jobs.values.sorted { $0.key < $1.key })
     }
 
@@ -415,7 +413,8 @@ final class BotsHostController {
         let machine = await thisMachine(identity)
         let state: String = switch machine.state { case .ready: "ready"; case .starting: "starting"; case .failed: "failed"; default: "off" }
         var status = BotsRemoteStatus(machine: .init(deviceID: identity.deviceID, name: identity.name, kind: "mac"), enabled: persisted.enabled,
-                                      state: state, message: machine.message, versions: machine.versions, resources: machine.resources,
+                                      state: state, message: machine.message, versions: machine.versions,
+                                      runtimeInstalled: machine.runtimeInstalled, resources: machine.resources,
                                       capacity: machine.capacity, paused: machine.paused)
         status.updating = machine.updating
         status.engineUpdateFailure = machine.engineUpdateFailure
@@ -444,7 +443,7 @@ final class BotsHostController {
         }
         var machine = BotMachine(id: identity.deviceID, name: identity.name, kind: .thisMac, state: state, message: message,
                                  socket: persisted.enabled ? socket : nil,
-                                 versions: .init(app: dependencies.appVersion, runtime: bundle?.version, protocol: 1),
+                                 versions: .init(app: dependencies.appVersion), runtimeInstalled: bundle != nil,
                                  resources: resources, capacity: capacity, paused: paused,
                                  updating: engineUpdateTask != nil || engineStatus.state == .updating)
         machine.engineUpdateFailure = engineUpdateFailure

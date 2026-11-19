@@ -64,7 +64,7 @@ final class DefaultAgentSettingsModel {
     /// Only compact per-scope display metadata is persisted, off the main actor.
     private actor EnabledMetadataStore {
         static let shared = EnabledMetadataStore()
-        private let prefix = "wovenmatter.built-in.enabled-metadata.v2."
+        private let prefix = "wovenmatter.built-in.enabled-metadata."
         private var revisions: [String: UInt64] = [:]
         func read(_ key: String) -> EnabledMetadata? {
             guard let data = UserDefaults.standard.data(forKey: prefix + key), data.count <= 131_072 else { return nil }

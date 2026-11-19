@@ -248,7 +248,7 @@ final class FleetUpdatesModel {
 
     /// Bots run on one machine at a time: the one whose bots are on (not off or unreachable).
     func hasBots(_ machine: BotMachine) -> Bool {
-        machine.versions.runtime != nil && ![.off, .unreachable].contains(machine.state)
+        machine.runtimeInstalled == true && ![.off, .unreachable].contains(machine.state)
     }
 
     /// Where a machine's harnesses are listed: this Mac, a Linux workspace this Mac added, or

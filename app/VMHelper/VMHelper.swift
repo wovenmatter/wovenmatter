@@ -375,9 +375,8 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     }
 
     private func recordGuest(_ status: [String: Any]) {
-        let provisioned = (status["provisioned"] as? [String: Any])?["guestVersion"] as? Int
         let info = WovenVMGuestInfo(os: status["os"] as? String, kernel: status["kernel"] as? String,
-                                    docker: status["docker"] as? String, provisionedVersion: provisioned)
+                                    docker: status["docker"] as? String)
         let commandLine = status["cmdline"] as? String
         queue.async { [self] in
             guest = info
@@ -722,7 +721,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
                 throw Sockets.posixError("snapshot \(name)")
             }
         }
-        let info = ["at": ISO8601DateFormatter().string(from: Date()), "guestVersion": String(queue.sync { guest?.provisionedVersion ?? 0 })]
+        let info = ["at": ISO8601DateFormatter().string(from: Date())]
         try JSONSerialization.data(withJSONObject: info).write(to: directory.appending(path: "info.json"))
     }
 

@@ -67,7 +67,6 @@ public struct WovenVMGuestInfo: Codable, Sendable, Equatable {
     public var os: String?
     public var kernel: String?
     public var docker: String?
-    public var provisionedVersion: Int?
 }
 
 /// A preview forward: `127.0.0.1:hostPort` on the Mac reaches `port` on a
