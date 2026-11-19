@@ -23,6 +23,61 @@ struct PanelControlButton: View {
     }
 }
 
+/// Someone a draft can "@": a name, and a word on what naming them does.
+struct ComposerMention: Equatable {
+    let name: String
+    var detail: String?
+
+    /// The text after the draft's last "@", when that "@" starts a word and the draft ends
+    /// in it: what is being typed toward a name. Nil when no mention is being typed.
+    static func query(in draft: String) -> String? {
+        guard let at = draft.lastIndex(of: "@") else { return nil }
+        if at > draft.startIndex {
+            let before = draft[draft.index(before: at)]
+            // An "@" inside a word (an email address) is not a mention.
+            if before.isLetter || before.isNumber || before == "_" { return nil }
+        }
+        let query = draft[draft.index(after: at)...]
+        return query.contains(where: \.isNewline) || query.count > 80 ? nil : String(query)
+    }
+
+    /// The names the typed text could still become, best first: names it starts, then names
+    /// with a later word it starts. Nothing once the text is one name in full and no other
+    /// fits, so Return then sends the message.
+    static func matching(_ draft: String, among mentions: [ComposerMention]) -> [ComposerMention] {
+        guard !mentions.isEmpty, let query = query(in: draft) else { return [] }
+        let needle = query.lowercased()
+        if needle.isEmpty { return mentions }
+        let starts = mentions.filter { $0.name.lowercased().hasPrefix(needle) }
+        let within = mentions.filter { mention in
+            let name = mention.name.lowercased()
+            return !name.hasPrefix(needle) && name.split(separator: " ").dropFirst().contains { $0.hasPrefix(needle) }
+        }
+        let found = starts + within
+        if found.count == 1, found[0].name.lowercased() == needle { return [] }
+        return found
+    }
+
+    /// The draft with what was typed after its last "@" written out as `mention`.
+    static func completing(_ draft: String, with mention: ComposerMention) -> String {
+        guard query(in: draft) != nil, let at = draft.lastIndex(of: "@") else { return draft }
+        return String(draft[..<at]) + "@\(mention.name) "
+    }
+}
+
+/// One row of the list that typing "/" or "@" opens above the composer's controls.
+private struct ComposerCompletion: Identifiable {
+    enum Kind {
+        case slash(LocalACPSlashCommand)
+        case mention(ComposerMention)
+    }
+    let id: String
+    let title: String
+    let hint: String?
+    let detail: String?
+    let kind: Kind
+}
+
 struct ConversationComposer: View {
     /// Inset above and below the content; the bottom control row ends here.
     static let verticalPadding: CGFloat = 10
@@ -64,6 +119,9 @@ struct ConversationComposer: View {
     var directAttachmentLabel: String? = nil
     /// Offered Escape first, after slash commands. Returns whether it handled the key.
     var onEscapeKey: (() -> Bool)? = nil
+    /// Who typing "@" can name here (the Forum's bots). Typing "@" lists them and narrows as
+    /// the name is typed; picking one writes it out. Empty: "@" is ordinary text.
+    var mentions: [ComposerMention] = []
     @Environment(\.wovenTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTaskProgress) private var taskProgress
@@ -156,8 +214,8 @@ struct ConversationComposer: View {
                 composerTextEditor(maximumVisibleLines: 7)
             }
 
-            if showsSlashCommands {
-                slashCommandPicker
+            if showsCompletions {
+                completionPicker
             }
 
             if !isCollapsed {
@@ -232,7 +290,7 @@ struct ConversationComposer: View {
             .allowsHitTesting(false)
         }
         .onExitCommand {
-            if !dismissSlashCommands() {
+            if !dismissCompletions() {
                 focused = false
                 openMenu = nil
             }
@@ -271,13 +329,13 @@ struct ConversationComposer: View {
             placeholder: placeholder,
             maximumVisibleLines: maximumVisibleLines,
             onSubmit: {
-                if applySelectedSlashCommandIfNeeded() { return }
+                if applySelectedCompletionIfNeeded() { return }
                 if canSend { onSend() }
             },
-            onTab: applySelectedSlashCommandIfNeeded,
+            onTab: applySelectedCompletionIfNeeded,
             onCommandNavigation: onCommandNavigation,
-            onMoveSelection: moveSlashSelection,
-            onEscape: { dismissSlashCommands() || onEscapeKey?() == true },
+            onMoveSelection: moveCompletionSelection,
+            onEscape: { dismissCompletions() || onEscapeKey?() == true },
             completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 },
             onAttachFiles: onDropFiles,
@@ -317,34 +375,48 @@ struct ConversationComposer: View {
         }
     }
 
-    private var showsSlashCommands: Bool {
-        focused && caretAtEnd && !slashCommandsDismissed && !matchingSlashCommands.isEmpty
+    /// What typing has narrowed to: slash commands at the start of a draft, else the names
+    /// an "@" at the end of it could become.
+    private var completions: [ComposerCompletion] {
+        if slashQuery != nil {
+            return matchingSlashCommands.map {
+                ComposerCompletion(id: $0.id, title: "/\($0.name)", hint: $0.argumentHint, detail: $0.detail, kind: .slash($0))
+            }
+        }
+        return ComposerMention.matching(draft, among: mentions).map {
+            ComposerCompletion(id: "@" + $0.name, title: "@\($0.name)", hint: nil, detail: $0.detail, kind: .mention($0))
+        }
     }
 
-    private var selectedSlashCommand: LocalACPSlashCommand? {
-        matchingSlashCommands.first { $0.id == selectedSlashCommandID }
-            ?? matchingSlashCommands.first
+    private var showsCompletions: Bool {
+        focused && caretAtEnd && !slashCommandsDismissed && !completions.isEmpty
     }
 
-    private var slashCommandPicker: some View {
-        ScrollViewReader { proxy in
+    private var selectedCompletion: ComposerCompletion? {
+        let all = completions
+        return all.first { $0.id == selectedSlashCommandID } ?? all.first
+    }
+
+    private var completionPicker: some View {
+        let all = completions
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(matchingSlashCommands) { command in
+                    ForEach(all) { item in
                         Button {
-                            applySlashCommand(command)
+                            apply(item)
                         } label: {
                             HStack(spacing: 8) {
-                                Text("/\(command.name)")
+                                Text(verbatim: item.title)
                                     .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(WovenPalette.foreground)
-                                if let hint = command.argumentHint, !hint.isEmpty {
+                                if let hint = item.hint, !hint.isEmpty {
                                     Text(hint)
                                         .font(.system(size: 11.5, design: .monospaced))
                                         .foregroundStyle(WovenPalette.mutedForeground)
                                         .lineLimit(1)
                                 }
-                                if let detail = command.detail, !detail.isEmpty {
+                                if let detail = item.detail, !detail.isEmpty {
                                     Text(detail)
                                         .font(.system(size: 11.5))
                                         .foregroundStyle(WovenPalette.mutedForeground)
@@ -358,57 +430,60 @@ struct ConversationComposer: View {
                         }
                         .buttonStyle(.plain)
                         .background(
-                            selectedSlashCommand?.id == command.id ? theme.palette.themeSoft : .clear,
+                            selectedCompletion?.id == item.id ? theme.palette.themeSoft : .clear,
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
                         .onHover { hovering in
-                            if hovering { selectedSlashCommandID = command.id }
+                            if hovering { selectedSlashCommandID = item.id }
                         }
-                        .accessibilityLabel("/\(command.name)")
-                        .accessibilityValue(selectedSlashCommand?.id == command.id ? "Selected" : "")
-                        .id(command.id)
+                        .accessibilityLabel(item.title)
+                        .accessibilityValue(selectedCompletion?.id == item.id ? "Selected" : "")
+                        .id(item.id)
                     }
                 }
             }
             .scrollIndicators(.never)
-            .frame(height: min(CGFloat(matchingSlashCommands.count) * 32, 224))
+            .frame(height: min(CGFloat(all.count) * 32, 224))
             .onChange(of: slashNavigationRequest) { _, _ in
-                if let command = selectedSlashCommand {
-                    proxy.scrollTo(command.id)
+                if let item = selectedCompletion {
+                    proxy.scrollTo(item.id)
                 }
             }
-            .onChange(of: slashQuery) { _, _ in
-                if let command = matchingSlashCommands.first {
-                    proxy.scrollTo(command.id, anchor: .top)
+            .onChange(of: all.map(\.id)) { _, ids in
+                if let first = ids.first {
+                    proxy.scrollTo(first, anchor: .top)
                 }
             }
         }
     }
 
-    private func moveSlashSelection(_ direction: Int) -> Bool {
-        guard showsSlashCommands else { return false }
-        let commands = matchingSlashCommands
-        let current = commands.firstIndex { $0.id == selectedSlashCommand?.id } ?? 0
-        let next = min(max(current + direction, 0), commands.count - 1)
-        selectedSlashCommandID = commands[next].id
+    private func moveCompletionSelection(_ direction: Int) -> Bool {
+        guard showsCompletions else { return false }
+        let all = completions
+        let current = all.firstIndex { $0.id == selectedCompletion?.id } ?? 0
+        let next = min(max(current + direction, 0), all.count - 1)
+        selectedSlashCommandID = all[next].id
         slashNavigationRequest += 1
         return true
     }
 
-    private func dismissSlashCommands() -> Bool {
-        guard showsSlashCommands else { return false }
+    private func dismissCompletions() -> Bool {
+        guard showsCompletions else { return false }
         slashCommandsDismissed = true
         return true
     }
 
-    private func applySelectedSlashCommandIfNeeded() -> Bool {
-        guard showsSlashCommands, let command = selectedSlashCommand else { return false }
-        applySlashCommand(command)
+    private func applySelectedCompletionIfNeeded() -> Bool {
+        guard showsCompletions, let item = selectedCompletion else { return false }
+        apply(item)
         return true
     }
 
-    private func applySlashCommand(_ command: LocalACPSlashCommand) {
-        draft = "/\(command.name) "
+    private func apply(_ item: ComposerCompletion) {
+        switch item.kind {
+        case .slash(let command): draft = "/\(command.name) "
+        case .mention(let mention): draft = ComposerMention.completing(draft, with: mention)
+        }
         completionRequest += 1
         focused = true
         openMenu = nil

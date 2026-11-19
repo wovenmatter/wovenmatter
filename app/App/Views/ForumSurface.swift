@@ -429,11 +429,7 @@ private struct ForumPane: View {
                 }
                 .padding(.bottom, ConversationComposer.verticalPadding)
                 VStack(alignment: .leading, spacing: 6) {
-                    ForumMentionBar(
-                        bots: bots.bots.filter { forum?.isActive($0.id) == true },
-                        note: draftMentions.note,
-                        onInsert: insertMention
-                    )
+                    if let note = draftMentions.note { ForumMentionNote(text: note) }
                     composer
                 }
                 .frame(maxWidth: 768)
@@ -500,15 +496,18 @@ private struct ForumPane: View {
             onDropFiles: attach,
             onCommandNavigation: { _ in false },
             onSend: send,
-            directAttachmentLabel: "Attach text or code files"
+            directAttachmentLabel: "Attach text or code files",
+            mentions: composerMentions
         )
     }
 
-    private func insertMention(_ name: String) {
-        var text = bots.drafts[key].text
-        if let last = text.last, !last.isWhitespace { text += " " }
-        bots.drafts[key].text = text + "@\(name) "
-        composerCollapseOverride = false
+    /// Who typing "@" offers: the bots in the Forum, then everyone in this room.
+    private var composerMentions: [ComposerMention] {
+        let members = memberIDs
+        let named = bots.bots.filter { forum?.isActive($0.id) == true }.map { bot in
+            ComposerMention(name: bot.name, detail: isThread && !members.contains(bot.id) ? "Adds it to this thread" : nil)
+        }
+        return named + [ComposerMention(name: PiBotForumMentions.everyoneKeyword, detail: isThread ? "Every bot in this thread" : "Every bot in the Forum")]
     }
 
     private func chooseFiles() {
@@ -733,47 +732,21 @@ private struct ForumPausedBanner: View {
 
 // MARK: - Mentions
 
-/// The "@" menu and what the draft's mentions will do, above the composer.
-private struct ForumMentionBar: View {
-    /// Bots in the Forum.
-    let bots: [PiBotSummary]
-    let note: String?
-    let onInsert: (String) -> Void
+/// What the draft's mentions will do, in one line above the composer.
+private struct ForumMentionNote: View {
+    let text: String
     @Environment(\.wovenTheme) private var theme
 
     var body: some View {
-        HStack(spacing: 6) {
-            Menu {
-                ForEach(bots) { bot in
-                    Button(bot.name) { onInsert(bot.name) }
-                }
-                if !bots.isEmpty { Divider() }
-                Button("Everyone here") { onInsert(PiBotForumMentions.everyoneKeyword) }
-            } label: {
-                Text(verbatim: "@")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(WovenIconButtonStyle())
-            .fixedSize()
-            .help("Mention a bot to ask it to reply")
-            .accessibilityLabel("Mention a bot")
-            if let note {
-                Text(note)
-                    .font(.system(size: 12))
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-        // Posts scroll under this row, so it carries the page's own surface.
-        .background(theme.palette.workspace.opacity(0.92), in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(WovenPalette.mutedForeground)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            // Posts scroll under this line, so it carries the page's own surface.
+            .background(theme.palette.workspace.opacity(0.92), in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
     }
 }
 

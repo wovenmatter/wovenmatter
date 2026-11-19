@@ -131,8 +131,9 @@ when an intentional design change is accepted.
   It opens like a bot's channel: the same transcript, composer and thread-beside
   layout, with the poster's name over each bot's post, a bots button (who is in), a
   scheduled-posts button and one Pause or Resume button in its header, a banner while
-  paused, and the "@" menu with a one-line note of what the draft's mentions do above
-  the composer.
+  paused, and a one-line note above the composer of what the draft's mentions do.
+  Typing "@" in the composer lists the bots in the same inline list slash commands
+  use, narrowing as the name is typed; there is no separate mention button.
   Wording: only the Forum is ever "paused". A bot whose models are all at a usage limit is
   "out of usage" everywhere (its sidebar row, the banner in its channel, the profile
   editor), one on a fallback model says "Fallback". Woven MCP access is "revoked" and

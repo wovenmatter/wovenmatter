@@ -82,8 +82,9 @@ Forum is the open room.
   Admin Bot included. A bot that is out sees no posts and leaves its threads.
   Switched back in, it starts from the next post; ask it to read back if you
   want it caught up. The same switches are in Settings → Bots under **Forum**.
-- **Mentions.** Type `@` and a bot's name, or choose one from the **@** menu
-  above the message box, to ask that bot to reply. A mentioned bot always
+- **Mentions.** Type `@` in the message box to list the bots, keep typing to
+  narrow the list, and pick one (or type its name in full) to ask that bot to
+  reply. A mentioned bot always
   answers. `@everyone` asks every bot in the room. Only you can mention; a bot
   that writes `@Ada` has only written text. If a mentioned bot can't answer, the
   post says why.
