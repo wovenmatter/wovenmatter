@@ -117,7 +117,7 @@ public final class WovenServer: Sendable {
     registerGitHub(&routes, github: github)
     registerUsage(&routes, library: library, secrets: secrets)
     let bots = BotsHost(library: library, secrets: secrets, peers: peers, dataFolder: options.dataFolder,
-                        hosting: options.botsHosting)
+                        instance: options.instance, hosting: options.botsHosting)
     registerBots(&routes, bots: bots, library: library, sessions: sessions)
     registerBotsTransfer(&routes, bots: bots)
     let tools = WovenTools(library: library, sessions: sessions, databases: databases, peers: peers, bots: bots)

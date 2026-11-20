@@ -18,7 +18,8 @@ protocol BotsRuntimeProcess: Sendable {
 /// How the home machine runs the bots: its container engine and how the
 /// runtime is started. Tests give a stand-in for both.
 struct BotsHosting: Sendable {
-  var engine: @Sendable (_ dataFolder: URL) -> any BotsEngine
+  /// The engine for a data folder and, on Linux, a development instance's own engine.
+  var engine: @Sendable (_ dataFolder: URL, _ instance: String?) -> any BotsEngine
   /// Starts the runtime with its config file, logging to `log`.
   var launch: @Sendable (_ config: URL, _ log: URL) throws -> any BotsRuntimeProcess
   /// Writes each bot's files out of the engine and back, for a transfer.
@@ -27,7 +28,7 @@ struct BotsHosting: Sendable {
   /// before it writes the setting. Tests pause here.
   var committing: @Sendable () async -> Void = {}
 
-  static let standard = BotsHosting(engine: { standardBotsEngine(dataFolder: $0) },
+  static let standard = BotsHosting(engine: { standardBotsEngine(dataFolder: $0, instance: $1) },
                                     launch: { try NodeBotsRuntime(config: $0, log: $1) })
 }
 

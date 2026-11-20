@@ -7,7 +7,8 @@ import WovenProtocol
 /// secret sealed for each machine; the identity and which places use the key
 /// are synced settings. Agents never get the key: git reaches it through this
 /// server's SSH agent, by files in `github/` in the data folder that every
-/// runtime finds through the environment the server sets for itself.
+/// runtime finds through the git settings the server adds to every child's
+/// environment (`GitEnvironment`).
 actor GitHub {
   static let identityKey = "github.identity"
   static let accessKey = "github.access"
@@ -16,27 +17,27 @@ actor GitHub {
   private let secrets: Secrets
   private let folder: URL
   private let agent: SSHAgent
-  private let environment: GitEnvironment.Applied
+  private let git: GitEnvironment.Settings
   private var key: OpenSSHKey?
   private var watcher: Task<Void, Never>?
 
-  private init(library: Library, secrets: Secrets, folder: URL, agent: SSHAgent, environment: GitEnvironment.Applied) {
+  private init(library: Library, secrets: Secrets, folder: URL, agent: SSHAgent) {
     self.library = library
     self.secrets = secrets
     self.folder = folder
     self.agent = agent
-    self.environment = environment
+    self.git = GitEnvironment.Settings(folder: folder)
   }
 
-  /// Starts the agent, writes the files and points this process's environment
-  /// at them. Call before any runtime starts, so every child inherits it.
+  /// Starts the agent, writes the files and points git in every child started
+  /// from now on at them. Call before any runtime starts.
   static func start(library: Library, secrets: Secrets, dataFolder: URL) async throws -> GitHub {
     let folder = dataFolder.appendingPathComponent("github", isDirectory: true)
     try GitFiles.makePrivateFolder(folder)
     let socket = try SocketFolder.path("agent.sock", for: dataFolder)
     let agent = try await SSHAgent.start(path: socket)
-    let github = GitHub(library: library, secrets: secrets, folder: folder, agent: agent,
-                        environment: GitEnvironment.apply(folder: folder))
+    let github = GitHub(library: library, secrets: secrets, folder: folder, agent: agent)
+    GitEnvironment.use(github.git)
     await github.refresh()
     await github.watch()
     return github
@@ -45,7 +46,7 @@ actor GitHub {
   func stop() async {
     watcher?.cancel()
     await agent.stop()
-    GitEnvironment.remove(environment)
+    GitEnvironment.remove(git)
   }
 
   /// Follows changes from this machine and others: a new key, identity or switch.
@@ -263,50 +264,53 @@ enum GitFiles {
   }
 }
 
-/// Points git in this process's environment, and so in every runtime it
-/// starts, at the files: `GIT_SSH_COMMAND` (unless one is already set) and an
-/// include of `gitconfig` at command-line scope.
+/// Points git in every child the server starts at the files: `GIT_SSH_COMMAND`
+/// (unless the server's own environment sets one) and an include of
+/// `gitconfig` at command-line scope. Held here and added to each child's
+/// environment as it starts (`ChildProcess.environment`); the server never
+/// changes its own, since another thread may be reading it.
 enum GitEnvironment {
-  struct Applied: Sendable {
-    var sshCommand: String?
-    var include: String?
-  }
+  struct Settings: Equatable, Sendable {
+    var sshCommand: String
+    var include: String
 
-  private static let lock = Mutex(())
-
-  static func apply(folder: URL) -> Applied {
-    lock.withLock { _ in
-      var applied = Applied()
-      let environment = ProcessInfo.processInfo.environment
-      if environment["GIT_SSH_COMMAND"]?.isEmpty != false, environment["GIT_SSH"]?.isEmpty != false {
-        let command = "ssh -F " + shellQuoted(folder.appendingPathComponent("ssh_config").path)
-        setenv("GIT_SSH_COMMAND", command, 1)
-        applied.sshCommand = command
-      }
-      let include = folder.appendingPathComponent("gitconfig").path
-      let count = Int(environment["GIT_CONFIG_COUNT"] ?? "") ?? 0
-      if !(0..<count).contains(where: { environment["GIT_CONFIG_KEY_\($0)"] == "include.path" && environment["GIT_CONFIG_VALUE_\($0)"] == include }) {
-        setenv("GIT_CONFIG_KEY_\(count)", "include.path", 1)
-        setenv("GIT_CONFIG_VALUE_\(count)", include, 1)
-        setenv("GIT_CONFIG_COUNT", String(count + 1), 1)
-        applied.include = include
-      }
-      return applied
+    init(folder: URL) {
+      sshCommand = "ssh -F " + GitEnvironment.shellQuoted(folder.appendingPathComponent("ssh_config").path)
+      include = folder.appendingPathComponent("gitconfig").path
     }
   }
 
-  /// Takes back what `apply` set, when nothing has changed it since.
-  static func remove(_ applied: Applied) {
-    lock.withLock { _ in
-      let environment = ProcessInfo.processInfo.environment
-      if let command = applied.sshCommand, environment["GIT_SSH_COMMAND"] == command { unsetenv("GIT_SSH_COMMAND") }
-      if let include = applied.include, let count = Int(environment["GIT_CONFIG_COUNT"] ?? ""), count > 0,
-         environment["GIT_CONFIG_VALUE_\(count - 1)"] == include {
-        unsetenv("GIT_CONFIG_KEY_\(count - 1)")
-        unsetenv("GIT_CONFIG_VALUE_\(count - 1)")
-        if count == 1 { unsetenv("GIT_CONFIG_COUNT") } else { setenv("GIT_CONFIG_COUNT", String(count - 1), 1) }
-      }
+  private static let current = Mutex<Settings?>(nil)
+
+  /// Children started from now on get `settings`.
+  static func use(_ settings: Settings) {
+    current.withLock { $0 = settings }
+  }
+
+  /// Children started from now on no longer get `settings`, unless another
+  /// server in this process has put its own in place since.
+  static func remove(_ settings: Settings) {
+    current.withLock { if $0 == settings { $0 = nil } }
+  }
+
+  /// `environment` with the settings in use added.
+  static func added(to environment: [String: String]) -> [String: String] {
+    added(current.withLock { $0 }, to: environment)
+  }
+
+  static func added(_ settings: Settings?, to environment: [String: String]) -> [String: String] {
+    guard let settings else { return environment }
+    var environment = environment
+    if environment["GIT_SSH_COMMAND"]?.isEmpty != false, environment["GIT_SSH"]?.isEmpty != false {
+      environment["GIT_SSH_COMMAND"] = settings.sshCommand
     }
+    let count = Int(environment["GIT_CONFIG_COUNT"] ?? "") ?? 0
+    if !(0..<count).contains(where: { environment["GIT_CONFIG_KEY_\($0)"] == "include.path" && environment["GIT_CONFIG_VALUE_\($0)"] == settings.include }) {
+      environment["GIT_CONFIG_KEY_\(count)"] = "include.path"
+      environment["GIT_CONFIG_VALUE_\(count)"] = settings.include
+      environment["GIT_CONFIG_COUNT"] = String(count + 1)
+    }
+    return environment
   }
 
   static func shellQuoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }

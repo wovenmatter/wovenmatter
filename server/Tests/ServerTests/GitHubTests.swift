@@ -81,6 +81,20 @@ func gitHubKeySignsOnlyThroughTheAgentAndStopsWhenThisMachineIsOff() async throw
   #expect(!FileManager.default.fileExists(atPath: github.appendingPathComponent("github.conf").path))
 }
 
+/// A child's environment points git at the server's files, after any git
+/// settings of the server's own, and is left alone when there are none.
+@Test
+func childEnvironmentPointsGitAtTheServersFiles() {
+  let settings = GitEnvironment.Settings(folder: URL(fileURLWithPath: "/data/github"))
+  let own = ["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.editor", "GIT_CONFIG_VALUE_0": "vi"]
+  let child = GitEnvironment.added(settings, to: own)
+  #expect(child["GIT_SSH_COMMAND"] == "ssh -F '/data/github/ssh_config'")
+  #expect(child["GIT_CONFIG_COUNT"] == "2" && child["GIT_CONFIG_KEY_0"] == "core.editor")
+  #expect(child["GIT_CONFIG_KEY_1"] == "include.path" && child["GIT_CONFIG_VALUE_1"] == "/data/github/gitconfig")
+  #expect(GitEnvironment.added(settings, to: ["GIT_SSH": "/bin/myssh"])["GIT_SSH_COMMAND"] == nil)
+  #expect(GitEnvironment.added(nil, to: own) == own)
+}
+
 /// Sends one agent request over the Unix socket and returns the reply, without lengths.
 private func agentRequest(_ path: String, _ message: Data) throws -> Data {
   #if canImport(Glibc)

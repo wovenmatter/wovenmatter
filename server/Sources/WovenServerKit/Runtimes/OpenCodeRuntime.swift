@@ -162,7 +162,7 @@ actor OpenCodeHost {
   /// The environment OpenCode runs with: its state (service registration,
   /// locks, recent models) in this runtime's own folder.
   nonisolated func environment(password: String? = nil) -> [String: String] {
-    var environment = ProcessInfo.processInfo.environment
+    var environment = ChildProcess.environment()
     environment["XDG_STATE_HOME"] = folder.appending(path: "state").path
     if let password { environment["OPENCODE_SERVER_PASSWORD"] = password }
     return environment

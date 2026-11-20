@@ -113,11 +113,8 @@ public enum ServerCommand {
       appVersion: appVersion, machineName: name ?? this?.name ?? localHostName(), tailnet: tailnet,
       runtimes: standardRuntimes(dataFolder: URL(fileURLWithPath: folder, isDirectory: true)) + (standIn ? [StandInRuntime()] : []),
       foldersRoot: foldersRoot)
+    // A development instance on Linux also runs its bots in its own engine, `woven-bots-engine-NAME`.
     options.instance = instance
-    // A development instance on Linux runs its bots in its own engine, `woven-bots-engine-NAME`.
-    if let instance, ProcessInfo.processInfo.environment["WOVEN_BOTS_ENGINE_INSTANCE"] == nil {
-      setenv("WOVEN_BOTS_ENGINE_INSTANCE", instance, 1)
-    }
     options.offersStandIn = standIn
     options.harnessHome = FileManager.default.homeDirectoryForCurrentUser
     let server = try await WovenServer.start(options)

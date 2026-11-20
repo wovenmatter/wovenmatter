@@ -102,13 +102,14 @@ actor BotsHost {
   private var openSubscribers: [UUID: (key: String, continuation: Events.Continuation)] = [:]
   private var opened: [String: Opened] = [:]
 
-  init(library: Library, secrets: Secrets, peers: PeerSync, dataFolder: URL, hosting: BotsHosting = .standard) {
+  init(library: Library, secrets: Secrets, peers: PeerSync, dataFolder: URL, instance: String? = nil,
+       hosting: BotsHosting = .standard) {
     self.library = library
     self.peers = peers
     self.tenure = BotsTenure(file: dataFolder.appendingPathComponent("bots-runtime/tenure"))
     self.interface = BotsHostInterface(library: library, secrets: secrets, tenure: tenure)
     self.hosting = hosting
-    self.engine = hosting.engine(dataFolder)
+    self.engine = hosting.engine(dataFolder, instance)
     self.dataFolder = dataFolder
   }
 

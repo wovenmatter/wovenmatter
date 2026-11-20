@@ -155,9 +155,7 @@ public struct TailscaleTailnet: Tailnet {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         // The app-bundle binary acts as the command line only when told to.
-        var environment = ProcessInfo.processInfo.environment
-        environment["TAILSCALE_BE_CLI"] = "1"
-        process.environment = environment
+        process.environment = ChildProcess.environment(["TAILSCALE_BE_CLI": "1"])
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice

@@ -19,8 +19,8 @@ final class ChildProcess: Sendable {
   /// The longest line accepted from a runtime.
   static let maximumLine = 64 << 20
 
-  /// Starts `executable` with `arguments` in `directory`. `environment` is
-  /// added to this process's own environment.
+  /// Starts `executable` with `arguments` in `directory`, with
+  /// `ChildProcess.environment(environment)`.
   init(executable: String, arguments: [String], directory: String, environment: [String: String],
        logFile: URL? = nil) throws {
     let process = Process()
@@ -29,10 +29,7 @@ final class ChildProcess: Sendable {
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = ["-c", #"ulimit -c 0; set -m; exec "$@""#, "woven-runtime", executable] + arguments
     process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true)
-    var env = ProcessInfo.processInfo.environment
-    env["PATH"] = ChildProcess.searchPath(env["PATH"])
-    for (key, value) in environment { env[key] = value }
-    process.environment = env
+    process.environment = ChildProcess.environment(environment)
     let stdin = Pipe(), stdout = Pipe()
     process.standardInput = stdin
     process.standardOutput = stdout
@@ -90,6 +87,17 @@ final class ChildProcess: Sendable {
     }
   }
 
+  /// The environment a child of this server gets: the server's own, the
+  /// search path below, git pointed at the server's GitHub files
+  /// (`GitEnvironment`), then `extra`.
+  static func environment(_ extra: [String: String] = [:]) -> [String: String] {
+    var environment = ProcessInfo.processInfo.environment
+    environment["PATH"] = searchPath(environment["PATH"])
+    environment = GitEnvironment.added(to: environment)
+    for (key, value) in extra { environment[key] = value }
+    return environment
+  }
+
   /// PATH with the places runtimes install themselves added, since a server
   /// started by the app has only the system's.
   static func searchPath(_ path: String?) -> String {
@@ -125,10 +133,7 @@ final class ChildProcess: Sendable {
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
     if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
-    var env = ProcessInfo.processInfo.environment
-    env["PATH"] = searchPath(env["PATH"])
-    for (key, value) in environment { env[key] = value }
-    process.environment = env
+    process.environment = ChildProcess.environment(environment)
     let output = Pipe(), errors = Pipe()
     process.standardOutput = output
     process.standardError = mergeErrors ? output : errors

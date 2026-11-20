@@ -59,9 +59,9 @@ struct GivenBotsEngine: BotsEngine {
 
 /// The engine for this machine: the given socket when one is set, else the
 /// platform's own.
-func standardBotsEngine(dataFolder: URL) -> any BotsEngine {
+func standardBotsEngine(dataFolder: URL, instance: String?) -> any BotsEngine {
   if let socket = ProcessInfo.processInfo.environment["WOVEN_BOTS_ENGINE_SOCKET"], !socket.isEmpty {
     return GivenBotsEngine(socket: socket)
   }
-  return platformBotsEngine(dataFolder: dataFolder)
+  return platformBotsEngine(dataFolder: dataFolder, instance: instance)
 }

@@ -14,11 +14,11 @@ import WovenProtocol
 struct LinuxDockerdBotsEngine: BotsEngine {
   /// The name `bots-engine.py` gives every path and unit: `woven-bots-engine`,
   /// or `woven-bots-engine-<instance>` for a development instance
-  /// (`WOVEN_BOTS_ENGINE_INSTANCE`).
+  /// (`--instance`).
   let name: String
   var kind: String { "linux-dockerd" }
 
-  init(instance: String? = ProcessInfo.processInfo.environment["WOVEN_BOTS_ENGINE_INSTANCE"]) {
+  init(instance: String?) {
     name = "woven-bots-engine" + (instance.flatMap { $0.isEmpty ? nil : "-" + $0 } ?? "")
   }
 

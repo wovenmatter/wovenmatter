@@ -36,7 +36,7 @@ private final class StandInBotsRuntime: Sendable {
   var hosting: BotsHosting { hosting(files: StandInFiles()) }
 
   func hosting(files: StandInFiles, committing: Gate? = nil) -> BotsHosting {
-    BotsHosting(engine: { _ in StandInEngine() }, launch: { config, _ in try self.launch(config) }, files: files.files,
+    BotsHosting(engine: { _, _ in StandInEngine() }, launch: { config, _ in try self.launch(config) }, files: files.files,
                 committing: { await committing?.pass() })
   }
 

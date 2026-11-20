@@ -2,12 +2,12 @@ import Foundation
 import WovenProtocol
 
 /// This platform's own engine: Woven's Linux VM on a Mac, the dedicated
-/// dockerd on Linux.
-func platformBotsEngine(dataFolder: URL) -> any BotsEngine {
+/// dockerd on Linux (a development instance's own).
+func platformBotsEngine(dataFolder: URL, instance: String?) -> any BotsEngine {
   #if os(macOS)
   MacVMBotsEngine.make(dataFolder: dataFolder)
   #else
-  LinuxDockerdBotsEngine()
+  LinuxDockerdBotsEngine(instance: instance)
   #endif
 }
 
