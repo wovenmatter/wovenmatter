@@ -37,7 +37,7 @@ app. There is no Woven Matter account and no hosted service in between.
   With it, agents start, message, and check on sessions on any of your
   machines, and work with your notes, calendar, history, library, timers,
   databases, and browser.
-- **Keep your work beside the chat.** Open Notes, Sheets, Artifacts, Pages,
+- **Keep your work beside the chat.** Open Notes, Pages, Sheets, Apps,
   browser tabs, and document previews next to a conversation and work on them
   with the agent. Pages are flowing documents you and your agents edit
   together. Notes keep a version history you can restore from.
