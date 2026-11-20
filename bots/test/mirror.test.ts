@@ -1,6 +1,7 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mirrorItems } from "../src/mirror.ts";
+import { displayEntry } from "../src/transcript.ts";
 import type { BotSummary, MirrorBot, MirrorForum } from "../src/protocol.ts";
 import { echoModels, tempDir } from "./helpers.ts";
 import { startTestRuntime, type TestRuntime } from "./runtime.ts";
@@ -200,5 +201,21 @@ describe("library items", () => {
     const next = entry(6, [{ role: "user", content: "never mind", timestamp: 3000 }]);
     const orphan = mirrorItems([call, next]).items.find((built) => built.item.kind === "tool");
     expect(orphan?.item.tool).toEqual({ name: "bash", input: '{"command":"ls"}', failed: true });
+  });
+
+  it("shows a published page in place of its render_html call, in the copy and in the chat", () => {
+    const page = { title: "Sales", height: 320, digest: "a".repeat(64), size: 1200 };
+    const call = entry(2, [
+      assistant([
+        { type: "text", text: "Here it is." },
+        { type: "toolCall", id: "p1", name: "woven_render_html", arguments: { html: "<h1>Sales</h1>", title: "Sales", height: 320 } },
+      ]),
+    ]);
+    const result = entry(3, [
+      { role: "toolResult", toolCallId: "p1", toolName: "woven_render_html", content: [{ type: "text", text: "Shown." }], details: { wovenPage: page }, isError: false, timestamp: 2500 },
+    ]);
+    expect(mirrorItems([call, result]).items.map((built) => built.item.kind)).toEqual(["assistant", "page"]);
+    expect(mirrorItems([call, result]).items[1]?.item.page).toEqual(page);
+    expect(displayEntry(result)).toEqual({ id: 3, conversationId: 1, role: "assistant", text: "", pages: [page] });
   });
 });

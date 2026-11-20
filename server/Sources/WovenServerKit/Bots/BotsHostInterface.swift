@@ -57,8 +57,9 @@ struct BotsHostInterface: Sendable {
       guard await toolsAllowed(botID), let tools = tools.current else {
         return try JSONValue(encoding: ToolResult.error("Woven tools are turned off for this bot in Settings."))
       }
-      return try JSONValue(encoding: await tools.call(name, arguments: params["arguments"] ?? .object([:]),
-                                                      caller: ToolCaller(machineID: home, botID: botID)))
+      // `forum`: the bot is answering in the Forum, not in one of its own chats.
+      let caller = ToolCaller(machineID: home, botID: botID, inForum: params["forum"]?.bool == true ? true : nil)
+      return try JSONValue(encoding: await tools.call(name, arguments: params["arguments"] ?? .object([:]), caller: caller))
     case "mirror.checkpoints":
       var bots: [String: JSONValue] = [:]
       var forum: Int64 = 0
@@ -168,6 +169,8 @@ struct MirrorBot: Decodable, Sendable {
     var kind: String
     var text: String?
     var tool: Tool?
+    /// A page the bot published with `render_html`.
+    var page: HTMLPage?
     var usage: Usage?
   }
 
@@ -322,13 +325,15 @@ enum BotsMirrorMapping {
   }
 
   private static func content(_ item: MirrorBot.Item) -> ItemContent {
+    if item.kind == "page", let page = item.page { return .htmlPage(page) }
     switch item.kind {
     case "user": return .userMessage(text: item.text ?? "")
     case "assistant": return .assistantMessage(text: item.text ?? "")
     case "tool":
       let tool = item.tool ?? MirrorBot.Item.Tool(name: "tool", input: "", output: nil, failed: false)
-      return .toolCall(ToolCall(name: tool.name, input: tool.input, output: tool.output, failed: tool.failed,
-                                kind: tool.name.lowercased() == "bash" ? .execute : OpenCodeProjection.kind(tool.name)))
+      return .toolCall(HTMLPages.withoutPage(ToolCall(
+        name: tool.name, input: tool.input, output: tool.output, failed: tool.failed,
+        kind: tool.name.lowercased() == "bash" ? .execute : OpenCodeProjection.kind(tool.name))))
     case "stopped": return .notice(Notice(kind: .interrupted, text: "Stopped."))
     default: return .notice(Notice(kind: .failure, text: item.text ?? "Something went wrong."))
     }

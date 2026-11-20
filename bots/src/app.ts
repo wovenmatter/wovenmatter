@@ -275,7 +275,10 @@ export async function startRuntime(
         manager ??= self;
         return createBotHarnessOptions({
           bot,
-          wovenTools: (install) => wovenTools(bot.id, host, install),
+          wovenTools: (install) =>
+            wovenTools(bot.id, host, install, async (conversationId) =>
+              Boolean(await forumStore.seatOfConversation(bot.id, conversationId)),
+            ),
           models,
           profile: () => profiles.resolve(self.assignedProfile(bot.id)),
           onSubagent: (event) =>

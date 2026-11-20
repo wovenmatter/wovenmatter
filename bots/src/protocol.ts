@@ -722,16 +722,21 @@ export type MirrorConversation = {
   createdAt: string;
 };
 
+/** A page a bot published in its chat with `render_html`; the page itself is in the server's content store. */
+export type PublishedPage = { title: string; height: number; digest: string; size: number };
+
 export type MirrorItem = {
   /** Stable forever, unique within the bot: `<entryId>` or `<entryId>.<n>`. */
   key: string;
   conversationId: number;
   /** Epoch ms. */
   createdAt: number;
-  kind: "user" | "assistant" | "tool" | "error" | "stopped";
+  kind: "user" | "assistant" | "tool" | "page" | "error" | "stopped";
   /** user, assistant, error. */
   text?: string;
   tool?: { name: string; input: string; output?: string; failed: boolean };
+  /** page: shown in place of the `render_html` call that published it. */
+  page?: PublishedPage;
   /** One model turn's usage, on the first item of that turn (its text when it has any). */
   usage?: {
     /** `provider/model`. */
@@ -823,11 +828,14 @@ export type HostMethods = {
         };
   };
   /** One Woven tool call, carried out by the server (which checks access again). */
+  /** `forum`: the bot calls from its Forum seat, not one of its own chats. */
   "tools.call": {
-    params: { botId: string; name: string; arguments: Record<string, unknown> };
+    params: { botId: string; name: string; arguments: Record<string, unknown>; forum?: true };
     data: {
       content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
       isError: boolean;
+      /** What the bot is not shown: the page `render_html` published. */
+      _meta?: { wovenPage?: PublishedPage };
     };
   };
   "mirror.checkpoints": { params: Empty; data: MirrorCheckpoints };

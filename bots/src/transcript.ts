@@ -1,9 +1,10 @@
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
 import { contentText } from "@earendil-works/pi-ai";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { type ErrorIssue, errorIssue } from "./issues.ts";
 import { stripFallbackNote } from "./limits.ts";
 import { stripContextNote } from "./message-context.ts";
+import type { PublishedPage } from "./protocol.ts";
 
 /** What clients render for one durable entry. */
 export type DisplayEntry = {
@@ -17,7 +18,16 @@ export type DisplayEntry = {
   readonly issue?: ErrorIssue;
   /** An assistant reply the user stopped part-way (`conversation.abort`). */
   readonly stopped?: true;
+  /** Pages the bot published here with `render_html`, shown above the text. */
+  readonly pages?: readonly PublishedPage[];
 };
+
+/** The page a successful `render_html` call published, from its result's details. */
+export function publishedPage(message: ToolResultMessage | undefined): PublishedPage | undefined {
+  if (!message || message.isError) return undefined;
+  const page = (message.details as { wovenPage?: PublishedPage } | undefined)?.wovenPage;
+  return page && typeof page.digest === "string" ? page : undefined;
+}
 
 /** The chat text of a user or assistant message (notes for the model removed). */
 export function messageText(message: Message): string {
@@ -53,6 +63,11 @@ export function hiddenInput(entry: EntryRecord): boolean {
 
 export function displayEntry(entry: EntryRecord): DisplayEntry | undefined {
   if (hiddenInput(entry)) return undefined;
+  const pages = (entry.model ?? []).flatMap((message) => {
+    const page = message.role === "toolResult" ? publishedPage(message as ToolResultMessage) : undefined;
+    return page ? [page] : [];
+  });
+  const shown = pages.length ? { pages } : {};
   for (const message of entry.model ?? []) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     const text = messageText(message);
@@ -71,9 +86,12 @@ export function displayEntry(entry: EntryRecord): DisplayEntry | undefined {
       ...(error ? { error } : {}),
       ...(issue ? { issue } : {}),
       ...(stopReason === "aborted" ? { stopped: true as const } : {}),
+      ...shown,
     };
   }
-  return undefined;
+  return pages.length
+    ? { id: entry.id, conversationId: entry.conversationId, role: "assistant", text: "", pages }
+    : undefined;
 }
 
 export function assistantText(message: AssistantMessage | undefined): string {

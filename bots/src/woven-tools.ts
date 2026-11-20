@@ -17,20 +17,36 @@ type CatalogTool = {
  * off when it opened gets the tools once a later connection allows them. The server checks the
  * same setting on every call, so a bot turned off later is refused.
  */
-export function wovenTools(botId: string, host: HostChannel, install: (extension: Extension) => void): void {
+export function wovenTools(
+  botId: string,
+  host: HostChannel,
+  install: (extension: Extension) => void,
+  inForum: (conversationId: number) => Promise<boolean>,
+): void {
   let installed = false;
   const ask = async () => {
     if (installed || !host.connected) return;
     const reply = await host.call("tools.list", { botId });
     if (!reply.allowed || installed) return;
     installed = true;
-    install(extension(botId, host, reply.tools, reply.instructions));
+    install(extension(botId, host, reply.tools, reply.instructions, inForum));
   };
   host.onConnected(() => void ask().catch(() => {}));
   void ask().catch(() => {});
 }
 
-function extension(botId: string, host: HostChannel, tools: CatalogTool[], instructions: string): Extension {
+/**
+ * A call says when it comes from the bot's Forum seat (`forum`), and its result's `_meta` becomes the
+ * result's details: a page `render_html` published (`wovenPage`), which the chat and the library
+ * copy show in its place.
+ */
+function extension(
+  botId: string,
+  host: HostChannel,
+  tools: CatalogTool[],
+  instructions: string,
+  inForum: (conversationId: number) => Promise<boolean>,
+): Extension {
   return defineExtension({
     name: "woven",
     sections: [section("woven", () => instructions, { tag: false })],
@@ -40,9 +56,15 @@ function extension(botId: string, host: HostChannel, tools: CatalogTool[], instr
         description: tool.description,
         parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
         ...(tool.annotations?.readOnlyHint ? { replay: "safe" as const } : {}),
-        execute: async (args) => {
+        execute: async (args, api) => {
           try {
-            const result = await host.call("tools.call", { botId, name: tool.name, arguments: args ?? {} });
+            const forum = await inForum(Number(api.conversationId));
+            const result = await host.call("tools.call", {
+              botId,
+              name: tool.name,
+              arguments: args ?? {},
+              ...(forum ? { forum } : {}),
+            });
             return {
               output: result.content.map((block) =>
                 block.type === "image"
@@ -50,6 +72,7 @@ function extension(botId: string, host: HostChannel, tools: CatalogTool[], instr
                   : { type: "text" as const, text: block.text },
               ),
               isError: result.isError,
+              ...(result._meta ? { details: result._meta } : {}),
             };
           } catch (error) {
             return {

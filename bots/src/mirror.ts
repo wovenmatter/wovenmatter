@@ -6,7 +6,7 @@ import type { HostChannel } from "./host/channel.ts";
 import type { MirrorBot, MirrorConversation, MirrorForum, MirrorItem } from "./protocol.ts";
 import type { ForumStore } from "./storage/forum.ts";
 import type { BotRecord } from "./storage/registry.ts";
-import { hiddenInput, messageText } from "./transcript.ts";
+import { hiddenInput, messageText, publishedPage } from "./transcript.ts";
 
 /** Items (or posts) in one push. */
 export const MIRROR_BATCH = 200;
@@ -68,6 +68,12 @@ export function mirrorItems(entries: readonly EntryRecord[]): { items: Built[]; 
         flush();
         const result = results.get(block.id);
         if (!result && !entries.slice(index + 1).some(spoken)) return { items, heldAt: entry.id };
+        // A page `render_html` published is saved in place of the call, once.
+        const page = publishedPage(result);
+        if (page) {
+          built.push({ key: "", conversationId: entry.conversationId, createdAt, kind: "page", page });
+          continue;
+        }
         const output = result ? contentText(result.content) : undefined;
         built.push({
           key: "",
