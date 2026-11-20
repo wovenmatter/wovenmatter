@@ -40,6 +40,24 @@ final class WorkspaceStore {
                 self?.applyRunStates()
             })
         }
+        followRuntimeNames()
+    }
+
+    /// Names runtimes again when this Mac's server reports its runtimes, which
+    /// it may do after the sessions were listed.
+    private func followRuntimeNames() {
+        withObservationTracking { _ = machines?.runtimes } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if var overview = workspaceOverview {
+                    for index in overview.conversations.indices {
+                        overview.conversations[index].runtimeName = runtimeName(overview.conversations[index].runtime)
+                    }
+                    if overview != workspaceOverview { workspaceOverview = overview }
+                }
+                followRuntimeNames()
+            }
+        }
     }
 
     /// Sets each listed session's activity from `runStates`. Other machines'
@@ -120,7 +138,7 @@ final class WorkspaceStore {
         return WorkspaceConversationRecord(
             id: session.id, machineID: session.machineID,
             agentID: kind.map { WorkspaceAgent.id(machineID: session.machineID, runtime: $0) }, runtimeKind: kind,
-            runtimeName: runtimeName(session.runtime),
+            runtime: session.runtime, runtimeName: runtimeName(session.runtime),
             title: session.title, unread: session.unread, lastMessagePreview: session.preview,
             lastMessageAt: session.lastActivityAt, isScheduledTask: false, folderID: session.folderID,
             isPinned: session.pinned, isArchived: session.archived, activity: Self.activity(runStates[session.id]))
