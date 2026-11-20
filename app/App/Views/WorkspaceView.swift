@@ -156,7 +156,7 @@ struct WorkspaceView: View {
         }
         .debugNavigation(openNote: selectNote, show: { destination = $0 })
         .debugRequest("trash") { showsWorkspaceTrash = true }
-        // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent.
+        // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent, `new:RUNTIME@MACHINE` there.
         .debugCommand("chat:") { selectConversation($0) }
         .debugCommand("new:", startDebugChat)
         // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
@@ -1045,7 +1045,18 @@ struct WorkspaceView: View {
         }
     }
 
+    /// `RUNTIME@MACHINE` starts one with any runtime that machine's server
+    /// offers (a dev instance's stand-in, say) through the usual start path.
     private func startDebugChat(_ runtime: String) {
+        let parts = runtime.split(separator: "@", maxSplits: 1).map(String.init)
+        if parts.count == 2 {
+            let selection = beginChatCreation(agentID: nil)
+            Task {
+                let id = try? await model.workspace.startSession(runtime: RuntimeKind(rawValue: parts[0]), on: parts[1], folderID: nil)
+                finishChatCreation(selection, conversationID: id)
+            }
+            return
+        }
         let here = model.machines.thisMachine?.id
         guard let agent = model.workspace.agents.first(where: { $0.runtimeKind.rawValue == runtime && $0.machineID == here }) else { return }
         startChat(with: agent)

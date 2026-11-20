@@ -17,6 +17,8 @@ let usage = """
     devices                          tailnet computers without a Woven server
     device-install HOST [USER]       install the Linux server there over SSH
     device-update MACHINE | remove MACHINE | rename NAME [MACHINE]
+    server MACHINE start|stop|restart  control a machine's server, as Settings does (stop confirmed)
+    server-log MACHINE               the end of a machine's server log
     create RUNTIME [TITLE] [--folder ID]
     send SESSION TEXT [--attach FILE]... [--approve OPTION]
                                      send a turn and print the stream until it ends
@@ -237,6 +239,12 @@ do {
   case "device-update":
     _ = try await client.call(UpdateServer(machineID: argument(0, "MACHINE")))
     out("updated")
+  case "server":
+    let action = ServerAction(rawValue: argument(1, "ACTION")) ?? .restart
+    _ = try await client.call(ControlServer(machineID: argument(0, "MACHINE"), action: action, confirmed: true))
+    out(action.rawValue)
+  case "server-log":
+    out(try await client.call(ServerLog(machineID: argument(0, "MACHINE"))), terminator: "")
   case "remove":
     _ = try await client.call(RemoveMachine(machineID: argument(0, "MACHINE")))
     out("removed")
