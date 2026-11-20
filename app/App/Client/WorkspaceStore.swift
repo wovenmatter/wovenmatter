@@ -81,7 +81,7 @@ final class WorkspaceStore {
                                           managedRoot: false, referencePaths: [])
                 },
                 conversations: sessions.map(Self.record),
-                notes: workspaceOverview?.notes ?? [])
+                notes: (try? await server.call(ListArtifacts()).map(Self.noteRecord)) ?? workspaceOverview?.notes ?? [])
         } catch {
             folderMutationError = error.localizedDescription
         }
@@ -143,20 +143,56 @@ final class WorkspaceStore {
 
     /// Creates a note, page, sheet or app and returns its id; nil sets `noteMutationError`.
     func createNote(folderID: String?, kind: NoteArtifactKind) async -> String? {
-        noteMutationError = ClientError.notConnected.localizedDescription
-        return nil
+        do {
+            let created = try await server(for: nil).call(CreateArtifact(kind: kind, folderID: folderID))
+            noteMutationError = nil
+            await refresh()
+            return created.artifact.id
+        } catch {
+            noteMutationError = error.localizedDescription
+            return nil
+        }
     }
 
     func mutateNote(id: String, mutation: WorkspaceNoteMutation) async throws {
-        throw ClientError.notConnected
+        let server = try server(for: nil)
+        noteActionIDs.insert(id)
+        defer { noteActionIDs.remove(id) }
+        switch mutation {
+        case .setPinned(let pinned): _ = try await server.call(UpdateArtifact(artifactID: id, pinned: pinned))
+        case .rename(let title): _ = try await server.call(UpdateArtifact(artifactID: id, title: title))
+        case .moveToFolder(let folderID):
+            _ = try await server.call(UpdateArtifact(artifactID: id, folderID: folderID, removeFromFolder: folderID == nil))
+        case .moveToTrash: _ = try await server.call(UpdateArtifact(artifactID: id, trashed: true))
+        case .restore: _ = try await server.call(UpdateArtifact(artifactID: id, trashed: false))
+        case .delete: _ = try await server.call(DeleteArtifact(artifactID: id))
+        }
+        await refresh()
     }
 
+    /// The artifact as a file: a note as Markdown, a sheet as CSV, an app as
+    /// HTML, a page as its document; `.document` is always the document.
     func exportNote(id: String, format: WorkspaceNoteExportFormat = .standard) async throws -> WorkspaceNoteExport {
-        throw ClientError.notConnected
+        let artifact = try await server(for: nil).call(ReadArtifact(artifactID: id))
+        let (data, fileExtension) = try NoteExportFile.contents(of: NoteDocument.decode(artifact.body),
+                                                                title: artifact.artifact.title, format: format)
+        let name = NoteExportFile.basename(artifact.artifact.title)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("woven-export-\(UUID().uuidString)")
+            .appendingPathExtension(fileExtension)
+        try data.write(to: url, options: .atomic)
+        return WorkspaceNoteExport(url: url, suggestedFilename: name + "." + fileExtension, fileExtension: fileExtension)
     }
 
     func trashedNotes() async throws -> [WorkspaceTrashedNote] {
-        throw ClientError.notConnected
+        try await server(for: nil).call(ListArtifacts(includeTrashed: true)).filter(\.trashed).map {
+            WorkspaceTrashedNote(id: $0.id, title: $0.title, kind: $0.kind, trashedAt: $0.updatedAt)
+        }
+    }
+
+    private static func noteRecord(_ artifact: Artifact) -> WorkspaceNoteRecord {
+        WorkspaceNoteRecord(id: artifact.id, folderID: artifact.folderID, title: artifact.title, kind: artifact.kind,
+                            isPinned: artifact.pinned, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt,
+                            preview: artifact.preview)
     }
 
     func clearNoteMutationError() { noteMutationError = nil }
@@ -256,6 +292,8 @@ enum WorkspaceNoteMutation: Sendable {
     case moveToFolder(String?)
     case moveToTrash
     case restore
+    /// Deletes it and its history for good, in every library.
+    case delete
 }
 
 enum WorkspaceNoteExportFormat: String, Sendable {

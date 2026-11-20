@@ -92,6 +92,7 @@ final class ApplicationModel {
         sessions.attach(server, workspace: workspace)
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
+        documents.attach(server, machines: machines, databases: databases)
         server.start()
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] _ in
@@ -124,6 +125,7 @@ final class ApplicationModel {
         await machines.reload()
         await workspace.refresh()
         await databases.refresh()
+        await documents.reload()
         await settings.reload()
     }
 
