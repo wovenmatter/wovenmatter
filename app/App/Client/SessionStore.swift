@@ -33,7 +33,6 @@ final class SessionStore {
     private(set) var interactions: [SessionInteraction] = []
     /// The runtime's settings, once the owner has reported them.
     private(set) var settings: SessionSettings?
-    private(set) var isLoadingSettings = false
     private(set) var isUpdatingSettings = false
     private(set) var goal: WorkspaceGoal?
     /// A macOS permission the owning Mac is missing for this session.
@@ -299,8 +298,6 @@ final class SessionStore {
             self.apply(configuration)
         }
     }
-
-    func refreshSettings() async {}
 
     func updateGoal(_ mutation: WorkspaceGoalMutation) async throws {
         guard let owner, isOwnerReachable else { throw ClientError.notConnected }

@@ -164,7 +164,7 @@ public enum Schema {
       // The server made the directory, so deleting the folder may delete it.
       .integer("managed", 0),
       // Other directories on the machine its agents may use, as a JSON array.
-      .text("references", "[]"),
+      .text("other_directories", "[]"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
     // `id` is the setting's key, so two machines setting one key write one row.

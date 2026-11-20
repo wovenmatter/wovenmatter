@@ -246,7 +246,7 @@ extension Library {
                            references: [String]? = nil) async throws -> Folder {
     var values: [String: SQLValue] = [:]
     if let references {
-      values["references"] = .text(String(decoding: try Wire.encoder.encode(Array(Set(references)).sorted()), as: UTF8.self))
+      values["other_directories"] = .text(String(decoding: try Wire.encoder.encode(Array(Set(references)).sorted()), as: UTF8.self))
     }
     if let name { values["name"] = .text(name) }
     if let pinned { values["pinned"] = .integer(pinned ? 1 : 0) }
@@ -400,7 +400,7 @@ extension Library {
     Folder(id: row.text("id") ?? "", machineID: row.text("machine_id") ?? "", name: row.text("name") ?? "",
            path: row.text("path") ?? "", pinned: row.bool("pinned"), position: Int(row.integer("position") ?? 0),
            managed: row.bool("managed"),
-           references: (try? Wire.decoder.decode([String].self, from: Data((row.text("references") ?? "[]").utf8))) ?? [],
+           references: (try? Wire.decoder.decode([String].self, from: Data((row.text("other_directories") ?? "[]").utf8))) ?? [],
            createdAt: row.date("created_at"))
   }
 
