@@ -432,6 +432,7 @@ private let botTools: [WovenTool] = [
     input: schema(["botID": text("The bot."), "text": text("The message."), "newThread": flag("Start a new thread for it.")],
                   required: ["botID", "text"]),
     forBots: false,
+    groups: [.sessions],
     run: { call in
       let tools = call.tools
       let author = try await tools.author(call.caller)
@@ -452,6 +453,7 @@ private let botTools: [WovenTool] = [
                                         "description": .string("Bot ids asked to reply.")]),
                    "everyone": flag("Ask every bot in the Forum.")], required: ["text"]),
     forBots: false,
+    groups: [.sessions],
     run: { call in
       let tools = call.tools
       let name = try await tools.author(call.caller).name.trimmingCharacters(in: .whitespacesAndNewlines)
