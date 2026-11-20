@@ -559,6 +559,13 @@ final class SessionStore {
             case .htmlPage(let page):
                 let run = currentRun(at: entry.date)
                 runs[run].completedAt = entry.date
+                // A page is a reply even before any words, so its run is drawn.
+                if runs[run].assistantMessageID == nil {
+                    let id = Self.replyID(runs[run].id)
+                    messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                                           status: .complete, createdAt: entry.date))
+                    runs[run].assistantMessageID = id
+                }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: AgentRunActivity(
