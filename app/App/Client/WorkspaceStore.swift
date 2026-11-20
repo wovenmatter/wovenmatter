@@ -159,7 +159,7 @@ final class WorkspaceStore {
         do {
             let folders = try await server.call(ListFolders())
             // Bot chats and Forum rooms show only in the bots' own surfaces.
-            let sessions = try await server.call(ListSessions(includeArchived: true)).filter { $0.runtime != .bots }
+            let sessions = try await server.call(ListSessions()).filter { $0.runtime != .bots }
             workspaceOverview = WorkspaceOverview(
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,

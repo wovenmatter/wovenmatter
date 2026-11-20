@@ -140,6 +140,12 @@ struct CloudConversation: View {
                 .task(id: [model.navigation.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
                 }
+                .debugRequest("scroll-top") {
+                    guard let first = rows.first?.id else { return }
+                    transcriptOwnsScroll = true
+                    scrollState.setNearBottom(false)
+                    scrollWithoutAnimation(proxy, to: first, anchor: .top)
+                }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1

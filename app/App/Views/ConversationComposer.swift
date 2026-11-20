@@ -520,6 +520,7 @@ struct ConversationComposer: View {
             .popover(isPresented: Binding(get: { openMenu == .tools }, set: { if !$0, openMenu == .tools { openMenu = nil } })) {
                 WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID)
             }
+            .debugRequest("tools-menu") { openMenu = .tools }
         }
     }
 
