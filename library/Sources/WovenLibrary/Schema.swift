@@ -197,6 +197,11 @@ public enum Schema {
       .text("folder_id"),
       // The document, including an app's saved state.
       .text("body", ""),
+      // One line under the title, taken from the document when it is written.
+      .text("preview", ""),
+      .integer("pinned", 0),
+      // In the Trash; deleting it for good deletes the row.
+      .integer("trashed", 0),
       .integer("created_at", 0),
       // What this version had seen: each machine's identifier and the latest
       // stamp of that machine's included in it, as a JSON object with sorted
@@ -213,6 +218,11 @@ public enum Schema {
       .text("kind", ""),
       .text("title", ""),
       .text("body", ""),
+      .text("preview", ""),
+      .integer("pinned", 0),
+      .integer("trashed", 0),
+      // Why it was saved: "conflict", "checkpoint" or "restore".
+      .text("reason", "conflict"),
       .integer("saved_at", 0),
     ], parents: [Parent(column: "artifact_id", table: "artifacts")]),
     Table("session_items", .appendOnly, [

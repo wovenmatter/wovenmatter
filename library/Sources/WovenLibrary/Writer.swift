@@ -276,8 +276,8 @@ final class Writer {
   /// Its id and stamp come from the loser, so every machine that resolves
   /// the same conflict saves the same row.
   @discardableResult
-  private func saveLoser(_ historyName: String, of table: Table, id: String, stamp: String,
-                         values: [String: SQLValue]) throws -> Bool {
+  func saveLoser(_ historyName: String, of table: Table, id: String, stamp: String,
+                 values: [String: SQLValue], reason: String = "conflict") throws -> Bool {
     let history = try synced(historyName)
     let versionID = "\(id):\(stamp)"
     guard try row(history.name, versionID) == nil, let link = history.parents.first(where: { $0.table == table.name }) else {
@@ -286,7 +286,7 @@ final class Writer {
     var columns: [String: SQLValue] = [
       "id": .text(versionID), "stamp": .text(stamp), "changed": .integer(nextChanged()), "deleted": .integer(0),
       link.column: .text(id), "version_stamp": .text(stamp),
-      "saved_at": .integer(Stamp(text: stamp)?.time ?? 0),
+      "saved_at": .integer(Stamp(text: stamp)?.time ?? 0), "reason": .text(reason),
     ]
     for column in history.columns where columns[column.name] == nil {
       columns[column.name] = values[column.name] ?? column.fallback ?? .null

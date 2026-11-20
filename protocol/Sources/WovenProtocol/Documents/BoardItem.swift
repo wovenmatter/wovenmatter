@@ -107,6 +107,18 @@ public struct BoardTaskAssignee: Codable, Equatable, Identifiable, Sendable {
     }
   }
 
+  /// The server's runtime for an agent's `runtime`.
+  public var runtimeKind: RuntimeKind? {
+    switch runtime {
+    case "default_agent": .piDurable
+    case "codex": .codex
+    case "claude_code": .claudeCode
+    case "grok_build": .grokBuild
+    case "opencode": .openCode
+    default: nil
+    }
+  }
+
   /// A conversation UUID that every host derives the same way from one assignment.
   public static func conversationID(for assigneeID: String) -> String {
     var bytes = Array(SHA256.hash(data: Data("woven-page-task\u{0}\(assigneeID)".utf8)).prefix(16))
