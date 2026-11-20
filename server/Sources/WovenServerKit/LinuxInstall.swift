@@ -150,6 +150,9 @@ struct LinuxInstall: Sendable {
     process.standardOutput = output
     process.standardError = errors
     process.standardInput = try input.map { try FileHandle(forReadingFrom: $0) } ?? FileHandle.nullDevice
+    // Not waitUntilExit: off the main thread it can miss the exit and wait forever.
+    let (exited, exit) = AsyncStream<Void>.makeStream()
+    process.terminationHandler = { _ in exit.yield(); exit.finish() }
     try process.run()
     let watchdog = Task {
       try await Task.sleep(for: timeout)
@@ -158,7 +161,7 @@ struct LinuxInstall: Sendable {
     async let out = Task.detached { output.fileHandleForReading.readDataToEndOfFile() }.value
     async let err = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }.value
     let (outData, errData) = await (out, err)
-    await Task.detached { process.waitUntilExit() }.value
+    for await _ in exited {}
     watchdog.cancel()
     return (process.terminationStatus, String(decoding: outData, as: UTF8.self), String(decoding: errData, as: UTF8.self))
   }
