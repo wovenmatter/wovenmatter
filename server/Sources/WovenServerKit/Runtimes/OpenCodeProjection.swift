@@ -219,7 +219,7 @@ struct OpenCodeProjection: Sendable {
 
 extension OpenCodeProjection {
   static let permissionOptions = [
-    PromptOption(id: "once", name: "Allow once"),
+    PromptOption(id: "once", name: "Allow once", allowsOnce: true),
     PromptOption(id: "always", name: "Always allow"),
     PromptOption(id: "reject", name: "Reject"),
   ]

@@ -240,7 +240,8 @@ public struct CreateFolder: Request {
   }
 }
 
-/// Changes a folder's name, pinned flag or position. Fields left nil stay.
+/// Changes a folder's name, pinned flag, position or other directories.
+/// Fields left nil stay.
 public struct UpdateFolder: Request {
   public static let method = "folders.update"
   public typealias Reply = Folder
@@ -248,11 +249,15 @@ public struct UpdateFolder: Request {
   public var name: String?
   public var pinned: Bool?
   public var position: Int?
-  public init(folderID: String, name: String? = nil, pinned: Bool? = nil, position: Int? = nil) {
+  /// Other directories on the folder's machine its agents may use.
+  public var references: [String]?
+  public init(folderID: String, name: String? = nil, pinned: Bool? = nil, position: Int? = nil,
+              references: [String]? = nil) {
     self.folderID = folderID
     self.name = name
     self.pinned = pinned
     self.position = position
+    self.references = references
   }
 }
 

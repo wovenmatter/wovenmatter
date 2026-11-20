@@ -144,6 +144,8 @@ public enum Schema {
       .text("thinking"),
       .text("permission"),
       .integer("archived", 0),
+      // When it was last moved to Trash.
+      .integer("archived_at", 0),
       .integer("pinned", 0),
       // The newest item the person has seen, by its `created_at`.
       .integer("read_at", 0),
@@ -161,6 +163,8 @@ public enum Schema {
       .integer("position", 0),
       // The server made the directory, so deleting the folder may delete it.
       .integer("managed", 0),
+      // Other directories on the machine its agents may use, as a JSON array.
+      .text("references", "[]"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
     // `id` is the setting's key, so two machines setting one key write one row.
@@ -365,7 +369,7 @@ public enum Schema {
   ]
 
   static let byName: [String: Table] = Dictionary(uniqueKeysWithValues: tables.map { ($0.name, $0) })
-  static let synced: [Table] = tables.filter(\.synced)
+  public static let synced: [Table] = tables.filter(\.synced)
 
   /// Brings the file up to the declaration: creates missing tables, adds
   /// missing columns and indexes. Never removes or rewrites anything.

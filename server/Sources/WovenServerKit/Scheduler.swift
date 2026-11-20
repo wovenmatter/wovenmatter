@@ -86,6 +86,14 @@ actor Scheduler {
     let now = now()
     var soonest = Self.longestSleep
     for item in own {
+      // A chat moved to Trash has its timers and wake-ups paused; restoring it leaves them paused.
+      if item.entry.kind == .timer || item.entry.kind == .wakeUp, item.entry.draft.enabled,
+         let sessionID = item.entry.draft.sessionID, (try? await library.session(sessionID))??.archived == true {
+        var draft = item.entry.draft
+        draft.enabled = false
+        _ = try? await ScheduleBook.save(item.entry.id, draft, library: library, sessions: sessions)
+        continue
+      }
       var next = item.entry.state?.nextFireAt
       if item.stateStamp != item.stamp {
         let floor = now.addingTimeInterval(-Self.grace)

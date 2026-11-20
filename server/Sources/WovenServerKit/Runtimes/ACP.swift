@@ -643,7 +643,8 @@ private actor ACPState {
   private func permissionRequest(id: JSONValue, _ params: JSONValue) {
     let options = (params["options"]?.array ?? []).compactMap { option -> PromptOption? in
       guard let optionID = option["optionId"]?.string else { return nil }
-      return PromptOption(id: optionID, name: option["name"]?.string ?? optionID)
+      return PromptOption(id: optionID, name: option["name"]?.string ?? optionID,
+                          allowsOnce: option["kind"]?.string == "allow_once")
     }
     guard !options.isEmpty else {
       Task { await connection.respond(id, result: .object(["outcome": .object(["outcome": .string("cancelled")])])) }

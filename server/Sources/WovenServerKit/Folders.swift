@@ -24,7 +24,12 @@ func registerFolders(_ router: inout Router, library: Library, root: URL) {
   router.on(UpdateFolder.self) { request, _ in
     let name = request.name?.trimmingCharacters(in: .whitespacesAndNewlines)
     if name?.isEmpty == true { throw ProtocolError(.badRequest, "A folder needs a name.") }
-    return try await library.updateFolder(request.folderID, name: name, pinned: request.pinned, position: request.position)
+    let references = request.references?.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    if let references, references.contains(where: { !$0.hasPrefix("/") }) {
+      throw ProtocolError(.badRequest, "Give each other directory as a full path.")
+    }
+    return try await library.updateFolder(request.folderID, name: name, pinned: request.pinned, position: request.position,
+                                          references: references)
   }
   router.on(DeleteFolder.self) { request, _ in
     if request.deleteDirectory {

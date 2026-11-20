@@ -373,7 +373,7 @@ private let databaseTools: [WovenTool] = [
 private let placeTools: [WovenTool] = [
   WovenTool(
     name: "list_places",
-    description: "The person's machines (id, name, online) with each one's folders (id, name, path). Use the ids with `start_session` and `create_database`.",
+    description: "The person's machines (id, name, online) with each one's folders (id, name, path, and other directories its agents may use). Use the ids with `start_session` and `create_database`.",
     input: schema([:]),
     readOnly: true,
     run: { call in
@@ -387,6 +387,7 @@ private let placeTools: [WovenTool] = [
         result.append("machine \(machine.id) | \(machine.name)\(here ? " (this machine)" : "") | \(machine.platform.rawValue) | \(online ? "online" : "offline")")
         for folder in folders where folder.machineID == machine.id {
           result.append("  folder \(folder.id) | \(folder.name) | \(folder.path)")
+          for reference in folder.references { result.append("    other directory | \(reference)") }
         }
       }
       let runtimes = await tools.sessions.allRuntimes.map(\.kind.rawValue).sorted()

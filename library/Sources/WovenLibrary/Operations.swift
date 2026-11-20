@@ -128,6 +128,7 @@ extension Library {
         changes["read_at"] = .integer(read ? newest : 0)
       }
       changes = changes.filter { row[$0.key] != $0.value }
+      if changes["archived"] == .integer(1) { changes["archived_at"] = .integer(Self.millis(Self.now())) }
       if !changes.isEmpty { try writer.put("sessions", id: id, changes) }
     }
     guard let session = try await session(id) else { throw LibraryError(.notFound, "No session \(id).") }
@@ -239,9 +240,14 @@ extension Library {
     }
   }
 
-  /// Changes a folder's name, pinned flag or position; nil leaves a field.
-  public func updateFolder(_ id: String, name: String? = nil, pinned: Bool? = nil, position: Int? = nil) async throws -> Folder {
+  /// Changes a folder's name, pinned flag, position or other directories;
+  /// nil leaves a field.
+  public func updateFolder(_ id: String, name: String? = nil, pinned: Bool? = nil, position: Int? = nil,
+                           references: [String]? = nil) async throws -> Folder {
     var values: [String: SQLValue] = [:]
+    if let references {
+      values["references"] = .text(String(decoding: try Wire.encoder.encode(Array(Set(references)).sorted()), as: UTF8.self))
+    }
     if let name { values["name"] = .text(name) }
     if let pinned { values["pinned"] = .integer(pinned ? 1 : 0) }
     if let position { values["position"] = .integer(Int64(position)) }
@@ -369,7 +375,8 @@ extension Library {
                    thinking: row.text("thinking"), permission: row.text("permission"), archived: row.bool("archived"),
                    pinned: row.bool("pinned"), goal: row.text("goal"), createdAt: row.date("created_at"),
                    lastActivityAt: row.date("last_at"), preview: row.text("preview_text").flatMap(Self.preview),
-                   unread: unread, tools: row.text("tools").flatMap(Self.toolGroups))
+                   unread: unread, tools: row.text("tools").flatMap(Self.toolGroups),
+                   archivedAt: row.bool("archived") ? row.date("archived_at") : nil)
   }
 
   private static func toolGroups(_ json: String) -> Set<ToolGroup>? {
@@ -392,7 +399,9 @@ extension Library {
   private static func folder(_ row: Row) -> Folder {
     Folder(id: row.text("id") ?? "", machineID: row.text("machine_id") ?? "", name: row.text("name") ?? "",
            path: row.text("path") ?? "", pinned: row.bool("pinned"), position: Int(row.integer("position") ?? 0),
-           managed: row.bool("managed"), createdAt: row.date("created_at"))
+           managed: row.bool("managed"),
+           references: (try? Wire.decoder.decode([String].self, from: Data((row.text("references") ?? "[]").utf8))) ?? [],
+           createdAt: row.date("created_at"))
   }
 
   private static func setting(_ row: Row) throws -> Setting {

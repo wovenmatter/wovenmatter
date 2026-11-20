@@ -341,12 +341,18 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
   router.subscription(SubscribeLibrary.self) { _, _ in
     let changes = library.changes()
     let (events, continuation) = AsyncStream<LibraryEvent>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let first = library.changed
     let forward = Task {
-      for await changed in changes { continuation.yield(LibraryEvent(changed: changed)) }
+      var last = first
+      for await changed in changes {
+        let tables = (try? await library.tablesChanged(after: last)) ?? Schema.synced.map(\.name)
+        last = changed
+        continuation.yield(LibraryEvent(changed: changed, tables: tables))
+      }
       continuation.finish()
     }
     continuation.onTermination = { _ in forward.cancel() }
-    return (LibraryEvent(changed: library.changed), events.throwing)
+    return (LibraryEvent(changed: first, tables: Schema.synced.map(\.name)), events.throwing)
   }
   router.on(SyncPull.self) { request, caller in
     // Two machines on different app releases do not sync.

@@ -5,6 +5,16 @@ extension Library {
   /// Rows of every synced table whose `changed` is above `after`, in
   /// `changed` order: what another machine asks for when it pulls. At most
   /// `limit` rows, and no more after their size reaches `byteBudget`.
+  /// The synced tables with a row whose `changed` is above `after`, read
+  /// through each table's `changed` index.
+  public func tablesChanged(after: Int64) async throws -> [String] {
+    try await read { db in
+      try Schema.synced.filter { table in
+        try !db.query("SELECT 1 FROM \(table.name) WHERE changed > ? LIMIT 1", [.integer(after)]).isEmpty
+      }.map(\.name)
+    }
+  }
+
   public func pull(after: Int64, limit: Int = 500, byteBudget: Int = 8 << 20) async throws -> SyncPage {
     let limit = max(1, limit)
     return try await read { db in

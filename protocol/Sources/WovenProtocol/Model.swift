@@ -90,6 +90,8 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
   public var thinking: String?
   public var permission: String?
   public var archived: Bool
+  /// When it was last moved to Trash.
+  public var archivedAt: Date?
   public var pinned: Bool
   /// The goal the session works against until it is met or cleared.
   public var goal: String?
@@ -107,7 +109,7 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
   public init(id: String, machineID: String, runtime: RuntimeKind, title: String, folderID: String?,
               directory: String = "", model: String? = nil, thinking: String? = nil, permission: String? = nil,
               archived: Bool, pinned: Bool = false, goal: String?, createdAt: Date, lastActivityAt: Date? = nil,
-              preview: String? = nil, unread: Bool = false, tools: Set<ToolGroup>? = nil) {
+              preview: String? = nil, unread: Bool = false, tools: Set<ToolGroup>? = nil, archivedAt: Date? = nil) {
     self.id = id
     self.machineID = machineID
     self.runtime = runtime
@@ -118,6 +120,7 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
     self.thinking = thinking
     self.permission = permission
     self.archived = archived
+    self.archivedAt = archivedAt
     self.pinned = pinned
     self.goal = goal
     self.createdAt = createdAt
@@ -370,12 +373,16 @@ public struct PromptOption: Codable, Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String
   public var detail: String?
+  /// For an approval, the option that allows this one request only.
+  public var allowsOnce: Bool
 
-  public init(id: String, name: String, detail: String? = nil) {
+  public init(id: String, name: String, detail: String? = nil, allowsOnce: Bool = false) {
     self.id = id
     self.name = name
     self.detail = detail
+    self.allowsOnce = allowsOnce
   }
+
 }
 
 /// One field of a form a runtime asks the person to fill in.
@@ -662,10 +669,12 @@ public struct Folder: Codable, Sendable, Hashable, Identifiable {
   /// The server made the directory (rather than the person linking one), so
   /// deleting the folder may delete the directory too.
   public var managed: Bool
+  /// Other directories on the machine its agents may use.
+  public var references: [String]
   public var createdAt: Date
 
   public init(id: String, machineID: String, name: String, path: String, pinned: Bool = false, position: Int = 0,
-              managed: Bool = false, createdAt: Date) {
+              managed: Bool = false, references: [String] = [], createdAt: Date) {
     self.id = id
     self.machineID = machineID
     self.name = name
@@ -673,6 +682,7 @@ public struct Folder: Codable, Sendable, Hashable, Identifiable {
     self.pinned = pinned
     self.position = position
     self.managed = managed
+    self.references = references
     self.createdAt = createdAt
   }
 }
@@ -719,8 +729,12 @@ public struct Setting: Codable, Sendable, Hashable {
 /// A change to the library this server holds: its `changed` counter moved.
 public struct LibraryEvent: Codable, Sendable, Hashable {
   public var changed: Int64
+  /// The synced tables written since the previous event; every table in the
+  /// subscription's first reply.
+  public var tables: [String]
 
-  public init(changed: Int64) {
+  public init(changed: Int64, tables: [String]) {
     self.changed = changed
+    self.tables = tables
   }
 }
