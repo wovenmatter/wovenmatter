@@ -350,7 +350,8 @@ private let artifactTools: [WovenTool] = [
       edit is an object with `action` (add, update, move, remove, setPurpose), `id` and `expectedRevision` from the \
       outline (for update, move and remove), `kind` (text, task or section, for add), `patch` (`text`, and for a \
       task `status` todo|doing|blocked|done, `outcome`, `details`), `position` (`parentID`, `afterID` or `atStart`; \
-      add appends when omitted), `removal` (promoteChildren or removeSubtree, for a section), `purpose`. \
+      add appends when omitted), `removal` (for a section: promoteChildren, or removeSubtree with the outline's \
+      `subtreeRevision` as `expectedSubtreeRevision`), `purpose`. \
       `appState` edits are `{action: set|remove, key, value, expectedVersion}`. An app's `databaseID` and `query` \
       change the database it reads as `window.wovenMatterData` (see `create_artifact`). Returns the new `basedOn`.
       """,

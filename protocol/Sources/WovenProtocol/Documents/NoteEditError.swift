@@ -29,7 +29,7 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
     case .pageTargetMissing(let id): "Page section \(id) does not exist. Read the Page and choose a current section."
     case .pageMoveIntoOwnSubtree(let id): "Page section \(id) cannot move inside itself."
     case .pageDepthExceeded(let id): "Component \(id) would nest more than \(NoteDocument.maximumPageDepth) sections deep."
-    case .pageSectionNotEmpty(let id): "Page section \(id) still has contents. Give its remove edit `removal`: promoteChildren keeps them on the Page."
+    case .pageSectionNotEmpty(let id): "Page section \(id) still has contents. Give its remove edit `removal`: promoteChildren keeps them on the Page; removeSubtree removes them too and needs the section's subtreeRevision as `expectedSubtreeRevision`."
     case .pagePositionInvalid(let id): "\(id) is not a valid place here. An afterID must be a direct child of the chosen parent."
     case .pageSubtreeConflict(let id, _): "Page section \(id) or its contents changed since they were read. Read them again before removing them."
     case .boardItemConflict(let id, let current):

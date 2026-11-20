@@ -69,7 +69,7 @@ write data through the Woven database tools.
 An app can read a database: choose the **Database** and query in its toolbar,
 and the result reaches the page as `window.wovenMatterData`. It refreshes when
 committed data changes. Notes, pages and sheets can also link to a database
-for tables or single values; ask your agent to set up the link. A broken query
-shows an error; ask the agent to fix it.
+for tables or single values with the same toolbar button. An agent can set up
+only an app's link. A broken query shows an error; ask the agent to fix it.
 
 Next: [Scheduled work and usage](schedules-and-usage.md).

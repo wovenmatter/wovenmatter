@@ -75,20 +75,23 @@ enum DocumentText {
   // MARK: Pages
 
   /// A page as an outline: each component on its own line with its kind,
-  /// id and revision, indented by depth, then its text.
+  /// id and revision (and a section's subtree revision), indented by depth,
+  /// then its text.
   static func outline(of document: NoteDocument) -> String {
     let page = document.materializedPage()
     var lines: [String] = []
     if let purpose = page.boardPurpose, !purpose.isEmpty { lines.append("Purpose: \(purpose)") }
     let blocks = Dictionary(page.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    func line(_ depth: Int, _ kind: String, _ id: String, _ text: String) {
+    func line(_ depth: Int, _ kind: String, _ id: String, _ text: String, subtree: Bool = false) {
       let indent = String(repeating: "  ", count: depth)
-      lines.append("\(indent)[\(kind) id=\(id) revision=\(page.boardItemRevision(for: id))] \(text)")
+      let revisions = "revision=\(page.boardItemRevision(for: id))"
+        + (subtree ? " subtreeRevision=\(page.pageSubtreeRevision(for: id))" : "")
+      lines.append("\(indent)[\(kind) id=\(id) \(revisions)] \(text)")
     }
     for segment in page.pageSegments {
       switch segment {
       case .section(let id, _, let depth):
-        line(depth, "section", id, blocks[id]?.plainText ?? "")
+        line(depth, "section", id, blocks[id]?.plainText ?? "", subtree: true)
       case .task(let id, _, let depth):
         let task = page.boardItems?[id]?.task
         var text = blocks[id]?.plainText ?? ""
