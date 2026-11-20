@@ -64,6 +64,7 @@ struct ConversationResponse: View {
 
 private struct ConversationResponseText: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     let content: String
     let document: ConversationMarkdownDocument?
     let isStreaming: Bool
@@ -77,6 +78,7 @@ private struct ConversationResponseText: NSViewRepresentable {
         viewport.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         let textView = viewport.textView
         textView.onOpenLink = onOpenLink
+        textView.onPressWhileGrowing = isStreaming ? transcriptInteraction : nil
         if textView.apply(content: content, document: document, isStreaming: isStreaming, colorScheme: colorScheme) {
             viewport.invalidateIntrinsicContentSize()
         }
@@ -150,6 +152,8 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     // Bounds follow the viewport; text and selection retain document coordinates.
     override var textContainerOrigin: NSPoint { .zero }
     var onOpenLink: ((URL) -> Void)?
+    /// Hands the transcript's scroll to the reader while the reply grows.
+    var onPressWhileGrowing: (@MainActor () -> Void)?
     private var appliedContent: String?
     private var appliedStreaming: Bool?
     private var appliedColorScheme: ColorScheme?
@@ -292,6 +296,13 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
             }
         }
         super.draw(dirtyRect)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // A transcript following the live edge scrolls each new chunk under
+        // the held pointer, so a selection would run on to the newest text.
+        onPressWhileGrowing?()
+        super.mouseDown(with: event)
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
