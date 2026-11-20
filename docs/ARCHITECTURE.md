@@ -249,7 +249,8 @@ machine reads its own library and so shows every machine.
   sessions is (`native_sessions`) names the session and marks it as made in
   Woven Matter.
 - **Pi Durable** writes one record per turn, and **bots** one per model turn,
-  from what the runtime reports. Nothing else counts them.
+  in their chats and in the Forum alike, from what the runtime reports. Nothing
+  else counts them.
 - Only counts leave a history: the harness, model, time, tokens by kind, the
   cost when the harness records one, and the harness's own session
   identifier. No text, path or credential is read into the library.
@@ -357,7 +358,15 @@ transfer.
 - Bot chats and Forum posts are saved to the library like every other
   transcript, so they can be read when the home machine is away. A page a bot
   shows in its own chat is saved there as an `htmlPage` item in place of its
-  call; Forum posts are text, so `render_html` is refused in the Forum.
+  call. A visual reply it publishes during a Forum turn is a post of its own in
+  the room or thread it is answering in, in order with its words: the bots'
+  database keeps a small reference beside the post, and the library one
+  `htmlPage` item. Its HTML is stored once, in the content store, and a new
+  home fetches by digest what it does not hold as the posts arrive.
+- A bot hears the Forum and each thread it is in through a seat: a
+  conversation of its own, which is not saved to the library. Only its posts
+  are. Each of a seat's model turns is recorded as usage under the room, as a
+  chat's are under the chat.
 - The bots folder on the home machine holds the bots' own database (bots,
   chats, memories, the Forum, schedules) and the model profiles. Nothing in it
   is tied to that machine. Each bot's files are a volume in that machine's
