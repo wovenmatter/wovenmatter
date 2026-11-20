@@ -51,9 +51,11 @@ the same reason. Exceptions:
 
 On a Mac the server keeps this machine's private key and its subscription
 sign-ins as generic passwords in the login Keychain, under this machine's
-identifier. Setting `WOVEN_SECRET_STORE=file` uses a private file in the data
-folder instead, as on Linux; this suits development servers, which would
-otherwise ask for Keychain access. Harness CLIs keep their own sign-ins.
+identifier. These are the app's own items, so macOS never asks to allow them
+and Permissions & Access has no Keychain row. The server turns off Keychain
+prompts for its process: a read that would need one fails with its reason
+instead of waiting. Setting `WOVEN_SECRET_STORE=file` uses a private file in
+the data folder instead, as on Linux. Harness CLIs keep their own sign-ins.
 
 The embedded browser keeps its profile in memory and saves no website
 passwords. Before starting Chromium the app turns off Keychain prompts for the

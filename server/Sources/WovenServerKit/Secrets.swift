@@ -20,8 +20,7 @@ public protocol SecretStore: Sendable {
 }
 
 /// The Keychain on a Mac and a private file on Linux. On a Mac,
-/// `WOVEN_SECRET_STORE=file` uses the private file instead (for development
-/// servers, which would otherwise ask for Keychain access).
+/// `WOVEN_SECRET_STORE=file` uses the private file instead.
 public func standardSecretStore(dataFolder: URL, machineID: String) -> any SecretStore {
     #if canImport(Security)
     if ProcessInfo.processInfo.environment["WOVEN_SECRET_STORE"] != "file" {
@@ -72,6 +71,9 @@ public struct KeychainSecretStore: SecretStore {
 
   public init(account: String) {
     self.account = account
+    // Nobody may be at this Mac. A read that would need a Keychain prompt
+    // fails with its reason instead of waiting on one. Process-wide.
+    SecKeychainSetUserInteractionAllowed(false)
   }
 
   private func query(_ name: String) -> [String: Any] {
