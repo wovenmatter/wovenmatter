@@ -48,12 +48,22 @@ run_default_agent_tests() {
   (cd default-agent && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm test)
 }
 
+# The bots runtime's tests (tsc and vitest), against its committed package
+# graph: installed again when node_modules is missing or older than the lockfile.
+run_bots_tests() {
+  (cd bots && {
+    [ -f node_modules/.package-lock.json ] && [ ! package-lock.json -nt node_modules/.package-lock.json ] \
+      || npm ci --no-audit --no-fund
+  } && npm test)
+}
+
 case "${1:---all}" in
   --ci) run_static_checks ;;
   --all)
     run_static_checks
     run_foundation_tests
     run_default_agent_tests
+    run_bots_tests
     ;;
   *)
     echo 'usage: scripts/test-changes.sh [--all|--ci]' >&2
