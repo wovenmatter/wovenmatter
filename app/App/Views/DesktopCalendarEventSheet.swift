@@ -136,7 +136,7 @@ struct DesktopCalendarEventSheet: View {
                         TextField("Interval", value: Binding(get: { draft.recurrence?.interval ?? 1 }, set: { draft.recurrence?.interval = $0 }), format: .number)
                             .modifier(CalendarInputStyle()).frame(width: 64)
                         CalendarMenuPicker(title: "Repeat unit", selection: Binding(get: { draft.recurrence?.unit ?? .week }, set: { draft.recurrence?.unit = $0 }),
-                            options: CalendarRecurrence.Unit.allCases, label: { $0.title })
+                            options: CalendarRecurrence.Unit.calendarCases, label: { $0.title })
                     }
                 }
             }
@@ -186,7 +186,6 @@ struct DesktopCalendarEventSheet: View {
                 LabeledContent("Model", value: task.configuration.model ?? "Agent default")
                 LabeledContent("Thinking level", value: task.configuration.thinking ?? "Agent default")
                 LabeledContent("Access", value: task.configuration.permission ?? "Agent default")
-                LabeledContent("Tools", value: WorkspaceToolGroup.allCases.filter { task.configuration.tools.contains($0) }.map(\.title).joined(separator: ", "))
                 LabeledContent("Work location", value: CalendarTaskFields.machineName(draft.machineID, in: model))
                 LabeledContent("Session folder", value: task.configuration.folderID.map { id in model.workspace.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder" } ?? "All Workspaces")
                 if let directory = task.configuration.workingDirectory { LabeledContent("Directory", value: directory).textSelection(.enabled) }

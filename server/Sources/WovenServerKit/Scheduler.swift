@@ -139,8 +139,12 @@ actor Scheduler {
     case .task:
       let author = ItemAuthor(botID: nil, name: draft.title, source: .scheduledTask)
       if !draft.newSessionEachRun, let sessionID = draft.sessionID, (try await library.session(sessionID)) != nil {
-        try await sessions.host(for: sessionID).send(draft.prompt, attachments: [], author: author, delivered: draft.prompt)
-        return sessionID
+        do {
+          try await sessions.host(for: sessionID).send(draft.prompt, attachments: [], author: author, delivered: draft.prompt)
+          return sessionID
+        } catch let error as ProtocolError where error.code == .nativeSessionGone {
+          // The runtime lost that chat's session: the task goes on in a new one.
+        }
       }
       guard let runtime = draft.runtime else { throw ProtocolError(.badRequest, "This task has no runtime.") }
       let session = try await sessions.create(runtime: runtime, title: draft.title, folderID: draft.folderID,

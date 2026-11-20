@@ -76,9 +76,24 @@ final class SettingsStore {
 
     func setTitleGenerationThinking(_ thinking: String) { setTitle(Key.titleThinking, .string(thinking)) }
 
-    /// The models come from this Mac's Codex account, which the server does not report yet.
+    /// The models and thinking levels Codex last reported on this Mac, which names new chats.
     func refreshTitleGenerationCapabilities() {
-        titleGenerationStatus = ClientError.notOffered("Title models").localizedDescription
+        guard let server, server.isConnected else { return titleGenerationStatus = ClientError.notConnected.localizedDescription }
+        isRefreshingTitleGenerationCapabilities = true
+        Task {
+            defer { isRefreshingTitleGenerationCapabilities = false }
+            do {
+                guard let configuration = try await server.call(GetRuntimeConfiguration(runtime: .codex)) else {
+                    titleGenerationStatus = RuntimeOptionsUnknown(runtime: .codex).localizedDescription
+                    return
+                }
+                titleGenerationCapabilities = TitleGenerationCapabilities(models: configuration.models.map(\.id),
+                                                                          thinkingLevels: configuration.thinkingLevels.map(\.id))
+                titleGenerationStatus = ""
+            } catch {
+                titleGenerationStatus = error.localizedDescription
+            }
+        }
     }
 
     private func setTitle(_ key: String, _ value: WovenProtocol.JSONValue) {

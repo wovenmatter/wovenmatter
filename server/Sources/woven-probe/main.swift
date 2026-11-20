@@ -23,6 +23,11 @@ let usage = """
     items SESSION                    print the saved items
     configure SESSION [--model M] [--thinking T] [--permission P]
     answer SESSION PROMPT ANSWER | interrupt SESSION | stop SESSION | delete SESSION
+    goal SESSION [TEXT]              set a session's goal, or without TEXT clear it
+    schedules                        the scheduler's entries, with what this machine fired of its own
+    task RUNTIME TITLE PROMPT [--in SECONDS] [--every UNIT] [--model M] [--folder ID]
+                                     schedule a task on this machine, by default in 5 seconds
+    schedule-delete ID
     artifacts                        notes, pages, sheets and apps, with their stamps
     artifact ID                      print an artifact's document
     artifact-create KIND TITLE [FILE]
@@ -291,6 +296,30 @@ do {
       .values(values)
     } else { .option(text) }
     _ = try await client.call(AnswerPrompt(sessionID: argument(0, "SESSION"), promptID: argument(1, "PROMPT"), answer: answer))
+    out("done")
+  case "goal":
+    let session = try await client.call(SetGoal(sessionID: argument(0, "SESSION"), goal: arguments.count > 1 ? arguments[1] : nil))
+    out("goal \(session.goal ?? "(none)")")
+  case "schedules":
+    for entry in try await client.call(ListSchedules()) {
+      let draft = entry.draft, state = entry.state
+      out([entry.id, entry.kind.rawValue, draft.title, draft.startsAt.formatted(.iso8601),
+           draft.recurrence.map { "every \($0.interval) \($0.unit.rawValue)" } ?? "once", draft.sessionID ?? "-",
+           "next " + (state?.nextFireAt?.formatted(.iso8601) ?? "-"), "fired " + (state?.lastFiredAt?.formatted(.iso8601) ?? "-"),
+           "run " + (state?.lastSessionID ?? "-"), state?.lastError ?? ""].joined(separator: "\t"))
+    }
+  case "task":
+    let delay = TimeInterval(options("--in").first ?? "5") ?? 5
+    let every = options("--every").first.flatMap(Recurrence.Unit.init(rawValue:))
+    let model = options("--model").first, folder = options("--folder").first
+    guard let machineID = await client.remote?.machine.id else { fail("no server hello") }
+    let entry = try await client.call(SaveSchedule(draft: ScheduleDraft(
+      machineID: machineID, kind: .task, title: argument(1, "TITLE"), prompt: argument(2, "PROMPT"),
+      runtime: RuntimeKind(rawValue: argument(0, "RUNTIME")), folderID: folder, model: model,
+      startsAt: Date().addingTimeInterval(delay), recurrence: every.map { Recurrence(unit: $0) })))
+    out("task \(entry.id) at \(entry.draft.startsAt.formatted(.iso8601))")
+  case "schedule-delete":
+    _ = try await client.call(DeleteSchedule(id: argument(0, "ID")))
     out("done")
   case "interrupt":
     _ = try await client.call(InterruptTurn(sessionID: argument(0, "SESSION")))

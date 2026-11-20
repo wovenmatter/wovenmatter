@@ -96,46 +96,17 @@ struct RunPresentation: Sendable {
 
 // MARK: - Goals
 
-enum WorkspaceGoalStatus: String, Hashable, Sendable {
-    case active, paused, blocked, complete
-    case budgetLimited
-
-    var title: String {
-        switch self {
-        case .active: "Pursuing goal"
-        case .paused: "Paused goal"
-        case .blocked: "Goal stalled"
-        case .complete: "Goal achieved"
-        case .budgetLimited: "Goal budget reached"
-        }
-    }
-}
-
-/// The goal a session works against until it is met or cleared.
+/// The goal a session works against until it is met or cleared. While it is
+/// set, the owning server continues the session after each turn.
 struct WorkspaceGoal: Identifiable, Hashable, Sendable {
     let id: String
     var objective: String
-    var status: WorkspaceGoalStatus
-    /// Time spent pursuing it before `activeSince`.
-    var activeSeconds: TimeInterval
-    var activeSince: Date?
-    var evidence: String?
-
-    func elapsedPursuitText(at now: Date) -> String {
-        let elapsed = activeSeconds + (status == .active ? activeSince.map { max(0, now.timeIntervalSince($0)) } ?? 0 : 0)
-        guard elapsed.isFinite, elapsed >= 0, elapsed < Double(Int.max) else { return "Elapsed unavailable" }
-        let seconds = Int(elapsed)
-        let duration = seconds >= 3600
-            ? String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
-            : String(format: "%d:%02d", seconds / 60, seconds % 60)
-        return "\(duration) elapsed"
-    }
 
     static func supports(_ runtime: AgentRuntimeKind?) -> Bool { runtime != nil }
 }
 
 enum WorkspaceGoalMutation: Hashable, Sendable {
-    case pause(id: String), resume(id: String), clear(id: String)
+    case clear(id: String)
 }
 
 // MARK: - Subagent history

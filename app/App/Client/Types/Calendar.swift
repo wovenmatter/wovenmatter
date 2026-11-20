@@ -2,12 +2,17 @@ import Foundation
 
 struct CalendarRecurrence: Codable, Hashable, Sendable {
     enum Unit: String, Codable, CaseIterable, Hashable, Sendable {
-        case day, week, month
+        case minute, hour, day, week, month
+
+        /// The units the calendar sheet offers; agents may also repeat by minutes or hours.
+        static let calendarCases: [Self] = [.day, .week, .month]
 
         var title: String { rawValue.capitalized + "s" }
 
         var component: Calendar.Component {
             switch self {
+            case .minute: .minute
+            case .hour: .hour
             case .day: .day
             case .week: .weekOfYear
             case .month: .month
@@ -26,6 +31,8 @@ struct CalendarRecurrence: Codable, Hashable, Sendable {
     var label: String {
         if interval == 1 {
             switch unit {
+            case .minute: return "Every minute"
+            case .hour: return "Hourly"
             case .day: return "Daily"
             case .week: return "Weekly"
             case .month: return "Monthly"
@@ -44,13 +51,9 @@ struct CalendarTaskConfiguration: Codable, Hashable, Sendable {
     var thinking: String?
     var permission: String?
     var workingDirectory: String?
-    var tools: Set<WorkspaceToolGroup>
-
-    static let defaultTools = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor && $0 != .computer })
 
     init(runtimeKind: AgentRuntimeKind, folderID: String? = nil, title: String, model: String? = nil,
-         thinking: String? = nil, permission: String? = nil, workingDirectory: String? = nil,
-         tools: Set<WorkspaceToolGroup> = Self.defaultTools) {
+         thinking: String? = nil, permission: String? = nil, workingDirectory: String? = nil) {
         self.runtimeKind = runtimeKind
         self.folderID = folderID
         self.title = title
@@ -58,7 +61,6 @@ struct CalendarTaskConfiguration: Codable, Hashable, Sendable {
         self.thinking = thinking
         self.permission = permission
         self.workingDirectory = workingDirectory
-        self.tools = tools
     }
 }
 

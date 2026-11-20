@@ -173,6 +173,7 @@ private struct SettingsConversationTitlesSection: View {
             }
         }
         .task {
+            if store.titleGenerationCapabilities == nil { store.refreshTitleGenerationCapabilities() }
             guard let thisMachineID = model.thisMachineID else { return }
             await model.machines.refreshSignIn(.codex, on: thisMachineID)
         }

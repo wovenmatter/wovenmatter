@@ -144,6 +144,13 @@ final class SessionStore {
     /// first, since the turn refers to them by digest.
     func send(_ input: AgentMessageInput) async throws {
         guard let owner, isOwnerReachable else { throw ClientError.notConnected }
+        // `/goal OBJECTIVE` sets the session's goal, which the owner works toward on every runtime.
+        let text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if input.attachments.isEmpty, text.lowercased().hasPrefix("/goal ") {
+            error = nil
+            applyGoal(try await owner.call(SetGoal(sessionID: sessionID, goal: String(text.dropFirst(6)))).goal)
+            return
+        }
         var attachments: [Attachment] = []
         for draft in input.attachments {
             guard case .file(let file) = draft else { throw ClientError.notOffered("Attaching notes and chats") }
@@ -267,7 +274,15 @@ final class SessionStore {
     func refreshSettings() async {}
 
     func updateGoal(_ mutation: WorkspaceGoalMutation) async throws {
-        throw ClientError.notOffered("Goals")
+        guard let owner, isOwnerReachable else { throw ClientError.notConnected }
+        switch mutation {
+        case .clear: applyGoal(try await owner.call(SetGoal(sessionID: sessionID, goal: nil)).goal)
+        }
+    }
+
+    private func applyGoal(_ objective: String?) {
+        let value = objective.map { WorkspaceGoal(id: sessionID, objective: $0) }
+        if value != goal { goal = value }
     }
 
     /// Moves a chat with no messages yet to another folder of its machine.
@@ -304,6 +319,7 @@ final class SessionStore {
         inProgress = snapshot.inProgress
         prompts = snapshot.prompts
         run = snapshot.run
+        applyGoal(snapshot.session.goal)
         apply(snapshot.configuration)
         project()
     }
@@ -325,6 +341,7 @@ final class SessionStore {
         case .itemFinished(let item):
             inProgress.removeAll { $0.id == item.id }
             if !items.contains(where: { $0.id == item.id }) { items.append(item) }
+            if case .notice(let notice) = item.content, notice.kind == .goalMet { applyGoal(nil) }
         case .runState(let state):
             run = state
         case .awaiting(let prompt):
@@ -359,8 +376,9 @@ final class SessionStore {
         var messages: [WorkspaceMessageRecord] = []
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
-        let entries = items.sorted { $0.sequence < $1.sequence }.map { (id: $0.id, date: $0.createdAt, content: $0.content, live: false) }
-            + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true) }
+        let entries = items.sorted { $0.sequence < $1.sequence }.map {
+            (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author)
+        } + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none) }
         let formatter = ISO8601DateFormatter()
         var goneNotice: String?
 
@@ -375,12 +393,18 @@ final class SessionStore {
         for (position, entry) in entries.enumerated() {
             switch entry.content {
             case .userMessage(let text, let attachments):
+                // A goal's turns and a timer's or wake-up's prompts are marked as such.
+                let sender: WorkspaceSessionDeliveryKind? = switch entry.author?.source {
+                case .goal: .goal
+                case .timer, .wakeUp: .timer
+                default: nil
+                }
                 messages.append(WorkspaceMessageRecord(
                     id: entry.id, conversationID: sessionID, role: .user, content: text, status: .complete, createdAt: entry.date,
                     attachments: attachments.map {
                         SessionMessageAttachment(id: $0.digest, kind: $0.mimeType.hasPrefix("image/") ? .image : .file,
                                                  fileName: $0.name, mimeType: $0.mimeType, sizeBytes: $0.size, contentHash: $0.digest)
-                    }))
+                    }, senderKind: sender, senderSessionID: sender == nil ? nil : sessionID))
                 runs.append(WorkspaceRunRecord(id: "run-\(entry.id)", conversationID: sessionID, status: .completed,
                                                userMessageID: entry.id, startedAt: entry.date, completedAt: entry.date))
             case .assistantMessage(let text):

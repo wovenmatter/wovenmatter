@@ -11,23 +11,11 @@ struct ConversationGoalControls: View {
     var body: some View {
         if let goal {
             HStack(spacing: 8) {
-                Text(goal.status.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(goal.elapsedPursuitText(at: context.date))
-                }.font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(WovenPalette.mutedForeground)
+                Text("Pursuing goal").font(.system(size: 11, weight: .medium)).lineLimit(1)
                 Spacer(minLength: 0)
                 Button(role: .destructive) { mutate(.clear(id: goal.id)) } label: {
                     Text("Delete").padding(.horizontal, 6).frame(height: 24)
                 }.disabled(busy)
-                if goal.status != .complete {
-                    Button {
-                        mutate(goal.status == .active ? .pause(id: goal.id) : .resume(id: goal.id))
-                    } label: {
-                        Text(goal.status == .active ? "Pause" : "Resume")
-                            .padding(.horizontal, 6).frame(height: 24)
-                    }.disabled(busy)
-                }
                 Button { showingDetails = true } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 12)).frame(width: 24, height: 24)
@@ -45,15 +33,11 @@ struct ConversationGoalControls: View {
                     HStack {
                         Text("Goal").font(.headline)
                         Spacer()
-                        Text(goal.status.title).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
+                        Text("Pursuing goal").font(.caption).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(goal.objective).textSelection(.enabled)
-                            if let evidence = goal.evidence, !evidence.isEmpty {
-                                Text(evidence).font(.caption).foregroundStyle(WovenPalette.mutedForeground)
-                                    .textSelection(.enabled)
-                            }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.scrollIndicators(.never).frame(minHeight: 180, maxHeight: 360)
                     HStack {

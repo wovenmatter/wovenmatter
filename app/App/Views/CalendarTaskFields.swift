@@ -64,20 +64,6 @@ struct CalendarTaskFields: View {
             optionPicker("Thinking level", selection: choice(\.thinking), choices: metadata?.selectableThinkingLevels ?? [], metadata: metadata?.thinkingOptionMetadata ?? [:])
             optionPicker("Access", selection: choice(\.permission), choices: metadata?.permissionOptions ?? [], metadata: metadata?.permissionOptionMetadata ?? [:])
             if let error { Text(error).font(.system(size: 11.5)).foregroundStyle(WovenPalette.danger).fixedSize(horizontal: false, vertical: true) }
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 9) {
-                    ForEach(WorkspaceToolGroup.configurableCases) { group in
-                        Toggle(group.title, isOn: Binding(get: { task.configuration.tools.contains(group) }, set: {
-                            if $0 { task.configuration.tools.insert(group) } else { task.configuration.tools.remove(group) }
-                        })).toggleStyle(CompactSwitchToggleStyle())
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 10)
-            } label: {
-                Text("Tools").font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(WovenPalette.mutedForeground)
-            }
             if recurring {
                 CalendarField("Send each occurrence to") {
                     CalendarMenuPicker(title: "Send each occurrence to", selection: $task.sessionMode,
