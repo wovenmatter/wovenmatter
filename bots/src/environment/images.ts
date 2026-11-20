@@ -69,9 +69,9 @@ export async function imageContext(dir = IMAGE_DIR): Promise<Buffer> {
 /** The toolchain image's context: bots/image/toolchain plus the npm tooling records it uses. */
 export async function toolchainContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT): Promise<Buffer> {
   const entries = await directoryEntries(join(dir, TOOLCHAIN_DIR));
-  // The private npm's records (npm-runtime at the source or release root) are in the content
-  // hash, so a tooling refresh rebuilds the toolchain without another copy to maintain.
-  const graph = "npm-runtime";
+  // The private npm's records (harnesses/npm-runtime) are in the content hash, so a tooling
+  // refresh rebuilds the toolchain without another copy to maintain.
+  const graph = "harnesses/npm-runtime";
   for (const [source, target] of [
     ["harnesses/prepare-npm.mjs", "harnesses/prepare-npm.mjs"],
     ["harnesses/install-adapter.mjs", "harnesses/install-adapter.mjs"],
