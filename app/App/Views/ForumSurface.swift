@@ -367,12 +367,15 @@ private struct ForumPane: View {
     /// Who has a turn running here, so it shows that bots saw a post before any has answered.
     @ViewBuilder private var thinkingRow: some View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
-            HStack(spacing: 8) {
-                Image(systemName: "brain").frame(width: 17)
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                Text(text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(WovenPalette.mutedForeground)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain").frame(width: 17)
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                    Text(text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                }
+                ConversationRunningDots()
             }
             .padding(.horizontal, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
