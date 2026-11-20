@@ -138,7 +138,7 @@ export async function openForumTest(dir: string, options: ForumTestOptions = {})
     },
   };
   const registry = new BotRegistry(db);
-  await registry.migrate();
+  await registry.createTables();
   const open = async () => {
     const store = new ForumStore(db);
     forum = await openForum({

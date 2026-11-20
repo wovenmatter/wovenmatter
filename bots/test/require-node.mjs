@@ -1,5 +1,5 @@
 // Runs before the suite on any Node. The runtime loads its TypeScript sources
-// directly and its container tests rely on Node 26; on an older Node they hang
+// directly and relies on Node 26; on an older Node its tests hang
 // until their timeouts instead of failing with a reason.
 import { readFileSync } from 'node:fs'
 

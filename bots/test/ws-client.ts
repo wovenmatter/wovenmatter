@@ -1,31 +1,58 @@
 import WebSocket from "ws";
-import type { ServerMessage, StreamEvent } from "../src/protocol.ts";
+import type { HostMethod, HostMethods, HostRequest, ServerMessage } from "../src/protocol.ts";
 
-/** Minimal test client for the Pi Bot WebSocket API. */
-export class Client {
+/** How the test server answers one host method (a throw becomes `host.error`). */
+export type HostHandlers = {
+  [M in HostMethod]?: (params: HostMethods[M]["params"]) => HostMethods[M]["data"] | Promise<HostMethods[M]["data"]>;
+};
+
+/**
+ * The server's side of the one connection, for tests: it sends requests, collects pushes, and
+ * answers the runtime's host requests from `handlers` (each one is recorded in `hostCalls`).
+ */
+export class FakeServer {
   readonly messages: ServerMessage[] = [];
+  readonly hostCalls: HostRequest[] = [];
+  handlers: HostHandlers;
   readonly #socket: WebSocket;
   readonly #waiters = new Set<() => void>();
   #next = 1;
 
-  private constructor(socket: WebSocket) {
+  private constructor(socket: WebSocket, handlers: HostHandlers) {
     this.#socket = socket;
+    this.handlers = handlers;
     socket.on("message", (data) => {
-      this.messages.push(JSON.parse(data.toString()) as ServerMessage);
+      const message = JSON.parse(data.toString()) as ServerMessage;
+      if (message.type === "host") void this.#answer(message);
+      else this.messages.push(message);
       for (const wake of this.#waiters) wake();
     });
   }
 
-  static open(url: string, headers: Record<string, string> = {}): Promise<Client> {
-    const socket = new WebSocket(url, { headers });
+  static open(socketPath: string, handlers: HostHandlers = {}): Promise<FakeServer> {
+    const socket = new WebSocket(`ws+unix://${socketPath}:/`);
     return new Promise((resolve, reject) => {
-      const client = new Client(socket);
-      socket.once("open", () => resolve(client));
+      const server = new FakeServer(socket, handlers);
+      socket.once("open", () => resolve(server));
       socket.once("error", reject);
-      socket.once("unexpected-response", (_request, response) =>
-        reject(new Error(`HTTP ${response.statusCode}`)),
-      );
     });
+  }
+
+  async #answer(request: HostRequest): Promise<void> {
+    this.hostCalls.push(request);
+    const handler = this.handlers[request.method] as ((params: unknown) => unknown) | undefined;
+    try {
+      if (!handler) throw new Error(`no handler for ${request.method}`);
+      const data = await handler(request.params);
+      this.#socket.send(JSON.stringify({ type: "host.result", id: request.id, data }));
+    } catch (error) {
+      this.#socket.send(JSON.stringify({ type: "host.error", id: request.id, message: (error as Error).message }));
+    }
+  }
+
+  /** Host requests of one method so far. */
+  calls<M extends HostMethod>(method: M): HostMethods[M]["params"][] {
+    return this.hostCalls.flatMap((call) => (call.method === method ? [call.params as HostMethods[M]["params"]] : []));
   }
 
   waitFor<T extends ServerMessage>(predicate: (message: ServerMessage) => boolean, timeout = 5000) {
@@ -46,6 +73,24 @@ export class Client {
     });
   }
 
+  /** Wait until `check` holds, looking again after every message. */
+  until(check: () => boolean, timeout = 5000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const look = () => {
+        if (!check()) return;
+        this.#waiters.delete(look);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.#waiters.delete(look);
+        reject(new Error("timed out"));
+      }, timeout);
+      this.#waiters.add(look);
+      look();
+    });
+  }
+
   async request<T>(type: string, payload: Record<string, unknown> = {}): Promise<T> {
     const id = this.#next++;
     this.#socket.send(JSON.stringify({ id, type, ...payload }));
@@ -56,13 +101,11 @@ export class Client {
     return (reply as Extract<ServerMessage, { type: "result" }>).data as T;
   }
 
-  events(conversationId: number): StreamEvent[] {
-    return this.messages.flatMap((message) =>
-      message.type === "event" && message.conversationId === conversationId ? [message.event] : [],
-    );
-  }
-
-  close() {
-    this.#socket.close();
+  close(): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.#socket.readyState === WebSocket.CLOSED) return resolve();
+      this.#socket.once("close", () => resolve());
+      this.#socket.close();
+    });
   }
 }

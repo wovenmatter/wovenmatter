@@ -1,0 +1,1799 @@
+{
+  "BotSummary": {
+    "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "name": "Ada",
+    "createdAt": "2026-11-19T09:30:00.000Z",
+    "kind": "bot",
+    "manager": false,
+    "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+    "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+    "orchestrator": false,
+    "profileId": "default",
+    "profileName": "Default",
+    "defaultProfile": true,
+    "modelStatus": {
+      "kind": "fallback",
+      "at": 1795080600000,
+      "primary": "openai-codex/gpt-6-sol",
+      "active": "anthropic/claude-opus-5",
+      "limits": [
+        {
+          "model": "openai-codex/gpt-6-sol",
+          "account": "ChatGPT account",
+          "kind": "five_hour",
+          "resetsAt": 1795084200000,
+          "retryAt": 1795084200000
+        }
+      ]
+    }
+  },
+  "DeletedBotSummary": {
+    "id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+    "name": "Max",
+    "createdAt": "2026-11-19T09:30:00.000Z",
+    "kind": "bot",
+    "manager": false,
+    "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+    "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+    "orchestrator": false,
+    "profileId": "default",
+    "profileName": "Default",
+    "defaultProfile": true,
+    "modelStatus": {
+      "kind": "fallback",
+      "at": 1795080600000,
+      "primary": "openai-codex/gpt-6-sol",
+      "active": "anthropic/claude-opus-5",
+      "limits": [
+        {
+          "model": "openai-codex/gpt-6-sol",
+          "account": "ChatGPT account",
+          "kind": "five_hour",
+          "resetsAt": 1795084200000,
+          "retryAt": 1795084200000
+        }
+      ]
+    },
+    "deletedAt": "2026-11-19T09:30:00.000Z"
+  },
+  "ThreadSummary": {
+    "pinned": true,
+    "conversationId": 4,
+    "parentConversationId": 1,
+    "forkedAt": 12,
+    "title": "Build failures",
+    "createdAt": "2026-11-19T09:30:00.000Z"
+  },
+  "DisplayEntry": {
+    "id": 13,
+    "conversationId": 4,
+    "role": "assistant",
+    "text": "Partial answer",
+    "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
+    "issue": "limit",
+    "stopped": true
+  },
+  "ConversationSnapshot": {
+    "subscriptionId": "s-1",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "mainConversationId": 1,
+    "threadOrigin": {
+      "id": 12,
+      "conversationId": 1,
+      "role": "user",
+      "text": "Why does the build fail?"
+    },
+    "entries": [
+      {
+        "id": 12,
+        "conversationId": 1,
+        "role": "user",
+        "text": "Why does the build fail?"
+      },
+      {
+        "id": 13,
+        "conversationId": 4,
+        "role": "assistant",
+        "text": "Partial answer",
+        "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
+        "issue": "limit",
+        "stopped": true
+      }
+    ],
+    "running": true,
+    "streaming": "Looking at the log"
+  },
+  "ForumState": {
+    "mainRoomId": 1,
+    "paused": false,
+    "latestPostId": 7,
+    "bots": [
+      {
+        "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "active": true
+      },
+      {
+        "botId": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+        "active": false
+      }
+    ],
+    "threads": [
+      {
+        "roomId": 3,
+        "parentPostId": 7,
+        "title": "The build",
+        "preview": "The build is fixed.",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "pinned": true,
+        "replies": 2,
+        "botIds": [
+          "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+        ]
+      }
+    ]
+  },
+  "ForumRoomSnapshot": {
+    "subscriptionId": 2,
+    "roomId": 3,
+    "mainRoomId": 1,
+    "parent": {
+      "id": 7,
+      "roomId": 1,
+      "author": "bot",
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "text": "The build is fixed.",
+      "mentions": [
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ],
+      "scheduled": true,
+      "auto": true,
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "thread": {
+        "roomId": 3,
+        "replies": 2
+      },
+      "unanswered": [
+        {
+          "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "name": "Max",
+          "reason": "No model selected yet.",
+          "issue": "signIn"
+        }
+      ]
+    },
+    "posts": [
+      {
+        "id": 8,
+        "roomId": 3,
+        "author": "user",
+        "name": "",
+        "text": "Thanks",
+        "createdAt": "2026-11-19T09:30:00.000Z"
+      }
+    ],
+    "hasEarlier": false,
+    "thinking": [
+      "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    ]
+  },
+  "ForumPost": {
+    "id": 7,
+    "roomId": 1,
+    "author": "bot",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "name": "Ada",
+    "text": "The build is fixed.",
+    "mentions": [
+      "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+    ],
+    "scheduled": true,
+    "auto": true,
+    "createdAt": "2026-11-19T09:30:00.000Z",
+    "thread": {
+      "roomId": 3,
+      "replies": 2
+    },
+    "unanswered": [
+      {
+        "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "name": "Max",
+        "reason": "No model selected yet.",
+        "issue": "signIn"
+      }
+    ]
+  },
+  "ForumThreadSummary": {
+    "roomId": 3,
+    "parentPostId": 7,
+    "title": "The build",
+    "preview": "The build is fixed.",
+    "createdAt": "2026-11-19T09:30:00.000Z",
+    "pinned": true,
+    "replies": 2,
+    "botIds": [
+      "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+    ]
+  },
+  "ForumScheduleSummary": {
+    "id": "standup",
+    "text": "Standup: what are you working on?",
+    "mentions": [
+      "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    ],
+    "everyone": true,
+    "repeat": "weekly",
+    "time": "09:00",
+    "weekday": 1,
+    "at": 1795080600000,
+    "timeZone": "Europe/Berlin",
+    "nextAt": 1795167000000
+  },
+  "ProfilesList": {
+    "defaultId": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "name": "Default",
+        "main": "openai-codex/gpt-6-sol",
+        "fallbacks": [
+          "anthropic/claude-opus-5"
+        ],
+        "memoryModel": "openai/gpt-6-mini",
+        "guidance": "Prefer the cheaper model for research.",
+        "pool": [
+          {
+            "model": "openrouter/qwen-4",
+            "useFor": "bulk summaries"
+          }
+        ],
+        "default": true
+      }
+    ]
+  },
+  "OnboardingStatus": {
+    "adminId": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+    "profileId": "default",
+    "mainModel": "openai-codex/gpt-6-sol",
+    "mainModelAvailable": true,
+    "signedIn": true,
+    "needed": false
+  },
+  "EnvironmentSummary": {
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "state": "running",
+    "busy": "a turn is running",
+    "lastActivity": 1795080600000,
+    "services": [
+      {
+        "name": "dev-server",
+        "command": "npm run dev",
+        "cwd": "/workspace/app",
+        "running": true,
+        "pid": 412,
+        "since": "2026-11-19T09:30:00.000Z",
+        "restarts": 1,
+        "lastExit": {
+          "code": 1,
+          "signal": null,
+          "at": "2026-11-19T09:30:00.000Z"
+        }
+      }
+    ]
+  },
+  "ModelCatalog": {
+    "providers": [
+      {
+        "id": "openai-codex",
+        "name": "OpenAI (ChatGPT)",
+        "access": {
+          "kind": "subscription",
+          "label": "ChatGPT subscription"
+        },
+        "models": [
+          {
+            "id": "gpt-6-sol",
+            "name": "GPT-6 Sol",
+            "reasoning": true,
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "input": [
+              "text",
+              "image"
+            ],
+            "unsupportedReasoning": [
+              "minimal"
+            ],
+            "pricing": {
+              "status": "listed",
+              "rates": {
+                "input": 1.25,
+                "output": 10,
+                "cacheRead": 0.125,
+                "cacheWrite": 0
+              },
+              "tiers": [
+                {
+                  "input": 2.5,
+                  "output": 20,
+                  "cacheRead": 0.25,
+                  "cacheWrite": 0,
+                  "inputTokensAbove": 272000
+                }
+              ],
+              "source": "pi-ai catalog"
+            },
+            "limit": {
+              "kind": "five_hour",
+              "label": "5-hour limit",
+              "account": "ChatGPT account",
+              "resetsAt": 1795080600000
+            }
+          },
+          {
+            "id": "gpt-6-mini",
+            "name": "GPT-6 Mini",
+            "reasoning": false,
+            "contextWindow": 200000,
+            "pricing": {
+              "status": "zero",
+              "source": "pi-ai catalog"
+            }
+          },
+          {
+            "id": "codex-x",
+            "name": "Codex X",
+            "reasoning": true,
+            "contextWindow": 200000,
+            "pricing": {
+              "status": "unknown"
+            }
+          }
+        ]
+      }
+    ],
+    "roles": {
+      "titles": "openai/gpt-6-mini",
+      "titlesReasoning": "high"
+    },
+    "reasoningLevels": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "AccountsSummary": {
+    "accounts": [
+      {
+        "id": "openai-codex",
+        "label": "OpenAI · ChatGPT subscription",
+        "group": "OpenAI",
+        "method": "oauth",
+        "configured": true
+      }
+    ],
+    "search": {
+      "provider": "exa",
+      "providers": [
+        {
+          "id": "exa",
+          "label": "Exa",
+          "group": "Search",
+          "method": "api_key",
+          "configured": false
+        }
+      ]
+    }
+  },
+  "RuntimeStatus": {
+    "environment": "mac-vm",
+    "bots": 3,
+    "image": {
+      "tag": "wovenmatter-bots:0123456789abcdef",
+      "base": "ubuntu:26.04",
+      "node": "26.13.1",
+      "playwright": "1.65.1",
+      "staleBots": 1,
+      "outdatedBots": 2
+    }
+  },
+  "SidebarGroup": {
+    "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+    "name": "Research",
+    "position": 0
+  },
+  "message.event.run": {
+    "type": "event",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "event": {
+      "kind": "run",
+      "state": "start"
+    }
+  },
+  "message.event.assistant_start": {
+    "type": "event",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "event": {
+      "kind": "assistant_start",
+      "text": "Looking"
+    }
+  },
+  "message.event.delta": {
+    "type": "event",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "event": {
+      "kind": "delta",
+      "text": " at the log"
+    }
+  },
+  "message.event.entry": {
+    "type": "event",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "event": {
+      "kind": "entry",
+      "entry": {
+        "id": 13,
+        "conversationId": 4,
+        "role": "assistant",
+        "text": "Partial answer",
+        "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
+        "issue": "limit",
+        "stopped": true
+      }
+    }
+  },
+  "message.event.error": {
+    "type": "event",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "event": {
+      "kind": "error",
+      "message": "retrying: overloaded"
+    }
+  },
+  "message.bots.changed": {
+    "type": "bots.changed"
+  },
+  "message.groups.changed": {
+    "type": "groups.changed"
+  },
+  "message.threads.changed": {
+    "type": "threads.changed",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+  },
+  "message.memory.changed": {
+    "type": "memory.changed",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+  },
+  "message.forum.post": {
+    "type": "forum.post",
+    "post": {
+      "id": 7,
+      "roomId": 1,
+      "author": "bot",
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "text": "The build is fixed.",
+      "mentions": [
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ],
+      "scheduled": true,
+      "auto": true,
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "thread": {
+        "roomId": 3,
+        "replies": 2
+      },
+      "unanswered": [
+        {
+          "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "name": "Max",
+          "reason": "No model selected yet.",
+          "issue": "signIn"
+        }
+      ]
+    }
+  },
+  "message.forum.thinking": {
+    "type": "forum.thinking",
+    "roomId": 1,
+    "botIds": [
+      "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    ]
+  },
+  "message.forum.changed": {
+    "type": "forum.changed"
+  },
+  "message.user.changed": {
+    "type": "user.changed"
+  },
+  "message.bots.environment.changed": {
+    "type": "bots.environment.changed",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "state": "stopped"
+  },
+  "message.runtime.update": {
+    "type": "runtime.update",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "phase": "rolledBack",
+    "error": "health check failed"
+  },
+  "reply.groups.list": {
+    "groups": [
+      {
+        "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "name": "Research",
+        "position": 0
+      }
+    ]
+  },
+  "reply.groups.create": {
+    "group": {
+      "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "name": "Research",
+      "position": 0
+    }
+  },
+  "reply.groups.rename": {
+    "group": {
+      "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "name": "Research",
+      "position": 0
+    }
+  },
+  "reply.groups.delete": {
+    "deleted": true
+  },
+  "reply.groups.reorder": {
+    "groups": [
+      {
+        "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "name": "Research",
+        "position": 0
+      }
+    ]
+  },
+  "reply.bots.setGroup": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.list": {
+    "bots": [
+      {
+        "id": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+        "name": "Admin Bot",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "kind": "admin",
+        "manager": false,
+        "orchestrator": false,
+        "profileId": "default",
+        "profileName": "Default",
+        "defaultProfile": true
+      },
+      {
+        "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "name": "Ada",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "kind": "bot",
+        "manager": false,
+        "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "orchestrator": false,
+        "profileId": "default",
+        "profileName": "Default",
+        "defaultProfile": true,
+        "modelStatus": {
+          "kind": "fallback",
+          "at": 1795080600000,
+          "primary": "openai-codex/gpt-6-sol",
+          "active": "anthropic/claude-opus-5",
+          "limits": [
+            {
+              "model": "openai-codex/gpt-6-sol",
+              "account": "ChatGPT account",
+              "kind": "five_hour",
+              "resetsAt": 1795084200000,
+              "retryAt": 1795084200000
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "reply.bots.create": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.delete": {
+    "deleted": true
+  },
+  "reply.bots.listDeleted": {
+    "bots": [
+      {
+        "id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "name": "Max",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "kind": "bot",
+        "manager": false,
+        "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+        "orchestrator": false,
+        "profileId": "default",
+        "profileName": "Default",
+        "defaultProfile": true,
+        "modelStatus": {
+          "kind": "fallback",
+          "at": 1795080600000,
+          "primary": "openai-codex/gpt-6-sol",
+          "active": "anthropic/claude-opus-5",
+          "limits": [
+            {
+              "model": "openai-codex/gpt-6-sol",
+              "account": "ChatGPT account",
+              "kind": "five_hour",
+              "resetsAt": 1795084200000,
+              "retryAt": 1795084200000
+            }
+          ]
+        },
+        "deletedAt": "2026-11-19T09:30:00.000Z"
+      }
+    ]
+  },
+  "reply.bots.restore": {
+    "restored": true,
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.purge": {
+    "purged": true,
+    "tables": 9,
+    "environment": {
+      "removed": false,
+      "error": "the engine is unavailable"
+    }
+  },
+  "reply.bots.rename": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.setManager": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.setTeam": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.replaceManager": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.bots.setOrchestrator": {
+    "bot": null
+  },
+  "reply.onboarding.status": {
+    "adminId": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+    "profileId": "default",
+    "mainModel": "openai-codex/gpt-6-sol",
+    "mainModelAvailable": true,
+    "signedIn": true,
+    "needed": false
+  },
+  "reply.onboarding.setMainModel": {
+    "profile": {
+      "id": "default",
+      "name": "Default",
+      "main": "openai-codex/gpt-6-sol",
+      "fallbacks": [
+        "anthropic/claude-opus-5"
+      ],
+      "memoryModel": "openai/gpt-6-mini",
+      "guidance": "Prefer the cheaper model for research.",
+      "pool": [
+        {
+          "model": "openrouter/qwen-4",
+          "useFor": "bulk summaries"
+        }
+      ],
+      "default": true
+    }
+  },
+  "reply.profiles.list": {
+    "defaultId": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "name": "Default",
+        "main": "openai-codex/gpt-6-sol",
+        "fallbacks": [
+          "anthropic/claude-opus-5"
+        ],
+        "memoryModel": "openai/gpt-6-mini",
+        "guidance": "Prefer the cheaper model for research.",
+        "pool": [
+          {
+            "model": "openrouter/qwen-4",
+            "useFor": "bulk summaries"
+          }
+        ],
+        "default": true
+      }
+    ]
+  },
+  "reply.profiles.save": {
+    "defaultId": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "name": "Default",
+        "main": "openai-codex/gpt-6-sol",
+        "fallbacks": [
+          "anthropic/claude-opus-5"
+        ],
+        "memoryModel": "openai/gpt-6-mini",
+        "guidance": "Prefer the cheaper model for research.",
+        "pool": [
+          {
+            "model": "openrouter/qwen-4",
+            "useFor": "bulk summaries"
+          }
+        ],
+        "default": true
+      }
+    ]
+  },
+  "reply.profiles.delete": {
+    "defaultId": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "name": "Default",
+        "main": "openai-codex/gpt-6-sol",
+        "fallbacks": [
+          "anthropic/claude-opus-5"
+        ],
+        "memoryModel": "openai/gpt-6-mini",
+        "guidance": "Prefer the cheaper model for research.",
+        "pool": [
+          {
+            "model": "openrouter/qwen-4",
+            "useFor": "bulk summaries"
+          }
+        ],
+        "default": true
+      }
+    ]
+  },
+  "reply.profiles.setDefault": {
+    "defaultId": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "name": "Default",
+        "main": "openai-codex/gpt-6-sol",
+        "fallbacks": [
+          "anthropic/claude-opus-5"
+        ],
+        "memoryModel": "openai/gpt-6-mini",
+        "guidance": "Prefer the cheaper model for research.",
+        "pool": [
+          {
+            "model": "openrouter/qwen-4",
+            "useFor": "bulk summaries"
+          }
+        ],
+        "default": true
+      }
+    ]
+  },
+  "reply.bots.setProfile": {
+    "bot": {
+      "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "kind": "bot",
+      "manager": false,
+      "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "groupId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+      "orchestrator": false,
+      "profileId": "default",
+      "profileName": "Default",
+      "defaultProfile": true,
+      "modelStatus": {
+        "kind": "fallback",
+        "at": 1795080600000,
+        "primary": "openai-codex/gpt-6-sol",
+        "active": "anthropic/claude-opus-5",
+        "limits": [
+          {
+            "model": "openai-codex/gpt-6-sol",
+            "account": "ChatGPT account",
+            "kind": "five_hour",
+            "resetsAt": 1795084200000,
+            "retryAt": 1795084200000
+          }
+        ]
+      }
+    }
+  },
+  "reply.memory.list": {
+    "facts": [
+      "Prefers short answers."
+    ]
+  },
+  "reply.memory.add": {
+    "facts": [
+      "Prefers short answers."
+    ]
+  },
+  "reply.memory.update": {
+    "facts": [
+      "Prefers short answers."
+    ]
+  },
+  "reply.memory.delete": {
+    "facts": []
+  },
+  "reply.account.notes": {
+    "notes": "ChatGPT Pro; keep API spend under $20 a month.",
+    "updatedAt": "2026-11-19T09:30:00.000Z"
+  },
+  "reply.account.setNotes": {
+    "saved": true
+  },
+  "reply.conversation.open": {
+    "subscriptionId": "s-1",
+    "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+    "conversationId": 4,
+    "mainConversationId": 1,
+    "threadOrigin": {
+      "id": 12,
+      "conversationId": 1,
+      "role": "user",
+      "text": "Why does the build fail?"
+    },
+    "entries": [
+      {
+        "id": 12,
+        "conversationId": 1,
+        "role": "user",
+        "text": "Why does the build fail?"
+      },
+      {
+        "id": 13,
+        "conversationId": 4,
+        "role": "assistant",
+        "text": "Partial answer",
+        "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
+        "issue": "limit",
+        "stopped": true
+      }
+    ],
+    "running": true,
+    "streaming": "Looking at the log"
+  },
+  "reply.conversation.close": {
+    "closed": true
+  },
+  "reply.conversation.abort": {
+    "conversationId": 1,
+    "stopped": true
+  },
+  "reply.message.send": {
+    "conversationId": 4,
+    "submissionId": 31
+  },
+  "reply.thread.fork": {
+    "thread": {
+      "pinned": true,
+      "conversationId": 4,
+      "parentConversationId": 1,
+      "forkedAt": 12,
+      "title": "Build failures",
+      "createdAt": "2026-11-19T09:30:00.000Z"
+    }
+  },
+  "reply.thread.setPinned": {
+    "thread": {
+      "pinned": true,
+      "conversationId": 4,
+      "parentConversationId": 1,
+      "forkedAt": 12,
+      "title": "Build failures",
+      "createdAt": "2026-11-19T09:30:00.000Z"
+    }
+  },
+  "reply.threads.list": {
+    "threads": [
+      {
+        "pinned": true,
+        "conversationId": 4,
+        "parentConversationId": 1,
+        "forkedAt": 12,
+        "title": "Build failures",
+        "createdAt": "2026-11-19T09:30:00.000Z"
+      }
+    ]
+  },
+  "reply.settings.accounts": {
+    "accounts": [
+      {
+        "id": "openai-codex",
+        "label": "OpenAI · ChatGPT subscription",
+        "group": "OpenAI",
+        "method": "oauth",
+        "configured": true
+      }
+    ],
+    "search": {
+      "provider": "exa",
+      "providers": [
+        {
+          "id": "exa",
+          "label": "Exa",
+          "group": "Search",
+          "method": "api_key",
+          "configured": false
+        }
+      ]
+    }
+  },
+  "reply.models.catalog": {
+    "providers": [
+      {
+        "id": "openai-codex",
+        "name": "OpenAI (ChatGPT)",
+        "access": {
+          "kind": "subscription",
+          "label": "ChatGPT subscription"
+        },
+        "models": [
+          {
+            "id": "gpt-6-sol",
+            "name": "GPT-6 Sol",
+            "reasoning": true,
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "input": [
+              "text",
+              "image"
+            ],
+            "unsupportedReasoning": [
+              "minimal"
+            ],
+            "pricing": {
+              "status": "listed",
+              "rates": {
+                "input": 1.25,
+                "output": 10,
+                "cacheRead": 0.125,
+                "cacheWrite": 0
+              },
+              "tiers": [
+                {
+                  "input": 2.5,
+                  "output": 20,
+                  "cacheRead": 0.25,
+                  "cacheWrite": 0,
+                  "inputTokensAbove": 272000
+                }
+              ],
+              "source": "pi-ai catalog"
+            },
+            "limit": {
+              "kind": "five_hour",
+              "label": "5-hour limit",
+              "account": "ChatGPT account",
+              "resetsAt": 1795080600000
+            }
+          },
+          {
+            "id": "gpt-6-mini",
+            "name": "GPT-6 Mini",
+            "reasoning": false,
+            "contextWindow": 200000,
+            "pricing": {
+              "status": "zero",
+              "source": "pi-ai catalog"
+            }
+          },
+          {
+            "id": "codex-x",
+            "name": "Codex X",
+            "reasoning": true,
+            "contextWindow": 200000,
+            "pricing": {
+              "status": "unknown"
+            }
+          }
+        ]
+      }
+    ],
+    "roles": {
+      "titles": "openai/gpt-6-mini",
+      "titlesReasoning": "high"
+    },
+    "reasoningLevels": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "reply.models.setRoles": {
+    "roles": {
+      "titles": "openai/gpt-6-mini",
+      "titlesReasoning": "high"
+    },
+    "restartRequired": false
+  },
+  "reply.bots.environment": {
+    "environment": {
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "state": "running",
+      "busy": "a turn is running",
+      "lastActivity": 1795080600000,
+      "services": [
+        {
+          "name": "dev-server",
+          "command": "npm run dev",
+          "cwd": "/workspace/app",
+          "running": true,
+          "pid": 412,
+          "since": "2026-11-19T09:30:00.000Z",
+          "restarts": 1,
+          "lastExit": {
+            "code": 1,
+            "signal": null,
+            "at": "2026-11-19T09:30:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  "reply.bots.rebuild": {
+    "rebuilt": true
+  },
+  "reply.bots.stop": {
+    "stopped": true
+  },
+  "reply.runtime.update": {
+    "started": true
+  },
+  "reply.runtime.status": {
+    "environment": "mac-vm",
+    "bots": 3,
+    "image": {
+      "tag": "wovenmatter-bots:0123456789abcdef",
+      "base": "ubuntu:26.04",
+      "node": "26.13.1",
+      "playwright": "1.65.1",
+      "staleBots": 1,
+      "outdatedBots": 2
+    }
+  },
+  "reply.forum.get": {
+    "mainRoomId": 1,
+    "paused": false,
+    "latestPostId": 7,
+    "bots": [
+      {
+        "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "active": true
+      },
+      {
+        "botId": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+        "active": false
+      }
+    ],
+    "threads": [
+      {
+        "roomId": 3,
+        "parentPostId": 7,
+        "title": "The build",
+        "preview": "The build is fixed.",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "pinned": true,
+        "replies": 2,
+        "botIds": [
+          "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+        ]
+      }
+    ]
+  },
+  "reply.forum.open": {
+    "subscriptionId": 2,
+    "roomId": 3,
+    "mainRoomId": 1,
+    "parent": {
+      "id": 7,
+      "roomId": 1,
+      "author": "bot",
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "text": "The build is fixed.",
+      "mentions": [
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ],
+      "scheduled": true,
+      "auto": true,
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "thread": {
+        "roomId": 3,
+        "replies": 2
+      },
+      "unanswered": [
+        {
+          "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "name": "Max",
+          "reason": "No model selected yet.",
+          "issue": "signIn"
+        }
+      ]
+    },
+    "posts": [
+      {
+        "id": 8,
+        "roomId": 3,
+        "author": "user",
+        "name": "",
+        "text": "Thanks",
+        "createdAt": "2026-11-19T09:30:00.000Z"
+      }
+    ],
+    "hasEarlier": false,
+    "thinking": [
+      "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    ]
+  },
+  "reply.forum.close": {
+    "closed": true
+  },
+  "reply.forum.posts": {
+    "posts": [
+      {
+        "id": 7,
+        "roomId": 1,
+        "author": "bot",
+        "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "name": "Ada",
+        "text": "The build is fixed.",
+        "mentions": [
+          "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+        ],
+        "scheduled": true,
+        "auto": true,
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "thread": {
+          "roomId": 3,
+          "replies": 2
+        },
+        "unanswered": [
+          {
+            "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "name": "Max",
+            "reason": "No model selected yet.",
+            "issue": "signIn"
+          }
+        ]
+      }
+    ],
+    "hasEarlier": true
+  },
+  "reply.forum.post": {
+    "post": {
+      "id": 7,
+      "roomId": 1,
+      "author": "bot",
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Ada",
+      "text": "The build is fixed.",
+      "mentions": [
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ],
+      "scheduled": true,
+      "auto": true,
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "thread": {
+        "roomId": 3,
+        "replies": 2
+      },
+      "unanswered": [
+        {
+          "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "name": "Max",
+          "reason": "No model selected yet.",
+          "issue": "signIn"
+        }
+      ]
+    }
+  },
+  "reply.forum.thread.create": {
+    "thread": {
+      "roomId": 3,
+      "parentPostId": 7,
+      "title": "The build",
+      "preview": "The build is fixed.",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "pinned": true,
+      "replies": 2,
+      "botIds": [
+        "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ]
+    }
+  },
+  "reply.forum.thread.setPinned": {
+    "thread": {
+      "roomId": 3,
+      "parentPostId": 7,
+      "title": "The build",
+      "preview": "The build is fixed.",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "pinned": true,
+      "replies": 2,
+      "botIds": [
+        "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ]
+    }
+  },
+  "reply.forum.setPaused": {
+    "mainRoomId": 1,
+    "paused": false,
+    "latestPostId": 7,
+    "bots": [
+      {
+        "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "active": true
+      },
+      {
+        "botId": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+        "active": false
+      }
+    ],
+    "threads": [
+      {
+        "roomId": 3,
+        "parentPostId": 7,
+        "title": "The build",
+        "preview": "The build is fixed.",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "pinned": true,
+        "replies": 2,
+        "botIds": [
+          "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+        ]
+      }
+    ]
+  },
+  "reply.forum.setBotActive": {
+    "mainRoomId": 1,
+    "paused": false,
+    "latestPostId": 7,
+    "bots": [
+      {
+        "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "active": true
+      },
+      {
+        "botId": "0b9e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4",
+        "active": false
+      }
+    ],
+    "threads": [
+      {
+        "roomId": 3,
+        "parentPostId": 7,
+        "title": "The build",
+        "preview": "The build is fixed.",
+        "createdAt": "2026-11-19T09:30:00.000Z",
+        "pinned": true,
+        "replies": 2,
+        "botIds": [
+          "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+        ]
+      }
+    ]
+  },
+  "reply.forum.schedules.list": {
+    "schedules": [
+      {
+        "id": "standup",
+        "text": "Standup: what are you working on?",
+        "mentions": [
+          "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+        ],
+        "everyone": true,
+        "repeat": "weekly",
+        "time": "09:00",
+        "weekday": 1,
+        "at": 1795080600000,
+        "timeZone": "Europe/Berlin",
+        "nextAt": 1795167000000
+      }
+    ]
+  },
+  "reply.forum.schedules.save": {
+    "schedules": [
+      {
+        "id": "standup",
+        "text": "Standup: what are you working on?",
+        "mentions": [
+          "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+        ],
+        "everyone": true,
+        "repeat": "weekly",
+        "time": "09:00",
+        "weekday": 1,
+        "at": 1795080600000,
+        "timeZone": "Europe/Berlin",
+        "nextAt": 1795167000000
+      }
+    ]
+  },
+  "reply.forum.schedules.delete": {
+    "schedules": []
+  },
+  "reply.user.get": {
+    "name": "Sam"
+  },
+  "reply.user.setName": {
+    "name": "Sam"
+  },
+  "reply.message.send.duplicate": {
+    "duplicate": true
+  },
+  "reply.forum.post.duplicate": {
+    "duplicate": true
+  },
+  "host.credentials": {
+    "type": "host",
+    "id": "h-credentials",
+    "method": "credentials",
+    "params": {
+      "provider": "web-search"
+    }
+  },
+  "host.credentials.result": {
+    "type": "host.result",
+    "id": "h-credentials",
+    "data": {
+      "credential": {
+        "type": "apiKey",
+        "key": "exa-key"
+      },
+      "searchProvider": "exa"
+    }
+  },
+  "host.credentials.update": {
+    "type": "host",
+    "id": "h-credentials.update",
+    "method": "credentials.update",
+    "params": {
+      "provider": "openai-codex",
+      "credential": {
+        "type": "oauth",
+        "access": "access",
+        "refresh": "refresh",
+        "expires": 1795080600000,
+        "accountId": "acct"
+      }
+    }
+  },
+  "host.credentials.update.result": {
+    "type": "host.result",
+    "id": "h-credentials.update",
+    "data": {}
+  },
+  "host.git.setup": {
+    "type": "host",
+    "id": "h-git.setup",
+    "method": "git.setup",
+    "params": {
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    }
+  },
+  "host.git.setup.result": {
+    "type": "host.result",
+    "id": "h-git.setup",
+    "data": {
+      "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ada",
+      "identity": {
+        "name": "Sam",
+        "email": "sam@example.com"
+      }
+    }
+  },
+  "host.git.agent": {
+    "type": "host",
+    "id": "h-git.agent",
+    "method": "git.agent",
+    "params": {
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+      "message": "AAAAAQs="
+    }
+  },
+  "host.git.agent.result": {
+    "type": "host.result",
+    "id": "h-git.agent",
+    "data": {
+      "message": "AAAAAQw="
+    }
+  },
+  "host.tools.access": {
+    "type": "host",
+    "id": "h-tools.access",
+    "method": "tools.access",
+    "params": {
+      "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    }
+  },
+  "host.tools.access.result": {
+    "type": "host.result",
+    "id": "h-tools.access",
+    "data": {
+      "allowed": false
+    }
+  },
+  "host.mirror.checkpoints": {
+    "type": "host",
+    "id": "h-mirror.checkpoints",
+    "method": "mirror.checkpoints",
+    "params": {}
+  },
+  "host.mirror.checkpoints.result": {
+    "type": "host.result",
+    "id": "h-mirror.checkpoints",
+    "data": {
+      "bots": {
+        "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b": 12
+      },
+      "forum": 7
+    }
+  },
+  "host.mirror.bot": {
+    "type": "host",
+    "id": "h-mirror.bot",
+    "method": "mirror.bot",
+    "params": {
+      "bot": {
+        "id": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "name": "Ada",
+        "kind": "bot",
+        "manager": false,
+        "managerId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "orchestrator": false,
+        "deleted": false,
+        "createdAt": "2026-11-19T09:30:00.000Z"
+      },
+      "conversations": [
+        {
+          "conversationId": 1,
+          "kind": "main",
+          "createdAt": "2026-11-19T09:30:00.000Z"
+        },
+        {
+          "conversationId": 4,
+          "kind": "thread",
+          "parentConversationId": 1,
+          "title": "Build failures",
+          "pinned": true,
+          "createdAt": "2026-11-19T09:30:00.000Z"
+        }
+      ],
+      "items": [
+        {
+          "key": "13",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "user",
+          "text": "Why does the build fail?"
+        },
+        {
+          "key": "14",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "assistant",
+          "text": "Looking at the log.",
+          "usage": {
+            "model": "openai-codex/gpt-6-sol",
+            "input": 1200,
+            "output": 80,
+            "cacheRead": 900,
+            "cacheWrite": 0,
+            "cost": 0.0021
+          }
+        },
+        {
+          "key": "14.1",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "tool",
+          "tool": {
+            "name": "bash",
+            "input": "{\"command\":\"npm test\"}",
+            "output": "1 failing",
+            "failed": true
+          }
+        },
+        {
+          "key": "15",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "error",
+          "text": "overloaded"
+        },
+        {
+          "key": "15.1",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "stopped"
+        }
+      ],
+      "upTo": 15
+    }
+  },
+  "host.mirror.bot.result": {
+    "type": "host.result",
+    "id": "h-mirror.bot",
+    "data": {}
+  },
+  "host.mirror.forum": {
+    "type": "host",
+    "id": "h-mirror.forum",
+    "method": "mirror.forum",
+    "params": {
+      "rooms": [
+        {
+          "roomId": 1,
+          "createdAt": "2026-11-19T09:30:00.000Z"
+        },
+        {
+          "roomId": 3,
+          "parentPostId": 7,
+          "title": "The build",
+          "pinned": false,
+          "createdAt": "2026-11-19T09:30:00.000Z"
+        }
+      ],
+      "posts": [
+        {
+          "id": 7,
+          "roomId": 1,
+          "author": "bot",
+          "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "name": "Ada",
+          "text": "The build is fixed.",
+          "createdAt": 1795080600000
+        },
+        {
+          "id": 8,
+          "roomId": 3,
+          "author": "user",
+          "name": "",
+          "text": "Thanks",
+          "createdAt": 1795080600000
+        }
+      ],
+      "upTo": 8
+    }
+  },
+  "host.mirror.forum.result": {
+    "type": "host.result",
+    "id": "h-mirror.forum",
+    "data": {}
+  },
+  "host.mirror.purge": {
+    "type": "host",
+    "id": "h-mirror.purge",
+    "method": "mirror.purge",
+    "params": {
+      "botId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+    }
+  },
+  "host.mirror.purge.result": {
+    "type": "host.result",
+    "id": "h-mirror.purge",
+    "data": {}
+  },
+  "host.error": {
+    "type": "host.error",
+    "id": "h-git.setup",
+    "message": "No machine runs the bots."
+  }
+}
