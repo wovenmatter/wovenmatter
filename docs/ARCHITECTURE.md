@@ -319,9 +319,10 @@ returns a screenshot; it saves nothing.
 - The tools are in groups, and each session is offered only the groups it may
   use. A tool in no group (goals, places, `render_html`, `preview_html`) is
   always offered to sessions. Bots are offered only the tools meant for them,
-  and a call to any other is refused: a bot can publish a page but cannot
-  preview one, and nothing on the host's disk is read for a bot, so its page
-  is stored as written.
+  and a call to any other is refused. The browser, the computer and page
+  previews act on the host machine, so bots are not offered them: a bot can
+  publish a page but cannot preview one, and nothing on the host's disk is
+  read for a bot, so its page is stored as written.
 - Agents outside Woven Matter on that machine can use the same bridge without a
   key, only while the person turns that on, and only with the groups chosen
   for them.

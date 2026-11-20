@@ -577,6 +577,8 @@ private let uiTools: [WovenTool] = [
                    "frame": text("A frame selector."), "name": text("Upload file name."), "mimeType": text("Upload type."),
                    "data": text("Upload content, base64."), "id": text("A download id."), "offset": integer("Byte offset.")],
                   required: ["action"]),
+    // It acts on this machine; a bot lives in its own.
+    forBots: false,
     groups: [.browser],
     run: { call in
       await call.tools.ui.carryOut("browser", arguments: call.arguments.value, sessionID: call.caller.sessionID)
@@ -606,6 +608,8 @@ private let uiTools: [WovenTool] = [
                    "includeScreenshot": flag("Include an image with the snapshot."),
                    "treeFormat": choice(["markdown", "elements", "both"], "How the tree is shown.")],
                   required: ["action"]),
+    // It acts on this machine; a bot lives in its own.
+    forBots: false,
     groups: [.computer],
     run: { call in
       await call.tools.ui.carryOut("computer", arguments: call.arguments.value, sessionID: call.caller.sessionID)

@@ -55,14 +55,19 @@ func everyRuntimesReportOfTheCallIsKeptWithoutThePage() {
 }
 
 @Test
-func aBotCannotPreviewAPageAndNothingOnThisMachineIsReadForItsPage() async throws {
+func aBotCannotUseTheHostsToolsAndNothingOnItIsReadForItsPage() async throws {
   let host = try await PageServer.start(tailnet: StandInTailnet())
   defer { host.server.stopLater() }
   let tools = try #require(await host.server.bots.toolsForTests)
   let offered = tools.listing(forBots: true).compactMap { $0["name"]?.string }
   #expect(offered.contains("render_html") && !offered.contains("preview_html"))
+  #expect(!offered.contains("browser") && !offered.contains("computer"))
   let bot = ToolCaller(machineID: host.server.machineID, botID: "b1")
-  #expect(await tools.call("preview_html", arguments: .object(["html": .string("<p>Hi</p>")]), caller: bot).isError)
+  // Each is refused for being a bot's call, not for want of a UI.
+  for (name, action) in [("preview_html", "html"), ("browser", "action"), ("computer", "action")] {
+    let result = await tools.call(name, arguments: .object([action: .string("tabs")]), caller: bot)
+    #expect(result == .error("Bots cannot use \(name)."))
+  }
 
   let image = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).png")
   try (Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data(repeating: 7, count: 24)).write(to: image)
