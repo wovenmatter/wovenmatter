@@ -224,7 +224,7 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_artifact",
-    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML page). An app can link a database: give `databaseID` and `query`, and the page reads the rows as `window.wovenMatterData`, refreshed when the data changes. Returns its id and `basedOn` stamp.",
+    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML page). An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the page has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
     input: schema(["kind": choice(["note", "page", "app"], "What to create."), "title": text("Its title."),
                    "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
                    "html": text("An app's whole HTML page."), "folderID": text("File it in this folder."),
@@ -254,7 +254,7 @@ private let artifactTools: [WovenTool] = [
       task `status` todo|doing|blocked|done, `outcome`, `details`), `position` (`parentID`, `afterID` or `atStart`; \
       add appends when omitted), `removal` (promoteChildren or removeSubtree, for a section), `purpose`. \
       `appState` edits are `{action: set|remove, key, value, expectedVersion}`. An app's `databaseID` and `query` \
-      change the database it reads as `window.wovenMatterData`. Returns the new `basedOn`.
+      change the database it reads as `window.wovenMatterData` (see `create_artifact`). Returns the new `basedOn`.
       """,
     input: schema(["artifactID": text("The artifact."), "basedOn": text("The stamp from when you read it."),
                    "title": text("A new title."), "text": text("A note's whole new text."), "html": text("An app's whole new HTML."),
