@@ -3,6 +3,7 @@ import Observation
 
 /// The app release each machine runs and the harness versions on each, as Settings → Updates
 /// shows them. The server runs updates; this holds their state and sends the commands.
+/// This Mac's harness rows come from `MachinesStore`; app releases and bots are not connected yet.
 @MainActor
 @Observable
 final class UpdatesStore {
@@ -71,8 +72,35 @@ final class UpdatesStore {
     private(set) var checking = false
     private(set) var checkedAt: Date?
     private(set) var releaseError: String?
-    /// Per machine, by machine id.
-    private(set) var machines: [String: MachineState] = [:]
+    /// The app and bots part of each machine, by machine id.
+    private var appStates: [String: MachineState] = [:]
+    @ObservationIgnored private weak var machineStore: MachinesStore?
+
+    func attach(_ machines: MachinesStore) { machineStore = machines }
+
+    /// Per machine, by machine id: the app and bots part, with this Mac's harnesses.
+    var machines: [String: MachineState] {
+        var result = appStates
+        guard let store = machineStore, let thisID = store.thisMachine?.id else { return result }
+        var state = result[thisID] ?? MachineState()
+        if store.harnessInventoryUnavailable.contains(thisID) && store.harnesses(on: thisID).isEmpty {
+            state.harnessError = ClientError.notConnected.localizedDescription
+        } else if store.hasReadRuntimes {
+            state.harnesses = store.harnesses(on: thisID).filter(\.isInstalled).map { harness in
+                let kind = harness.runtimeKind
+                let installed = harness.installedVersion
+                let latest = harness.components.first?.updateVersion
+                return Harness(id: kind.rawValue, name: kind.displayName,
+                               versions: latest.map { "\(installed ?? "?") → \($0)" } ?? installed,
+                               updateAvailable: harness.updateAvailable,
+                               checking: store.isCheckingHarness(kind, on: thisID),
+                               updating: store.operation(kind, on: thisID) != nil,
+                               error: store.harnessError(kind, on: thisID))
+            }
+        }
+        result[thisID] = state
+        return result
+    }
     private(set) var progress: [ProgressLine] = []
     private(set) var failures: [String] = []
     private(set) var notice: String?
@@ -108,9 +136,44 @@ final class UpdatesStore {
     /// Whether a request may start: it waits while everything it covers is already updating.
     func canStart(_ request: Request) -> Bool { !isUpdating(request) }
 
-    func loadIfNeeded() {}
-    func checkAll() async { failures = [ClientError.notConnected.localizedDescription] }
-    func start(_ request: Request) { failures = [ClientError.notConnected.localizedDescription] }
+    func loadIfNeeded() {
+        guard let store = machineStore, let thisID = store.thisMachine?.id, !store.hasReadRuntimes else { return }
+        store.refreshHarnesses(on: thisID)
+    }
+
+    /// Checks this Mac's harnesses for newer releases. The app release is not checked yet.
+    func checkAll() async {
+        guard let store = machineStore, let thisID = store.thisMachine?.id else {
+            failures = [ClientError.notConnected.localizedDescription]
+            return
+        }
+        checking = true
+        failures = []
+        await store.checkAllHarnesses(on: thisID)
+        releaseError = ClientError.notOffered("The release check").localizedDescription
+        checkedAt = Date()
+        checking = false
+    }
+
+    /// Runs the harness updates a request covers on this Mac; app and bots updates are not connected yet.
+    func start(_ request: Request) {
+        guard let store = machineStore, let thisID = store.thisMachine?.id else {
+            failures = [ClientError.notConnected.localizedDescription]
+            return
+        }
+        failures = []
+        let outdated = store.harnesses(on: thisID).filter(\.updateAvailable).map(\.runtimeKind)
+        let kinds: [AgentRuntimeKind]
+        switch request {
+        case .everything, .harnesses: kinds = outdated
+        case .machine(let id): kinds = id == thisID ? outdated : []
+        case .harness(let machineID, let harnessID):
+            kinds = machineID == thisID ? AgentRuntimeKind.allCases.filter { $0.rawValue == harnessID } : []
+        case .apps, .app, .bots: kinds = []
+        }
+        if kinds.isEmpty { failures = [ClientError.notConnected.localizedDescription] }
+        for kind in kinds { store.update(kind, on: thisID) }
+    }
     func confirmBusy() { busyConfirmation = nil }
     func cancelBusy(_ id: UUID) { if busyConfirmation?.id == id { busyConfirmation = nil } }
 }

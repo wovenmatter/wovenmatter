@@ -14,7 +14,7 @@ final class SettingsStore {
     private(set) var error: String?
     /// The server has answered at least once.
     private(set) var isLoaded = false
-    @ObservationIgnored private weak var server: ServerConnection?
+    @ObservationIgnored weak var server: ServerConnection?
 
     init() {}
 

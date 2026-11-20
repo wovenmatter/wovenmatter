@@ -14,9 +14,9 @@ import WovenProtocol
 final class MachinesStore {
     /// Every machine in the library as this Mac's server reports it.
     private var statuses: [MachineStatus] = []
-    /// The runtimes this Mac's server has.
-    private var runtimes: [RuntimeStatus] = []
-    @ObservationIgnored private weak var server: ServerConnection?
+    /// The runtimes this Mac's server has, as it last reported them.
+    var runtimes: [RuntimeStatus] = []
+    @ObservationIgnored weak var server: ServerConnection?
 
     /// This machine first, then the others by name. This Mac is online while
     /// the UI is connected to its server.
@@ -59,7 +59,9 @@ final class MachinesStore {
         } catch {
             errorMessage = error.localizedDescription
         }
-        runtimes = (try? await server.call(ListRuntimes())) ?? []
+        // Each runtime's status runs its CLI, so library changes do not read
+        // them again; Settings and installs do (`refreshHarnesses`).
+        if !hasReadRuntimes { await readRuntimes(checkForUpdates: false) }
     }
 
     // MARK: Server on each machine
@@ -111,6 +113,13 @@ final class MachinesStore {
     var pendingHarnessInstall: PendingHarnessInstall?
     /// Machines whose server was just installed, waiting for harness setup.
     var pendingHarnessSetupMachineIDs: Set<String> = []
+
+    /// The newest release of each harness on each machine, once checked (nil: the check found none).
+    var latestVersions: [String: [AgentRuntimeKind: String?]] = [:]
+    /// Install or update attempts that failed in a row, per machine and harness.
+    var harnessFailures: [String: [AgentRuntimeKind: Int]] = [:]
+    var hasReadRuntimes = false
+    @ObservationIgnored var runtimeRead: Task<Void, Never>?
 
     var signInStatuses: [String: [AgentRuntimeKind: AgentSignInStatus]] = [:]
     /// Pi Durable's provider accounts on each machine.

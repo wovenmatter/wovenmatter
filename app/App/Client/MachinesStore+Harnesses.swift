@@ -1,7 +1,9 @@
 import Foundation
+import WovenProtocol
 
 /// Harness installs, updates and sign-ins on each machine. The machine's server runs
-/// the harness's own commands; the UI never starts a harness process.
+/// the harness's own commands; the UI never starts a harness process. Only this Mac's
+/// server is connected, so other machines report nothing here yet.
 extension MachinesStore {
     // MARK: Inventory
 
@@ -44,26 +46,43 @@ extension MachinesStore {
 
     func hasActiveChats(on machineID: String) -> Bool { machinesWithActiveChats.contains(machineID) }
 
-    /// Re-reads installed and latest versions there.
+    /// Re-reads what is installed and signed in there, Pi Durable's providers included.
     func refreshHarnesses(on machineID: String) {
-        harnessInventoryUnavailable.insert(machineID)
+        guard isThisMachine(machineID) else { return markUnavailable(machineID) }
+        Task { await readRuntimes(checkForUpdates: false) }
+        Task { await refreshProviderSignIns(on: machineID) }
     }
 
+    /// Looks up the newest release of every harness there.
     func checkForUpdates(_ kind: AgentRuntimeKind, on machineID: String) {
-        setHarnessError(kind, on: machineID)
+        guard isThisMachine(machineID) else { return markUnavailable(machineID) }
+        Task { await checkAllHarnesses(on: machineID, showing: [kind]) }
+    }
+
+    /// Looks up the newest release of every harness there; `showing` are the ones marked as checking.
+    func checkAllHarnesses(on machineID: String, showing kinds: [AgentRuntimeKind]? = nil) async {
+        guard isThisMachine(machineID) else { return markUnavailable(machineID) }
+        let marked = Set(kinds ?? AgentRuntimeKind.allCases)
+        checkingHarnesses[machineID, default: []].formUnion(marked)
+        await readRuntimes(checkForUpdates: true)
+        checkingHarnesses[machineID]?.subtract(marked)
     }
 
     func install(_ kind: AgentRuntimeKind, on machineID: String) {
-        setHarnessError(kind, on: machineID)
+        Task { await maintain(kind, .install, on: machineID) }
     }
 
     func update(_ kind: AgentRuntimeKind, on machineID: String) {
-        setHarnessError(kind, on: machineID)
+        Task { await maintain(kind, .update, on: machineID) }
     }
 
     /// Installs each harness in order on that machine's server.
     func installHarnesses(_ kinds: [AgentRuntimeKind], on machineID: String) {
-        for kind in kinds { setHarnessError(kind, on: machineID) }
+        Task {
+            for kind in kinds where harness(kind, on: machineID)?.isInstalled != true {
+                await maintain(kind, .install, on: machineID)
+            }
+        }
     }
 
     func confirmPendingHarnessInstall() {
@@ -78,8 +97,102 @@ extension MachinesStore {
         pendingHarnessSetupMachineIDs.remove(machineID)
     }
 
-    private func setHarnessError(_ kind: AgentRuntimeKind, on machineID: String) {
-        harnessErrors[machineID, default: [:]][kind] = ClientError.notConnected.localizedDescription
+    /// Installs or updates a harness to its latest release with the server's `InstallRuntime`.
+    func maintain(_ kind: AgentRuntimeKind, _ operation: HarnessOperation, on machineID: String) async {
+        guard let server, isThisMachine(machineID) else {
+            harnessErrors[machineID, default: [:]][kind] = ClientError.machineNotConnected(machine(id: machineID)?.name ?? "That machine")
+                .localizedDescription
+            return
+        }
+        guard harnessOperations[machineID]?[kind] == nil else { return }
+        harnessOperations[machineID, default: [:]][kind] = operation
+        harnessErrors[machineID]?[kind] = nil
+        defer { harnessOperations[machineID]?[kind] = nil }
+        do {
+            let status = try await server.call(InstallRuntime(runtime: kind.runtime))
+            harnessFailures[machineID]?[kind] = nil
+            // The installed release is the newest one now.
+            if let version = status.version { latestVersions[machineID, default: [:]][kind] = .some(version) }
+            runtimes.removeAll { $0.runtime == status.runtime }
+            runtimes.append(status)
+            applyRuntimes(on: machineID)
+        } catch {
+            harnessFailures[machineID, default: [:]][kind, default: 0] += 1
+            harnessErrors[machineID, default: [:]][kind] = error.localizedDescription
+            applyRuntimes(on: machineID)
+        }
+    }
+
+    /// Reads this Mac's runtimes; one read at a time, and callers during one wait for it.
+    func readRuntimes(checkForUpdates: Bool) async {
+        if let running = runtimeRead, !checkForUpdates { return await running.value }
+        let previous = runtimeRead
+        let read = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, let server = self.server else { return }
+            do {
+                let statuses = try await server.call(ListRuntimes(checkForUpdates: checkForUpdates))
+                self.runtimes = statuses
+                self.hasReadRuntimes = true
+                guard let thisID = self.thisMachine?.id else { return }
+                self.harnessInventoryUnavailable.remove(thisID)
+                if checkForUpdates {
+                    for status in statuses {
+                        guard let kind = AgentRuntimeKind(runtime: status.runtime) else { continue }
+                        self.latestVersions[thisID, default: [:]][kind] = .some(status.latestVersion)
+                    }
+                }
+                self.applyRuntimes(on: thisID)
+            } catch {
+                if let thisID = self.thisMachine?.id { self.harnessInventoryUnavailable.insert(thisID) }
+            }
+        }
+        runtimeRead = read
+        await read.value
+        if runtimeRead == read { runtimeRead = nil }
+    }
+
+    /// Projects the server's runtime statuses into the harness and sign-in rows of this Mac.
+    func applyRuntimes(on machineID: String) {
+        var installations: [AgentRuntimeKind: HarnessInstallation] = [:]
+        var signIns: [AgentRuntimeKind: AgentSignInStatus] = [:]
+        for status in runtimes {
+            guard let kind = AgentRuntimeKind(runtime: status.runtime) else { continue }
+            let checked = latestVersions[machineID]?[kind]
+            var withLatest = status
+            withLatest.latestVersion = checked ?? nil
+            let failures = harnessFailures[machineID]?[kind] ?? 0
+            let component = HarnessComponent(
+                id: kind.rawValue,
+                displayName: kind == .defaultAgent ? "Pi Durable SDK" : "\(status.name) CLI",
+                installedVersion: status.version,
+                updateVersion: withLatest.updateAvailable ? withLatest.latestVersion : nil,
+                isInstalled: status.installed,
+                isSystemInstall: false)
+            let state: HarnessInstallation.State = !status.installed ? (status.version == nil ? .notInstalled : .unavailable)
+                : status.signedIn == false && kind != .defaultAgent ? .signInRequired : .ready
+            installations[kind] = HarnessInstallation(
+                runtimeKind: kind, state: state, components: [component], isInstalled: status.installed,
+                isSystemInstall: false, path: nil,
+                versionCheckAvailable: checked.map { $0 != nil } ?? true,
+                failureCount: failures,
+                diagnostic: failures > 0 ? harnessErrors[machineID]?[kind] : nil)
+            guard kind != .defaultAgent else { continue }
+            let signInState: AgentSignInStatus.State = !status.installed ? .notInstalled
+                : status.signedIn == true ? .verified : status.signedIn == false ? .signInRequired : .notChecked
+            signIns[kind] = AgentSignInStatus(id: kind.rawValue, name: status.name, state: signInState,
+                                              detail: status.detail ?? "")
+            signInMessages[machineID]?[kind] = nil
+        }
+        harnessInstallations[machineID] = installations
+        signInStatuses[machineID] = signIns
+    }
+
+    private func isThisMachine(_ machineID: String) -> Bool { machineID == thisMachine?.id }
+
+    /// Another machine's server is not connected, so its inventory cannot be read.
+    private func markUnavailable(_ machineID: String) {
+        harnessInventoryUnavailable.insert(machineID)
     }
 
     // MARK: Sign-in
@@ -90,6 +203,14 @@ extension MachinesStore {
 
     func providerSignIns(on machineID: String) -> [AgentSignInStatus] {
         providerSignInStatuses[machineID] ?? []
+    }
+
+    /// Re-reads Pi Durable's providers on this Mac, for the Agents page's summary.
+    func refreshProviderSignIns(on machineID: String) async {
+        guard let server, isThisMachine(machineID), let list = try? await server.call(ListSignIns()) else { return }
+        providerSignInStatuses[machineID] = list.map {
+            AgentSignInStatus(id: $0.provider, name: $0.name, state: $0.connected ? .credentialsPresent : .signInRequired, detail: "")
+        }
     }
 
     func signInSession(_ kind: AgentRuntimeKind, on machineID: String) -> HarnessSignInSession? {
@@ -118,7 +239,13 @@ extension MachinesStore {
             || isRemovingSignIn(kind, on: machineID) || signInSession(kind, on: machineID)?.isActive == true
     }
 
-    func refreshSignIn(_ kind: AgentRuntimeKind, on machineID: String) async {}
+    /// Re-reads whether the harness's CLI reports a sign-in there.
+    func refreshSignIn(_ kind: AgentRuntimeKind, on machineID: String) async {
+        guard isThisMachine(machineID) else { return markUnavailable(machineID) }
+        checkingSignIns[machineID, default: []].insert(kind)
+        await readRuntimes(checkForUpdates: false)
+        checkingSignIns[machineID]?.remove(kind)
+    }
 
     /// Starts the harness's own sign-in there. A key method passes `key`.
     func startSignIn(_ kind: AgentRuntimeKind, method: HarnessSignInMethod, key: String? = nil, on machineID: String) {
@@ -153,7 +280,9 @@ extension MachinesStore {
         setSignInMessage(kind, on: machineID)
     }
 
+    /// The server runs no harness sign-in or sign-out commands yet.
     private func setSignInMessage(_ kind: AgentRuntimeKind, on machineID: String) {
-        signInMessages[machineID, default: [:]][kind] = ClientError.notConnected.localizedDescription
+        signInMessages[machineID, default: [:]][kind] = ClientError.notOffered("Signing in to \(kind.displayName) from Woven Matter")
+            .localizedDescription
     }
 }

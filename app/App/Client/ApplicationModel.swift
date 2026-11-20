@@ -88,7 +88,7 @@ final class ApplicationModel {
         self.server = server
         machines.attach(server)
         workspace.attach(server, machines: machines)
-        settings.attach(server)
+        settings.attach(server); connections.attach(server, settings: settings); updates.attach(machines)
         sessions.attach(server, workspace: workspace)
         server.start()
         following = Task { [weak self] in
