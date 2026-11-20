@@ -177,6 +177,9 @@ extension PiBotForumPost {
                   thread: post.thread.map { ThreadLink(roomId: $0.roomId, replies: $0.replies) },
                   unanswered: (post.unanswered ?? []).map {
                       Unanswered(botId: $0.botId, name: $0.name, reason: $0.reason, issue: BotReplyIssue(wire: $0.issue))
+                  },
+                  visualReply: post.visualReply.map {
+                      ConversationHTMLRenderReference(id: "forum:\(post.id)", title: $0.title, height: $0.height, digest: $0.digest)
                   })
     }
 
@@ -190,7 +193,12 @@ extension PiBotForumPost {
             case .assistantMessage(let text):
                 PiBotForumPost(id: item.sequence, roomId: roomID, isUser: false, name: item.author?.name ?? "", text: text,
                                isScheduled: false, thread: nil, unanswered: [])
-            case .toolCall, .notice, .htmlPage: nil
+            case .htmlPage(let page):
+                PiBotForumPost(id: item.sequence, roomId: roomID, isUser: false, name: item.author?.name ?? "", text: "",
+                               isScheduled: false, thread: nil, unanswered: [],
+                               visualReply: ConversationHTMLRenderReference(id: item.id, title: page.title, height: page.height,
+                                                                            digest: page.digest))
+            case .toolCall, .notice: nil
             }
         }
     }

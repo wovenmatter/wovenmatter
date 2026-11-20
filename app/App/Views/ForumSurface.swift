@@ -590,6 +590,8 @@ private struct ForumPostRow: View {
                             .foregroundStyle(WovenPalette.mutedForeground)
                             .padding(.horizontal, 4)
                     }
+                } else if let visualReply = post.visualReply {
+                    ConversationHTMLRenderView(reference: visualReply).padding(.horizontal, 4)
                 } else {
                     ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
                         .padding(.horizontal, 4)
@@ -615,18 +617,20 @@ private struct ForumPostRow: View {
 
     private var actions: some View {
         HStack(spacing: 4) {
-            Button {
-                NSPasteboard.general.clearContents()
-                copied = NSPasteboard.general.setString(post.text, forType: .string)
-            } label: {
-                LucideIcon(glyph: copied ? .check : .copy, size: 13)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            if post.visualReply == nil {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    copied = NSPasteboard.general.setString(post.text, forType: .string)
+                } label: {
+                    LucideIcon(glyph: copied ? .check : .copy, size: 13)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(WovenIconButtonStyle())
+                .focused($focusedAction, equals: .copy)
+                .help("Copy post")
+                .accessibilityLabel(copied ? "Post copied" : "Copy post")
             }
-            .buttonStyle(WovenIconButtonStyle())
-            .focused($focusedAction, equals: .copy)
-            .help("Copy post")
-            .accessibilityLabel(copied ? "Post copied" : "Copy post")
             if showsThreadControls, canStartThread || post.thread != nil {
                 Button(action: onOpenThread) {
                     HStack(spacing: 5) {
@@ -694,7 +698,11 @@ private struct ForumThreadOrigin: View {
                     .textSelection(.enabled)
             } else {
                 Text(post.name).font(.system(size: 12, weight: .medium))
-                ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
+                if let visualReply = post.visualReply {
+                    ConversationHTMLRenderView(reference: visualReply)
+                } else {
+                    ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

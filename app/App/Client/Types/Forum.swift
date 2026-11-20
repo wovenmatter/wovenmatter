@@ -30,6 +30,8 @@ struct PiBotForumPost: Equatable, Identifiable, Sendable {
     let isScheduled: Bool
     let thread: ThreadLink?
     let unanswered: [Unanswered]
+    /// A visual reply the bot published here with `render_html`, shown in place of text.
+    var visualReply: ConversationHTMLRenderReference?
 }
 
 struct PiBotForumThread: Equatable, Identifiable, Sendable {
