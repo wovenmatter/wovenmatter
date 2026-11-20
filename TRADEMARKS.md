@@ -13,8 +13,8 @@ Names and marks of third parties belong to their respective owners, including:
 
 - **Harnesses and providers:** Codex and OpenAI; Claude and Anthropic; Grok and
   xAI; OpenCode; Pi.
-- **Platforms and components:** Apple, macOS, iPhone, TestFlight, Tailscale,
-  Docker, Ubuntu, Chromium, and Executor.
+- **Platforms and components:** Apple, macOS, Tailscale,
+  Docker, Ubuntu, and Chromium.
 
 They appear only to identify compatible software, the harness used by a
 conversation, or attributed source material, and do not imply endorsement. See
