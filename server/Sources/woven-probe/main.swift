@@ -120,6 +120,8 @@ func describe(_ content: ItemContent) -> String {
     return line
   case .notice(let notice):
     return "notice \(notice.kind.rawValue): \(notice.text)"
+  case .htmlPage(let page):
+    return "page \(page.title) (\(page.height)px, \(page.size) bytes, \(page.digest.prefix(12)))"
   }
 }
 

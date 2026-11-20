@@ -217,6 +217,9 @@ public struct ToolKind: RawRepresentable, Codable, Sendable, Hashable {
   public static let plan = ToolKind(rawValue: "plan")
   /// A child task (subagent); `output` is its result.
   public static let task = ToolKind(rawValue: "task")
+  /// Woven's `render_html`: the page it published is its own item
+  /// (`ItemContent.htmlPage`), and the call does not carry it.
+  public static let page = ToolKind(rawValue: "page")
   public static let other = ToolKind(rawValue: "other")
 }
 
@@ -294,14 +297,33 @@ public struct Notice: Codable, Sendable, Hashable {
   }
 }
 
+/// A self-contained page an agent published in the chat with `render_html`.
+/// The page is stored once, in the content store by digest; another machine
+/// fetches it when the page is opened.
+public struct HTMLPage: Codable, Sendable, Hashable {
+  public var title: String
+  /// The height it starts at, in points, before it has measured itself.
+  public var height: Int
+  public var digest: String
+  public var size: Int64
+
+  public init(title: String, height: Int, digest: String, size: Int64) {
+    self.title = title
+    self.height = height
+    self.digest = digest
+    self.size = size
+  }
+}
+
 /// What a session item holds. Encoded with a `type` field.
 public enum ItemContent: Codable, Sendable, Hashable {
   case userMessage(text: String, attachments: [Attachment] = [])
   case assistantMessage(text: String)
   case toolCall(ToolCall)
   case notice(Notice)
+  case htmlPage(HTMLPage)
 
-  private enum Key: String, CodingKey { case type, text, attachments, call, notice }
+  private enum Key: String, CodingKey { case type, text, attachments, call, notice, page }
 
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: Key.self)
@@ -312,6 +334,7 @@ public enum ItemContent: Codable, Sendable, Hashable {
     case "assistantMessage": self = .assistantMessage(text: try container.decode(String.self, forKey: .text))
     case "toolCall": self = .toolCall(try container.decode(ToolCall.self, forKey: .call))
     case "notice": self = .notice(try container.decode(Notice.self, forKey: .notice))
+    case "htmlPage": self = .htmlPage(try container.decode(HTMLPage.self, forKey: .page))
     case let other:
       throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown item type \(other)")
     }
@@ -333,6 +356,9 @@ public enum ItemContent: Codable, Sendable, Hashable {
     case .notice(let notice):
       try container.encode("notice", forKey: .type)
       try container.encode(notice, forKey: .notice)
+    case .htmlPage(let page):
+      try container.encode("htmlPage", forKey: .type)
+      try container.encode(page, forKey: .page)
     }
   }
 }

@@ -369,6 +369,17 @@ actor SessionHost {
                      id: UUID().uuidString.lowercased())
   }
 
+  /// Saves a page the agent published (`render_html`) where it came: after
+  /// the reply so far, which is finished as its own item, and before what
+  /// the turn says next. Its content is already in the content store.
+  func publish(_ page: HTMLPage) async throws {
+    await enter()
+    defer { leave() }
+    turnActed = true
+    await saving { try await self.finishAssistant() }
+    try await finish(.htmlPage(page), id: UUID().uuidString.lowercased())
+  }
+
   /// When a turn ends and the session still has a goal, the next turn asks
   /// the runtime to continue toward it. Not after an interruption or a failed
   /// turn, nor while a question waits; the person's next message resumes it.
@@ -466,7 +477,8 @@ actor SessionHost {
       broadcast(.text(itemID: id, delta: delta))
     case .messageFinished:
       await saving { try await self.finishAssistant() }
-    case .tool(let callID, let call, let finished):
+    case .tool(let callID, let reported, let finished):
+      let call = HTMLPages.withoutPage(reported)
       if call.kind != .thinking { turnActed = true }
       await saving { try await self.finishAssistant() }
       if let id = toolItemIDs[callID] {

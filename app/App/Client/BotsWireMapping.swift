@@ -181,7 +181,7 @@ extension PiBotForumPost {
             case .assistantMessage(let text):
                 PiBotForumPost(id: item.sequence, roomId: roomID, isUser: false, name: item.author?.name ?? "", text: text,
                                isScheduled: false, thread: nil, unanswered: [])
-            case .toolCall, .notice: nil
+            case .toolCall, .notice, .htmlPage: nil
             }
         }
     }

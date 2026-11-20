@@ -41,10 +41,19 @@ public enum ToolContent: Codable, Sendable, Hashable {
 public struct ToolResult: Codable, Sendable, Hashable {
   public var content: [ToolContent]
   public var isError: Bool
+  /// MCP's `_meta`: what the agent is not shown. `render_html` gives the page
+  /// it published as `wovenPage` (an `HTMLPage`), for the bots runtime's chat.
+  public var meta: JSONValue?
 
-  public init(content: [ToolContent], isError: Bool = false) {
+  private enum CodingKeys: String, CodingKey {
+    case content, isError
+    case meta = "_meta"
+  }
+
+  public init(content: [ToolContent], isError: Bool = false, meta: JSONValue? = nil) {
     self.content = content
     self.isError = isError
+    self.meta = meta
   }
 
   public static func text(_ text: String) -> ToolResult { ToolResult(content: [.text(text)]) }
@@ -56,11 +65,14 @@ public struct ToolCaller: Codable, Sendable, Hashable {
   public var machineID: String
   public var sessionID: String?
   public var botID: String?
+  /// The bot speaks in the Forum, not in one of its own chats.
+  public var inForum: Bool?
 
-  public init(machineID: String, sessionID: String? = nil, botID: String? = nil) {
+  public init(machineID: String, sessionID: String? = nil, botID: String? = nil, inForum: Bool? = nil) {
     self.machineID = machineID
     self.sessionID = sessionID
     self.botID = botID
+    self.inForum = inForum
   }
 }
 

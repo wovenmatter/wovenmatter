@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A page an agent wrote, made ready to show: its local images embedded.
 struct PreparedPage: Sendable, Hashable {
@@ -55,6 +56,45 @@ enum HTMLPages {
     }
     pieces.append(source.substring(from: cursor))
     return PreparedPage(html: pieces.joined(), missingImages: missing)
+  }
+
+  /// The one rule that keeps a page from being saved twice. The page is
+  /// saved once, as its own item, when `render_html` runs; every runtime also
+  /// reports the call, and that report is kept without the page: each `html`
+  /// argument becomes its length, and the call is marked `.page` so the chat
+  /// shows the page, not the call. Every runtime's tool calls pass here
+  /// (`SessionHost`, and the bots' mirror) before they are shown or saved.
+  static func withoutPage(_ call: ToolCall) -> ToolCall {
+    guard publishes(call) else { return call }
+    var call = call
+    call.kind = .page
+    if let input = try? JSONDecoder().decode(JSONValue.self, from: Data(call.input.utf8)), case .object = input {
+      call.input = (try? String(decoding: Wire.encoder.encode(withoutHTML(input)), as: UTF8.self)) ?? ""
+    } else if !call.input.isEmpty {
+      // Cut short on the way, so no longer JSON.
+      call.input = #"{"html":"(the page, shown in the chat)"}"#
+    }
+    return call
+  }
+
+  /// Whether a runtime's tool call is Woven's `render_html`, by the name or
+  /// title the runtime gives it (`render_html`, `woven_render_html`,
+  /// `mcp__woven__render_html`, `woven/render_html`).
+  static func publishes(_ call: ToolCall) -> Bool {
+    [call.name, call.title ?? ""].contains { name in
+      name.lowercased().firstMatch(of: #/(^|[^a-z0-9])render_html($|[^a-z0-9_])/#) != nil
+    }
+  }
+
+  private static func withoutHTML(_ value: JSONValue) -> JSONValue {
+    switch value {
+    case .object(let fields):
+      .object(fields.mapValues(withoutHTML).merging(
+        fields["html"]?.string.map { ["html": .string("(\($0.utf16.count) characters, shown in the chat)")] } ?? [:],
+        uniquingKeysWith: { _, page in page }))
+    case .array(let values): .array(values.map(withoutHTML))
+    default: value
+    }
   }
 
   /// A regular file of at most `imageLimit` whose bytes are an image, as a

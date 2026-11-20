@@ -7,7 +7,7 @@ import WovenProtocol
 // entries like these.
 
 func wovenToolCatalog() -> [WovenTool] {
-  sessionTools + artifactTools + databaseTools + placeTools + botTools + uiTools + scheduleTools
+  sessionTools + pageTools + artifactTools + databaseTools + placeTools + botTools + uiTools + scheduleTools
 }
 
 // MARK: Schema helpers
@@ -103,6 +103,8 @@ private let sessionTools: [WovenTool] = [
           result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : ""): \(output)")
         case .notice(let notice):
           result.append("#\(item.sequence) notice: \(notice.text)")
+        case .htmlPage(let page):
+          result.append("#\(item.sequence) page shown in the chat: \(page.title)")
         }
       }
       return lines(result)
@@ -162,6 +164,55 @@ extension WovenTools {
     return ItemAuthor(botID: nil, name: "An agent")
   }
 }
+
+// MARK: Pages in the chat
+
+/// Always offered, whatever groups a session may use: it shows something in
+/// the caller's own chat and reaches nothing else.
+private let pageTools: [WovenTool] = [
+  WovenTool(
+    name: "render_html",
+    description: """
+      Show a chart, table, diagram or anything interactive in this chat: publish one whole self-contained HTML page \
+      (styles and scripts inline; libraries may load over HTTPS). It appears above your reply and stays in the chat. \
+      It starts at `height` and then fits its content. Absolute paths to local images in it are embedded; every one \
+      must be there. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something the \
+      person wants to keep and change, make an app with `create_artifact` instead.
+      """,
+    input: schema(["html": text("The whole self-contained page, at most 512,000 characters."),
+                   "title": text("A short title, at most 200 characters."),
+                   "height": integer("The height it starts at, 80 to 2000 pixels.")],
+                  required: ["html", "title", "height"]),
+    run: { call in
+      guard call.caller.inForum != true else {
+        throw ToolFailure("A page cannot be shown in the Forum. Show it in one of your own chats, or say it in words.")
+      }
+      let title = try call.arguments.string("title").trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !title.isEmpty, title.count <= 200 else { throw ToolFailure("Give a `title` of at most 200 characters.") }
+      guard let height = call.arguments.int("height"), (80...2000).contains(height) else {
+        throw ToolFailure("Give `height` from 80 to 2000.")
+      }
+      let page = try HTMLPages.prepare(try call.arguments.string("html"))
+      guard page.missingImages.isEmpty else {
+        throw ToolFailure("These local images are missing, unreadable or not images, so nothing was shown: "
+                          + page.missingImages.joined(separator: ", "))
+      }
+      guard call.caller.sessionID != nil || call.caller.botID != nil else {
+        throw ToolFailure("`render_html` shows a page in a Woven Matter chat, and this caller is not in one.")
+      }
+      let tools = call.tools
+      let data = Data(page.html.utf8)
+      let published = HTMLPage(title: title, height: height, digest: try await tools.library.storeContent(data),
+                               size: Int64(data.count))
+      let shown = "Shown in the chat: “\(title)”."
+      // A bot's chat is its runtime's own; the page reaches it with the call's result.
+      guard let sessionID = call.caller.sessionID else {
+        return ToolResult(content: [.text(shown)], meta: .object(["wovenPage": try JSONValue(encoding: published)]))
+      }
+      try await tools.sessions.host(for: sessionID).publish(published)
+      return .text(shown)
+    }),
+]
 
 // MARK: Notes, pages and apps
 
