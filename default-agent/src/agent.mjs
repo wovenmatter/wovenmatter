@@ -32,7 +32,9 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
       const create = method === 'session/new';
       const sessionId = create ? randomUUID() : params.sessionId;
       if (sessions.has(sessionId)) throw new AgentError('This session is already open.');
-      const session = await Session.open({ models, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, notify: rpc.notify, create });
+      // Pi Durable's settings for this machine, read once when the session opens.
+      const settings = await rpc.request('woven/settings', {}).then(reply => reply?.settings ?? {}, () => ({}));
+      const session = await Session.open({ models, settings, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, notify: rpc.notify, create });
       sessions.set(sessionId, session);
       const configOptions = await session.configOptions();
       return create ? { sessionId, configOptions } : { configOptions };

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { claudeExecutable, claudeProvider, claudeStatus } from './claude.mjs';
 import { ServerCredentials, toWire } from './credentials.mjs';
-import { createModels, providerList, subscriptions } from './models.mjs';
+import { catalog, createModels, providerList, subscriptions } from './models.mjs';
 import { humanMessage } from './rpc.mjs';
 import { updateSDK } from './sdk.mjs';
 import { dataDirectory } from './data.mjs';
@@ -46,9 +46,12 @@ export async function runControl() {
 
 async function perform(request, { data, write, ask, closed }) {
   if (request.action === 'update-sdk') return updateSDK(data);
-  const credentials = new ServerCredentials({ fetch: async () => ({ credentials: {} }), report: async () => {} });
-  const { runtime } = await createModels({ dataDirectory: data, credentials });
+  // Only the catalog needs credentials; the server passes them in with the request.
+  const credentials = new ServerCredentials({ fetch: async () => ({ credentials: request.credentials ?? {} }), report: async () => {} });
+  const models = await createModels({ dataDirectory: data, credentials });
+  const { runtime } = models;
   if (request.action === 'providers') return { providers: providerList(runtime) };
+  if (request.action === 'models') return { models: await catalog(models, { refresh: request.refresh === true }) };
   if (request.action !== 'login') throw new Error(`Unknown action ${request.action}.`);
   if (!subscriptions.some(provider => provider.id === request.provider)) throw new Error('That provider does not sign in with a subscription.');
   if (request.provider === claudeProvider) return { credential: await claudeLogin({ write, ask, closed }) };

@@ -2,6 +2,7 @@
   "harnesses": [
     {
       "id": "codex",
+      "latestPackage": "@openai/codex",
       "displayName": "Codex",
       "transport": "acp",
       "command": "codex-acp",
@@ -55,6 +56,7 @@
     },
     {
       "id": "claude_code",
+      "latestPackage": "@anthropic-ai/claude-code",
       "displayName": "Claude Code",
       "transport": "acp",
       "command": "claude-agent-acp",
@@ -110,6 +112,7 @@
     },
     {
       "id": "grok_build",
+      "latestPackage": "@xai-official/grok",
       "displayName": "Grok Build",
       "transport": "agent-stdio",
       "command": "grok",
@@ -211,6 +214,7 @@
     },
     {
       "id": "pi_durable",
+      "latestPackage": "@earendil-works/pi-durable",
       "runtime": "piDurable",
       "displayName": "Pi Durable",
       "transport": "acp",

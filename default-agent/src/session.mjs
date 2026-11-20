@@ -10,7 +10,7 @@ import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { createCodingTools } from '@earendil-works/pi-durable/tools';
 import { AgentError, humanMessage } from './rpc.mjs';
-import { availableModels, modelReference, refreshCatalogs, thinkingLevels } from './models.mjs';
+import { availableModels, modelReference, offeredModels, refreshCatalogs, thinkingLevels } from './models.mjs';
 import { Projection } from './projection.mjs';
 import { Subagents, Workflow, connectMcp, createSearch } from './tools.mjs';
 
@@ -78,16 +78,16 @@ const usageTotals = state => {
 };
 
 export class Session {
-  static async open({ models, dataDirectory, sessionId, cwd, mcpServers, notify, create }) {
+  static async open({ models, settings = {}, dataDirectory, sessionId, cwd, mcpServers, notify, create }) {
     const path = databasePath(dataDirectory);
     if (!create && (!uuid.test(sessionId ?? '') || !sessionExists(path, sessionId))) throw new AgentError('There is no Pi Durable session with that ID.', SESSION_NOT_FOUND);
     const root = await directory(cwd);
-    const session = new Session(models, sessionId, root, notify);
+    const session = new Session(models, settings, sessionId, root, notify);
     await session.start(path, mcpServers ?? []);
     return session;
   }
-  constructor(models, sessionId, cwd, notify) {
-    this.models = models; this.sessionId = sessionId; this.cwd = cwd;
+  constructor(models, settings, sessionId, cwd, notify) {
+    this.models = models; this.settings = settings; this.sessionId = sessionId; this.cwd = cwd;
     this.send = update => notify('session/update', { sessionId, update });
     this.busy = false;
   }
@@ -97,7 +97,7 @@ export class Session {
     const registry = createRegistry();
     registry.install(createCodingTools({ images: await createNodePhotonImages() }));
     registry.install(Workflow);
-    registry.install(createSearch(this.models.credentials));
+    registry.install(createSearch(this.models.credentials, this.settings.searchProvider));
     registry.install(Subagents);
     registry.install(this.mcp.extension);
     registry.install(defineExtension({ name: 'woven-context', sections: [
@@ -127,15 +127,16 @@ export class Session {
     const { model } = await this.agentState();
     return model ? this.models.runtime.getModel(model.provider, model.modelId) : undefined;
   }
-  // A new conversation starts on the first available model.
+  async offered() { return offeredModels(await availableModels(this.models), this.settings); }
+  // A new conversation starts on the settings' default model, else the first offered.
   async ensureModel() {
     if (await this.currentModel()) return;
-    const [model] = await availableModels(this.models);
+    const [model] = await this.offered();
     if (model) await this.conversation.configure({ model: { provider: model.provider, modelId: model.id }, thinkingLevel: thinkingLevels(model).includes('medium') ? 'medium' : undefined }, context);
   }
   async configOptions() {
     await this.ensureModel();
-    const available = await availableModels(this.models);
+    const available = await this.offered();
     const current = await this.currentModel();
     const { thinkingLevel } = await this.agentState();
     const options = available.map(model => ({ value: modelReference(model), name: model.name, description: this.models.runtime.getProvider(model.provider)?.name }));

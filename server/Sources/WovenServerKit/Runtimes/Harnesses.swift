@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import WovenProtocol
 
 /// Where the server finds what ships beside it: `harnesses/` (the catalog and
@@ -44,6 +47,8 @@ struct Harness: Decodable, Sendable {
   var arguments: [String]
   var cliCommand: String?
   var adapterPackage: String?
+  /// The npm package whose published version is the newest release.
+  var latestPackage: String?
   var install: Install?
   var update: Install?
   var authentication: Authentication?
@@ -150,8 +155,28 @@ private func cliStatus(_ kind: RuntimeKind, _ harness: Harness, cli: String?, mi
     signedIn = all
   }
   return RuntimeStatus(runtime: kind, name: harness.displayName, installed: missing == nil,
-                       version: version.status == 0 ? version.output.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+                       version: version.status == 0 ? versionNumber(version.output) : nil,
                        signedIn: signedIn, detail: missing)
+}
+
+/// The version number in what a `--version` prints ("codex-cli 0.170.0" → "0.170.0").
+func versionNumber(_ text: String) -> String? {
+  let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard let range = trimmed.range(of: #"[0-9]+(\.[0-9]+)+"#, options: .regularExpression) else {
+    return trimmed.isEmpty ? nil : trimmed
+  }
+  return String(trimmed[range])
+}
+
+/// The newest published release of a runtime, from the npm registry.
+func latestRelease(_ kind: RuntimeKind) async -> String? {
+  guard let package = Harness.named(kind)?.latestPackage,
+        let url = URL(string: "https://registry.npmjs.org/\(package)/latest") else { return nil }
+  let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+  guard let (data, response) = try? await URLSession.shared.data(for: request),
+        (response as? HTTPURLResponse)?.statusCode == 200,
+        let version = (try? JSONDecoder().decode([String: JSONValue].self, from: data))?["version"]?.string else { return nil }
+  return version
 }
 
 /// Installs the CLI with the vendor's installer when it is missing, or runs

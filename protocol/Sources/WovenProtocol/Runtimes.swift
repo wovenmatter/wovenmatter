@@ -9,30 +9,66 @@ public struct RuntimeStatus: Codable, Sendable, Hashable {
   public var name: String
   /// Everything the runtime needs is here (its CLI and, where it has one, its adapter).
   public var installed: Bool
-  /// The CLI's or SDK's version, as it reports it.
+  /// The CLI's or SDK's version number, as it reports it.
   public var version: String?
   /// Whether the CLI reports a sign-in; nil when the runtime has no sign-in
   /// of its own (Pi Durable's are listed by `ListSignIns`) or it could not tell.
   public var signedIn: Bool?
   /// What is missing or what went wrong, for people.
   public var detail: String?
+  /// The newest release, when the request asked for it and it could be found.
+  public var latestVersion: String?
 
   public init(runtime: RuntimeKind, name: String, installed: Bool, version: String? = nil, signedIn: Bool? = nil,
-              detail: String? = nil) {
+              detail: String? = nil, latestVersion: String? = nil) {
     self.runtime = runtime
     self.name = name
     self.installed = installed
     self.version = version
     self.signedIn = signedIn
     self.detail = detail
+    self.latestVersion = latestVersion
+  }
+}
+
+extension RuntimeStatus {
+  /// A newer release than the installed one is published.
+  public var updateAvailable: Bool {
+    guard installed, let version, let latestVersion else { return false }
+    return Self.isNewer(latestVersion, than: version)
+  }
+
+  /// Compares dotted version numbers part by part; text after a part's digits is ignored.
+  public static func isNewer(_ candidate: String, than current: String) -> Bool {
+    func parts(_ text: String) -> [Int] {
+      text.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+    }
+    let a = parts(candidate), b = parts(current)
+    for index in 0..<max(a.count, b.count) {
+      let x = index < a.count ? a[index] : 0, y = index < b.count ? b[index] : 0
+      if x != y { return x > y }
+    }
+    return false
   }
 }
 
 /// Every runtime this server knows, with what is installed and signed in here.
+/// `checkForUpdates` also looks up each one's newest release.
 public struct ListRuntimes: Request {
   public static let method = "runtimes.list"
   public typealias Reply = [RuntimeStatus]
-  public init() {}
+  public var checkForUpdates: Bool
+  public init(checkForUpdates: Bool = false) { self.checkForUpdates = checkForUpdates }
+}
+
+/// The options a runtime last reported on the machine asked (its models,
+/// thinking levels and permission modes), or nil before it has run there
+/// since the server started.
+public struct GetRuntimeConfiguration: Request {
+  public static let method = "runtimes.configuration"
+  public typealias Reply = SessionConfiguration?
+  public var runtime: RuntimeKind
+  public init(runtime: RuntimeKind) { self.runtime = runtime }
 }
 
 /// Installs a runtime, or updates it to the latest release: its CLI with the
@@ -157,6 +193,31 @@ public struct SetAPIKey: Request {
     self.provider = provider
     self.key = key
   }
+}
+
+/// One model Pi Durable can use, from its provider's catalog.
+public struct ProviderModel: Codable, Sendable, Hashable {
+  /// `provider/model`, as Pi Durable's settings name it.
+  public var id: String
+  public var name: String
+  public var provider: String
+  public var providerName: String
+
+  public init(id: String, name: String, provider: String, providerName: String) {
+    self.id = id
+    self.name = name
+    self.provider = provider
+    self.providerName = providerName
+  }
+}
+
+/// The models of every provider Pi Durable is connected to on the machine
+/// asked. `refresh` fetches the providers' catalogs again first.
+public struct ListProviderModels: Request {
+  public static let method = "signIns.models"
+  public typealias Reply = [ProviderModel]
+  public var refresh: Bool
+  public init(refresh: Bool = false) { self.refresh = refresh }
 }
 
 /// Removes a subscription's sign-in from the machine asked.

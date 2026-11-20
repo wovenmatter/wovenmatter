@@ -6,14 +6,23 @@ import WovenProtocol
 func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets: Secrets) {
   let flows = SignInFlows()
 
-  router.on(ListRuntimes.self) { _, _ in
+  router.on(ListRuntimes.self) { request, _ in
     let runtimes = await sessions.allRuntimes
     return await withTaskGroup(of: RuntimeStatus.self) { group in
-      for runtime in runtimes { group.addTask { await runtime.status() } }
+      for runtime in runtimes {
+        group.addTask {
+          var status = await runtime.status()
+          if request.checkForUpdates { status.latestVersion = await latestRelease(runtime.kind) }
+          return status
+        }
+      }
       var statuses: [RuntimeStatus] = []
       for await status in group { statuses.append(status) }
       return statuses.sorted { $0.name < $1.name }
     }
+  }
+  router.on(GetRuntimeConfiguration.self) { request, _ in
+    sessions.configurations.configuration(request.runtime)
   }
   router.on(InstallRuntime.self) { request, _ in
     guard let runtime = await sessions.runtime(request.runtime) else {
@@ -27,6 +36,10 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
     guard let pi = await sessions.runtime(.piDurable) as? PiDurableRuntime else { return [] }
     guard let list = await pi.signIns() else { throw ProtocolError(.failed, "Pi Durable could not list its providers.") }
     return list
+  }
+  router.on(ListProviderModels.self) { request, _ in
+    guard let pi = await sessions.runtime(.piDurable) as? PiDurableRuntime else { return [] }
+    return try await pi.models(refresh: request.refresh)
   }
   router.on(SetAPIKey.self) { request, _ in
     let key = request.key?.trimmingCharacters(in: .whitespacesAndNewlines)

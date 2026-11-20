@@ -23,13 +23,22 @@ public final class PiDurableRuntime: Runtime {
   let data: URL
   let credentials = PiCredentialSource()
   private let logs: URL
+  /// `default-agent/`; a test gives a stand-in.
+  private let agent: URL
 
   public init(dataFolder: URL) {
     data = dataFolder.appendingPathComponent("pi-durable", isDirectory: true)
     logs = dataFolder.appendingPathComponent("logs", isDirectory: true)
+    agent = Resources.defaultAgent
   }
 
-  private var entry: URL { Resources.defaultAgent.appendingPathComponent("src/main.mjs") }
+  init(dataFolder: URL, agent: URL) {
+    data = dataFolder.appendingPathComponent("pi-durable", isDirectory: true)
+    logs = dataFolder.appendingPathComponent("logs", isDirectory: true)
+    self.agent = agent
+  }
+
+  private var entry: URL { agent.appendingPathComponent("src/main.mjs") }
   private var environment: [String: String] { ["WOVEN_PI_DATA": data.path] }
 
   public func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
@@ -40,9 +49,15 @@ public final class PiDurableRuntime: Runtime {
     let profile = ACPProfile(
       kind: .piDurable, executable: node, arguments: [entry.path], environment: environment,
       handleRequest: { method, _ in
-        guard method == "woven/credentials" else { throw RuntimeError.failed("Woven Matter does not offer \(method).") }
-        guard let secrets = credentials.current else { return .object(["credentials": .object([:])]) }
-        return .object(["credentials": await secrets.piCredentials(subscriptions: Self.subscriptions)])
+        let secrets = credentials.current
+        switch method {
+        case "woven/credentials":
+          return .object(["credentials": await secrets?.piCredentials(subscriptions: Self.subscriptions) ?? .object([:])])
+        case "woven/settings":
+          return .object(["settings": await secrets?.piSettings() ?? .object([:])])
+        default:
+          throw RuntimeError.failed("Woven Matter does not offer \(method).")
+        }
       },
       handleNotification: { method, params in
         // A subscription the SDK renewed: keep the new credential.
@@ -57,9 +72,12 @@ public final class PiDurableRuntime: Runtime {
   public func status() async -> RuntimeStatus {
     let name = "Pi Durable"
     guard Resources.node != nil else { return RuntimeStatus(runtime: kind, name: name, installed: false, detail: "Node is not installed.") }
-    let manifest = Resources.defaultAgent.appendingPathComponent("node_modules/@earendil-works/pi-durable/package.json")
-    guard let data = try? Data(contentsOf: manifest),
-          let version = (try? JSONDecoder().decode([String: JSONValue].self, from: data))?["version"]?.string else {
+    // An SDK update installed with `update-sdk` is what new sessions load.
+    let package = "node_modules/@earendil-works/pi-durable/package.json"
+    let manifests = [data.appendingPathComponent("sdk/current").appendingPathComponent(package),
+                     agent.appendingPathComponent(package)]
+    guard let version = manifests.lazy.compactMap({ try? Data(contentsOf: $0) })
+            .compactMap({ (try? JSONDecoder().decode([String: JSONValue].self, from: $0))?["version"]?.string }).first else {
       return RuntimeStatus(runtime: kind, name: name, installed: false, detail: "Its SDK is not installed.")
     }
     let signIns = await self.signIns()
@@ -70,11 +88,11 @@ public final class PiDurableRuntime: Runtime {
   /// Installs Pi Durable's packages when they are missing, or the latest SDK
   /// for new sessions when they are there.
   public func install() async throws {
-    let modules = Resources.defaultAgent.appendingPathComponent("node_modules")
+    let modules = agent.appendingPathComponent("node_modules")
     if !FileManager.default.fileExists(atPath: modules.path) {
       guard let npm = ChildProcess.find("npm") else { throw RuntimeError.failed("Installing Pi Durable needs npm.") }
       let result = await ChildProcess.run(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"],
-                                          directory: Resources.defaultAgent.path, timeout: .seconds(900))
+                                          directory: agent.path, timeout: .seconds(900))
       guard result.status == 0 else { throw RuntimeError.failed("npm ci failed: \(result.output.suffix(2000))") }
       return
     }
@@ -97,6 +115,14 @@ public final class PiDurableRuntime: Runtime {
       list.append(SignIn(provider: id, name: provider["name"]?.string ?? id, kind: kind, connected: connected))
     }
     return list
+  }
+
+  /// The models of every provider this machine's credentials reach.
+  func models(refresh: Bool) async throws -> [ProviderModel] {
+    let credentials = await credentials.current?.piCredentials(subscriptions: Self.subscriptions) ?? .object([:])
+    let result = try await control(.object(["action": .string("models"), "credentials": credentials, "refresh": .bool(refresh)]),
+                                   events: { _ in }, answers: nil)
+    return try (result["models"] ?? .array([])).decode([ProviderModel].self)
   }
 
   /// Runs one control request (`node main.mjs --control`): its events go to

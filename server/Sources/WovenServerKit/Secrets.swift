@@ -218,6 +218,22 @@ actor Secrets {
     try store.write("sign-in/" + provider, try credential.map { try JSONEncoder().encode($0) })
   }
 
+  /// Pi Durable's chat settings on this machine: the synced setting
+  /// `piDurable.<machineID>` when this machine keeps its own, else
+  /// `piDurable`, with `defaultModel` from the defaults for new chats
+  /// (`agentDefaults.piDurable[.<machineID>]`).
+  func piSettings() async -> JSONValue {
+    func setting(_ key: String) async -> JSONValue? { (try? await library.setting(key))?.value }
+    let own = library.machineID
+    var settings = await setting("piDurable.\(own)")
+    if settings == nil { settings = await setting("piDurable") }
+    var defaults = await setting("agentDefaults.piDurable.\(own)")
+    if defaults == nil { defaults = await setting("agentDefaults.piDurable") }
+    guard case .object(var fields) = settings ?? .object([:]) else { return .object([:]) }
+    fields["defaultModel"] = defaults?["model"]
+    return .object(fields)
+  }
+
   /// Every credential Pi Durable may use on this machine, in its shape.
   func piCredentials(subscriptions providers: [String]) async -> JSONValue {
     var credentials: [String: JSONValue] = [:]

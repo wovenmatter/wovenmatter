@@ -55,12 +55,13 @@ function sumUsage(state) {
 export const Workflow = defineExtension({ name: 'woven-workflow', tools: [checklist] });
 export const Subagents = defineExtension({ name: 'woven-subagents', tools: [subagent] });
 
-// Web search through whichever search key the server supplied.
+// Web search through the chosen provider, else whichever search key the server supplied.
 const searchProviders = ['exa', 'brave', 'firecrawl'];
-export function createSearch(credentials) {
+export function createSearch(credentials, preferred) {
+  const order = searchProviders.includes(preferred) ? [preferred, ...searchProviders.filter(id => id !== preferred)] : searchProviders;
   const run = async (action, parameters, signal) => {
     let provider, key;
-    for (const id of searchProviders) { const value = await credentials.read(id); if (value?.key) { provider = id; key = value.key; break; } }
+    for (const id of order) { const value = await credentials.read(id); if (value?.key) { provider = id; key = value.key; break; } }
     if (!provider) throw new Error('No web search key is set up. Add an Exa, Brave or Firecrawl key in Settings.');
     if (action === 'read' && provider === 'brave') throw new Error('Brave can search but cannot read pages. Use an Exa or Firecrawl key to read pages.');
     const limit = Math.min(10, Math.max(1, parameters.numResults ?? 5));

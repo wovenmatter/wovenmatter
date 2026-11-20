@@ -56,4 +56,25 @@ export async function refreshCatalogs({ runtime, credentials }) {
 }
 
 export const modelReference = model => `${model.provider}/${model.id}`;
+
+// The models Pi Durable's settings offer, from those available: the enabled
+// providers' models that are listed, the default first (every one when none is listed).
+export function offeredModels(available, settings = {}) {
+  const providers = Array.isArray(settings.providers) ? new Set(settings.providers) : undefined;
+  const enabled = providers ? available.filter(model => providers.has(model.provider)) : available;
+  const listed = [settings.defaultModel, ...(Array.isArray(settings.models) ? settings.models : [])].filter(Boolean);
+  if (!listed.length) return enabled;
+  const byReference = new Map(enabled.map(model => [modelReference(model), model]));
+  const offered = [...new Set(listed)].map(reference => byReference.get(reference)).filter(Boolean);
+  return offered.length ? offered : enabled;
+}
+
+// Every model of the providers the credentials reach, for the settings' catalog.
+export async function catalog(models, { refresh = false } = {}) {
+  if (refresh) await refreshCatalogs(models);
+  return (await availableModels(models)).map(model => ({
+    id: modelReference(model), name: model.name ?? model.id, provider: model.provider,
+    providerName: models.runtime.getProvider(model.provider)?.name ?? model.provider,
+  }));
+}
 export const thinkingLevels = model => model ? getSupportedThinkingLevels(model) : [];
