@@ -71,7 +71,15 @@
     "text": "Partial answer",
     "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
     "issue": "limit",
-    "stopped": true
+    "stopped": true,
+    "visualReplies": [
+      {
+        "title": "Build times",
+        "height": 320,
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048
+      }
+    ]
   },
   "ConversationSnapshot": {
     "subscriptionId": "s-1",
@@ -98,7 +106,15 @@
         "text": "Partial answer",
         "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
         "issue": "limit",
-        "stopped": true
+        "stopped": true,
+        "visualReplies": [
+          {
+            "title": "Build times",
+            "height": 320,
+            "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 2048
+          }
+        ]
       }
     ],
     "running": true,
@@ -458,7 +474,15 @@
         "text": "Partial answer",
         "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
         "issue": "limit",
-        "stopped": true
+        "stopped": true,
+        "visualReplies": [
+          {
+            "title": "Build times",
+            "height": 320,
+            "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 2048
+          }
+        ]
       }
     }
   },
@@ -1075,7 +1099,15 @@
         "text": "Partial answer",
         "error": "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
         "issue": "limit",
-        "stopped": true
+        "stopped": true,
+        "visualReplies": [
+          {
+            "title": "Build times",
+            "height": 320,
+            "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 2048
+          }
+        ]
       }
     ],
     "running": true,

@@ -105,6 +105,7 @@ const failedEntry = {
   error: "openai-codex/gpt-6-sol hit its 5-hour usage limit.",
   issue: "limit",
   stopped: true,
+  visualReplies: [{ title: "Build times", height: 320, digest: "c".repeat(64), size: 2048 }],
 } satisfies DisplayEntry;
 
 const snapshot = {
