@@ -187,8 +187,10 @@ behind one adapter interface in the server and are treated alike:
   command it ran finishes. Its first output with no turn running starts a
   turn, which shows as running, can be stopped and is saved item by item
   like any other. It ends with the runtime's own end report, or, for a
-  runtime that gives none, after a few seconds without output. A goal does
-  not count such a turn or continue after it.
+  runtime that gives none, after a few seconds without output. Should an
+  end report never come, it ends after two minutes without output with no
+  tool call open and no question waiting. A goal does not count such a turn
+  or continue after it.
 - When an item finishes (a user message, an assistant message, a tool call with
   its result) the server writes it once to `session_items`, in the same step as
   it announces it. Partial text is never written while it streams. When a

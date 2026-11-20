@@ -365,6 +365,11 @@ private actor ACPState {
     guard let sessionID, turnRunning || ownTurn else { return false }
     let taken: Bool
     switch profile.steering {
+    case .interject where !turnRunning:
+      // Grok takes an interjection even after its own turn ended, which it
+      // does not report, so the message would reach no turn. As a prompt it
+      // starts one, or joins the work it is doing.
+      taken = false
     case .interject:
       _ = try await connection.request("_x.ai/interject", .object([
         "sessionId": .string(sessionID), "text": .string(Self.textWithFiles(turn)),
@@ -394,17 +399,29 @@ private actor ACPState {
     guard !turnRunning, !ownTurn else { return }
     ownTurn = true
     turnNumber += 1
-    guard profile.ownTurnsEndQuietly else { return }
+    let quiet = profile.ownTurnsEndQuietly ? Self.quietEnd : Self.missedEnd
     Task {
       while true {
-        try? await Task.sleep(for: Self.quietEnd)
+        try? await Task.sleep(for: quiet)
         guard self.ownTurn else { return }
-        if ContinuousClock.now - self.lastOutput >= Self.quietEnd { return self.endOwnTurn() }
+        if self.quietFor(quiet) { return self.endOwnTurn() }
       }
     }
   }
 
+  /// A turn the agent started by itself ends after this long without output
+  /// when the runtime gives no end report.
   static let quietEnd: Duration = .seconds(3)
+  /// For a runtime that does report the end, the same happens after this long,
+  /// and only with no tool call open and no question waiting, in case the
+  /// report never comes (output after a prompt's reply, with nothing after it).
+  static let missedEnd: Duration = .seconds(120)
+
+  private func quietFor(_ quiet: Duration) -> Bool {
+    guard ContinuousClock.now - lastOutput >= quiet else { return false }
+    return profile.ownTurnsEndQuietly
+      || waiting.isEmpty && !tools.values.contains { $0.kind != .thinking && $0.kind != .plan }
+  }
 
   /// The agent's own turn ended: it is closed like a prompt's.
   private func endOwnTurn() {
