@@ -11,7 +11,8 @@ resources_dir="$app/Contents/Resources/WovenVM"
 scratch="${DERIVED_FILE_DIR:-${TMPDIR:-/tmp}/wovenmatter-build}/vm-helper"
 sources="$repo_root/app/VMHelper"
 # What the server and the helper share.
-shared="$repo_root/server/Sources/WovenServerKit/Bots/VM/VMProtocol.swift"
+shared=("$repo_root/server/Sources/WovenServerKit/Bots/VM/VMProtocol.swift"
+  "$repo_root/protocol/Sources/WovenProtocol/SocketFolder.swift")
 mkdir -p "$helper_dir" "$scratch"
 
 # The guest is arm64 Ubuntu, so the helper exists only for Apple silicon.
@@ -20,7 +21,7 @@ case " ${ARCHS:-$(uname -m)} " in
   *) rm -rf "$helper_dir/WovenMatterVMHelper" "$resources_dir"; exit 0 ;;
 esac
 
-swift_sources=("$shared" "$sources/Main.swift" "$sources/VMHelper.swift" "$sources/Sockets.swift"
+swift_sources=("${shared[@]}" "$sources/Main.swift" "$sources/VMHelper.swift" "$sources/Sockets.swift"
   "$sources/HostMetrics.swift" "$sources/GuestSetup.swift" "$sources/Guest.swift" "$sources/QCOW2Image.swift")
 guest_files=(agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc
   woven-agent.service woven-provision.service woven-egress.service)

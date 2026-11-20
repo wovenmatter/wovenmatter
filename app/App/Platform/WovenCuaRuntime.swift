@@ -72,9 +72,9 @@ final class WovenCuaRuntime {
             throw WorkspaceToolError.invalid("The bundled Cua Driver is missing. Rebuild or update Woven Matter.")
         }
         if daemon == nil {
-            // Darwin's sockaddr_un path is limited to 104 bytes; the user's
-            // long per-user TMPDIR can exceed that before our filename.
-            let root = URL(fileURLWithPath: "/private/tmp").appending(path: "woven-cua-" + UUID().uuidString)
+            let sockets = SocketFolder.directory(for: AppDataFolder.url)
+            try SocketFolder.prepare(sockets)
+            let root = sockets.appending(path: "cua-" + UUID().uuidString.prefix(8))
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                 attributes: [.posixPermissions: 0o700])
             let process = Process(), pipe = Pipe()

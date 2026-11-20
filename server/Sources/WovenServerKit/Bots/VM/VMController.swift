@@ -1,9 +1,10 @@
 #if os(macOS)
 import Darwin
 import Foundation
+import WovenProtocol
 
 /// The server's handle on the VM helper: a per-user launchd job running
-/// `Contents/Helpers/WovenMatterVMHelper --root <root>`, and its control socket.
+/// `Contents/Helpers/WovenMatterVMHelper --root <root> --sockets <directory>`, and its control socket.
 ///
 /// The job file lives in the server's data folder, not in ~/Library/LaunchAgents,
 /// so the VM never starts at login on its own: the server starts it when this
@@ -17,8 +18,8 @@ struct WovenVMController: Sendable {
 
   /// The label is the app's bundle identifier plus `.vm`, so a dev instance
   /// (its own bundle identifier) has its own VM and never touches another's.
-  init(root: URL, bundleIdentifier: String, helper: URL, jobFile: URL) {
-    paths = WovenVMPaths(root: root)
+  init(root: URL, sockets: URL, bundleIdentifier: String, helper: URL, jobFile: URL) {
+    paths = WovenVMPaths(root: root, sockets: sockets)
     label = bundleIdentifier + ".vm"
     self.helper = helper
     self.jobFile = jobFile
@@ -37,7 +38,7 @@ struct WovenVMController: Sendable {
                                               attributes: [.posixPermissions: 0o700])
       let job: [String: Any] = [
         "Label": label,
-        "ProgramArguments": [helper.path, "--root", paths.root.path],
+        "ProgramArguments": [helper.path, "--root", paths.root.path, "--sockets", paths.socketDirectory.path],
         "RunAtLoad": true,
         "KeepAlive": ["SuccessfulExit": false],
         "ThrottleInterval": 5,
@@ -99,7 +100,7 @@ struct WovenVMController: Sendable {
   private func call<Reply: Decodable>(_ method: String, _ path: String, body: Data? = nil,
                                       as type: Reply.Type) async throws -> Reply {
     // Only talk to a helper listening in this user's own private directory.
-    try WovenVMPaths.preparePrivateDirectory(paths.socketDirectory, create: false)
+    try SocketFolder.prepare(paths.socketDirectory)
     let reply: (status: Int, body: Data)
     do {
       reply = try await UnixHTTP.request(socket: paths.controlSocket.path, method: method, path: path, body: body)

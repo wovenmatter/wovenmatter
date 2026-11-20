@@ -43,6 +43,8 @@ struct LinuxDockerdBotsEngine: BotsEngine {
   }
 
   func prepare(_ resources: BotsResources) async throws -> String {
+    // The instance name is part of the engine's socket path.
+    try SocketFolder.check(socket)
     guard let installed = read(Installed.self, config) else {
       let installer = Resources.root.appending(path: "bots/engine/bots-engine.py").path
       throw RuntimeError.failed("""

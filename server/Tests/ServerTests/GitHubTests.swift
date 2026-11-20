@@ -34,7 +34,7 @@ func gitHubKeySignsOnlyThroughTheAgentAndStopsWhenThisMachineIsOff() async throw
   #expect(replies[0].key == key.summary)
   #expect(replies[0].key?.fingerprint.hasPrefix("SHA256:") == true)
 
-  let agent = try GitFiles.agentSocket(in: folder.appendingPathComponent("github"))
+  let agent = try SocketFolder.path("agent.sock", for: folder)
   let identities = try agentRequest(agent, Data([SSHAgent.requestIdentities]))
   #expect(identities == Data([SSHAgent.identitiesAnswer]) + SSHWire.uint32(1) + SSHWire.string(key.blob)
     + SSHWire.string(Data("throwaway".utf8)))
@@ -61,7 +61,7 @@ func gitHubKeySignsOnlyThroughTheAgentAndStopsWhenThisMachineIsOff() async throw
     for value in row.values.values { if case .blob(let data) = value { haystack.append(data) } }
   }
   let github = folder.appendingPathComponent("github")
-  for name in try FileManager.default.contentsOfDirectory(atPath: github.path) where name != "agent.sock" {
+  for name in try FileManager.default.contentsOfDirectory(atPath: github.path) {
     haystack.append(try Data(contentsOf: github.appendingPathComponent(name)))
   }
   let lines = pasted.split(separator: "\n")

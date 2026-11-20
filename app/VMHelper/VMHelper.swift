@@ -59,9 +59,9 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         chmod(paths.root.path, 0o700)
-        // The socket directory may be under /private/tmp: never listen in one
-        // another user created or can enter.
-        try WovenVMPaths.preparePrivateDirectory(paths.socketDirectory)
+        // The socket directory is under /tmp: never listen in one another
+        // user created or can enter.
+        try SocketFolder.prepare(paths.socketDirectory)
         lockDescriptor = open(paths.root.appending(path: "helper.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard lockDescriptor >= 0, flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0 else {
             throw HelperAlreadyRunning()

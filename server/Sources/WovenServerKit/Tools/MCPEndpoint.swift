@@ -2,11 +2,6 @@ import Foundation
 import Synchronization
 import WovenLibrary
 import WovenProtocol
-#if canImport(CryptoKit)
-import CryptoKit
-#else
-import Crypto
-#endif
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -89,14 +84,6 @@ final class MCPEndpoint: Sendable {
   init(keys: ToolKeys, tools: WovenTools) {
     self.keys = keys
     self.tools = tools
-  }
-
-  /// A socket path short enough for `sockaddr_un`, in `folder` when it fits.
-  static func socketPath(in folder: URL) -> String {
-    let path = folder.appendingPathComponent("tools.sock").path
-    if path.utf8.count < 100 { return path }
-    let digest = SHA256.hash(data: Data(folder.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-    return "/tmp/woven-tools-\(getuid())-\(digest).sock"
   }
 
   func start() throws {

@@ -10,7 +10,7 @@ import WovenProtocol
 ///                 [--peer-port PORT]...
 ///
 /// Opens the library in DATA-FOLDER, listens on a Unix socket for the UI on
-/// this machine (default DATA-FOLDER/server.sock) and on this machine's
+/// this machine (default `server.sock` in the data folder's `SocketFolder`) and on this machine's
 /// Tailscale address for other machines (default port 47337, or `--port`). `--listen auto`
 /// listens there only when Tailscale is connected. `--tailnet none` keeps the
 /// server to itself: it neither listens for nor looks for other machines.
@@ -40,7 +40,7 @@ public enum ServerCommand {
     }
     arguments.removeFirst()
 
-    var socketPath: String? = URL(fileURLWithPath: folder).appendingPathComponent("server.sock").path
+    var socketPath: String? = try SocketFolder.path("server.sock", for: URL(fileURLWithPath: folder, isDirectory: true))
     var listen: String?
     var alone = false
     var name: String?
@@ -60,6 +60,7 @@ public enum ServerCommand {
       switch option {
       case "--socket":
         let path = try value()
+        if path != "none" { try SocketFolder.check(path) }
         socketPath = path == "none" ? nil : path
       case "--listen": listen = try value()
       case "--port":

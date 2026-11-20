@@ -85,7 +85,7 @@ public final class WovenServer: Sendable {
     // Before any runtime starts, so every one inherits the git environment.
     let github = try await GitHub.start(library: library, secrets: secrets, dataFolder: options.dataFolder)
     let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion)
-    let toolKeys = ToolKeys(socketPath: MCPEndpoint.socketPath(in: options.dataFolder))
+    let toolKeys = ToolKeys(socketPath: try SocketFolder.path("tools.sock", for: options.dataFolder))
     let sessions = SessionManager(library: library, runtimes: options.runtimes,
                                   scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true),
                                   toolKeys: toolKeys)

@@ -1,12 +1,11 @@
 // Woven's Linux VM for the bots' containers runs on a Mac only (Virtualization).
 #if os(macOS)
-import CryptoKit
 import Darwin
 import Foundation
 
 // What the server and the VM helper (`app/VMHelper`) both know about the VM.
-// `scripts/build-vm-helper.sh` compiles this file into the helper too, so it
-// depends on Foundation and CryptoKit only.
+// `scripts/build-vm-helper.sh` compiles this file and `SocketFolder.swift` into
+// the helper too, so it depends on Foundation only.
 
 /// The VM's lifecycle as the helper reports it. `failed` always carries a reason.
 enum WovenVMPhase: String, Codable, Sendable {
@@ -94,14 +93,14 @@ enum WovenVMError: Error, LocalizedError, Equatable {
 }
 
 /// Every file the VM owns lives under `root` (in the server's data folder);
-/// the sockets live there too unless that path is too long for a socket.
+/// its sockets live in the data folder's `SocketFolder` directory.
 struct WovenVMPaths: Sendable, Equatable {
   let root: URL
   let socketDirectory: URL
 
-  init(root: URL) {
+  init(root: URL, sockets: URL) {
     self.root = root.standardizedFileURL
-    socketDirectory = Self.socketDirectory(root: self.root)
+    socketDirectory = sockets.standardizedFileURL
   }
 
   var config: URL { root.appending(path: "config.json") }
@@ -115,33 +114,6 @@ struct WovenVMPaths: Sendable, Equatable {
   var downloads: URL { root.appending(path: "downloads", directoryHint: .isDirectory) }
   var engineSocket: URL { socketDirectory.appending(path: "docker.sock") }
   var controlSocket: URL { socketDirectory.appending(path: "control.sock") }
-
-  /// sun_path holds 104 bytes on macOS. A longer root keeps its sockets in a
-  /// private per-user directory keyed by the root.
-  static func socketDirectory(root: URL) -> URL {
-    if root.appending(path: "control.sock").path.utf8.count < 100 { return root }
-    let digest = SHA256.hash(data: Data(root.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-    return URL(fileURLWithPath: "/private/tmp/wovenmatter-vm-\(getuid())-\(digest)", isDirectory: true)
-  }
-
-  /// Creates `directory` (mode 0700) when missing, then requires it to be a
-  /// real directory owned by this user that nobody else can enter: in the
-  /// shared /private/tmp another local user could otherwise create it first
-  /// and receive the engine and control connections.
-  static func preparePrivateDirectory(_ directory: URL, create: Bool = true) throws {
-    let path = directory.path
-    if create, mkdir(path, 0o700) != 0, errno != EEXIST {
-      throw WovenVMError.unavailable("The VM's socket directory could not be created.")
-    }
-    var info = stat()
-    guard lstat(path, &info) == 0 else { throw WovenVMError.unavailable("The VM's socket directory is missing.") }
-    guard info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid() else {
-      throw WovenVMError.invalid("\(path) belongs to another user or is not a directory. Remove it, then start the bots again.")
-    }
-    if info.st_mode & 0o077 != 0, chmod(path, 0o700) != 0 {
-      throw WovenVMError.invalid("\(path) could not be made private.")
-    }
-  }
 }
 
 /// The ports the guest agent listens on. Containers cannot open AF_VSOCK

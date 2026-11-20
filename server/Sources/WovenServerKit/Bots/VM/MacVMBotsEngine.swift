@@ -21,6 +21,7 @@ struct MacVMBotsEngine: BotsEngine {
       return UnavailableBotsEngine(reason: "This build of Woven Matter has no VM helper, so it cannot run bots.")
     }
     let vm = WovenVMController(root: dataFolder.appending(path: "vm", directoryHint: .isDirectory),
+                               sockets: SocketFolder.directory(for: dataFolder),
                                bundleIdentifier: bundle, helper: helper,
                                jobFile: dataFolder.appending(path: bundle + ".vm.plist"))
     return MacVMBotsEngine(vm: vm, dataFolder: dataFolder)

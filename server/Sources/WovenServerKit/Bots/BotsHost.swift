@@ -112,7 +112,6 @@ actor BotsHost {
   var botsFolder: URL { dataFolder.appendingPathComponent("bots", isDirectory: true) }
   var configURL: URL { runtimeFolder.appendingPathComponent("config.json") }
   private var logURL: URL { runtimeFolder.appendingPathComponent("runtime.log") }
-  private var socketPath: String { runtimeFolder.appendingPathComponent("runtime.sock").path }
 
   /// The Woven MCP, offered to the bots when this machine is their home.
   func offerTools(_ tools: WovenTools) {
@@ -288,10 +287,7 @@ actor BotsHost {
     let pi = dataFolder.appendingPathComponent("pi-durable", isDirectory: true)
     try manager.createDirectory(at: bots, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     try manager.createDirectory(at: pi, withIntermediateDirectories: true)
-    // A Unix socket path has a short fixed limit (104 bytes on a Mac, 108 on Linux).
-    guard socketPath.utf8.count < 104 else {
-      throw RuntimeError.failed("The bots runtime's socket path is too long: \(socketPath)")
-    }
+    let socketPath = try SocketFolder.path("runtime.sock", for: dataFolder)
     let config = BotsRuntimeConfig(
       dataDir: bots.path, socket: socketPath, engine: .init(socket: engineSocket, kind: engine.kind),
       image: .init(tag: "wovenmatter-bots"), limits: .init(botMemoryBytes: resources.perBotBytes),

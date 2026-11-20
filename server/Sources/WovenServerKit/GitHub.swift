@@ -2,11 +2,6 @@ import Foundation
 import Synchronization
 import WovenLibrary
 import WovenProtocol
-#if canImport(CryptoKit)
-import CryptoKit
-#else
-import Crypto
-#endif
 
 /// The GitHub SSH key and git identity on this machine. The key is a synced
 /// secret sealed for each machine; the identity and which places use the key
@@ -38,7 +33,7 @@ actor GitHub {
   static func start(library: Library, secrets: Secrets, dataFolder: URL) async throws -> GitHub {
     let folder = dataFolder.appendingPathComponent("github", isDirectory: true)
     try GitFiles.makePrivateFolder(folder)
-    let socket = try GitFiles.agentSocket(in: folder)
+    let socket = try SocketFolder.path("agent.sock", for: dataFolder)
     let agent = try await SSHAgent.start(path: socket)
     let github = GitHub(library: library, secrets: secrets, folder: folder, agent: agent,
                         environment: GitEnvironment.apply(folder: folder))
@@ -190,17 +185,6 @@ enum GitFiles {
   static func makePrivateFolder(_ folder: URL) throws {
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
-  }
-
-  /// Where the agent listens. A socket path is limited to 104 bytes, so a long
-  /// data folder falls back to a private folder in the temporary directory.
-  static func agentSocket(in folder: URL) throws -> String {
-    let socket = folder.appendingPathComponent("agent.sock").path
-    if socket.utf8.count < 100 { return socket }
-    let digest = SHA256.hash(data: Data(folder.path.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
-    let fallback = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("woven-github-\(digest)", isDirectory: true)
-    try makePrivateFolder(fallback)
-    return fallback.appendingPathComponent("agent.sock").path
   }
 
   /// File name to contents; nil removes the file.

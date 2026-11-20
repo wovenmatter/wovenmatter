@@ -3,9 +3,10 @@ import WovenProtocol
 import WovenServerKit
 
 // woven-probe: talks to a running woven-server over its Unix socket, for
-// checking it by hand. The socket is --socket PATH or $WOVEN_SOCKET.
+// checking it by hand. The socket is --socket PATH or $WOVEN_SOCKET; a data
+// folder there means that folder's server socket.
 let usage = """
-  usage: woven-probe [--socket PATH] COMMAND
+  usage: woven-probe [--socket PATH|DATA-FOLDER] COMMAND
     runtimes                         which runtimes are installed and signed in here
     install RUNTIME                  install or update a runtime
     sign-ins                         Pi Durable's providers on this machine
@@ -80,7 +81,11 @@ if let index = arguments.firstIndex(of: "--socket"), index + 1 < arguments.count
 
 guard let command = arguments.first else { fail(usage) }
 arguments.removeFirst()
-guard let socket else { fail("say which server: --socket PATH or WOVEN_SOCKET") }
+guard var socket else { fail("say which server: --socket PATH or WOVEN_SOCKET") }
+var isFolder: ObjCBool = false
+if FileManager.default.fileExists(atPath: socket, isDirectory: &isFolder), isFolder.boolValue {
+  socket = SocketFolder.directory(for: URL(fileURLWithPath: socket, isDirectory: true)).appendingPathComponent("server.sock").path
+}
 
 let client: Client
 do {

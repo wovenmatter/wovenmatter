@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// This Mac's background server: the app's own signed program run with
 /// `--server`, as a per-user launchd agent so it outlives the window. Closing
@@ -15,7 +16,8 @@ import Foundation
 enum ThisMachineServer {
     static var label: String { (Bundle.main.bundleIdentifier ?? "wovenmatter.desktop") + ".server" }
     static var dataFolder: URL { AppDataFolder.url }
-    static var socketPath: String { dataFolder.appending(path: "server.sock").path }
+    /// The server makes it at start, in the data folder's socket directory.
+    static var socketPath: String { SocketFolder.directory(for: dataFolder).appending(path: "server.sock").path }
     static var isDevelopmentInstance: Bool { !(AppDataFolder.developmentInstance ?? "").isEmpty }
 
     private static var domain: String { "gui/\(getuid())" }
@@ -52,7 +54,7 @@ enum ThisMachineServer {
     private static func arguments() -> [String] {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         var arguments = [Bundle.main.executableURL?.path ?? "", ServerEntry.argument, dataFolder.path,
-                         "--socket", socketPath, "--app-version", version]
+                         "--app-version", version]
         if isDevelopmentInstance {
             arguments += ["--folders", dataFolder.appending(path: "Folders").path, "--stand-in-runtime",
                           "--instance", AppDataFolder.developmentInstance ?? "dev"]

@@ -159,7 +159,7 @@ private final class StandInProcess: BotsRuntimeProcess {
   }
 }
 
-/// A server whose data folder is short enough for the runtime's socket path.
+/// A server with a data folder of its own.
 private struct TestServer {
   let server: WovenServer
   let folder: URL
