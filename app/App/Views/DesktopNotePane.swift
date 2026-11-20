@@ -379,6 +379,7 @@ struct DesktopNotePane: View {
         .disabled(model.workspace.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
         .sheet(isPresented: $showsVersionHistory) { NoteVersionHistory(model: model, noteID: note.id) }
+        .debugRequest("history") { showsVersionHistory = true }
         .onAppear {
             model.documents.open(note)
             if focusesTitleOnAppear {

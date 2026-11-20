@@ -169,6 +169,8 @@ struct WorkspaceView: View {
         .onChange(of: model.navigation.pendingDefaultAgentSettingsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
+        .debugNavigation(openNote: selectNote, show: { destination = $0 })
+        .debugRequest("trash") { showsWorkspaceTrash = true }
         .onChange(of: model.navigation.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }

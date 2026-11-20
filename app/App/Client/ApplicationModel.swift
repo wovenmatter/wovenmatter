@@ -122,10 +122,11 @@ final class ApplicationModel {
     }
 
     private func reloadAll() async {
-        await machines.reload()
+        // The library's own lists first: reading machines' runtimes can take long.
         await workspace.refresh()
-        await databases.refresh()
         await documents.reload()
+        await databases.refresh()
+        await machines.reload()
         await settings.reload()
     }
 

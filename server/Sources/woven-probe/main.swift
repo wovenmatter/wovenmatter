@@ -20,6 +20,16 @@ let usage = """
     items SESSION                    print the saved items
     configure SESSION [--model M] [--thinking T] [--permission P]
     answer SESSION PROMPT ANSWER | interrupt SESSION | stop SESSION | delete SESSION
+    artifacts                        notes, pages, sheets and apps, with their stamps
+    artifact ID                      print an artifact's document
+    artifact-create KIND TITLE [FILE]
+                                     create one (note, canvas, spreadsheet, html), FILE its document
+    artifact-write ID FILE [--based-on STAMP]
+                                     write a document, by default based on an old stamp so it conflicts
+    versions ID                      an artifact's version history
+    trash ID | restore ID
+    app-state ID KEY JSON            set one key of an app's saved state
+    databases | db-create NAME | db-execute ID SQL | db-query ID SQL
   """
 
 func fail(_ message: String) -> Never {
@@ -261,6 +271,46 @@ do {
   case "delete":
     _ = try await client.call(DeleteSession(sessionID: argument(0, "SESSION")))
     out("done")
+  case "artifacts":
+    for artifact in try await client.call(ListArtifacts(includeTrashed: true)) {
+      out("\(artifact.id)\t\(artifact.kind.rawValue)\t\(artifact.title)\t\(artifact.stamp)" + (artifact.trashed ? "\ttrashed" : ""))
+    }
+  case "artifact":
+    out(try await client.call(ReadArtifact(artifactID: argument(0, "ID"))).body)
+  case "artifact-create":
+    let kind = NoteArtifactKind(rawValue: argument(0, "KIND")) ?? .note
+    let body = arguments.count > 2 ? try String(contentsOfFile: arguments[2], encoding: .utf8) : nil
+    out(try await client.call(CreateArtifact(kind: kind, title: argument(1, "TITLE"), body: body)).artifact.id)
+  case "artifact-write":
+    let id = argument(0, "ID")
+    let body = try String(contentsOfFile: argument(1, "FILE"), encoding: .utf8)
+    let basedOn = options("--based-on").first ?? "an earlier version"
+    let written = try await client.call(WriteArtifact(artifactID: id, basedOn: basedOn, body: body))
+    out("\(written.document.artifact.stamp)" + (written.replacedUnseen ? "\treplaced a version unseen" : ""))
+  case "versions":
+    for version in try await client.call(ListArtifactVersions(artifactID: argument(0, "ID"))) {
+      out("\(version.id)\t\(version.reason.rawValue)\t\(version.title)\t\(version.savedAt)")
+    }
+  case "trash", "restore":
+    _ = try await client.call(UpdateArtifact(artifactID: argument(0, "ID"), trashed: command == "trash"))
+    out("done")
+  case "app-state":
+    let id = argument(0, "ID"), key = argument(1, "KEY")
+    let value = try JSONDecoder().decode(JSONValue.self, from: Data(argument(2, "JSON").utf8))
+    let current = NoteDocument.decode(try await client.call(ReadArtifact(artifactID: id)).body).artifactState?[key]?.version
+    let result = try await client.call(EditAppState(artifactID: id, edits: [ArtifactStateEdit(action: .set, key: key, value: value,
+                                                                                               expectedVersion: current)]))
+    out("version \(result.version)")
+  case "databases":
+    for database in try await client.call(ListDatabases()) {
+      out("\(database.id)\t\(database.name)\t\(database.machineID)\t\(database.copyDigest ?? "-")")
+    }
+  case "db-create":
+    out(try await client.call(CreateDatabase(name: argument(0, "NAME"))).id)
+  case "db-execute":
+    out("\(try await client.call(ExecuteDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).changes) changed")
+  case "db-query":
+    out(try await client.call(QueryDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).json)
   default:
     fail(usage)
   }

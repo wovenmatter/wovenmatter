@@ -36,9 +36,11 @@ final class DatabasesStore {
             let known = machines?.machines ?? []
             do {
                 guard let server, server.isConnected else { throw ClientError.notConnected }
-                snapshot = Self.snapshot(databases: try await server.call(ListDatabases()), machines: known, error: nil)
+                snapshot = Self.snapshot(databases: try await server.call(ListDatabases()), machines: known,
+                                         thisMachine: server.remote?.machine, error: nil)
             } catch {
-                snapshot = Self.snapshot(databases: [], machines: known, error: Self.message(error))
+                snapshot = Self.snapshot(databases: [], machines: known, thisMachine: server?.remote?.machine,
+                                         error: Self.message(error))
             }
         }
     }
@@ -46,15 +48,21 @@ final class DatabasesStore {
     @ObservationIgnored private var refreshAgain = false
 
     /// One source per machine, this Mac first, then any owner the machine list does not know.
-    private static func snapshot(databases: [Database], machines: [Machine], error: String?) -> DatabasesSnapshot {
+    private static func snapshot(databases: [Database], machines: [Machine], thisMachine: WovenProtocol.Machine?,
+                                 error: String?) -> DatabasesSnapshot {
         var sources = machines.map { machine in
             source(id: machine.id, name: machine.name, kind: machine.isThisMachine ? .local : .remote,
                    detail: machine.isThisMachine ? "\(machine.platform.displayName) · This Mac" : machine.platform.displayName,
                    online: machine.isOnline, databases: databases, error: error)
         }
+        // This Mac's own server answered, so this Mac is online even before the machine list has loaded.
+        if let thisMachine, !machines.contains(where: { $0.id == thisMachine.id }) {
+            sources.insert(source(id: thisMachine.id, name: thisMachine.name, kind: .local, detail: "This Mac", online: true,
+                                  databases: databases, error: error), at: 0)
+        }
         var unknown: [String] = []
         for database in databases where !machines.contains(where: { $0.id == database.machineID })
-            && !unknown.contains(database.machineID) {
+            && database.machineID != thisMachine?.id && !unknown.contains(database.machineID) {
             unknown.append(database.machineID)
         }
         sources += unknown.map {
