@@ -51,7 +51,7 @@ struct BotsHostInterface: Sendable {
       guard let botID = params["botId"]?.string else { throw RuntimeError.failed("tools.list needs a botId.") }
       guard await toolsAllowed(botID), let tools = tools.current else { return .object(["allowed": .bool(false)]) }
       return .object(["allowed": .bool(true), "tools": .array(tools.listing(forBots: true)),
-                      "instructions": .string(WovenInstructions.text)])
+                      "instructions": .string(WovenInstructions.forBots)])
     case "tools.call":
       guard let botID = params["botId"]?.string, let name = params["name"]?.string else {
         throw RuntimeError.failed("tools.call needs a botId and a name.")

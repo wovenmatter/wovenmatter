@@ -4,8 +4,9 @@ import WovenProtocol
 /// A page an agent wrote, made ready to show: its local images embedded.
 struct PreparedPage: Sendable, Hashable {
   var html: String
-  /// Absolute local image paths the page refers to that are missing,
-  /// unreadable, too large or not images, each once, in the order met.
+  /// Absolute local image paths the page refers to that were not embedded
+  /// (missing, unreadable, too large, not images, or not read at all), each
+  /// once, in the order met.
   var missingImages: [String]
 }
 
@@ -34,7 +35,10 @@ enum HTMLPages {
   /// Embeds each local image the page refers to as a data URI. A path read
   /// once is embedded everywhere it appears. Fails when the page is empty or
   /// too long, uses viewport-height lengths, or would be over `pageLimit`.
-  static func prepare(_ html: String) throws -> PreparedPage {
+  /// `readingDisk` false (a bot, whose files are in its own machine, not this
+  /// one) reads nothing: the page stays as authored and every local path is
+  /// in `missingImages`.
+  static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedPage {
     guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("Give `html`.") }
     guard html.utf16.count <= authoredLimit else {
       throw ToolFailure("The page is longer than 512,000 characters.")
@@ -54,7 +58,7 @@ enum HTMLPages {
       let range = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 3)
       let path = source.substring(with: range)
       if images[path] == nil, !missing.contains(path) {
-        if let uri = dataURI(path) { images[path] = uri } else { missing.append(path) }
+        if readingDisk, let uri = dataURI(path) { images[path] = uri } else { missing.append(path) }
       }
       guard let uri = images[path] else { continue }
       size += uri.utf8.count - path.utf8.count

@@ -94,6 +94,7 @@ final class WovenTools: Sendable {
   /// Carries out one call. Every failure comes back as an error result.
   func call(_ name: String, arguments: JSONValue, caller: ToolCaller, forwarded: Bool = false) async -> ToolResult {
     guard let tool = byName[name] else { return .error("Woven has no tool \(name).") }
+    guard tool.forBots || caller.botID == nil else { return .error("Bots cannot use \(name).") }
     // A forwarded call was allowed by the caller's own server.
     if !forwarded, let sessionID = caller.sessionID, !Self.allowed(tool, await enabledGroups(sessionID: sessionID)),
        let group = tool.groups.min(by: { $0.rawValue < $1.rawValue }) {

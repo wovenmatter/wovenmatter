@@ -54,6 +54,26 @@ func everyRuntimesReportOfTheCallIsKeptWithoutThePage() {
   }
 }
 
+@Test
+func aBotCannotPreviewAPageAndNothingOnThisMachineIsReadForItsPage() async throws {
+  let host = try await PageServer.start(tailnet: StandInTailnet())
+  defer { host.server.stopLater() }
+  let tools = try #require(await host.server.bots.toolsForTests)
+  let offered = tools.listing(forBots: true).compactMap { $0["name"]?.string }
+  #expect(offered.contains("render_html") && !offered.contains("preview_html"))
+  let bot = ToolCaller(machineID: host.server.machineID, botID: "b1")
+  #expect(await tools.call("preview_html", arguments: .object(["html": .string("<p>Hi</p>")]), caller: bot).isError)
+
+  let image = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).png")
+  try (Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data(repeating: 7, count: 24)).write(to: image)
+  defer { try? FileManager.default.removeItem(at: image) }
+  let html = "<p>Hi</p><img src=\"\(image.path)\">"
+  let result = await tools.call("render_html", arguments: .object(["html": .string(html)]), caller: bot)
+  #expect(!result.isError)
+  let digest = try #require(result.meta?["wovenPage"]?["digest"]?.string)
+  #expect(try await host.server.library.content(digest)?.data == Data(html.utf8))
+}
+
 private struct PageServer {
   let server: WovenServer
   let socket: String

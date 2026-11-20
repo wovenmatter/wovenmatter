@@ -196,8 +196,10 @@ private let pageTools: [WovenTool] = [
       guard call.arguments["height"] == nil || call.arguments.int("height") != nil, (80...2000).contains(height) else {
         throw ToolFailure("Give `height` from 80 to 2000, or leave it out.")
       }
-      let page = try HTMLPages.prepare(html)
-      guard page.missingImages.isEmpty else {
+      // A bot runs in its own machine: nothing on this one is read for it.
+      let fromBot = call.caller.botID != nil
+      let page = try HTMLPages.prepare(html, readingDisk: !fromBot)
+      guard fromBot || page.missingImages.isEmpty else {
         throw ToolFailure("These local images are missing, unreadable or not images, so nothing was shown: "
                           + page.missingImages.joined(separator: ", "))
       }
@@ -211,7 +213,9 @@ private let pageTools: [WovenTool] = [
       let shown = title.isEmpty ? "Shown in the chat." : "Shown in the chat: “\(title)”."
       // A bot's chat is its runtime's own; the page reaches it with the call's result.
       guard let sessionID = call.caller.sessionID else {
-        return ToolResult(content: [.text(shown)], meta: .object(["wovenPage": try JSONValue(encoding: published)]))
+        let note = page.missingImages.isEmpty ? "" : " Local files are not embedded from a bot, so these stay as written "
+          + "and will not show: \(page.missingImages.joined(separator: ", ")). Put images in the page as data URIs."
+        return ToolResult(content: [.text(shown + note)], meta: .object(["wovenPage": try JSONValue(encoding: published)]))
       }
       try await tools.sessions.host(for: sessionID).publish(published)
       return .text(shown)
@@ -618,6 +622,8 @@ private let uiTools: [WovenTool] = [
                    "width": integer("240 to 1600 CSS pixels; default 728."),
                    "appearance": choice(["light", "dark"], "Default dark.")], required: ["html"]),
     readOnly: true,
+    // It reads this machine's files and renders on its network; a bot lives in its own machine.
+    forBots: false,
     run: { call in
       let page = try HTMLPages.prepare(call.arguments.optionalString("html") ?? "")
       let width = call.arguments.int("width") ?? 728

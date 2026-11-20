@@ -122,6 +122,7 @@ actor BotsHost {
   func offerTools(_ tools: WovenTools) {
     interface.tools.attach(tools)
   }
+  var toolsForTests: WovenTools? { interface.tools.current }
 
   // MARK: Lifetime
 
