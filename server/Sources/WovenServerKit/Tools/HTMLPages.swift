@@ -26,13 +26,22 @@ enum HTMLPages {
     (["'`])(/(?!/)(?:(?!\1)[^\r\n]){0,2048}?\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico))\1|url\(\s*(/(?!/)[^\s"'`()]{0,2048}?\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico))\s*\)
     """#, options: [.caseInsensitive])
 
+  /// Lengths relative to the viewport's height. The frame takes the page's
+  /// height, so such a page would grow with its frame without end.
+  private static let viewportHeights = try! NSRegularExpression(
+    pattern: #"(?<![\w.-])\d*\.?\d+\s*[sld]?(?:vh|vmin|vmax)\b"#, options: [.caseInsensitive])
+
   /// Embeds each local image the page refers to as a data URI. A path read
   /// once is embedded everywhere it appears. Fails when the page is empty or
-  /// too long, or would be over `pageLimit`.
+  /// too long, uses viewport-height lengths, or would be over `pageLimit`.
   static func prepare(_ html: String) throws -> PreparedPage {
     guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("Give `html`.") }
     guard html.utf16.count <= authoredLimit else {
       throw ToolFailure("The page is longer than 512,000 characters.")
+    }
+    if let found = viewportHeights.firstMatch(in: html, range: NSRange(location: 0, length: (html as NSString).length)) {
+      throw ToolFailure("The page sizes something by the viewport (\((html as NSString).substring(with: found.range))). "
+                        + "The frame fits the page's height, so give heights in px or let the content set them.")
     }
     let source = html as NSString
     let matches = references.matches(in: html, range: NSRange(location: 0, length: source.length))
@@ -78,12 +87,26 @@ enum HTMLPages {
   }
 
   /// Whether a runtime's tool call is Woven's `render_html`, by the name or
-  /// title the runtime gives it (`render_html`, `woven_render_html`,
-  /// `mcp__woven__render_html`, `woven/render_html`).
+  /// title the runtime gives it: the tool's own name, alone or after the
+  /// `woven` server and whatever separator the runtime puts between them
+  /// (Claude Code and Pi Durable `mcp__woven__render_html`, Codex
+  /// `mcp.woven.render_html`, OpenCode and the bots `woven_render_html`,
+  /// `woven/render_html`, `woven: render_html`). Another server's
+  /// `render_html` is not Woven's.
   static func publishes(_ call: ToolCall) -> Bool {
     [call.name, call.title ?? ""].contains { name in
-      name.lowercased().firstMatch(of: #/(^|[^a-z0-9])render_html($|[^a-z0-9_])/#) != nil
+      name.trimmingCharacters(in: .whitespaces).lowercased()
+        .wholeMatch(of: #/(?:(?:.*[^a-z0-9])?woven(?:__|[_.\/:]\s*|\s+))?render_html/#) != nil
     }
+  }
+
+  /// The page's own `<title>`, when it has a non-empty one, in one line.
+  static func title(of html: String) -> String? {
+    guard let match = html.firstMatch(of: #/(?is)<title\b[^>]*>(.*?)</title\s*>/#) else { return nil }
+    let text = String(match.1).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+      .replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&lt;", with: "<")
+      .replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&quot;", with: "\"")
+    return text.isEmpty ? nil : String(text.prefix(200))
   }
 
   private static func withoutHTML(_ value: JSONValue) -> JSONValue {

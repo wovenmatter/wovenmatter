@@ -18,6 +18,8 @@ struct ConversationHTMLRenderView: View {
     @State private var zoom = 1.0
     @State private var pendingLink: URL?
 
+    private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
+
     init(reference: ConversationHTMLRenderReference) {
         self.reference = reference
         _height = State(initialValue: CGFloat(min(2000, max(80, reference.height))))
@@ -26,7 +28,7 @@ struct ConversationHTMLRenderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Text(reference.title).lineLimit(1)
+                Text(title).lineLimit(1)
                 Spacer()
                 controls
                 Button { expanded = true } label: {
@@ -59,7 +61,7 @@ struct ConversationHTMLRenderView: View {
         .sheet(isPresented: $expanded) {
             VStack(spacing: 0) {
                 HStack {
-                    Text(reference.title).font(.headline)
+                    Text(title).font(.headline)
                     Spacer()
                     controls
                     Button("Done") { expanded = false }.keyboardShortcut(.cancelAction)

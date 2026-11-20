@@ -175,24 +175,28 @@ private let pageTools: [WovenTool] = [
     description: """
       Show a chart, table, diagram or anything interactive in this chat: publish one whole self-contained HTML page \
       (styles and scripts inline; libraries may load over HTTPS). It appears above your reply and stays in the chat. \
-      It starts at `height` and then fits its content. Absolute paths to local images in it are embedded; every one \
-      must be there. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something the \
-      person wants to keep and change, make an app with `create_artifact` instead.
+      It fits its content; `height` is only where it starts, and `title` defaults to the page's own <title>. \
+      Absolute paths to local images in it are embedded; every one must be there. Heights in vh, vmin or vmax are \
+      refused, since the frame fits the page. It runs sandboxed, with no access to Woven Matter, your tools or this \
+      chat. For something the person wants to keep and change, make an app with `create_artifact` instead.
       """,
     input: schema(["html": text("The whole self-contained page, at most 512,000 characters."),
-                   "title": text("A short title, at most 200 characters."),
-                   "height": integer("The height it starts at, 80 to 2000 pixels.")],
-                  required: ["html", "title", "height"]),
+                   "title": text("A short title, at most 200 characters; default the page's <title>."),
+                   "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")],
+                  required: ["html"]),
     run: { call in
       guard call.caller.inForum != true else {
         throw ToolFailure("A page cannot be shown in the Forum. Show it in one of your own chats, or say it in words.")
       }
-      let title = try call.arguments.string("title").trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !title.isEmpty, title.count <= 200 else { throw ToolFailure("Give a `title` of at most 200 characters.") }
-      guard let height = call.arguments.int("height"), (80...2000).contains(height) else {
-        throw ToolFailure("Give `height` from 80 to 2000.")
+      let html = try call.arguments.string("html")
+      let given = call.arguments.optionalString("title")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let title = given.isEmpty ? HTMLPages.title(of: html) ?? "" : given
+      guard title.count <= 200 else { throw ToolFailure("Give a `title` of at most 200 characters.") }
+      let height = call.arguments.int("height") ?? 320
+      guard call.arguments["height"] == nil || call.arguments.int("height") != nil, (80...2000).contains(height) else {
+        throw ToolFailure("Give `height` from 80 to 2000, or leave it out.")
       }
-      let page = try HTMLPages.prepare(try call.arguments.string("html"))
+      let page = try HTMLPages.prepare(html)
       guard page.missingImages.isEmpty else {
         throw ToolFailure("These local images are missing, unreadable or not images, so nothing was shown: "
                           + page.missingImages.joined(separator: ", "))
@@ -204,7 +208,7 @@ private let pageTools: [WovenTool] = [
       let data = Data(page.html.utf8)
       let published = HTMLPage(title: title, height: height, digest: try await tools.library.storeContent(data),
                                size: Int64(data.count))
-      let shown = "Shown in the chat: “\(title)”."
+      let shown = title.isEmpty ? "Shown in the chat." : "Shown in the chat: “\(title)”."
       // A bot's chat is its runtime's own; the page reaches it with the call's result.
       guard let sessionID = call.caller.sessionID else {
         return ToolResult(content: [.text(shown)], meta: .object(["wovenPage": try JSONValue(encoding: published)]))

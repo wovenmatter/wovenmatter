@@ -33,6 +33,25 @@ func aPagesLocalImagesAreEmbeddedOnceAndAMissingOneIsNamed() throws {
   let full = folder.appendingPathComponent("full.png").path
   try (png + Data(count: HTMLPages.imageLimit - png.count)).write(to: URL(fileURLWithPath: full))
   #expect(throws: ToolFailure.self) { try HTMLPages.prepare("<img src='\(full)'><img src='\(full)'><img src='\(full)'>") }
+  // A page sized by the viewport would grow with its frame.
+  #expect(throws: ToolFailure.self) { try HTMLPages.prepare("<div style='min-height: 100vh'></div>") }
+  #expect(throws: ToolFailure.self) { try HTMLPages.prepare("<style>main{height:calc(50dvh - 2px)}</style>") }
+}
+
+@Test
+func everyRuntimesReportOfTheCallIsKeptWithoutThePage() {
+  let input = #"{"html":"<h1>Sales</h1>","title":"Sales"}"#
+  let forms: [(name: String, title: String?)] = [
+    ("mcp__woven__render_html", nil), ("other", "mcp__woven__render_html"), ("other", "mcp.woven.render_html"),
+    ("woven_render_html", nil), ("render_html", nil), ("other", "Tool: woven/render_html"), ("other", "woven: render_html"),
+  ]
+  for form in forms {
+    let call = HTMLPages.withoutPage(ToolCall(name: form.name, input: input, title: form.title))
+    #expect(call.kind == .page && !call.input.contains("<h1>"), "\(form)")
+  }
+  for name in ["mcp__charts__render_html", "render_html_preview", "preview_html", "rewoven_render_html"] {
+    #expect(HTMLPages.withoutPage(ToolCall(name: name, input: input)).input == input, "\(name)")
+  }
 }
 
 private struct PageServer {
@@ -71,9 +90,9 @@ func aPublishedPageIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async throws
   _ = try await onA.call(UpdateSession(sessionID: session.id, tools: []))
 
   // The stand-in calls the tool over its tool socket and then reports the call, as a runtime does.
-  let html = "<h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 5000)
-  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object([
-    "html": .string(html), "title": .string("Sales by quarter"), "height": .integer(320)])), as: UTF8.self)
+  // Only the page: its title is its own <title>, and it starts at the default height.
+  let html = "<title>Sales by quarter</title><h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 5000)
+  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(html)])), as: UTF8.self)
   let subscription = try await onA.subscribe(SubscribeSession(sessionID: session.id))
   _ = try await onA.call(SendTurn(sessionID: session.id, text: "woven render_html \(arguments)"))
   var live: [SessionItem] = []
