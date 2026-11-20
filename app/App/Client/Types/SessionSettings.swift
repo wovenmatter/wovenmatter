@@ -113,11 +113,14 @@ struct SessionChoice: Identifiable, Hashable, Sendable {
     let id: String
     let label: String
     let detail: String?
+    /// For an approval, the option that allows this one request only.
+    let allowsOnce: Bool
 
-    init(id: String, label: String, detail: String? = nil) {
+    init(id: String, label: String, detail: String? = nil, allowsOnce: Bool = false) {
         self.id = id
         self.label = label
         self.detail = detail
+        self.allowsOnce = allowsOnce
     }
 }
 

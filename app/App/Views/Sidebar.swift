@@ -222,7 +222,6 @@ struct SidebarNavigationPage: View {
     @AppStorage(WorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
 
-    @State private var browserMachine: Machine?
     @State private var presentedFolderID: String?
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = ScrollHoverCoordinator()
@@ -271,9 +270,6 @@ struct SidebarNavigationPage: View {
             .onScrollPhaseChange { _, phase in
                 scrollHoverCoordinator.setScrolling(phase.isScrolling)
             }
-        }
-        .sheet(item: $browserMachine) { machine in
-            RemoteBrowserView(model: model, machineID: machine.id)
         }
     }
 
@@ -492,11 +488,6 @@ struct SidebarNavigationPage: View {
         let key = AgentDisclosureKey.machine(machine.id)
         // Remote workspace names deliberately align with the local heading.
         agentDisclosureHeading(title: machine.name, key: key)
-            .contextMenu {
-                if machine.platform == .linux {
-                    Button("View browser") { browserMachine = machine }
-                }
-            }
         if agentSectionExpanded(key) {
             workspaceContents(key: key, title: machine.name, machine: machine)
         }
@@ -1270,13 +1261,6 @@ struct NewChatDrawer: View {
                         summary: NewChatAvailabilitySummary.available(count: localAgents.filter(isReady).count),
                         isExpanded: expansionBinding(for: .acpDirect)
                     ) {
-                        if localAgents.isEmpty {
-                            NewChatEmptyCard(
-                                icon: .terminal,
-                                title: "No local agents ready",
-                                detail: "Set up an agent in Settings."
-                            )
-                        }
                         ForEach(localAgents) { agent in
                             Button {
                                 onSelect(agent)

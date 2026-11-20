@@ -248,7 +248,7 @@ final class SessionStore {
 
     /// A prompt in the one card shape the chat shows.
     private func interaction(_ prompt: Prompt) -> SessionInteraction {
-        let choices = { (options: [PromptOption]) in options.map { SessionChoice(id: $0.id, label: $0.name, detail: $0.detail) } }
+        let choices = { (options: [PromptOption]) in options.map { SessionChoice(id: $0.id, label: $0.name, detail: $0.detail, allowsOnce: $0.allowsOnce) } }
         let request: SessionInteraction.Request
         switch prompt.kind {
         case .approval:

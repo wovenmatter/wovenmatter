@@ -164,7 +164,7 @@ final class WorkspaceStore {
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,
                                           isPinned: folder.pinned, machineID: folder.machineID, rootPath: folder.path,
-                                          managedRoot: folder.managed, referencePaths: [])
+                                          managedRoot: folder.managed, referencePaths: folder.references)
                 },
                 conversations: sessions.map(record),
                 notes: (try? await server.call(ListArtifacts()).map(Self.noteRecord)) ?? workspaceOverview?.notes ?? [])
@@ -207,15 +207,12 @@ final class WorkspaceStore {
         return session.id
     }
 
+    /// Sessions sync newest-wins, so this Mac's server writes these whichever
+    /// machine owns the session; the owner's server takes them in by sync.
     func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
-        if case .setPinned(let pinned) = mutation {
-            // Pinning is the person's, so this Mac's server writes it whoever owns the session.
-            _ = try await server(for: nil).call(UpdateSession(sessionID: id, pinned: pinned))
-            return await refresh()
-        }
-        let server = try server(for: conversation(id: id)?.machineID)
+        let server = try server(for: nil)
         switch mutation {
-        case .setPinned: break
+        case .setPinned(let pinned): _ = try await server.call(UpdateSession(sessionID: id, pinned: pinned))
         case .rename(let title): _ = try await server.call(UpdateSession(sessionID: id, title: title))
         case .moveToTrash: _ = try await server.call(UpdateSession(sessionID: id, archived: true))
         case .restore: _ = try await server.call(UpdateSession(sessionID: id, archived: false))
@@ -241,15 +238,61 @@ final class WorkspaceStore {
         }
     }
 
+    /// The chat as a file staged for saving: its messages as Markdown, or
+    /// the session with every saved item as JSON. Items come from this Mac's
+    /// library, so a chat whose owner is away exports too.
     func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
-        throw ClientError.notConnected
+        let server = try server(for: nil)
+        guard let session = try await server.call(ListSessions(includeArchived: true)).first(where: { $0.id == id }) else {
+            throw ProtocolError(.notFound, "No chat \(id).")
+        }
+        var items: [SessionItem] = []
+        while true {
+            let page = try await server.call(SessionItems(sessionID: id, afterSequence: items.last?.sequence ?? 0, limit: 1000))
+            items += page
+            if page.count < 1000 { break }
+        }
+        let data: Data
+        switch format {
+        case .messages:
+            let dates = ISO8601DateFormatter()
+            var sections = ["# " + session.title]
+            for item in items {
+                let role: String, text: String, attachments: [Attachment]
+                switch item.content {
+                case .userMessage(let body, let files): (role, text, attachments) = ("User", body, files)
+                case .assistantMessage(let body): (role, text, attachments) = ("Assistant", body, [])
+                default: continue
+                }
+                var section = "## \(role) · \(dates.string(from: item.createdAt))\n\n\(text)"
+                for file in attachments {
+                    section += "\n\nAttachment: \(file.name) (\(file.mimeType), \(file.size) bytes)"
+                }
+                sections.append(section)
+            }
+            data = Data((sections.joined(separator: "\n\n") + "\n").utf8)
+        case .fullRun:
+            struct FullRun: Encodable {
+                let exportedAt: Date
+                let session: Session
+                let items: [SessionItem]
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .iso8601
+            data = try encoder.encode(FullRun(exportedAt: Date(), session: session, items: items))
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("woven-export-\(UUID().uuidString)")
+            .appendingPathExtension(format.fileExtension)
+        try data.write(to: url, options: .atomic)
+        return url
     }
 
-    /// Archived chats.
+    /// Chats in Trash, most recently trashed first.
     func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
         try await server(for: nil).call(ListSessions(includeArchived: true)).filter { $0.archived && $0.runtime != .bots }.map {
-            WorkspaceTrashedConversation(id: $0.id, title: $0.title, trashedAt: $0.createdAt)
-        }
+            WorkspaceTrashedConversation(id: $0.id, title: $0.title, trashedAt: $0.archivedAt ?? $0.createdAt)
+        }.sorted { ($0.trashedAt, $0.id) > ($1.trashedAt, $1.id) }
     }
 
     // MARK: Notes
@@ -299,7 +342,7 @@ final class WorkspaceStore {
     func trashedNotes() async throws -> [WorkspaceTrashedNote] {
         try await server(for: nil).call(ListArtifacts(includeTrashed: true)).filter(\.trashed).map {
             WorkspaceTrashedNote(id: $0.id, title: $0.title, kind: $0.kind, trashedAt: $0.updatedAt)
-        }
+        }.sorted { ($0.trashedAt, $0.id) > ($1.trashedAt, $1.id) }
     }
 
     private static func noteRecord(_ artifact: Artifact) -> WorkspaceNoteRecord {
@@ -365,8 +408,9 @@ final class WorkspaceStore {
         await folderMutation(id) { try await $0.call(DeleteFolder(folderID: id, deleteDirectory: deleteRoot)) }
     }
 
+    /// Other directories of the folder's machine its agents may use; the owner's server keeps them.
     func setFolderReferencePaths(id: String, paths: [String]) async -> Bool {
-        failFolderMutation(.notOffered("Reference directories"))
+        await folderMutation(id) { try await $0.call(UpdateFolder(folderID: id, references: paths)) }
     }
 
     /// The directories directly inside `path` on `machineID` (its home when nil),
@@ -393,11 +437,6 @@ final class WorkspaceStore {
             folderMutationError = error.localizedDescription
             return false
         }
-    }
-
-    private func failFolderMutation(_ error: ClientError) -> Bool {
-        folderMutationError = error.localizedDescription
-        return false
     }
 }
 

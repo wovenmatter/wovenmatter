@@ -68,9 +68,6 @@ final class ApplicationModel {
     /// Carries out this Mac's server's browser and computer calls.
     @ObservationIgnored private var uiTools: UIToolsStore?
 
-    var activeSessionLimitPresented = false
-    var sessionAccessError: String?
-
     init() {}
 
     func retry() {
@@ -97,6 +94,7 @@ final class ApplicationModel {
         workspace.attach(server, machines: machines)
         settings.attach(server); connections.attach(machines, settings: settings); updates.attach(machines)
         sessions.attach(server, workspace: workspace)
+        agentTools.attach(server, workspace: workspace, settings: settings)
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
         documents.attach(server, machines: machines, databases: databases)
@@ -105,39 +103,45 @@ final class ApplicationModel {
         server.start()
         uiTools = UIToolsStore(server: server, assets: workspaceAssets)
         following = Task { [weak self] in
-            await server.follow(SubscribeLibrary(), reply: { [weak self] _ in
+            await server.follow(SubscribeLibrary(), reply: { [weak self] event in
                 self?.restartIfAnotherRelease(server.remote)
-                self?.requestReload()
-            }, event: { [weak self] _ in
-                self?.requestReload()
+                self?.requestReload(event.tables)
+            }, event: { [weak self] event in
+                self?.requestReload(event.tables)
             })
         }
     }
 
-    @ObservationIgnored private var reloadRequested = false
+    /// Library tables written since the running reload began.
+    @ObservationIgnored private var changedTables: Set<String> = []
     @ObservationIgnored private var reloading = false
 
-    /// One reload runs at a time; changes during it bring one more.
-    private func requestReload() {
-        reloadRequested = true
+    /// One reload runs at a time; changes during it bring one more, for the
+    /// tables they wrote.
+    private func requestReload(_ tables: [String]) {
+        changedTables.formUnion(tables)
         guard !reloading else { return }
         reloading = true
         Task {
-            while reloadRequested {
-                reloadRequested = false
-                await reloadAll()
+            while !changedTables.isEmpty {
+                let tables = changedTables
+                changedTables = []
+                await reload(tables)
             }
             reloading = false
         }
     }
 
-    private func reloadAll() async {
-        await machines.reload()
-        await workspace.refresh()
-        await documents.reload()
-        await databases.refresh()
-        await settings.reload()
-        await calendar.reload()
+    /// Reads again only the areas whose tables changed.
+    private func reload(_ tables: Set<String>) async {
+        func any(_ names: String...) -> Bool { !tables.isDisjoint(with: names) }
+        if any("machines") { await machines.reload() }
+        if any("machines", "sessions", "folders", "session_items", "artifacts") { await workspace.refresh() }
+        if any("artifacts", "artifact_versions") { await documents.reload() }
+        if any("databases") { await databases.refresh() }
+        if any("settings", "sealed_secrets") { await settings.reload() }
+        if any("schedules", "sessions") { await calendar.reload() }
+        if any("schedules", "sessions", "settings") { await agentTools.reload() }
     }
 
     /// A server left running by another release of the app is restarted once,

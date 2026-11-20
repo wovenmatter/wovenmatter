@@ -42,18 +42,23 @@ private struct SessionApprovalCard: View {
         .sessionInteractionCardStyle(theme)
     }
 
+    private var allowOnce: SessionChoice? { options.first { $0.allowsOnce } }
+
+    private var otherOptions: [SessionChoice] { options.filter { $0.id != allowOnce?.id } }
+
     @ViewBuilder
     private var actions: some View {
-        if let first = options.first {
-            Button(first.label) { respond(.option(first.id)) }
+        if let option = allowOnce {
+            Button("Allow once") { respond(.option(option.id)) }
                 .buttonStyle(WovenPrimaryButtonStyle())
-                .help(first.detail ?? first.label)
+                .help(option.label)
+                .accessibilityLabel(option.label)
         }
-        if options.count > 1 {
-            Menu("More options") {
+        if !otherOptions.isEmpty {
+            Menu(allowOnce == nil ? "Choose response" : "More options") {
                 // Keep the runtime's complete labels: persistent choices may
                 // apply only to a domain, command, or project, not every tool.
-                ForEach(options.dropFirst()) { option in
+                ForEach(otherOptions) { option in
                     Button(option.label) { respond(.option(option.id)) }
                 }
             }

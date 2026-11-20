@@ -199,9 +199,6 @@ struct WorkspaceTrashSheet: View {
                                     Button("Restore") { restore(note) }
                                         .disabled(restoringNoteIDs.contains(note.id))
                                         .accessibilityLabel("Restore note \(note.title)")
-                                    Button("Delete", role: .destructive) { deleteForGood(note) }
-                                        .disabled(restoringNoteIDs.contains(note.id))
-                                        .accessibilityLabel("Delete note \(note.title) for good")
                                 }
                             }
                         }
@@ -251,18 +248,6 @@ struct WorkspaceTrashSheet: View {
             defer { restoringConversationIDs.remove(conversation.id) }
             do {
                 try await model.workspace.mutateConversation(id: conversation.id, mutation: .restore)
-                await reload()
-            } catch { self.error = error.localizedDescription }
-        }
-    }
-
-    private func deleteForGood(_ note: WorkspaceTrashedNote) {
-        guard restoringNoteIDs.insert(note.id).inserted else { return }
-        error = nil
-        Task {
-            defer { restoringNoteIDs.remove(note.id) }
-            do {
-                try await model.workspace.mutateNote(id: note.id, mutation: .delete)
                 await reload()
             } catch { self.error = error.localizedDescription }
         }

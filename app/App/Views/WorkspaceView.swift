@@ -49,21 +49,6 @@ extension EnvironmentValues {
     }
 }
 
-struct RunDisplayPolicy {
-    static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
-        run.status != .queued
-    }
-
-    static func presentsMessage(
-        _ message: WorkspaceMessageRecord,
-        run: WorkspaceRunRecord?
-    ) -> Bool {
-        guard message.role == .assistant, message.content.isEmpty else { return true }
-        guard let run else { return true }
-        return presentsStatus(run)
-    }
-}
-
 struct WorkspaceView: View {
     @Bindable var model: ApplicationModel
     @State private var conversationToRename: WorkspaceConversationRecord?
