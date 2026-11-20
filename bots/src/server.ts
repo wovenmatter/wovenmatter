@@ -510,6 +510,12 @@ class Connection {
         this.#server.threadsChanged(request.botId);
         return { thread: thread(record) };
       }
+      case "thread.delete": {
+        const target = await manager.get(request.botId);
+        await target.deleteThread(request.conversationId);
+        this.#server.threadsChanged(request.botId);
+        return { deleted: true };
+      }
       case "message.send": {
         const target = await manager.get(request.botId);
         this.#server.onActivity?.(request.botId);
@@ -599,6 +605,9 @@ class Connection {
         return { thread: await this.#forum().setThreadTitle(request.roomId, request.title) };
       case "forum.thread.setPinned":
         return { thread: await this.#forum().setThreadPinned(request.roomId, request.pinned) };
+      case "forum.thread.delete":
+        await this.#forum().deleteThread(request.roomId);
+        return { deleted: true };
       case "forum.setPaused":
         return this.#forum().setPaused(request.paused);
       case "forum.setBotActive":

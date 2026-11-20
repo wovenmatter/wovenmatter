@@ -739,6 +739,32 @@ export class Forum {
     return this.#thread(room.id);
   }
 
+  /**
+   * Delete a thread (never the Forum itself) and stop the bots' turns in it. The rows go first,
+   * so nothing more is delivered there or posted from a turn that ends meanwhile. The seats'
+   * conversations keep their entries; nothing hears the room through them again.
+   */
+  async deleteThread(roomId: number): Promise<void> {
+    const room = await this.#room(roomId);
+    if (room.parentPostId === undefined) throw new ForumError("only threads can be deleted");
+    const seats = await this.store.seats(room.id);
+    if (!(await this.store.deleteThread(room.id))) throw new NotFoundError(`no Forum thread ${roomId}`);
+    // On each seat's own line: a delivery under way finishes first and is then stopped.
+    await Promise.all(
+      seats.map((seat) =>
+        this.#enqueue(seat.roomId, seat.botId, async () => void (await this.#stop(seat))),
+      ),
+    );
+    let thinking = false;
+    for (const seat of seats) {
+      const key = this.#key(room.id, seat.botId);
+      if ((this.#seats.get(key)?.waiting ?? 0) > 0) thinking = true;
+      this.#seats.delete(key);
+    }
+    if (thinking) this.#emitThinking(room.id);
+    this.#events.changed?.();
+  }
+
   async #thread(roomId: number): Promise<ForumThreadSummary> {
     const thread = (await this.state()).threads.find((item) => item.roomId === roomId);
     if (!thread) throw new NotFoundError(`no Forum thread ${roomId}`);

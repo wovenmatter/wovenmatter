@@ -130,6 +130,50 @@ describe("bot lifecycle", () => {
     }
   });
 
+  it("deletes a thread at the source: its turn stops and a restart does not bring it back", async () => {
+    const path = join(dir.path, "bots.sqlite");
+    // 2 tokens/s: the thread's reply is still running when it is deleted.
+    const t = await openTestManager(path, { tokensPerSecond: 2 });
+    let botId: string;
+    let threadId: number;
+    try {
+      const record = await t.manager.create("Alpha");
+      botId = record.id;
+      const bot = await t.manager.get(record.id);
+      const main = await bot.main();
+      await bot.send("hello");
+      await bot.abort();
+      const last = (await main.entries({ order: "descending" }, 1, undefined, ctx)).items[0];
+      if (!last) throw new Error("empty main");
+      threadId = (await bot.fork({ entryId: last.id as unknown as number })).conversationId;
+      const sent = await bot.send("side note", threadId);
+      for (let tries = 0; ; tries += 1) {
+        const live = await bot.harness.inspect(ctx);
+        if (live.tasks.some((task) => task.record.conversationId === threadId)) break;
+        if (tries > 200) throw new Error("the thread's turn never started");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      await expect(bot.deleteThread(main.id)).rejects.toThrow(BotRuleError);
+      await bot.deleteThread(threadId);
+      await expect(sent.submission.wait(ctx)).resolves.toMatchObject({ status: "unanswered" });
+      expect(await bot.threads()).toEqual([]);
+      await expect(bot.conversation(threadId)).rejects.toThrow(NotFoundError);
+      await expect(bot.deleteThread(threadId)).rejects.toThrow(NotFoundError);
+    } finally {
+      await t.close();
+    }
+    // Pi Durable still holds the fork; startup reconciliation must not adopt it again.
+    const reopened = await openTestManager(path);
+    try {
+      const bot = await reopened.manager.get(botId);
+      expect(await bot.threads()).toEqual([]);
+      await expect(bot.conversation(threadId)).rejects.toThrow(NotFoundError);
+    } finally {
+      await reopened.close();
+    }
+  });
+
   it("purges only a deleted bot, never Admin Bot: every row and table of it, nothing of the others", async () => {
     const purged: string[] = [];
     const t = await openTestManager(join(dir.path, "bots.sqlite"), {

@@ -212,6 +212,19 @@ export class Bot {
   }
 
   /**
+   * Delete one of this bot's threads (never the main channel) and stop its turn. The row goes
+   * first, so nothing can send to the thread while it stops. Pi Durable keeps the conversation's
+   * entries; nothing lists or mirrors it again.
+   */
+  async deleteThread(conversationId: number): Promise<void> {
+    const main = await this.main();
+    if (conversationId === main.id) throw new BotRuleError("the main channel cannot be deleted");
+    const conversation = await this.conversation(conversationId);
+    await this.#registry.deleteThread(this.id, conversationId);
+    await conversation.abort(ctx);
+  }
+
+  /**
    * Fork a thread off any message of the main channel or another thread. The fork inherits the
    * context up to and including `entryId` as is: no compaction, no rewriting. Threads have no
    * user-visible name and cannot be renamed; a title is generated later from the first message.
@@ -274,9 +287,11 @@ export class Bot {
       return all;
     }, ctx);
     const stored = new Set<number>(records.map((record) => record.id));
+    const deleted = await this.#registry.deletedThreads(this.id);
     const adoptedThreads: number[] = [];
     for (const conversation of records) {
       if (!isThreadFork(conversation, main.id) || registered.has(conversation.id)) continue;
+      if (deleted.has(conversation.id)) continue;
       await this.#registry.addThread({
         botId: this.id,
         conversationId: conversation.id,

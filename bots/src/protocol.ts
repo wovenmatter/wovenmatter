@@ -201,6 +201,8 @@ export const requestSchema = z.discriminatedUnion("type", [
     conversationId,
     pinned: z.boolean(),
   }),
+  // Delete a thread at the source, stopping its turn first; the main channel is refused.
+  z.strictObject({ id: requestId, type: z.literal("thread.delete"), botId, conversationId }),
   z.object({
     id: requestId,
     type: z.literal("threads.list"),
@@ -274,6 +276,8 @@ export const requestSchema = z.discriminatedUnion("type", [
     roomId,
     pinned: z.boolean(),
   }),
+  // Delete a Forum thread with its posts, stopping its turns first; the Forum itself is refused.
+  z.strictObject({ id: requestId, type: z.literal("forum.thread.delete"), roomId }),
   z.strictObject({ id: requestId, type: z.literal("forum.setPaused"), paused: z.boolean() }),
   z.strictObject({
     id: requestId,
@@ -660,6 +664,7 @@ export type Replies = {
   "thread.fork": { thread: ThreadSummary };
   "thread.setTitle": { thread: ThreadSummary };
   "thread.setPinned": { thread: ThreadSummary };
+  "thread.delete": { deleted: true };
   "threads.list": { threads: ThreadSummary[] };
   "settings.accounts": AccountsSummary;
   "models.catalog": ModelCatalog;
@@ -677,6 +682,7 @@ export type Replies = {
   "forum.thread.create": { thread: ForumThreadSummary };
   "forum.thread.setTitle": { thread: ForumThreadSummary };
   "forum.thread.setPinned": { thread: ForumThreadSummary };
+  "forum.thread.delete": { deleted: true };
   "forum.setPaused": ForumState;
   "forum.setBotActive": ForumState;
   "forum.schedules.list": { schedules: ForumScheduleSummary[] };

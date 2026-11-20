@@ -14,6 +14,11 @@ const DELIVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export const BOTS_TABLE = "bot_bots";
 export const THREADS_TABLE = "bot_threads";
+/**
+ * Threads the user deleted. Pi Durable cannot delete a conversation, so its entries stay; this
+ * keeps startup reconciliation from adopting the ownerless fork as a thread again.
+ */
+export const DELETED_THREADS_TABLE = "bot_deleted_threads";
 /** Free-text notes, e.g. the user's plans and comfort spend (`account`), which Admin Bot reads. */
 export const NOTES_TABLE = "bot_notes";
 /** Marked main-model usage limits (`ModelAvailability`), so they outlive a restart. */
@@ -202,6 +207,11 @@ export class BotRegistry {
         title TEXT NOT NULL,
         created_at TEXT NOT NULL,
         is_pinned INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (bot_id, conversation_id)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS ${DELETED_THREADS_TABLE} (
+        bot_id TEXT NOT NULL REFERENCES ${BOTS_TABLE}(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL,
         PRIMARY KEY (bot_id, conversation_id)
       ) STRICT;
       CREATE TABLE IF NOT EXISTS ${NOTES_TABLE} (
@@ -584,6 +594,7 @@ export class BotRegistry {
       const tables = objects.filter((object) => object.type === "table").map((t) => t.name);
       for (const table of tables) await tx.exec(`DROP TABLE IF EXISTS ${quoted(table)}`);
       await tx.run(`DELETE FROM ${THREADS_TABLE} WHERE bot_id = ?`, id);
+      await tx.run(`DELETE FROM ${DELETED_THREADS_TABLE} WHERE bot_id = ?`, id);
       await tx.run(`DELETE FROM ${MEMORY_TABLE} WHERE bot_id = ?`, id);
       await tx.run(`UPDATE ${BOTS_TABLE} SET manager_id = NULL WHERE manager_id = ?`, id);
       await tx.run(`DELETE FROM ${BOTS_TABLE} WHERE id = ?`, id);
@@ -635,6 +646,35 @@ export class BotRegistry {
     );
     if (!row) throw new Error("Thread not found");
     return toThread(row);
+  }
+
+  /**
+   * Remove a thread's row and remember it was deleted, in one transaction. Threads forked from it
+   * keep their own rows. Throws for an unknown thread.
+   */
+  async deleteThread(botId: string, conversationId: number): Promise<void> {
+    await this.#db.transaction(async (tx) => {
+      const row = await tx.get<{ conversation_id: number }>(
+        `DELETE FROM ${THREADS_TABLE} WHERE bot_id = ? AND conversation_id = ? RETURNING conversation_id`,
+        botId,
+        conversationId,
+      );
+      if (!row) throw new Error("Thread not found");
+      await tx.run(
+        `INSERT OR IGNORE INTO ${DELETED_THREADS_TABLE} (bot_id, conversation_id) VALUES (?, ?)`,
+        botId,
+        conversationId,
+      );
+    });
+  }
+
+  /** The conversations of a bot's deleted threads. */
+  async deletedThreads(botId: string): Promise<Set<number>> {
+    const rows = await this.#db.all<{ conversation_id: number }>(
+      `SELECT conversation_id FROM ${DELETED_THREADS_TABLE} WHERE bot_id = ?`,
+      botId,
+    );
+    return new Set(rows.map((row) => row.conversation_id));
   }
 
   /** Woven's `updateConversationTitleIfCurrent`: set the title only while it is still empty. */

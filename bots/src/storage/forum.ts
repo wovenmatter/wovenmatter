@@ -313,6 +313,29 @@ export class ForumStore {
   }
 
   /**
+   * Delete a thread with its posts, its seats, the replies owed in it and the notes on its posts,
+   * in one transaction. Its parent post stays, and may start a thread again. False when `roomId`
+   * is not a thread.
+   */
+  async deleteThread(roomId: number): Promise<boolean> {
+    return this.#db.transaction(async (tx) => {
+      const room = await tx.get<{ id: number }>(
+        `DELETE FROM ${FORUM_ROOMS_TABLE} WHERE id = ? AND parent_post_id IS NOT NULL RETURNING id`,
+        roomId,
+      );
+      if (!room) return false;
+      await tx.run(
+        `DELETE FROM ${FORUM_UNANSWERED_TABLE} WHERE post_id IN (SELECT id FROM ${FORUM_POSTS_TABLE} WHERE room_id = ?)`,
+        roomId,
+      );
+      await tx.run(`DELETE FROM ${FORUM_OWED_TABLE} WHERE room_id = ?`, roomId);
+      await tx.run(`DELETE FROM ${FORUM_SEATS_TABLE} WHERE room_id = ?`, roomId);
+      await tx.run(`DELETE FROM ${FORUM_POSTS_TABLE} WHERE room_id = ?`, roomId);
+      return true;
+    });
+  }
+
+  /**
    * Store a post, with the replies its mentions ask for (`owed`) and the thread seats they add
    * (`join`), in one transaction.
    */

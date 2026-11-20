@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Bot } from "../src/bots.ts";
+import {
+  FORUM_OWED_TABLE,
+  FORUM_POSTS_TABLE,
+  FORUM_ROOMS_TABLE,
+  FORUM_SEATS_TABLE,
+  FORUM_UNANSWERED_TABLE,
+} from "../src/storage/forum.ts";
 import { type ForumTest, type Move, openForumTest, type Turn } from "./forum-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -60,5 +67,44 @@ describe("a Forum reply a mentioned bot owes", () => {
     const autos = (await t.forum.store.postsAfter(1, 0)).filter((post) => post.auto);
     expect(autos.map((post) => post.name)).toEqual(["Max"]);
     expect([...((await t.forum.store.post(1))?.mentions ?? [])].sort()).toEqual([ada.id, max.id].sort());
+  });
+
+  it("is never posted once its thread is deleted, and the thread leaves nothing behind", async () => {
+    // Ada takes a moment over the thread's question, so its turn is running at the delete.
+    await start({
+      brain: (turn) =>
+        turn.user.includes("deep question")
+          ? { say: "a late answer", after: new Promise((resolve) => setTimeout(resolve, 500)) }
+          : { say: "noted" },
+    });
+    const root = await t.forum.postAsUser({ text: "a topic" });
+    await t.settle();
+    const thread = await t.forum.createThread(root.id);
+    await t.forum.postAsUser({ roomId: thread.roomId, text: "@Ada deep question", mentions: [ada.id] });
+    for (let tries = 0; !t.forum.thinking(thread.roomId).includes(ada.id); tries += 1) {
+      if (tries > 200) throw new Error("Ada never started");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const main = await t.forum.store.mainRoom();
+    await expect(t.forum.deleteThread(main.id)).rejects.toThrow("only threads can be deleted");
+    await t.forum.deleteThread(thread.roomId);
+    await t.settle();
+
+    for (const [table, column] of [
+      [FORUM_ROOMS_TABLE, "id"],
+      [FORUM_POSTS_TABLE, "room_id"],
+      [FORUM_SEATS_TABLE, "room_id"],
+      [FORUM_OWED_TABLE, "room_id"],
+    ] as const) {
+      expect(await t.db.all(`SELECT * FROM ${table} WHERE ${column} = ?`, thread.roomId)).toEqual([]);
+    }
+    expect(await t.db.all(`SELECT * FROM ${FORUM_UNANSWERED_TABLE}`)).toEqual([]);
+    expect(t.forum.thinking(thread.roomId)).toEqual([]);
+    expect((await t.forum.state()).threads).toEqual([]);
+    // The parent post stays in the Forum and can start a thread again.
+    expect(await t.log()).toEqual(["user: a topic"]);
+    expect((await t.forum.createThread(root.id)).roomId).not.toBe(thread.roomId);
+    await expect(t.forum.deleteThread(thread.roomId)).rejects.toThrow(`no Forum room ${thread.roomId}`);
   });
 });
