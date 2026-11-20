@@ -109,3 +109,9 @@ struct SavedArtifactLibraryItem: Equatable, Identifiable, Sendable {
   let machineID: String
   let machineName: String
 }
+
+/// A Library request that failed, with a message for the person.
+struct LibraryFailure: LocalizedError, Equatable, Sendable {
+  let message: String
+  var errorDescription: String? { message }
+}

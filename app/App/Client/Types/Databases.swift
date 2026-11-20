@@ -59,6 +59,12 @@ struct DatabasesSnapshot: Equatable, Sendable {
     }
 }
 
+/// A database request that failed, with the server's message.
+struct DatabaseFailure: LocalizedError, Equatable, Sendable {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 /// Rows and columns a database link reads, with the same result as JSON for an App.
 struct DatabaseTabularData: Equatable, Sendable {
     let columns: [String]

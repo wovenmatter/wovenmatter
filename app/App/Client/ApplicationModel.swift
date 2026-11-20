@@ -90,6 +90,8 @@ final class ApplicationModel {
         workspace.attach(server, machines: machines)
         settings.attach(server); connections.attach(server, settings: settings); updates.attach(machines)
         sessions.attach(server, workspace: workspace)
+        databases.attach(server, machines: machines)
+        library.attach(server, machines: machines)
         server.start()
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] _ in
@@ -121,6 +123,7 @@ final class ApplicationModel {
     private func reloadAll() async {
         await machines.reload()
         await workspace.refresh()
+        await databases.refresh()
         await settings.reload()
     }
 

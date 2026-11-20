@@ -65,7 +65,7 @@ struct LibrarySurface: View {
                             ForEach(library.items) { item in
                                 LibraryRow(
                                     item: item, onOpen: { if let openPreview { library.open(item, onOpenFile: openPreview) } },
-                                    onSource: { onOpenMessage(item) }, onRetry: { library.retry(item) })
+                                    onSource: { onOpenMessage(item) })
                             }
                             if library.hasMore {
                                 Button("Load more") { Task { await library.load(query: query, more: true) } }
@@ -193,7 +193,6 @@ private struct LibraryRow: View {
     let item: WorkspaceLibraryItem
     let onOpen: () -> Void
     let onSource: () -> Void
-    let onRetry: () -> Void
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
@@ -238,9 +237,6 @@ private struct LibraryRow: View {
     }
     private var actions: some View {
         HStack(spacing: 8) {
-            if item.storage == .unavailable {
-                Button("Retry", action: onRetry).buttonStyle(WovenQuietButtonStyle())
-            }
             Button("Open", action: onOpen).buttonStyle(WovenQuietButtonStyle()).disabled(!item.canOpen)
             Button("Show in conversation", action: onSource).buttonStyle(WovenQuietButtonStyle())
         }.fixedSize()
