@@ -442,25 +442,7 @@ struct ActiveConversationRowBackground: View {
         ZStack {
             shape.fill(presentation.isActive ? theme.palette.themeWhisper : .clear)
             if presentation.allowsMotion {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    // Animate drawing, rather than a child's frame and offset.
-                    // Active rows appear in both rails; relaying their sweep
-                    // through layout repeatedly invalidates the whole window.
-                    Canvas(rendersAsynchronously: true) { canvas, size in
-                        let progress = context.date.timeIntervalSinceReferenceDate
-                            .truncatingRemainder(dividingBy: 4.2) / 4.2
-                        let start = size.width * (-1.7 + 2.7 * progress)
-                        canvas.fill(
-                            Path(CGRect(x: start, y: 0, width: size.width * 1.7, height: size.height)),
-                            with: .linearGradient(
-                                Gradient(colors: [.clear, WovenPalette.primary.opacity(0.055), .clear]),
-                                startPoint: CGPoint(x: start, y: 0),
-                                endPoint: CGPoint(x: start + size.width * 1.7, y: 0)
-                            )
-                        )
-                    }
-                    .clipShape(shape)
-                }
+                ActiveRowSweep(cornerRadius: cornerRadius)
             }
             shape.fill(
                 selected
@@ -468,6 +450,115 @@ struct ActiveConversationRowBackground: View {
                     : hovered ? theme.palette.themeSoft : .clear
             )
         }
+    }
+}
+
+/// The faint band that sweeps across a running chat's row every 4.2 s. Core
+/// Animation moves it, so the rails are not evaluated or laid out again while
+/// it runs. It stops while the window is not visible. Every row shares one
+/// phase, so a chat's rows in both rails sweep together.
+private struct ActiveRowSweep: NSViewRepresentable {
+    let cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> ActiveRowSweepView { ActiveRowSweepView() }
+
+    func updateNSView(_ view: ActiveRowSweepView, context: Context) {
+        view.cornerRadius = cornerRadius
+    }
+}
+
+private final class ActiveRowSweepView: NSView {
+    private static let period: CFTimeInterval = 4.2
+    /// The band is this many row widths wide.
+    private static let bandWidth: CGFloat = 1.7
+    private static let animationKey = "sweep"
+
+    private let band = CAGradientLayer()
+
+    var cornerRadius: CGFloat = 0 {
+        didSet { layer?.cornerRadius = cornerRadius }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        let root = CALayer()
+        root.masksToBounds = true
+        root.cornerCurve = .continuous
+        layer = root
+        wantsLayer = true
+        clipsToBounds = true
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+        root.addSublayer(band)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        let size = bounds.size
+        let width = size.width * Self.bandWidth
+        guard band.bounds.size != CGSize(width: width, height: size.height) else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        band.anchorPoint = .zero
+        band.bounds = CGRect(x: 0, y: 0, width: width, height: size.height)
+        band.position = .zero
+        CATransaction.commit()
+        band.removeAnimation(forKey: Self.animationKey)
+        updateAnimation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(occlusionChanged),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        updateColor()
+        updateAnimation()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColor()
+    }
+
+    @objc private func occlusionChanged() { updateAnimation() }
+
+    private func updateColor() {
+        var colors: [CGColor] = []
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let primary = WovenColors.primary
+            colors = [primary.withAlphaComponent(0), primary.withAlphaComponent(0.055), primary.withAlphaComponent(0)]
+                .map(\.cgColor)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        band.colors = colors
+        CATransaction.commit()
+    }
+
+    /// The band's left edge travels from 1.7 row widths before the row to its
+    /// right edge, in step with the wall clock.
+    private func updateAnimation() {
+        let width = bounds.width
+        guard width > 0, window?.occlusionState.contains(.visible) == true else {
+            band.removeAnimation(forKey: Self.animationKey)
+            return
+        }
+        guard band.animation(forKey: Self.animationKey) == nil else { return }
+        let animation = CABasicAnimation(keyPath: "position.x")
+        animation.fromValue = -width * Self.bandWidth
+        animation.toValue = width
+        animation.duration = Self.period
+        animation.timeOffset = Date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.period)
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        band.add(animation, forKey: Self.animationKey)
     }
 }
 
