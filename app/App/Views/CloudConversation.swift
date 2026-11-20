@@ -50,6 +50,8 @@ struct CloudConversation: View {
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onCommandNavigation: (ComposerNavigationDirection) -> Bool
+    /// Starts a new chat in this one's place, when its native session is gone.
+    var onNewSession: (() -> Void)? = nil
     @State private var toolObservationToken = UUID()
     @State private var scrollState = ConversationScrollState()
     @State private var transcriptOwnsScroll = false
@@ -75,7 +77,7 @@ struct CloudConversation: View {
 
     /// Archived, or its owner is unreachable: saved items show, controls are off.
     private var isReadOnly: Bool {
-        conversation?.isArchived != false || session?.isOwnerReachable != true
+        conversation?.isArchived != false || session?.isOwnerReachable != true || session?.isNativeSessionGone == true
     }
 
     private var interaction: SessionInteraction? {
@@ -296,7 +298,8 @@ struct CloudConversation: View {
             displayedBody: presentation?.displayedBody,
             commentaryIDs: presentation?.commentaryIDs,
             workTimeline: presentation?.workTimeline,
-            streaming: presentation?.isStreaming
+            streaming: presentation?.isStreaming,
+            onNewSession: message.id == session?.goneNoticeID && conversation?.isArchived == false ? onNewSession : nil
         )
     }
 
@@ -733,6 +736,7 @@ struct MessageRow: View {
     var commentaryIDs: Set<String>? = nil
     var workTimeline: ConversationWorkTimeline? = nil
     var streaming: Bool? = nil
+    var onNewSession: (() -> Void)? = nil
 
     private var isStreaming: Bool {
         streaming ?? AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
@@ -755,6 +759,10 @@ struct MessageRow: View {
                 Image(systemName: "info.circle")
                 Text(message.content)
                     .lineLimit(1)
+                if let onNewSession {
+                    Button("New Chat", action: onNewSession)
+                        .buttonStyle(WovenQuietButtonStyle())
+                }
             }
             .font(.system(size: 12))
             .foregroundStyle(WovenPalette.mutedForeground)

@@ -107,6 +107,13 @@ actor SessionManager {
       directory = url.path
     }
     let session = try await library.createSession(id: id, runtime: kind, title: title, folderID: folderID, directory: directory)
+    // The defaults for this runtime on this machine, else for every machine.
+    let own = try? await library.setting("agentDefaults.\(kind.rawValue).\(library.machineID)")
+    let shared = try? await library.setting("agentDefaults.\(kind.rawValue)")
+    if let defaults = (own ?? shared)?.value {
+      try? await library.setSessionChoices(id, model: defaults["model"]?.string, thinking: defaults["thinking"]?.string,
+                                           permission: defaults["permission"]?.string)
+    }
     // A runtime that cannot start yet still leaves a session to send to later.
     _ = try? await host(for: id).configure(SessionChoices())
     return try await library.session(id) ?? session

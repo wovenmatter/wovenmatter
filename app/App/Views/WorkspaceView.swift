@@ -606,6 +606,7 @@ struct WorkspaceView: View {
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
                         onDropFiles: attachFiles,
+                        onReplaceSession: startChat(replacing:),
                         onBotRoute: { target, panelID in
                             _ = chatPanels.setBot(target, in: panelID)
                         },
@@ -1045,6 +1046,22 @@ struct WorkspaceView: View {
         }
     }
 
+    /// Starts a chat with the same runtime, machine and folder as one whose
+    /// native session is gone.
+    private func startChat(replacing conversation: WorkspaceConversationRecord) {
+        let selection = beginChatCreation(agentID: conversation.agentID)
+        Task {
+            do {
+                let conversationID = try await model.workspace.startSession(
+                    runtime: conversation.runtime, on: conversation.machineID, folderID: conversation.folderID)
+                finishChatCreation(selection, conversationID: conversationID)
+            } catch {
+                finishChatCreation(selection, conversationID: nil)
+                showNotice(error.localizedDescription)
+            }
+        }
+    }
+
     private func closeNewChatChooser() {
         showsNewChatChooser = false
     }
@@ -1300,6 +1317,8 @@ struct WorkspaceSurface: View {
     let onAttachmentAction: (ChatPanelID, ComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, ChatPanelID) -> Void
     let onDropFiles: ([URL], ChatPanelID) -> Bool
+    /// Starts a new chat in place of one whose native session is gone.
+    let onReplaceSession: (WorkspaceConversationRecord) -> Void
     let onBotRoute: (BotTarget, ChatPanelID) -> Void
     let onOpenBotLink: (URL, ChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
@@ -1500,7 +1519,8 @@ struct WorkspaceSurface: View {
                 onAttachmentAction: { onAttachmentAction(panelID, $0) },
                 onRemoveAttachment: { onRemoveAttachment($0, panelID) },
                 onDropFiles: { onDropFiles($0, panelID) },
-                onCommandNavigation: handleComposerNavigation
+                onCommandNavigation: handleComposerNavigation,
+                onNewSession: conversation.map { gone in { onReplaceSession(gone) } }
             )
             if showNoteButton { compactAssetsButton }
         }

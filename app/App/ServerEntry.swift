@@ -13,8 +13,9 @@ enum ServerEntry {
         if let resources = Bundle.main.resourcePath { setenv("WOVEN_RESOURCES", resources, 0) }
         Task.detached {
             do {
-                // A machine another one removed exits with a failure status, so
-                // launchd starts it again and it begins as a new machine.
+                // The status `run` returns: a machine another one removed exits
+                // with `removedStatus`, and launchd, which restarts the server only
+                // after a crash, leaves it stopped.
                 exit(try await ServerCommand.run(arguments))
             } catch {
                 FileHandle.standardError.write(Data("woven-server: \(error)\n".utf8))

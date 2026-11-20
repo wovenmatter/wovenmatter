@@ -25,6 +25,10 @@ final class SessionStore {
     var isOwnerReachable: Bool { isFollowing && server?.isConnected == true }
     /// A turn is running on the owner.
     var isRunning: Bool { run == .running }
+    /// The runtime no longer has this chat's native session: it can only be read.
+    var isNativeSessionGone: Bool { run == .nativeSessionGone }
+    /// The notice that says so, which offers a new session.
+    private(set) var goneNoticeID: String?
     /// Questions, approvals and forms the running turn waits on.
     private(set) var interactions: [SessionInteraction] = []
     /// The runtime's settings, once the owner has reported them.
@@ -95,9 +99,13 @@ final class SessionStore {
 
     func send(_ input: AgentMessageInput) async throws {
         guard let server, isOwnerReachable else { throw ClientError.notConnected }
-        guard input.attachments.isEmpty else { throw ClientError.notOffered("Attachments") }
+        var attachments: [Attachment] = []
+        for draft in input.attachments {
+            guard case .file(let file) = draft else { throw ClientError.notOffered("Attaching notes and chats") }
+            attachments.append(Attachment(name: file.fileName, mimeType: file.mimeType, digest: file.contentHash, size: file.sizeBytes))
+        }
         error = nil
-        _ = try await server.call(SendTurn(sessionID: sessionID, text: input.text))
+        _ = try await server.call(SendTurn(sessionID: sessionID, text: input.text, attachments: attachments))
     }
 
     func stop() async {
@@ -291,6 +299,7 @@ final class SessionStore {
         let entries = items.sorted { $0.sequence < $1.sequence }.map { (id: $0.id, date: $0.createdAt, content: $0.content, live: false) }
             + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true) }
         let formatter = ISO8601DateFormatter()
+        var goneNotice: String?
 
         func currentRun(at date: Date) -> Int {
             if runs.isEmpty {
@@ -329,6 +338,7 @@ final class SessionStore {
                         rawInputJSON: call.input, rawOutputJSON: call.output),
                     createdAt: formatter.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
+                if notice.kind == .nativeSessionGone { goneNotice = entry.id }
                 if notice.kind == .failure, !runs.isEmpty {
                     runs[runs.count - 1].status = .failed
                     runs[runs.count - 1].error = notice.text
@@ -349,6 +359,7 @@ final class SessionStore {
                 runs[last].assistantMessageID = id
             }
         }
+        if goneNotice != goneNoticeID { goneNoticeID = goneNotice }
         self.messages = messages
         self.runs = runs
         runActivities = activities

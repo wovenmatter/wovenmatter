@@ -3,7 +3,7 @@ import Foundation
 /// This Mac's background server: the app's own signed program run with
 /// `--server`, as a per-user launchd agent so it outlives the window. Closing
 /// or quitting the UI leaves it and its sessions running; launchd restarts it
-/// after a crash, and a clean stop stays stopped.
+/// after a crash; any exit it chose stays stopped.
 ///
 /// The installed app's agent is a login item in ~/Library/LaunchAgents. A dev
 /// instance has its own label, data folder and socket (its bundle identifier
@@ -65,7 +65,9 @@ enum ThisMachineServer {
             "Label": label,
             "ProgramArguments": arguments(),
             "RunAtLoad": true,
-            "KeepAlive": ["SuccessfulExit": false],
+            // Restarted after a crash only: a clean stop, a start that failed and
+            // a machine another one removed all stay stopped.
+            "KeepAlive": ["Crashed": true],
             "ThrottleInterval": 5,
             "ExitTimeOut": 60,
             "LimitLoadToSessionType": "Aqua",

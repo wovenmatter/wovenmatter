@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WovenProtocol
 
 /// One SessionStore per open chat, created on demand.
 @MainActor
@@ -38,7 +39,18 @@ final class SessionsStore {
     var defaultAgentFallbackNotice: String?
 
     /// Uploads files to be attached to a message and returns their composer chips.
+    /// Each file goes into this Mac's server's content store, where the turn
+    /// that sends it finds it by digest.
     func stageMessageAttachments(_ files: [(url: URL, mimeType: String)]) async throws -> [AgentMessageAttachmentDraft] {
-        throw ClientError.notConnected
+        guard let server, server.isConnected else { throw ClientError.notConnected }
+        var drafts: [AgentMessageAttachmentDraft] = []
+        for file in files {
+            let data = try await Task.detached { try Data(contentsOf: file.url) }.value
+            let stored = try await server.call(PutContent(data: data))
+            drafts.append(.file(AgentFileAttachmentDraft(
+                kind: file.mimeType.hasPrefix("image/") ? .image : .file, fileName: file.url.lastPathComponent,
+                mimeType: file.mimeType, sizeBytes: stored.size, contentHash: stored.digest, localURL: file.url)))
+        }
+        return drafts
     }
 }
