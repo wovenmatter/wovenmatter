@@ -239,10 +239,33 @@ actor Secrets {
     try store.write("sign-in/" + provider, try credential.map { try JSONEncoder().encode($0) })
   }
 
+  // MARK: Local model servers (this machine only)
+
+  struct SavedModelServer: Codable {
+    var server: LocalModelServer
+    var key: String
+  }
+
+  func localModelServers() throws -> [SavedModelServer] {
+    guard let data = try store.read("local-model-servers") else { return [] }
+    return try JSONDecoder().decode([SavedModelServer].self, from: data)
+  }
+
+  func setLocalModelServers(_ servers: [SavedModelServer]) throws {
+    try store.write("local-model-servers", servers.isEmpty ? nil : try JSONEncoder().encode(servers))
+  }
+
+  /// The model servers as Pi Durable registers them, without their keys.
+  func piLocalServers() -> JSONValue {
+    .array(((try? localModelServers()) ?? []).map {
+      .object(["id": .string($0.server.id), "url": .string($0.server.url), "models": .array($0.server.models.map(JSONValue.string))])
+    })
+  }
+
   /// Pi Durable's chat settings on this machine: the synced setting
   /// `piDurable.<machineID>` when this machine keeps its own, else
   /// `piDurable`, with `defaultModel` from the defaults for new chats
-  /// (`agentDefaults.piDurable[.<machineID>]`).
+  /// (`agentDefaults.piDurable[.<machineID>]`) and this machine's model servers.
   func piSettings() async -> JSONValue {
     func setting(_ key: String) async -> JSONValue? { (try? await library.setting(key))?.value }
     let own = library.machineID
@@ -252,6 +275,7 @@ actor Secrets {
     if defaults == nil { defaults = await setting("agentDefaults.piDurable") }
     guard case .object(var fields) = settings ?? .object([:]) else { return .object([:]) }
     fields["defaultModel"] = defaults?["model"]
+    fields["localServers"] = piLocalServers()
     return .object(fields)
   }
 
@@ -263,6 +287,9 @@ actor Secrets {
     }
     for provider in providers {
       if let credential = try? subscription(provider) { credentials[provider] = credential }
+    }
+    for saved in (try? localModelServers()) ?? [] {
+      credentials[saved.server.id] = .object(["type": .string("apiKey"), "key": .string(saved.key)])
     }
     return .object(credentials)
   }

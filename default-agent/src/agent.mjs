@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { AgentError, connect } from './rpc.mjs';
 import { ServerCredentials } from './credentials.mjs';
-import { createModels } from './models.mjs';
+import { createModels, registerLocalServers } from './models.mjs';
 import { Session } from './session.mjs';
 import { dataDirectory } from './data.mjs';
 
@@ -34,6 +34,7 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
       if (sessions.has(sessionId)) throw new AgentError('This session is already open.');
       // Pi Durable's settings for this machine, read once when the session opens.
       const settings = await rpc.request('woven/settings', {}).then(reply => reply?.settings ?? {}, () => ({}));
+      registerLocalServers(models.runtime, settings.localServers);
       const session = await Session.open({ models, settings, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, systemPrompt: appended(params.systemPrompt), notify: rpc.notify, create });
       sessions.set(sessionId, session);
       const configOptions = await session.configOptions();

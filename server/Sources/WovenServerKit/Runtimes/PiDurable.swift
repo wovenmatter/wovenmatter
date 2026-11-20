@@ -117,10 +117,13 @@ public final class PiDurableRuntime: Runtime {
     return list
   }
 
-  /// The models of every provider this machine's credentials reach.
+  /// The models of every provider and model server this machine's credentials reach.
   func models(refresh: Bool) async throws -> [ProviderModel] {
-    let credentials = await credentials.current?.piCredentials(subscriptions: Self.subscriptions) ?? .object([:])
-    let result = try await control(.object(["action": .string("models"), "credentials": credentials, "refresh": .bool(refresh)]),
+    let secrets = credentials.current
+    let credentials = await secrets?.piCredentials(subscriptions: Self.subscriptions) ?? .object([:])
+    let servers = await secrets?.piLocalServers() ?? .array([])
+    let result = try await control(.object(["action": .string("models"), "credentials": credentials, "refresh": .bool(refresh),
+                                            "localServers": servers]),
                                    events: { _ in }, answers: nil)
     return try (result["models"] ?? .array([])).decode([ProviderModel].self)
   }

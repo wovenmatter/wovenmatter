@@ -96,6 +96,7 @@ public final class WovenServer: Sendable {
     var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
     registerFolders(&routes, library: library, root: options.foldersRoot)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
+    registerLocalModelServers(&routes, sessions: sessions, secrets: secrets)
     registerArtifacts(&routes, library: library, sessions: sessions)
     registerLibraryItems(&routes, library: library)
     registerSchedules(&routes, library: library, sessions: sessions)

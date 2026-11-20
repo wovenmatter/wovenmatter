@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { claudeExecutable, claudeProvider, claudeStatus } from './claude.mjs';
 import { ServerCredentials, toWire } from './credentials.mjs';
-import { catalog, createModels, providerList, subscriptions } from './models.mjs';
+import { catalog, createModels, probeLocalServer, providerList, registerLocalServers, subscriptions } from './models.mjs';
 import { humanMessage } from './rpc.mjs';
 import { updateSDK } from './sdk.mjs';
 import { dataDirectory } from './data.mjs';
@@ -46,10 +46,12 @@ export async function runControl() {
 
 async function perform(request, { data, write, ask, closed }) {
   if (request.action === 'update-sdk') return updateSDK(data);
-  // Only the catalog needs credentials; the server passes them in with the request.
+  if (request.action === 'probe-local-server') return probeLocalServer(request.url, request.key);
+  // Only the catalog needs credentials and model servers; the server passes them in with the request.
   const credentials = new ServerCredentials({ fetch: async () => ({ credentials: request.credentials ?? {} }), report: async () => {} });
   const models = await createModels({ dataDirectory: data, credentials });
   const { runtime } = models;
+  registerLocalServers(runtime, request.localServers);
   if (request.action === 'providers') return { providers: providerList(runtime) };
   if (request.action === 'models') return { models: await catalog(models, { refresh: request.refresh === true }) };
   if (request.action !== 'login') throw new Error(`Unknown action ${request.action}.`);
