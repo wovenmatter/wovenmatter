@@ -100,11 +100,16 @@ extension Library {
         AND kind IN ('userMessage', 'assistantMessage') ORDER BY sequence DESC LIMIT 1)
     """
 
-  /// Changes a session's title, folder, archived or pinned flag; nil leaves a
+  /// Changes a session's title, folder, archived or pinned flag, goal or tool
+  /// groups; nil leaves a
   /// field. `read` true marks every item so far read, false marks it unread.
   public func updateSession(_ id: String, title: String? = nil, archived: Bool? = nil, pinned: Bool? = nil,
-                            read: Bool? = nil, folderID: String?? = nil, goal: String?? = nil) async throws -> Session {
+                            read: Bool? = nil, folderID: String?? = nil, goal: String?? = nil,
+                            tools: Set<ToolGroup>? = nil) async throws -> Session {
     var values: [String: SQLValue] = [:]
+    if let tools {
+      values["tools"] = .text(String(decoding: try Wire.encoder.encode(tools.map(\.rawValue).sorted()), as: UTF8.self))
+    }
     if let title { values["title"] = .text(title) }
     if let archived { values["archived"] = .integer(archived ? 1 : 0) }
     if let pinned { values["pinned"] = .integer(pinned ? 1 : 0) }
@@ -364,7 +369,11 @@ extension Library {
                    thinking: row.text("thinking"), permission: row.text("permission"), archived: row.bool("archived"),
                    pinned: row.bool("pinned"), goal: row.text("goal"), createdAt: row.date("created_at"),
                    lastActivityAt: row.date("last_at"), preview: row.text("preview_text").flatMap(Self.preview),
-                   unread: unread)
+                   unread: unread, tools: row.text("tools").flatMap(Self.toolGroups))
+  }
+
+  private static func toolGroups(_ json: String) -> Set<ToolGroup>? {
+    (try? Wire.decoder.decode([String].self, from: Data(json.utf8))).map { Set($0.compactMap(ToolGroup.init(rawValue:))) }
   }
 
   /// One line from the start of a message: whitespace runs become one space.

@@ -64,6 +64,33 @@ public struct ToolCaller: Codable, Sendable, Hashable {
   }
 }
 
+/// A group of Woven tools a session may be allowed or refused. Tools in no
+/// group (goals, places, bots) are always offered.
+public enum ToolGroup: String, Codable, Sendable, Hashable, CaseIterable, Identifiable {
+  case notes, history, sessions, timers, calendar, library, browser, computer
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .notes: "Notes"
+    case .history: "Conversation history"
+    case .sessions: "Session management"
+    case .timers: "Timers"
+    case .calendar: "Calendar"
+    case .library: "Library"
+    case .browser: "Browser Use"
+    case .computer: "Computer Use"
+    }
+  }
+
+  /// What a session may use when neither it nor any setting says otherwise.
+  public static let standard: Set<ToolGroup> = Set(allCases).subtracting([.computer])
+
+  /// The synced setting holding the groups new chats may use, as an array of names.
+  public static let defaultsSetting = "tools.defaults"
+}
+
 /// Carries out one Woven tool on the machine asked, for a caller on another
 /// machine: a tool that concerns this machine (a session it runs) is sent
 /// here by the caller's own server. Only servers send it.

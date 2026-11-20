@@ -72,6 +72,21 @@ func aToolCallFromASessionIsCarriedOutAndAttributedToThatSession() async throws 
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aSessionIsRefusedTheToolsOfAGroupItMayNotUse() async throws {
+  let host = try await TestServer.start(name: "Studio")
+  defer { Task { await host.server.stop() } }
+  let client = try await host.connect()
+  let caller = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Planner"))
+  let target = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
+  _ = try await client.call(UpdateSession(sessionID: caller.id, tools: [.notes]))
+
+  let call = try await callTool(client, from: caller.id, "send_to_session",
+                                #"{"sessionID":"\#(target.id)","text":"Build the page."}"#)
+  #expect(call.failed)
+  #expect(try await client.call(SessionItems(sessionID: target.id)).isEmpty)
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aToolForAnotherMachineIsForwardedToItsOwner() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(name: "Studio", tailnet: tailnetA, listen: true)

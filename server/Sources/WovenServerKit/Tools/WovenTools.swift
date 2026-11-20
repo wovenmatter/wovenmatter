@@ -14,6 +14,8 @@ struct WovenTool: Sendable {
   var readOnly = false
   /// Offered to bots too; bots have their own tools for bots and the Forum.
   var forBots = true
+  /// A session may use it when it may use one of these; none means always.
+  var groups: Set<ToolGroup> = []
   var run: @Sendable (ToolRequest) async throws -> ToolResult
 }
 
@@ -80,9 +82,10 @@ final class WovenTools: Sendable {
 
   var machineID: String { library.machineID }
 
-  /// The catalog as MCP's `tools/list` describes it.
-  func listing(forBots: Bool = false) -> [JSONValue] {
-    catalog.filter { !forBots || $0.forBots }.map { tool in
+  /// The catalog as MCP's `tools/list` describes it; `enabled` leaves out
+  /// the tools of the other groups.
+  func listing(forBots: Bool = false, enabled: Set<ToolGroup>? = nil) -> [JSONValue] {
+    catalog.filter { (!forBots || $0.forBots) && Self.allowed($0, enabled) }.map { tool in
       .object(["name": .string(tool.name), "description": .string(tool.description), "inputSchema": tool.input,
                "annotations": .object(["readOnlyHint": .bool(tool.readOnly)])])
     }
@@ -91,6 +94,11 @@ final class WovenTools: Sendable {
   /// Carries out one call. Every failure comes back as an error result.
   func call(_ name: String, arguments: JSONValue, caller: ToolCaller, forwarded: Bool = false) async -> ToolResult {
     guard let tool = byName[name] else { return .error("Woven has no tool \(name).") }
+    // A forwarded call was allowed by the caller's own server.
+    if !forwarded, let sessionID = caller.sessionID, !Self.allowed(tool, await enabledGroups(sessionID: sessionID)),
+       let group = tool.groups.min(by: { $0.rawValue < $1.rawValue }) {
+      return .error("\(group.title) is disabled for this session.")
+    }
     let arguments: JSONValue = if case .object = arguments { arguments } else { .object([:]) }
     let call = ToolRequest(arguments: Arguments(value: arguments), caller: caller, tools: self, name: name, forwarded: forwarded)
     do {
@@ -100,6 +108,29 @@ final class WovenTools: Sendable {
     } catch {
       return .error(ProtocolError(error).message)
     }
+  }
+
+  /// The groups a session may use: its own choice, else its runtime's
+  /// defaults for new chats on this machine or every machine, else the
+  /// defaults for every new chat.
+  func enabledGroups(sessionID: String) async -> Set<ToolGroup> {
+    guard let session = try? await library.session(sessionID) else { return [] }
+    if let tools = session.tools { return tools }
+    let runtime = session.runtime.rawValue
+    let own = try? await library.setting("agentDefaults.\(runtime).\(session.machineID)")
+    let shared = try? await library.setting("agentDefaults.\(runtime)")
+    if let names = (own ?? shared)?.value["tools"]?.array { return Self.groups(names) }
+    if let names = (try? await library.setting(ToolGroup.defaultsSetting))?.value.array { return Self.groups(names) }
+    return ToolGroup.standard
+  }
+
+  private static func allowed(_ tool: WovenTool, _ enabled: Set<ToolGroup>?) -> Bool {
+    guard let enabled, !tool.groups.isEmpty else { return true }
+    return !tool.groups.isDisjoint(with: enabled)
+  }
+
+  private static func groups(_ names: [JSONValue]) -> Set<ToolGroup> {
+    Set(names.compactMap { $0.string.flatMap(ToolGroup.init(rawValue:)) })
   }
 
   func forward(_ call: ToolRequest, to owner: String) async throws -> ToolResult? {

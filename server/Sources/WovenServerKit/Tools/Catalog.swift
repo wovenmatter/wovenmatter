@@ -61,6 +61,7 @@ private let sessionTools: [WovenTool] = [
     input: schema(["machineID": text("Only this machine's sessions."), "query": text("Words the title contains."),
                    "includeArchived": flag("Include archived sessions.")]),
     readOnly: true,
+    groups: [.history],
     run: { call in
       let tools = call.tools
       var sessions = try await tools.library.sessions(machineID: call.arguments.optionalString("machineID"),
@@ -81,6 +82,7 @@ private let sessionTools: [WovenTool] = [
     input: schema(["sessionID": text("The session."), "afterSequence": integer("Only items after this sequence number."),
                    "limit": integer("At most this many items (default 40).")], required: ["sessionID"]),
     readOnly: true,
+    groups: [.history],
     run: { call in
       let session = try await call.tools.session(try call.arguments.string("sessionID"))
       let limit = min(max(call.arguments.int("limit") ?? 40, 1), 200)
@@ -114,6 +116,7 @@ private let sessionTools: [WovenTool] = [
                    "machineID": text("Run on this machine when no folder is given; default this one.")],
                   required: ["runtime", "title", "message"]),
     forBots: true,
+    groups: [.sessions],
     run: { call in
       let tools = call.tools
       var owner = call.arguments.optionalString("machineID") ?? tools.machineID
@@ -134,6 +137,7 @@ private let sessionTools: [WovenTool] = [
     name: "send_to_session",
     description: "Send a message to another agent session, on any machine; it starts a turn there and returns once that session took it. The message is marked as coming from you. Fails while that session is in a turn or its machine is offline.",
     input: schema(["sessionID": text("The session to send to."), "text": text("The message.")], required: ["sessionID", "text"]),
+    groups: [.sessions],
     run: { call in
       let session = try await call.tools.session(try call.arguments.string("sessionID"))
       guard session.id != call.caller.sessionID else { throw ToolFailure("That is your own session.") }
@@ -183,6 +187,7 @@ private let artifactTools: [WovenTool] = [
     description: "List notes, pages, apps and sheets, most recently changed first: id, kind, title, a preview.",
     input: schema(["kind": choice(["note", "page", "app", "sheet"], "Only this kind."), "query": text("Words the title or text contains.")]),
     readOnly: true,
+    groups: [.notes],
     run: { call in
       var artifacts = try await call.tools.library.artifacts()
       if let kind = call.arguments.optionalString("kind") {
@@ -201,6 +206,7 @@ private let artifactTools: [WovenTool] = [
     description: "Read a note, page, app or sheet. Returns its title, its `basedOn` stamp for `edit_artifact`, and its content: a note's text, an app's HTML and saved state, or a page's components with their ids and revisions.",
     input: schema(["artifactID": text("The artifact.")], required: ["artifactID"]),
     readOnly: true,
+    groups: [.notes],
     run: { call in
       let document = try await call.tools.library.artifact(try call.arguments.string("artifactID"))
       let artifact = document.artifact
@@ -223,6 +229,7 @@ private let artifactTools: [WovenTool] = [
                    "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
                    "html": text("An app's whole HTML page."), "folderID": text("File it in this folder.")],
                   required: ["kind", "title"]),
+    groups: [.notes],
     run: { call in
       guard let kind = call.arguments.optionalString("kind").flatMap({ artifactKinds[$0] }), kind != .spreadsheet else {
         throw ToolFailure("kind is note, page or app.")
@@ -253,6 +260,7 @@ private let artifactTools: [WovenTool] = [
                    "appState": .object(["type": .string("array"), "items": .object(["type": .string("object")]),
                                         "description": .string("Edits to an app's saved state.")])],
                   required: ["artifactID", "basedOn"]),
+    groups: [.notes],
     run: { call in
       let library = call.tools.library
       let id = try call.arguments.string("artifactID")
@@ -305,6 +313,7 @@ private let databaseTools: [WovenTool] = [
     description: "Without `databaseID`, list every database (id, name, owning machine, description). With it, its tables, columns and row counts.",
     input: schema(["databaseID": text("The database.")]),
     readOnly: true,
+    groups: [.notes],
     run: { call in
       let tools = call.tools
       guard let id = call.arguments.optionalString("databaseID") else {
@@ -326,6 +335,7 @@ private let databaseTools: [WovenTool] = [
     description: "Run one read-only SQL statement (SELECT) on a database and get the rows as JSON. Reads the latest copy when another machine owns it.",
     input: schema(["databaseID": text("The database."), "sql": text("One SQLite SELECT statement.")], required: ["databaseID", "sql"]),
     readOnly: true,
+    groups: [.notes],
     run: { call in
       let rows = try await call.tools.databases.query(QueryDatabase(databaseID: try call.arguments.string("databaseID"),
                                                                     sql: try call.arguments.string("sql")))
@@ -335,6 +345,7 @@ private let databaseTools: [WovenTool] = [
     name: "execute_database",
     description: "Run SQL that changes a database: CREATE TABLE, INSERT, UPDATE, DELETE. It is carried out by the machine that owns the database and fails while that machine is offline.",
     input: schema(["databaseID": text("The database."), "sql": text("SQLite statements.")], required: ["databaseID", "sql"]),
+    groups: [.notes],
     run: { call in
       let tools = call.tools
       let written = try await tools.databases.execute(ExecuteDatabase(databaseID: try call.arguments.string("databaseID"),
@@ -347,6 +358,7 @@ private let databaseTools: [WovenTool] = [
     description: "Create an empty database that notes, pages and apps can link to. It belongs to the machine given (default this one).",
     input: schema(["name": text("Its name."), "description": text("What it holds."),
                    "machineID": text("The machine that owns it.")], required: ["name"]),
+    groups: [.notes],
     run: { call in
       let tools = call.tools
       let database = try await tools.databases.create(
@@ -386,6 +398,7 @@ private let placeTools: [WovenTool] = [
     description: "Search the library of links and files sent in every chat: title, address or file name, the chat it was in, when.",
     input: schema(["query": text("Words to look for."), "kind": choice(["file", "link", "photo"], "Only this kind.")]),
     readOnly: true,
+    groups: [.library],
     run: { call in
       var items = try await call.tools.library.libraryItems()
       if let kind = call.arguments.optionalString("kind") { items = items.filter { $0.kind.rawValue == kind } }
@@ -485,6 +498,7 @@ private let uiTools: [WovenTool] = [
                    "frame": text("A frame selector."), "name": text("Upload file name."), "mimeType": text("Upload type."),
                    "data": text("Upload content, base64."), "id": text("A download id."), "offset": integer("Byte offset.")],
                   required: ["action"]),
+    groups: [.browser],
     run: { call in
       await call.tools.ui.carryOut("browser", arguments: call.arguments.value, sessionID: call.caller.sessionID)
     }),
@@ -513,6 +527,7 @@ private let uiTools: [WovenTool] = [
                    "includeScreenshot": flag("Include an image with the snapshot."),
                    "treeFormat": choice(["markdown", "elements", "both"], "How the tree is shown.")],
                   required: ["action"]),
+    groups: [.computer],
     run: { call in
       await call.tools.ui.carryOut("computer", arguments: call.arguments.value, sessionID: call.caller.sessionID)
     }),

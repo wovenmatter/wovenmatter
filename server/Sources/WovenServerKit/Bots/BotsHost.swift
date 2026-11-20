@@ -656,6 +656,7 @@ func registerBots(_ router: inout Router, bots: BotsHost, library: Library) {
     let isBotChat = try await library.session(request.sessionID)?.runtime == .bots
     let folder: String?? = request.removeFromFolder == true ? .some(nil) : request.folderID.map { .some($0) }
     return try await library.updateSession(request.sessionID, title: isBotChat ? nil : request.title, archived: request.archived,
-                                           pinned: request.pinned, read: request.read, folderID: folder)
+                                           pinned: request.pinned, read: request.read, folderID: folder,
+                                           tools: request.tools)
   }
 }

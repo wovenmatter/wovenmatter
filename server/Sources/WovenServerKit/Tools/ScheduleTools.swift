@@ -92,6 +92,7 @@ let scheduleTools: [WovenTool] = [
                                     "description": .string("Only this kind.")])]),
     readOnly: true,
     forBots: false,
+    groups: [.calendar, .timers],
     run: { call in
       var entries = try await call.tools.library.schedules()
       if let kind = call.arguments.optionalString("kind") { entries = entries.filter { $0.kind.rawValue == kind } }
@@ -104,6 +105,7 @@ let scheduleTools: [WovenTool] = [
     description: "Schedule a prompt to run in an agent session at a time, once or repeating. Each run continues the task's session (or starts a new one with `newSessionEachRun`). It runs on the folder's machine, or `machineID`, even while no one has the app open.",
     input: schema(taskFields, required: ["title", "prompt", "startsAt", "runtime"]),
     forBots: false,
+    groups: [.calendar],
     run: { call in
       let tools = call.tools
       let arguments = call.arguments
@@ -130,6 +132,7 @@ let scheduleTools: [WovenTool] = [
     input: schema(taskFields.filter { $0.key != "machineID" && $0.key != "folderID" }
       .merging(["scheduleID": text("The task, from `list_schedules`.")]) { first, _ in first }, required: ["scheduleID"]),
     forBots: false,
+    groups: [.calendar],
     run: { call in
       let tools = call.tools
       let arguments = call.arguments
@@ -155,6 +158,7 @@ let scheduleTools: [WovenTool] = [
     description: "Delete a scheduler entry (a scheduled task, event, timer or wake-up) by its id from `list_schedules`. Sessions it already ran stay.",
     input: schema(["scheduleID": text("The entry.")], required: ["scheduleID"]),
     forBots: false,
+    groups: [.calendar, .timers],
     run: { call in
       let tools = call.tools
       let id = try call.arguments.string("scheduleID")
@@ -170,6 +174,7 @@ let scheduleTools: [WovenTool] = [
                    "repeatMinutes": integer("Fire again every this many minutes."), "title": text("A short name for it.")],
                   required: ["afterSeconds", "instruction"]),
     forBots: false,
+    groups: [.timers],
     run: { call in
       let tools = call.tools
       let session = try await call.callingSession()
@@ -189,6 +194,7 @@ let scheduleTools: [WovenTool] = [
     input: schema(["at": text("When, as ISO 8601 with a time zone offset."), "message": text("What you will be told then.")],
                   required: ["at", "message"]),
     forBots: false,
+    groups: [.timers],
     run: { call in
       let tools = call.tools
       let session = try await call.callingSession()

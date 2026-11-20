@@ -86,8 +86,10 @@ public struct UpdateSession: Request {
   public var folderID: String?
   /// Takes the session out of its folder; wins over `folderID`.
   public var removeFromFolder: Bool?
+  /// The groups of Woven tools it may use from now on.
+  public var tools: Set<ToolGroup>?
   public init(sessionID: String, title: String? = nil, archived: Bool? = nil, pinned: Bool? = nil, read: Bool? = nil,
-              folderID: String? = nil, removeFromFolder: Bool? = nil) {
+              folderID: String? = nil, removeFromFolder: Bool? = nil, tools: Set<ToolGroup>? = nil) {
     self.sessionID = sessionID
     self.title = title
     self.archived = archived
@@ -95,6 +97,7 @@ public struct UpdateSession: Request {
     self.read = read
     self.folderID = folderID
     self.removeFromFolder = removeFromFolder
+    self.tools = tools
   }
 }
 

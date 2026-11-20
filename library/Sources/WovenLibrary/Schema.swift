@@ -148,6 +148,8 @@ public enum Schema {
       // The newest item the person has seen, by its `created_at`.
       .integer("read_at", 0),
       .text("goal"),
+      // The tool groups it may use, as a JSON array; null follows the defaults.
+      .text("tools"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
     Table("folders", .newestWins, [

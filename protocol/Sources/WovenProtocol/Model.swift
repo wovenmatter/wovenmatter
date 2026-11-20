@@ -101,11 +101,13 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
   /// Its newest item is not the person's own message and came after they
   /// last read it.
   public var unread: Bool
+  /// The groups of Woven tools it may use; nil follows the defaults for new chats.
+  public var tools: Set<ToolGroup>?
 
   public init(id: String, machineID: String, runtime: RuntimeKind, title: String, folderID: String?,
               directory: String = "", model: String? = nil, thinking: String? = nil, permission: String? = nil,
               archived: Bool, pinned: Bool = false, goal: String?, createdAt: Date, lastActivityAt: Date? = nil,
-              preview: String? = nil, unread: Bool = false) {
+              preview: String? = nil, unread: Bool = false, tools: Set<ToolGroup>? = nil) {
     self.id = id
     self.machineID = machineID
     self.runtime = runtime
@@ -122,6 +124,7 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
     self.lastActivityAt = lastActivityAt ?? createdAt
     self.preview = preview
     self.unread = unread
+    self.tools = tools
   }
 }
 

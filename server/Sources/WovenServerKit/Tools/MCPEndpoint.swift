@@ -188,7 +188,9 @@ private final class MCPConnection: @unchecked Sendable {
     case "ping":
       result = .object([:])
     case "tools/list":
-      result = .object(["tools": .array(tools.listing())])
+      // A session is shown only the groups it may use.
+      let enabled: Set<ToolGroup>? = if case .session(let id) = grant { await tools.enabledGroups(sessionID: id) } else { nil }
+      result = .object(["tools": .array(tools.listing(enabled: enabled))])
     case "tools/call":
       let outcome: ToolResult
       if let caller = await caller(grant, params) {
