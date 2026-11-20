@@ -52,8 +52,8 @@ public final class FileSecretStore: SecretStore {
       let partial = file.appendingPathExtension("partial")
       FileManager.default.createFile(atPath: partial.path, contents: nil, attributes: [.posixPermissions: 0o600])
       try JSONEncoder().encode(all).write(to: partial)
-      _ = try FileManager.default.replaceItemAt(file, withItemAt: partial)
-      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+      // rename(2) replaces the old file in one step, on every platform.
+      guard rename(partial.path, file.path) == 0 else { throw RuntimeError.failed("Could not save \(file.path).") }
     }
   }
 

@@ -13,15 +13,20 @@ private let appVersion = "test"
 
 /// The scripted ACP agent, built into the same folder as this test image.
 private func fakeAgent() throws -> String {
-  var info = dl_info()
+  #if os(Linux)
+  let image = try FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
+  #else
+  var info = Dl_info()
   guard dladdr(#dsohandle, &info) != 0, let name = info.dli_fname else { throw RuntimeError.failed("Cannot find the test image.") }
-  var url = URL(fileURLWithPath: String(cString: name))
+  let image = String(cString: name)
+  #endif
+  var url = URL(fileURLWithPath: image)
   for _ in 0..<4 {
     url.deleteLastPathComponent()
     let candidate = url.appendingPathComponent("fake-acp-agent")
     if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate.path }
   }
-  throw RuntimeError.failed("fake-acp-agent was not built next to \(String(cString: name)).")
+  throw RuntimeError.failed("fake-acp-agent was not built next to \(image).")
 }
 
 /// An ACP runtime that runs the fake agent, keeping its native sessions in `store`.

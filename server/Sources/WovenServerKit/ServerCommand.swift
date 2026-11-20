@@ -93,9 +93,8 @@ public enum ServerCommand {
       appVersion: appVersion, machineName: name ?? this?.name ?? localHostName(), tailnet: tailnet,
       runtimes: standardRuntimes(dataFolder: URL(fileURLWithPath: folder, isDirectory: true)) + (standIn ? [StandInRuntime()] : []),
       foldersRoot: foldersRoot))
-    print("woven-server: machine \(server.machineID) on \(socketPath ?? "no socket")"
-          + (address.map { ", \($0.host):\(server.port ?? $0.port)" } ?? ""))
-    fflush(stdout)
+    FileHandle.standardOutput.write(Data(("woven-server: machine \(server.machineID) on \(socketPath ?? "no socket")"
+          + (address.map { ", \($0.host):\(server.port ?? $0.port)" } ?? "") + "\n").utf8))
 
     // Whichever comes first. Not a task group: that would wait for the other,
     // and neither ends when cancelled.
