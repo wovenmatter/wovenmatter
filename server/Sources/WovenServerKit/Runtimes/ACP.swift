@@ -38,6 +38,9 @@ struct ACPProfile: Sendable {
   var handleNotification: (@Sendable (String, JSONValue) async -> Void)?
   /// How a message reaches a turn while it runs.
   var steering: ACPSteering = .sessionSteering
+  /// The runtime says nothing when a turn it started by itself ends, so one
+  /// ends after `ACPState.quietEnd` without output.
+  var ownTurnsEndQuietly = false
   /// Where the process's standard error goes.
   var logFile: URL?
   /// The Woven MCP and instructions for the native session.
@@ -293,6 +296,9 @@ private actor ACPState {
   private var usesSetMode = false
 
   private var turnRunning = false
+  /// The agent works on a turn it started by itself, with no `session/prompt` open.
+  private var ownTurn = false
+  private var lastOutput = ContinuousClock.now
   private var turnNumber = 0
   /// The session's cost so far in US dollars, as `usage_update` reports it,
   /// and what it was when the running turn began.
@@ -336,7 +342,9 @@ private actor ACPState {
     guard let sessionID else { throw RuntimeError.failed("The session is not open.") }
     guard !turnRunning else { throw RuntimeError.failed("A turn is already running.") }
     turnRunning = true
-    turnNumber += 1
+    // A prompt sent during a turn the agent started itself takes that turn
+    // over: its reply ends it.
+    if ownTurn { ownTurn = false } else { turnNumber += 1 }
     costBeforeTurn = sessionCost
     let blocks = try Self.blocks(turn)
     let connection = connection
@@ -355,14 +363,18 @@ private actor ACPState {
 
   /// Hands the running turn a message. The turn's own `session/prompt` goes
   /// on and ends once, with the message's work in it.
+  /// A turn the agent started itself is steered the same way; when the
+  /// agent has no prompt turn to put it in, it is sent as a prompt, which the
+  /// agent takes into the work it is doing.
   func steer(_ turn: Turn) async throws -> Bool {
-    guard let sessionID, turnRunning else { return false }
+    guard let sessionID, turnRunning || ownTurn else { return false }
+    let taken: Bool
     switch profile.steering {
     case .interject:
       _ = try await connection.request("_x.ai/interject", .object([
         "sessionId": .string(sessionID), "text": .string(Self.textWithFiles(turn)),
       ]))
-      return true
+      taken = true
     case .sessionSteering:
       // `promptRequired`: when the turn has just ended, the agent takes
       // nothing, rather than starting a turn of its own.
@@ -371,16 +383,44 @@ private actor ACPState {
         "_meta": .object(["steering": .object(["idleBehavior": .string("promptRequired")])]),
       ]))
       switch reply["outcome"]?.string {
-      case "injected": return true
-      case "promptRequired": return false
+      case "injected": taken = true
+      case "promptRequired": taken = false
       default: throw RuntimeError.failed("\(profile.kind.rawValue) did not take the message.")
+      }
+    }
+    guard !taken, ownTurn, !turnRunning else { return taken }
+    try prompt(turn)
+    return true
+  }
+
+  /// Output with no prompt open: the agent started a turn by itself.
+  private func output() {
+    lastOutput = .now
+    guard !turnRunning, !ownTurn else { return }
+    ownTurn = true
+    turnNumber += 1
+    guard profile.ownTurnsEndQuietly else { return }
+    Task {
+      while true {
+        try? await Task.sleep(for: Self.quietEnd)
+        guard self.ownTurn else { return }
+        if ContinuousClock.now - self.lastOutput >= Self.quietEnd { return self.endOwnTurn() }
       }
     }
   }
 
-  private func promptEnded(_ result: Result<JSONValue, any Error>) {
-    guard turnRunning else { return }
-    turnRunning = false
+  static let quietEnd: Duration = .seconds(3)
+
+  /// The agent's own turn ended: it is closed like a prompt's.
+  private func endOwnTurn() {
+    guard ownTurn, !turnRunning else { return }
+    ownTurn = false
+    closeActivity()
+    emit.yield(.turnFinished(failure: nil, usage: nil))
+  }
+
+  /// Ends whatever a turn left open.
+  private func closeActivity() {
     endActivity(planToo: true)
     for (callID, var call) in tools {
       if call.output == nil { call.failed = true }
@@ -389,6 +429,12 @@ private actor ACPState {
     tools.removeAll()
     withdrawPermissions()
     emit.yield(.messageFinished)
+  }
+
+  private func promptEnded(_ result: Result<JSONValue, any Error>) {
+    guard turnRunning else { return }
+    turnRunning = false
+    closeActivity()
     switch result {
     case .success(let value):
       let reason = value["stopReason"]?.string ?? "end_turn"
@@ -410,8 +456,9 @@ private actor ACPState {
 
   func cancel() async {
     withdrawPermissions()
-    guard let sessionID, turnRunning else { return }
+    guard let sessionID, turnRunning || ownTurn else { return }
     await connection.notify("session/cancel", .object(["sessionId": .string(sessionID)]))
+    endOwnTurn()
   }
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
@@ -456,6 +503,7 @@ private actor ACPState {
 
   func processEnded() {
     if turnRunning { promptEnded(.failure(RuntimeError.failed("The runtime's process ended during the turn."))) }
+    endOwnTurn()
     emit.yield(.exited)
     emit.finish()
   }
@@ -593,12 +641,20 @@ private actor ACPState {
       if let cost = update["cost"], cost["currency"]?.string?.uppercased() ?? "USD" == "USD", let amount = cost["amount"]?.double {
         sessionCost = amount
       }
+      // Claude Code reports the cost of a model cycle at its end, also of
+      // one it started by itself.
+      if update["cost"] != nil { endOwnTurn() }
+      return
+    case "session_info_update":
+      // Codex says when its thread goes idle.
+      if update["_meta"]?["codex"]?["threadStatus"]?["type"]?.string == "idle" { endOwnTurn() }
       return
     default:
       break
     }
     // A resumed session replays its history; the library already has it.
     guard !replaying else { return }
+    if ["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"].contains(kind) { output() }
     switch kind {
     case "agent_message_chunk":
       guard let text = update["content"]?["text"]?.string else { return }

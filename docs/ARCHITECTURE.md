@@ -181,6 +181,12 @@ behind one adapter interface in the server and are treated alike:
   and goes on. Nothing is queued. The message is saved where it came, after
   the reply so far and before what the turn says next, and the turn still
   ends once. Goal, timer, wake-up and scheduled turns never steer.
+- A runtime can start a turn by itself, for example when a background
+  command it ran finishes. Its first output with no turn running starts a
+  turn, which shows as running, can be stopped and is saved item by item
+  like any other. It ends with the runtime's own end report, or, for a
+  runtime that gives none, after a few seconds without output. A goal does
+  not count such a turn or continue after it.
 - When an item finishes (a user message, an assistant message, a tool call with
   its result) the server writes it once to `session_items`, in the same step as
   it announces it. Partial text is never written while it streams. When a

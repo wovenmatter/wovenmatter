@@ -11,6 +11,8 @@ import WovenProtocol
 /// "Turn N: <text>" (N counts the turns its native session has seen), in two
 /// pieces of text, then makes one tool call. A message steered into a turn
 /// before its second piece joins that piece: "Turn N: <text> + <message>".
+/// A turn whose text starts with "then " is followed by one the stand-in
+/// starts by itself, answering "On my own: <text>".
 /// A turn `woven NAME {arguments}` instead calls that Woven tool through the
 /// session's tool socket, as a runtime's MCP client would, and reports its
 /// result.
@@ -151,6 +153,10 @@ private final class StandInSession: RuntimeSession {
                        finished: true))
       self.steered.withLock { $0 = nil }
       emit.yield(.turnFinished(failure: nil, usage: TokenUsage(model: "stand-in", input: 10, output: 5)))
+      guard text.hasPrefix("then ") else { return }
+      emit.yield(.text("On my own: \(text)"))
+      emit.yield(.messageFinished)
+      emit.yield(.turnFinished(failure: nil, usage: nil))
     }
     turn.withLock { $0 = task }
   }

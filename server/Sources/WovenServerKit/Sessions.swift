@@ -231,6 +231,9 @@ actor SessionHost {
   private var goalTurn = false
   private var turnActed = false
   private var idleGoalTurns = 0
+  /// The turn running is one the runtime started by itself; a goal neither
+  /// counts it nor continues after it.
+  private var runtimeTurn = false
   /// Output of a tool call in progress past `ToolOutput.limit`: its start,
   /// its latest end and how much fell between, by item.
   private var overflow: [String: (head: String, tail: String, omitted: Int)] = [:]
@@ -314,12 +317,11 @@ actor SessionHost {
       idleGoalTurns = 0
     }
     goalTurn = continuesGoal
+    runtimeTurn = false
     turnActed = false
     let empty = (try? await library.hasItems(sessionID)) == false
     let first = author == nil && empty
     let live = try await openLive()
-    // What the runtime said on its own since the last turn ended comes before this message.
-    await saving { try await self.finishAssistant() }
     try await finish(.userMessage(text: text, attachments: attachments), id: UUID().uuidString.lowercased(), author: author)
     try? await library.setTurnRunning(sessionID, true)
     setRun(.running)
@@ -441,6 +443,11 @@ actor SessionHost {
     defer { leave() }
     guard generation == self.generation else { return }
     switch event {
+    case .text, .tool, .toolOutput, .prompt:
+      if run == .idle { await runtimeStarted() }
+    default: break
+    }
+    switch event {
     case .text(let delta):
       turnActed = true
       let id: String
@@ -505,6 +512,10 @@ actor SessionHost {
                                        cacheWrite: usage.cacheWrite, cost: usage.cost ?? 0)
       }
       await endTurn()
+      if runtimeTurn {
+        runtimeTurn = false
+        return
+      }
       guard failure == nil else { return }
       idleGoalTurns = goalTurn && !turnActed ? idleGoalTurns + 1 : 0
       if idleGoalTurns >= Self.idleGoalTurnLimit {
@@ -586,6 +597,17 @@ actor SessionHost {
     self.live = nil
     await live.stop()
     await endTurn()
+  }
+
+  /// Output with no turn running is a turn the runtime started by itself.
+  /// It runs like any other: it shows as running, Stop interrupts it, its
+  /// items are saved as they finish, and it ends with `turnFinished`.
+  private func runtimeStarted() async {
+    runtimeTurn = true
+    goalTurn = false
+    turnActed = false
+    try? await library.setTurnRunning(sessionID, true)
+    setRun(.running)
   }
 
   /// Whatever ends a turn ends its run state, marker and prompts, even when

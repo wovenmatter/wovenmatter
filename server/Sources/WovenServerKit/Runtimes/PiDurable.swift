@@ -65,7 +65,7 @@ public final class PiDurableRuntime: Runtime {
               Self.subscriptions.contains(provider), let credential = params["credential"] else { return }
         try? await credentials.current?.setSubscription(provider, credential)
       },
-      logFile: logs.appendingPathComponent("piDurable-\(start.sessionID).log"), tools: start.tools)
+      ownTurnsEndQuietly: true, logFile: logs.appendingPathComponent("piDurable-\(start.sessionID).log"), tools: start.tools)
     return try await ACPSession.open(profile: profile, start: start)
   }
 

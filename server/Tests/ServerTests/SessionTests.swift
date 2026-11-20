@@ -154,6 +154,25 @@ func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aTurnTheRuntimeStartsItselfRunsAndIsSavedWithoutAnotherMessage() async throws {
+  let host = try await TestServer.start(runtime: StandInRuntime())
+  defer { host.server.stopLater() }
+  let client = try await host.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "then more"))
+  var runStates: [RunState] = []
+  for try await event in subscription.events {
+    if case .runState(let state) = event { runStates.append(state) }
+    if runStates.count == 4 { break }
+  }
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(runStates == [.running, .idle, .running, .idle])
+  #expect(assistantTexts(items) == ["Turn 1: then more", "On my own: then more"])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func secondServerReceivesTheSessionBySyncAndServesItReadOnly() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)

@@ -93,7 +93,9 @@ public struct TokenUsage: Sendable, Hashable {
 }
 
 /// What a runtime reports while its process runs. Events come in order on
-/// one stream for the life of the process, across turns.
+/// one stream for the life of the process, across turns. Output while no turn
+/// runs begins a turn the runtime started by itself, which the runtime ends
+/// with `turnFinished` like any other.
 public enum RuntimeEvent: Sendable {
   /// More text of the assistant message in progress (one is started if none is).
   case text(String)
@@ -191,11 +193,11 @@ public protocol RuntimeSession: Sendable {
   var events: AsyncStream<RuntimeEvent> { get }
   /// Starts a turn. Returns once the runtime has taken it, not when it ends.
   func send(_ turn: Turn) async throws
-  /// Steers the turn running now: hands it a message through the runtime's
-  /// own mid-turn input, which the turn takes in and goes on, still ending
-  /// once. Returns once the runtime has taken it. Returns false, having taken
-  /// nothing, when the runtime's turn has already ended; that end is then on
-  /// its way in `events`.
+  /// Steers the turn running now, also one the runtime started by itself:
+  /// hands it a message through the runtime's own mid-turn input, which the
+  /// turn takes in and goes on, still ending once. Returns once the runtime
+  /// has taken it. Returns false, having taken nothing, when the runtime's
+  /// turn has already ended; that end is then on its way in `events`.
   func steer(_ turn: Turn) async throws -> Bool
   /// Changes the model, thinking level or permission mode; replies with what
   /// the runtime confirmed.
