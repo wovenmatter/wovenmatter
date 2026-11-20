@@ -86,10 +86,12 @@ public final class Library: Sendable {
   public func close() async {
     await lane.close()
     readers.close()
-    watchers.withLock { watchers in
-      for continuation in watchers.values { continuation.finish() }
-      watchers.removeAll()
+    // Finished outside the lock: finishing runs `onTermination`, which takes it.
+    let ending = watchers.withLock { watchers in
+      defer { watchers.removeAll() }
+      return Array(watchers.values)
     }
+    for continuation in ending { continuation.finish() }
   }
 
   /// Runs `body` as one transaction on the write lane.
