@@ -39,8 +39,8 @@ struct Stamp: Equatable {
 }
 
 /// The library's clock. Each local write gets a stamp later than every stamp
-/// this library has written, and than every stamp it has received unless that
-/// stamp is further ahead of this machine's wall clock than `maxLead`: a
+/// this library has written or received, unless that stamp is further ahead
+/// of this machine's wall clock than `maxLead`: a
 /// machine whose clock runs fast cannot drag the others' clocks with it. A
 /// write that replaces a row is always stamped later than that row.
 struct HybridClock {
@@ -57,24 +57,32 @@ struct HybridClock {
 
   /// A stamp for a local write. With `over`, the stamp of the row being
   /// replaced, it is also later than that stamp, however far ahead it is,
-  /// so the write always replaces that row on every machine.
+  /// so the write always replaces that row on every machine. The clock
+  /// itself follows such a stamp no further than `maxLead`, so one far-future
+  /// row does not carry every later write with it.
   mutating func tick(over replaced: String? = nil, now: Date = Date()) -> String {
-    if let floor = replaced.flatMap(Stamp.init(text:)),
-       last.map({ ($0.time, $0.count) < (floor.time, floor.count) }) ?? true {
-      last = Stamp(time: floor.time, count: floor.count, machine: machine)
-    }
     let wall = Self.millis(now)
     let next: Stamp
     if let last, last.time >= wall {
-      // The counter carries into the time part rather than outgrow its width.
-      next = last.count < Stamp.maxCount
-        ? Stamp(time: last.time, count: last.count + 1, machine: machine)
-        : Stamp(time: last.time + 1, count: 0, machine: machine)
+      next = Self.after(last, machine: machine)
     } else {
       next = Stamp(time: wall, count: 0, machine: machine)
     }
     last = next
-    return next.text
+    guard let floor = replaced.flatMap(Stamp.init(text:)), (next.time, next.count) <= (floor.time, floor.count) else {
+      return next.text
+    }
+    let above = Self.after(floor, machine: machine)
+    observe(above.text, now: now)
+    return above.text
+  }
+
+  /// The next stamp after `stamp`; the counter carries into the time part
+  /// rather than outgrow its width.
+  private static func after(_ stamp: Stamp, machine: String) -> Stamp {
+    stamp.count < Stamp.maxCount
+      ? Stamp(time: stamp.time, count: stamp.count + 1, machine: machine)
+      : Stamp(time: stamp.time + 1, count: 0, machine: machine)
   }
 
   /// Moves the clock past a stamp received from another machine, but never
