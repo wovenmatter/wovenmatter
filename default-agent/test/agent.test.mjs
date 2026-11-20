@@ -79,3 +79,18 @@ test('a subagent shows as a task tool call carrying its answer', async t => {
   assert.equal(done.content[0].content.text, 'echo: child work (turn 1)');
   await agent.stop();
 });
+
+test('a message sent during a turn steers it, and the turn answers once', async t => {
+  const { data, cwd } = await folders(t);
+  const agent = startAgent({ data, cwd });
+  const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
+  const turn = agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'work slowly' }] });
+  while (!agent.updates.some(item => item.update.sessionUpdate === 'tool_call')) await new Promise(resolve => setTimeout(resolve, 10));
+  const steered = await agent.request('_session/steering', { sessionId, prompt: [{ type: 'text', text: 'and this' }] });
+  assert.deepEqual(steered.result, { outcome: 'injected' });
+  assert.equal((await turn).result.stopReason, 'end_turn');
+  assert.equal(text(agent.updates), 'echo: and this (turn 2)');
+  const idle = await agent.request('_session/steering', { sessionId, prompt: [{ type: 'text', text: 'late' }] });
+  assert.equal(idle.result.outcome, 'promptRequired');
+  await agent.stop();
+});

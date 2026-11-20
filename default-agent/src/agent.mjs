@@ -27,6 +27,7 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
       agentCapabilities: { loadSession: true, promptCapabilities: { image: true, embeddedContext: true }, sessionCapabilities: { systemPrompt: {} } },
       agentInfo: { name: 'pi-durable', title: 'Pi Durable', version: 'current' },
       authMethods: [],
+      _meta: { steering: { supported: true } },
     };
     if (method === 'session/new' || method === 'session/load') {
       const create = method === 'session/new';
@@ -40,10 +41,11 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
       const configOptions = await session.configOptions();
       return create ? { sessionId, configOptions } : { configOptions };
     }
-    if (!['session/prompt', 'session/cancel', 'session/set_config_option'].includes(method)) throw new AgentError(`Unknown method ${method}.`, -32601);
+    if (!['session/prompt', '_session/steering', 'session/cancel', 'session/set_config_option'].includes(method)) throw new AgentError(`Unknown method ${method}.`, -32601);
     const session = sessions.get(params.sessionId);
     if (!session) throw new AgentError('That session is not open in this process. Load it first.', -32602);
     if (method === 'session/prompt') return session.prompt(params.prompt);
+    if (method === '_session/steering') return session.steer(params.prompt);
     if (method === 'session/cancel') { await session.cancel(); return {}; }
     return { configOptions: await session.setConfigOption(params.configId, params.value) };
   }

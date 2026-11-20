@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { AgentDoc, AssistantEntry, Harness, UsageDoc, createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
+import { AgentDoc, AssistantEntry, ConversationIdle, Harness, UsageDoc, createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
 import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
@@ -186,6 +186,20 @@ export class Session {
       const detail = typeof settled.detail === 'string' ? settled.detail : settled.detail?.message;
       throw new AgentError(humanMessage(detail ?? `The model did not answer (${settled.reason}).`));
     } finally { this.busy = false; }
+  }
+  // ACP's `_session/steering`: the message joins the run working on the prompt, after its
+  // current tool round, and that prompt answers once for both. With no run working it takes
+  // nothing and says so, the way the extension's `promptRequired` does.
+  async steer(blocks) {
+    const content = promptContent(blocks);
+    if (!this.busy) return { outcome: 'promptRequired', reason: 'noRunningTurn' };
+    try {
+      await this.conversation.submit({ type: 'input', content, requestId: randomUUID(), whenBusy: 'steer', whenIdle: 'reject' }, context);
+    } catch (error) {
+      if (error instanceof ConversationIdle) return { outcome: 'promptRequired', reason: 'noRunningTurn' };
+      throw error;
+    }
+    return { outcome: 'injected' };
   }
   async cancel() { await this.conversation.abort(context); }
   async close() {
