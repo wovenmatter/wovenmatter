@@ -239,9 +239,13 @@ enum HistoryReader {
     return value
   }
 
+  /// The most one count may be: no response comes near a trillion tokens,
+  /// and sums of such counts stay far from overflowing.
+  static let maximumCount: Double = 1_000_000_000_000
+
   private static func integer(_ value: Any?) -> Int64 {
     guard let value = number(value) else { return 0 }
-    return Int64(value)
+    return Int64(min(value, maximumCount))
   }
 
   /// A JSON number, however Foundation on this platform hands it over.
@@ -254,7 +258,7 @@ enum HistoryReader {
     default: nil
     }
     guard let result, result.isFinite, result >= 0 else { return nil }
-    return result
+    return min(result, maximumCount)
   }
 
   /// An ISO 8601 time, or seconds or milliseconds since 1970.

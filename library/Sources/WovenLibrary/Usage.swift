@@ -63,7 +63,7 @@ extension Library {
   /// model and period of `periodSeconds`, with the range's totals. This
   /// machine's usage from an hour not yet over is included.
   public func usage(from start: Date, to end: Date, periodSeconds: Int) async throws -> UsageReport {
-    let period = Int64(max(periodSeconds, 60)) * 1000
+    let period = Int64(min(max(periodSeconds, 60), 366 * 86_400)) * 1000
     let machine = machineID
     let range: [SQLValue] = [.text(machine), .integer(Self.millis(start)), .integer(Self.millis(end))]
     return try await read { db in

@@ -2,12 +2,20 @@ import Foundation
 
 /// A Zstandard decoder (RFC 8878), for the histories Codex keeps compressed.
 /// It reads whole frames without dictionaries, which is what Codex writes,
-/// and does not check the optional content checksum.
+/// and does not check the optional content checksum. Any file may have been
+/// written by anyone, so every malformed input throws `Failure`: nothing in
+/// here may trap, loop without end or grow without bound.
 enum Zstd {
   struct Failure: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = "Zstandard: " + description }
   }
+
+  /// The format's largest block, before and after decompression.
+  static let maximumBlock = 128 * 1024
+  /// The most one file may decompress to: far above the largest Codex
+  /// rollout seen (13.5 MB), far below what would hurt the machine.
+  static let maximumOutput = 256 * 1024 * 1024
 
   static func decompress(_ data: Data) throws -> Data {
     var output: [UInt8] = []
@@ -21,6 +29,7 @@ enum Zstd {
         if magic & 0xFFFF_FFF0 == 0x184D_2A50 {
           guard input.count - position >= 4 else { throw Failure("truncated skippable frame") }
           let size = Int(input[position]) | Int(input[position + 1]) << 8 | Int(input[position + 2]) << 16 | Int(input[position + 3]) << 24
+          guard input.count - position - 4 >= size else { throw Failure("truncated skippable frame") }
           position += 4 + size
           continue
         }
@@ -40,8 +49,11 @@ enum Zstd {
     var literalLengths: FSETable?
     var offsets: FSETable?
     var matchLengths: FSETable?
+    /// Where this frame's output starts: a match reaches no further back.
+    var outputStart = 0
 
     mutating func decode(_ input: UnsafeBufferPointer<UInt8>, at start: Int, into output: inout [UInt8]) throws -> Int {
+      outputStart = output.count
       var position = start
       let descriptor = try byte(input, position)
       position += 1
@@ -59,6 +71,8 @@ enum Zstd {
         position += 3
         let last = header & 1 != 0
         let size = header >> 3
+        guard size <= maximumBlock else { throw Failure("block too large") }
+        if (header >> 1) & 3 < 2 { try room(size, after: output.count, in: output) }
         switch (header >> 1) & 3 {
         case 0:
           guard input.count - position >= size else { throw Failure("truncated raw block") }
@@ -82,16 +96,18 @@ enum Zstd {
     }
 
     private mutating func block(_ input: UnsafeBufferPointer<UInt8>, into output: inout [UInt8]) throws {
+      let blockStart = output.count
       var position = 0
       let literals = try readLiterals(input, &position)
       let sequences = try readSequences(input, &position)
       var literal = 0
       for sequence in sequences {
-        guard literal + sequence.literalLength <= literals.count else { throw Failure("literals overrun") }
+        guard sequence.literalLength <= literals.count - literal else { throw Failure("literals overrun") }
+        try room(sequence.literalLength + sequence.matchLength, after: blockStart, in: output)
         output.append(contentsOf: literals[literal..<(literal + sequence.literalLength)])
         literal += sequence.literalLength
         let offset = resolve(sequence)
-        guard offset > 0, offset <= output.count else { throw Failure("match before the start") }
+        guard offset > 0, offset <= output.count - outputStart else { throw Failure("match before the start") }
         // Byte by byte from the front, so a match may overlap what it writes.
         let from = output.count - offset
         let to = output.count
@@ -100,7 +116,16 @@ enum Zstd {
           for index in 0..<sequence.matchLength { buffer[to + index] = buffer[from + index] }
         }
       }
+      try room(literals.count - literal, after: blockStart, in: output)
       output.append(contentsOf: literals[literal...])
+    }
+
+    /// Throws unless `count` more bytes keep the block since `start` and the
+    /// whole output within their limits.
+    private func room(_ count: Int, after start: Int, in output: [UInt8]) throws {
+      guard count >= 0, output.count - start + count <= maximumBlock, output.count + count <= maximumOutput else {
+        throw Failure("output too large")
+      }
     }
 
     /// The match offset of a sequence, keeping the three repeat offsets.
@@ -139,6 +164,7 @@ enum Zstd {
           size = Int(first >> 4) + Int(try byte(input, position + 1)) << 4 + Int(try byte(input, position + 2)) << 12
           position += 3
         }
+        guard size <= maximumBlock else { throw Failure("literals too large") }
         if type == 1 {
           let value = try byte(input, position)
           position += 1
@@ -155,6 +181,9 @@ enum Zstd {
       position += headerBytes
       let regenerated = (header >> 4) & ((1 << bits) - 1)
       let compressed = (header >> (4 + bits)) & ((1 << bits) - 1)
+      guard regenerated <= maximumBlock else { throw Failure("literals too large") }
+      // Four streams each hold at least one of the first three quarters.
+      guard format == 0 || regenerated >= 6 else { throw Failure("too few literals for four streams") }
       guard input.count - position >= compressed else { throw Failure("truncated compressed literals") }
       var data = UnsafeBufferPointer(rebasing: input[position..<(position + compressed)])
       position += compressed
@@ -422,6 +451,7 @@ enum Zstd {
         }
         count -= 1
         remaining -= abs(count)
+        guard remaining >= 1 else { throw Failure("bad entropy table description") }
         counts.append(count)
         previousZero = count == 0
         while remaining < threshold {
@@ -510,6 +540,8 @@ enum Zstd {
           }
         }
       }
+      // Real weights stop at 11, and the one left implied is symbol 255 at most.
+      guard weights.count <= 255, weights.allSatisfy({ $0 <= 11 }) else { throw Failure("bad Huffman weights") }
       let total = weights.reduce(0) { $0 + ($1 > 0 ? 1 << ($1 - 1) : 0) }
       guard total > 0 else { throw Failure("empty Huffman tree") }
       let log = Zstd.highBit(total) + 1

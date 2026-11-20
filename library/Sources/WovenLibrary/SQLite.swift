@@ -35,7 +35,7 @@ public struct Row: Sendable {
   public func integer(_ name: String) -> Int64? {
     switch self[name] {
     case .integer(let value): value
-    case .real(let value): Int64(value)
+    case .real(let value): value.isNaN ? nil : Int64(exactly: value.rounded(.towardZero)) ?? (value > 0 ? .max : .min)
     case .text(let value): Int64(value)
     default: nil
     }

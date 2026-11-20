@@ -124,26 +124,50 @@ actor UsageScanner {
     return files
   }
 
+  /// Reads what is new in one file. A file that cannot be read (it fails to
+  /// decompress, or reading it fails) is passed over with its size and
+  /// change time recorded, so it is tried again only once it changes; its
+  /// read position stays where it was. A line that is not what its harness
+  /// writes is skipped on its own.
   private func read(_ file: HistoryFile, known: UsageSource?, into pass: inout Pass) async throws {
     let attributes = try FileManager.default.attributesOfItem(atPath: file.url.path)
     let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
     let modified = Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000)
-    let identity = file.compressed ? "zst" : "file:\((attributes[.systemFileNumber] as? NSNumber)?.int64Value ?? 0)"
-    if let known, known.size == size, known.modified == modified, known.identity == identity { return }
+    if let known, known.size == size, known.modified == modified { return }
+    do {
+      try await read(file, known: known, size: size, modified: modified, into: &pass)
+    } catch {
+      try await library.saveUsage([], source: UsageSource(id: file.source, offset: known?.offset ?? 0, size: size, modified: modified,
+                                                          identity: known?.identity ?? "", state: known?.state ?? ""))
+    }
+  }
 
+  /// A plain file is the same history while its first line is: copied,
+  /// restored or rewritten whole, it is read on from where it stopped.
+  private static func identity(of url: URL) throws -> String {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let head = try handle.read(upToCount: 4096) ?? Data()
+    guard let newline = head.firstIndex(of: 0x0A) else { return "" }
+    return "head:" + Library.digest(of: head[head.startIndex..<newline])
+  }
+
+  private func read(_ file: HistoryFile, known: UsageSource?, size: Int64, modified: Int64, into pass: inout Pass) async throws {
+    let identity = file.compressed ? "zst" : try Self.identity(of: file.url)
     var state = known.flatMap { try? JSONDecoder().decode(ReaderState.self, from: Data($0.state.utf8)) } ?? ReaderState()
     var start = known?.offset ?? 0
     let data: Data
     if file.compressed {
       // Read whole; it is the file Codex wrote before, so reading goes on where it stopped.
+      guard size <= Zstd.maximumOutput else { throw Zstd.Failure("file too large") }
       data = try Zstd.decompress(try Data(contentsOf: file.url))
       if start > data.count { start = 0 }
     } else {
-      if known?.identity != identity || size < start { start = 0 }
+      if identity.isEmpty || known?.identity != identity || size < start { start = 0 }
       let handle = try FileHandle(forReadingFrom: file.url)
       defer { try? handle.close() }
       try handle.seek(toOffset: UInt64(start))
-      data = try handle.readToEnd() ?? Data()
+      data = try handle.read(upToCount: Self.chunk) ?? Data()
     }
     if start == 0 { state = ReaderState() }
     if case .grok(_, let summary) = file.kind, state.model == nil,
@@ -162,7 +186,8 @@ actor UsageScanner {
         let end: Int
         if let newline = memchr(base + lineStart, 0x0A, rest) {
           end = base.distance(to: UnsafeRawPointer(newline))
-        } else if file.compressed {
+        } else if file.compressed || (lineStart == 0 && bytes.count == Self.chunk) {
+          // The end of a finished file, or a line longer than any history writes, skipped.
           end = bytes.count
         } else {
           break
@@ -176,9 +201,14 @@ actor UsageScanner {
     let saved = String(decoding: try JSONEncoder().encode(state), as: UTF8.self)
     pass.read += 1
     pass.found += entries.count
-    pass.added += try await library.saveUsage(entries, source: UsageSource(id: file.source, offset: offset, size: size,
+    // A file with more than one read's worth left is read on at the next pass.
+    let more = !file.compressed && data.count == Self.chunk
+    pass.added += try await library.saveUsage(entries, source: UsageSource(id: file.source, offset: offset, size: more ? 0 : size,
                                                                            modified: modified, identity: identity, state: saved))
   }
+
+  /// The most of a file read in one go; the rest is read on the next pass.
+  private static let chunk = 64 * 1024 * 1024
 
   // MARK: OpenCode
 
@@ -196,13 +226,25 @@ actor UsageScanner {
       modified = max(modified, Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000))
     }
     if let known, known.size == size, known.modified == modified { return }
-    let database = try ReadOnlyDatabase(path: path)
     var cursor = (time: known?.offset ?? 0, id: known?.identity ?? "")
+    do {
+      try await readOpenCode(path, from: &cursor, size: size, modified: modified, into: &pass)
+    } catch {
+      // Locked past the wait, corrupt or not OpenCode's: tried again once it changes.
+      try await library.saveUsage([], source: UsageSource(id: Self.openCodeSource, offset: cursor.time, size: size,
+                                                          modified: modified, identity: cursor.id))
+    }
+  }
+
+  private func readOpenCode(_ path: String, from cursor: inout (time: Int64, id: String), size: Int64, modified: Int64,
+                            into pass: inout Pass) async throws {
+    let database = try ReadOnlyDatabase(path: path)
     let limit = 500
     while true {
       let page = try HistoryReader.openCode(database, after: cursor, limit: limit)
+      let stuck = page.cursor == cursor
       cursor = page.cursor
-      let last = page.rows < limit
+      let last = page.rows < limit || stuck
       pass.found += page.entries.count
       pass.added += try await library.saveUsage(page.entries, source: UsageSource(
         id: Self.openCodeSource, offset: cursor.time, size: last ? size : 0, modified: last ? modified : 0, identity: cursor.id))

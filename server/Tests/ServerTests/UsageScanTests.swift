@@ -168,3 +168,38 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   try await sync()
   #expect(try await groups(other) == open)
 }
+
+/// Anyone can write a history file, so malformed compressed input throws and
+/// never traps: four streams for too few literals, a Huffman weight past 11,
+/// a block larger than the format allows, every truncation and every one-byte
+/// change of a real file.
+@Test func malformedCompressedInputThrows() throws {
+  let frame: [UInt8] = [0x28, 0xB5, 0x2F, 0xFD, 0x20, 0x00]
+  let fourStreams = frame + [0x1D, 0x00, 0x00, 0x16, 0x00, 0x00]
+  let deepWeight = frame + [0x2D, 0x00, 0x00, 0x12, 0x80, 0x00, 0x80, 0xF0]
+  let hugeBlock = frame + [0xFB, 0xFF, 0xFF, 0x41]
+  for input in [fourStreams, deepWeight, hugeBlock] {
+    #expect(throws: Zstd.Failure.self) { try Zstd.decompress(Data(input)) }
+  }
+  let real = try Data(contentsOf: fixtures.appendingPathComponent(rollout + ".zst"))
+  for length in 1..<real.count {
+    #expect(throws: Zstd.Failure.self) { try Zstd.decompress(real.prefix(length)) }
+  }
+  for index in real.indices {
+    var changed = real
+    changed[index] ^= 0x5A
+    _ = try? Zstd.decompress(changed)
+  }
+}
+
+/// A count or time too large for any real history is held to a ceiling.
+@Test func aHugeNumberInAHistoryLineIsHeldToACeiling() async throws {
+  var state = ReaderState()
+  let line = #"{"type":"assistant","sessionId":"s","timestamp":1e300,"message":{"id":"m","model":"x","usage":{"input_tokens":1e30,"output_tokens":9223372036854775807,"cache_read_input_tokens":1}}}"#
+  let entries = Array(line.utf8).withUnsafeBytes { HistoryReader.entries($0, kind: .claude(session: nil), state: &state) }
+  #expect(entries.count == 1 && entries[0].input == 1_000_000_000_000 && entries[0].output == 1_000_000_000_000)
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  try await library.saveUsage(entries + [UsageEntry(id: "other", runtime: .claudeCode, nativeSession: "s", model: "x", at: entries[0].at,
+                                                    input: .max, output: .max)], source: UsageSource(id: "s"))
+  _ = try await library.usage(from: .distantPast, to: .distantFuture, periodSeconds: .max)
+}

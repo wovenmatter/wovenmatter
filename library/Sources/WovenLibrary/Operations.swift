@@ -377,7 +377,12 @@ extension Library {
   // MARK: Mapping
 
   static func now() -> Date { Date(timeIntervalSince1970: Double(Writer.now()) / 1000) }
-  static func millis(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
+  /// Milliseconds since 1970, held to the years a library can mean, so a
+  /// time read from anywhere never overflows.
+  static func millis(_ date: Date) -> Int64 {
+    let value = (date.timeIntervalSince1970 * 1000).rounded()
+    return value.isNaN ? 0 : Int64(min(max(value, -1e15), 1e15))
+  }
 
   private static func machine(_ row: Row) -> Machine {
     Machine(id: row.text("id") ?? "", name: row.text("name") ?? "",
