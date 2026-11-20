@@ -116,6 +116,27 @@ struct ConversationMarkdownDocument: Sendable {
         blocks = parser.parse()
     }
 
+    /// The blocks of `source`, and the last place it can be cut so that the
+    /// blocks before and after the cut are the blocks of the whole: the start
+    /// of a complete, unindented line after a blank line that begins a block
+    /// and cannot continue a list. Text appended later cannot change the
+    /// blocks before that cut, so a stream parses each part once.
+    static func blocks(cutting source: Substring) -> (blocks: [Block], cut: (offset: Int, blockCount: Int)?) {
+        var parser = Parser(String(source))
+        var starts: [(line: Int, blockCount: Int)] = []
+        let blocks = parser.parse(recordingStarts: &starts)
+        // Line offsets match the source only when it has no carriage returns.
+        guard !source.utf8.contains(UInt8(ascii: "\r")) else { return (blocks, nil) }
+        let lines = parser.lines
+        guard let cut = starts.last(where: { start in
+            let line = lines[start.line]
+            return start.line > 0 && start.line + 1 < lines.count && Parser.isBlank(lines[start.line - 1])
+                && line.first?.isWhitespace == false && Parser.listMarker(line) == nil
+        }) else { return (blocks, nil) }
+        let offset = lines[..<cut.line].reduce(0) { $0 + $1.utf8.count + 1 }
+        return (blocks, (offset, cut.blockCount))
+    }
+
     static func preview(_ rawContent: String, limit: Int) -> String {
         guard limit > 0 else { return "" }
         let document = ConversationMarkdownDocument(rawContent)
@@ -210,8 +231,15 @@ private extension ConversationMarkdownDocument {
         }
 
         mutating func parse() -> [Block] {
+            var starts: [(line: Int, blockCount: Int)] = []
+            return parse(recordingStarts: &starts)
+        }
+
+        /// Also records the line each top-level block starts on.
+        mutating func parse(recordingStarts starts: inout [(line: Int, blockCount: Int)]) -> [Block] {
             var result: [Block] = []
             while index < lines.count {
+                if !Self.isBlank(lines[index]) { starts.append((index, result.count)) }
                 if Self.isBlank(lines[index]) {
                     index += 1
                 } else if Self.isIndentedCode(lines[index]) {
@@ -411,7 +439,7 @@ private extension ConversationMarkdownDocument {
             return Self.tableCells(line) != nil && Self.tableSeparator(lines[candidate + 1]) != nil
         }
 
-        private static func isBlank(_ line: String) -> Bool {
+        static func isBlank(_ line: String) -> Bool {
             line.allSatisfy(\.isWhitespace)
         }
 
@@ -450,7 +478,7 @@ private extension ConversationMarkdownDocument {
             return (level, content)
         }
 
-        private static func listMarker(_ line: String) -> ListMarker? {
+        static func listMarker(_ line: String) -> ListMarker? {
             let indent = leadingIndent(line)
             let remainder = line.drop(while: { $0 == " " || $0 == "\t" })
             guard remainder.isEmpty == false else { return nil }

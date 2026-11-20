@@ -16,9 +16,17 @@ public enum AssistantStreamingText {
   }
 
   public static func readyPrefix(of text: String) -> String {
+    readyEnd(of: text, from: text.startIndex).map { String(text[..<$0]) } ?? ""
+  }
+
+  /// Where the ready part of `text` ends, or nil when none of it is ready.
+  /// `origin` is the start of `text` or an end this returned for an earlier
+  /// text that `text` extends: the scan resumes there, so following a stream
+  /// reads only what arrived after the last boundary.
+  public static func readyEnd(of text: String, from origin: String.Index) -> String.Index? {
     var fence: (marker: Character, length: Int, indent: Int)?
-    var boundary: String.Index?
-    var start = text.startIndex
+    var boundary: String.Index? = origin > text.startIndex ? origin : nil
+    var start = origin
     var titleAwaitingContent = false
     while true {
       let newline = text[start...].firstIndex(of: "\n")
@@ -49,7 +57,7 @@ public enum AssistantStreamingText {
       }
       start = text.index(after: newline)
     }
-    return boundary.map { String(text[..<$0]) } ?? ""
+    return boundary
   }
 
   private static func matches(_ expression: NSRegularExpression, _ text: String) -> Bool {

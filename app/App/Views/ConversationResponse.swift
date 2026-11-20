@@ -155,6 +155,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     private var appliedColorScheme: ColorScheme?
     private var measuredSize: CGSize?
     private var decorations: [(key: NSAttributedString.Key, range: NSRange)] = []
+    /// While streaming: the source before the last stable cut, and the length
+    /// of its rendering at the start of the text storage.
+    private var stable: (source: String, length: Int)?
 
     init() {
         let storage = NSTextStorage()
@@ -186,30 +189,66 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         guard appliedContent != content || appliedStreaming != isStreaming
             || appliedColorScheme != colorScheme else { return false }
         appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        let sameColorScheme = appliedColorScheme == colorScheme
         appliedColorScheme = colorScheme
         let selection = selectedRange()
         let previous = selection.length > 0 ? NSString(string: string) : nil
-        let rendered = ConversationResponseAttributedText.render(
-            document ?? ConversationMarkdownDocument(content), isStreaming: isStreaming
-        )
-        textStorage?.setAttributedString(rendered)
+        guard let textStorage else { return false }
+        // While a reply streams, the blocks before its last stable cut are
+        // already in the text storage: only what follows is parsed, rendered
+        // and laid out again, so a chunk costs its own length, not the reply's.
+        // The cut stays valid while the reply only grows past what was applied,
+        // through the last chunk when it settles.
+        let kept: (source: Int, length: Int)
+        let tail: NSAttributedString
+        if document == nil, let stable, sameColorScheme, let appliedContent,
+           content.utf8.starts(with: appliedContent.utf8), stable.length <= textStorage.length {
+            kept = (stable.source.utf8.count, stable.length)
+            tail = renderStreaming(content, keeping: kept)
+        } else if isStreaming, document == nil {
+            kept = (0, 0)
+            tail = renderStreaming(content, keeping: kept)
+        } else {
+            stable = nil
+            kept = (0, 0)
+            tail = ConversationResponseAttributedText.render(document ?? ConversationMarkdownDocument(content))
+        }
+        textStorage.replaceCharacters(in: NSRange(location: kept.length, length: textStorage.length - kept.length), with: tail)
         measuredSize = nil
-        decorations.removeAll(keepingCapacity: true)
+        decorations.removeAll { $0.range.location >= kept.length }
         for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider] {
-            rendered.enumerateAttribute(key, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
-                if value != nil { decorations.append((key, range)) }
+            tail.enumerateAttribute(key, in: NSRange(location: 0, length: tail.length)) { value, range, _ in
+                if value != nil { decorations.append((key, NSRange(location: range.location + kept.length, length: range.length))) }
             }
         }
         // Streaming appends keep the selection; once the selected text itself
         // changes (a replacement, or a rerendered prefix), it no longer
         // identifies what the user chose.
         let end = NSMaxRange(selection)
-        let selectionUnchanged = previous.map { end <= $0.length && end <= rendered.length
-            && $0.substring(to: end) == (rendered.string as NSString).substring(to: end) } ?? false
+        let selectionUnchanged = previous.map { previous in
+            let rendered = textStorage.string as NSString
+            return end <= previous.length && end <= rendered.length
+                && previous.substring(to: end) == rendered.substring(to: end)
+        } ?? false
         setSelectedRange(selectionUnchanged ? selection : NSRange(location: 0, length: 0))
         appliedContent = content
         appliedStreaming = isStreaming
         return true
+    }
+
+    /// What follows the kept part of a streaming reply, rendered, with the
+    /// reply's new stable cut recorded.
+    private func renderStreaming(_ content: String, keeping kept: (source: Int, length: Int)) -> NSAttributedString {
+        let start = content.utf8.index(content.startIndex, offsetBy: kept.source)
+        let source = content[start...]
+        let (blocks, cut) = ConversationMarkdownDocument.blocks(cutting: source)
+        let settledCount = cut?.blockCount ?? 0
+        let settled = ConversationResponseAttributedText.render(Array(blocks[..<settledCount]), endsResponse: false)
+        let tail = NSMutableAttributedString(attributedString: settled)
+        tail.append(ConversationResponseAttributedText.render(Array(blocks[settledCount...]), endsResponse: true))
+        let end = cut.map { source.utf8.index(source.startIndex, offsetBy: $0.offset) } ?? start
+        stable = (String(content[..<end]), kept.length + settled.length)
+        return tail
     }
 
     func fittingSize(width: CGFloat) -> CGSize {
@@ -275,8 +314,14 @@ private extension NSAttributedString.Key {
 /// Reuses the prepared Markdown parser; only the response's presentation changes.
 @MainActor
 private enum ConversationResponseAttributedText {
-    static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool, width: CGFloat = 680,
-                       scaleFont: (ResponseFont) -> ResponseFont = { $0 }) -> NSAttributedString {
+    static func render(_ document: ConversationMarkdownDocument) -> NSAttributedString {
+        render(document.blocks, endsResponse: true)
+    }
+
+    /// `blocks` rendered on their own. Blocks that do not end the response
+    /// keep their last line break, so pieces rendered apart join exactly as
+    /// the whole would render.
+    static func render(_ values: [ConversationMarkdownDocument.Block], endsResponse: Bool) -> NSAttributedString {
         let output = NSMutableAttributedString(string: "")
         // Streaming is conveyed by work activity; answer ink stays stable as
         // paragraphs arrive and the run settles.
@@ -401,10 +446,11 @@ private enum ConversationResponseAttributedText {
                 }
             }
         }
-        blocks(document.blocks)
+        blocks(values)
         // A terminal newline creates an extra empty line between text and Copy.
         // Native tables retain their cell-ending paragraph delimiter.
-        if output.length > 0, case .table = document.blocks.last {
+        guard endsResponse else { return output }
+        if output.length > 0, case .table = values.last {
             return output
         }
         if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }

@@ -41,6 +41,8 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
+    /// Where the drawn part of each streaming reply ends, in UTF-8 bytes.
+    @ObservationIgnored private var readyEnds: [String: Int] = [:]
     @ObservationIgnored private var prompts: [Prompt] = []
     /// This Mac's server, which answers `SessionItems` from its synced library.
     @ObservationIgnored private weak var server: ServerConnection?
@@ -338,6 +340,7 @@ final class SessionStore {
         error = nil
         items = snapshot.items
         inProgress = snapshot.inProgress
+        readyEnds = [:]
         prompts = snapshot.prompts
         run = snapshot.run
         applyGoal(snapshot.session.goal)
@@ -368,8 +371,10 @@ final class SessionStore {
             }
         case .itemDropped(let itemID):
             inProgress.removeAll { $0.id == itemID }
+            readyEnds[itemID] = nil
         case .itemFinished(let item):
             inProgress.removeAll { $0.id == item.id }
+            readyEnds[item.id] = nil
             if !items.contains(where: { $0.id == item.id }) { items.append(item) }
             if case .notice(let notice) = item.content, notice.kind == .goalMet { applyGoal(nil) }
         case .runState(let state):
@@ -389,14 +394,17 @@ final class SessionStore {
     /// Streamed text and tool output change only the item in progress, so
     /// they update its message or activity where it is drawn, without
     /// rebuilding the transcript. Returns false when it is not drawn yet.
+    /// A streaming reply is drawn a stable chunk at a time, so a delta that
+    /// completes no chunk changes nothing the transcript reads.
     private func updateInPlace(_ event: SessionEvent) -> Bool {
         switch event {
         case .text(let itemID, let delta):
             guard let index = inProgress.firstIndex(where: { $0.id == itemID }),
-                  case .assistantMessage(let text) = inProgress[index].content,
+                  case .assistantMessage(let earlier) = inProgress[index].content,
                   let shown = messages.lastIndex(where: { $0.id == itemID }) else { return false }
-            inProgress[index].content = .assistantMessage(text: text + delta)
-            messages[shown].content = text + delta
+            let text = earlier + delta
+            inProgress[index].content = .assistantMessage(text: text)
+            if readyGrew(itemID, in: text) { messages[shown].content = text }
             return true
         case .toolOutput(let itemID, let delta):
             guard let index = inProgress.firstIndex(where: { $0.id == itemID }),
@@ -413,6 +421,16 @@ final class SessionStore {
         default:
             return false
         }
+    }
+
+    /// Whether the ready part of `text` now ends past where it was drawn, as
+    /// `AssistantStreamingText` decides; the scan resumes at the last end.
+    private func readyGrew(_ itemID: String, in text: String) -> Bool {
+        let drawn = min(readyEnds[itemID] ?? 0, text.utf8.count)
+        let origin = text.utf8.index(text.startIndex, offsetBy: drawn)
+        let end = AssistantStreamingText.readyEnd(of: text, from: origin).map { text.utf8.distance(from: text.startIndex, to: $0) } ?? 0
+        readyEnds[itemID] = end
+        return end > drawn
     }
 
     private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
