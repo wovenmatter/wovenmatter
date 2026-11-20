@@ -63,12 +63,14 @@ struct BotsHostInterface: Sendable {
       let caller = ToolCaller(machineID: home, botID: botID, inForum: params["forum"]?.bool == true ? true : nil)
       return try JSONValue(encoding: await tools.call(name, arguments: params["arguments"] ?? .object([:]), caller: caller))
     case "mirror.checkpoints":
-      var bots: [String: JSONValue] = [:]
+      var bots: [String: JSONValue] = [:], seats: [String: JSONValue] = [:]
       var forum: Int64 = 0
       for (key, entry) in try await library.botCheckpoints() {
-        if key == "forum" { forum = entry } else if key.hasPrefix("bot:") { bots[String(key.dropFirst(4))] = .integer(entry) }
+        if key == "forum" { forum = entry }
+        else if key.hasPrefix("bot:") { bots[String(key.dropFirst(4))] = .integer(entry) }
+        else if key.hasPrefix("seat:") { seats[String(key.dropFirst(5))] = .integer(entry) }
       }
-      return .object(["bots": .object(bots), "forum": .integer(forum)])
+      return .object(["bots": .object(bots), "forum": .integer(forum), "seats": .object(seats)])
     case "mirror.bot":
       let push = try params.decode(MirrorBot.self)
       try await library.saveBotMirror(BotsMirrorMapping.bot(push, home: sessions))
@@ -187,21 +189,19 @@ struct MirrorBot: Decodable, Sendable {
     var tool: Tool?
     /// A visual reply the bot published with `render_html`.
     var visualReply: VisualReply?
+    /// A message an agent session sent (`message_bot`).
+    var from: From?
     var usage: Usage?
-  }
 
-  /// The usage of turns in the bot's Forum seats, which are not mirrored.
-  struct ForumUsage: Decodable, Sendable {
-    var key: String
-    var roomId: Int
-    var createdAt: Double
-    var usage: Item.Usage
+    struct From: Decodable, Sendable {
+      var name: String
+      var sessionId: String
+    }
   }
 
   var bot: Bot
   var conversations: [Conversation]
   var items: [Item]
-  var forumUsage: [ForumUsage]?
   var upTo: Int64
 }
 
@@ -226,8 +226,28 @@ struct MirrorForum: Decodable, Sendable {
     var createdAt: Double
   }
 
+  /// What a bot did in its seat for a room: a tool call or its thinking.
+  struct SeatItem: Decodable, Sendable {
+    var botId: String
+    var name: String
+    var item: MirrorBot.Item
+  }
+
+  /// One model turn of a bot's seat.
+  struct SeatUsage: Decodable, Sendable {
+    var botId: String
+    var key: String
+    var roomId: Int
+    var createdAt: Double
+    var usage: MirrorBot.Item.Usage
+  }
+
   var rooms: [Room]
   var posts: [Post]
+  var seatItems: [SeatItem]?
+  var seatUsage: [SeatUsage]?
+  /// Each bot's seat entries through this one are covered.
+  var seats: [String: Int64]?
   var upTo: Int64
 }
 
@@ -291,19 +311,15 @@ enum BotsMirrorMapping {
     let items = push.items.map { item in
       let session = botSession(home: home, botID: bot.id, conversationID: item.conversationId)
       return BotMirror.Item(id: "\(session):\(item.key)", sessionID: session, content: content(item),
+                            author: item.from.map { ItemAuthor(botID: nil, name: $0.name, sessionID: $0.sessionId) },
                             createdAt: Date(timeIntervalSince1970: item.createdAt / 1000))
     }
-    // Keyed by the bot and its entry, not the home machine: after a transfer
-    // the new home pushes the same turns again and records none twice.
-    func record(_ key: String, _ session: String, _ createdAt: Double, _ usage: MirrorBot.Item.Usage) -> BotMirror.UsageRecord {
-      BotMirror.UsageRecord(id: "bot:\(bot.id):\(key):usage", sessionID: session,
-                            createdAt: Date(timeIntervalSince1970: createdAt / 1000),
-                            usage: BotMirror.Usage(model: usage.model, input: usage.input, output: usage.output,
-                                                   cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, cost: usage.cost))
-    }
     let usage = push.items.compactMap { item in
-      item.usage.map { record(item.key, botSession(home: home, botID: bot.id, conversationID: item.conversationId), item.createdAt, $0) }
-    } + (push.forumUsage ?? []).map { record($0.key, forumSession(home: home, roomID: $0.roomId), $0.createdAt, $0.usage) }
+      item.usage.map {
+        record(bot: bot.id, key: item.key, botSession(home: home, botID: bot.id, conversationID: item.conversationId),
+               item.createdAt, $0)
+      }
+    }
     return BotMirror(
       bot: BotMirror.Bot(id: bot.id, name: bot.name, isAdmin: bot.kind == "admin", manager: bot.manager,
                          managerID: bot.managerId, orchestrator: bot.orchestrator, trashed: bot.deleted,
@@ -311,6 +327,20 @@ enum BotsMirrorMapping {
       chats: chats, items: items, usage: usage, checkpoint: "bot:" + bot.id, upTo: push.upTo)
   }
 
+  /// One model turn's usage. Keyed by the bot and its entry, not the home
+  /// machine: after a transfer the new home pushes the same turns again and
+  /// records none twice.
+  private static func record(bot: String, key: String, _ session: String, _ createdAt: Double,
+                             _ usage: MirrorBot.Item.Usage) -> BotMirror.UsageRecord {
+    BotMirror.UsageRecord(id: "bot:\(bot):\(key):usage", sessionID: session,
+                          createdAt: Date(timeIntervalSince1970: createdAt / 1000),
+                          usage: BotMirror.Usage(model: usage.model, input: usage.input, output: usage.output,
+                                                 cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, cost: usage.cost))
+  }
+
+  /// The rooms, their posts, and what bots did in their seats for them, in
+  /// time order (a post before seat work of the same moment), each bot's
+  /// work under its name.
   static func forum(_ push: MirrorForum, home: String) -> BotMirror {
     let main = push.rooms.first { $0.parentPostId == nil }?.roomId
     let chats = push.rooms.map { room in
@@ -326,21 +356,31 @@ enum BotsMirrorMapping {
                             parentConversationID: main, title: title, parentPostID: parentPost,
                             pinned: room.pinned ?? false, createdAt: date(room.createdAt))
     }
-    let items = push.posts.map { post in
+    let posts = push.posts.map { post in
       let session = forumSession(home: home, roomID: post.roomId)
-      // A bot speaks as itself; an agent session posts for the person, under its own name.
-      let author: ItemAuthor? = switch post.author {
-      case "bot": ItemAuthor(botID: post.botId, name: post.name)
-      case "agent": ItemAuthor(botID: nil, name: post.name)
-      default: nil
-      }
+      // A bot speaks as itself.
+      let bot = post.author == "bot"
       return BotMirror.Item(
         id: "\(session):\(post.id)", sessionID: session,
         content: post.visualReply.map(ItemContent.visualReply)
-          ?? (post.author == "bot" ? .assistantMessage(text: post.text) : .userMessage(text: post.text)),
-        author: author, createdAt: Date(timeIntervalSince1970: post.createdAt / 1000))
+          ?? (bot ? .assistantMessage(text: post.text) : .userMessage(text: post.text)),
+        author: bot ? ItemAuthor(botID: post.botId, name: post.name) : nil,
+        createdAt: Date(timeIntervalSince1970: post.createdAt / 1000))
     }
-    return BotMirror(bot: nil, chats: chats, items: items, checkpoint: "forum", upTo: push.upTo)
+    let work = (push.seatItems ?? []).map { seat in
+      let session = forumSession(home: home, roomID: seat.item.conversationId)
+      return BotMirror.Item(id: "\(session):\(seat.botId).\(seat.item.key)", sessionID: session, content: content(seat.item),
+                            author: ItemAuthor(botID: seat.botId, name: seat.name),
+                            createdAt: Date(timeIntervalSince1970: seat.item.createdAt / 1000))
+    }
+    let items = (posts.map { ($0, 0) } + work.map { ($0, 1) })
+      .enumerated().sorted { ($0.element.0.createdAt, $0.element.1, $0.offset) < ($1.element.0.createdAt, $1.element.1, $1.offset) }
+      .map(\.element.0)
+    let usage = (push.seatUsage ?? []).map {
+      record(bot: $0.botId, key: $0.key, forumSession(home: home, roomID: $0.roomId), $0.createdAt, $0.usage)
+    }
+    return BotMirror(bot: nil, chats: chats, items: items, usage: usage, checkpoint: "forum", upTo: push.upTo,
+                     checkpoints: Dictionary(uniqueKeysWithValues: (push.seats ?? [:]).map { ("seat:" + $0.key, $0.value) }))
   }
 
   private static func content(_ item: MirrorBot.Item) -> ItemContent {
@@ -348,11 +388,14 @@ enum BotsMirrorMapping {
     switch item.kind {
     case "user": return .userMessage(text: item.text ?? "")
     case "assistant": return .assistantMessage(text: item.text ?? "")
+    // Saved as sessions save the model's reasoning, and calls capped as theirs are.
+    case "thinking":
+      return .toolCall(ToolCall(name: "thinking", input: "", output: item.text ?? "", title: "Thinking", kind: .thinking))
     case "tool":
       let tool = item.tool ?? MirrorBot.Item.Tool(name: "tool", input: "", output: nil, failed: false)
-      return .toolCall(VisualReplies.withoutVisualReply(ToolCall(
+      return .toolCall(ToolOutput.capped(VisualReplies.withoutVisualReply(ToolCall(
         name: tool.name, input: tool.input, output: tool.output, failed: tool.failed,
-        kind: tool.name.lowercased() == "bash" ? .execute : OpenCodeProjection.kind(tool.name))))
+        kind: tool.name.lowercased() == "bash" ? .execute : OpenCodeProjection.kind(tool.name)))))
     case "stopped": return .notice(Notice(kind: .interrupted, text: "Stopped."))
     default: return .notice(Notice(kind: .failure, text: item.text ?? "Something went wrong."))
     }

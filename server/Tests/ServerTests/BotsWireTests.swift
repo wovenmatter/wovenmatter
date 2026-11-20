@@ -43,7 +43,7 @@ private let unread: Set<String> = [
   "reply.bots.setOrchestrator", "reply.bots.setProfile",
   "reply.groups.rename", "reply.groups.delete", "reply.groups.reorder",
   "reply.thread.setPinned", "reply.forum.thread.setPinned", "reply.thread.delete", "reply.forum.thread.delete", "reply.thread.setTitle", "reply.forum.thread.setTitle", "reply.onboarding.setMainModel",
-  "reply.conversation.abort", "reply.conversation.close", "reply.forum.close",
+  "reply.conversation.abort", "reply.forum.abort", "reply.conversation.close", "reply.forum.close",
   "reply.message.send", "reply.message.send.duplicate", "reply.forum.post.duplicate", "reply.runtime.update",
 ]
 

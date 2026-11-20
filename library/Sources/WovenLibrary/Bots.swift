@@ -119,8 +119,12 @@ public struct BotMirror: Sendable {
   public var checkpoint: String
   /// The runtime's entries through this one are covered.
   public var upTo: Int64
+  /// Further checkpoints the push covers (`seat:<botId>`: a bot's Forum seats).
+  public var checkpoints: [String: Int64]
 
-  public init(bot: Bot?, chats: [Chat], items: [Item], usage: [UsageRecord] = [], checkpoint: String, upTo: Int64) {
+  public init(bot: Bot?, chats: [Chat], items: [Item], usage: [UsageRecord] = [], checkpoint: String, upTo: Int64,
+              checkpoints: [String: Int64] = [:]) {
+    self.checkpoints = checkpoints
     self.bot = bot
     self.chats = chats
     self.items = items
@@ -141,28 +145,14 @@ extension Library {
     try await write { writer in
       if let bot = mirror.bot { try Self.saveBot(bot, machineID: machineID, writer) }
       for chat in mirror.chats { try Self.saveChat(chat, machineID: machineID, writer) }
-      var last: [String: Int64] = [:]
       for item in mirror.items {
         guard let session = try writer.row("sessions", item.sessionID) else {
           throw LibraryError(.invalid, "Bot items for \(item.sessionID) came before its conversation.")
         }
         if session.bool("deleted") || session.text("machine_id") != machineID { continue }
         if try writer.row("session_items", item.id) != nil { continue }
-        let sequence: Int64
-        if let previous = last[item.sessionID] {
-          sequence = previous + 1
-        } else {
-          sequence = (try writer.db.query("SELECT MAX(sequence) AS last FROM session_items WHERE session_id = ?",
-                                          [.text(item.sessionID)]).first?.integer("last") ?? 0) + 1
-        }
-        last[item.sessionID] = sequence
-        let created = Self.millis(item.createdAt)
-        try writer.put("session_items", id: item.id, [
-          "session_id": .text(item.sessionID), "sequence": .integer(sequence), "kind": .text(item.content.kindName),
-          "body": .text(String(decoding: try Wire.encoder.encode(item.content), as: UTF8.self)),
-          "author": try item.author.map { .text(String(decoding: try Wire.encoder.encode($0), as: UTF8.self)) } ?? .null,
-          "created_at": .integer(created),
-        ])
+        _ = try Self.putItem(id: item.id, sessionID: item.sessionID, content: item.content, author: item.author,
+                             createdAt: item.createdAt, writer)
       }
       for record in mirror.usage where try writer.row("usage_records", record.id) == nil {
         let usage = record.usage
@@ -173,10 +163,12 @@ extension Library {
           "cost": .real(usage.cost), "recorded_at": .integer(Self.millis(record.createdAt)),
         ])
       }
-      try writer.db.run("""
-        INSERT INTO bot_checkpoints (key, entry) VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET entry = MAX(entry, excluded.entry)
-        """, [.text(mirror.checkpoint), .integer(mirror.upTo)])
+      for (key, entry) in [(mirror.checkpoint, mirror.upTo)] + mirror.checkpoints.map({ ($0.key, $0.value) }) {
+        try writer.db.run("""
+          INSERT INTO bot_checkpoints (key, entry) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET entry = MAX(entry, excluded.entry)
+          """, [.text(key), .integer(entry)])
+      }
     }
   }
 
@@ -263,7 +255,7 @@ extension Library {
         .compactMap { $0.text("session_id") }
       for session in sessions { try writer.delete("sessions", id: session) }
       if try writer.row("bots", botID) != nil { try writer.delete("bots", id: botID) }
-      try writer.db.run("DELETE FROM bot_checkpoints WHERE key = ?", [.text("bot:" + botID)])
+      try writer.db.run("DELETE FROM bot_checkpoints WHERE key IN (?, ?)", [.text("bot:" + botID), .text("seat:" + botID)])
     }
   }
 
@@ -339,7 +331,8 @@ extension Library {
       for row in try db.query("SELECT key, entry FROM bot_checkpoints") {
         if let key = row.text("key") { held[key] = row.integer("entry") ?? 0 }
       }
-      for (key, entry) in expected.checkpoints where key == "forum" || live.contains(String(key.dropFirst(4))) {
+      for (key, entry) in expected.checkpoints
+      where key == "forum" || live.contains(String(key.drop { $0 != ":" }.dropFirst())) {
         if (held[key] ?? 0) < entry { return "the entries of \(key)" }
       }
       return nil

@@ -176,16 +176,37 @@ extension Library {
       guard session.text("machine_id") == machineID else {
         throw LibraryError(.notOwner(machineID: session.text("machine_id") ?? ""), "Another machine owns this session.")
       }
-      let last = try writer.db.query("SELECT MAX(sequence) AS last FROM session_items WHERE session_id = ?",
-                                     [.text(sessionID)]).first?.integer("last") ?? 0
-      let item = SessionItem(id: id, sessionID: sessionID, sequence: Int(last) + 1, createdAt: createdAt, content: content,
-                             author: author)
-      try writer.put("session_items", id: id, [
-        "session_id": .text(sessionID), "sequence": .integer(Int64(item.sequence)),
-        "kind": .text(content.kindName), "body": .text(body), "created_at": .integer(Self.millis(createdAt)),
-        "author": try author.map { .text(String(decoding: try Wire.encoder.encode($0), as: UTF8.self)) } ?? .null,
-      ])
-      return item
+      let sequence = try Self.putItem(id: id, sessionID: sessionID, content: content, body: body, author: author,
+                                      createdAt: createdAt, writer)
+      return SessionItem(id: id, sessionID: sessionID, sequence: sequence, createdAt: createdAt, content: content,
+                         author: author)
+    }
+  }
+
+  /// Writes one session item after the session's last: the one way a
+  /// session's items and a bot's are saved. Returns its sequence.
+  static func putItem(id: String, sessionID: String, content: ItemContent, body: String? = nil, author: ItemAuthor?,
+                      createdAt: Date, _ writer: Writer) throws -> Int {
+    let last = try writer.db.query("SELECT MAX(sequence) AS last FROM session_items WHERE session_id = ?",
+                                   [.text(sessionID)]).first?.integer("last") ?? 0
+    let body = try body ?? String(decoding: try Wire.encoder.encode(content), as: UTF8.self)
+    try writer.put("session_items", id: id, [
+      "session_id": .text(sessionID), "sequence": .integer(last + 1),
+      "kind": .text(content.kindName), "body": .text(body), "created_at": .integer(millis(createdAt)),
+      "author": try author.map { .text(String(decoding: try Wire.encoder.encode($0), as: UTF8.self)) } ?? .null,
+    ])
+    return Int(last + 1)
+  }
+
+  /// Whether a session holds an item from `author`: the other session (by
+  /// its id) or the bot (by its id) it names.
+  public func hasItem(in sessionID: String, from author: ItemAuthor) async throws -> Bool {
+    let (path, id) = author.sessionID.map { ("$.sessionID", $0) } ?? ("$.botID", author.botID ?? "")
+    return try await read { db in
+      try !db.query("""
+        SELECT 1 FROM session_items WHERE session_id = ? AND deleted = 0 AND author IS NOT NULL
+        AND json_extract(author, '\(path)') = ? LIMIT 1
+        """, [.text(sessionID), .text(id)]).isEmpty
     }
   }
 
