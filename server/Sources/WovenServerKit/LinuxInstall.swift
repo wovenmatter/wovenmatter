@@ -35,8 +35,9 @@ struct LinuxInstall: Sendable {
   }
 
   /// Copies the release there and (re)starts the unit. The data folder stays.
-  func install(host: String, user: String?) async throws {
-    let facts = try await ssh(host, user, script: """
+  /// `address`: as for `ssh`.
+  func install(host: String, user: String?, address: String? = nil) async throws {
+    let facts = try await ssh(host, user, address: address, script: """
       uname -m
       command -v systemctl >/dev/null && echo systemd || echo none
       loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || echo unknown
@@ -89,7 +90,7 @@ struct LinuxInstall: Sendable {
       [Install]
       WantedBy=default.target
       """
-    _ = try await ssh(host, user, input: upload, script: """
+    _ = try await ssh(host, user, address: address, input: upload, script: """
       set -eu
       root="\(root)"
       mkdir -p "$root/data" "$HOME/.config/systemd/user"
@@ -113,13 +114,13 @@ struct LinuxInstall: Sendable {
       """)
     if linger == "no" {
       // Without lingering the unit stops when the person logs out there.
-      _ = try? await ssh(host, user, script: "loginctl enable-linger \"$(id -un)\"")
+      _ = try? await ssh(host, user, address: address, script: "loginctl enable-linger \"$(id -un)\"")
     }
   }
 
   /// Stops and disables the unit and deletes everything it had there.
-  func uninstall(host: String, user: String?) async throws {
-    _ = try await ssh(host, user, script: """
+  func uninstall(host: String, user: String?, address: String? = nil) async throws {
+    _ = try await ssh(host, user, address: address, script: """
       systemctl --user disable --now \(unit).service >/dev/null 2>&1 || true
       rm -f "$HOME/.config/systemd/user/\(unit).service"
       systemctl --user daemon-reload || true
@@ -132,14 +133,19 @@ struct LinuxInstall: Sendable {
   /// must be an IP address or a plain DNS name, and the user a plain login
   /// name, so neither can be read as an option; the unit's name goes into
   /// shell lines and the unit file, so it must be plain too.
-  func ssh(_ host: String, _ user: String?, input: URL? = nil, script: String) async throws -> String {
-    guard Self.isPlainHost(host) else { throw Failure(description: "\(host) is not an IP address or a DNS name.") }
+  /// With `address`, SSH connects there but takes its settings (user, key)
+  /// from the person's SSH configuration for `host`, a tailnet name.
+  func ssh(_ host: String, _ user: String?, address: String? = nil, input: URL? = nil, script: String) async throws -> String {
+    guard Self.isPlainHost(host), Self.isPlainHost(address ?? host) else {
+      throw Failure(description: "\(host) is not an IP address or a DNS name.")
+    }
     if let user, !user.isEmpty, !Self.isPlain(user, extra: "._-") {
       throw Failure(description: "\(user) is not a plain user name.")
     }
     guard Self.isPlain(instance ?? "", extra: "._-") else { throw Failure(description: "\(unit) is not a plain unit name.") }
     var arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15"]
     if let user, !user.isEmpty { arguments += ["-l", user] }
+    if let address { arguments += ["-o", "HostName=\(address)"] }
     // SSH joins its arguments into one command line for the remote shell.
     arguments += ["--", host, "sh -c " + Self.quoted(script)]
     let result = await ChildProcess.run("/usr/bin/ssh", arguments, mergeErrors: false, input: input, timeout: .seconds(600))

@@ -9,7 +9,7 @@ import WovenProtocol
 /// stopped one is started. Both platforms write the server's log to
 /// `server.log` in its data folder.
 func registerServerControl(_ router: inout Router, library: Library, sessions: SessionManager, peers: PeerSync,
-                           dataFolder: URL, instance: String?, install: LinuxInstall?) {
+                           tailnet: any Tailnet, dataFolder: URL, instance: String?, install: LinuxInstall?) {
   let log = dataFolder.appendingPathComponent("server.log")
 
   router.on(ControlServer.self) { request, _ in
@@ -20,37 +20,42 @@ func registerServerControl(_ router: inout Router, library: Library, sessions: S
       if request.action != .start { try controlSelf(request.action, instance: instance) }
       return ServerControlResult(confirmationRequired: false)
     }
-    let (install, host) = try await linuxHost(request.machineID, library: library, peers: peers, install: install)
+    let (install, host) = try await linuxHost(request.machineID, library: library, peers: peers, tailnet: tailnet, install: install)
     do {
-      try await install.control(request.action, host: host)
+      try await install.control(request.action, on: host)
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
+    // Looks for it at once rather than at the next discovery.
+    if request.action != .stop { _ = await peers.waitForServer(at: host.host, timeout: .seconds(60)) }
     return ServerControlResult(confirmationRequired: false)
   }
 
   router.on(ServerLog.self) { request, _ in
     if request.machineID == library.machineID { return tail(of: log) }
-    let (install, host) = try await linuxHost(request.machineID, library: library, peers: peers, install: install)
+    let (install, host) = try await linuxHost(request.machineID, library: library, peers: peers, tailnet: tailnet, install: install)
     do {
-      return try await install.log(host: host)
+      return try await install.log(on: host)
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
   }
 }
 
-/// Where this machine reaches a Linux machine over SSH.
-private func linuxHost(_ machineID: String, library: Library, peers: PeerSync,
-                       install: LinuxInstall?) async throws -> (LinuxInstall, String) {
+/// Where this machine reaches a Linux machine over SSH: where its server was
+/// last reached, else the tailnet device of its name (a stopped server's
+/// machine, after this server restarted).
+private func linuxHost(_ machineID: String, library: Library, peers: PeerSync, tailnet: any Tailnet,
+                       install: LinuxInstall?) async throws -> (LinuxInstall, TailnetMachine) {
   guard let install else { throw ProtocolError(.failed, "This machine cannot reach another machine's server over SSH.") }
   guard let machine = try await library.machine(machineID), machine.platform == .linux else {
     throw ProtocolError(.notFound, "No Linux machine \(machineID).")
   }
-  guard let address = await peers.address(of: machine.id) else {
+  if let address = await peers.address(of: machine.id) { return (install, address) }
+  guard let device = try? await tailnet.devices().first(where: { $0.name == machine.name }) else {
     throw ProtocolError(.ownerUnreachable, "\(machine.name) has not been reached on the tailnet.", machineID: machine.id)
   }
-  return (install, address.host)
+  return (install, TailnetMachine(name: device.name, host: device.address))
 }
 
 /// Stops or restarts this server a moment after the reply has gone.
@@ -95,8 +100,8 @@ extension LinuxInstall {
   static func unitName(instance: String?) -> String { "woven-server" + (instance.map { "-" + $0 } ?? "") }
 
   /// Starts, stops or restarts the unit there.
-  func control(_ action: ServerAction, host: String) async throws {
-    _ = try await ssh(host, nil, script: "systemctl --user \(action.rawValue) \(unit).service")
+  func control(_ action: ServerAction, on machine: TailnetMachine) async throws {
+    _ = try await ssh(machine.name, nil, address: machine.host, script: "systemctl --user \(action.rawValue) \(unit).service")
   }
 
   /// Whether the server can be installed there, and its storage. Changes nothing.
@@ -123,7 +128,7 @@ extension LinuxInstall {
   }
 
   /// The end of the server's log there.
-  func log(host: String) async throws -> String {
-    try await ssh(host, nil, script: "tail -c 262144 \"$HOME/.local/share/\(unit)/data/server.log\" 2>/dev/null || true")
+  func log(on machine: TailnetMachine) async throws -> String {
+    try await ssh(machine.name, nil, address: machine.host, script: "tail -c 262144 \"$HOME/.local/share/\(unit)/data/server.log\" 2>/dev/null || true")
   }
 }

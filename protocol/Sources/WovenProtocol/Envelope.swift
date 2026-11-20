@@ -173,3 +173,7 @@ public struct ProtocolError: Error, Codable, Sendable, Hashable {
     self.machineID = machineID
   }
 }
+
+extension ProtocolError: LocalizedError {
+  public var errorDescription: String? { message }
+}
