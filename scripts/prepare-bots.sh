@@ -61,7 +61,7 @@ find "$output/node_modules" -type f -name '*.map' -delete
 # runtime cannot load a different one. Nothing under Resources/bots is signed by the
 # build, so no native code may remain; a new native dependency has to be removed or
 # signed explicitly before it can ship (validate-release-code.py checks every image).
-python3 -I "$repo_root/remote/host/prune-bots-sdk.py" "$output"
+python3 -I "$repo_root/scripts/prune-bots-sdk.py" "$output"
 shared_claude="$agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$shared_claude"
 codesign --verify --strict "$shared_claude"

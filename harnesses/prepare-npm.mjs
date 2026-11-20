@@ -11,7 +11,7 @@ import { run } from './install-adapter.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
-export async function prepareNPM({ prefix, node, bootstrap, securityGraph = resolve(root, '../remote/npm-runtime'), recordPath = join(root, 'npm-version.json'), fetchImplementation = fetch }) {
+export async function prepareNPM({ prefix, node, bootstrap, securityGraph = join(root, 'npm-runtime'), recordPath = join(root, 'npm-version.json'), fetchImplementation = fetch }) {
   const recordBytes = await readFile(recordPath);
   const record = JSON.parse(recordBytes);
   const lockBytes = await readFile(join(securityGraph, 'package-lock.json'));
