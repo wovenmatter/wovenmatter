@@ -13,6 +13,7 @@ export const MIRROR_BATCH = 200;
 const FORUM = "forum";
 
 type Built = { readonly item: MirrorItem; readonly entry: number; readonly n: number };
+type ForumUsage = NonNullable<MirrorBot["forumUsage"]>[number];
 
 const usageOf = (message: AssistantMessage): MirrorItem["usage"] | undefined => {
   const usage = message.usage;
@@ -280,6 +281,7 @@ export class LibraryMirror {
       createdAt: record.createdAt,
     };
     let items: Built[] = [];
+    let forumUsage: (ForumUsage & { entry: number })[] = [];
     let upTo = from;
     if (live) {
       const open = await this.#manager.get(botId);
@@ -298,19 +300,43 @@ export class LibraryMirror {
           if (built.heldAt !== undefined) upTo = Math.min(upTo, built.heldAt - 1);
         }
         items = items.filter((built) => built.entry <= upTo).sort((a, b) => a.entry - b.entry || a.n - b.n);
+        // A Forum reply's turn runs in the bot's seat, which is not mirrored: only its usage is.
+        for (const seat of await this.#forum.seatsOf(botId)) {
+          if (seat.conversationId === undefined) continue;
+          for await (const entry of open.ownEntries(seat.conversationId, from)) {
+            if (entry.id > upTo) break;
+            let n = 0;
+            for (const message of entry.model ?? []) {
+              if (message.role !== "assistant") continue;
+              const usage = usageOf(message as AssistantMessage);
+              if (usage) {
+                const createdAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
+                forumUsage.push({ key: n ? `${entry.id}.${n}` : String(entry.id), roomId: seat.roomId, createdAt, usage, entry: entry.id });
+              }
+              n += 1;
+            }
+          }
+        }
+        forumUsage = forumUsage.sort((a, b) => a.entry - b.entry);
       }
     }
     const meta = JSON.stringify([bot, conversations]);
     if (upTo <= from && this.#meta.get(botId) === meta) return;
     const pushes = items.length ? batches(items, (built) => built.entry, upTo) : [{ slice: [], upTo }];
+    let after = from;
     for (const push of pushes) {
       if (this.#closed) return;
+      const usage = forumUsage
+        .filter((entry) => entry.entry > after && entry.entry <= push.upTo)
+        .map(({ entry: _entry, ...rest }) => rest);
       await this.#host.call("mirror.bot", {
         bot,
         conversations,
         items: push.slice.map((built) => built.item),
+        ...(usage.length ? { forumUsage: usage } : {}),
         upTo: push.upTo,
       });
+      after = push.upTo;
       checkpoints.bots.set(botId, push.upTo);
     }
     this.#meta.set(botId, meta);

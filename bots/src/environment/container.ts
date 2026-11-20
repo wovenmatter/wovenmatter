@@ -1050,15 +1050,16 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   /**
    * Write the bot's storage (everything under /workspace, its home folder included) as a tar
    * archive at `path`, entries under `workspace/`. Its container is stopped first, so the files
-   * are at rest; the next tool call starts it again.
+   * are at rest; the next tool call starts it again. False when the bot has no storage yet.
    */
-  exportFiles(botId: string, path: string): Promise<void> {
+  exportFiles(botId: string, path: string): Promise<boolean> {
     this.#connections.get(botId)?.close();
     return this.#locked(botId, async () => {
-      if (!(await this.#engine.volumeExists(volumeName(botId)))) throw new Error(`bot ${botId} has no files`);
+      if (!(await this.#engine.volumeExists(volumeName(botId)))) return false;
       this.#lastUse.delete(botId);
       await this.#engine.stopContainer(containerName(botId), STOP_SECONDS);
       await this.#withStorage(botId, "export", (name) => this.#engine.getArchiveToFile(name, WORKSPACE, path));
+      return true;
     });
   }
 

@@ -541,6 +541,8 @@ export class Forum {
     readonly mentions?: readonly string[];
     readonly everyone?: boolean;
     readonly scheduled?: boolean;
+    /** An agent session that posts for the user, by its name. */
+    readonly agent?: string;
   }): Promise<ForumPost> {
     if (!input.text.trim()) throw new ForumError("a post needs some text");
     if (input.text.length > MAX_POST_CHARS) throw new ForumError("that post is too long");
@@ -558,8 +560,8 @@ export class Forum {
     const record = await this.store.addPost(
       {
         roomId: room.id,
-        author: "user",
-        name: (await this.userName()) ?? "",
+        author: input.agent ? "agent" : "user",
+        name: input.agent ?? (await this.userName()) ?? "",
         text: input.text,
         mentions,
         scheduled: input.scheduled === true,
@@ -665,6 +667,7 @@ export class Forum {
 
   #author(post: ForumPostRecord, readerId: string, user: string): string {
     if (post.author === "user") return post.scheduled ? `${user} (scheduled post)` : user;
+    if (post.author === "agent") return `${post.name} (an agent session of ${user}'s)`;
     return post.botId === readerId ? "You" : post.name;
   }
 

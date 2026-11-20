@@ -331,6 +331,14 @@ export class DockerEngineAPI {
     );
   }
 
+  /** The names of the volumes with a label (`key` or `key=value`). */
+  async listVolumes(label: string): Promise<string[]> {
+    const reply = await this.json<{ Volumes: { Name: string }[] | null }>("GET", "/volumes", {
+      query: { filters: JSON.stringify({ label: [label] }) },
+    });
+    return (reply?.Volumes ?? []).map((volume) => volume.Name);
+  }
+
   async volumeExists(name: string): Promise<boolean> {
     return (await this.json("GET", `/volumes/${encodeURIComponent(name)}`, { allow: [404] })) !== undefined;
   }

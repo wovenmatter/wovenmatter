@@ -84,14 +84,27 @@ public struct BotMirror: Sendable {
     public var content: ItemContent
     public var author: ItemAuthor?
     public var createdAt: Date
-    public var usage: Usage?
 
-    public init(id: String, sessionID: String, content: ItemContent, author: ItemAuthor? = nil, createdAt: Date,
-                usage: Usage? = nil) {
+    public init(id: String, sessionID: String, content: ItemContent, author: ItemAuthor? = nil, createdAt: Date) {
       self.id = id
       self.sessionID = sessionID
       self.content = content
       self.author = author
+      self.createdAt = createdAt
+    }
+  }
+
+  /// One model turn's usage. Its id is the bot's and the entry's, the same on
+  /// every home machine, so a transfer never records a turn twice.
+  public struct UsageRecord: Sendable {
+    public var id: String
+    public var sessionID: String
+    public var createdAt: Date
+    public var usage: Usage
+
+    public init(id: String, sessionID: String, createdAt: Date, usage: Usage) {
+      self.id = id
+      self.sessionID = sessionID
       self.createdAt = createdAt
       self.usage = usage
     }
@@ -101,15 +114,17 @@ public struct BotMirror: Sendable {
   public var chats: [Chat]
   /// In order; each session's items continue its sequence.
   public var items: [Item]
+  public var usage: [UsageRecord]
   /// `bot:<botId>` or `forum`.
   public var checkpoint: String
   /// The runtime's entries through this one are covered.
   public var upTo: Int64
 
-  public init(bot: Bot?, chats: [Chat], items: [Item], checkpoint: String, upTo: Int64) {
+  public init(bot: Bot?, chats: [Chat], items: [Item], usage: [UsageRecord] = [], checkpoint: String, upTo: Int64) {
     self.bot = bot
     self.chats = chats
     self.items = items
+    self.usage = usage
     self.checkpoint = checkpoint
     self.upTo = upTo
   }
@@ -148,14 +163,15 @@ extension Library {
           "author": try item.author.map { .text(String(decoding: try Wire.encoder.encode($0), as: UTF8.self)) } ?? .null,
           "created_at": .integer(created),
         ])
-        if let usage = item.usage, try writer.row("usage_records", item.id + ":usage") == nil {
-          try writer.put("usage_records", id: item.id + ":usage", [
-            "machine_id": .text(machineID), "session_id": .text(item.sessionID), "runtime": .text(RuntimeKind.bots.rawValue),
-            "model": .text(usage.model), "input_tokens": .integer(usage.input), "output_tokens": .integer(usage.output),
-            "cache_read_tokens": .integer(usage.cacheRead), "cache_write_tokens": .integer(usage.cacheWrite),
-            "cost": .real(usage.cost), "recorded_at": .integer(created),
-          ])
-        }
+      }
+      for record in mirror.usage where try writer.row("usage_records", record.id) == nil {
+        let usage = record.usage
+        try writer.put("usage_records", id: record.id, [
+          "machine_id": .text(machineID), "session_id": .text(record.sessionID), "runtime": .text(RuntimeKind.bots.rawValue),
+          "model": .text(usage.model), "input_tokens": .integer(usage.input), "output_tokens": .integer(usage.output),
+          "cache_read_tokens": .integer(usage.cacheRead), "cache_write_tokens": .integer(usage.cacheWrite),
+          "cost": .real(usage.cost), "recorded_at": .integer(Self.millis(record.createdAt)),
+        ])
       }
       try writer.db.run("""
         INSERT INTO bot_checkpoints (key, entry) VALUES (?, ?)
@@ -248,6 +264,70 @@ extension Library {
       for session in sessions { try writer.delete("sessions", id: session) }
       if try writer.row("bots", botID) != nil { try writer.delete("bots", id: botID) }
       try writer.db.run("DELETE FROM bot_checkpoints WHERE key = ?", [.text("bot:" + botID)])
+    }
+  }
+
+  // MARK: Transfer
+
+  /// What a transfer's target must hold before it becomes the home: the bots
+  /// and chats this machine's library holds as their home, and its checkpoints.
+  public func botsTransferExpected() async throws -> BotsTransferExpected {
+    let machineID = machineID
+    return try await read { db in
+      let bots = try db.query("SELECT id FROM bots WHERE machine_id = ? AND deleted = 0", [.text(machineID)])
+        .compactMap { $0.text("id") }
+      let chats = try db.query("""
+        SELECT c.bot_id, c.conversation_id FROM bot_chats c JOIN sessions s ON s.id = c.session_id
+        WHERE s.machine_id = ? AND s.deleted = 0 AND c.deleted = 0
+        """, [.text(machineID)]).map { row in
+        let bot = row.text("bot_id") ?? ""
+        return BotsTransferExpected.Chat(botID: bot.isEmpty ? nil : bot, conversationID: Int(row.integer("conversation_id") ?? 0))
+      }
+      var checkpoints: [String: Int64] = [:]
+      for row in try db.query("SELECT key, entry FROM bot_checkpoints") {
+        if let key = row.text("key") { checkpoints[key] = row.integer("entry") ?? 0 }
+      }
+      return BotsTransferExpected(bots: bots, chats: chats, checkpoints: checkpoints)
+    }
+  }
+
+  /// What of `expected` this machine's library does not hold yet as the bots'
+  /// home: a bot, a chat, or a live bot's or the Forum's entries up to the old
+  /// home's checkpoint. Nil when it holds everything.
+  public func botsTransferMissing(_ expected: BotsTransferExpected) async throws -> String? {
+    let machineID = machineID
+    return try await read { db in
+      var live: Set<String> = []
+      for id in expected.bots {
+        guard let row = try db.query("SELECT machine_id, trashed FROM bots WHERE id = ? AND deleted = 0", [.text(id)]).first,
+              row.text("machine_id") == machineID else { return "bot \(id)" }
+        if !row.bool("trashed") { live.insert(id) }
+      }
+      for chat in expected.chats {
+        let session = chat.botID.map { "bot:\(machineID):\($0):\(chat.conversationID)" } ?? "forum:\(machineID):\(chat.conversationID)"
+        if try db.query("SELECT id FROM bot_chats WHERE id = ? AND deleted = 0", [.text(session)]).isEmpty { return "chat \(session)" }
+      }
+      var held: [String: Int64] = [:]
+      for row in try db.query("SELECT key, entry FROM bot_checkpoints") {
+        if let key = row.text("key") { held[key] = row.integer("entry") ?? 0 }
+      }
+      for (key, entry) in expected.checkpoints where key == "forum" || live.contains(String(key.dropFirst(4))) {
+        if (held[key] ?? 0) < entry { return "the entries of \(key)" }
+      }
+      return nil
+    }
+  }
+
+  /// After a transfer away: the bot chats and Forum rooms this machine owned
+  /// are deleted in every library (the new home saved them under its own),
+  /// and its checkpoints go. The bots' rows stay: the new home writes them.
+  public func removeBotChats() async throws {
+    let machineID = machineID
+    try await write { writer in
+      let sessions = try writer.db.query("SELECT id FROM sessions WHERE machine_id = ? AND runtime = ? AND deleted = 0",
+                                         [.text(machineID), .text(RuntimeKind.bots.rawValue)]).compactMap { $0.text("id") }
+      for session in sessions { try writer.delete("sessions", id: session) }
+      try writer.db.run("DELETE FROM bot_checkpoints")
     }
   }
 

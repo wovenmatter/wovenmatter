@@ -355,7 +355,7 @@ public enum BotsWire {
     }
     public var id: Int
     public var roomId: Int
-    /// "user" or "bot".
+    /// "user", "bot", or "agent" (an agent session posted for the person; `name` is its name).
     public var author: String
     public var botId: String?
     public var name: String

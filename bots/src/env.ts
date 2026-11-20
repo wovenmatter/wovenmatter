@@ -57,9 +57,9 @@ export interface BotEnvironmentAdapter {
   reconcile?(activeBotIds: readonly string[], deletedBotIds: readonly string[]): Promise<void>;
   /**
    * Write the bot's files (its workspace volume, home folder included) out of the engine as a tar
-   * archive at `path` on this machine, so the bots folder can carry them.
+   * archive at `path` on this machine, so a transfer can carry them. False when it has none.
    */
-  exportFiles?(botId: string, path: string): Promise<void>;
+  exportFiles?(botId: string, path: string): Promise<boolean>;
   /** Put a tar archive written by `exportFiles` back into the bot's workspace volume. */
   importFiles?(botId: string, path: string): Promise<void>;
   /** Shutdown: drop connections; containers keep running and are reconciled on the next start. */

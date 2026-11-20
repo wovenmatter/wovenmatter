@@ -171,12 +171,12 @@ extension PiBotForumPost {
                   })
     }
 
-    /// A room's saved posts: the person's, and each bot's under the name it posted with.
+    /// A room's saved posts: the person's, and each bot's or agent session's under the name it posted with.
     static func saved(_ items: [SessionItem], roomID: Int) -> [PiBotForumPost] {
         items.sorted { $0.sequence < $1.sequence }.compactMap { item in
             switch item.content {
             case .userMessage(let text, _):
-                PiBotForumPost(id: item.sequence, roomId: roomID, isUser: true, name: item.author?.name ?? "", text: text,
+                PiBotForumPost(id: item.sequence, roomId: roomID, isUser: item.author == nil, name: item.author?.name ?? "", text: text,
                                isScheduled: false, thread: nil, unanswered: [])
             case .assistantMessage(let text):
                 PiBotForumPost(id: item.sequence, roomId: roomID, isUser: false, name: item.author?.name ?? "", text: text,

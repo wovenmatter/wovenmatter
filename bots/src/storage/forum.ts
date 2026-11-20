@@ -29,7 +29,8 @@ export type ForumRoom = {
 export type ForumPostRecord = {
   readonly id: number;
   readonly roomId: number;
-  readonly author: "user" | "bot";
+  /** `agent`: an agent session posted for the user through the Woven tools; `name` is its name. */
+  readonly author: "user" | "bot" | "agent";
   readonly botId?: string;
   /** The author's name when it posted, so a renamed or deleted bot's posts keep theirs. */
   readonly name: string;
@@ -149,7 +150,7 @@ const toRoom = (row: RoomRow): ForumRoom => ({
 const toPost = (row: PostRow): ForumPostRecord => ({
   id: row.id,
   roomId: row.room_id,
-  author: row.author === "bot" ? "bot" : "user",
+  author: row.author === "bot" || row.author === "agent" ? row.author : "user",
   ...(row.bot_id ? { botId: row.bot_id } : {}),
   name: row.name,
   text: row.text,

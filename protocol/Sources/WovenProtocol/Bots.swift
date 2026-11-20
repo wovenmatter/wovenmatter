@@ -25,6 +25,8 @@ public enum BotsState: String, Codable, Sendable, Hashable {
   case unreachable
   /// The runtime or its container engine failed; `message` says why.
   case failed
+  /// The bots are stopped here while they move to another machine; `transfer` says how far.
+  case transferring
 }
 
 /// The home machine's memory and disk, for Settings > Bots > Resources.
@@ -51,14 +53,17 @@ public struct BotsStatus: Codable, Sendable, Hashable {
   /// The container engine: "mac-vm" or "linux-dockerd".
   public var engine: String?
   public var capacity: BotsCapacity?
+  /// A transfer to another machine, while one runs.
+  public var transfer: BotsTransferProgress?
 
   public init(homeMachineID: String?, state: BotsState, message: String? = nil, engine: String? = nil,
-              capacity: BotsCapacity? = nil) {
+              capacity: BotsCapacity? = nil, transfer: BotsTransferProgress? = nil) {
     self.homeMachineID = homeMachineID
     self.state = state
     self.message = message
     self.engine = engine
     self.capacity = capacity
+    self.transfer = transfer
   }
 }
 

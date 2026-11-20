@@ -440,7 +440,9 @@ private let botTools: [WovenTool] = [
     forBots: false,
     run: { call in
       let tools = call.tools
-      var request: [String: JSONValue] = ["type": .string("forum.post"), "text": .string(try call.arguments.string("text"))]
+      let name = try await tools.author(call.caller).name.trimmingCharacters(in: .whitespacesAndNewlines)
+      var request: [String: JSONValue] = ["type": .string("forum.post"), "text": .string(try call.arguments.string("text")),
+                                          "agent": .string(name.isEmpty ? "An agent" : String(name.prefix(200)))]
       if let mentions = call.arguments["mentions"] { request["mentions"] = mentions }
       if let everyone = call.arguments.bool("everyone") { request["everyone"] = .bool(everyone) }
       _ = try await tools.bots.call(.object(request), caller: tools.localCaller)

@@ -588,6 +588,7 @@ class Connection {
             text: request.text,
             ...(request.mentions ? { mentions: request.mentions } : {}),
             ...(request.everyone ? { everyone: true } : {}),
+            ...(request.agent ? { agent: request.agent } : {}),
           }),
         });
         return request.deliveryId ? this.#server.delivery(request.deliveryId, submit) : submit();

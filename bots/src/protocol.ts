@@ -257,6 +257,8 @@ export const requestSchema = z.discriminatedUnion("type", [
     mentions: z.array(botId).max(1000).optional(),
     /** Ask every bot in the room. */
     everyone: z.boolean().optional(),
+    /** Set by the server: an agent session posts for the user, by its name. */
+    agent: z.string().trim().min(1).max(200).optional(),
     deliveryId: z.string().min(1).max(128).optional(),
   }),
   z.strictObject({ id: requestId, type: z.literal("forum.thread.create"), postId }),
@@ -393,9 +395,10 @@ export type ForumPost = {
   /** Grows across every room; a post never changes its id or text. */
   id: number;
   roomId: number;
-  author: "user" | "bot";
+  /** `agent`: an agent session posted for the user through the Woven tools. */
+  author: "user" | "bot" | "agent";
   botId?: string;
-  /** The author's name when it posted ("" for a user without one). */
+  /** The author's name when it posted ("" for a user without one); an agent session's name. */
   name: string;
   text: string;
   /** Bots the user asked for a reply. */
@@ -753,6 +756,11 @@ export type MirrorBot = {
   conversations: MirrorConversation[];
   /** Sorted by entry, then n. At most 200. */
   items: MirrorItem[];
+  /**
+   * The usage of the bot's model turns in its Forum seats, whose conversations are not mirrored:
+   * one per assistant message, keyed like items (`<entryId>` or `<entryId>.<n>`).
+   */
+  forumUsage?: { key: string; roomId: number; createdAt: number; usage: NonNullable<MirrorItem["usage"]> }[];
   /** Entries through this id are covered. */
   upTo: number;
 };
@@ -763,7 +771,7 @@ export type MirrorForum = {
   posts: {
     id: number;
     roomId: number;
-    author: "user" | "bot";
+    author: "user" | "bot" | "agent";
     botId?: string;
     name: string;
     text: string;

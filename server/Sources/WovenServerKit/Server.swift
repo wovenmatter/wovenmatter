@@ -108,6 +108,7 @@ public final class WovenServer: Sendable {
     let bots = BotsHost(library: library, secrets: secrets, peers: peers, dataFolder: options.dataFolder,
                         hosting: options.botsHosting)
     registerBots(&routes, bots: bots, library: library)
+    registerBotsTransfer(&routes, bots: bots)
     let tools = WovenTools(library: library, sessions: sessions, databases: databases, peers: peers, bots: bots)
     registerTools(&routes, tools: tools)
     await bots.offerTools(tools)
