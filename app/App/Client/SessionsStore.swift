@@ -28,18 +28,21 @@ final class SessionsStore {
         return store
     }
 
-    /// How many views follow each chat's live view now.
+    /// How many views follow each chat's live view now, and the one task that follows it for them.
     @ObservationIgnored private var followers: [String: Int] = [:]
+    @ObservationIgnored private var following: [String: Task<Void, Never>] = [:]
 
-    /// Follows a chat's live view until the task is cancelled. When no view
-    /// follows it any more, its store is let go.
+    /// Follows a chat's live view until the task is cancelled. Views share one
+    /// subscription per chat; when no view follows it any more, its store is let go.
     func follow(_ sessionID: String) async {
         let store = session(for: sessionID)
         followers[sessionID, default: 0] += 1
-        await store.follow()
+        if following[sessionID] == nil { following[sessionID] = Task { await store.follow() } }
+        while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
         followers[sessionID, default: 1] -= 1
         if followers[sessionID] == 0 {
             followers[sessionID] = nil
+            following.removeValue(forKey: sessionID)?.cancel()
             if stores[sessionID] === store { stores[sessionID] = nil }
         }
     }

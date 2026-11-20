@@ -136,6 +136,10 @@ struct CloudConversation: View {
                     .padding(.top, 24)
                     .scrollTargetLayout()
                 }
+                // Each chat gets its own scroll view, which opens at the bottom
+                // in its first layout; reusing one would lay the new chat out
+                // at the old offset and move it a turn later.
+                .id(conversation?.id)
                 .scrollIndicators(.never)
                 .task(id: [model.navigation.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)

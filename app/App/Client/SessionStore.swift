@@ -36,6 +36,8 @@ final class SessionStore {
     private(set) var isUpdatingSettings = false
     private(set) var goal: WorkspaceGoal?
     private(set) var error: String?
+    /// Its first view has arrived, or could not, so a chat switched to it shows it whole.
+    private(set) var hasLoaded = false
 
     private var isFollowing = false
     private var run: RunState = .idle
@@ -76,6 +78,13 @@ final class SessionStore {
     /// connection is down the saved items from this Mac's server show and
     /// sending is disabled; when it returns the live view resumes on its own.
     func follow() async {
+        if !hasLoaded {
+            // An owner that never answers must not keep the chat from showing.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                self?.hasLoaded = true
+            }
+        }
         while !Task.isCancelled {
             guard let owner = ownerConnection() else {
                 self.owner = nil
@@ -92,6 +101,7 @@ final class SessionStore {
                     failure: { [weak self] failure in
                         guard let self else { return }
                         isFollowing = false
+                        hasLoaded = true
                         if failure.code == .notOwner, let machineID = failure.machineID {
                             namedOwnerID = machineID
                         } else {
@@ -141,6 +151,7 @@ final class SessionStore {
         } catch {
             self.error = error.localizedDescription
         }
+        hasLoaded = true
     }
 
     /// Pages in older messages from this Mac's server. Returns whether any arrived.
@@ -348,6 +359,7 @@ final class SessionStore {
         applyGoal(snapshot.session.goal)
         apply(snapshot.configuration)
         project()
+        hasLoaded = true
     }
 
     private func apply(_ event: SessionEvent) {

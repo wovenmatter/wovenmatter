@@ -1338,6 +1338,8 @@ struct WorkspaceSurface: View {
     let onBotRoute: (BotTarget, ChatPanelID) -> Void
     let onOpenBotLink: (URL, ChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
+    /// The chat each panel shows now (see `conversation(for:)`).
+    @State private var shownConversationIDs: [ChatPanelID: String] = [:]
 
     var body: some View {
         GeometryReader { geometry in
@@ -1516,7 +1518,7 @@ struct WorkspaceSurface: View {
                 conversation: conversation,
                 attachedNoteTitle: panelID == .primary && assets.tabs.isPresented
                     ? workspaceContextLabel : nil,
-                draft: draftBinding(for: panelID),
+                draft: draftBinding(for: conversation?.id),
                 attachments: attachments,
                 sendInProgress: conversation.map {
                     submittingConversationIDs.contains($0.id)
@@ -1545,15 +1547,30 @@ struct WorkspaceSurface: View {
             // The open chat follows its live state until it closes.
             await model.sessions.follow(conversation.id)
         }
+        .task(id: chatPanels.panel(id: panelID)?.conversationID) {
+            // The chosen chat loads while the one on screen stays.
+            guard let chosen = chatPanels.panel(id: panelID)?.conversationID else { return }
+            await model.sessions.follow(chosen)
+        }
+        .onChange(of: conversation?.id, initial: true) { _, shown in shownConversationIDs[panelID] = shown }
     }
 
+    /// The chat a panel shows. A chosen chat replaces the one on screen once
+    /// its first view has arrived, so the transcript changes in one step
+    /// instead of showing an empty chat first.
     private func conversation(
         for panelID: ChatPanelID
     ) -> WorkspaceConversationRecord? {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
             return nil
         }
-        return conversations.first { $0.id == conversationID }
+        let chosen = conversations.first { $0.id == conversationID }
+        if let shownID = shownConversationIDs[panelID], shownID != conversationID,
+           !model.sessions.session(for: conversationID).hasLoaded,
+           let shown = conversations.first(where: { $0.id == shownID }) {
+            return shown
+        }
+        return chosen
     }
 
     private func agent(
@@ -1563,8 +1580,8 @@ struct WorkspaceSurface: View {
         return agents.first { $0.id == agentID }
     }
 
-    private func draftBinding(for panelID: ChatPanelID) -> Binding<String> {
-        let conversationID = chatPanels.panel(id: panelID)?.conversationID ?? ""
+    private func draftBinding(for conversationID: String?) -> Binding<String> {
+        let conversationID = conversationID ?? ""
         return Binding(
             get: { draftsByConversationID[conversationID, default: ""] },
             set: { draftsByConversationID[conversationID] = $0 }
