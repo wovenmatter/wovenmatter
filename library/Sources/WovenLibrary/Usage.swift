@@ -47,14 +47,18 @@ public struct UsageSource: Sendable, Hashable {
   public var identity: String
   /// The reader's state where it stopped, as JSON.
   public var state: String
+  /// Reads begun in a row that never finished: the process ended during them.
+  public var interrupted: Int64
 
-  public init(id: String, offset: Int64 = 0, size: Int64 = 0, modified: Int64 = 0, identity: String = "", state: String = "") {
+  public init(id: String, offset: Int64 = 0, size: Int64 = 0, modified: Int64 = 0, identity: String = "", state: String = "",
+              interrupted: Int64 = 0) {
     self.id = id
     self.offset = offset
     self.size = size
     self.modified = modified
     self.identity = identity
     self.state = state
+    self.interrupted = interrupted
   }
 }
 
@@ -130,7 +134,7 @@ extension Library {
         let id = row.text("id") ?? ""
         sources[id] = UsageSource(id: id, offset: row.integer("offset") ?? 0, size: row.integer("size") ?? 0,
                                   modified: row.integer("modified") ?? 0, identity: row.text("identity") ?? "",
-                                  state: row.text("state") ?? "")
+                                  state: row.text("state") ?? "", interrupted: row.integer("interrupted") ?? 0)
       }
       return sources
     }
@@ -167,11 +171,11 @@ extension Library {
         added += 1
       }
       try db.run("""
-        INSERT INTO usage_sources (id, offset, size, modified, identity, state) VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO usage_sources (id, offset, size, modified, identity, state, interrupted) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id) DO UPDATE SET offset = excluded.offset, size = excluded.size, modified = excluded.modified,
-          identity = excluded.identity, state = excluded.state
+          identity = excluded.identity, state = excluded.state, interrupted = excluded.interrupted
         """, [.text(source.id), .integer(source.offset), .integer(source.size), .integer(source.modified),
-              .text(source.identity), .text(source.state)])
+              .text(source.identity), .text(source.state), .integer(source.interrupted)])
       return added
     }
   }

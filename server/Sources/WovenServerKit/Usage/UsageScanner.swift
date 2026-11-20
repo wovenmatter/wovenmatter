@@ -32,10 +32,13 @@ actor UsageScanner {
   private let library: Library
   private let home: URL
   private var task: Task<Void, Never>?
+  /// For tests: called with a history's source as its read begins.
+  private let willRead: (@Sendable (String) async -> Void)?
 
-  init(library: Library, home: URL) {
+  init(library: Library, home: URL, willRead: (@Sendable (String) async -> Void)? = nil) {
     self.library = library
     self.home = home
+    self.willRead = willRead
   }
 
   func start(every interval: Duration = .seconds(120)) {
@@ -47,8 +50,9 @@ actor UsageScanner {
     }
   }
 
-  /// Ends the scanning after the history being read, so a normal stop
-  /// never leaves one marked as being read.
+  /// Ends the scanning once the history being read is finished or, for
+  /// OpenCode's database, its page is, so a normal stop leaves no read
+  /// counted as interrupted.
   func stop() async {
     guard let task else { return }
     task.cancel()
@@ -129,20 +133,55 @@ actor UsageScanner {
     return files
   }
 
-  /// Reads what is new in one file. Before reading, the file is recorded as
-  /// passed over at its size and change time with its read position where it
-  /// was, and only a finished read records otherwise. So a file that cannot
-  /// be read (it fails to decompress, or reading it fails), or whose reading
-  /// ended the process, is tried again only once it changes. A line that is
-  /// not what its harness writes is skipped on its own.
+  /// A history open at this many unclean ends of the process in a row is
+  /// taken to be what ended it. One could be a kill or a power loss that
+  /// happened while it was open; a history that traps the reader does so
+  /// every time, so a second confirms it at the cost of one more crash.
+  static let interruptedReadsBeforePassingOver: Int64 = 2
+
+  /// Before a history is read, the attempt is counted in its row, and every
+  /// end of the read (finished, failed, or stopped) clears the count. A count
+  /// still there at the next read means the process ended during the last
+  /// one: the history is read again, unless that has happened
+  /// `interruptedReadsBeforePassingOver` times, when it is passed over like
+  /// one that failed. Returns the counted row to read with, or nil.
+  private func begin(_ known: UsageSource?, id: String, size: Int64, modified: Int64) async throws -> UsageSource? {
+    var source = known ?? UsageSource(id: id)
+    guard source.interrupted < Self.interruptedReadsBeforePassingOver else {
+      try await passOver(source, size: size, modified: modified)
+      return nil
+    }
+    source.interrupted += 1
+    try await library.saveUsage([], source: source)
+    await willRead?(id)
+    return source
+  }
+
+  /// Passed over until it changes: its size and change time recorded, its
+  /// read position where it was.
+  private func passOver(_ source: UsageSource, size: Int64, modified: Int64) async throws {
+    var source = source
+    source.size = size
+    source.modified = modified
+    source.interrupted = 0
+    try await library.saveUsage([], source: source)
+  }
+
+  /// Reads what is new in one file. A file that cannot be read (it fails to
+  /// decompress, or reading it fails), or whose reading ended the process
+  /// more than once, is passed over until it changes. A line that is not
+  /// what its harness writes is skipped on its own.
   private func read(_ file: HistoryFile, known: UsageSource?, into pass: inout Pass) async throws {
     let attributes = try FileManager.default.attributesOfItem(atPath: file.url.path)
     let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
     let modified = Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000)
     if let known, known.size == size, known.modified == modified { return }
-    try await library.saveUsage([], source: UsageSource(id: file.source, offset: known?.offset ?? 0, size: size, modified: modified,
-                                                        identity: known?.identity ?? "", state: known?.state ?? ""))
-    try? await read(file, known: known, size: size, modified: modified, into: &pass)
+    guard let counted = try await begin(known, id: file.source, size: size, modified: modified) else { return }
+    do {
+      try await read(file, known: known, size: size, modified: modified, into: &pass)
+    } catch {
+      try await passOver(counted, size: size, modified: modified)
+    }
   }
 
   /// A plain file is the same history while its first line is: copied,
@@ -219,8 +258,9 @@ actor UsageScanner {
 
   /// OpenCode keeps its history in one database, read on from the last
   /// message seen. Its size and change time include the write-ahead log.
-  /// Like a file, it is recorded as passed over before it is read, and each
-  /// page read keeps it so while moving the place on.
+  /// Its reads are counted as a file's are; each page moves the place on and
+  /// keeps the count until the last, so an interrupted read goes on from
+  /// that page.
   private func readOpenCode(known: UsageSource?, into pass: inout Pass) async throws {
     let path = home.appendingPathComponent(".local/share/opencode/opencode.db").path
     guard FileManager.default.fileExists(atPath: path) else { return }
@@ -231,25 +271,32 @@ actor UsageScanner {
       modified = max(modified, Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000))
     }
     if let known, known.size == size, known.modified == modified { return }
+    guard let counted = try await begin(known, id: Self.openCodeSource, size: size, modified: modified) else { return }
     var cursor = (time: known?.offset ?? 0, id: known?.identity ?? "")
-    try await library.saveUsage([], source: UsageSource(id: Self.openCodeSource, offset: cursor.time, size: size,
-                                                        modified: modified, identity: cursor.id))
-    // Locked past the wait, corrupt or not OpenCode's: tried again once it changes.
-    try? await readOpenCode(path, from: &cursor, size: size, modified: modified, into: &pass)
+    do {
+      try await readOpenCode(path, from: &cursor, size: size, modified: modified, interrupted: counted.interrupted, into: &pass)
+    } catch {
+      // Locked past the wait, corrupt or not OpenCode's: tried again once it changes.
+      try await passOver(UsageSource(id: Self.openCodeSource, offset: cursor.time, identity: cursor.id), size: size, modified: modified)
+    }
   }
 
   private func readOpenCode(_ path: String, from cursor: inout (time: Int64, id: String), size: Int64, modified: Int64,
-                            into pass: inout Pass) async throws {
+                            interrupted: Int64, into pass: inout Pass) async throws {
     let database = try ReadOnlyDatabase(path: path)
     let limit = 500
     while true {
       let page = try HistoryReader.openCode(database, after: cursor, limit: limit)
       let stuck = page.cursor == cursor
       cursor = page.cursor
+      let last = page.rows < limit || stuck
+      // A stop ends the read here, to go on at the next pass.
+      let stopped = !last && Task.isCancelled
       pass.found += page.entries.count
       pass.added += try await library.saveUsage(page.entries, source: UsageSource(
-        id: Self.openCodeSource, offset: cursor.time, size: size, modified: modified, identity: cursor.id))
-      if page.rows < limit || stuck { break }
+        id: Self.openCodeSource, offset: cursor.time, size: last ? size : 0, modified: last ? modified : 0, identity: cursor.id,
+        interrupted: last || stopped ? 0 : interrupted))
+      if last || stopped { break }
     }
     pass.read += 1
   }

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import WovenLibrary
 import WovenProtocol
@@ -169,10 +170,11 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   #expect(try await groups(other) == open)
 }
 
-/// A history whose reading ended the process is left marked as passed over
-/// at its size and change time, as reading starts. After the restart it is
-/// not read again until it changes, and every other history still is.
-@Test func aHistoryWhoseReadingEndedTheProcessIsPassedOverUntilItChanges() async throws {
+/// A read is counted before it begins, so a history open when the process
+/// ends is read again at the next start, and passed over only once it has
+/// been open at two unclean ends in a row; then it is read again when it
+/// changes. Another history is read all the while.
+@Test func aHistoryOpenAtTwoUncleanEndsIsPassedOverUntilItChanges() async throws {
   let home = try temporary("usage-home")
   let project = home.appendingPathComponent(".claude/projects/-tmp-example")
   let fatal = project.appendingPathComponent(claudeSession + ".jsonl")
@@ -180,15 +182,31 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   try write([claudeLine("msg_other", session: "22222222-2222-4333-8444-555555555555", at: "2026-01-05T11:00:02.000Z",
                         input: 2, output: 2)], to: project.appendingPathComponent("22222222-2222-4333-8444-555555555555.jsonl"))
   let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
-  // The mark an attempt on a file never read before writes, left behind.
-  let attributes = try FileManager.default.attributesOfItem(atPath: fatal.path)
-  try await library.saveUsage([], source: UsageSource(
-    id: UsageScanner.source("claude", "/-tmp-example/\(claudeSession).jsonl"), size: (attributes[.size] as? NSNumber)?.int64Value ?? 0,
-    modified: Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000)))
+  let fatalID = UsageScanner.source("claude", "/-tmp-example/\(claudeSession).jsonl")
 
-  let scanner = UsageScanner(library: library, home: home)
-  let restarted = await scanner.scan()
-  #expect(restarted.read == 1 && restarted.added == 1)
+  // A process that ends while it reads the history: the read never returns,
+  // and the next scanner starts on the same library. Returns the count the
+  // library held as the read began.
+  func readUntilTheProcessEnds() async -> Int64? {
+    let (began, signal) = AsyncStream<Int64?>.makeStream()
+    let scanner = UsageScanner(library: library, home: home) { source in
+      guard source == fatalID else { return }
+      signal.yield((try? await library.usageSources())?[source]?.interrupted)
+      await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+    }
+    Task { await scanner.scan() }
+    for await interrupted in began { return interrupted }
+    return nil
+  }
+  #expect(await readUntilTheProcessEnds() == 1)
+  #expect(await readUntilTheProcessEnds() == 2)
+
+  let opened = Mutex<[String]>([])
+  let scanner = UsageScanner(library: library, home: home) { source in opened.withLock { $0.append(source) } }
+  await scanner.scan()
+  #expect(!opened.withLock { $0 }.contains(fatalID))
+  #expect(try await totals(library)[.claudeCode]?.requests == 1)
+  #expect(try await library.usageSources()[fatalID]?.interrupted == 0)
   #expect(await scanner.scan().read == 0)
 
   let handle = try FileHandle(forWritingTo: fatal)
@@ -197,6 +215,25 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   try handle.close()
   let changed = await scanner.scan()
   #expect(changed.read == 1 && changed.added == 2)
+  #expect(try await library.usageSources()[fatalID]?.interrupted == 0)
+}
+
+/// A normal stop during a read lets it finish, so it leaves no count.
+@Test func aStopDuringAReadLeavesNoCount() async throws {
+  let home = try temporary("usage-home")
+  try write([claudeLine("msg_one", at: "2026-01-05T11:00:01.000Z", input: 1, output: 1)],
+            to: home.appendingPathComponent(".claude/projects/-tmp-example/\(claudeSession).jsonl"))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  let (began, signal) = AsyncStream<Void>.makeStream()
+  let scanner = UsageScanner(library: library, home: home) { _ in
+    signal.yield()
+    try? await Task.sleep(for: .seconds(30))
+  }
+  await scanner.start()
+  for await _ in began { break }
+  await scanner.stop()
+  #expect(try await library.usageSources().values.map(\.interrupted) == [0])
+  #expect(try await totals(library)[.claudeCode]?.requests == 1)
 }
 
 /// Anyone can write a history file, so malformed compressed input throws and

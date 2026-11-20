@@ -512,8 +512,10 @@ final class OpenCodeSession: RuntimeSession {
       default:
         let events = state.withLock { state in
           var events = state.projection.receive(event)
-          // An execution OpenCode started by itself runs and ends the same way.
-          if !events.isEmpty { state.running = true }
+          // An execution OpenCode started by itself runs and ends the same
+          // way. Only its start marks it running: an event of an execution
+          // already ended (a tool closing after an interrupt) can come later.
+          if event["type"]?.string == "session.execution.started" { state.running = true }
           if let end = events.firstIndex(where: { if case .turnFinished = $0 { true } else { false } }) {
             // Whatever the turn still asked is withdrawn with it.
             events.insert(contentsOf: state.prompts.keys.sorted().map { RuntimeEvent.promptResolved(id: $0) }, at: end)

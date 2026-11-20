@@ -366,7 +366,8 @@ public enum Schema {
     // How far this machine's harness histories have been read, by a digest
     // of the file's path (paths never enter the library): the bytes read, the
     // file's size, change time and identity when read, and the reader's
-    // state at that point as JSON.
+    // state at that point as JSON. `interrupted` counts the reads begun and
+    // never finished in a row: the process ended while it was open.
     Table("usage_sources", .local, [
       .key("id"),
       .integer("offset", 0),
@@ -374,6 +375,7 @@ public enum Schema {
       .integer("modified", 0),
       .text("identity", ""),
       .text("state", ""),
+      .integer("interrupted", 0),
     ]),
     // Usage read from the histories for an hour not yet over, summed per
     // harness session and model. A row moves to `usage_records` once its hour
