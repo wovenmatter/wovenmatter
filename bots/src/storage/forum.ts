@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { SqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite";
 
-/** The Forum's shared tables. Bot tables start with `pibot_<32 hex>_`, so these never collide. */
-export const FORUM_ROOMS_TABLE = "pibot_forum_rooms";
-export const FORUM_POSTS_TABLE = "pibot_forum_posts";
-export const FORUM_BOTS_TABLE = "pibot_forum_bots";
-export const FORUM_SEATS_TABLE = "pibot_forum_seats";
-export const FORUM_OWED_TABLE = "pibot_forum_owed";
-export const FORUM_UNANSWERED_TABLE = "pibot_forum_unanswered";
-export const FORUM_SCHEDULES_TABLE = "pibot_forum_schedules";
+/** The Forum's shared tables. Bot tables start with `bot_<32 hex>_`, so these never collide. */
+export const FORUM_ROOMS_TABLE = "bot_forum_rooms";
+export const FORUM_POSTS_TABLE = "bot_forum_posts";
+export const FORUM_BOTS_TABLE = "bot_forum_bots";
+export const FORUM_SEATS_TABLE = "bot_forum_seats";
+export const FORUM_OWED_TABLE = "bot_forum_owed";
+export const FORUM_UNANSWERED_TABLE = "bot_forum_unanswered";
+export const FORUM_SCHEDULES_TABLE = "bot_forum_schedules";
 
 /** The entry kind of a seat's inputs; its data says how far the input takes the seat. */
 export const DELIVERY_KIND = "forum.delivery";
@@ -192,8 +192,8 @@ export class ForumStore {
     this.#db = db;
   }
 
-  /** Creates the tables and the Forum room itself. Additive, so the bots schema version stays. */
-  async migrate(at = new Date().toISOString()): Promise<void> {
+  /** Creates the tables and the Forum room itself. */
+  async createTables(at = new Date().toISOString()): Promise<void> {
     await this.#db.transaction(async (tx) => {
       await tx.exec(`
         CREATE TABLE IF NOT EXISTS ${FORUM_ROOMS_TABLE} (
@@ -241,7 +241,7 @@ export class ForumStore {
     const row = await this.#db.get<RoomRow>(
       `SELECT * FROM ${FORUM_ROOMS_TABLE} WHERE parent_post_id IS NULL ORDER BY id LIMIT 1`,
     );
-    if (!row) throw new Error("the Forum has no room; run migrate() first");
+    if (!row) throw new Error("the Forum has no room; run createTables() first");
     return toRoom(row);
   }
 
@@ -251,6 +251,14 @@ export class ForumStore {
       id,
     );
     return row ? toRoom(row) : undefined;
+  }
+
+  /** Every room, the Forum itself first, then threads oldest first. */
+  async rooms(): Promise<ForumRoom[]> {
+    const rows = await this.#db.all<RoomRow>(
+      `SELECT * FROM ${FORUM_ROOMS_TABLE} ORDER BY parent_post_id IS NOT NULL, id`,
+    );
+    return rows.map(toRoom);
   }
 
   /** Every thread, newest first. */
@@ -356,6 +364,16 @@ export class ForumStore {
       `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE room_id = ? AND id > ? ORDER BY id`,
       roomId,
       after,
+    );
+    return rows.map(toPost);
+  }
+
+  /** Up to `limit` posts of every room after post `after`, oldest first. */
+  async postsAbove(after: number, limit: number): Promise<ForumPostRecord[]> {
+    const rows = await this.#db.all<PostRow>(
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE id > ? ORDER BY id LIMIT ?`,
+      after,
+      limit,
     );
     return rows.map(toPost);
   }

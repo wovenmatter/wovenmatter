@@ -2,7 +2,7 @@
 // over a long-lived Docker exec and listens on the agent socket git's ssh asks
 // (`IdentityAgent` in github.conf). Each request goes to the runtime over stdio and from there
 // to the machine's signing agent, which holds the key and checks the bot is on every time. It
-// holds no key. Mounted read-only from the runtime's helper volume.
+// holds no key. Mounted read-only from the runtime's shared volume.
 //
 // Out: { ready: true }   listening (the runtime then writes github.conf)
 //      { id, m }   one agent request (base64, without its length prefix)

@@ -4,9 +4,10 @@ import type {
   CredentialInfo,
   CredentialStore,
 } from "@earendil-works/pi-ai";
-import type { HostAPI, HostCredential } from "./client.ts";
+import type { HostCredential } from "../protocol.ts";
+import type { HostCall } from "./channel.ts";
 
-/** Woven's provider connection ids, the same ids the machine's default agent uses. */
+/** Woven's provider connection ids, the same ids Pi Durable uses. */
 export const MODEL_PROVIDERS = [
   "openai-codex",
   "openai",
@@ -18,84 +19,89 @@ export const MODEL_PROVIDERS = [
   "anthropic",
 ] as const;
 
-/** Marks a Claude native profile inside an api-key credential (see claude/provider.ts). */
-export const NATIVE_PREFIX = "woven-native:";
+/**
+ * Claude Code's own sign-in, as pi-ai sees it: an api-key credential with this marker, which the
+ * Claude provider runs with Claude's default configuration (claude/provider.ts).
+ */
+export const NATIVE_KEY = "woven-native";
 
-const POSITIVE_MS = 60_000;
-const NEGATIVE_MS = 15_000;
-const OAUTH_MARGIN_MS = 60_000;
+/** A missing or failed answer is asked again after this long. */
+const REFETCH_AFTER_MS = 2_000;
+/** A credential the server gave is asked for again after this long (it may have been removed). */
+const KEEP_MS = 60_000;
+/** An OAuth credential this close to expiring is asked for again (the server may have renewed it). */
+const EXPIRY_MARGIN_MS = 60_000;
 
-type Cached = { readonly credential: Credential | undefined; readonly until: number };
-
-/** pi-ai credentials for a host credential. Native Claude becomes a marked api key. */
-export function toPiCredential(value: HostCredential | null): Credential | undefined {
-  if (!value) return undefined;
-  if (value.type === "api_key") return { type: "api_key", key: value.key };
-  if (value.type === "oauth") {
-    // Access-only: an empty refresh makes pi-ai ask the store again instead of refreshing.
-    return {
-      type: "oauth",
-      access: value.access,
-      refresh: "",
-      expires: value.expires,
-      ...(value.accountId ? { accountId: value.accountId } : {}),
-    };
+/** The server's form to pi-ai's. */
+export function fromWire(value: HostCredential | null | undefined): Credential | undefined {
+  if (value?.type === "apiKey" && typeof value.key === "string" && value.key) {
+    return { type: "api_key", key: value.key };
   }
-  return {
-    type: "api_key",
-    key: `${NATIVE_PREFIX}${JSON.stringify({ configDir: value.configDir, secureStorageDir: value.secureStorageDir })}`,
-  };
+  if (value?.type === "oauth" && typeof value.access === "string") {
+    const { type: _type, ...rest } = value;
+    return { ...rest, type: "oauth" } as Credential;
+  }
+  if (value?.type === "native") return { type: "api_key", key: NATIVE_KEY };
+  return undefined;
 }
 
-/**
- * A read-only pi-ai credential store over the host API: the runtime never stores provider
- * credentials. Values are cached briefly in memory; OAuth access tokens until shortly before they
- * expire, when pi-ai's refresh path (`modify`) asks the host again.
- */
-export class HostCredentialStore implements CredentialStore {
-  readonly #host: Pick<HostAPI, "inferenceCredential">;
-  readonly #cache = new Map<string, Cached>();
-  readonly #pending = new Map<string, Promise<Credential | undefined>>();
-  readonly #now: () => number;
+/** pi-ai's form to the server's. */
+export function toWire(credential: Credential): HostCredential {
+  if (credential.type === "api_key") {
+    return credential.key === NATIVE_KEY ? { type: "native" } : { type: "apiKey", key: credential.key ?? "" };
+  }
+  return { ...credential, type: "oauth" } as Extract<HostCredential, { type: "oauth" }>;
+}
 
-  constructor(host: Pick<HostAPI, "inferenceCredential">, now: () => number = Date.now) {
-    this.#host = host;
-    this.#now = now;
+const expiresSoon = (credential: Credential | undefined) =>
+  credential?.type === "oauth" && Number(credential.expires) <= Date.now() + EXPIRY_MARGIN_MS;
+
+type Known = { readonly credential: Credential | undefined; readonly at: number };
+
+/**
+ * pi-ai's credential store, backed by the server (as Pi Durable's is): credentials are held in
+ * memory only, asked for at first need, again a minute later, and again soon when one is missing
+ * or about to expire. A subscription pi-ai renews is reported back with `credentials.update` so
+ * the server stores it.
+ */
+export class ServerCredentials implements CredentialStore {
+  readonly #call: HostCall;
+  readonly #values = new Map<string, Known>();
+  readonly #fetching = new Map<string, Promise<Credential | undefined>>();
+  readonly #chains = new Map<string, Promise<unknown>>();
+
+  constructor(call: HostCall) {
+    this.#call = call;
   }
 
-  /** Forget cached values (a provider connection changed in Woven settings). */
+  /** Forget what the server said (a connection changed in Woven settings). */
   invalidate(provider?: string): void {
-    if (provider) this.#cache.delete(provider);
-    else this.#cache.clear();
+    if (provider) this.#values.delete(provider);
+    else this.#values.clear();
   }
 
   async read(providerId: string, _options?: AuthOperationOptions): Promise<Credential | undefined> {
-    const cached = this.#cache.get(providerId);
-    if (cached && cached.until > this.#now()) return cached.credential;
-    return this.#fetch(providerId);
+    const known = this.#values.get(providerId);
+    const keep = known?.credential && !expiresSoon(known.credential) ? KEEP_MS : REFETCH_AFTER_MS;
+    if (known && Date.now() - known.at <= keep) return structuredClone(known.credential);
+    return structuredClone(await this.#fetch(providerId));
   }
 
   #fetch(providerId: string): Promise<Credential | undefined> {
-    const running = this.#pending.get(providerId);
+    const running = this.#fetching.get(providerId);
     if (running) return running;
-    const work = (async () => {
-      try {
-        const { credential } = await this.#host.inferenceCredential(providerId);
-        const value = toPiCredential(credential);
-        const now = this.#now();
-        const until =
-          value?.type === "oauth"
-            ? Math.max(now, value.expires - OAUTH_MARGIN_MS)
-            : now + (value ? POSITIVE_MS : NEGATIVE_MS);
-        this.#cache.set(providerId, { credential: value, until });
-        return value;
-      } catch {
-        // Unreachable host: behave as not connected for a short while; never cache a failure long.
-        this.#cache.set(providerId, { credential: undefined, until: this.#now() + 2_000 });
-        return undefined;
-      }
-    })().finally(() => this.#pending.delete(providerId));
-    this.#pending.set(providerId, work);
+    const work = this.#call("credentials", { provider: providerId })
+      .then(
+        (reply) => fromWire(reply.credential),
+        // No server, or it failed: not connected, for a moment.
+        () => undefined,
+      )
+      .then((credential) => {
+        this.#values.set(providerId, { credential, at: Date.now() });
+        return credential;
+      })
+      .finally(() => this.#fetching.delete(providerId));
+    this.#fetching.set(providerId, work);
     return work;
   }
 
@@ -109,20 +115,28 @@ export class HostCredentialStore implements CredentialStore {
     return found.filter((entry): entry is CredentialInfo => entry !== undefined);
   }
 
-  /**
-   * pi-ai's refresh path. The host owns renewal: drop the cached value and read it again; a
-   * caller's own write (a sign-in) is not supported, since sign-in belongs to Woven settings.
-   */
-  async modify(
+  /** pi-ai's renewal path: one change at a time per provider; a changed credential goes to the server. */
+  modify(
     providerId: string,
-    _fn: (current: Credential | undefined) => Promise<Credential | undefined>,
+    fn: (current: Credential | undefined) => Promise<Credential | undefined>,
     _options?: AuthOperationOptions,
   ): Promise<Credential | undefined> {
-    this.#cache.delete(providerId);
-    return this.#fetch(providerId);
+    const run = async () => {
+      const before = await this.read(providerId);
+      const next = await fn(before);
+      if (next === undefined) return before;
+      this.#values.set(providerId, { credential: structuredClone(next), at: Date.now() });
+      if (JSON.stringify(next) !== JSON.stringify(before)) {
+        await this.#call("credentials.update", { provider: providerId, credential: toWire(next) });
+      }
+      return structuredClone(next);
+    };
+    const result = (this.#chains.get(providerId) ?? Promise.resolve()).then(run, run);
+    this.#chains.set(providerId, result.catch(() => {}));
+    return result;
   }
 
   async delete(providerId: string): Promise<void> {
-    this.#cache.delete(providerId);
+    this.#values.delete(providerId);
   }
 }

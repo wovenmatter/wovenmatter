@@ -12,7 +12,6 @@ import {
   type JsonObject,
   type Registry,
 } from "@earendil-works/pi-durable";
-import { type BeforeCompactHook, noopBeforeCompact } from "../memory.ts";
 import {
   applyWindow,
   compactNative,
@@ -36,7 +35,7 @@ import {
  * a head marker only moves the start of the model context, so SQLite keeps the full history.
  */
 
-export const NATIVE_COMPACTION_KIND = "pibot.native-compaction";
+export const NATIVE_COMPACTION_KIND = "bot.native-compaction";
 
 type ActiveWindow = {
   /** Which compaction produced it; matches the head entry's `data.id`. */
@@ -56,7 +55,7 @@ export type NativeContextState = {
 };
 
 export const NativeContextDoc = defineDoc<NativeContextState & JsonObject>({
-  kind: "pibot.native-context",
+  kind: "bot.native-context",
   version: 1,
   scope: "conversation",
   history: "rewindable",
@@ -70,8 +69,6 @@ export type CompactionOptions = {
   readonly native?: "auto" | "off";
   /** Fetch for native compaction and generation requests; tests inject a fake. */
   readonly fetch?: FetchFunction;
-  /** The memory-extraction hook every compaction calls first. */
-  readonly onBeforeCompact?: BeforeCompactHook;
   readonly onReport?: (error: unknown, info: unknown) => void;
 };
 
@@ -268,20 +265,6 @@ export class NativeCompaction {
     api: HookApi,
     ctx: HookContext,
   ): Promise<{ decline: true } | { summary: string } | undefined> => {
-    try {
-      await (this.#options.onBeforeCompact ?? noopBeforeCompact)(
-        {
-          conversationId: api.conversationId as unknown as number,
-          reason: compaction.reason,
-          entries: compaction.entries,
-          messages: compaction.messages,
-        },
-        ctx,
-      );
-    } catch (error) {
-      if (ctx.abortSignal?.aborted) throw error;
-      this.#options.onReport?.(error, { kind: "before-compact-failed" });
-    }
     const saved = (await api.snapshot(NativeContextDoc, api.conversationId, ctx)) ?? {
       covered: [],
     };

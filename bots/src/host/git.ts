@@ -1,24 +1,21 @@
 import { createHash } from "node:crypto";
 
-/**
- * Settings → GitHub for bots (docs/architecture/GITHUB_IDENTITY.md): the public half of the
- * user's GitHub SSH key while the bot is on, and the commit identity, from the Woven server that
- * runs this runtime (`POST /v1/bots-host/git`). The key itself never enters the container: git
- * there signs through the in-container relay (helper/ssh-agent.mjs), which asks the machine's
- * signing agent. The runtime writes the files below; git reads them through the container's
- * environment. Keep the contents identical to remote/src/github-identity.mjs and the Mac's
- * GitHubGitFiles.
- */
-export type GitSetup = {
-  readonly publicKey: string | null;
-  readonly identity: { readonly name: string; readonly email: string } | null;
-};
+import type { GitSetup } from "../protocol.ts";
 
+export type { GitSetup };
+
+/**
+ * Settings → GitHub for bots: the public half of the user's GitHub SSH key while the bot may use
+ * it, and the commit identity, from the server (`git.setup`). The key itself never enters the
+ * container: git there signs through the in-container relay (helper/ssh-agent.mjs), whose requests
+ * the runtime passes to the server (`git.agent`). The runtime writes the files below; git reads
+ * them through the container's environment.
+ */
 export const NO_GIT: GitSetup = { publicKey: null, identity: null };
 
 /**
  * The container's /dev/shm, a tmpfs every container has: the key never reaches the container's
- * disk, the storage volume, or the snapshot an update commits, in containers of any age. It is
+ * disk, the storage volume, or the snapshot an update commits. It is
  * empty after every container start and written again before the agent runs.
  */
 export const CONTAINER_GIT_DIRECTORY = "/dev/shm/woven-github";
@@ -133,9 +130,9 @@ export function validGitSetup(value: unknown): GitSetup {
 export const gitDigest = (setup: GitSetup) => createHash("sha256").update(JSON.stringify(setup)).digest("hex");
 
 /**
- * Each bot's setup, asked of the host at most once a minute per bot, failures included (like
- * credentials, it is cached in memory only). The host answers without the key for a bot the
- * user keeps it from. A failed request keeps the last answer, so a host restart never strips
+ * Each bot's setup, asked of the server at most once a minute per bot, failures included (like
+ * credentials, it is kept in memory only). The server answers without the key for a bot the
+ * user keeps it from. A failed request keeps the last answer, so a server restart never strips
  * a bot's key; with no answer yet it is undefined and nothing is written.
  */
 export class HostGitSource {

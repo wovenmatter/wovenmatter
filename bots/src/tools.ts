@@ -597,13 +597,13 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
   ];
 }
 
-/** The account notes record (`pibot_notes`). */
+/** The account notes record (`bot_notes`). */
 export const ACCOUNT_NOTES = "account";
 
-/** The `pi-bot-tools` extension for one bot. */
+/** The `bot-tools` extension for one bot. */
 export function botTools(record: BotRecord, platform: BotPlatform): Extension {
   return defineExtension({
-    name: "pi-bot-tools",
+    name: "bot-tools",
     tools: [
       ...commonTools(record.id, platform),
       ...historyTools(record.id, platform),

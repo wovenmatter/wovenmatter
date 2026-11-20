@@ -35,7 +35,7 @@ import { isTimeZone, parseTimeOfDay, zonedEpoch, zonedTime } from "./zoned-time.
 
 const ctx = BACKGROUND_CONTEXT;
 
-/** What bots call the user (`pibot_notes`); unset: "the user". */
+/** What bots call the user (`bot_notes`); unset: "the user". */
 export const USER_NAME = "user.name";
 const PAUSED = "forum.paused";
 export { DELIVERY_KIND };
@@ -1406,6 +1406,6 @@ export class Forum {
 
 /** Open the Forum over the shared database: its tables exist and it has its room. */
 export async function openForum(options: ForumOptions): Promise<Forum> {
-  await options.store.migrate(new Date((options.now ?? Date.now)()).toISOString());
+  await options.store.createTables(new Date((options.now ?? Date.now)()).toISOString());
   return new Forum(options);
 }

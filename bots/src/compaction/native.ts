@@ -61,7 +61,7 @@ export class NativeCompactionError extends Error {
 }
 
 /** The API the Claude Agent SDK provider registers; compacted by Claude Code's `/compact`. */
-export const CLAUDE_AGENT_API = "pibot-claude-agent";
+export const CLAUDE_AGENT_API = "bot-claude-agent";
 const CLAUDE_AGENT_ENDPOINT = "process://claude-agent-sdk/compact";
 
 /** A compaction summary as the user message that replaces the covered turns. */
@@ -138,7 +138,7 @@ export async function captureRequest(
     }
     url = target;
     headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    return new Response(JSON.stringify({ error: { message: "pi-bot request capture" } }), {
+    return new Response(JSON.stringify({ error: { message: "bot request capture" } }), {
       status: 400,
       headers: { "content-type": "application/json" },
     });
@@ -324,15 +324,15 @@ async function claudeAgentCompact(request: CompactRequest): Promise<NativeOutcom
   }
   const options = {
     ...(request.signal ? { signal: request.signal } : {}),
-    pibotCompact: request.instructions ? { instructions: request.instructions } : {},
+    botCompact: request.instructions ? { instructions: request.instructions } : {},
   };
   const result = (await request.models.stream(model, { messages }, options).result()) as {
     stopReason: string;
     errorMessage?: string;
     usage?: unknown;
-    pibotCompaction?: { summary?: string };
+    botCompaction?: { summary?: string };
   };
-  const summary = result.pibotCompaction?.summary;
+  const summary = result.botCompaction?.summary;
   if (result.stopReason === "error" || result.stopReason === "aborted" || !summary) {
     throw new NativeCompactionError(
       "claude_agent_sdk",

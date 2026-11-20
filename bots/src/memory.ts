@@ -1,35 +1,9 @@
-import type { Api, AssistantMessage, Message, Model, Models } from "@earendil-works/pi-ai";
-import type { EntryRecord } from "@earendil-works/pi-durable";
+import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { BotManager } from "./bots.ts";
 import { parseModelRef } from "./config.ts";
 import { type CronSchedule, parseCron, zonedParts } from "./cron.ts";
 import { DELIVERY_KIND } from "./storage/forum.ts";
 import { displayEntry } from "./transcript.ts";
-
-/** What the memory extractor sees before a compaction replaces part of a conversation's context. */
-export type BeforeCompactInput = {
-  readonly conversationId: number;
-  readonly reason: string;
-  /** The entries the compaction covers (the head marker first). They stay in SQLite. */
-  readonly entries: readonly EntryRecord[];
-  readonly messages: readonly Message[];
-};
-
-/**
- * The memory-extraction point of every compaction (main channel and threads alike). It runs
- * before the provider or Pi Durable summarizes, so durable facts can be extracted from the
- * covered messages. A throw is reported and compaction continues.
- */
-export type BeforeCompactHook = (
-  input: BeforeCompactInput,
-  context: unknown,
-) => void | Promise<void>;
-
-/**
- * The hook in use: a no-op. Compaction never deletes entries, so `MemoryExtractor` reads covered
- * messages from SQLite on its own schedule instead.
- */
-export const noopBeforeCompact: BeforeCompactHook = () => {};
 
 /** Facts kept per bot; the oldest are dropped beyond this. */
 export const MAX_FACTS = 200;

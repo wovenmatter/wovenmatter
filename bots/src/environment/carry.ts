@@ -7,15 +7,14 @@
  * - `CAPTURE` runs in a short-lived container of the bot's snapshot (its whole old filesystem) and
  *   writes the difference to the bot's storage: apt packages it marked manual, files it added or
  *   changed under the carried roots (apt sources and keys included) that no package owns as is,
- *   global npm and system pip packages by name and version, and (once, for bots from before the
- *   home folder moved into storage) its home folder.
+ *   global npm and system pip packages by name and version.
  * - `REAPPLY` runs as root in the new container: sources and keys, then the apt packages, then the
  *   files, then npm and pip reinstalls (so native code is rebuilt for the new Node and Python),
  *   then the bot's own `/workspace/.woven/setup.sh`. Every step is best effort and the report says
  *   what did not come across; the update fails only if the bot's health check does.
  *
- * Scripts are POSIX sh with Ubuntu's coreutils, findutils, tar and dpkg: they run in old images
- * too, which have no Node at a known path. They treat everything they read as data.
+ * Scripts are POSIX sh with Ubuntu's coreutils, findutils, tar and dpkg: a base image has no Node
+ * at a known path. They treat everything they read as data.
  */
 
 export const SYSTEM_DIR = "/workspace/.woven/system";
@@ -25,25 +24,20 @@ export const REPORT_PATH = `${SYSTEM_DIR}/update-report.md`;
 /** Present while captured changes wait to be applied (a move that stopped partway resumes them). */
 export const PENDING_MARKER = `${CARRY_DIR}/.pending`;
 export const SETUP_SCRIPT = "/workspace/.woven/setup.sh";
-export const HOME_DIR = "/workspace/.woven/home";
 
 /** Roots whose added or changed files are carried. */
 const ROOTS = "/etc /usr/local /opt /usr/share/keyrings /var/spool/cron";
 
 /**
- * Never carried: the runtime's own mounts and links, the old in-image toolchain, generated or
- * identity files, and what is reinstalled by name instead (npm and pip packages).
+ * Never carried: the runtime's own mounts and links, generated or identity files, and what is
+ * reinstalled by name instead (npm and pip packages).
  */
 const PRUNE = [
   "/opt/woven",
   "/opt/woven-bot",
   "/opt/woven-toolchain",
-  "/opt/ms-playwright",
-  "/opt/wovenmatter",
   "/usr/local/lib/node_modules",
   "/usr/local/lib/python3*",
-  "/usr/local/include/node",
-  "/usr/local/share/doc/node",
   "/etc/ssl/certs",
   "/etc/alternatives",
   "/etc/passwd",
@@ -71,19 +65,6 @@ const PRUNE = [
   "/etc/pam.d/common-*",
   "/etc/shells",
   "/etc/ld.so.conf.d/*.conf.dpkg-*",
-];
-
-/** Old in-image toolchain files at /usr/local's top (never the bot's own). */
-const LEGACY_FILES = [
-  "/usr/local/bin/node",
-  "/usr/local/bin/npm",
-  "/usr/local/bin/npx",
-  "/usr/local/bin/corepack",
-  "/usr/local/bin/playwright",
-  "/usr/local/CHANGELOG.md",
-  "/usr/local/LICENSE",
-  "/usr/local/README.md",
-  "/usr/local/share/man/man1/node.1",
 ];
 
 const pruneExpression = PRUNE.map((path) => `-path '${path}'`).join(" -o ");
@@ -117,8 +98,7 @@ ls /usr/local/lib/node_modules 2>/dev/null | sort -u > "$out/npm-global.txt"
 
 /**
  * Run in a container of the bot's snapshot, root, no network, with the bot's storage; writes
- * ${CARRY_DIR} (and moves a pre-storage home folder into storage, once). Exits non-zero, so the
- * update rolls back, when something it must keep (the home folder, the saved files) failed.
+ * ${CARRY_DIR}. Exits non-zero, so the update rolls back, when saving the files failed.
  */
 export const CAPTURE = `set -u
 export LC_ALL=C
@@ -127,13 +107,6 @@ base=${BASELINE_DIR}
 out=${CARRY_DIR}
 rm -rf "$out"; mkdir -p "$out"
 ${MANIFEST}
-# The home folder moved into storage; a bot from before still has it in its container.
-if [ -d /home/bot ] && [ ! -L /home/bot ] && [ ! -e ${HOME_DIR} ]; then
-  rm -rf ${HOME_DIR}.new && mkdir -p ${HOME_DIR}.new && cp -a /home/bot/. ${HOME_DIR}.new/ \\
-    && rm -rf ${HOME_DIR}.new/.cache && chown 1000:1000 ${HOME_DIR}.new && mv ${HOME_DIR}.new ${HOME_DIR} \\
-    || { echo "copying the home folder into storage failed" >&2; rm -rf ${HOME_DIR}.new; exit 1; }
-  echo "home" > "$out/home-migrated"
-fi
 touch "$base/apt-manual.txt" "$base/files.txt" "$base/npm-global.txt"
 apt-mark showmanual 2>/dev/null | sort -u | comm -23 - "$base/apt-manual.txt" > "$out/apt-packages.txt"
 # What packages installed: their files with dpkg's checksums (so an unchanged one matches and is
@@ -150,8 +123,8 @@ manifest | sort -u | comm -23 - "$base/files.txt" | comm -23 - "$out/.owned" \\
          { kind = $1; path = substr($0, index($0, "  ") + 2)
            if ((kind ~ /^link:/ || kind ~ /^dir:/) && (path in listed)) next
            print path }' "$out/.listed" - > "$out/.changed"
-grep -vxF -e '${LEGACY_FILES.join("' -e '")}' "$out/.changed" > "$out/files.txt" || true
-rm -f "$out/.owned" "$out/.listed" "$out/.changed"
+mv "$out/.changed" "$out/files.txt"
+rm -f "$out/.owned" "$out/.listed"
 if [ -s "$out/files.txt" ]; then
   tr '\\n' '\\0' < "$out/files.txt" | tar --null --no-recursion --numeric-owner -cpf "$out/files.tar" -T - \\
     || { echo "saving the bot's system files failed" >&2; exit 1; }
@@ -253,7 +226,6 @@ mkdir -p ${SYSTEM_DIR}
   echo "- system files restored (under /etc, /usr/local, /opt, keyrings, crontabs): $restored"
   echo "- global npm packages reinstalled: $(count "$carry/npm-global.txt")"
   echo "- system pip packages reinstalled: $(count "$carry/pip-system.txt")"
-  [ -f "$carry/home-migrated" ] && echo "- your home folder moved into your storage (it now persists through every update)"
   [ "$setup" = ran ] && echo "- your setup script ran"
   echo
   echo "The lists are in $carry. Anything installed elsewhere outside /workspace and your home"

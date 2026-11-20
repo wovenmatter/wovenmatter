@@ -52,8 +52,8 @@ function xaiApiProvider(): Provider {
 }
 
 /**
- * pi-ai models for every bot. Request auth resolves through `credentials` (the host API: provider
- * connections in Woven settings). `claude-subscription` is Claude through the Claude Agent SDK.
+ * pi-ai models for every bot. Request auth resolves through `credentials` (asked of the server:
+ * provider connections in Woven settings). `claude-subscription` is Claude through the Claude Agent SDK.
  * With `catalog`, every provider also lists Pi's live catalog once `refreshBotModels` has loaded it.
  */
 export function createBotModels(

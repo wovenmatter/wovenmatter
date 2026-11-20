@@ -1,13 +1,12 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { HarnessOptions } from "@earendil-works/pi-durable";
-import type { Duplex } from "node:stream";
 
 export type HarnessEnvFactory = NonNullable<HarnessOptions["env"]>;
 
 /**
  * Builds the execution environment (filesystem, shell) a bot's tools run in. With an adapter the
  * bot gets Pi Durable's coding tools (bash, read, write, edit), all executing in that environment,
- * plus the container tools (restart list, browser, previews).
+ * plus the container tools (restart list, browser).
  */
 export interface BotEnvironmentAdapter {
   readonly kind: string;
@@ -15,9 +14,7 @@ export interface BotEnvironmentAdapter {
   harnessEnv(botId: string): HarnessEnvFactory;
   /** A request to the bot's in-container supervisor (`services.*`, `browser.*`, `ping`). */
   control?(botId: string, method: string, args: Record<string, unknown>, context: Context): Promise<unknown>;
-  /** A stream to `port` inside the bot's container (previews); starts the container if needed. */
-  connectPort?(botId: string, port: number): Promise<Duplex>;
-  /** Something used the bot (a tool call, preview traffic, an open chat): restart its idle clock. */
+  /** Something used the bot (a tool call, an open chat): restart its idle clock. */
   touch?(botId: string): void;
   /** Container state for status displays. */
   state?(botId: string): Promise<"missing" | "running" | "stopped">;
@@ -37,7 +34,7 @@ export interface BotEnvironmentAdapter {
     tag: string;
     tools: import("./environment/images.ts").ImageTools;
     staleBots: string[];
-    outdatedBots?: string[];
+    outdatedBots: string[];
   }>;
   /** Recreate the container from a clean base image, keeping storage and carrying its installs. */
   rebuild?(botId: string): Promise<void>;
@@ -58,6 +55,13 @@ export interface BotEnvironmentAdapter {
    * Runtimes of bots this runtime doesn't know are left alone.
    */
   reconcile?(activeBotIds: readonly string[], deletedBotIds: readonly string[]): Promise<void>;
+  /**
+   * Write the bot's files (its workspace volume, home folder included) out of the engine as a tar
+   * archive at `path` on this machine, so the bots folder can carry them.
+   */
+  exportFiles?(botId: string, path: string): Promise<void>;
+  /** Put a tar archive written by `exportFiles` back into the bot's workspace volume. */
+  importFiles?(botId: string, path: string): Promise<void>;
   /** Shutdown: drop connections; containers keep running and are reconciled on the next start. */
   close?(): void;
   shutdown?(): Promise<void>;

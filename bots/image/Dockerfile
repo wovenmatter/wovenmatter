@@ -2,7 +2,7 @@
 # runtime builds this through the Docker Engine API with a content-hash tag of this directory
 # (toolchain/ excluded). Only slow-moving parts live here: the Ubuntu release, its packages and
 # Chromium's system libraries. Node, npm, Playwright and Chromium (toolchain/) and the helper (env
-# agent, supervisor, browser and preview forwarder) come from the runtime's shared volume,
+# agent, supervisor, browser and SSH agent relay) come from the runtime's shared volume,
 # mounted read-only at /opt/woven, through per-bot links (/opt/woven-toolchain, /opt/woven-bot)
 # that an update repoints in place. So a tool or runtime update keeps the container, and only a
 # change to this file moves bots to a new container.

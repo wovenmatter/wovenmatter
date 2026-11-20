@@ -2,7 +2,7 @@
 // long-lived Docker exec and serves Pi Durable's Node execution environment over stdio, one JSON
 // message per line, so the runtime's tools (bash, read, write, edit) execute here instead of on
 // the host. It also forwards control calls (restart list, browser) to the in-container
-// supervisor. It holds no credentials. Mounted read-only from the runtime's helper volume.
+// supervisor. It holds no credentials. Mounted read-only from the runtime's shared volume.
 //
 // In:  { id, cwd, handle?, method, args }   call a method on the env for `cwd` or on a handle
 //      { id, control, args }                ask the supervisor (services.*, browser.*, ping)

@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { isIP } from "node:net";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import { isCronExpression } from "./cron.ts";
 import { TITLE_REASONING } from "./titles.ts";
@@ -16,15 +15,6 @@ export function parseModelRef(value: string): ModelRef {
   return { provider: match[1], modelId: match[2] };
 }
 
-/** The runtime listens on loopback only; the machine's Woven server proxies remote members. */
-export function isLoopbackHost(host: string): boolean {
-  const value = host.trim().toLowerCase();
-  if (value === "localhost") return true;
-  const bare = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
-  if (isIP(bare) === 4) return bare.startsWith("127.");
-  return bare === "::1";
-}
-
 function isTimeZone(value: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: value });
@@ -38,20 +28,20 @@ export class ConfigError extends Error {
   override name = "ConfigError";
 }
 
+const absolute = z.string().min(1).max(4096).refine(isAbsolute, "must be absolute");
+
 /**
- * The runtime configuration the machine's Woven server writes (JSON). It names where data lives,
- * where to listen, the engine socket and the host API; secrets here are the runtime's own WS
- * token and the host API bearer, both minted by the Woven server.
+ * The runtime configuration the server writes at each start (`D/bots-runtime/config.json`): the
+ * bots folder, the socket it listens on, the container engine, the bot image and limits. No
+ * secrets, tokens or machine identifiers.
  */
 export const runtimeConfigSchema = z.strictObject({
-  dataDir: z.string().min(1),
-  listen: z.strictObject({
-    host: z.string().default("127.0.0.1").refine(isLoopbackHost, "must be a loopback address"),
-    port: z.number().int().min(0).max(65535),
-  }),
-  runtimeToken: z.string().min(32).max(512),
+  /** The bots folder: everything a bot is, with nothing tied to this machine. */
+  dataDir: absolute,
+  /** The WebSocket the server connects to (a Unix socket in a private directory). */
+  socket: absolute,
   engine: z.strictObject({
-    socket: z.string().min(1),
+    socket: absolute,
     kind: z.enum(["linux-dockerd", "mac-vm"]),
   }),
   /**
@@ -67,37 +57,16 @@ export const runtimeConfigSchema = z.strictObject({
       .min(64 * 1024 * 1024)
       .nullable(),
   }),
-  host: z.strictObject({
-    url: z
-      .string()
-      .url()
-      .refine((value) => {
-        const url = new URL(value);
-        return url.protocol === "http:" && isLoopbackHost(url.hostname);
-      }, "the host API is a loopback http URL"),
-    token: z.string().min(16).max(8192),
-  }),
-  machine: z.strictObject({
-    deviceID: z.string().min(1).max(128),
-    name: z.string().min(1).max(200),
-  }),
   /**
    * This machine's Pi Durable (absolute paths): bots load the SDK copy it runs, with that
-   * copy's Claude binary (`pi-durable-sdk.ts`). The Woven server always sends it.
+   * copy's Claude binary (`pi-durable-sdk.ts`). The server always sends it.
    */
-  piDurable: z
-    .strictObject({
-      bundle: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute"),
-      directory: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute"),
-    })
-    .optional(),
+  piDurable: z.strictObject({ bundle: absolute, directory: absolute }).optional(),
   /**
    * A Claude runtime binary (absolute), for tests and checkouts without `piDurable`.
    * Omitted: the SDK's own platform package, if installed.
    */
-  claude: z
-    .strictObject({ executable: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute") })
-    .optional(),
+  claude: z.strictObject({ executable: absolute }).optional(),
 }).refine((value) => !(value.piDurable && value.claude), {
   message: "piDurable supplies the Claude binary; omit claude",
   path: ["claude"],
@@ -108,6 +77,7 @@ export type RuntimeConfig = z.infer<typeof runtimeConfigSchema> & {
     readonly dataDir: string;
     readonly database: string;
     readonly settings: string;
+    /** Claude Code's private directory for API-key requests: this machine's, beside the socket. */
     readonly claude: string;
   };
 };
@@ -118,7 +88,6 @@ export function validateRuntimeConfig(input: unknown, source = "config"): Runtim
     throw new ConfigError(`invalid ${source}:\n${z.prettifyError(result.error)}`);
   }
   const raw = result.data;
-  if (!isAbsolute(raw.dataDir)) throw new ConfigError(`invalid ${source}: dataDir must be absolute`);
   const dataDir = resolve(raw.dataDir);
   return {
     ...raw,
@@ -126,7 +95,7 @@ export function validateRuntimeConfig(input: unknown, source = "config"): Runtim
       dataDir,
       database: resolve(dataDir, "bots.sqlite"),
       settings: resolve(dataDir, "settings.json"),
-      claude: resolve(dataDir, "claude-agent"),
+      claude: resolve(dirname(raw.socket), "claude-agent"),
     },
   };
 }
@@ -233,8 +202,7 @@ export const settingsSchema = z.strictObject({
 });
 
 export type RawSettings = z.infer<typeof settingsSchema>;
-/** Kept for the ported modules that read `RawConfig["compaction"]` and friends. */
-export type RawConfig = RawSettings;
+
 
 /** One additional model the main model may run subagents on. */
 export type PoolModel = {

@@ -12,42 +12,14 @@ import { LIMIT_LABELS, type LimitEntry } from "./limits.ts";
 import { CATALOG_ENDPOINTS } from "./model-catalog.ts";
 
 /**
- * What Pi Bot knows about a model, for the main model's subagent choices and Settings' model pool.
+ * What the runtime knows about a model, for the main model's subagent choices and Settings' model pool.
  * Everything comes from the model entry pi-ai serves for that exact `provider/model-id` (no
- * cross-provider matching, no guessing), plus Pi Bot's own knowledge of how each provider is
+ * cross-provider matching, no guessing), plus the runtime's own knowledge of how each provider is
  * accessed. Nothing is fetched here: the entry may be one Pi's live catalog added (model-catalog.ts).
  */
 
-/** USD per million tokens. */
-export type PriceRates = {
-  readonly input: number;
-  readonly output: number;
-  readonly cacheRead: number;
-  readonly cacheWrite: number;
-};
-
-/**
- * A model's raw API price. `listed`: the catalog gives per-token prices. `zero`: the catalog lists
- * $0 for everything, which pi-ai also uses for models it has no price for, so it means "free or
- * unpriced", never verified free. `unknown`: no catalog entry at all.
- */
-export type ModelPricing =
-  | {
-      readonly status: "listed";
-      readonly rates: PriceRates;
-      /** Higher rates once a request's input passes `inputTokensAbove` tokens. */
-      readonly tiers?: readonly (PriceRates & { readonly inputTokensAbove: number })[];
-      readonly source: string;
-    }
-  | { readonly status: "zero"; readonly source: string }
-  | { readonly status: "unknown" };
-
-/** How the provider is reached: Pi Bot's explicit per-provider knowledge, never inferred. */
-export type ModelAccess = {
-  readonly kind: "subscription" | "api_key" | "unknown";
-  /** e.g. "ChatGPT subscription", "OpenRouter API key". */
-  readonly label: string;
-};
+export type { ModelAccess, ModelPricing, PriceRates } from "./protocol.ts";
+import type { ModelAccess, ModelPricing, PriceRates } from "./protocol.ts";
 
 export type ModelFacts = {
   readonly ref: string;
@@ -67,7 +39,7 @@ export type ModelFacts = {
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * pi-ai's bundled static catalogs (as shipped, without the live catalog) of the providers Pi Bot
+ * pi-ai's bundled static catalogs (as shipped, without the live catalog) of the providers the runtime
  * registers. A price is attributed to one only when the served model's cost equals the entry for
  * the same id.
  */

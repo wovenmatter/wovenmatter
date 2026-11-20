@@ -151,7 +151,7 @@ export class Bot {
         const data = entry.data;
         const round =
           data && typeof data === "object" && !Array.isArray(data) ? data.round : undefined;
-        return entry.kind === "pibot.input" &&
+        return entry.kind === "bot.input" &&
           typeof round === "number" &&
           Number.isInteger(round) &&
           round >= 0
@@ -189,7 +189,7 @@ export class Bot {
           .join("\n\n"),
         whenBusy: "followUp",
         // Hidden inputs reach the model but never the chat (transcript.ts).
-        entry: { kind: "pibot.input", data: options.hidden ? { round, hidden: true } : { round } },
+        entry: { kind: "bot.input", data: options.hidden ? { round, hidden: true } : { round } },
       },
       ctx,
     );
@@ -477,11 +477,10 @@ export type BotManagerOptions = {
   readonly onThreadsChanged?: (botId: string) => void;
   /**
    * Model profiles. With them, each open bot's main channel and threads follow its profile's main
-   * model (on open, on `setProfile`, and on every profile change), and legacy per-bot model
-   * overrides are migrated to profiles on open.
+   * model (on open, on `setProfile`, and on every profile change).
    */
   readonly profiles?: ProfileStore;
-  /** Server-side log lines (model changes, migrations). */
+  /** Server-side log lines (model changes). */
   readonly log?: (message: string) => void;
   /**
    * Main-model usage limits shared by every bot. With it (and profiles), a bot whose main model is
@@ -576,10 +575,9 @@ export class BotManager {
 
   static async open(options: BotManagerOptions): Promise<BotManager> {
     const manager = new BotManager(options);
-    await manager.registry.migrate();
-    if (options.ensureAdmin) {
-      if (await manager.registry.admin()) await manager.registry.renameAdmin(ADMIN_NAME);
-      else await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
+    await manager.registry.createTables();
+    if (options.ensureAdmin && !(await manager.registry.admin())) {
+      await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
     }
     options.profiles?.onChange(() => manager.#profilesChanged());
     options.availability?.onChange(() => void manager.#reapplyAll());
@@ -905,9 +903,9 @@ export class BotManager {
   }
 
   /**
-   * Woven Matter's load path (`engine.mjs` `create`): reinstall the host around committed work,
-   * inspect it, then resume scheduling so interrupted runs and queued input continue. Pi Durable's
-   * open already reconciled interrupted invocations; `resume()` lets them run again.
+   * After a restart or crash: reconcile the thread registry with the stored forks, inspect live
+   * work, then resume scheduling so interrupted runs and queued input continue. Pi Durable's open
+   * already reconciled interrupted invocations; `resume()` lets them run again.
    */
   async #recover(bot: Bot): Promise<RecoveryReport> {
     // `#open` rejects soft-deleted bots before a harness exists, so they never reach recovery.

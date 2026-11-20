@@ -498,7 +498,7 @@ export async function fetchUrl(
  */
 export function webTools(options: WebToolsOptions): Extension {
   return defineExtension({
-    name: "pi-bot-web",
+    name: "bot-web",
     tools: [
       defineTool({
         name: "web_search",

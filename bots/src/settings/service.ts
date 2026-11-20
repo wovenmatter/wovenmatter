@@ -1,50 +1,19 @@
 import type { CredentialStore, Models } from "@earendil-works/pi-ai";
 import { parseModelRef } from "../config.ts";
-import { LIMIT_LABELS, type LimitEntry, type LimitKind } from "../limits.ts";
+import { LIMIT_LABELS, type LimitEntry } from "../limits.ts";
 import { newestFirst } from "../model-catalog.ts";
-import { type ModelAccess, type ModelPricing, modelAccess, modelFacts } from "../model-info.ts";
+import { modelAccess, modelFacts } from "../model-info.ts";
+import type { AccountStatus, AccountsSummary, ModelCatalog, ProviderModels, Roles } from "../protocol.ts";
 import { TITLE_REASONING } from "../titles.ts";
 import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
 import type { SettingsStore } from "./store.ts";
 
-export type AccountStatus = {
-  readonly id: string;
-  readonly label: string;
-  readonly group: string;
-  readonly method: "oauth" | "api_key";
-  readonly configured: boolean;
-};
-
-export type ModelOption = {
-  readonly id: string;
-  readonly name: string;
-  readonly reasoning: boolean;
-  readonly contextWindow: number;
-  readonly maxTokens?: number;
-  readonly input?: readonly string[];
-  readonly unsupportedReasoning?: readonly string[];
-  readonly pricing: ModelPricing;
-  readonly limit?: {
-    readonly kind: LimitKind;
-    readonly label: string;
-    readonly account: string;
-    readonly resetsAt?: number;
-  };
-};
-export type ProviderModels = {
-  readonly id: string;
-  readonly name: string;
-  readonly access: ModelAccess;
-  models: ModelOption[];
-};
-
-/** The title model: the one global model setting; bots' models are in profiles. */
-export type Roles = { titles: string; titlesReasoning: string };
+export type { AccountStatus, ModelOption, ProviderModels, Roles } from "../protocol.ts";
 
 export class SettingsError extends Error {}
 
 export type SettingsOptions = {
-  /** Provider connections, read through the host API. */
+  /** Provider connections, asked of the server. */
   readonly credentials: CredentialStore;
   readonly models: Models;
   readonly store: SettingsStore;
@@ -66,10 +35,7 @@ export class SettingsService {
     this.#options = options;
   }
 
-  async accounts(): Promise<{
-    accounts: AccountStatus[];
-    search: { provider: string; providers: AccountStatus[] };
-  }> {
+  async accounts(): Promise<AccountsSummary> {
     const status = async (spec: (typeof ACCOUNTS)[number]): Promise<AccountStatus> => ({
       id: spec.id,
       label: spec.label,
@@ -118,11 +84,7 @@ export class SettingsService {
   }
 
   /** Models of providers with a working connection, and the title model. */
-  async modelCatalog(): Promise<{
-    providers: ProviderModels[];
-    roles: Roles;
-    reasoningLevels: readonly string[];
-  }> {
+  async modelCatalog(): Promise<ModelCatalog> {
     const models = this.#options.models;
     await this.#options.refreshModels?.();
     const available = await models.getAvailable();
@@ -148,8 +110,8 @@ export class SettingsService {
         reasoning: model.reasoning,
         contextWindow: model.contextWindow,
         ...(facts.maxTokens ? { maxTokens: facts.maxTokens } : {}),
-        ...(facts.input ? { input: facts.input } : {}),
-        ...(facts.unsupportedReasoning ? { unsupportedReasoning: facts.unsupportedReasoning } : {}),
+        ...(facts.input ? { input: [...facts.input] } : {}),
+        ...(facts.unsupportedReasoning ? { unsupportedReasoning: [...facts.unsupportedReasoning] } : {}),
         pricing: facts.pricing,
         ...(limit
           ? {
@@ -168,7 +130,7 @@ export class SettingsService {
       ...provider,
       models: newestFirst(provider.models),
     }));
-    return { providers, roles: this.roles(), reasoningLevels: TITLE_REASONING };
+    return { providers, roles: this.roles(), reasoningLevels: [...TITLE_REASONING] };
   }
 
   roles(): Roles {

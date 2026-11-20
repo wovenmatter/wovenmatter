@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
+import { createReadStream, createWriteStream } from "node:fs";
+import { rename, rm, stat } from "node:fs/promises";
 import { type IncomingHttpHeaders, type IncomingMessage, request as httpRequest } from "node:http";
 import type { Socket } from "node:net";
 import { PassThrough, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 /**
  * A Docker Engine API client over its Unix socket: plain HTTP for everything, and a hijacked
@@ -346,20 +349,72 @@ export class DockerEngineAPI {
     return true;
   }
 
-  async listVolumes(label: string): Promise<{ Name: string; Labels: Record<string, string> | null }[]> {
-    const result = await this.json<{ Volumes: { Name: string; Labels: Record<string, string> | null }[] | null }>(
-      "GET",
-      "/volumes",
-      { query: { filters: JSON.stringify({ label: [label] }) } },
-    );
-    return result?.Volumes ?? [];
-  }
-
   /** Extract a tar archive into `path` of a (created or running) container. */
   async putArchive(container: string, path: string, tar: Buffer): Promise<void> {
     await this.json("PUT", `/containers/${encodeURIComponent(container)}/archive`, {
       query: { path },
       raw: { data: tar, type: "application/x-tar" },
+    });
+  }
+
+  /**
+   * Stream `path` of a (created, running or stopped) container, volumes included, as a tar archive
+   * into the file `file`, written beside it first and moved into place once complete.
+   */
+  async getArchiveToFile(container: string, path: string, file: string): Promise<void> {
+    const prefix = await this.#prefix();
+    const partial = `${file}.partial`;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            socketPath: this.socketPath,
+            method: "GET",
+            path: `${prefix}/containers/${encodeURIComponent(container)}/archive${queryString({ path })}`,
+            headers: { host: "docker" },
+          },
+          (response) => {
+            if (response.statusCode !== 200) {
+              response.resume();
+              reject(new EngineError(`Docker Engine archive ${container}:${path}: HTTP ${response.statusCode}`, response.statusCode));
+              return;
+            }
+            pipeline(response, createWriteStream(partial, { mode: 0o600 })).then(resolve, reject);
+          },
+        );
+        req.on("error", (error) => reject(new EngineError(`Docker Engine is unreachable: ${error.message}`)));
+        req.end();
+      });
+      await rename(partial, file);
+    } finally {
+      await rm(partial, { force: true });
+    }
+  }
+
+  /** Extract the tar archive in the file `file` into `path` of a (created or running) container. */
+  async putArchiveFromFile(container: string, path: string, file: string): Promise<void> {
+    const prefix = await this.#prefix();
+    const size = (await stat(file)).size;
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          socketPath: this.socketPath,
+          method: "PUT",
+          path: `${prefix}/containers/${encodeURIComponent(container)}/archive${queryString({ path })}`,
+          headers: { host: "docker", "content-type": "application/x-tar", "content-length": size },
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => {
+            const status = response.statusCode ?? 0;
+            if (status >= 200 && status < 300) resolve();
+            else reject(new EngineError(`Docker Engine PUT archive ${container}:${path}: ${engineMessage({ status, body: Buffer.concat(chunks) })}`, status));
+          });
+        },
+      );
+      req.on("error", (error) => reject(new EngineError(`Docker Engine is unreachable: ${error.message}`)));
+      pipeline(createReadStream(file), req).catch(reject);
     });
   }
 

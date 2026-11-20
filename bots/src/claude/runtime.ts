@@ -1,13 +1,12 @@
 import { chmod, lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { VERSION } from "../version.ts";
 import type { ClaudeCredential } from "./provider.ts";
 
 /**
- * The Claude Agent SDK runtime: where Claude Code runs and with which environment. Mirrors Woven
- * Matter's `default-agent/src/claude-runtime.mjs`. Credentials come from the host API: for a
- * Claude subscription the machine's native Claude directories, which Claude Code owns (the runtime
- * never reads or copies their contents); for an API key, the key through the SDK's environment.
+ * The Claude Agent SDK runtime: where Claude Code runs and with which environment. Credentials
+ * come from the server: for a Claude subscription, Claude Code's own sign-in on this machine with
+ * its default configuration (the runtime never reads it); for an API key, the key through the
+ * SDK's environment and a private configuration directory.
  */
 
 /** The parts of an SDK message the runtime reads. The SDK's own types are much wider. */
@@ -35,7 +34,7 @@ export type ClaudeSdkQuery = (params: {
 }) => AsyncIterable<ClaudeSdkEvent> & { close?(): void };
 
 export type ClaudeAgentOptions = {
-  /** Private runtime directory (mode 0700): Claude Code's config dir and working directory. */
+  /** Private runtime directory (mode 0700): the working directory, and the config dir for keys. */
   readonly directory: string;
   /** Replace the SDK's `query` (tests inject a fake; no Claude Code process starts). */
   readonly query?: ClaudeSdkQuery;
@@ -68,25 +67,25 @@ export class ClaudeAgentRuntime {
   }
 
   /**
-   * `config` is CLAUDE_CONFIG_DIR (the native one when given), `workspace` the SDK's cwd; the
-   * runtime's own directories are private to this user.
+   * `config` is CLAUDE_CONFIG_DIR (undefined with Claude Code's own sign-in: its default), and
+   * `workspace` the SDK's cwd; the runtime's own directories are private to this user.
    */
-  async directories(nativeConfig?: string): Promise<{ config: string; workspace: string }> {
-    const config = nativeConfig ?? join(this.options.directory, "config");
+  async directories(native: boolean): Promise<{ config: string | undefined; workspace: string }> {
+    const config = native ? undefined : join(this.options.directory, "config");
     const workspace = join(this.options.directory, "workspace");
     await privateDirectory(this.options.directory);
-    if (!nativeConfig) await privateDirectory(config);
+    if (config) await privateDirectory(config);
     await privateDirectory(workspace);
     return { config, workspace };
   }
 
   /**
    * The SDK process environment: the parent's, minus every inherited Anthropic/Claude variable,
-   * plus the config dir, the credential, and no telemetry or SDK-side retries (Pi Durable owns
-   * retries).
+   * plus the config dir (for a key), the credential, and no telemetry or SDK-side retries (Pi
+   * Durable owns retries).
    */
   environment(
-    config: string,
+    config: string | undefined,
     credential: ClaudeCredential,
     source = process.env,
   ): Record<string, string> {
@@ -96,11 +95,8 @@ export class ClaudeAgentRuntime {
     }
     return {
       ...env,
-      CLAUDE_CONFIG_DIR: config,
-      ...(credential.native?.secureStorageDir
-        ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: credential.native.secureStorageDir }
-        : {}),
-      CLAUDE_AGENT_SDK_CLIENT_APP: `wovenmatter-bots/${VERSION}`,
+      ...(config ? { CLAUDE_CONFIG_DIR: config } : {}),
+      CLAUDE_AGENT_SDK_CLIENT_APP: "wovenmatter-bots",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       DISABLE_TELEMETRY: "1",
       DISABLE_ERROR_REPORTING: "1",

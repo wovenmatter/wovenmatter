@@ -21,7 +21,7 @@ import {
   modelFacts,
 } from "./model-info.ts";
 
-export const SUBAGENT_EXTENSION = "pi-bot-subagent";
+export const SUBAGENT_EXTENSION = "bot-subagent";
 
 /** The `run_subagent` model name for the model the calling conversation runs right now. */
 export const SELF = "self";

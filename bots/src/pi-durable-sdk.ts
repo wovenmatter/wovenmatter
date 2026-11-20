@@ -1,11 +1,10 @@
-// Bots run on the machine's Pi Durable SDK copy, never on one of their own. Pi Durable picks
-// its copy (the active SDK update, or the one bundled with Woven Matter) with
-// `resolveSDKRuntime` in `default-agent/src/sdk-management.mjs`; bots call that same function
-// at launch, then resolve every SDK package from the copy it returns. One SDK update in
-// Settings → Updates covers both; the machine's Woven server restarts bots after it.
-import { accessSync, constants, realpathSync } from "node:fs";
+// Bots run on this machine's Pi Durable SDK copy, never on one of their own: the copy Pi
+// Durable's SDK update made current (`<directory>/sdk/current`, see default-agent/src/sdk.mjs),
+// or else the one bundled with Woven Matter. Every SDK package resolves from that copy. One SDK
+// update covers both; the server restarts bots after it.
+import { accessSync, constants, existsSync, realpathSync } from "node:fs";
 import { registerHooks } from "node:module";
-import { dirname, isAbsolute, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RuntimeConfig } from "./config.ts";
 
@@ -21,14 +20,14 @@ export const PI_DURABLE_SDK_PACKAGES = [
 export interface PiDurableLocation {
   /** Pi Durable as Woven Matter bundles it (`<Resources>/default-agent`, `<release>/default-agent`). */
   readonly bundle: string;
-  /** Pi Durable's SDK workspace on this machine, which holds `sdk-runtime/active.json`. */
+  /** Pi Durable's data folder on this machine, which holds `sdk/current`. */
   readonly directory: string;
 }
 
 export interface PiDurableSDK {
   /** The copy: a directory whose `node_modules` holds every SDK package. */
   readonly root: string;
-  /** Pi Durable's name for it: an update's id, or `bundled-<fingerprint>`. */
+  /** An update's folder name, or `bundled`. */
   readonly generation: string;
   /** That copy's Claude Agent SDK binary. */
   readonly claudeExecutable: string;
@@ -41,7 +40,7 @@ export function sdkPackage(specifier: string): string | undefined {
   return PI_DURABLE_SDK_PACKAGES.find((name) => specifier === name || specifier.startsWith(name + "/"));
 }
 
-/** The copy Pi Durable runs on this machine, chosen by Pi Durable's own code. */
+/** The copy Pi Durable runs on this machine: its current SDK update, or the bundled one. */
 export async function resolvePiDurableSDK(
   location: PiDurableLocation,
   { platform = process.platform, arch = process.arch }: { platform?: string; arch?: string } = {},
@@ -49,16 +48,15 @@ export async function resolvePiDurableSDK(
   if (!isAbsolute(location.bundle) || !isAbsolute(location.directory)) {
     throw new PiDurableSDKError("The Pi Durable location must be absolute.");
   }
-  let runtime: { root: string; generation: string };
+  const current = join(location.directory, "sdk", "current");
+  const updated = existsSync(join(current, "node_modules"));
+  const root = updated ? current : location.bundle;
   try {
-    const management = (await import(pathToFileURL(join(location.bundle, "src/sdk-management.mjs")).href)) as {
-      resolveSDKRuntime(options: { directory: string }): Promise<{ root: string; generation: string }>;
-    };
-    runtime = await management.resolveSDKRuntime({ directory: location.directory });
+    const sdk = piDurableSDKAt(root, { platform, arch });
+    return { ...sdk, generation: updated ? basename(sdk.root) : "bundled" };
   } catch (error) {
-    throw new PiDurableSDKError(`Pi Durable's SDK could not be found in ${location.bundle}: ${(error as Error).message}`);
+    throw new PiDurableSDKError(`Pi Durable's SDK could not be found in ${root}: ${(error as Error).message}`);
   }
-  return { ...piDurableSDKAt(runtime.root, { platform, arch }), generation: runtime.generation };
 }
 
 /** The SDK copy at `root`, if bots can run on it: every SDK package and the Claude binary. */
@@ -72,10 +70,7 @@ export function piDurableSDKAt(
   return { root: real, claudeExecutable: claudeExecutable(real, platform, arch) };
 }
 
-/**
- * Pi Durable's Claude binary in `root`, where its SDK update verifies it
- * (`default-agent/src/sdk-management.mjs`): the glibc package, or the musl one.
- */
+/** The Claude binary in `root`: the glibc package, or the musl one. */
 export function claudeExecutable(root: string, platform: string = process.platform, arch: string = process.arch): string {
   for (const name of [`claude-agent-sdk-${platform}-${arch}`, `claude-agent-sdk-${platform}-${arch}-musl`]) {
     try {
@@ -132,9 +127,9 @@ function inside(root: string, path: string, name: string): string {
 }
 
 /**
- * Before the runtime is imported: with `piDurable` (always, from the Woven server), this
- * process loads that machine's Pi Durable SDK copy and runs its Claude binary. Without it
- * (tests, a checkout), bots keep their own development dependencies.
+ * Before the runtime is imported: with `piDurable` (always, from the server), this process loads
+ * this machine's Pi Durable SDK copy and runs its Claude binary. Without it (tests, a checkout),
+ * bots keep their own development dependencies.
  */
 export async function usePiDurableSDK(
   config: RuntimeConfig,
