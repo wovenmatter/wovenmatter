@@ -54,24 +54,6 @@ private func messageFromAnotherSession(_ client: Client, in sessionID: String) a
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aToolCallFromASessionIsCarriedOutAndAttributedToThatSession() async throws {
-  let host = try await TestServer.start(name: "Studio")
-  defer { Task { await host.server.stop() } }
-  let client = try await host.connect()
-  let caller = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Planner"))
-  let target = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
-
-  let call = try await callTool(client, from: caller.id, "send_to_session",
-                                #"{"sessionID":"\#(target.id)","text":"Build the page."}"#)
-  #expect(!call.failed)
-
-  let item = try #require(try await messageFromAnotherSession(client, in: target.id))
-  #expect(item.content == .userMessage(text: "Build the page."))
-  #expect(item.author?.sessionID == caller.id)
-  #expect(item.author?.name == "Planner")
-}
-
-@Test(.timeLimit(.minutes(1)))
 func aSessionIsRefusedTheToolsOfAGroupItMayNotUse() async throws {
   let host = try await TestServer.start(name: "Studio")
   defer { Task { await host.server.stop() } }
@@ -111,6 +93,7 @@ func aToolForAnotherMachineIsForwardedToItsOwner() async throws {
   let item = try #require(try await messageFromAnotherSession(onB, in: target.id))
   #expect(item.content == .userMessage(text: "Run the tests."))
   #expect(item.author?.sessionID == caller.id)
+  #expect(item.author?.name == "Planner")
 }
 
 @Test(.timeLimit(.minutes(1)))

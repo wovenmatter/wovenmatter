@@ -190,3 +190,16 @@ private func contents(_ library: Library) async throws -> Set<SyncRow> {
   for library in [a, b] { #expect(try await library.setting("theme")?.value == .string("light")) }
   #expect(try await contents(a) == contents(b))
 }
+
+@Test func aScheduleEntryReachesEveryMachineButOnlyItsOwnerRunsOrChangesIt() async throws {
+  let a = try await makeLibrary("a"), b = try await makeLibrary("b")
+  let draft = ScheduleDraft(machineID: a.machineID, kind: .task, title: "Report", prompt: "Write it.", runtime: .codex,
+                            startsAt: Date().addingTimeInterval(60), timeZone: "UTC")
+  let entry = try await a.saveSchedule(id: nil, draft)
+  try await sync(b, from: a)
+
+  #expect(try await b.schedules().map(\.id) == [entry.id])
+  #expect(try await b.ownSchedules().isEmpty)
+  #expect(try await a.ownSchedules().map(\.entry.id) == [entry.id])
+  await #expect(throws: LibraryError.self) { _ = try await b.saveSchedule(id: entry.id, draft) }
+}
