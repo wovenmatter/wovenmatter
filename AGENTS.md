@@ -7,40 +7,32 @@
   A sandboxed `gh` failure does not prove a missing or invalid credential. Retry
   the read-only `scripts/check-release-access.sh` through the approved execution
   permission path; if it still fails, stop and report the blocker to the user.
-- Build and launch: `scripts/build_and_run.sh`.
-- Dev builds have two modes. "Build this from a snapshot" or "use a snapshot"
-  means `scripts/build_and_run.sh --mode snapshot`: the actual standalone app,
-  with its normal workspace and sidebars, against an isolated copy of the
-  library that never syncs back. "Build the live database" or "host the
-  production database directly" means `--mode live`: this Dev profile’s background server becomes the
-  production library host and requires its exclusive execution lease.
-  If unspecified, choose snapshot. State the choice briefly and proceed
-  without asking the user to choose. `--plan` prints the resolved profile without building
-  or reading production data; `--mode auto` selects snapshot; never select live automatically. Explicit
-  user choice always wins.
-- Only an explicitly requested live host may open production SQLite directly.
-  Stop the existing production host, including background execution, before that
-  launch; never bypass the lease or force-kill an owner. Snapshot builds
-  remain isolated. Use `--instance NAME` for another instance
-  of one worktree or a fresh snapshot; existing snapshots retain their edits.
-  `--fresh` replaces an instance's snapshot in place and keeps its macOS
-  permissions (same bundle ID); prefer it over a new name for a clean start.
+- [The architecture](docs/ARCHITECTURE.md) is the contract: the library, the
+  background server and the thin UI, and the rules they keep. A change that
+  breaks one of its rules is wrong even if it works.
+- No version numbers inside the codebase: not on schemas, protocols, routes,
+  tables, files, types, capabilities or features. Only the app has a version.
+- Build and launch: `scripts/build_and_run.sh --instance NAME`. Each instance
+  has its own bundle identifier, its own data folder and its own server. It
+  never reads or changes the data of an installed app. `--port PORT` puts the
+  instance's server on the tailnet; `--plan` prints the instance's profile
+  without building.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
-- Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
-  Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;
-  native/mobile/image workflows run only when explicitly requested.
-  PR CI and explicitly requested platform validation own source validation.
-  Release preparation never reruns CI. Releases are built on this Mac with
-  `scripts/cut-release.sh build` and `ship`; GitHub only signs and notarizes them.
-  Follow the release skill.
-  Tests must not consume provider services.
+- Validate: `scripts/test-changes.sh`. It runs the static checks, the server
+  package's tests (which cover `library/` and `protocol/`) and the Pi Durable
+  and bots tests. `--ci` runs the same on Linux in pull request CI, which is one
+  portable Linux check. `WOVEN_SWIFT_SCRATCH_PATH` gives a run its own Swift
+  build folder. Tests must not consume provider services.
 - Keep one-off audit reports, generated coverage inventories, and review evidence
   out of Git. Record results in PR descriptions or external build artifacts.
 - Release, installation, publication, and delivery require an explicit request.
   Always build and verify a private draft, then present its user-facing release
   description to Trey and wait for his explicit approval before publication.
-  Version confirmation alone does not authorize publication.
+  Version confirmation alone does not authorize publication. Releases are built
+  on this Mac with `scripts/cut-release.sh build` and `ship`; GitHub only signs
+  and notarizes them. Release preparation never reruns CI.
   For releases, use `.agents/skills/cut-release-wovenmatter/SKILL.md`.
+- `ios/` is not part of the build. Leave it alone.
 
 ## Dependencies
 
@@ -52,14 +44,12 @@ Follow [the dependency policy](docs/DEPENDENCIES.md).
 - An exact or narrowed selection needs a concrete security or core-function
   reason, documented beside it and in `docs/DEPENDENCIES.md`. It also needs
   a documented maintenance process and a stated validation boundary.
-- Lockfiles, `app/Package.resolved`, and the Node, CEF, and Sparkle records are
-  required. Builds and tests consume the committed package graphs (`npm ci`)
-  and native runtime records. Linux base images intentionally follow their
-  current stable Node major, as documented in the policy. Change recorded
-  selections through maintenance refresh and regenerate dependent provenance
-  in the same change. Never hand-edit
-  `app/Package.resolved`; use package-manager tooling to generate the combined
-  SwiftPM/Xcode graph. Normal builds consume it with resolution frozen.
+- Lockfiles, `app/Package.resolved`, `server/Package.resolved`, and the Node,
+  CEF, Sparkle and Linux build records are required. Builds and tests consume
+  the committed package graphs (`npm ci`, frozen Swift resolution) and runtime
+  records. Change recorded selections through maintenance refresh and
+  regenerate dependent provenance in the same change. Never hand-edit a
+  `Package.resolved`; use package-manager tooling.
 - Keep checksums, signatures, updater keys, and provenance. Keep every copy of
   one selection in sync and verify that the records agree before proposing updates.
 - Read-only workflow helpers may track `@main`. Workflows with write tokens or
@@ -67,9 +57,7 @@ Follow [the dependency policy](docs/DEPENDENCIES.md).
 - Do not add Dependabot or GitHub-hosted dependency-proposal jobs. Scheduled
   dependency upkeep belongs in Codex or on an owned machine, configured
   separately from repository CI.
-- Installed apps update SDKs through explicit Settings actions at or above the
-  bundled minimum version; agent CLIs follow the documented API requirements.
-  Bundled signed or offline components reach users only through app delivery.
+- Bundled signed or offline components reach users only through app delivery.
 - When cutting a release, first run `scripts/release-check.py` on this Mac, never
   on GitHub. Update anything outdated in one development PR and report known
   vulnerabilities, as the release skill describes. Release builds consume the

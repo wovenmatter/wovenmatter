@@ -18,14 +18,6 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$info
 # grep reads all input (no -q): an early exit would SIGPIPE nm under pipefail.
 nm -j "$main_executable" | grep WovenServerKit >/dev/null
 
-power_helper="${app}/Contents/Library/LaunchServices/WovenMatterPowerHelper"
-power_daemon="${app}/Contents/Library/LaunchDaemons/wovenmatter.desktop.power-helper.plist"
-test -x "$power_helper"
-codesign --verify --strict "$power_helper"
-test "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$power_daemon")" = Contents/Library/LaunchServices/WovenMatterPowerHelper
-test "$(/usr/libexec/PlistBuddy -c 'Print :UserName' "$power_daemon")" = root
-test "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$power_daemon")" = true
-
 # The Woven VM helper exists on Apple silicon builds only (the guest is arm64).
 vm_helper="${app}/Contents/Helpers/WovenMatterVMHelper"
 if lipo -archs "$main_executable" | grep -qw arm64; then

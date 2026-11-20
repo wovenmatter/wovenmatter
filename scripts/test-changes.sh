@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# Runs the test suite. Suites are added here as the rebuilt parts gain tests.
+# Runs the test suite: static checks, the Swift packages (protocol, library and
+# server, through the server package) and the two Node children. No test calls
+# a provider. Runs the same on this Mac and on Linux; pull request CI runs
+# `--ci` on Linux.
+#
+#   scripts/test-changes.sh [--all|--ci]
+#
+# WOVEN_SWIFT_SCRATCH_PATH puts the Swift build somewhere of your own, so
+# parallel worktrees and agents never wait on one another's build lock.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,32 +46,29 @@ check_app_imports() {
 }
 
 # Sync, sessions and server-to-server tests for protocol/, library/ and
-# server/. They use a stand-in runtime and stand-in tailnet.
-run_foundation_tests() {
-  swift test --package-path server
+# server/. They use a stand-in runtime and a stand-in tailnet. The committed
+# Package.resolved is used as it is.
+run_swift_tests() {
+  local scratch=()
+  [ -z "${WOVEN_SWIFT_SCRATCH_PATH:-}" ] || scratch=(--scratch-path "$WOVEN_SWIFT_SCRATCH_PATH")
+  swift test --package-path server --force-resolved-versions ${scratch[@]+"${scratch[@]}"}
 }
 
-# Pi Durable's own tests, against its committed package graph.
-run_default_agent_tests() {
-  (cd default-agent && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npm test)
-}
-
-# The bots runtime's tests (tsc and vitest), against its committed package
-# graph: installed again when node_modules is missing or older than the lockfile.
-run_bots_tests() {
-  (cd bots && {
+# Installs a Node child's committed package graph when node_modules is missing
+# or older than the lockfile, then runs its tests with the repository's Node.
+run_node_tests() {
+  (cd "$1" && {
     [ -f node_modules/.package-lock.json ] && [ ! package-lock.json -nt node_modules/.package-lock.json ] \
-      || npm ci --no-audit --no-fund
-  } && npm test)
+      || "$repo_root/scripts/with-pinned-node.sh" npm ci --no-audit --no-fund
+  } && "$repo_root/scripts/with-pinned-node.sh" npm test)
 }
 
 case "${1:---all}" in
-  --ci) run_static_checks ;;
-  --all)
+  --all|--ci)
     run_static_checks
-    run_foundation_tests
-    run_default_agent_tests
-    run_bots_tests
+    run_swift_tests
+    run_node_tests default-agent
+    run_node_tests bots
     ;;
   *)
     echo 'usage: scripts/test-changes.sh [--all|--ci]' >&2

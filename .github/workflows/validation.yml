@@ -3,25 +3,17 @@ name: Manual validation
 # Expensive platform validation runs only when a maintainer requests it.
 on:
   workflow_dispatch:
-    inputs:
-      scope:
-        description: Validation to run
-        type: choice
-        required: true
-        default: all
-        options: [all, desktop, mobile]
 
 permissions:
   contents: read
 
 concurrency:
-  group: validation-${{ github.ref }}-${{ inputs.scope }}
+  group: validation-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   macos:
     name: Desktop updates
-    if: inputs.scope == 'all' || inputs.scope == 'desktop'
     # Xcode 27.2, the toolchain the app is developed and released with (macos-26 stops at 26.6).
     runs-on: xcode-27
     timeout-minutes: 20
@@ -31,43 +23,3 @@ jobs:
       - uses: actions/checkout@main
       - name: Verify signed full-only update round trip
         run: python3 scripts/test-full-updates.py
-
-  ios:
-    name: iOS (${{ matrix.device }})
-    if: inputs.scope == 'all' || inputs.scope == 'mobile'
-    runs-on: macos-26
-    # The iPad UI suite outgrew 25 minutes on hosted runners once member and send flows were added.
-    timeout-minutes: 40
-    env:
-      WOVENMATTER_IOS_TEST_CACHE_DIR: /private/tmp/wovenmatter-ios-${{ matrix.device }}
-    strategy:
-      fail-fast: false
-      matrix:
-        device: [iPhone, iPad]
-    steps:
-      - uses: actions/checkout@main
-      - name: Identify mobile toolchain
-        id: toolchain
-        run: xcodebuild -version | shasum -a 256 | awk '{print "key=" $1}' >> "$GITHUB_OUTPUT"
-      - name: Reuse mobile build intermediates
-        uses: actions/cache@main
-        with:
-          path: |
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/package
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/modules
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/Build/Intermediates.noindex
-            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/SourcePackages
-          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatter.xcodeproj/project.pbxproj') }}-
-      - name: Test native mobile flows
-        env:
-          WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device == 'iPhone' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' || 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB' }}
-        run: scripts/test-ios.sh --ui
-      - name: Preserve mobile test results
-        if: always()
-        uses: actions/upload-artifact@main
-        with:
-          name: ios-results-${{ matrix.device }}-${{ github.run_attempt }}
-          path: ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/results.*
-          if-no-files-found: warn
-          retention-days: 7
