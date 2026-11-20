@@ -80,7 +80,7 @@ public enum AgentMessageAttachmentDraft: Equatable, Identifiable, Sendable {
   }
 }
 
-/// What the person sends: the text, the queued attachments and the notes and pages open beside the chat.
+/// What the person sends: the text, the queued attachments and the artifacts and browser tabs open beside the chat.
 public struct AgentMessageInput: Equatable, Sendable {
   public let text: String
   public let attachments: [AgentMessageAttachmentDraft]

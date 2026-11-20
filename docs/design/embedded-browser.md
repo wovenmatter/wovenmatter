@@ -46,9 +46,9 @@ seconds and refuses results over 1 MiB.
   Accessibility.
 
 When the person sends a message with the pane open, `WorkspaceVisibleContext`
-records the open notes (id, title, last edit) and browser tabs (HTTP(S) URL
+records the open artifacts (id, title, kind, last edit) and browser tabs (HTTP(S) URL
 without user information or fragment, and title), marking the selected tab. It
-carries no page contents or cookies.
+carries no artifact or web page contents, and no cookies.
 
 ## Build and maintenance
 

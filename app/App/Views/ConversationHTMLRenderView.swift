@@ -111,7 +111,7 @@ struct ConversationHTMLRenderView: View {
 
     @MainActor private func load() async {
         guard reply == nil else { return }
-        let unavailable = "This page is unavailable. Reconnect to its workspace and try again."
+        let unavailable = "This visual reply is unavailable. Reconnect to its workspace and try again."
         guard let server = model?.server else { failure = unavailable; return }
         do {
             var data = Data()

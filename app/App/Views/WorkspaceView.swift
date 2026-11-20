@@ -1421,8 +1421,7 @@ struct WorkspaceSurface: View {
         return labels.isEmpty ? nil : labels.joined(separator: " · ")
     }
 
-    /// Open notes and pages at send time, from the same snapshot regular chats use.
-    /// A note reference is offered only while bots hold the Notes tool group.
+    /// Open artifacts and browser tabs at send time, from the same snapshot regular chats use.
     private func botContext(for panelID: ChatPanelID) -> String? {
         guard panelID == .primary else { return nil }
         _ = assets.pageRevision

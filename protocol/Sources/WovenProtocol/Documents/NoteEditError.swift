@@ -29,7 +29,7 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
     case .pageTargetMissing(let id): "Page section \(id) does not exist. Read the Page and choose a current section."
     case .pageMoveIntoOwnSubtree(let id): "Page section \(id) cannot move inside itself."
     case .pageDepthExceeded(let id): "Component \(id) would nest more than \(NoteDocument.maximumPageDepth) sections deep."
-    case .pageSectionNotEmpty(let id): "Page section \(id) still has contents. Use woven_pages_remove_component and choose promoteChildren, or removeSubtree with its subtreeRevision."
+    case .pageSectionNotEmpty(let id): "Page section \(id) still has contents. Give its remove edit `removal`: promoteChildren keeps them on the Page."
     case .pagePositionInvalid(let id): "\(id) is not a valid place here. An afterID must be a direct child of the chosen parent."
     case .pageSubtreeConflict(let id, _): "Page section \(id) or its contents changed since they were read. Read them again before removing them."
     case .boardItemConflict(let id, let current):
@@ -37,7 +37,7 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
         : "Page component \(id) changed since it was read. Read it again and apply your intended change to the current item."
     case .boardItemExists(let id): "A Page component already exists with ID \(id)."
     case .boardLinkedAssetText(let id): "Page component \(id) shows a linked original. Edit the original artifact, not the component."
-    case .boardItemNotText(let id): "Page component \(id) is a table. Use the table tools to change it."
+    case .boardItemNotText(let id): "Page component \(id) is a table or an image and takes no text."
     case .boardSessionLimit(let id): "Page component \(id) already links \(BoardItem.maximumSessions) sessions."
     case .pageAssigneeMissing(let id): "Page task \(id) has no such assignee. Read the Page for its current assignees."
     case .pageAssigneeChanged(let id): "An assignee of Page task \(id) changed meanwhile. Read the Page for its current assignees."

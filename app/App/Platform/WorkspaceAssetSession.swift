@@ -88,17 +88,17 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
 
     func snapshot(notes: [WorkspaceNoteRecord], title: (WorkspaceNoteRecord) -> String) -> WorkspaceVisibleContext? {
         guard tabs.isPresented else { return nil }
-        let openNotes = tabs.noteIDs.compactMap { id -> WorkspaceVisibleContext.Note? in
+        let openArtifacts = tabs.noteIDs.compactMap { id -> WorkspaceVisibleContext.Artifact? in
             guard let note = notes.first(where: { $0.id == id }) else { return nil }
             let edited = (note.updatedAt ?? note.createdAt).map { $0.formatted(.iso8601) } ?? ""
             return .init(id: id, title: title(note), revision: edited,
                          active: tabs.selected == .note(id), kind: note.kind)
         }
-        let openPages = tabs.browserIDs.compactMap { id -> WorkspaceVisibleContext.Page? in
+        let openTabs = tabs.browserIDs.compactMap { id -> WorkspaceVisibleContext.BrowserTab? in
             guard let page = pages[id] else { return nil }
             return .init(title: page.title, url: page.url, active: tabs.selected == .browser(id))
         }
-        return .init(notes: openNotes, pages: openPages)
+        return .init(artifacts: openArtifacts, browserTabs: openTabs)
     }
 
     func browserPageDidChange(_ page: WMBrowserPage) { pageRevision &+= 1 }
