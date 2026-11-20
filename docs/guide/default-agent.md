@@ -1,173 +1,51 @@
 # Pi Durable
 
-**Pi Durable** is included with Woven Matter. Choose it in **New chat** to work in
-your local agent workspace or a remote workspace.
-It includes Pi's file and shell tools, Woven Matter's existing note/workspace
-integration, and web search. You do not need to install Pi, Node, or Claude Code.
+**Pi Durable** is included with Woven Matter on every machine. Choose it in
+**New Chat** like any other agent. It has file and shell tools, web search and
+the Woven tools. You do not need to install Pi, Node or Claude Code.
 
-Open **Settings → Subscriptions & API Keys** to connect providers:
+## Connect providers
 
-- **OpenAI:** connect a ChatGPT subscription, an OpenAI API key, or both.
-- **OpenRouter / OpenCode Go:** add an API key. The global OpenRouter key is
-  shared with Usage and Pi Durable.
-- **Claude:** use your Claude subscription through Anthropic’s native sign-in,
-  an Anthropic API key, or both. They appear as separate model connections.
-- **Grok/xAI:** connect a Grok subscription or a separately billed xAI API key.
-- **Web search:** add Exa, Brave, or Firecrawl keys under **Web search**, then select
-  the provider to use on its row.
-  Exa remains the default. Exa and Firecrawl also read webpages; Brave returns
-  search context, with the browser available for page reading. Chat and workspace
-  tools work without a search key.
-- **Local Model Server:** connect up to 12 OpenAI Responses-compatible servers.
-  Their models appear in the existing Pi Durable model picker.
+Open **Settings → Subscriptions & API Keys**:
 
-Open **Settings → Agents → Pi Durable** to choose a default, show or hide models,
-change their selector order, and choose an ordered list of fallback models.
-After connecting an account, choose **Choose chat models** to open the model browser. Choose the models
-you want in chat; the first selection becomes the default. The default is always shown. Filter
-the catalog by connection type, model lab across connections, or subscriptions.
+- **OpenAI:** a ChatGPT subscription, an OpenAI API key, or both.
+- **Anthropic:** a Claude subscription through **Sign in with Claude**, a Claude
+  API key, or both. They are separate connections and billed separately.
+- **Grok · xAI:** a Grok subscription or an xAI API key.
+- **OpenRouter** and **OpenCode:** an API key.
+- **Web search:** an Exa, Brave or Firecrawl key, then choose which one to use.
+  Exa and Firecrawl can also read web pages; Brave only searches. Chats work
+  without a search key.
 
-See [Connections and dictation](connections-and-dictation.md) for account and microphone setup.
+Subscriptions are signed in on each machine. Use **Sign in on** at the top of
+the page to choose the machine. API keys are shared with all your machines.
+See [Connections and dictation](connections-and-dictation.md).
 
-Set **Applies to** to **All workspaces** for shared Pi Durable settings. To give
-one workspace its own model, thinking, permission, and tool preferences, choose
-it under **Applies to** and turn off **Use shared chat settings**. Accounts stay
-independent of this switch: workspace-specific API keys override the global
-keys; otherwise global keys are reused. Changes synchronize to connected
-workspaces automatically, and **More → Synchronization → Retry synchronization**
-retries immediately. New workspaces inherit these settings automatically. An
-offline workspace gets the current settings when it reconnects.
+## Choose models
+
+Open **Settings → Agents → Pi Durable**. After connecting a provider, choose
+**Choose chat models** to browse its models and pick the ones that appear in
+the composer. Filter by connection type or model lab, or show subscriptions
+only. Choose a **Default model** for new chats.
+
+**Applies to** chooses whether you edit the settings for all machines or for
+one machine. For one machine, turn off **Use shared chat settings** to give it
+its own models and defaults.
 
 **More → Subagents** sets how many subagents can be active in one conversation.
 It applies to new conversations; the parent agent does not count.
 
-SDK versions are under **More → Software**. Expand a workspace to see its
-**Pi Durable SDK** and **Claude SDK** versions. Use **Check for updates**, then **Update**
-for the SDK you want to update. With **All workspaces** selected the list shows
-each location; choosing one workspace limits the list to that location.
-Collapsing a workspace hides its SDK details without discarding update progress.
+**More → Software** shows the installed Pi Durable SDK on each machine, with
+**Check for updates** and **Update**.
 
-SDK installations belong to each location, independently of inherited provider
-preferences. Updating the local SDK does not update remote workspaces or the
-separately installed Pi and Claude Code CLIs. Older remote workspace services
-need a workspace software update before they can expose SDK management.
+## Where sign-ins are kept
 
-ChatGPT, Claude, and Grok each support one subscription account per workspace.
-API keys still support up to four accounts per connection type. Existing subscription
-account lists keep the selected account and remove additional entries. Reconnect
-the current subscription or remove it before changing accounts.
+Each machine keeps its own subscription sign-ins: in the Keychain on a Mac and
+in a private file on Linux. They never enter your library. API keys are kept
+sealed in your library separately for each machine, so only that machine can
+open its copy. Agents never receive a key; the server uses it for them.
 
-Fallback applies when a connection loses authentication or exhausts its available
-usage. API-key connections try the preferred key and its ordered backups first.
-Subscription connections use only their current account; an
-independent workspace sign-in does not fall back to a shared subscription account.
-Woven Matter then tries your enabled fallback models in order, updates the
-model selector, and shows a popup explaining the switch. Ordinary transient
-rate limits do not trigger fallback. A turn that has already produced output or
-executed tools is not automatically replayed.
+Signing in for Pi Durable does not sign in Codex, Claude Code, Grok Build or
+OpenCode, and their own credentials are not imported.
 
-Remote workspaces include the same helper. Their Pi Durable runs continue
-when your Mac disconnects, as long as the Linux host and its Woven service keep
-running. Reopening the conversation shows the completed response, and an
-unfinished response keeps streaming when you reconnect. A service restart
-interrupts active work and requires an explicit retry.
-
-Pi Durable and Usage use the same saved provider accounts, managed in Settings → Subscriptions & API Keys.
-Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
-keys. Signing in here does not sign in
-Codex, Claude Code, Grok Build, or OpenCode, and their
-credential files are not imported.
-
-API keys can be reused in remote workspaces. For shared subscription sign-ins,
-the Mac that added the workspace keeps and renews the credentials. The
-workspace receives only short-lived access, never the long-lived refresh
-credential. Renewed access is saved on the Mac before being sent to
-connected workspaces. Launch, wake, reconnect, settings changes, and an
-expiry-aware background check keep those workspaces current. Ordinary message
-submissions check cached state; opening conversation history does not refresh
-authentication. Token lifetimes come from each provider, not a fixed number of days.
-
-For an independent subscription sign-in on one remote workspace, open
-**Settings → Subscriptions & API Keys**, set **Accounts for** to that workspace,
-and use **Sign in**. **Use shared sign-in** removes that independent connection and
-returns to shared credentials. An active remote helper can keep working while
-the Mac is offline. If borrowed access expires, it waits before the next model
-request until access is supplied again; it does not repeat completed tools.
-Starting a new turn can use your configured fallback instead.
-
-## Code mode and Executor
-
-**More → Code mode** in Pi Durable settings defaults to **On**, alongside ordinary
-tools. **Only** presents those tools through code mode; **Off** removes the code
-mode tool. Nested calls retain normal approval. User Pi extensions remain
-disabled. Executor Execute is independent and available when Executor is enabled
-in the conversation. See [Executor apps](executor.md).
-
-## Credential storage
-
-Each device keeps its own sign-ins. On a Mac, Pi Durable credentials, including
-OAuth refresh tokens, are stored in macOS Keychain. On a Linux host they are
-one private file in the host's own folder outside the workspace
-(`~/.local/share/wovenmatter/default-agent/sign-ins.json`), readable only by
-that user, like the Claude Code and Codex CLIs' own logins.
-Sign in on a host from **Settings → Subscriptions & API Keys → Sign in on**;
-nothing is copied from another device. Updates do not restart active sessions.
-Claude’s native sign-in is separate; use its **Remove** button to disconnect
-that account.
-Crash dumps are disabled for managed helpers; host swap and memory
-snapshots remain host responsibilities. Removing stored credentials does not
-revoke copies already obtained elsewhere; revoke those through the provider.
-
-Open **Settings → Agents** or a remote workspace in **Settings → Workspaces** to see
-sign-in status. It checks Pi Durable and independent harnesses without starting login. Results distinguish stored
-credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
-and failures. These checks do not verify remaining usage. Local harnesses whose
-credential access is disabled stay unchecked.
-
-With **Keep working in the background** on for a remote workspace (in its
-**Settings → Workspaces** page), the workspace also keeps supported sessions
-running across Mac disconnections. A service restart is a separate boundary:
-interrupted sends are not automatically repeated. See
-[Background execution](../architecture/BACKGROUND_EXECUTION.md).
-
-## Claude models
-
-In **Settings → Subscriptions & API Keys**, expand **Anthropic** and click
-**Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
-Paste the full code returned by Claude into the sign-in form and click **Continue**.
-The account list refreshes when sign-in completes. Woven Matter bundles the unmodified
-official runtime; this sign-in is separate from an independently installed Claude Code harness.
-An API key uses the separate **Claude API key** option and is billed separately.
-
-Claude provides model responses while Pi Durable retains its tools, approvals,
-history, and compaction. The composer exposes model, thinking, permissions, and
-workspace-tool controls. The agent is named **Pi Durable** throughout the app,
-regardless of the selected model or provider. SDK management identifies its
-underlying libraries as **Pi Durable SDK** and **Claude SDK**.
-
-Claude owns subscription login, storage, and refresh. On this Mac, it uses its
-native Keychain entry; plaintext fallback is blocked if Keychain is unavailable.
-In remote workspaces, sign in separately. On a Linux host, Claude keeps its
-sign-in in private memory-backed storage (`/dev/shm`), which is cleared when the
-host restarts, so sign in again after a reboot. Claude subscription credentials
-are never copied between workspaces.
-API keys retain the existing Keychain/encrypted remote storage behavior.
-
-Subscription entitlement and any enabled extra usage are controlled by your
-Claude account. To prevent subscription overage billing, disable extra usage
-there. Woven Matter does not automatically substitute your separately billed API
-key. An explicitly configured fallback can switch connections and will update
-the selector and show a notice.
-
-Usage shows the native Claude account’s sign-in status. Remaining subscription
-limits are checked in Claude; Woven Matter does not extract its token to query
-those limits. Live account acceptance and billing attribution require testing
-with your own account.
-
-## iPhone Quick Chat (beta)
-
-The iPhone app is a beta available through TestFlight. Its Quick Chat runs Pi
-Durable on the phone, with one subscription connection per provider (ChatGPT,
-Claude, and Grok) and multiple API-key connections. Edit a saved
-connection to reconnect it or change its sign-in. To try it, email
-trey@wovenmatter.com with the email address to add as a TestFlight tester.
+Next: [Connections and dictation](connections-and-dictation.md).

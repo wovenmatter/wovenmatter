@@ -1,91 +1,54 @@
-# Workspaces and storage
+# Folders and storage
 
-Each project folder has one owning execution workspace and one fixed root
-directory. Conversations, notes, and assets are organized in Woven's internal
-SQLite history store; project files stay in their execution workspace.
+A folder is a name plus a directory on one machine. It belongs to that machine
+for good, and chats in it run there. Conversations, notes and other items are
+kept in your library; project files stay in the folder's directory.
 
-## Create a project folder
+## Create a folder
 
-Choose **New folder** in the sidebar, select its workspace, and enter a name.
-The owning workspace must be connected. **Create New** makes a blank directory
-with that name under the managed workspace root: `~/.woven-matter` on your Mac
-while a native Linux host uses
-`~/.local/share/wovenmatter/workspace` under its SSH account.
+In the sidebar, choose **New Folder** in the section of the machine that should
+own it. That machine must be online.
 
-**Link Existing** lets you choose an existing project directory on the owning
-execution machine, including an accessible directory on a native Linux host.
-Woven preserves its files and project instructions. New projects receive no
-preset directories, `AGENTS.md`, or `CLAUDE.md`.
+- **Create New** makes an empty directory with the folder's name in
+  `~/Woven Matter` on that machine. A number is added when the name is taken.
+- **Link Existing** uses a directory that is already on that machine. Its
+  files and project instructions are kept as they are. For another machine,
+  you browse its directories through its own server.
 
-The workspace and root are fixed at creation. **Rename** changes the folder's
-name in Woven without renaming its directory. **Remove folder** asks whether to
-remove only the UI folder or also its directory and contents. The directory
-choice is available only for managed roots; external project directories are
-preserved. Conversations and notes remain in Woven.
+New folders get no preset files, `AGENTS.md` or `CLAUDE.md`.
 
-## Chats and reference locations
+**Rename** changes the folder's name in Woven Matter, not its directory.
+Removing a folder offers **Remove Folder Only** or, for a directory Woven
+Matter made, **Delete Folder and Directory**. A directory you linked is never
+deleted.
 
-**New chat** opens the agent chooser. Choose an agent to start a draft in the
-selected folder. The plus beside a folder opens the chooser for that folder,
-and the **All Workspaces** plus opens it without assigning a folder. In the
-sidebar, clicking an agent's name opens its most recent chat; the separate plus
-beside it starts a new chat with that agent in the selected folder.
+## Chats without a folder
 
-Before the first message, use the composer's folder selector to choose a folder
-owned by that agent's workspace or **All Workspaces**. Sending the first message
-fixes the folder and working directory.
+A chat started without a folder gets its own empty working directory in the
+server's data folder on its machine. Before the first message, the composer's
+folder selector can still move the chat to a folder on the same machine. After
+the first message the folder and working directory are fixed; start a new chat
+to work somewhere else.
 
-Each chat in All Workspaces uses its own directory under `scratch` in the
-workspace's managed root: `~/.woven-matter/scratch` on the Mac, or
-`~/.local/share/wovenmatter/workspace/scratch` on a Linux host. Woven creates
-the directory when the chat launches, with a date, the first words of its initial
-message, and a short chat ID. The directory starts blank. Retries, resumes and
-title changes keep the same directory; deleting the chat keeps its working files.
-Scratch is reserved for these chat directories. Chats and project folders must
-have an execution workspace and directory when they are created. A disconnected
-workspace keeps that ownership; choosing another agent never assigns or changes
-it. Folderless chats remain in All Workspaces with their own execution workspace.
-Folders created on any device keep their workspace and root when they
-synchronize; a device running an older version must update before it can
-create folders. An unsent draft can still choose a project folder before its first message. Sessions
-from the former workspace layout remain readable as archived history and cannot
-be resumed; start a new chat for further work. Their existing files remain in
-place.
-
-Use a folder's **Reference locations** menu to link or unlink additional files
-and directories on the same execution workspace. Agents are told the available
-locations and use their harness's existing permissions. Woven does not inject
-instruction files from every reference location. Unlinking is not operating
-system permission revocation.
-
-Copy files explicitly when moving work between devices. There are no live
-cross-device project mounts or bidirectional folder synchronization.
+Project files do not sync between machines. Copy them yourself when you move
+work from one machine to another.
 
 ## Where your work lives
 
-| Location | Contents |
+| Location | What it holds |
 | --- | --- |
-| Managed root or linked directory | Project files and your project instructions |
-| Woven's Application Support folder on each Mac | That Mac's copy of your library (conversations, notes, schedules and settings), its managed dataset files, and copies of remote datasets |
-| A Linux host's Woven data directory | That host's copy of your library and its managed dataset files |
-| Each harness's home or service | Credentials, configuration, and independently maintained history |
+| A folder's directory | Project files and your project instructions |
+| The Woven server's data folder on each machine | That machine's copy of your library, its databases, and working directories for chats without a folder |
+| Each harness's own storage | Its sign-ins, configuration and native session history |
 
-Each named database is a separate SQLite file with one writable owner. Its
-schema belongs to the dataset and can contain multiple tables. These databases
-are linkable from any folder or artifact; they are separate from project roots
-and Woven's internal history/settings schema. See [Notes and data](notes-and-data.md).
+Each database is its own SQLite file owned by one machine; see
+[Notes and data](notes-and-data.md).
 
-Woven adds a short tool-discovery instruction block only to Woven-launched
-sessions, alongside native harness prompts and your project instructions. It
-does not overwrite project instruction files or user-global instructions.
+Woven Matter adds a short instruction block about its tools to the sessions it
+starts. It does not change your project instruction files or your own global
+instructions.
 
-## Remote storage
+Back up project files on each machine yourself; the library syncs your chats
+and notes, not project files.
 
-Remote workspaces run Woven Matter directly on Linux under the selected SSH
-account, reusing its installed tools and sign-ins. Full root or Normal user
-permissions apply to the whole workspace; folders retain their ordinary Linux
-permissions. Execution and SQLite state stay on Linux while disconnected. See
-[Native Linux hosts](../reference/REMOTE_HOSTS.md).
-
-Remote project files stay on their host; library sync carries conversations,
-not project files. Back up project files and Woven's data on each host.
+Next: [Conversations](conversations.md).
