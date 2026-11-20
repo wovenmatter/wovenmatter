@@ -165,19 +165,37 @@ public enum Schema {
     Table("settings", .newestWins, [
       .text("value", "null"),
     ], naturalKey: []),
-    // Scheduled tasks, timers and wake-ups; each belongs to the machine that
-    // runs it. When an entry next fires is local state (`schedule_state`).
+    // Scheduled tasks, calendar events, timers and wake-ups; each belongs to
+    // the machine that runs it, and only that machine writes it. What has
+    // fired is local state (`schedule_state`).
     Table("schedules", .newestWins, [
       .text("machine_id", ""),
+      // "task", "event", "timer" or "wakeUp".
       .text("kind", ""),
       .text("title", ""),
+      .text("details", ""),
       .text("prompt", ""),
       .text("session_id"),
+      .integer("new_session", 0),
       .text("folder_id"),
       .text("runtime"),
+      .text("directory"),
+      .text("model"),
+      .text("thinking"),
+      .text("permission"),
       .integer("starts_at"),
+      .integer("ends_at"),
+      .integer("all_day", 0),
+      .text("time_zone", ""),
+      // `Recurrence` as JSON.
       .text("recurrence"),
+      // Excluded occurrence indexes, as a JSON array.
+      .text("excluded", "[]"),
+      .integer("on_calendar", 1),
       .integer("enabled", 1),
+      .text("created_by"),
+      .text("edited_by"),
+      .integer("edited_at"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
     // One API key sealed for one machine. `id` is `name:machine_id`, so
@@ -324,10 +342,17 @@ public enum Schema {
       .key("key"),
       .integer("entry", 0),
     ]),
+    // What this machine's scheduler has fired of each entry it owns.
+    // `stamp` is the entry's stamp `next_fire_at` was worked out from.
     Table("schedule_state", .local, [
       .key("schedule_id"),
+      .text("stamp", ""),
       .integer("next_fire_at"),
+      // The scheduled time of the occurrence last fired, and when it fired.
       .integer("last_fired_at"),
+      .integer("fired_at"),
+      .text("session_id"),
+      .text("error"),
     ]),
     // The content store's index: files this machine holds, by digest.
     Table("files", .local, [

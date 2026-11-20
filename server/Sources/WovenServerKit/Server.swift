@@ -28,6 +28,10 @@ public final class WovenServer: Sendable {
     public var secretStore: (any SecretStore)?
     /// How this machine runs the bots when it is their home; tests give a stand-in.
     var botsHosting: BotsHosting = .standard
+    /// The scheduler's clock; tests move it.
+    var schedulerClock: @Sendable () -> Date = { Date() }
+    /// The runtime that names new chats.
+    var titleRuntime: RuntimeKind = .codex
     /// A development instance's name: servers it installs elsewhere are that instance too.
     public var instance: String?
     /// It offers the stand-in runtime, and so do servers it installs.
@@ -63,6 +67,8 @@ public final class WovenServer: Sendable {
   private let bots: BotsHost
   private let listeners: [Listener]
   private let endpoint: MCPEndpoint
+  private let scheduler: Scheduler
+  private let titles: Titles
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
   private let watcher = Mutex<Task<Void, Never>?>(nil)
@@ -83,12 +89,17 @@ public final class WovenServer: Sendable {
                                   scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true),
                                   toolKeys: toolKeys)
     await sessions.start()
+    let titles = Titles(library: library, sessions: sessions, runtime: options.titleRuntime,
+                        scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
+    let scheduler = Scheduler(library: library, sessions: sessions, now: options.schedulerClock)
     let peers = PeerSync(library: library, tailnet: options.tailnet, hello: hello, interval: options.discoveryInterval)
     var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
     registerFolders(&routes, library: library, root: options.foldersRoot)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
     registerArtifacts(&routes, library: library, sessions: sessions)
     registerLibraryItems(&routes, library: library)
+    registerSchedules(&routes, library: library, sessions: sessions)
+    registerGoals(&routes, library: library, sessions: sessions)
     let databases = Databases(library: library, peers: peers,
                               folder: options.dataFolder.appendingPathComponent("databases", isDirectory: true))
     registerDatabases(&routes, databases: databases)
@@ -140,17 +151,21 @@ public final class WovenServer: Sendable {
     }
     let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
                              sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
-                             endpoint: endpoint)
+                             endpoint: endpoint, scheduler: scheduler, titles: titles)
     pending.server.withLock { $0 = server }
     await peers.start()
     await bots.start()
+    await scheduler.start()
     server.watchLibrary()
     return server
   }
 
   private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
-               github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint) {
+               github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint, scheduler: Scheduler,
+               titles: Titles) {
     self.endpoint = endpoint
+    self.scheduler = scheduler
+    self.titles = titles
     self.library = library
     self.hello = hello
     self.port = port
@@ -185,6 +200,7 @@ public final class WovenServer: Sendable {
   /// and closes the library.
   public func stop() async {
     watcher.withLock { $0?.cancel() }
+    await scheduler.stop()
     for listener in listeners { await listener.stop() }
     endpoint.stop()
     await bots.stop()

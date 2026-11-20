@@ -7,7 +7,7 @@ import WovenProtocol
 // entries like these.
 
 func wovenToolCatalog() -> [WovenTool] {
-  sessionTools + artifactTools + databaseTools + placeTools + botTools + uiTools
+  sessionTools + artifactTools + databaseTools + placeTools + botTools + uiTools + scheduleTools
 }
 
 // MARK: Schema helpers

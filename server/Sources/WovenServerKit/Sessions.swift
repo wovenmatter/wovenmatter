@@ -63,6 +63,8 @@ actor SessionManager {
   private var watcher: Task<Void, Never>?
   nonisolated let board = RunBoard()
   nonisolated let configurations = RuntimeConfigurations()
+  /// Told of the person's first message in each session, for its title.
+  nonisolated let firstMessages = FirstMessageHook()
 
   init(library: Library, runtimes: [any Runtime], scratch: URL, toolKeys: ToolKeys? = nil) {
     self.toolKeys = toolKeys
@@ -90,14 +92,19 @@ actor SessionManager {
     }
   }
 
-  /// Creates a session on this machine, in its folder's directory or a
-  /// scratch directory of its own, and opens its runtime so the composer
-  /// has the runtime's options.
-  func create(runtime kind: RuntimeKind, title: String, folderID: String?) async throws -> Session {
+  /// Creates a session on this machine, in `directory`, its folder's
+  /// directory or a scratch directory of its own, and opens its runtime so
+  /// the composer has the runtime's options.
+  func create(runtime kind: RuntimeKind, title: String, folderID: String?, directory chosen: String? = nil) async throws -> Session {
     guard runtimes[kind] != nil else { throw ProtocolError(.badRequest, "This machine has no \(kind.rawValue) runtime.") }
     let id = UUID().uuidString.lowercased()
     let directory: String
-    if let folderID {
+    if let folderID, let folder = try await library.folder(folderID), folder.machineID != library.machineID {
+      throw ProtocolError(.notOwner, "That folder is on another machine.", machineID: folder.machineID)
+    }
+    if let chosen, !chosen.isEmpty {
+      directory = chosen
+    } else if let folderID {
       guard let folder = try await library.folder(folderID) else { throw ProtocolError(.notFound, "No folder \(folderID).") }
       guard folder.machineID == library.machineID else {
         throw ProtocolError(.notOwner, "That folder is on another machine.", machineID: folder.machineID)
@@ -138,7 +145,8 @@ actor SessionManager {
     if let host = hosts[sessionID] { return host }
     let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
                            configurations: configurations,
-                           tools: toolKeys?.access(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)))
+                           tools: toolKeys?.access(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)),
+                           firstMessages: firstMessages)
     hosts[sessionID] = host
     return host
   }
@@ -190,9 +198,13 @@ actor SessionHost {
   private var subscribers: [UUID: AsyncThrowingStream<SessionEvent, any Error>.Continuation] = [:]
   private var busy = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
+  /// The last turn was interrupted, so a goal does not continue it.
+  private var interrupted = false
+  private let firstMessages: FirstMessageHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
-       configurations: RuntimeConfigurations, tools: ToolAccess? = nil) {
+       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil) {
+    self.firstMessages = firstMessages
     self.tools = tools
     self.sessionID = sessionID
     self.library = library
@@ -225,8 +237,9 @@ actor SessionHost {
   }
 
   /// `author` marks a message another session or a bot sent through the
-  /// Woven MCP; the runtime is told who it is from.
-  func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil) async throws {
+  /// Woven MCP; the runtime is told who it is from. `delivered`, when set,
+  /// is what the runtime is sent in place of `text`, which is what is saved.
+  func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil) async throws {
     await enter()
     defer { leave() }
     switch run {
@@ -234,6 +247,9 @@ actor SessionHost {
     case .running: throw ProtocolError(.busy, "A turn is already running.")
     case .idle: break
     }
+    interrupted = false
+    let empty = (try? await library.hasItems(sessionID)) == false
+    let first = author == nil && empty
     var files: [TurnAttachment] = []
     for attachment in attachments {
       guard let file = try await library.contentFile(attachment.digest) else {
@@ -245,7 +261,7 @@ actor SessionHost {
     try await finish(.userMessage(text: text, attachments: attachments), id: UUID().uuidString.lowercased(), author: author)
     try? await library.setTurnRunning(sessionID, true)
     setRun(.running)
-    let delivered = author.map { author in
+    let delivered = override ?? author.map { author in
       let from = author.sessionID.map { "the agent session “\(author.name)” (\($0))" } ?? "the bot \(author.name)"
       return "This message is from \(from), not the person.\n\n" + text
     } ?? text
@@ -255,6 +271,29 @@ actor SessionHost {
       try? await library.setTurnRunning(sessionID, false)
       setRun(.idle)
       throw ProtocolError(.failed, "The runtime did not take the turn: \(error)")
+    }
+    if first { firstMessages?.tell(sessionID, text) }
+  }
+
+  /// The agent said the goal is met: it is cleared, and the chat says so.
+  func goalMet(_ evidence: String) async throws {
+    await enter()
+    defer { leave() }
+    guard let goal = try await library.session(sessionID)?.goal else { throw ProtocolError(.notFound, "This session has no goal.") }
+    _ = try await library.updateSession(sessionID, goal: .some(nil))
+    let account = evidence.trimmingCharacters(in: .whitespacesAndNewlines)
+    try await finish(.notice(Notice(kind: .goalMet, text: "Goal met: \(goal)" + (account.isEmpty ? "" : "\n\n" + account))),
+                     id: UUID().uuidString.lowercased())
+  }
+
+  /// When a turn ends and the session still has a goal, the next turn asks
+  /// the runtime to continue toward it. Not after an interruption or a failed
+  /// turn, nor while a question waits; the person's next message resumes it.
+  private func continueGoal() async {
+    guard run == .idle, prompts.isEmpty, !interrupted,
+          let goal = try? await library.session(sessionID)?.goal, !goal.isEmpty else { return }
+    Task { [weak self] in
+      try? await self?.send(Goals.continuedText, attachments: [], author: Goals.author, delivered: Goals.continuation(goal))
     }
   }
 
@@ -281,6 +320,7 @@ actor SessionHost {
   func interrupt() async throws {
     await enter()
     defer { leave() }
+    interrupted = true
     clearPrompts()
     try await live?.interrupt()
   }
@@ -375,6 +415,7 @@ actor SessionHost {
                                        cacheWrite: usage.cacheWrite, cost: usage.cost ?? 0)
       }
       await endTurn()
+      if failure == nil { await continueGoal() }
     case .nativeSessionGone:
       await saving { try await self.finishOpenItems() }
       let gone = live

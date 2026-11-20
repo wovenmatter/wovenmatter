@@ -97,6 +97,9 @@ final class Connection: @unchecked Sendable {
     guard status == SQLITE_DONE || status == SQLITE_ROW else { throw DatabaseError(lastError) }
   }
 
+  /// Rows the last statement changed.
+  var changes: Int { Int(sqlite3_changes(handle)) }
+
   func query(_ sql: String, _ values: [SQLValue] = []) throws -> [Row] {
     let statement = try prepare(sql, values)
     defer { sqlite3_reset(statement) }
