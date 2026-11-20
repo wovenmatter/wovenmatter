@@ -165,7 +165,8 @@ export class Bot {
 
   /**
    * Send a message to the main channel or a thread: a user message (round 0), or with `round` a
-   * bot-to-bot message. The first message of an untitled thread also starts its title generation,
+   * bot-to-bot message. While the bot works, it steers that turn, joining it after the current
+   * tool round. The first message of an untitled thread also starts its title generation,
    * as Woven titles a conversation from its first prompt. While the bot runs a fallback main model,
    * the stored input starts with the fallback note (the chat hides it).
    */
@@ -187,7 +188,7 @@ export class Bot {
         content: [note, round === 0 && context ? contextNote(context) : undefined, text]
           .filter(Boolean)
           .join("\n\n"),
-        whenBusy: "followUp",
+        whenBusy: "steer",
         // Hidden inputs reach the model but never the chat (transcript.ts).
         entry: { kind: "bot.input", data: options.hidden ? { round, hidden: true } : { round } },
       },
