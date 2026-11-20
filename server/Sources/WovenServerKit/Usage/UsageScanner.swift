@@ -47,9 +47,13 @@ actor UsageScanner {
     }
   }
 
-  func stop() {
-    task?.cancel()
-    task = nil
+  /// Ends the scanning after the history being read, so a normal stop
+  /// never leaves one marked as being read.
+  func stop() async {
+    guard let task else { return }
+    task.cancel()
+    await task.value
+    self.task = nil
   }
 
   private func scanAndReport() async {
@@ -70,6 +74,7 @@ actor UsageScanner {
       if Task.isCancelled { return pass }
       try? await read(file, known: sources[file.source], into: &pass)
     }
+    if Task.isCancelled { return pass }
     try? await readOpenCode(known: sources[Self.openCodeSource], into: &pass)
     pass.records = (try? await library.flushUsage(now: now)) ?? 0
     return pass
@@ -124,22 +129,20 @@ actor UsageScanner {
     return files
   }
 
-  /// Reads what is new in one file. A file that cannot be read (it fails to
-  /// decompress, or reading it fails) is passed over with its size and
-  /// change time recorded, so it is tried again only once it changes; its
-  /// read position stays where it was. A line that is not what its harness
-  /// writes is skipped on its own.
+  /// Reads what is new in one file. Before reading, the file is recorded as
+  /// passed over at its size and change time with its read position where it
+  /// was, and only a finished read records otherwise. So a file that cannot
+  /// be read (it fails to decompress, or reading it fails), or whose reading
+  /// ended the process, is tried again only once it changes. A line that is
+  /// not what its harness writes is skipped on its own.
   private func read(_ file: HistoryFile, known: UsageSource?, into pass: inout Pass) async throws {
     let attributes = try FileManager.default.attributesOfItem(atPath: file.url.path)
     let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
     let modified = Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000)
     if let known, known.size == size, known.modified == modified { return }
-    do {
-      try await read(file, known: known, size: size, modified: modified, into: &pass)
-    } catch {
-      try await library.saveUsage([], source: UsageSource(id: file.source, offset: known?.offset ?? 0, size: size, modified: modified,
-                                                          identity: known?.identity ?? "", state: known?.state ?? ""))
-    }
+    try await library.saveUsage([], source: UsageSource(id: file.source, offset: known?.offset ?? 0, size: size, modified: modified,
+                                                        identity: known?.identity ?? "", state: known?.state ?? ""))
+    try? await read(file, known: known, size: size, modified: modified, into: &pass)
   }
 
   /// A plain file is the same history while its first line is: copied,
@@ -216,6 +219,8 @@ actor UsageScanner {
 
   /// OpenCode keeps its history in one database, read on from the last
   /// message seen. Its size and change time include the write-ahead log.
+  /// Like a file, it is recorded as passed over before it is read, and each
+  /// page read keeps it so while moving the place on.
   private func readOpenCode(known: UsageSource?, into pass: inout Pass) async throws {
     let path = home.appendingPathComponent(".local/share/opencode/opencode.db").path
     guard FileManager.default.fileExists(atPath: path) else { return }
@@ -227,13 +232,10 @@ actor UsageScanner {
     }
     if let known, known.size == size, known.modified == modified { return }
     var cursor = (time: known?.offset ?? 0, id: known?.identity ?? "")
-    do {
-      try await readOpenCode(path, from: &cursor, size: size, modified: modified, into: &pass)
-    } catch {
-      // Locked past the wait, corrupt or not OpenCode's: tried again once it changes.
-      try await library.saveUsage([], source: UsageSource(id: Self.openCodeSource, offset: cursor.time, size: size,
-                                                          modified: modified, identity: cursor.id))
-    }
+    try await library.saveUsage([], source: UsageSource(id: Self.openCodeSource, offset: cursor.time, size: size,
+                                                        modified: modified, identity: cursor.id))
+    // Locked past the wait, corrupt or not OpenCode's: tried again once it changes.
+    try? await readOpenCode(path, from: &cursor, size: size, modified: modified, into: &pass)
   }
 
   private func readOpenCode(_ path: String, from cursor: inout (time: Int64, id: String), size: Int64, modified: Int64,
@@ -244,18 +246,17 @@ actor UsageScanner {
       let page = try HistoryReader.openCode(database, after: cursor, limit: limit)
       let stuck = page.cursor == cursor
       cursor = page.cursor
-      let last = page.rows < limit || stuck
       pass.found += page.entries.count
       pass.added += try await library.saveUsage(page.entries, source: UsageSource(
-        id: Self.openCodeSource, offset: cursor.time, size: last ? size : 0, modified: last ? modified : 0, identity: cursor.id))
-      if last { break }
+        id: Self.openCodeSource, offset: cursor.time, size: size, modified: modified, identity: cursor.id))
+      if page.rows < limit || stuck { break }
     }
     pass.read += 1
   }
 
   // MARK: Helpers
 
-  private static func source(_ harness: String, _ key: String) -> String {
+  static func source(_ harness: String, _ key: String) -> String {
     harness + ":" + Library.digest(of: Data((harness + "\n" + key).utf8)).prefix(32)
   }
 

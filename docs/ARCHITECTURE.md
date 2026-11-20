@@ -265,8 +265,11 @@ machine reads its own library and so shows every machine.
 - Every history may have been written by anyone. A line that is not what its
   harness writes is skipped; a file that cannot be read (it fails to
   decompress, or the database is locked or corrupt) is passed over until it
-  changes. Counts are held below a trillion per response, and decompression
-  stops at 256 MiB per file.
+  changes. Each history is recorded as passed over before it is read, and
+  only a finished read records otherwise, so one whose reading ends the
+  server costs one crash and waits until it changes; a normal stop lets the
+  read in progress finish. Counts are held below a trillion per response,
+  and decompression stops at 256 MiB per file.
 - What it reads is summed per harness session, model and hour in a local
   table. When the hour is over, each sum becomes one synced record, so a year
   of heavy use stays a few thousand rows per machine. The page includes this

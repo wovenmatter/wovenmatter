@@ -169,6 +169,36 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   #expect(try await groups(other) == open)
 }
 
+/// A history whose reading ended the process is left marked as passed over
+/// at its size and change time, as reading starts. After the restart it is
+/// not read again until it changes, and every other history still is.
+@Test func aHistoryWhoseReadingEndedTheProcessIsPassedOverUntilItChanges() async throws {
+  let home = try temporary("usage-home")
+  let project = home.appendingPathComponent(".claude/projects/-tmp-example")
+  let fatal = project.appendingPathComponent(claudeSession + ".jsonl")
+  try write([claudeLine("msg_fatal", at: "2026-01-05T11:00:01.000Z", input: 1, output: 1)], to: fatal)
+  try write([claudeLine("msg_other", session: "22222222-2222-4333-8444-555555555555", at: "2026-01-05T11:00:02.000Z",
+                        input: 2, output: 2)], to: project.appendingPathComponent("22222222-2222-4333-8444-555555555555.jsonl"))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  // The mark an attempt on a file never read before writes, left behind.
+  let attributes = try FileManager.default.attributesOfItem(atPath: fatal.path)
+  try await library.saveUsage([], source: UsageSource(
+    id: UsageScanner.source("claude", "/-tmp-example/\(claudeSession).jsonl"), size: (attributes[.size] as? NSNumber)?.int64Value ?? 0,
+    modified: Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000)))
+
+  let scanner = UsageScanner(library: library, home: home)
+  let restarted = await scanner.scan()
+  #expect(restarted.read == 1 && restarted.added == 1)
+  #expect(await scanner.scan().read == 0)
+
+  let handle = try FileHandle(forWritingTo: fatal)
+  try handle.seekToEnd()
+  try handle.write(contentsOf: Data((claudeLine("msg_later", at: "2026-01-05T11:05:00.000Z", input: 1, output: 1) + "\n").utf8))
+  try handle.close()
+  let changed = await scanner.scan()
+  #expect(changed.read == 1 && changed.added == 2)
+}
+
 /// Anyone can write a history file, so malformed compressed input throws and
 /// never traps: four streams for too few literals, a Huffman weight past 11,
 /// a block larger than the format allows, every truncation and every one-byte
