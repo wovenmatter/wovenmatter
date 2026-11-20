@@ -58,7 +58,11 @@ struct ACPRuntime: Runtime {
 }
 
 /// JSON-RPC over one child process: requests with replies, and everything
-/// the agent sends handed in order to `incoming`.
+/// else the agent sends handed to `receive`. Messages are handled one at a
+/// time in the order the agent wrote them, replies included: a reply is only
+/// returned once every message before it has been received, so a turn never
+/// ends before its last update, and a resumed session's replay is over
+/// before `session/load` returns.
 actor ACPConnection {
   enum Incoming: Sendable {
     case notification(method: String, params: JSONValue)
@@ -69,19 +73,17 @@ actor ACPConnection {
   private var nextID = 0
   private var pending: [Int: CheckedContinuation<JSONValue, any Error>] = [:]
   private var closed = false
-  nonisolated let incoming: AsyncStream<Incoming>
-  private let deliver: AsyncStream<Incoming>.Continuation
 
   init(child: ChildProcess) {
     self.child = child
-    (incoming, deliver) = AsyncStream<Incoming>.makeStream()
   }
 
-  func start() {
+  func start(receive: @escaping @Sendable (Incoming) async -> Void, ended: @escaping @Sendable () async -> Void) {
     let lines = child.lines
     Task {
-      for await line in lines { self.receive(line) }
+      for await line in lines { await self.handle(line, receive: receive) }
       self.ended()
+      await ended()
     }
   }
 
@@ -115,15 +117,15 @@ actor ACPConnection {
     await child.stop()
   }
 
-  private func receive(_ line: String) {
+  private func handle(_ line: String, receive: @Sendable (Incoming) async -> Void) async {
     guard let message = try? Wire.decoder.decode(JSONValue.self, from: Data(line.utf8)), case .object(let body) = message else { return }
     let method = body["method"]?.string
     let params = body["params"] ?? .object([:])
     if let method {
       if let id = body["id"], id != .null {
-        deliver.yield(.request(id: id, method: method, params: params))
+        await receive(.request(id: id, method: method, params: params))
       } else {
-        deliver.yield(.notification(method: method, params: params))
+        await receive(.notification(method: method, params: params))
       }
       return
     }
@@ -143,7 +145,6 @@ actor ACPConnection {
     closed = true
     for continuation in pending.values { continuation.resume(throwing: RuntimeError.failed("The runtime's process ended.")) }
     pending.removeAll()
-    deliver.finish()
   }
 
   private static func text(_ value: JSONValue) -> String {
@@ -178,15 +179,10 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
     let child = try ChildProcess(executable: profile.executable, arguments: profile.arguments, directory: start.directory,
                                  environment: profile.environment, logFile: profile.logFile)
     let connection = ACPConnection(child: child)
-    await connection.start()
     let (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
     let state = ACPState(connection: connection, profile: profile, emit: emit, directory: start.directory)
     // Everything the agent says goes through `state`, in order, from the start.
-    let incoming = connection.incoming
-    Task {
-      for await message in incoming { await state.receive(message) }
-      await state.processEnded()
-    }
+    await connection.start(receive: { await state.receive($0) }, ended: { await state.processEnded() })
     do {
       let initialized = try await connection.request("initialize", .object([
         "protocolVersion": .integer(Int64(profile.protocolVersion)),
