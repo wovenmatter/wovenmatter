@@ -13,7 +13,8 @@ enum WovenInstructions {
     - Notes take plain text: `# ` headings, `- ` and `1. ` lists, one paragraph per line. Apps take a whole HTML \
     page. Pages are edited one component at a time with the ids and revisions `read_artifact` shows.
     - To show a chart, table, diagram or anything interactive in the chat, call `render_html` with a \
-    self-contained page (it may load libraries, such as a charting or diagram library, over HTTPS). Never put a \
+    self-contained page (it may load libraries, such as a charting or diagram library, over HTTPS); \
+    `preview_html` can check it first. Never put a \
     chart in a fenced code block. When the person wants something to keep, make an app with `create_artifact`.
     - A database belongs to one machine. Writes go to it and fail while it is offline; reads use the latest copy.
     - Sessions run on one machine. `send_to_session` and `start_session` reach other machines' sessions too; \
