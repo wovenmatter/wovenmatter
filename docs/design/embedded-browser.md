@@ -1,148 +1,76 @@
-# Shared workspace browser
+# Embedded browser and Computer Use
 
-For controls, tab limits, persistence, and sharing behavior, see
-[Notes and data](../guide/notes-and-data.md#browse-beside-your-work). Credential
-consent, recovery, and Dev signing are documented in
-[Credential access](../MAC_ACCESS.md#keychain-access-and-prompt-policy).
+For the browser's controls, see
+[Notes and data](../guide/notes-and-data.md#browse-beside-your-work). Permissions
+are in [Mac access](../MAC_ACCESS.md).
 
-## Ownership and lifecycle
+## Ownership
 
-`WorkspaceAssetSession` owns ephemeral tabs independently of chats.
-`AssetPane` owns pane navigation and shared toolbar controls;
-`DesktopNotePane` supplies the selected note-like asset's editor.
-SwiftUI redraws, reparenting, and hidden panes retain each page's AppKit view.
+`WorkspaceAssetSession` owns the browser tabs, independently of chats, so
+switching chats, resizing or hiding the pane never destroys a page. `AssetPane`
+draws the tab strip and toolbar; `DesktopNotePane` supplies the note editor.
+Up to ten browser tabs can be open. Popups open as tabs in the same strip.
 
-The runtime retains pages until CEF's `OnBeforeClose`; clients hold weak page
-references, and closure releases CEF references before the owner. Creation,
-navigation, and close run on the main thread. The external message pump runs in
-common AppKit run-loop modes. Native quit is deferred until outside that pump.
-Updates and execution-mode changes resolve unload prompts before committing a
-restart, keeping CEF initialized so failed preparation can restore browsing.
-Only final termination calls `CefShutdown`.
+The browser is Chromium through CEF (`app/Browser`). Helpers start the macOS
+sandbox before loading CEF. Pages have no Woven bridge, no remote debugging
+port and no certificate-error bypass. A download the person starts uses a save
+dialog and never opens by itself.
 
-Popups preserve CEF's opener and POST navigation in the shared tab strip.
-Downloads use a save dialog and never execute automatically. Helpers initialize
-the macOS sandbox before loading CEF. Websites have no Woven Matter tool bridge,
-remote debugging port, Node integration, or certificate-error bypass. Existing
-HTML artifact WebKit isolation remains independent.
+## Profile and passwords
 
-Browser Use is enabled by default and exposes Playwright operations through the
-authenticated Woven MCP. The GUI owns an automation socket beside the backend
-socket, with the same private directory and kernel peer checks as backend RPC.
-The backend checks the caller's current capability and persists an input digest
-before dispatch. The GUI rechecks it on each native protocol command. An ephemeral
-Node helper translates one owned CEF page into a token-protected loopback CDP
-connection for Playwright; CEF itself has no debugging port. Native frame IDs,
-utility worlds and domain cleanup preserve repeated connections and iframes.
-The helper receives no MCP bearer or provider credentials. Shared tabs remain
-owned by ApplicationModel's WorkspaceAssetSession across pane visibility changes.
+The browser runs on an in-memory profile, so cookies and site data last only
+until the app quits. Website passwords are not saved or filled. Before
+starting Chromium the app turns off Keychain prompts for the whole process, and
+the bridge refuses to start without that policy.
 
-Each Mac's agents drive that Mac's own embedded browser; there is no shared
-browser across Macs. Quick Chat on iPhone offers neither
-capability and never controls iPhone UI. Execution access is checked before
-acceptance and between native input steps. Cancellation retains caller
-ownership and works after capability or execution-access revocation.
-Automation receipts retain completion metadata, without page or desktop captures;
-retries after completion inspect fresh state instead of replaying input.
+## Agents
 
-Linux execution workspaces expose the same `woven_browser_use` MCP tool against their
-own shared Chromium service. Its tabs appear in the remote workspace's **View
-browser** window. The browser profile and lifecycle remain with the Linux owner;
-MCP does not redirect those calls to the Mac currently viewing the conversation.
+The Woven MCP's `browser` and `computer` tools are defined once in the server
+(`server/Sources/WovenServerKit/Tools/Catalog.swift`). Because macOS ties these
+permissions to the app, the server hands each call to the newest connected UI
+on its own Mac and waits up to 90 seconds for the answer; with no UI connected
+the call fails at once. A Linux machine has no UI, so these tools fail there.
+`WovenAutomationHost` carries out one call at a time, stops an action after 25
+seconds and refuses results over 1 MiB.
 
-Computer Use is an independent, default-off capability, exposed exclusively as
-`woven_computer_use` through Woven MCP. The GUI directly supervises the signed,
-checksummed Cua Driver executable so macOS grants remain attributed to Woven
-Matter. Each caller receives a separate internal MCP proxy and implicit driver
-session; agents receive neither a raw driver descriptor nor its private socket.
-The wrapper admits only desktop discovery, bounded observations, launch and
-input actions. It defaults to exact-window background delivery; desktop and
-foreground input require explicit fields. Cua validates snapshot element tokens
-and capture IDs; Woven retains per-call authorization, durable request admission,
-inline image limits, cancellation and device execution checks. It re-encodes
-images without resizing them, preserving the driver's coordinate mapping.
+- **browser** drives the tabs in that Mac's window; the person sees them. For
+  each action the app runs the bundled Node with `browser-runtime.mjs` from
+  `default-agent/`, which drives the one page with Playwright over CDP that the
+  app relays to CEF. The helper gets only that page. Agent downloads go to a
+  private temporary folder under opaque identifiers.
+- **computer** controls the Mac's apps through the bundled Cua Driver
+  (`app/Automation/cua-version.json` records its release and checksums). The
+  app starts the driver itself so macOS credits its grants to Woven Matter,
+  gives each session its own connection, and never hands agents the driver's
+  socket. Every action except `status` needs Screen Recording and
+  Accessibility.
 
-The app bundles only the universal Cua executable and notices, with no Node SDK,
-perception extension, Cua Spaces, installer or runtime updater. Its isolated
-state, disabled telemetry and parent-lifetime pipe keep the helper owned by the
-GUI. Host shutdown and driver failure invalidate its generation. Native input on
-Linux and iOS remains outside this Mac desktop capability.
-
-`WorkspaceVisibleContext` captures bounded note IDs/titles/revisions and browser
-HTTP(S) URLs/titles at Send, marking the selected tab. URLs lose user information
-and fragments. The immutable snapshot survives local/backend/remote transport;
-it carries no page contents, cookies, saved passwords, or browser-control access.
-
-## Profiles and passwords
-
-Profiles live under Application Support/Woven Matter/Browser/<bundle ID>.
-Clear Browser Data deletes the selected profile before its first use after the
-next restart, with no open Chromium database handles. Saved website passwords
-and Connections credentials are separate and remain intact.
-
-CEF uses Chromium Safe Storage for encryption. Startup requires a
-consent-gated, noninteractive preflight. Preserve the existing shared secret;
-never replace a denied read or disable encryption. This stable SDK does not
-support a custom Safe Storage service name; do not patch its binary ABI.
-
-CEF password preferences are enabled, but its macOS child-view integration lacks
-Chrome's save bubble. Woven provides native Save/Update confirmation and an
-app-scoped Keychain vault. Native code independently validates the main frame's
-origin; lookup/fill requires exact HTTPS scheme/host/port (HTTP loopback allowed).
-Autofill rejects cross-origin form actions, iframes, new-password/confirmation
-fields, and existing user input. Manual account selection may replace input.
-
-The renderer observes standard top-level HTML form submissions and dynamic
-forms. Saving requires confirmation, not inferred login success. Scripted logins
-without form submission, iframe forms, and multi-step passwordless flows are
-outside this implementation. There is no Chrome/Safari password import.
+When the person sends a message with the pane open, `WorkspaceVisibleContext`
+records the open notes (id, title, last edit) and browser tabs (HTTP(S) URL
+without user information or fragment, and title), marking the selected tab. It
+carries no page contents or cookies.
 
 ## Build and maintenance
 
-`app/Browser/cef-version.json` records the exact official CEF build and archive
-SHA-1 for each Mac architecture. Builds use only that record.
-`scripts/prepare-browser.sh` verifies checksums, builds the wrapper/adapter, and
-bundles/signs Chromium, sandboxed helpers, and license notices. CMake 3.21+ is
-required; select it with `WOVENMATTER_CMAKE` if needed. Downloads use
-`~/Library/Caches/WovenMatter/CEF` or `WOVENMATTER_CEF_CACHE_DIR`.
-Use the normal `scripts/build_and_run.sh` and `scripts/test-changes.sh --all`.
+`app/Browser/cef-version.json` records the exact CEF build and each Mac
+architecture's archive SHA-1; builds use only that record.
+`scripts/prepare-browser.sh` downloads and checks the archive, builds the
+wrapper and bridge, and bundles and signs Chromium, the helpers and license
+notices. It needs CMake 3.21 or later (`WOVENMATTER_CMAKE` selects one) and
+caches downloads in `~/Library/Caches/WovenMatter/CEF` or
+`WOVENMATTER_CEF_CACHE_DIR`. The app's Xcode build runs it.
 
-Dependency maintenance proposes the newest stable CEF build through a PR,
-because Chromium security fixes ship only on its current major
-(see [the dependency policy](../DEPENDENCIES.md)). Accepting one requires
-building both architectures and checking lifecycle, profile recovery, and UI
-behavior. Installed apps receive it only in a signed app or refresh build. Chromium does not include
-all proprietary Chrome services, codecs, or DRM. Sources:
-[CEF](https://github.com/chromiumembedded/cef) and
-[official binary distributions](https://cef-builds.spotifycdn.com/index.html).
+Dependency maintenance moves to the newest stable CEF, because Chromium ships
+security fixes only on its current major (see
+[the dependency policy](../DEPENDENCIES.md)). Chromium lacks some proprietary
+Chrome services, codecs and DRM.
 
-## Focused validation
+## Tests
 
-- Core tests cover tab limits/selection, hidden-pane retention, address handling,
-  and snapshot transport. Credential tests cover persistence, origin isolation,
-  failed writes, and the app-wide prompt policy using fake Keychain operations.
-- Native lifecycle fixtures cover retained owners, unload cancellation, restart
-  recovery, and deferred shutdown without loading CEF or accessing Keychain.
-  The normal build validates the actual framework/helper bundles and signatures.
-- The opt-in password fixture exercises real CEF against synthetic loopback
-  forms, with a mock Chromium Keychain, disposable profile, and hidden window:
-
-  ```sh
-  cmake --build "$CEF_CMAKE_BUILD" --target WovenBrowserPasswordTests WovenBrowserHelper
-  python3 scripts/test-browser-passwords.py "$CEF_CMAKE_BUILD" "$BUILT_APP"
-  ```
-
-  `CEF_CMAKE_BUILD` is the build's `DerivedSources/cef-<architecture>` directory.
-  Only the fixture target compiles the mock-Keychain switch. Never automate
-  browser tests against the user's real Keychain/profile or provider accounts.
-  Live websites, signed-in sessions, and UI acceptance remain human testing.
-
-- `scripts/test-browser-automation.py CEF_CMAKE_BUILD BUILT_APP NODE BROWSER_SCRIPT`
-  runs the opt-in `WovenBrowserAutomationTests` target against real CEF/Playwright
-  with the same disposable profile, hidden window and mock Keychain. It covers
-  snapshots, repeated connections, form input, upload/download, screenshot,
-  navigation and shutdown. Build that target before invoking the script.
-  Browser MCP, capability migration, revocation, admission digests and image
-  transport have provider-free tests in the normal validation suite. Human testing
-  still covers signed-app TCC grants, multi-display desktop input, Stop during
-  active control, and provider acceptance in each harness.
+The CMake project has opt-in fixtures that are not part of the normal build:
+`WovenBrowserLifecycleTests`, which never loads Chromium, and
+`WovenBrowserPasswordTests` and `WovenBrowserAutomationTests`, which run real
+CEF with a disposable profile, a mock Keychain and a hidden window.
+`scripts/test-browser-passwords.py` and `scripts/test-browser-automation.py`
+run the last two against a built app. Never point browser tests at the person's
+own Keychain, profile or provider accounts.

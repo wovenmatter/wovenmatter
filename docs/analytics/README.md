@@ -1,140 +1,62 @@
-# Product analytics
+# Analytics
 
-Each Mac sends explicit events to PostHog Cloud US, for itself and for the
-iPhones and iPads that report through it; Linux hosts send none. One random
-analytics ID belongs to the library and synchronizes to every device in it. It is
-independent of operational device, workspace, provider, and account IDs. Separate
-libraries count separately; these are active-library estimates, not identified
-people. There is no analytics SDK, autocapture, person profile, or session replay.
+## In the app
 
-## Six-hour signals
+The app sends no product analytics. General settings has a **Share product
+analytics** toggle with a link to
+[wovenmatter.com/privacy](https://wovenmatter.com/privacy); it is stored as the
+synced setting `analytics.enabled` (off unless set), and nothing reads it to
+send events. The app-event tiles on the PostHog dashboard show only events from
+earlier releases.
 
-- `app_opened`: opening the interface (or foregrounding the mobile app) can send a signal.
-- `app_active`: a deliberate content change, session creation, or message submission
-  can send one generic activity signal. The action type is not recorded or sent.
-
-Each signal has its own rolling six-hour limit, enforced by each Mac for its own
-events and those of the phones it admits, across restarts. Several Macs in one
-library can each send a signal within the same window; distinct-ID counts are
-unaffected. A qualifying action at 9 am can send immediately;
-more activity is suppressed until 3 pm. Nothing fires at 3 pm: another qualifying
-action is required. Opens never consume the activity allowance, or vice versa.
-Browsing, background synchronization, agent writes/outcomes, scheduled work, and
-imports do not qualify. There are no per-feature or per-action usage counters.
-
-DAU/WAU/MAU count distinct library IDs with `app_active` signals in the whole
-rolling 24-hour/7-day/30-day UTC windows. Do not sum daily unique counts. Six-hour
-sampling makes these approximate, especially at the daily window boundary.
-App-open charts count sampled open signals, not every launch. Offline, opted-out,
-and failed-send usage is excluded from all reports.
-
-## Delivery and preferences
-
-Signals are attempted immediately. There is no 30-second publisher, persistent
-event queue, retry loop, or offline replay. Each request has a five-second timeout;
-concurrent sends are bounded, and excess events are dropped. Six-hour timestamps
-limit attempts as well as successful signals, so a failure does not cause every
-subsequent edit to retry. Future eligible actions can make a new attempt.
-iPhone and iPad sends do not block content synchronization or user actions.
-
-Privacy choices persist and synchronize to every device: the preference row, with
-its library-wide analytics ID, is part of library sync between Macs and Linux hosts.
-iPhones and iPads read and change it through a Mac: their current library host
-when that is a Mac, otherwise another Mac member (Linux hosts answer that
-analytics are unsupported). When devices chose
-differently while apart, opting out wins. Analytics default to on, with the toggle and explanation in General settings;
-there is no launch disclosure or acknowledgement step. Opt-out stops local collection and
-cancels outstanding requests; an already-sent request cannot be recalled. Offline
-opt-out reaches other devices on reconnection. Old opt-ins cannot override newer
-choices. Re-enabling collects only future activity, without resetting signal limits.
-
-The toggle and policy link are at the bottom of General settings on Mac, iPhone,
-and iPad. The policy lives at [wovenmatter.com/privacy](https://wovenmatter.com/privacy).
-There is no user-facing analytics log. The Mac that admits an event retains
-bounded receipts solely to deduplicate attempts, never for delivery. Acceptance
-for an iPhone or iPad means that Mac accepted the attempt, not that PostHog
-received it.
-
-Only platform, app version, OS major version, and updater target version are
-allowlisted. No action categories, agent outcomes, content, titles, messages,
-files, paths, account identifiers, arbitrary errors, or model labels are sent.
-The country-only transform in `country-only.hog` removes IP and precise location
-fields and disables person profiles. Country describes the sending Mac's network.
-Verify that transform and IP discard in the live project before shipping.
-Debug builds never transmit to production PostHog.
-
-## Updates
-
-Updater metrics remain separate: manual check clicks, download/install starts,
-completed downloads, installation failures, and verified replacement-app launches.
-Lifecycle callbacks are starts, not button clicks. Historical `update_download_clicked`
-and `update_install_clicked` events already in PostHog are grouped with the
-corresponding started stages in the report. Expected installation cancellation is
-not a failure, and telemetry never delays backend recovery.
-
-A local install receipt is saved before installation can terminate the app,
-including install-on-quit without Sparkle's optional relaunch callback. It verifies
-the matching replacement version and build after restart; it is consumed on its
-first reporting attempt, including failure. The library preference is rechecked
-before delivery. It is not an analytics delivery backlog. Opt-out invalidates it.
-Update stages never qualify for DAU/WAU/MAU and are never added to GitHub downloads.
+`country-only.hog` is the PostHog transformation that drops IP and precise
+location fields, keeps only the country, and turns off person profiles.
 
 ## GitHub
 
-One daily workflow collects repository totals: installer DMG downloads, stars,
-forks, views, and clones. No GitHub account identities are collected. Stars/forks
-start with the first observed snapshot; missing historical values are not invented.
-Downloads include repeat, internal, direct, website, and updater transfers. They
-are downloads, not installations or unique people. Supporting release files are
-excluded from reporting. GitHub daily uniques are not weekly/monthly unique users.
+One daily workflow, `.github/workflows/analytics-history.yml`, collects
+repository totals: installer DMG downloads, stars, forks, views and clones. No
+GitHub account identities are collected. Stars and forks start with the first
+observed snapshot; missing history is not invented. Downloads include repeat,
+internal, direct, website and updater transfers, so they are downloads, not
+installations or people. Other release files are excluded. GitHub's daily
+uniques are not weekly or monthly unique users.
 
-`collect-github-analytics.py` preserves existing history, including traffic outside
-GitHub's short API window and last-known counters for deleted/replaced installers.
-`publish-github-analytics.py --history PATH --dry-run` previews aggregate publication.
-The repository publisher retains deterministic snapshot IDs and acknowledgement
-checkpoints to avoid double-counting revisions. This aggregate history is separate
-from app telemetry and is intentionally preserved. Saved chart definitions live
-in `product-dashboard-insights.json` (nine product/website insights) and
-`github-dashboard-insights.json` (six GitHub insights). `dashboard-text.md` contains
-the matching measurement notes. All insights include their live short IDs.
+The workflow runs on `main` at **03:17 UTC**, or by hand:
 
-The daily workflow restores the complete previous main-branch workflow artifact
-and archives a complete successor. It never silently starts over. First setup or
-recovery requires the complete existing JSON backup as `bootstrap_history`.
-Keep durable backups: Actions artifact retention is 90 days. Collection failure
-must not renew stale history. Publication failure still preserves the new archive.
-`ANALYTICS_GITHUB_TOKEN` requires repository Administration read permission for
-traffic. The embedded PostHog token grants ingestion only, not administration.
+1. `scripts/restore-github-analytics.py` restores the complete previous history
+   from the last workflow artifact. It never silently starts over: first setup
+   or recovery needs the complete existing JSON backup as the
+   `bootstrap_history` input.
+2. `scripts/collect-github-analytics.py` adds today's totals, keeping traffic
+   older than GitHub's short API window and last-known counts for deleted or
+   replaced installers. It needs `ANALYTICS_GITHUB_TOKEN` with repository
+   Administration read access for traffic.
+3. `scripts/publish-github-analytics.py` publishes aggregate snapshots to
+   PostHog with deterministic snapshot IDs, so revisions are not counted twice.
+   `--history PATH --dry-run` previews it. The project token it uses allows
+   ingestion only.
+4. The new history is uploaded as an artifact whenever collection succeeded,
+   even if publication failed. Artifacts are kept 90 days, so keep durable
+   backups.
 
-## Daily email report
+## Dashboard and daily email
 
-Use PostHog's native dashboard email subscription for the product-and-acquisition
-dashboard (project `659360`, dashboard `2198735`). Configure one enabled report
-for the account's chosen email recipient, every day at **12:00 UTC**, including
-all 15 saved insights. Keep the timezone UTC so daylight saving does not shift
-the reporting time. An AI summary is optional and is not required for statistics.
-This is a scheduled report, independent of the account's billing plan.
+Saved chart definitions are in `product-dashboard-insights.json` (nine product
+and website insights) and `github-dashboard-insights.json` (six GitHub
+insights), each with its live short ID. `dashboard-text.md` holds the
+dashboard's measurement notes.
 
-The GitHub collector is scheduled at **03:17 UTC** to leave time before the noon
-report. GitHub Actions may delay or skip scheduled runs; the email uses the latest
-successfully published snapshot and includes the collection-time insight so its
-freshness is visible. App and website events arrive independently. The email is
-a statistics report, not a claim that a particular collection job succeeded.
-Saving a dashboard definition or merging this repository does not create a
-PostHog email subscription; configure and verify that separately in PostHog.
+The daily email is PostHog's own dashboard subscription for the
+product-and-acquisition dashboard (project `659360`, dashboard `2198735`): one
+enabled report to the chosen recipient, every day at **12:00 UTC**, with all 15
+insights. Keep it in UTC so daylight saving does not move it. GitHub Actions may
+delay or skip a scheduled run; the email uses the latest published snapshot and
+includes the collection-time tile so its freshness shows. Merging this
+repository does not create or change the subscription; set it up in PostHog.
 
-After editing live charts, read back every insight's name, description and full
-query and synchronize these JSON files and measurement notes. Execute each saved
-query to verify results; do not infer success from saving metadata. Check that the
-report still includes all 15 insights after adding a tile. Before calling email
-setup complete, verify its enabled state, recipient, daily UTC schedule, and a
-test delivery record. A successful send record does not prove inbox receipt.
-
-## Testing and rollout
-
-Use existing repository validation and disposable local probes. No live provider
-calls are needed for source tests. Before shipping, verify the public policy,
-Release ingestion and stored country-only/IP-free metadata, two-device throttling,
-offline dropping, opt-out/reconnection, and a signed updater round trip. Debug
-checks cannot establish those live outcomes. After merge, initialize the history
-workflow from the complete preserved backup and verify its first successor archive.
+After editing live charts, read back every insight's name, description and
+query, update these files to match, and run each saved query to check its
+results. Check the report still includes every insight after adding a tile.
+Before calling the email set up, check its enabled state, recipient, schedule
+and a test delivery record.
