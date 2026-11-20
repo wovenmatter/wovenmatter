@@ -224,10 +224,11 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_artifact",
-    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML page). Returns its id and `basedOn` stamp.",
+    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML page). An app can link a database: give `databaseID` and `query`, and the page reads the rows as `window.wovenMatterData`, refreshed when the data changes. Returns its id and `basedOn` stamp.",
     input: schema(["kind": choice(["note", "page", "app"], "What to create."), "title": text("Its title."),
                    "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
-                   "html": text("An app's whole HTML page."), "folderID": text("File it in this folder.")],
+                   "html": text("An app's whole HTML page."), "folderID": text("File it in this folder."),
+                   "databaseID": text("An app's linked database."), "query": text("The SELECT whose rows an app reads.")],
                   required: ["kind", "title"]),
     groups: [.notes],
     run: { call in
@@ -237,6 +238,7 @@ private let artifactTools: [WovenTool] = [
       var document = NoteDocument(kind: kind)
       if kind == .note, let text = call.arguments.optionalString("text") { document = DocumentText.note(text) }
       if kind == .html { document.html = call.arguments.optionalString("html") ?? "" }
+      try await linkDatabase(call, into: &document)
       let created = try await call.tools.library.createArtifact(kind: kind, title: try call.arguments.string("title"),
                                                                 folderID: call.arguments.optionalString("folderID"),
                                                                 body: try checked(document))
@@ -251,14 +253,16 @@ private let artifactTools: [WovenTool] = [
       outline (for update, move and remove), `kind` (text, task or section, for add), `patch` (`text`, and for a \
       task `status` todo|doing|blocked|done, `outcome`, `details`), `position` (`parentID`, `afterID` or `atStart`; \
       add appends when omitted), `removal` (promoteChildren or removeSubtree, for a section), `purpose`. \
-      `appState` edits are `{action: set|remove, key, value, expectedVersion}`. Returns the new `basedOn`.
+      `appState` edits are `{action: set|remove, key, value, expectedVersion}`. An app's `databaseID` and `query` \
+      change the database it reads as `window.wovenMatterData`. Returns the new `basedOn`.
       """,
     input: schema(["artifactID": text("The artifact."), "basedOn": text("The stamp from when you read it."),
                    "title": text("A new title."), "text": text("A note's whole new text."), "html": text("An app's whole new HTML."),
                    "pageEdits": .object(["type": .string("array"), "items": .object(["type": .string("object")]),
                                          "description": .string("Page component edits, applied in order.")]),
                    "appState": .object(["type": .string("array"), "items": .object(["type": .string("object")]),
-                                        "description": .string("Edits to an app's saved state.")])],
+                                        "description": .string("Edits to an app's saved state.")]),
+                   "databaseID": text("An app's linked database."), "query": text("The SELECT whose rows an app reads.")],
                   required: ["artifactID", "basedOn"]),
     groups: [.notes],
     run: { call in
@@ -277,10 +281,11 @@ private let artifactTools: [WovenTool] = [
         guard kind == .note else { throw ToolFailure("`text` replaces a note's text; this is a \(kindName(kind)).") }
         body = try checked(DocumentText.note(text))
       }
-      if let html = call.arguments.optionalString("html") {
-        guard kind == .html else { throw ToolFailure("`html` replaces an app's page; this is a \(kindName(kind)).") }
+      if call.arguments.optionalString("html") != nil || call.arguments.optionalString("databaseID") != nil {
+        guard kind == .html else { throw ToolFailure("`html` and `databaseID` change an app; this is a \(kindName(kind)).") }
         var document = try NoteDocument.editableDocument(from: (try await library.artifact(id)).body)
-        document.html = html
+        if let html = call.arguments.optionalString("html") { document.html = html }
+        try await linkDatabase(call, into: &document)
         body = try checked(document)
       }
       if let edits = call.arguments["pageEdits"], edits != .array([]) {
@@ -304,6 +309,18 @@ private let artifactTools: [WovenTool] = [
       return .text("Saved.\(note) basedOn: \(written.artifact.stamp)")
     }),
 ]
+
+/// Links the database `databaseID` names to an app, read through `query`.
+private func linkDatabase(_ call: ToolRequest, into document: inout NoteDocument) async throws {
+  guard let databaseID = call.arguments.optionalString("databaseID") else { return }
+  guard document.kind == .html else { throw ToolFailure("Only an app links a database here.") }
+  guard let query = call.arguments.optionalString("query"), !query.isEmpty else { throw ToolFailure("Give the `query` the app reads.") }
+  guard let database = try await call.tools.databases.list().first(where: { $0.id == databaseID }) else {
+    throw ToolFailure("No database \(databaseID).")
+  }
+  document.databaseLink = DatabaseArtifactLink(sourceID: database.machineID, databaseID: database.id,
+                                               relativePath: "data.sqlite", sqliteQuery: query)
+}
 
 // MARK: Databases
 
