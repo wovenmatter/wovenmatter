@@ -546,15 +546,20 @@ final class SessionStore {
                         createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
                 }
                 runs[run].assistantMessageID = id
-                runs[run].completedAt = entry.date
+                if !entry.live { runs[run].completedAt = entry.date }
             case .toolCall(let call):
                 let run = currentRun(at: entry.date)
+                if !entry.live { runs[run].completedAt = entry.date }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }
+                // A turn that failed or was stopped ended with that notice.
+                if notice.kind == .failure || notice.kind == .interrupted, !runs.isEmpty {
+                    runs[runs.count - 1].completedAt = entry.date
+                }
                 if notice.kind == .failure, !runs.isEmpty {
                     runs[runs.count - 1].status = .failed
                     runs[runs.count - 1].error = notice.text

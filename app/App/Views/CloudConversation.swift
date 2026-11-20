@@ -39,7 +39,6 @@ struct CloudConversation: View {
     @State private var scrollPosition = ScrollPosition(idType: String.self)
     @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
-    @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
     @State private var libraryHighlightID: String?
     @State private var attachmentOpenError: String?
@@ -152,7 +151,6 @@ struct CloudConversation: View {
                 }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
-                    scrollInteractionRevision += 1
                     scrollPosition = ScrollPosition(idType: String.self)
                     scrollState.setNearBottom(false)
                 }
@@ -170,7 +168,6 @@ struct CloudConversation: View {
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
                     if isUserScrolling {
                         transcriptOwnsScroll = false
-                        scrollInteractionRevision += 1
                     }
                 }
                 .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
@@ -178,8 +175,8 @@ struct CloudConversation: View {
                         contentHeight: geometry.contentSize.height,
                         isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 80
                     )
-                } action: { oldGeometry, newGeometry in
-                    geometryChanged(from: oldGeometry, to: newGeometry, using: proxy)
+                } action: { _, newGeometry in
+                    geometryChanged(to: newGeometry)
                 }
                 .onScrollGeometryChange(for: CGRect.self) { geometry in
                     // The offset as `scrollTo(y:)` takes it, and the content's size.
@@ -199,7 +196,6 @@ struct CloudConversation: View {
                 .overlay(alignment: .bottomTrailing) {
                     if !scrollState.isNearBottom, conversation != nil {
                         Button("Latest reply", systemImage: "arrow.down") {
-                            scrollInteractionRevision += 1
                             transcriptOwnsScroll = false
                             scrollState.setNearBottom(true)
                             scrollToConversationBottom(using: proxy)
@@ -429,7 +425,6 @@ struct CloudConversation: View {
                 guard conversation?.isArchived != true else { return }
                 transcriptOwnsScroll = false
                 isUserScrolling = false
-                scrollInteractionRevision += 1
                 scrollState.setNearBottom(true)
                 scrollPosition.scrollTo(id: chatEndID, anchor: .bottom)
                 onSend()
@@ -533,36 +528,22 @@ struct CloudConversation: View {
         isUserScrolling = false
         let targetsLibraryMessage = model.navigation.libraryMessageTarget?.conversationID == conversationID
         transcriptOwnsScroll = targetsLibraryMessage
-        scrollInteractionRevision += 1
         scrollState.conversationChanged(to: conversationID)
         if transcriptOwnsScroll { scrollState.setNearBottom(false) }
         scrollPosition = ScrollPosition(idType: String.self)
     }
 
-    private func geometryChanged(from oldGeometry: ConversationGeometry, to newGeometry: ConversationGeometry,
-                                 using proxy: ScrollViewProxy) {
-        let followedBottomBeforeGrowth = oldGeometry.contentHeight != newGeometry.contentHeight
-            && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
-            && model.navigation.libraryMessageTarget?.conversationID != conversation?.id
+    /// Growth and shrinking at the live edge keep the bottom through the
+    /// size-change anchor, in the same layout pass. A scroll a turn later
+    /// would move the view against a document AppKit has not resized yet.
+    private func geometryChanged(to newGeometry: ConversationGeometry) {
         scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
-
-        if followedBottomBeforeGrowth {
-            let interactionRevision = scrollInteractionRevision
-            let owner = conversation?.id
-            Task { @MainActor in
-                await Task.yield()
-                guard interactionRevision == scrollInteractionRevision,
-                      owner == conversation?.id, !isPrependingHistory else { return }
-                scrollToConversationBottom(using: proxy)
-            }
-        }
     }
 
     @MainActor
     private func scrollToLibraryMessage(using proxy: ScrollViewProxy) async {
         guard let item = model.navigation.libraryMessageTarget, item.conversationID == conversation?.id,
               let session else { return }
-        scrollInteractionRevision += 1
         transcriptOwnsScroll = true
         scrollState.setNearBottom(false)
         await session.refresh()

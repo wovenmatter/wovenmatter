@@ -76,8 +76,12 @@ struct ConversationWorkTranscript: View {
         hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
+        // A run starts with its message and ends with its last saved item.
+        let duration = run.status == .running ? nil : run.startedAt.flatMap { start in
+            run.completedAt.map { formattedRunDuration($0.timeIntervalSince(start)) }
+        }
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
-                  presentation: nil,
+                  presentation: ConversationWorkPresentation(startedAt: run.startedAt, completedDuration: duration),
                   records: records, commentaryIDs: commentaryIDs,
                   hasFollowingResponse: hasFollowingResponse, timeline: timeline)
     }
@@ -188,10 +192,7 @@ struct ConversationWorkTranscript: View {
         switch run.status {
         case .running:
             if let startedAt = presentation?.startedAt {
-                TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                    Text("Working for \(Self.elapsed(context.date.timeIntervalSince(startedAt)))")
-                        .monospacedDigit()
-                }
+                RunningElapsedLabel(startedAt: startedAt)
             } else {
                 Text("Working")
             }
@@ -207,7 +208,7 @@ struct ConversationWorkTranscript: View {
     }
 
     /// Whole seconds for a once-per-second count; longer runs use the shared format.
-    private static func elapsed(_ interval: TimeInterval) -> String {
+    static func elapsed(_ interval: TimeInterval) -> String {
         interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval)
     }
 
@@ -1558,4 +1559,71 @@ func formattedRunDuration(_ interval: TimeInterval) -> String {
     if seconds == 0 { return "\(minutes)m" }
     if seconds == 60 { return "\(minutes + 1)m" }
     return "\(minutes)m \(seconds)s"
+}
+
+/// "Working for …" while a run is under way. It ticks once a second from its
+/// own timer and only repaints itself: its size never changes, so a tick
+/// never makes the transcript lay out again.
+private struct RunningElapsedLabel: NSViewRepresentable {
+    let startedAt: Date
+
+    func makeNSView(context: Context) -> RunningElapsedView { RunningElapsedView() }
+
+    func updateNSView(_ view: RunningElapsedView, context: Context) { view.startedAt = startedAt }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: RunningElapsedView, context: Context) -> CGSize? {
+        RunningElapsedView.size
+    }
+}
+
+private final class RunningElapsedView: NSView {
+    private static let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    /// Wide enough for any count, so the label keeps one size.
+    static let size: CGSize = {
+        let size = NSAttributedString(string: "Working for 999m 59s", attributes: [.font: font]).size()
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }()
+
+    var startedAt = Date.distantPast {
+        didSet { if startedAt != oldValue { needsDisplay = true; schedule() } }
+    }
+    private var timer: Timer?
+
+    override var isFlipped: Bool { true }
+
+    private var text: String {
+        "Working for \(ConversationWorkTranscript.elapsed(Date().timeIntervalSince(startedAt)))"
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        schedule()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// Fires on each whole second since the start, as the count changes.
+    private func schedule() {
+        timer?.invalidate()
+        timer = nil
+        guard window != nil, startedAt != .distantPast else { return }
+        let next = startedAt.addingTimeInterval(Date().timeIntervalSince(startedAt).rounded(.down) + 1)
+        let timer = Timer(fire: next, interval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSAttributedString(string: text, attributes: [.font: Self.font, .foregroundColor: WovenColors.mutedForeground])
+            .draw(at: .zero)
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+    override func accessibilityValue() -> Any? { text }
 }
