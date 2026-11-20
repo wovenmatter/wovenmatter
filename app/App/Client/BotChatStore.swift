@@ -254,6 +254,7 @@ final class ForumRoomStore {
     private(set) var loading = true
     private(set) var sending = false
     private(set) var loadingEarlier = false
+    private(set) var stopping = false
     /// Posts sent and not yet back from the server.
     private(set) var pending: [Pending] = []
     var error: String?
@@ -378,7 +379,7 @@ final class ForumRoomStore {
     }
 
     /// Reports whether the server took the post, so the composer keeps it otherwise.
-    func send(text: String, mentions: [String], everyone: Bool) async -> Bool {
+    func send(text: String, mentions: [String], everyone: Bool, context: String?) async -> Bool {
         guard isReady, let roomID, let bots else { return false }
         if text.count > PiBotAttachmentDraft.maxMessageCharacters {
             error = "Message and attachments must total fewer than 100,000 characters."
@@ -394,6 +395,7 @@ final class ForumRoomStore {
         var fields: [String: JSONValue] = ["roomId": .integer(Int64(roomID)), "text": .string(text)]
         if everyone { fields["everyone"] = .bool(true) }
         else if !mentions.isEmpty { fields["mentions"] = .array(mentions.map(JSONValue.string)) }
+        if let context, !context.isEmpty { fields["context"] = .string(context) }
         do {
             let result = try await bots.call("forum.post", fields, as: BotsWire.ForumPostResult.self)
             // The push usually got here first; either way the post is shown once.
@@ -402,6 +404,19 @@ final class ForumRoomStore {
         } catch {
             self.error = error.localizedDescription
             return false
+        }
+    }
+
+    /// Stops the bots working in this room, as a chat's Stop does; the Forum is not paused.
+    func stop() async {
+        guard !stopping, let roomID, let bots else { return }
+        stopping = true
+        defer { stopping = false }
+        error = nil
+        do {
+            _ = try await bots.call("forum.abort", ["roomId": .integer(Int64(roomID))])
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 

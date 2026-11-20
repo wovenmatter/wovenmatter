@@ -120,6 +120,7 @@ struct BotConversationSurface: View {
             ForumWorkspace(
                 bots: bots,
                 target: target,
+                context: context,
                 headerInsets: headerInsets,
                 focusGeneration: focusGeneration,
                 startsComposerCollapsed: startsComposerCollapsed,
@@ -926,7 +927,7 @@ private struct BotStreamingMessage: View {
     }
 }
 
-private struct BotModelStatusBanner: View {
+struct BotModelStatusBanner: View {
     let text: PiBotModelStatusText
     var showsFixes = false
     let onDismiss: () -> Void

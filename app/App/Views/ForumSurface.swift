@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct ForumWorkspace: View {
     @Bindable var bots: BotsStore
     let target: BotTarget
+    /// The person's open notes, sent with a post as a chat message sends them.
+    let context: String?
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
@@ -44,6 +46,7 @@ struct ForumWorkspace: View {
         ForumPane(
             bots: bots,
             controller: bots.forumRoom(roomID: roomID),
+            context: context,
             headerInsets: insets,
             headerActions: actions,
             showsPausedBanner: showsPause,
@@ -86,6 +89,7 @@ private struct ForumPane: View {
 
     @Bindable var bots: BotsStore
     let controller: ForumRoomStore
+    let context: String?
     let headerInsets: BotHeaderInsets
     let headerActions: [BotPaneAction]
     let showsPausedBanner: Bool
@@ -108,6 +112,7 @@ private struct ForumPane: View {
     @State private var bottomStackHeight: CGFloat = 0
     @State private var composerCollapseOverride: Bool?
     @State private var pausing = false
+    @State private var dismissedStatuses: Set<String> = []
 
     private var key: BotConversationKey { controller.key }
     private var isThread: Bool { controller.isThread }
@@ -146,6 +151,16 @@ private struct ForumPane: View {
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
             }
+            // A bot here on a fallback model or paused at its limits says so, as in its own chat.
+            ForEach(statusBots, id: \.bot.id) { item in
+                BotModelStatusBanner(text: PiBotModelStatusText(status: item.status, botName: item.bot.name),
+                                     showsFixes: item.status.kind == .paused || item.status.kind == .fallback) {
+                    dismissedStatuses.insert(item.key)
+                }
+                .frame(maxWidth: 768)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 8)
+            }
             ZStack(alignment: .bottom) {
                 transcript
                 bottomStack
@@ -161,6 +176,15 @@ private struct ForumPane: View {
         .onDisappear {
             attached?.detach()
             attached = nil
+        }
+    }
+
+    private var statusBots: [(bot: PiBotSummary, status: PiBotSummary.ModelStatus, key: String)] {
+        let members = memberIDs
+        return bots.bots.compactMap { bot in
+            guard members.contains(bot.id), let status = bot.modelStatus else { return nil }
+            let key = "\(bot.id):\(status.kind):\(status.at ?? 0)"
+            return dismissedStatuses.contains(key) ? nil : (bot, status, key)
         }
     }
 
@@ -498,9 +522,16 @@ private struct ForumPane: View {
             onDropFiles: attach,
             onCommandNavigation: { _ in false },
             onSend: send,
+            onStop: stopAction,
             directAttachmentLabel: "Attach text or code files",
             mentions: composerMentions
         )
+    }
+
+    /// Stop while bots work in this room, as a chat's composer offers it; it stops them here only.
+    private var stopAction: (() -> Void)? {
+        guard !controller.state.thinking.isEmpty, controller.isReady, !controller.stopping else { return nil }
+        return { Task { await controller.stop() } }
     }
 
     /// Who typing "@" offers: the bots in the Forum, then everyone in this room.
@@ -548,7 +579,8 @@ private struct ForumPane: View {
         let drafts = bots.drafts
         let key = key
         Task {
-            let sent = await controller.send(text: text, mentions: mentions.botIDs, everyone: mentions.everyone)
+            let sent = await controller.send(text: text, mentions: mentions.botIDs, everyone: mentions.everyone,
+                                             context: context)
             if !sent {
                 var restored = drafts[key]
                 restored.text = restored.text.isEmpty ? draft.text : draft.text + "\n" + restored.text
