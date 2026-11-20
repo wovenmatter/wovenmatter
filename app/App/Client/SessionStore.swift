@@ -77,11 +77,8 @@ final class SessionStore {
     /// sending is disabled; when it returns the live view resumes on its own.
     func follow() async {
         if !hasLoaded {
-            // An owner that never answers must not keep the chat from showing.
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1))
-                self?.hasLoaded = true
-            }
+            // A slow owner, or one that never answers, must not keep the chat from showing.
+            Task { [weak self] in await self?.showSavedUnlessLive() }
         }
         while !Task.isCancelled {
             guard let owner = ownerConnection() else {
@@ -99,7 +96,8 @@ final class SessionStore {
                     failure: { [weak self] failure in
                         guard let self else { return }
                         isFollowing = false
-                        hasLoaded = true
+                        // Its saved items show, not an empty chat.
+                        if !hasLoaded { Task { await self.showSaved() } }
                         if failure.code == .notOwner, let machineID = failure.machineID {
                             namedOwnerID = machineID
                         } else {
@@ -134,6 +132,20 @@ final class SessionStore {
     }
     @ObservationIgnored private var hasReadSaved = false
 
+    /// Shows the saved items after a second if the owner's snapshot has not
+    /// come by then. They are read meanwhile, so they show at that moment.
+    private func showSavedUnlessLive() async {
+        let deadline = ContinuousClock.now + .seconds(1)
+        let saved = try? await server?.call(SessionItems(sessionID: sessionID, beforeSequence: .max, limit: Self.pageSize))
+        try? await Task.sleep(until: deadline)
+        guard !hasLoaded else { return }
+        if !isFollowing, let saved {
+            items = items.joined(withNewer: saved)
+            project()
+        }
+        hasLoaded = true
+    }
+
     /// The most finished items read in one page.
     private static let pageSize = 200
 
@@ -144,7 +156,7 @@ final class SessionStore {
             let saved = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: .max, limit: Self.pageSize))
             // The owner's live snapshot, if it arrived meanwhile, is newer than the library's copy.
             guard !isFollowing else { return }
-            items = saved
+            items = items.joined(withNewer: saved)
             project()
         } catch {
             self.error = error.localizedDescription
@@ -350,7 +362,8 @@ final class SessionStore {
     private func apply(_ snapshot: SessionSnapshot) {
         isFollowing = true
         error = nil
-        items = snapshot.items
+        // Older pages the reader brought in stay above the snapshot's newest items.
+        items = items.joined(withNewer: snapshot.items)
         inProgress = snapshot.inProgress
         readyEnds = [:]
         prompts = snapshot.prompts

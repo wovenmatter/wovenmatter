@@ -157,6 +157,21 @@ public struct SessionItem: Codable, Sendable, Hashable, Identifiable {
   }
 }
 
+extension Array where Element == SessionItem {
+  /// A newer page of the same session's items (a snapshot, or the saved
+  /// newest page) joined onto older items already held: the page wins for
+  /// the range it covers, and the held items before it stay when they reach
+  /// up to it. Held items that leave a gap before the page are dropped, so
+  /// what is held is always one unbroken run of the session.
+  public func joined(withNewer page: [SessionItem]) -> [SessionItem] {
+    guard let first = page.map(\.sequence).min() else { return page }
+    let before = filter { $0.sequence < first }.sorted { $0.sequence < $1.sequence }
+    guard before.last?.sequence == first - 1 else { return page }
+    let ids = Set(page.map(\.id))
+    return before.filter { !ids.contains($0.id) } + page
+  }
+}
+
 /// The speaker of an item in a chat with several: a bot by its identifier,
 /// or another session that sent it through the Woven MCP, with the name it
 /// had when it spoke. A message the server sent for a goal, a timer, a
