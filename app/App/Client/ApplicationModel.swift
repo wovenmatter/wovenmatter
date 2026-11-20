@@ -1,13 +1,20 @@
 import Foundation
 import Observation
+import WovenProtocol
 
 /// What a command reports while the UI has no connection to a server.
 enum ClientError: LocalizedError, Equatable {
     case notConnected
+    /// The command concerns another machine, whose server the UI is not connected to.
+    case machineNotConnected(String)
+    /// The server does not offer this yet.
+    case notOffered(String)
 
     var errorDescription: String? {
         switch self {
         case .notConnected: "Not connected to the Woven server."
+        case .machineNotConnected(let name): "\(name) is not connected."
+        case .notOffered(let what): "\(what) is not available yet."
         }
     }
 }
@@ -34,7 +41,10 @@ final class ApplicationModel {
     private(set) var state: State = .ready
     private(set) var startupProgress: StartupProgress?
     /// This Mac's permanent machine identifier, once its server has answered.
-    private(set) var thisMachineID: String?
+    var thisMachineID: String? { server?.remote?.machine.id }
+    /// The connection to this Mac's server, once it has been started.
+    private(set) var server: ServerConnection?
+    @ObservationIgnored private var following: Task<Void, Never>?
 
     let navigation = NavigationStore()
     let machines = MachinesStore()
@@ -61,5 +71,67 @@ final class ApplicationModel {
 
     func retry() {
         state = .ready
+        Task { await connect() }
     }
+
+    /// Starts this Mac's server if it is not running, connects to it, and
+    /// keeps the stores level with its library for as long as the app runs.
+    func connect() async {
+        guard server == nil else { return }
+        do {
+            try await ThisMachineServer.start()
+        } catch {
+            state = .failed(error.localizedDescription)
+            return
+        }
+        let server = ServerConnection(endpoint: .unix(path: ThisMachineServer.socketPath))
+        self.server = server
+        machines.attach(server)
+        workspace.attach(server, machines: machines)
+        settings.attach(server)
+        sessions.attach(server, workspace: workspace)
+        server.start()
+        following = Task { [weak self] in
+            await server.follow(SubscribeLibrary(), reply: { [weak self] _ in
+                self?.restartIfAnotherRelease(server.remote)
+                self?.requestReload()
+            }, event: { [weak self] _ in
+                self?.requestReload()
+            })
+        }
+    }
+
+    @ObservationIgnored private var reloadRequested = false
+    @ObservationIgnored private var reloading = false
+
+    /// One reload runs at a time; changes during it bring one more.
+    private func requestReload() {
+        reloadRequested = true
+        guard !reloading else { return }
+        reloading = true
+        Task {
+            while reloadRequested {
+                reloadRequested = false
+                await reloadAll()
+            }
+            reloading = false
+        }
+    }
+
+    private func reloadAll() async {
+        await machines.reload()
+        await workspace.refresh()
+        await settings.reload()
+    }
+
+    /// A server left running by another release of the app is restarted once,
+    /// so this Mac's server is always the app's own program.
+    private func restartIfAnotherRelease(_ remote: Hello?) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        guard let remote, remote.appVersion != version, !restarted else { return }
+        restarted = true
+        Task { try? await ThisMachineServer.restart() }
+    }
+
+    @ObservationIgnored private var restarted = false
 }

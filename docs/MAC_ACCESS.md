@@ -44,7 +44,7 @@ runtime `com.apple.security.automation.apple-events` entitlement for these reque
 
 TCC grants belong to the *responsible* process's code identity, not to an
 executable path. Woven Matter's background server is the same signed app binary
-(`Contents/MacOS/WovenMatter --backend`) started by its LaunchAgent, so it has
+(`Contents/MacOS/WovenMatter --server`) started by its LaunchAgent, so it has
 the app's bundle identifier and designated requirement; the frontend, the server
 and every harness, shell and tool process they spawn with `Process`/`posix_spawn`
 are attributed to Woven Matter. One grant therefore covers the processes that

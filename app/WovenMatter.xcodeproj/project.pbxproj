@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
         A03000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A03000000000000000000004; };
+		A04000000000000000000005 /* WovenProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A04000000000000000000003 /* WovenProtocol */; };
+		A04000000000000000000006 /* WovenServerKit in Frameworks */ = {isa = PBXBuildFile; productRef = A04000000000000000000004 /* WovenServerKit */; };
 		A12000000000000000000009 /* harnesses in Resources */ = {isa = PBXBuildFile; fileRef = A1200000000000000000000A /* harnesses */; };
 /* End PBXBuildFile section */
 
@@ -46,6 +48,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A03000000000000000000003 /* Sparkle in Frameworks */,
+				A04000000000000000000005 /* WovenProtocol in Frameworks */,
+				A04000000000000000000006 /* WovenServerKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -93,6 +97,8 @@
 			name = WovenMatter;
 			packageProductDependencies = (
                 A03000000000000000000004 /* Sparkle */,
+				A04000000000000000000003 /* WovenProtocol */,
+				A04000000000000000000004 /* WovenServerKit */,
 			);
 			productName = WovenMatter;
 			productReference = 37C9459F43D4462FD229B6B1 /* WovenMatter.app */;
@@ -123,6 +129,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
                 A03000000000000000000005 /* Sparkle */,
+				A04000000000000000000001 /* XCLocalSwiftPackageReference "../protocol" */,
+				A04000000000000000000002 /* XCLocalSwiftPackageReference "../server" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9959D7D4FDC4FD024F490589 /* Products */;
@@ -404,6 +412,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		A04000000000000000000001 /* XCLocalSwiftPackageReference "../protocol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../protocol;
+		};
+		A04000000000000000000002 /* XCLocalSwiftPackageReference "../server" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../server;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 
@@ -417,6 +433,8 @@
 
 /* Begin XCSwiftPackageProductDependency section */
         A03000000000000000000004 /* Sparkle */ = {isa = XCSwiftPackageProductDependency; package = A03000000000000000000005; productName = Sparkle; };
+		A04000000000000000000003 /* WovenProtocol */ = {isa = XCSwiftPackageProductDependency; package = A04000000000000000000001 /* XCLocalSwiftPackageReference "../protocol" */; productName = WovenProtocol; };
+		A04000000000000000000004 /* WovenServerKit */ = {isa = XCSwiftPackageProductDependency; package = A04000000000000000000002 /* XCLocalSwiftPackageReference "../server" */; productName = WovenServerKit; };
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 01308825FA357DD758C18D1F /* Project object */;

@@ -19,14 +19,6 @@ enum AppDataFolder {
     }
 }
 
-/// The one place the app starts this Mac's background server from its own
-/// signed program and connects the client layer to it. Not done yet: the
-/// window opens with empty stores.
-@MainActor
-enum ThisMachineServer {
-    static func startAndConnect(_ model: ApplicationModel) async {}
-}
-
 /// Actions belong to the active workspace window. Settings and setup windows
 /// publish no workspace actions.
 struct WorkspaceMenuActions {
@@ -50,6 +42,10 @@ extension FocusedValues {
 @main
 enum WovenMatterEntryPoint {
     @MainActor static func main() {
+        // Run with --server, the program is this Mac's background server and nothing of the UI.
+        if let index = CommandLine.arguments.firstIndex(of: ServerEntry.argument) {
+            ServerEntry.run(Array(CommandLine.arguments[(index + 1)...]))
+        }
         // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
         // Install CEF's required AppKit subclass first, without loading Chromium.
         WMBrowserRuntime.prepareApplication()
@@ -120,9 +116,12 @@ struct WovenMatterApp: App {
                     applicationModel.settings.configureDictationHistory()
                     DesktopUpdater.shared.start()
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
+                    #if DEBUG
+                    WindowCapture.startIfRequested()
+                    #endif
                 }
                 .frame(minWidth: WovenMetrics.windowMinimumWidth, minHeight: 640)
-                .task { await ThisMachineServer.startAndConnect(applicationModel) }
+                .task { await applicationModel.connect() }
                 .scrollIndicators(.never)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in
                     // AppKit focus is not observable. Publish changes after its

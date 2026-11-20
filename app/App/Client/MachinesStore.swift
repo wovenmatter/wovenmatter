@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WovenProtocol
 
 /// Every Woven machine on the tailnet, this Mac first: whether it is online,
 /// what it can run, its harness inventory and sign-ins, its Mac permission
@@ -11,8 +12,55 @@ import Observation
 @MainActor
 @Observable
 final class MachinesStore {
-    /// This machine first, then the others by name.
-    private(set) var machines: [Machine] = []
+    /// Every machine in the library as this Mac's server reports it.
+    private var statuses: [MachineStatus] = []
+    /// The runtimes this Mac's server has.
+    private var runtimes: [RuntimeStatus] = []
+    @ObservationIgnored private weak var server: ServerConnection?
+
+    /// This machine first, then the others by name. This Mac is online while
+    /// the UI is connected to its server.
+    var machines: [Machine] {
+        let connected = server?.isConnected == true
+        return statuses.map { status in
+            Machine(id: status.machine.id, name: status.machine.name,
+                    platform: status.machine.platform == .linux ? .linux : .mac,
+                    isThisMachine: status.isThisMachine,
+                    isOnline: status.isThisMachine ? connected : connected && status.online,
+                    appVersion: status.appVersion,
+                    runtimes: status.isThisMachine
+                        ? runtimes.filter(\.installed).compactMap { AgentRuntimeKind(runtime: $0.runtime) } : [])
+        }.sorted { ($0.isThisMachine ? 0 : 1, $0.name.localizedLowercase, $0.id)
+            < ($1.isThisMachine ? 0 : 1, $1.name.localizedLowercase, $1.id) }
+    }
+
+    /// Each machine's runtimes, as the sidebar lists them under its Agents.
+    var agents: [WorkspaceAgent] {
+        machines.flatMap { machine in
+            machine.runtimes.map { kind in
+                let signedIn = runtimes.first { AgentRuntimeKind(runtime: $0.runtime) == kind }?.signedIn
+                return WorkspaceAgent(id: WorkspaceAgent.id(machineID: machine.id, runtime: kind), displayName: kind.displayName,
+                                      iconKey: kind.rawValue, runtimeKind: kind, machineID: machine.id,
+                                      status: !machine.isOnline ? .offline : signedIn == false ? .needsAuthentication : .ready)
+            }
+        }
+    }
+
+    func attach(_ server: ServerConnection) {
+        self.server = server
+    }
+
+    /// Reads the machines and this Mac's runtimes again.
+    func reload() async {
+        guard let server else { return }
+        do {
+            statuses = try await server.call(ListMachines())
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        runtimes = (try? await server.call(ListRuntimes())) ?? []
+    }
 
     // MARK: Server on each machine
 
@@ -109,14 +157,25 @@ final class MachinesStore {
         }
     }
 
+    /// A machine is renamed by its own server.
     func rename(_ machineID: String, to name: String) async throws {
-        throw ClientError.notConnected
+        guard let server, machineID == thisMachine?.id else { throw ClientError.notConnected }
+        _ = try await server.call(RenameMachine(name: name))
+        await reload()
     }
 
     /// Stops and uninstalls the server there, then deletes the machine, its sessions
     /// and its folders from every library.
     func remove(_ machineID: String) {
-        errorMessage = ClientError.notConnected.localizedDescription
+        guard let server else { return errorMessage = ClientError.notConnected.localizedDescription }
+        Task {
+            do {
+                _ = try await server.call(RemoveMachine(machineID: machineID))
+                await reload()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     // MARK: Server

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WovenProtocol
 
 /// The sidebar's data across every machine: folders, sessions and notes, the
 /// agents each machine offers, and Trash. Commands create, rename, move, pin,
@@ -11,13 +12,32 @@ final class WorkspaceStore {
     /// Folders, sessions and notes of every machine; nil until the server has answered.
     private(set) var workspaceOverview: WorkspaceOverview?
     /// Every machine's agents. Each belongs to the machine that runs it.
-    private(set) var agents: [WorkspaceAgent] = []
+    var agents: [WorkspaceAgent] { machines?.agents ?? [] }
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
     /// Notes with a rename, move, export or trash in flight.
     private(set) var noteActionIDs: Set<String> = []
 
+    @ObservationIgnored private weak var server: ServerConnection?
+    @ObservationIgnored private weak var machines: MachinesStore?
+
     init() {}
+
+    func attach(_ server: ServerConnection, machines: MachinesStore) {
+        self.server = server
+        self.machines = machines
+    }
+
+    /// This Mac's server, for a command on something `machineID` owns. Only
+    /// this Mac's server is connected so far; another machine's things wait
+    /// for a direct connection to it.
+    private func server(for machineID: String?) throws -> ServerConnection {
+        guard let server, server.isConnected else { throw ClientError.notConnected }
+        if let machineID, machineID != machines?.thisMachine?.id {
+            throw ClientError.machineNotConnected(machines?.machine(id: machineID)?.name ?? "That machine")
+        }
+        return server
+    }
 
     func agents(on machineID: String) -> [WorkspaceAgent] {
         agents.filter { $0.machineID == machineID }
@@ -48,18 +68,62 @@ final class WorkspaceStore {
     }
 
     /// Asks the server for the whole overview again (File > Refresh Workspace).
-    func refresh() async {}
+    func refresh() async {
+        guard let server else { return }
+        do {
+            let folders = try await server.call(ListFolders())
+            let sessions = try await server.call(ListSessions(includeArchived: true))
+            let positions = Dictionary(uniqueKeysWithValues: folders.enumerated().map { ($1.id, $0) })
+            workspaceOverview = WorkspaceOverview(
+                folders: folders.map { folder in
+                    WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: positions[folder.id] ?? 0,
+                                          isPinned: false, machineID: folder.machineID, rootPath: folder.path,
+                                          managedRoot: false, referencePaths: [])
+                },
+                conversations: sessions.map(Self.record),
+                notes: workspaceOverview?.notes ?? [])
+        } catch {
+            folderMutationError = error.localizedDescription
+        }
+    }
+
+    private static func record(_ session: Session) -> WorkspaceConversationRecord {
+        let kind = AgentRuntimeKind(runtime: session.runtime)
+        return WorkspaceConversationRecord(
+            id: session.id, machineID: session.machineID,
+            agentID: kind.map { WorkspaceAgent.id(machineID: session.machineID, runtime: $0) }, runtimeKind: kind,
+            title: session.title, unread: false, lastMessagePreview: nil, lastMessageAt: session.createdAt,
+            isScheduledTask: false, folderID: session.folderID, isPinned: false, isArchived: session.archived,
+            activity: .idle)
+    }
 
     // MARK: Sessions
 
     /// Starts a session with `agent` on the machine that runs it, in `folderID`
     /// (which must belong to that machine), and returns the new session's id.
     func startSession(agent: WorkspaceAgent, folderID: String?) async throws -> String {
-        throw ClientError.notConnected
+        try await startSession(runtime: agent.runtimeKind.runtime, on: agent.machineID, folderID: folderID)
+    }
+
+    /// Starts a session with any runtime the machine's server offers.
+    func startSession(runtime: RuntimeKind, on machineID: String, folderID: String?) async throws -> String {
+        let session = try await server(for: machineID).call(CreateSession(runtime: runtime, title: "New Chat", folderID: folderID))
+        await refresh()
+        return session.id
     }
 
     func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
-        throw ClientError.notConnected
+        let server = try server(for: conversation(id: id)?.machineID)
+        switch mutation {
+        case .setPinned: throw ClientError.notOffered("Pinning chats")
+        case .rename(let title): _ = try await server.call(UpdateSession(sessionID: id, title: title))
+        case .moveToTrash: _ = try await server.call(UpdateSession(sessionID: id, archived: true))
+        case .restore: _ = try await server.call(UpdateSession(sessionID: id, archived: false))
+        case .moveToFolder(let folderID):
+            _ = try await server.call(UpdateSession(sessionID: id, folderID: folderID, removeFromFolder: folderID == nil))
+        case .delete: _ = try await server.call(DeleteSession(sessionID: id))
+        }
+        await refresh()
     }
 
     func markConversationRead(id: String) {}
@@ -68,8 +132,11 @@ final class WorkspaceStore {
         throw ClientError.notConnected
     }
 
+    /// Archived chats.
     func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
-        throw ClientError.notConnected
+        try await server(for: nil).call(ListSessions(includeArchived: true)).filter(\.archived).map {
+            WorkspaceTrashedConversation(id: $0.id, title: $0.title, trashedAt: $0.createdAt)
+        }
     }
 
     // MARK: Notes
@@ -100,30 +167,58 @@ final class WorkspaceStore {
     /// directory, or `externalRoot` when linking an existing one. Returns its id;
     /// nil sets `folderMutationError`.
     func createFolder(name: String, machineID: String, externalRoot: URL?) async -> String? {
-        folderMutationError = ClientError.notConnected.localizedDescription
-        return nil
+        do {
+            let folder = try await server(for: machineID).call(CreateFolder(name: name, path: externalRoot?.path))
+            folderMutationError = nil
+            await refresh()
+            return folder.id
+        } catch {
+            folderMutationError = error.localizedDescription
+            return nil
+        }
     }
 
-    func renameFolder(id: String, name: String) async -> Bool { failFolderMutation() }
+    func renameFolder(id: String, name: String) async -> Bool {
+        await folderMutation(id) { try await $0.call(RenameFolder(folderID: id, name: name)) }
+    }
 
-    func setFolderPinned(id: String, isPinned: Bool) async -> Bool { failFolderMutation() }
+    func setFolderPinned(id: String, isPinned: Bool) async -> Bool { failFolderMutation(.notOffered("Pinning folders")) }
 
-    func moveFolder(id: String, direction: WorkspaceFolderMoveDirection) async -> Bool { failFolderMutation() }
+    func moveFolder(id: String, direction: WorkspaceFolderMoveDirection) async -> Bool {
+        failFolderMutation(.notOffered("Ordering folders"))
+    }
 
-    func deleteFolder(id: String, deleteRoot: Bool) async -> Bool { failFolderMutation() }
+    /// Removes the folder from every library. Its directory stays on disk.
+    func deleteFolder(id: String, deleteRoot: Bool) async -> Bool {
+        await folderMutation(id) { try await $0.call(DeleteFolder(folderID: id)) }
+    }
 
-    func setFolderReferencePaths(id: String, paths: [String]) async -> Bool { failFolderMutation() }
+    func setFolderReferencePaths(id: String, paths: [String]) async -> Bool {
+        failFolderMutation(.notOffered("Reference directories"))
+    }
 
     /// The directories directly inside `path` on `machineID` (its home when nil),
     /// for linking an existing directory on another machine.
     func directories(on machineID: String, path: String?) async throws -> MachineDirectoryListing {
-        throw ClientError.notConnected
+        throw ClientError.notOffered("Browsing another machine's directories")
     }
 
     func clearFolderMutationError() { folderMutationError = nil }
 
-    private func failFolderMutation() -> Bool {
-        folderMutationError = ClientError.notConnected.localizedDescription
+    private func folderMutation<T>(_ id: String, _ body: (ServerConnection) async throws -> T) async -> Bool {
+        do {
+            _ = try await body(try server(for: folder(id: id)?.machineID))
+            folderMutationError = nil
+            await refresh()
+            return true
+        } catch {
+            folderMutationError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func failFolderMutation(_ error: ClientError) -> Bool {
+        folderMutationError = error.localizedDescription
         return false
     }
 }
@@ -133,6 +228,10 @@ enum WorkspaceConversationMutation: Sendable {
     case rename(String)
     case moveToTrash
     case restore
+    /// Into a folder of the session's machine, or out of its folder with nil.
+    case moveToFolder(String?)
+    /// Deletes the session and its transcript from every library.
+    case delete
 }
 
 enum WorkspaceConversationExportFormat: String, Sendable {

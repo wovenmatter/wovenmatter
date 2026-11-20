@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A Mac or Linux computer on the person's tailnet that runs the Woven server.
 /// This Mac is one of them. A machine that is switched off stays listed, offline.
@@ -47,6 +48,29 @@ enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable {
     case opencode
 
     static let presentationOrder: [Self] = allCases
+
+    /// The UI's kind for a runtime the server names; nil for one the UI does not offer.
+    init?(runtime: RuntimeKind) {
+        switch runtime {
+        case .piDurable: self = .defaultAgent
+        case .codex: self = .codex
+        case .claudeCode: self = .claudeCode
+        case .grokBuild: self = .grokBuild
+        case .openCode: self = .opencode
+        default: return nil
+        }
+    }
+
+    /// The server's name for this runtime.
+    var runtime: RuntimeKind {
+        switch self {
+        case .defaultAgent: .piDurable
+        case .codex: .codex
+        case .claudeCode: .claudeCode
+        case .grokBuild: .grokBuild
+        case .opencode: .openCode
+        }
+    }
 
     var presentationRank: Int {
         Self.presentationOrder.firstIndex(of: self) ?? Self.presentationOrder.count
@@ -114,4 +138,6 @@ struct WorkspaceAgent: Identifiable, Hashable, Sendable {
         case offline
         case failed
     }
+
+    static func id(machineID: String, runtime: AgentRuntimeKind) -> String { machineID + "/" + runtime.rawValue }
 }

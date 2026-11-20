@@ -93,6 +93,8 @@ stop_dev_app() {
 }
 # Stop before overwriting the executable, and respect graceful termination.
 stop_dev_app
+# The instance's server is the same program: stop it too. The next launch starts it again.
+launchctl bootout "gui/$(id -u)/${bundle_id}.server" 2>/dev/null || true
 xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
   -project "${app_root}/WovenMatter.xcodeproj" \
   -scheme WovenMatter \
