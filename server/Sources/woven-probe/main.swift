@@ -40,11 +40,12 @@ let usage = """
     versions ID                      an artifact's version history
     trash ID | restore ID
     app-state ID KEY JSON            set one key of an app's saved state
-    setting KEY JSON                 set a synced setting, e.g. setting bots.home '"MACHINE"'
+    setting KEY JSON                 set a synced setting, e.g. setting tools.defaults '["notes"]'
     databases | db-create NAME | db-execute ID SQL | db-query ID SQL
     bots                             the bots and their chats as the library holds them
     bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
     bots-follow [OPEN_JSON]          print the bots' status and messages (or one opened conversation's)
+    bots-home MACHINE                choose the bots' first home, as Settings → Bots does
     bots-transfer MACHINE            move the bots to that machine, as Settings → Bots does
   """
 
@@ -401,6 +402,9 @@ do {
   case "bots-call":
     let request = try Wire.decoder.decode(JSONValue.self, from: Data(argument(0, "JSON").utf8))
     out(json(try await client.call(BotsCall(request: request))))
+  case "bots-home":
+    _ = try await client.call(ChooseBotsHome(machineID: argument(0, "MACHINE")))
+    out("chosen")
   case "bots-transfer":
     _ = try await client.call(TransferBots(targetMachineID: argument(0, "MACHINE")))
     out("transferred")

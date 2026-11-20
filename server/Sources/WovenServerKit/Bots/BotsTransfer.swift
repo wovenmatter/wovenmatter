@@ -522,9 +522,12 @@ extension BotsHost {
     } else {
       try FileManager.default.createDirectory(at: botsFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
+    // No bot has files when none was sent.
+    let archives = incomingFolder.appendingPathComponent("files", isDirectory: true)
+    try FileManager.default.createDirectory(at: archives, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     try await prepareEngine()
     try stillCurrent(id)
-    try await hosting.files.run(.import, configURL, incomingFolder.appendingPathComponent("files", isDirectory: true))
+    try await hosting.files.run(.import, configURL, archives)
     try stillCurrent(id)
     // A new stint: whatever bot chats and checkpoints this library still holds
     // from an earlier one are gone, so the bots save their whole history again,
