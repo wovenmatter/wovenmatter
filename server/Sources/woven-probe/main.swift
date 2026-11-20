@@ -30,6 +30,9 @@ let usage = """
     trash ID | restore ID
     app-state ID KEY JSON            set one key of an app's saved state
     databases | db-create NAME | db-execute ID SQL | db-query ID SQL
+    bots                             the bots and their chats as the library holds them
+    bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
+    bots-follow [OPEN_JSON]          print the bots' status and messages (or one opened conversation's)
   """
 
 func fail(_ message: String) -> Never {
@@ -248,7 +251,9 @@ do {
     try await follow(subscription, sessionID: sessionID, untilIdle: false, approve: nil)
   case "items":
     let items = try await client.call(SessionItems(sessionID: argument(0, "SESSION")))
-    for item in items { out("#\(item.sequence) \(item.id.prefix(8)) " + describe(item.content)) }
+    for item in items {
+      out("#\(item.sequence) \(item.id.prefix(8)) " + (item.author.map { "[\($0.name)] " } ?? "") + describe(item.content))
+    }
     out("\(items.count) items, \(Set(items.map(\.id)).count) distinct ids, sequences "
         + (items.isEmpty || items.map(\.sequence) == Array(1...items.count) ? "1…\(items.count) without gaps" : "WITH GAPS"))
   case "configure":
@@ -311,6 +316,29 @@ do {
     out("\(try await client.call(ExecuteDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).changes) changed")
   case "db-query":
     out(try await client.call(QueryDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).json)
+  case "bots":
+    let saved = try await client.call(ListSavedBots())
+    for bot in saved.bots {
+      out("bot \(bot.id)\t\(bot.name)\t\(bot.isAdmin ? "admin" : "bot")\thome \(bot.homeMachineID)" + (bot.trashed ? "\ttrashed" : ""))
+    }
+    for chat in saved.chats {
+      out("chat \(chat.session.id)\t\(chat.kind.rawValue)\t\(chat.session.title)\tconversation \(chat.conversationID)"
+          + (chat.parentConversationID.map { "\tparent \($0)" } ?? "") + (chat.session.pinned ? "\tpinned" : ""))
+    }
+  case "bots-call":
+    let request = try Wire.decoder.decode(JSONValue.self, from: Data(argument(0, "JSON").utf8))
+    out(json(try await client.call(BotsCall(request: request))))
+  case "bots-follow":
+    let open = try arguments.first.map { try Wire.decoder.decode(JSONValue.self, from: Data($0.utf8)) }
+    let subscription = try await client.subscribe(SubscribeBots(open: open))
+    out(json(subscription.reply))
+    for try await event in subscription.events {
+      switch event {
+      case .status(let status): out("status " + json(status))
+      case .message(let message): out(String(decoding: try Wire.encoder.encode(message), as: UTF8.self))
+      }
+    }
+    out("(ended)")
   default:
     fail(usage)
   }
