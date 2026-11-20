@@ -72,6 +72,9 @@ public struct RuntimeKind: RawRepresentable, Codable, Sendable, Hashable {
   public static let openCode = RuntimeKind(rawValue: "openCode")
   public static let piDurable = RuntimeKind(rawValue: "piDurable")
   public static let bots = RuntimeKind(rawValue: "bots")
+  /// The Pi coding agent's own CLI. Woven Matter does not run it; only its
+  /// usage is read, from its session files.
+  public static let piCLI = RuntimeKind(rawValue: "piCLI")
 }
 
 /// One conversation with one runtime on one machine, which owns it for life.

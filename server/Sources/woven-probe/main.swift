@@ -19,6 +19,7 @@ let usage = """
     device-update MACHINE | remove MACHINE | rename NAME [MACHINE]
     server MACHINE start|stop|restart  control a machine's server, as Settings does (stop confirmed)
     server-log MACHINE               the end of a machine's server log
+    usage [DAYS]                     usage of the last DAYS (default 30) per machine, harness and inside or outside Woven Matter
     create RUNTIME [TITLE] [--folder ID]
     send SESSION TEXT [--attach FILE]... [--approve OPTION]
                                      send a turn and print the stream until it ends
@@ -246,6 +247,27 @@ do {
     out(action.rawValue)
   case "server-log":
     out(try await client.call(ServerLog(machineID: argument(0, "MACHINE"))), terminator: "")
+  case "usage":
+    let days = arguments.first.flatMap(Double.init) ?? 30
+    let report = try await client.call(ReadUsage(start: Date().addingTimeInterval(-days * 86_400), end: Date().addingTimeInterval(60),
+                                                 periodSeconds: 86_400))
+    var sums: [String: UsageAmounts] = [:]
+    for group in report.groups {
+      let key = "\(group.machineID)\t\(group.runtime.rawValue)\t\(group.inWoven ? "in Woven Matter" : "outside")"
+      var sum = sums[key] ?? UsageAmounts()
+      sum.input += group.amounts.input
+      sum.output += group.amounts.output
+      sum.cacheRead += group.amounts.cacheRead
+      sum.cacheWrite += group.amounts.cacheWrite
+      sum.cost += group.amounts.cost
+      sum.requests += group.amounts.requests
+      sums[key] = sum
+    }
+    out("machine\truntime\twhere\tinput\toutput\tcache read\tcache write\tcost\trequests")
+    for (key, sum) in sums.sorted(by: { $0.key < $1.key }) {
+      out("\(key)\t\(sum.input)\t\(sum.output)\t\(sum.cacheRead)\t\(sum.cacheWrite)\t\(String(format: "%.4f", sum.cost))\t\(sum.requests)")
+    }
+    out("sessions \(report.sessions)")
   case "remove":
     _ = try await client.call(RemoveMachine(machineID: argument(0, "MACHINE")))
     out("removed")

@@ -39,6 +39,9 @@ public final class WovenServer: Sendable {
     public var instance: String?
     /// It offers the stand-in runtime, and so do servers it installs.
     public var offersStandIn = false
+    /// The home folder whose harness histories (Codex, Claude Code, Grok
+    /// Build, OpenCode, the Pi CLI) this server counts usage from; nil for none.
+    public var harnessHome: URL?
 
     public init(dataFolder: URL, socketPath: String?, listen: (host: String, port: Int)?, appVersion: String,
                 machineName: String, tailnet: any Tailnet, runtimes: [any Runtime], discoveryInterval: Duration = .seconds(30),
@@ -73,6 +76,7 @@ public final class WovenServer: Sendable {
   private let scheduler: Scheduler
   private let titles: Titles
   private let keepAwake: KeepAwake
+  private let usage: UsageScanner?
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
   private let watcher = Mutex<Task<Void, Never>?>(nil)
@@ -133,6 +137,7 @@ public final class WovenServer: Sendable {
     registerServerControl(&routes, library: library, sessions: sessions, peers: peers, tailnet: options.tailnet,
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
+    let usage = options.harnessHome.map { UsageScanner(library: library, home: $0) }
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -164,20 +169,22 @@ public final class WovenServer: Sendable {
     let server = WovenServer(library: library, dataFolder: options.dataFolder, socketPath: options.socketPath,
                              hello: hello, port: listeners.compactMap(\.port).first,
                              sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
-                             endpoint: endpoint, scheduler: scheduler, titles: titles, keepAwake: keepAwake)
+                             endpoint: endpoint, scheduler: scheduler, titles: titles, keepAwake: keepAwake, usage: usage)
     pending.server.withLock { $0 = server }
     await peers.start()
     await bots.start()
     await scheduler.start()
     await keepAwake.start(board: sessions.board)
+    await usage?.start()
     server.watchLibrary()
     return server
   }
 
   private init(library: Library, dataFolder: URL, socketPath: String?, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
                github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint, scheduler: Scheduler,
-               titles: Titles, keepAwake: KeepAwake) {
+               titles: Titles, keepAwake: KeepAwake, usage: UsageScanner?) {
     self.keepAwake = keepAwake
+    self.usage = usage
     self.dataFolder = dataFolder
     self.socketPath = socketPath
     self.endpoint = endpoint
@@ -219,6 +226,7 @@ public final class WovenServer: Sendable {
     watcher.withLock { $0?.cancel() }
     await scheduler.stop()
     await keepAwake.stop()
+    await usage?.stop()
     for listener in listeners { await listener.stop() }
     endpoint.stop()
     await bots.stop()

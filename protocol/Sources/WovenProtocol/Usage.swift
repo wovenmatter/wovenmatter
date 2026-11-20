@@ -1,7 +1,9 @@
 import Foundation
 
 // Usage and dictation history: both append-only and synced, so any server
-// answers for every machine from its own library.
+// answers for every machine from its own library. Usage covers every
+// harness on every machine, inside Woven Matter or not: each server reads its
+// own machine's harness histories into the library.
 
 /// Tokens and cost summed by the server.
 public struct UsageAmounts: Codable, Sendable, Hashable {
@@ -9,18 +11,18 @@ public struct UsageAmounts: Codable, Sendable, Hashable {
   public var output: Int64
   public var cacheRead: Int64
   public var cacheWrite: Int64
-  /// In US dollars, as the runtimes reported it.
+  /// In US dollars, as the harness reported it; 0 when it reported none.
   public var cost: Double
-  /// How many finished turns the records are.
-  public var turns: Int
+  /// How many model responses (or, for Pi Durable, turns) the records are.
+  public var requests: Int
 
-  public init(input: Int64 = 0, output: Int64 = 0, cacheRead: Int64 = 0, cacheWrite: Int64 = 0, cost: Double = 0, turns: Int = 0) {
+  public init(input: Int64 = 0, output: Int64 = 0, cacheRead: Int64 = 0, cacheWrite: Int64 = 0, cost: Double = 0, requests: Int = 0) {
     self.input = input
     self.output = output
     self.cacheRead = cacheRead
     self.cacheWrite = cacheWrite
     self.cost = cost
-    self.turns = turns
+    self.requests = requests
   }
 }
 
@@ -31,17 +33,24 @@ public struct UsageGroup: Codable, Sendable, Hashable {
   /// The newest record in the group.
   public var latest: Date
   public var machineID: String
+  /// The Woven Matter session, when the usage was one.
   public var sessionID: String?
+  /// The harness's own session identifier, for usage read from its history.
+  public var nativeSessionID: String?
+  /// Whether the usage was made inside Woven Matter.
+  public var inWoven: Bool
   public var runtime: RuntimeKind
   public var model: String
   public var amounts: UsageAmounts
 
-  public init(period: Date, latest: Date, machineID: String, sessionID: String?, runtime: RuntimeKind, model: String,
-              amounts: UsageAmounts) {
+  public init(period: Date, latest: Date, machineID: String, sessionID: String?, nativeSessionID: String?, inWoven: Bool,
+              runtime: RuntimeKind, model: String, amounts: UsageAmounts) {
     self.period = period
     self.latest = latest
     self.machineID = machineID
     self.sessionID = sessionID
+    self.nativeSessionID = nativeSessionID
+    self.inWoven = inWoven
     self.runtime = runtime
     self.model = model
     self.amounts = amounts
@@ -53,7 +62,7 @@ public struct UsageReport: Codable, Sendable, Hashable {
   public var groups: [UsageGroup]
   /// Everything in the range.
   public var totals: UsageAmounts
-  /// Distinct sessions in the range.
+  /// Distinct sessions in the range, Woven Matter's and the harnesses' own.
   public var sessions: Int
   /// Each machine's newest record of all, by machine ID, so a machine whose
   /// usage has not arrived is not read as idle.

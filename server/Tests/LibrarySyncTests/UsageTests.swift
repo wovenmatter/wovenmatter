@@ -19,7 +19,7 @@ import WovenProtocol
   }
 
   let report = try await b.usage(from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(60), periodSeconds: 3600)
-  #expect(report.totals == UsageAmounts(input: 157, output: 18, cacheRead: 5, cacheWrite: 2, cost: 0.75, turns: 3))
+  #expect(report.totals == UsageAmounts(input: 157, output: 18, cacheRead: 5, cacheWrite: 2, cost: 0.75, requests: 3))
   #expect(report.sessions == 2)
   #expect(Set(report.newestByMachine.keys) == [a.machineID, b.machineID])
   let fromA = report.groups.filter { $0.machineID == a.machineID }

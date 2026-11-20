@@ -119,6 +119,7 @@ public enum ServerCommand {
       setenv("WOVEN_BOTS_ENGINE_INSTANCE", instance, 1)
     }
     options.offersStandIn = standIn
+    options.harnessHome = FileManager.default.homeDirectoryForCurrentUser
     let server = try await WovenServer.start(options)
     // Which machine this data folder is, for a Mac reaching it over SSH to
     // check it has the machine it means before changing anything.

@@ -484,7 +484,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
   }
   for server in [a, b] {
     let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
-    #expect(usage.totals.turns == 2)
+    #expect(usage.totals.requests == 2)
   }
 
   // And back: the first home saves them again under new sessions, though it deleted its old ones.

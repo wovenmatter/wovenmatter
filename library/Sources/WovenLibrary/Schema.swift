@@ -298,9 +298,18 @@ public enum Schema {
       .text("author"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "session_id", table: "sessions")], indexes: [["session_id", "sequence"]]),
+    // Usage of every harness on the machine that wrote it. A harness that
+    // keeps its own history (Codex, Claude Code, Grok Build, OpenCode, the Pi
+    // CLI) is counted only from that history, one row per session, model and
+    // hour; Pi Durable writes one row per turn and bots one per model turn.
     Table("usage_records", .appendOnly, [
       .text("machine_id", ""),
+      // The Woven Matter session, when the usage was one.
       .text("session_id"),
+      // The harness's own session identifier, for usage read from its history.
+      .text("native_session"),
+      // Made inside Woven Matter.
+      .integer("woven", 1),
       .text("runtime", ""),
       .text("model", ""),
       .integer("input_tokens", 0),
@@ -308,6 +317,8 @@ public enum Schema {
       .integer("cache_read_tokens", 0),
       .integer("cache_write_tokens", 0),
       .real("cost", 0),
+      .integer("requests", 1),
+      // The newest response the row counts.
       .integer("recorded_at", 0),
     ], indexes: [["recorded_at"]]),
     Table("dictation_history", .appendOnly, [
@@ -352,6 +363,43 @@ public enum Schema {
       .key("key"),
       .integer("entry", 0),
     ]),
+    // How far this machine's harness histories have been read, by a digest
+    // of the file's path (paths never enter the library): the bytes read, the
+    // file's size, change time and identity when read, and the reader's
+    // state at that point as JSON.
+    Table("usage_sources", .local, [
+      .key("id"),
+      .integer("offset", 0),
+      .integer("size", 0),
+      .integer("modified", 0),
+      .text("identity", ""),
+      .text("state", ""),
+    ]),
+    // Usage read from the histories for an hour not yet over, summed per
+    // harness session and model. A row moves to `usage_records` once its hour
+    // has passed; the Usage page reads both.
+    Table("usage_pending", .local, [
+      .key("id"),
+      .text("runtime", ""),
+      .text("native_session", ""),
+      .integer("woven", 0),
+      .text("model", ""),
+      .integer("hour", 0),
+      .integer("input_tokens", 0),
+      .integer("output_tokens", 0),
+      .integer("cache_read_tokens", 0),
+      .integer("cache_write_tokens", 0),
+      .real("cost", 0),
+      .integer("requests", 0),
+      .integer("recorded_at", 0),
+    ]),
+    // Responses already counted, by the harness's own identifier, so a copy
+    // in a forked or resumed session's file or a file read again counts
+    // once. Forgotten after 60 days.
+    Table("usage_seen", .local, [
+      .key("id"),
+      .integer("seen_at", 0),
+    ], indexes: [["seen_at"]]),
     // What this machine's scheduler has fired of each entry it owns.
     // `stamp` is the entry's stamp `next_fire_at` was worked out from.
     Table("schedule_state", .local, [

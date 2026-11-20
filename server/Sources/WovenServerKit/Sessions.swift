@@ -506,7 +506,8 @@ actor SessionHost {
       if let failure {
         await saving { try await self.finish(.notice(Notice(kind: .failure, text: failure)), id: UUID().uuidString.lowercased()) }
       }
-      if let usage {
+      // A harness with its own history is counted from there (`UsageScanner`).
+      if let usage, !runtime.kind.usageFromHistory {
         try? await library.recordUsage(sessionID: sessionID, runtime: runtime.kind, model: usage.model ?? configuration.model ?? "",
                                        input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
                                        cacheWrite: usage.cacheWrite, cost: usage.cost ?? 0)

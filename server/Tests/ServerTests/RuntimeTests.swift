@@ -84,7 +84,7 @@ private func assistantTexts(_ items: [SessionItem]) -> [String] {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func acpProcessStaysAliveAcrossTurnsAndStreamsToolsApprovalsAndUsage() async throws {
+func acpProcessStaysAliveAcrossTurnsAndStreamsToolsAndApprovals() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
   let host = try await Host.start(runtime: try fakeRuntime(store: store))
@@ -112,9 +112,9 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsApprovalsAndUsage() async thr
   #expect(tools.allSatisfy { $0.output == "a.txt" && !$0.failed })
   #expect(Set(items.map(\.id)).count == items.count)
 
+  // Codex keeps its own history, which is where its usage is counted from.
   let usage = try await host.server.library.rows("usage_records", where: "session_id", is: .text(session.id))
-  #expect(usage.count == 2)
-  #expect(usage.allSatisfy { $0.values["input_tokens"] == .integer(3) && $0.values["model"] == .text("fake-large") })
+  #expect(usage.isEmpty)
 }
 
 @Test(.timeLimit(.minutes(1)))

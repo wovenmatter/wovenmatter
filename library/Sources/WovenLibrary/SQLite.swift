@@ -55,6 +55,16 @@ public struct Row: Sendable {
   }
 }
 
+/// Another program's SQLite file, opened read-only, for reading what that
+/// program records (OpenCode's history). Never the library.
+public final class ReadOnlyDatabase: @unchecked Sendable {
+  private let connection: Connection
+
+  public init(path: String) throws { connection = try Connection(path: path, readOnly: true) }
+
+  public func query(_ sql: String, _ values: [SQLValue] = []) throws -> [Row] { try connection.query(sql, values) }
+}
+
 /// A thin wrapper over one SQLite connection. Not thread-safe: its owner
 /// confines it to one queue at a time.
 final class Connection: @unchecked Sendable {
