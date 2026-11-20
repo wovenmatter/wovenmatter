@@ -305,7 +305,13 @@ actor SessionHost {
       files.append(TurnAttachment(name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, file: file))
     }
     let delivered = override ?? author.map { author in
-      let from = author.sessionID.map { "the agent session “\(author.name)” (\($0))" } ?? "the bot \(author.name)"
+      let from = if let sessionID = author.sessionID {
+        "the agent session “\(author.name)” (\(sessionID))"
+      } else if let botID = author.botID {
+        "the bot \(author.name) (\(botID), whom `message_bot` reaches)"
+      } else {
+        "an agent outside Woven Matter"
+      }
       return "This message is from \(from), not the person.\n\n" + text
     } ?? text
     let turn = Turn(text: delivered, attachments: files)
