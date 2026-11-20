@@ -46,13 +46,29 @@ final class RunBoard: Sendable {
 /// The configuration each runtime last reported on this machine: what a new
 /// session with it can choose from before its process has started.
 final class RuntimeConfigurations: Sendable {
-  private let known = Mutex<[RuntimeKind: SessionConfiguration]>([:])
+  private let known: Mutex<[RuntimeKind: SessionConfiguration]>
+  /// Kept on disk, so Settings can offer a runtime's options after a restart.
+  private let file: URL?
+
+  init(file: URL? = nil) {
+    self.file = file
+    let saved = file.flatMap { try? Data(contentsOf: $0) }
+      .flatMap { try? JSONDecoder().decode([String: SessionConfiguration].self, from: $0) } ?? [:]
+    known = Mutex(Dictionary(saved.map { (RuntimeKind(rawValue: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first }))
+  }
 
   func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
     guard !configuration.models.isEmpty || !configuration.permissionModes.isEmpty else { return }
     var configuration = configuration
     configuration.goal = nil
-    known.withLock { $0[kind] = configuration }
+    let all = known.withLock { known -> [RuntimeKind: SessionConfiguration]? in
+      guard known[kind] != configuration else { return nil }
+      known[kind] = configuration
+      return known
+    }
+    guard let all, let file else { return }
+    let saved = Dictionary(all.map { ($0.key.rawValue, $0.value) }, uniquingKeysWith: { first, _ in first })
+    try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
   }
 
   func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
@@ -67,7 +83,7 @@ actor SessionManager {
   private var hosts: [String: SessionHost] = [:]
   private var watcher: Task<Void, Never>?
   nonisolated let board = RunBoard()
-  nonisolated let configurations = RuntimeConfigurations()
+  nonisolated let configurations: RuntimeConfigurations
   /// Told of the person's first message in each session, for its title.
   nonisolated let firstMessages = FirstMessageHook()
 
@@ -76,6 +92,7 @@ actor SessionManager {
     self.library = library
     self.runtimes = Dictionary(runtimes.map { ($0.kind, $0) }, uniquingKeysWith: { first, _ in first })
     self.scratch = scratch
+    configurations = RuntimeConfigurations(file: scratch.appendingPathComponent("runtime-options.json"))
   }
 
   func supports(_ kind: RuntimeKind) -> Bool { runtimes[kind] != nil }

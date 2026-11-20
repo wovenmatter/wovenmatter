@@ -95,7 +95,7 @@ extension SettingsStore {
     }
 }
 
-/// The runtime has not reported its options on that machine since its server started.
+/// The runtime has never reported its options on that machine.
 struct RuntimeOptionsUnknown: LocalizedError {
     let runtime: AgentRuntimeKind
     var errorDescription: String? { "Start a chat with \(runtime.displayName) on this machine to see its options." }
