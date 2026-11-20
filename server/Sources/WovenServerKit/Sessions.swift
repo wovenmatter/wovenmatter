@@ -274,16 +274,40 @@ actor SessionHost {
   /// `author` marks a message another session or a bot sent through the
   /// Woven MCP; the runtime is told who it is from. `delivered`, when set,
   /// is what the runtime is sent in place of `text`, which is what is saved.
-  func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil) async throws {
+  /// A message sent while a turn runs steers that turn; with `steers` false
+  /// it is refused as busy instead.
+  func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil,
+            steers: Bool = true) async throws {
     await enter()
     defer { leave() }
     let continuesGoal = author?.source == .goal
     // A stop that came after the goal's next turn was queued holds.
     if continuesGoal && interrupted { return }
-    switch run {
-    case .nativeSessionGone: throw Self.goneError
-    case .running: throw ProtocolError(.busy, "A turn is already running.")
-    case .idle: break
+    guard run != .nativeSessionGone else { throw Self.goneError }
+    guard run == .idle || steers else { throw ProtocolError(.busy, "A turn is already running.") }
+    var files: [TurnAttachment] = []
+    for attachment in attachments {
+      guard let file = try await library.contentFile(attachment.digest) else {
+        throw ProtocolError(.notFound, "\(attachment.name) is not on this machine. Put its content here first.")
+      }
+      files.append(TurnAttachment(name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, file: file))
+    }
+    let delivered = override ?? author.map { author in
+      let from = author.sessionID.map { "the agent session “\(author.name)” (\($0))" } ?? "the bot \(author.name)"
+      return "This message is from \(from), not the person.\n\n" + text
+    } ?? text
+    let turn = Turn(text: delivered, attachments: files)
+    if run == .running {
+      if try await steer(turn, saving: text, attachments: attachments, author: author) { return }
+      // The runtime's turn ended as the message came. Once that end is
+      // through, the message starts the next turn.
+      for _ in 0..<200 where run == .running {
+        leave()
+        try? await Task.sleep(for: .milliseconds(25))
+        await enter()
+      }
+      if run == .nativeSessionGone { throw Self.goneError }
+      guard run == .idle else { throw ProtocolError(.failed, "The runtime did not finish its turn.") }
     }
     if author == nil {
       interrupted = false
@@ -293,29 +317,42 @@ actor SessionHost {
     turnActed = false
     let empty = (try? await library.hasItems(sessionID)) == false
     let first = author == nil && empty
-    var files: [TurnAttachment] = []
-    for attachment in attachments {
-      guard let file = try await library.contentFile(attachment.digest) else {
-        throw ProtocolError(.notFound, "\(attachment.name) is not on this machine. Put its content here first.")
-      }
-      files.append(TurnAttachment(name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, file: file))
-    }
     let live = try await openLive()
+    // What the runtime said on its own since the last turn ended comes before this message.
+    await saving { try await self.finishAssistant() }
     try await finish(.userMessage(text: text, attachments: attachments), id: UUID().uuidString.lowercased(), author: author)
     try? await library.setTurnRunning(sessionID, true)
     setRun(.running)
-    let delivered = override ?? author.map { author in
-      let from = author.sessionID.map { "the agent session “\(author.name)” (\($0))" } ?? "the bot \(author.name)"
-      return "This message is from \(from), not the person.\n\n" + text
-    } ?? text
     do {
-      try await live.send(Turn(text: delivered, attachments: files))
+      try await live.send(turn)
     } catch {
       try? await library.setTurnRunning(sessionID, false)
       setRun(.idle)
       throw ProtocolError(.failed, "The runtime did not take the turn: \(error)")
     }
     if first { firstMessages?.tell(sessionID, text) }
+  }
+
+  /// Hands the running turn a message, then saves it where it came: after
+  /// the reply so far, which is finished as its own item, and before what
+  /// the turn says next. Nothing is saved unless the runtime took it.
+  /// Returns false when the runtime's turn had already ended.
+  private func steer(_ turn: Turn, saving text: String, attachments: [Attachment], author: ItemAuthor?) async throws -> Bool {
+    guard let live else { return false }
+    do {
+      guard try await live.steer(turn) else { return false }
+    } catch {
+      throw ProtocolError(.failed, "The runtime did not take the message: \(error)")
+    }
+    if author == nil {
+      // The person's message makes the turn theirs, and a paused goal resumes.
+      interrupted = false
+      idleGoalTurns = 0
+      goalTurn = false
+    }
+    await saving { try await self.finishAssistant() }
+    try await finish(.userMessage(text: text, attachments: attachments), id: UUID().uuidString.lowercased(), author: author)
+    return true
   }
 
   /// The agent said the goal is met: it is cleared, and the chat says so.
@@ -333,11 +370,14 @@ actor SessionHost {
   /// When a turn ends and the session still has a goal, the next turn asks
   /// the runtime to continue toward it. Not after an interruption or a failed
   /// turn, nor while a question waits; the person's next message resumes it.
+  /// It never steers: a turn the person started meanwhile continues the goal
+  /// when it ends.
   private func continueGoal() async {
     guard run == .idle, prompts.isEmpty, !interrupted,
           let goal = try? await library.session(sessionID)?.goal, !goal.isEmpty else { return }
     Task { [weak self] in
-      try? await self?.send(Goals.continuedText, attachments: [], author: Goals.author, delivered: Goals.continuation(goal))
+      try? await self?.send(Goals.continuedText, attachments: [], author: Goals.author, delivered: Goals.continuation(goal),
+                            steers: false)
     }
   }
 

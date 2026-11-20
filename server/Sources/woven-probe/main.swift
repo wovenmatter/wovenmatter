@@ -288,7 +288,9 @@ do {
     let subscription = try await client.subscribe(SubscribeSession(sessionID: sessionID))
     out("(\(subscription.reply.items.count) saved items; run \(subscription.reply.run.rawValue))")
     _ = try await client.call(SendTurn(sessionID: sessionID, text: text, attachments: attached))
-    try await follow(subscription, sessionID: sessionID, untilIdle: true, approve: approve)
+    // A message sent while a turn runs steers it; this follows that turn to its end.
+    try await follow(subscription, sessionID: sessionID, untilIdle: true, approve: approve,
+                     sawRunning: subscription.reply.run == .running)
   case "watch":
     let sessionID = argument(0, "SESSION")
     let subscription = try await client.subscribe(SubscribeSession(sessionID: sessionID))

@@ -135,7 +135,7 @@ private let sessionTools: [WovenTool] = [
     }),
   WovenTool(
     name: "send_to_session",
-    description: "Send a message to another agent session, on any machine; it starts a turn there and returns once that session took it. The message is marked as coming from you. Fails while that session is in a turn or its machine is offline.",
+    description: "Send a message to another agent session, on any machine; it starts a turn there, or joins the turn running there, and returns once that session took it. The message is marked as coming from you. Fails while its machine is offline.",
     input: schema(["sessionID": text("The session to send to."), "text": text("The message.")], required: ["sessionID", "text"]),
     groups: [.sessions],
     run: { call in

@@ -16,7 +16,8 @@ import WovenProtocol
 ///   late, when the server is back, and then carries on from its first
 ///   occurrence after now. Missed occurrences are not each run.
 /// - A timer, wake-up or task whose session is in a turn is tried again a
-///   little later. A one-time timer or wake-up is deleted once delivered.
+///   little later; it never steers that turn. A one-time timer or wake-up
+///   is deleted once delivered.
 actor Scheduler {
   /// How far into the past a new or edited entry's start still counts.
   static let grace: TimeInterval = 60
@@ -145,13 +146,14 @@ actor Scheduler {
       let source: ItemSource = entry.kind == .timer ? .timer : .wakeUp
       try await sessions.host(for: sessionID).send(draft.prompt, attachments: [],
                                                    author: ItemAuthor(botID: nil, name: draft.title, source: source),
-                                                   delivered: Self.delivered(entry))
+                                                   delivered: Self.delivered(entry), steers: false)
       return sessionID
     case .task:
       let author = ItemAuthor(botID: nil, name: draft.title, source: .scheduledTask)
       if !draft.newSessionEachRun, let sessionID = draft.sessionID, (try await library.session(sessionID)) != nil {
         do {
-          try await sessions.host(for: sessionID).send(draft.prompt, attachments: [], author: author, delivered: draft.prompt)
+          try await sessions.host(for: sessionID).send(draft.prompt, attachments: [], author: author, delivered: draft.prompt,
+                                                       steers: false)
           return sessionID
         } catch let error as ProtocolError where error.code == .nativeSessionGone {
           // The runtime lost that chat's session: the task goes on in a new one.

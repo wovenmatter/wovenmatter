@@ -49,9 +49,9 @@ enum Goals {
     _ = try await library.updateSession(sessionID, goal: .some(value))
     await host.goalChanged(value)
     if let value {
-      // A turn already running continues toward it when it ends.
+      // A turn already running is not steered; it continues toward the goal when it ends.
       do {
-        try await host.send(value, attachments: [], delivered: start(value))
+        try await host.send(value, attachments: [], delivered: start(value), steers: false)
       } catch let error as ProtocolError where error.code == .busy {}
     }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }

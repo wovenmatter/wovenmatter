@@ -176,6 +176,11 @@ behind one adapter interface in the server and are treated alike:
   would. It does not stop and replay it after each turn.
 - While a turn runs, the server streams text and tool activity to subscribed
   clients as it arrives.
+- A message sent while a turn runs steers that turn: it goes to the runtime
+  at once through the runtime's own mid-turn input, and the turn takes it in
+  and goes on. Nothing is queued. The message is saved where it came, after
+  the reply so far and before what the turn says next, and the turn still
+  ends once. Goal, timer, wake-up and scheduled turns never steer.
 - When an item finishes (a user message, an assistant message, a tool call with
   its result) the server writes it once to `session_items`, in the same step as
   it announces it. Partial text is never written while it streams. When a

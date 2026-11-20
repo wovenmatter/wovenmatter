@@ -36,10 +36,20 @@ struct ACPProfile: Sendable {
   var handleRequest: (@Sendable (String, JSONValue) async throws -> JSONValue)?
   /// Receives a notification the agent sends that ACP does not define.
   var handleNotification: (@Sendable (String, JSONValue) async -> Void)?
+  /// How a message reaches a turn while it runs.
+  var steering: ACPSteering = .sessionSteering
   /// Where the process's standard error goes.
   var logFile: URL?
   /// The Woven MCP and instructions for the native session.
   var tools: ToolAccess?
+}
+
+/// The ACP extension a runtime takes mid-turn input through.
+enum ACPSteering: Sendable {
+  /// `_session/steering`, the ACP steering extension (Codex, Claude Code, Pi Durable).
+  case sessionSteering
+  /// Grok Build's `_x.ai/interject`, which takes text only.
+  case interject
 }
 
 /// A runtime spoken to over ACP, one process per session.
@@ -241,6 +251,10 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
     try await state.prompt(turn)
   }
 
+  func steer(_ turn: Turn) async throws -> Bool {
+    try await state.steer(turn)
+  }
+
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
     try await state.configure(choices)
   }
@@ -336,6 +350,31 @@ private actor ACPState {
         result = .failure(error)
       }
       self.promptEnded(result)
+    }
+  }
+
+  /// Hands the running turn a message. The turn's own `session/prompt` goes
+  /// on and ends once, with the message's work in it.
+  func steer(_ turn: Turn) async throws -> Bool {
+    guard let sessionID, turnRunning else { return false }
+    switch profile.steering {
+    case .interject:
+      _ = try await connection.request("_x.ai/interject", .object([
+        "sessionId": .string(sessionID), "text": .string(Self.textWithFiles(turn)),
+      ]))
+      return true
+    case .sessionSteering:
+      // `promptRequired`: when the turn has just ended, the agent takes
+      // nothing, rather than starting a turn of its own.
+      let reply = try await connection.request("_session/steering", .object([
+        "sessionId": .string(sessionID), "prompt": .array(try Self.blocks(turn)),
+        "_meta": .object(["steering": .object(["idleBehavior": .string("promptRequired")])]),
+      ]))
+      switch reply["outcome"]?.string {
+      case "injected": return true
+      case "promptRequired": return false
+      default: throw RuntimeError.failed("\(profile.kind.rawValue) did not take the message.")
+      }
     }
   }
 
@@ -763,11 +802,18 @@ private actor ACPState {
                               "mimeType": .string(attachment.mimeType), "size": .integer(attachment.size)]))
       }
     }
-    var text = turn.text
-    if !linked.isEmpty {
-      text += (text.isEmpty ? "" : "\n\n") + "Attached files:\n" + linked.map { "- " + $0 }.joined(separator: "\n")
-    }
+    let text = withFiles(turn.text, linked)
     return (text.isEmpty ? [] : [.object(["type": .string("text"), "text": .string(text)])]) + files
+  }
+
+  /// A turn as text alone, its files named by path.
+  private static func textWithFiles(_ turn: Turn) -> String {
+    withFiles(turn.text, turn.attachments.map { "\($0.name): \($0.file.path)" })
+  }
+
+  private static func withFiles(_ text: String, _ linked: [String]) -> String {
+    guard !linked.isEmpty else { return text }
+    return text + (text.isEmpty ? "" : "\n\n") + "Attached files:\n" + linked.map { "- " + $0 }.joined(separator: "\n")
   }
 }
 

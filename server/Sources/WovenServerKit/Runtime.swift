@@ -191,6 +191,12 @@ public protocol RuntimeSession: Sendable {
   var events: AsyncStream<RuntimeEvent> { get }
   /// Starts a turn. Returns once the runtime has taken it, not when it ends.
   func send(_ turn: Turn) async throws
+  /// Steers the turn running now: hands it a message through the runtime's
+  /// own mid-turn input, which the turn takes in and goes on, still ending
+  /// once. Returns once the runtime has taken it. Returns false, having taken
+  /// nothing, when the runtime's turn has already ended; that end is then on
+  /// its way in `events`.
+  func steer(_ turn: Turn) async throws -> Bool
   /// Changes the model, thinking level or permission mode; replies with what
   /// the runtime confirmed.
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration

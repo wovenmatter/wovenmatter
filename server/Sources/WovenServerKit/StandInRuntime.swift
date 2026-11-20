@@ -9,9 +9,11 @@ import WovenProtocol
 
 /// A runtime that calls no provider, for tests. Each turn answers
 /// "Turn N: <text>" (N counts the turns its native session has seen), in two
-/// pieces of text, then makes one tool call. A turn `woven NAME {arguments}`
-/// instead calls that Woven tool through the session's tool socket, as a
-/// runtime's MCP client would, and reports its result.
+/// pieces of text, then makes one tool call. A message steered into a turn
+/// before its second piece joins that piece: "Turn N: <text> + <message>".
+/// A turn `woven NAME {arguments}` instead calls that Woven tool through the
+/// session's tool socket, as a runtime's MCP client would, and reports its
+/// result.
 public final class StandInRuntime: Runtime {
   public static let kind = RuntimeKind(rawValue: "standIn")
   public var kind: RuntimeKind { Self.kind }
@@ -101,6 +103,8 @@ private final class StandInSession: RuntimeSession {
   private let store: StandInRuntime.NativeStore
   private let gate: StandInRuntime.Gate?
   private let turn = Mutex<Task<Void, Never>?>(nil)
+  /// Messages steered into the running turn, or nil when none runs.
+  private let steered = Mutex<[String]?>(nil)
   private let tools: ToolAccess?
 
   init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?) {
@@ -135,18 +139,28 @@ private final class StandInSession: RuntimeSession {
       } }
       return
     }
-    let task = Task {
+    steered.withLock { $0 = [] }
+    let task = Task { [self] in
       emit.yield(.text("Turn \(number): "))
       await gate?.wait()
       if Task.isCancelled { return }
-      emit.yield(.text(text))
+      emit.yield(.text(([text] + (self.steered.withLock { $0 } ?? [])).joined(separator: " + ")))
       emit.yield(.messageFinished)
       emit.yield(.tool(callID: "echo-\(number)", call: ToolCall(name: "echo", input: "{\"text\":\"\(text)\"}"), finished: false))
       emit.yield(.tool(callID: "echo-\(number)", call: ToolCall(name: "echo", input: "{\"text\":\"\(text)\"}", output: text),
                        finished: true))
+      self.steered.withLock { $0 = nil }
       emit.yield(.turnFinished(failure: nil, usage: TokenUsage(model: "stand-in", input: 10, output: 5)))
     }
     turn.withLock { $0 = task }
+  }
+
+  func steer(_ input: Turn) async throws -> Bool {
+    steered.withLock { steered in
+      guard steered != nil else { return false }
+      steered?.append(input.text)
+      return true
+    }
   }
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
@@ -200,6 +214,7 @@ private final class StandInSession: RuntimeSession {
 
   func interrupt() async throws {
     turn.withLock { $0?.cancel() }
+    steered.withLock { $0 = nil }
     emit.yield(.turnFinished(failure: nil, usage: nil))
   }
 

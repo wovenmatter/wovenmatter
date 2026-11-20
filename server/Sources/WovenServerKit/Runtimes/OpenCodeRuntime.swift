@@ -400,6 +400,24 @@ final class OpenCodeSession: RuntimeSession {
   private var path: String { "/api/session/" + OpenCodeClient.segment(nativeHandle) }
 
   func send(_ turn: Turn) async throws {
+    state.withLock { $0.running = true }
+    do {
+      try await post(turn)
+    } catch {
+      state.withLock { $0.running = false }
+      throw RuntimeError.failed("OpenCode did not take the turn: \(error)")
+    }
+  }
+
+  /// OpenCode's prompt route delivers a message to a running execution as
+  /// a steer.
+  func steer(_ turn: Turn) async throws -> Bool {
+    guard state.withLock({ $0.running }) else { return false }
+    try await post(turn)
+    return true
+  }
+
+  private func post(_ turn: Turn) async throws {
     let files: [JSONValue] = try turn.attachments.map { attachment in
       if attachment.mimeType.hasPrefix("image/") {
         let data = try Data(contentsOf: attachment.file)
@@ -408,18 +426,14 @@ final class OpenCodeSession: RuntimeSession {
       return .object(["uri": .string(attachment.file.absoluteURL.absoluteString), "name": .string(attachment.name)])
     }
     let commands = state.withLock { $0.configuration.commands.map(\.name) }
-    state.withLock { $0.running = true }
-    do {
-      if turn.text.hasPrefix("/"), let name = turn.text.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init),
-         commands.contains(name) {
-        let rest = turn.text.dropFirst(name.count + 1).trimmingCharacters(in: .whitespaces)
-        try await client.call("POST", path + "/command", body: .object(["name": .string(name), "text": .string(rest), "files": .array(files)]))
-      } else {
-        try await client.call("POST", path + "/prompt", body: .object(["text": .string(turn.text), "files": .array(files)]))
-      }
-    } catch {
-      state.withLock { $0.running = false }
-      throw RuntimeError.failed("OpenCode did not take the turn: \(error)")
+    if turn.text.hasPrefix("/"), let name = turn.text.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init),
+       commands.contains(name) {
+      let rest = turn.text.dropFirst(name.count + 1).trimmingCharacters(in: .whitespaces)
+      try await client.call("POST", path + "/command", body: .object(["name": .string(name), "text": .string(rest), "files": .array(files),
+                                                                       "delivery": .string("steer")]))
+    } else {
+      try await client.call("POST", path + "/prompt", body: .object(["text": .string(turn.text), "files": .array(files),
+                                                                      "delivery": .string("steer")]))
     }
   }
 

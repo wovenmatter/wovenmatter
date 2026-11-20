@@ -124,6 +124,36 @@ func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async thr
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
+  let gate = StandInRuntime.Gate()
+  let host = try await TestServer.start(runtime: StandInRuntime(gate: gate))
+  defer { host.server.stopLater() }
+  let client = try await host.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  var events = subscription.events.makeAsyncIterator()
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "one"))
+  while let event = try await events.next() {
+    if case .text = event { break }
+  }
+
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "two"))
+  await gate.open()
+  var runStates: [RunState] = []
+  while let event = try await events.next() {
+    if case .runState(let state) = event { runStates.append(state) }
+    if event == .runState(.idle) { break }
+  }
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(runStates == [.idle])
+  #expect(items.count == 5 && Set(items.map(\.id)).count == 5)
+  #expect(Array(items.prefix(4).map(\.content)) == [
+    .userMessage(text: "one"), .assistantMessage(text: "Turn 1: "), .userMessage(text: "two"), .assistantMessage(text: "one + two"),
+  ])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func secondServerReceivesTheSessionBySyncAndServesItReadOnly() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)
