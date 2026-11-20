@@ -10,7 +10,7 @@ prune-bots-sdk.py <bots directory>
 import json, shutil, sys
 from pathlib import Path
 
-# The packages `default-agent/src/sdk-management.mjs` updates (bots use all but pi-coding-agent).
+# The packages Pi Durable's SDK update (`default-agent/src/sdk.mjs`) installs (bots use all but pi-coding-agent).
 SDK = {'@earendil-works/pi-durable', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent',
        '@earendil-works/chord', '@anthropic-ai/claude-agent-sdk'}
 
