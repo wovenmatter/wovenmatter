@@ -40,6 +40,19 @@ final class RunBoard: Sendable {
   }
 }
 
+/// The configuration each runtime last reported on this machine: what a new
+/// session with it can choose from before its process has started.
+final class RuntimeConfigurations: Sendable {
+  private let known = Mutex<[RuntimeKind: SessionConfiguration]>([:])
+
+  func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
+    guard !configuration.models.isEmpty || !configuration.permissionModes.isEmpty else { return }
+    known.withLock { $0[kind] = configuration }
+  }
+
+  func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
+}
+
 /// The sessions this machine owns, each with its host while it is in use.
 actor SessionManager {
   private let library: Library
@@ -48,6 +61,7 @@ actor SessionManager {
   private var hosts: [String: SessionHost] = [:]
   private var watcher: Task<Void, Never>?
   nonisolated let board = RunBoard()
+  nonisolated let configurations = RuntimeConfigurations()
 
   init(library: Library, runtimes: [any Runtime], scratch: URL) {
     self.library = library
@@ -113,7 +127,8 @@ actor SessionManager {
     }
     let gone = try await library.nativeSession(for: sessionID)?.gone == true
     if let host = hosts[sessionID] { return host }
-    let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board)
+    let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
+                           configurations: configurations)
     hosts[sessionID] = host
     return host
   }
@@ -152,6 +167,7 @@ actor SessionHost {
   private let library: Library
   private let runtime: any Runtime
   private let board: RunBoard
+  private let configurations: RuntimeConfigurations
   private var live: (any RuntimeSession)?
   private var generation = 0
   private var run: RunState
@@ -164,11 +180,13 @@ actor SessionHost {
   private var busy = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
 
-  init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard) {
+  init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
+       configurations: RuntimeConfigurations) {
     self.sessionID = sessionID
     self.library = library
     self.runtime = runtime
     self.board = board
+    self.configurations = configurations
     run = gone ? .nativeSessionGone : .idle
   }
 
@@ -421,6 +439,7 @@ actor SessionHost {
   private func adopt(_ configuration: SessionConfiguration) {
     guard configuration != self.configuration else { return }
     self.configuration = configuration
+    configurations.set(runtime.kind, configuration)
     broadcast(.configuration(configuration))
   }
 
