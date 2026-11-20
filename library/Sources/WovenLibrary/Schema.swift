@@ -197,6 +197,33 @@ public enum Schema {
       .integer("copied_at"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
+    // The bots, as their home machine's runtime reports them, so any machine
+    // can list them and read their chats while the home machine is away.
+    // `id` is the bot's own identifier; `machine_id` is the home machine.
+    Table("bots", .newestWins, [
+      .text("machine_id", ""),
+      .text("name", ""),
+      // "admin" or "bot".
+      .text("kind", "bot"),
+      .integer("manager", 0),
+      .text("manager_id"),
+      .integer("orchestrator", 0),
+      // Deleted in the runtime but restorable there.
+      .integer("trashed", 0),
+      .integer("created_at", 0),
+    ], parents: [Parent(column: "machine_id", table: "machines")]),
+    // Which bot conversation or Forum room a session holds. `id` is the
+    // session's identifier.
+    Table("bot_chats", .newestWins, [
+      .text("session_id", ""),
+      // Empty for a Forum room.
+      .text("bot_id", ""),
+      // The runtime's conversation, or the Forum room.
+      .integer("conversation_id", 0),
+      // "main", "thread", "forum" (the Forum itself) or "forumThread".
+      .text("kind", ""),
+      .integer("parent_conversation_id"),
+    ], parents: [Parent(column: "session_id", table: "sessions")]),
 
     // Newest write wins, loser kept: notes, pages and apps.
     Table("artifacts", .newestWinsKeepLoser(history: "artifact_versions"), [
@@ -239,6 +266,8 @@ public enum Schema {
       .text("kind", ""),
       // The item's content as JSON (`ItemContent`).
       .text("body", ""),
+      // Who said it, as JSON (`ItemAuthor`), in a chat with several speakers.
+      .text("author"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "session_id", table: "sessions")], indexes: [["session_id", "sequence"]]),
     Table("usage_records", .appendOnly, [
@@ -286,6 +315,14 @@ public enum Schema {
       // A turn is running. Still set at start, the server stopped mid-turn.
       .integer("turn_running", 0),
       .integer("updated_at", 0),
+    ]),
+    // How far the bots runtime's finished entries are saved here: "bot:<id>"
+    // for a bot's conversations, "forum" for the Forum. Kept by the library,
+    // not the bots' folder, so bots moved to another machine save their
+    // history again there, in sessions that machine owns.
+    Table("bot_checkpoints", .local, [
+      .key("key"),
+      .integer("entry", 0),
     ]),
     Table("schedule_state", .local, [
       .key("schedule_id"),

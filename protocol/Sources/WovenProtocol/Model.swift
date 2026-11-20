@@ -126,13 +126,30 @@ public struct SessionItem: Codable, Sendable, Hashable, Identifiable {
   public var sequence: Int
   public var createdAt: Date
   public var content: ItemContent
+  /// Who said it, in a chat with more than one speaker (the Forum). Nil is
+  /// the person, or the session's own runtime.
+  public var author: ItemAuthor?
 
-  public init(id: String, sessionID: String, sequence: Int, createdAt: Date, content: ItemContent) {
+  public init(id: String, sessionID: String, sequence: Int, createdAt: Date, content: ItemContent,
+              author: ItemAuthor? = nil) {
     self.id = id
     self.sessionID = sessionID
     self.sequence = sequence
     self.createdAt = createdAt
     self.content = content
+    self.author = author
+  }
+}
+
+/// The speaker of an item in a chat with several: a bot by its identifier,
+/// with the name it had when it spoke.
+public struct ItemAuthor: Codable, Sendable, Hashable {
+  public var botID: String?
+  public var name: String
+
+  public init(botID: String?, name: String) {
+    self.botID = botID
+    self.name = name
   }
 }
 

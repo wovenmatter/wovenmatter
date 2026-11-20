@@ -343,10 +343,11 @@ extension Library {
     return line.isEmpty ? nil : String(line.prefix(200))
   }
 
-  private static func item(_ row: Row) throws -> SessionItem {
+  static func item(_ row: Row) throws -> SessionItem {
     SessionItem(id: row.text("id") ?? "", sessionID: row.text("session_id") ?? "",
                 sequence: Int(row.integer("sequence") ?? 0), createdAt: row.date("created_at"),
-                content: try Wire.decoder.decode(ItemContent.self, from: Data((row.text("body") ?? "").utf8)))
+                content: try Wire.decoder.decode(ItemContent.self, from: Data((row.text("body") ?? "").utf8)),
+                author: try row.text("author").map { try Wire.decoder.decode(ItemAuthor.self, from: Data($0.utf8)) })
   }
 
   private static func folder(_ row: Row) -> Folder {
