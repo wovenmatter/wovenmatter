@@ -17,7 +17,7 @@ new pool or cap by writing a request file that a root path unit applies.
 Afterwards the installed root-owned copy runs only from those units. Remove
 everything with:
 
-    sudo python3 /usr/local/lib/wovenmatter-bots/bots-engine uninstall
+    sudo python3 /usr/local/lib/woven-bots-engine/bots-engine uninstall
 """
 import contextlib, grp, hashlib, ipaddress, json, os, platform, pwd, re, shutil, stat, subprocess, sys, tarfile
 import tempfile, time, urllib.request
@@ -63,45 +63,48 @@ def fail(code, detail, status=69): raise Failure(code, detail, status)
 
 
 class Layout:
-    """Every path and unit name, derived from one instance name, so a test
-    instance can run beside the real one."""
-    def __init__(self, instance='wovenmatter', root='/'):
-        if not re.fullmatch(r'[a-z][a-z0-9]{1,15}', instance or ''):
+    """Every path and unit name, derived from one name: `woven-bots-engine`,
+    or `woven-bots-engine-<instance>` for a development instance, so one can
+    run beside the real one. No name can be another program's."""
+    def __init__(self, instance=None, root='/'):
+        if instance is not None and not re.fullmatch(r'[a-z][a-z0-9]{1,15}', instance):
             fail('invalid_instance', 'Use a short lowercase engine instance name.', 64)
         self.instance = instance
+        name = 'woven-bots-engine' + ('-'+instance if instance else '')
+        self.name = name
         r = Path(root)
-        self.lib = r/'usr/local/lib'/(instance+'-bots')
+        self.lib = r/'usr/local/lib'/name
         self.helper = self.lib/'bots-engine'
         self.docker_root = self.lib/'docker'
         self.docker_current = self.docker_root/'current'
-        self.etc = r/'etc'/(instance+'-bots')
+        self.etc = r/'etc'/name
         self.config = self.etc/'instance.json'
         self.daemon = self.etc/'daemon.json'
         self.containerd_config = self.etc/'containerd.toml'
-        self.var = r/'var/lib'/(instance+'-bots')
+        self.var = r/'var/lib'/name
         self.image = self.var/'disk.img'
         self.data = self.var/'docker'
         self.requests = self.var/'requests'
         self.request = self.requests/'settings.json'
         self.state = self.var/'state/state.json'
-        self.run = r/'run'/instance
+        self.run = r/'run'/name
         self.socket = self.run/'docker.sock'
         self.containerd_socket = self.run/'containerd/containerd.sock'
         self.units = r/'etc/systemd/system'
-        self.service = instance+'-docker.service'
+        self.service = name+'.service'
         # Its own containerd: dockerd would otherwise join a system containerd
         # and share the person's Docker "moby" namespace.
-        self.containerd = instance+'-containerd.service'
-        self.slice = instance+'-bots.slice'
-        self.firewall = instance+'-bots-firewall.service'
-        self.apply_path = instance+'-bots-apply.path'
-        self.apply_service = instance+'-bots-apply.service'
+        self.containerd = name+'-containerd.service'
+        self.slice = name.replace('-', '_')+'.slice'
+        self.firewall = name+'-firewall.service'
+        self.apply_path = name+'-apply.path'
+        self.apply_service = name+'-apply.service'
         self.mount = systemd_escape_path(str(Path('/')/self.data.relative_to(r)))+'.mount'
         # Docker-style name: host firewalls that admit container bridges
         # commonly match br-*. The person's Docker manages only bridges it made.
-        self.bridge = 'br-wovenbots' if instance == 'wovenmatter' else 'br-'+instance[:12]
-        self.table = instance+'_bots'
-        self.chain = (instance.upper()+'-BOTS')[:28]
+        self.bridge = 'br-wvbots' + ('-'+instance[:5] if instance else '')
+        self.table = name.replace('-', '_')
+        self.chain = name.upper()[:28]
 
     def unit_names(self):
         return [self.service, self.containerd, self.slice, self.firewall, self.apply_path, self.apply_service, self.mount]
@@ -258,7 +261,7 @@ table inet {layout.table} {{
 
 
 def render_units(layout, config, python):
-    helper = f'{python} -I {layout.helper} --instance {layout.instance}'
+    helper = f'{python} -I {layout.helper}' + (f' --instance {layout.instance}' if layout.instance else '')
     pool = 'infinity' if config.get('poolBytes') is None else str(config['poolBytes'])
     return {
         layout.slice: f'''[Unit]
@@ -304,7 +307,7 @@ Type=notify
 Slice={layout.slice}
 Environment=PATH={layout.docker_current}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart={layout.docker_current}/containerd --config {layout.containerd_config}
-RuntimeDirectory={layout.instance}/containerd
+RuntimeDirectory={layout.name}/containerd
 RuntimeDirectoryPreserve=yes
 Restart=always
 RestartSec=3
@@ -329,7 +332,7 @@ Environment=PATH={layout.docker_current}:/usr/local/sbin:/usr/local/bin:/usr/sbi
 ExecStartPre={helper} prestart
 ExecStart={layout.docker_current}/dockerd --config-file {layout.daemon}
 ExecReload=/bin/kill -s HUP $MAINPID
-RuntimeDirectory={layout.instance}
+RuntimeDirectory={layout.name}
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 TimeoutStartSec=180
@@ -592,7 +595,7 @@ class Engine:
         if current is None:
             with layout.image.open('xb') as stream: stream.truncate(want)
             layout.image.chmod(0o600)
-            self.host.run(['mkfs.ext4', '-q', '-F', '-m', '0', '-L', (layout.instance+'bots')[:16], str(layout.image)], timeout=600)
+            self.host.run(['mkfs.ext4', '-q', '-F', '-m', '0', '-L', ('wvbots'+(layout.instance or ''))[:16], str(layout.image)], timeout=600)
         elif want > current:
             with layout.image.open('r+b') as stream: stream.truncate(want)
             device = self.loop_device()
@@ -708,10 +711,6 @@ class Engine:
         for unit in (layout.apply_path, layout.apply_service, layout.service, layout.containerd, layout.firewall, layout.mount):
             self.systemctl('disable', '--now', unit, check=False)
         self.systemctl('stop', layout.slice, check=False)
-        # The implicit parent slice stays loaded; stop it only when it is ours alone.
-        parent = Path('/sys/fs/cgroup')/(layout.instance+'.slice')
-        with contextlib.suppress(OSError):
-            if not [p for p in parent.iterdir() if p.is_dir() and p.name != layout.slice]: self.systemctl('stop', layout.instance+'.slice', check=False)
         for name in layout.unit_names():
             with contextlib.suppress(FileNotFoundError): (layout.units/name).unlink()
         for control in (Path('/etc/systemd/system.control'), Path('/run/systemd/system.control')):
@@ -725,17 +724,17 @@ class Engine:
         for path in (layout.var, layout.etc, layout.lib, layout.run):
             if path.is_symlink(): path.unlink()
             elif path.exists(): shutil.rmtree(path)
-        return {'removed': True, 'instance': layout.instance}
+        return {'removed': True, 'name': layout.name}
 
     def status(self):
         layout = self.layout; config = self.config(required=False)
-        if not config: return {'installed': False, 'instance': layout.instance}
+        if not config: return {'installed': False, 'name': layout.name}
         state = read_json(layout.state, {}) or {}
         used = None
         with contextlib.suppress(OSError):
             if os.path.ismount(layout.data):
                 info = os.statvfs(layout.data); used = (info.f_blocks-info.f_bfree)*info.f_frsize
-        return {'installed': True, 'instance': layout.instance, 'running': self.active(layout.service),
+        return {'installed': True, 'name': layout.name, 'running': self.active(layout.service),
             'socket': str(layout.socket), 'user': config['user'], 'dockerVersion': config.get('dockerVersion'),
             'bridge': layout.bridge, 'subnet': config['subnet'], 'slice': layout.slice,
             'poolBytes': config.get('poolBytes'), 'diskBytes': config.get('diskBytes'), 'diskImageBytes': self.image_size(),
@@ -747,7 +746,7 @@ class Engine:
 def main(argv):
     # Root-owned files must be readable by the account's server.
     os.umask(0o022)
-    instance = 'wovenmatter'
+    instance = None
     if len(argv) >= 2 and argv[0] == '--instance': instance, argv = argv[1], argv[2:]
     if not argv: fail('invalid_command', 'usage: bots-engine.py install --user NAME [--pool BYTES|none] [--disk BYTES|none] | uninstall | status', 64)
     command, *rest = argv; options = {}

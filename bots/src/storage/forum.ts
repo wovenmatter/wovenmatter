@@ -299,6 +299,10 @@ export class ForumStore {
     return changed > 0;
   }
 
+  async setRoomTitle(roomId: number, title: string): Promise<void> {
+    await this.#db.run(`UPDATE ${FORUM_ROOMS_TABLE} SET title = ? WHERE id = ?`, title.trim(), roomId);
+  }
+
   async setRoomPinned(roomId: number, pinned: boolean): Promise<void> {
     await this.#db.run(
       `UPDATE ${FORUM_ROOMS_TABLE} SET is_pinned = ? WHERE id = ?`,

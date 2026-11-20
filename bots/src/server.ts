@@ -494,6 +494,12 @@ class Connection {
         this.#server.threadsChanged(request.botId);
         return { thread: thread(record) };
       }
+      case "thread.setTitle": {
+        await manager.get(request.botId);
+        const record = await manager.registry.setThreadTitle(request.botId, request.conversationId, request.title);
+        this.#server.threadsChanged(request.botId);
+        return { thread: thread(record) };
+      }
       case "thread.setPinned": {
         await manager.get(request.botId);
         const record = await manager.registry.setThreadPinned(
@@ -588,6 +594,8 @@ class Connection {
       }
       case "forum.thread.create":
         return { thread: await this.#forum().createThread(request.postId) };
+      case "forum.thread.setTitle":
+        return { thread: await this.#forum().setThreadTitle(request.roomId, request.title) };
       case "forum.thread.setPinned":
         return { thread: await this.#forum().setThreadPinned(request.roomId, request.pinned) };
       case "forum.setPaused":

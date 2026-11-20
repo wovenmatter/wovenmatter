@@ -12,17 +12,19 @@ import WovenProtocol
 /// never needs root afterwards: the socket belongs to the person's group, and
 /// a changed pool or disk cap is a request file that a root path unit applies.
 struct LinuxDockerdBotsEngine: BotsEngine {
-  /// The names `bots-engine.py` derives from its instance name.
-  let instance: String
+  /// The name `bots-engine.py` gives every path and unit: `woven-bots-engine`,
+  /// or `woven-bots-engine-<instance>` for a development instance
+  /// (`WOVEN_BOTS_ENGINE_INSTANCE`).
+  let name: String
   var kind: String { "linux-dockerd" }
 
-  init(instance: String = "wovenmatter") {
-    self.instance = instance
+  init(instance: String? = ProcessInfo.processInfo.environment["WOVEN_BOTS_ENGINE_INSTANCE"]) {
+    name = "woven-bots-engine" + (instance.flatMap { $0.isEmpty ? nil : "-" + $0 } ?? "")
   }
 
-  var socket: String { "/run/\(instance)/docker.sock" }
-  private var config: String { "/etc/\(instance)-bots/instance.json" }
-  private var root: String { "/var/lib/\(instance)-bots" }
+  var socket: String { "/run/\(name)/docker.sock" }
+  private var config: String { "/etc/\(name)/instance.json" }
+  private var root: String { "/var/lib/\(name)" }
   private var requests: String { root + "/requests" }
   private var state: String { root + "/state/state.json" }
   private var data: String { root + "/docker" }
@@ -45,7 +47,8 @@ struct LinuxDockerdBotsEngine: BotsEngine {
       let installer = Resources.root.appending(path: "bots/engine/bots-engine.py").path
       throw RuntimeError.failed("""
         The bots' container engine is not installed on this machine. Install it once with: \
-        sudo python3 \(Self.quoted(installer)) install --user \(Self.quoted(NSUserName()))
+        sudo python3 \(Self.quoted(installer))\(name == "woven-bots-engine" ? "" : " --instance " + name.dropFirst(18)) \
+        install --user \(Self.quoted(NSUserName()))
         """)
     }
     guard installed.user == NSUserName() else {
@@ -54,7 +57,7 @@ struct LinuxDockerdBotsEngine: BotsEngine {
     let clock = ContinuousClock(), deadline = clock.now + .seconds(60)
     while !(await UnixHTTP.dockerAnswers(socket)) {
       guard clock.now < deadline else {
-        throw RuntimeError.failed("The bots' container engine is not running. Start it with: sudo systemctl start \(instance)-docker.service")
+        throw RuntimeError.failed("The bots' container engine is not running. Start it with: sudo systemctl start \(name).service")
       }
       try await Task.sleep(for: .seconds(1))
     }

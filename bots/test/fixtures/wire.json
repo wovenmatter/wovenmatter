@@ -1084,6 +1084,16 @@
       "createdAt": "2026-11-19T09:30:00.000Z"
     }
   },
+  "reply.thread.setTitle": {
+    "thread": {
+      "pinned": true,
+      "conversationId": 4,
+      "parentConversationId": 1,
+      "forkedAt": 12,
+      "title": "Build failures",
+      "createdAt": "2026-11-19T09:30:00.000Z"
+    }
+  },
   "reply.thread.setPinned": {
     "thread": {
       "pinned": true,
@@ -1401,6 +1411,21 @@
     }
   },
   "reply.forum.thread.create": {
+    "thread": {
+      "roomId": 3,
+      "parentPostId": 7,
+      "title": "The build",
+      "preview": "The build is fixed.",
+      "createdAt": "2026-11-19T09:30:00.000Z",
+      "pinned": true,
+      "replies": 2,
+      "botIds": [
+        "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+        "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+      ]
+    }
+  },
+  "reply.forum.thread.setTitle": {
     "thread": {
       "roomId": 3,
       "parentPostId": 7,

@@ -582,4 +582,25 @@ func registerBots(_ router: inout Router, bots: BotsHost, library: Library) {
   router.on(ListSavedBots.self) { _, _ in
     try await library.savedBots()
   }
+  // A bot chat's title is the runtime's (the bot's name, a thread's title),
+  // so renaming one goes to the runtime, and its next push brings the title
+  // here. Other changes are the library's alone. Replaces the general handler.
+  router.on(UpdateSession.self) { request, caller in
+    if let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
+       let chat = try await library.savedBots().chats.first(where: { $0.session.id == request.sessionID }) {
+      let rename: JSONValue = switch chat.kind {
+      case .main: .object(["type": .string("bots.rename"), "botId": .string(chat.botID ?? ""), "name": .string(title)])
+      case .thread: .object(["type": .string("thread.setTitle"), "botId": .string(chat.botID ?? ""),
+                             "conversationId": .integer(Int64(chat.conversationID)), "title": .string(title)])
+      case .forumThread: .object(["type": .string("forum.thread.setTitle"), "roomId": .integer(Int64(chat.conversationID)),
+                                  "title": .string(title)])
+      case .forum: throw ProtocolError(.badRequest, "The Forum keeps its name.")
+      }
+      _ = try await bots.call(rename, caller: caller)
+    }
+    let isBotChat = try await library.session(request.sessionID)?.runtime == .bots
+    let folder: String?? = request.removeFromFolder == true ? .some(nil) : request.folderID.map { .some($0) }
+    return try await library.updateSession(request.sessionID, title: isBotChat ? nil : request.title, archived: request.archived,
+                                           pinned: request.pinned, read: request.read, folderID: folder)
+  }
 }

@@ -184,7 +184,15 @@ export const requestSchema = z.discriminatedUnion("type", [
     botId,
     conversationId: conversationId.optional(),
     entryId: z.number().int().nonnegative(),
-    // Strict: threads cannot be named or renamed (`title` is rejected).
+    // Strict: a fork takes no title (`thread.setTitle` names a thread).
+  }),
+  // A title the person gives a thread in Woven; it replaces the generated one.
+  z.strictObject({
+    id: requestId,
+    type: z.literal("thread.setTitle"),
+    botId,
+    conversationId,
+    title: z.string().trim().min(1).max(200),
   }),
   z.strictObject({
     id: requestId,
@@ -252,6 +260,12 @@ export const requestSchema = z.discriminatedUnion("type", [
     deliveryId: z.string().min(1).max(128).optional(),
   }),
   z.strictObject({ id: requestId, type: z.literal("forum.thread.create"), postId }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.thread.setTitle"),
+    roomId,
+    title: z.string().trim().min(1).max(200),
+  }),
   z.strictObject({
     id: requestId,
     type: z.literal("forum.thread.setPinned"),
@@ -641,6 +655,7 @@ export type Replies = {
   /** `duplicate`: a retry of a delivery id already accepted. */
   "message.send": { conversationId: number; submissionId: number } | { duplicate: true };
   "thread.fork": { thread: ThreadSummary };
+  "thread.setTitle": { thread: ThreadSummary };
   "thread.setPinned": { thread: ThreadSummary };
   "threads.list": { threads: ThreadSummary[] };
   "settings.accounts": AccountsSummary;
@@ -657,6 +672,7 @@ export type Replies = {
   "forum.posts": { posts: ForumPost[]; hasEarlier: boolean };
   "forum.post": { post: ForumPost } | { duplicate: true };
   "forum.thread.create": { thread: ForumThreadSummary };
+  "forum.thread.setTitle": { thread: ForumThreadSummary };
   "forum.thread.setPinned": { thread: ForumThreadSummary };
   "forum.setPaused": ForumState;
   "forum.setBotActive": ForumState;

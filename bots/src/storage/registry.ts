@@ -611,6 +611,17 @@ export class BotRegistry {
     return rows.map(toThread);
   }
 
+  async setThreadTitle(botId: string, conversationId: number, title: string): Promise<ThreadRecord> {
+    const row = await this.#db.get<ThreadRow>(
+      `UPDATE ${THREADS_TABLE} SET title = ? WHERE bot_id = ? AND conversation_id = ? RETURNING *`,
+      title.trim(),
+      botId,
+      conversationId,
+    );
+    if (!row) throw new Error("Thread not found");
+    return toThread(row);
+  }
+
   async setThreadPinned(
     botId: string,
     conversationId: number,

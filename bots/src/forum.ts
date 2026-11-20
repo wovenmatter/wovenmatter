@@ -720,6 +720,14 @@ export class Forum {
     return this.#thread(thread.id);
   }
 
+  async setThreadTitle(roomId: number, title: string): Promise<ForumThreadSummary> {
+    const room = await this.#room(roomId);
+    if (room.parentPostId === undefined) throw new ForumError("only threads can be renamed");
+    await this.store.setRoomTitle(room.id, title);
+    this.#events.changed?.();
+    return this.#thread(room.id);
+  }
+
   async setThreadPinned(roomId: number, pinned: boolean): Promise<ForumThreadSummary> {
     const room = await this.#room(roomId);
     if (room.parentPostId === undefined) throw new ForumError("only threads can be pinned");
