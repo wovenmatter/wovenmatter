@@ -291,8 +291,11 @@ public func connectWebSocket(_ endpoint: Endpoint) async throws -> any MessageTr
       let upgrade = NIOTypedHTTPClientUpgradeConfiguration<ClientUpgrade>(
         upgradeRequestHead: head, upgraders: [upgrader],
         notUpgradingCompletionHandler: { channel in channel.eventLoop.makeSucceededFuture(ClientUpgrade.notUpgraded) })
-      return try channel.pipeline.syncOperations.configureUpgradableHTTPClientPipeline(
-        configuration: .init(upgradeConfiguration: upgrade))
+      var configuration = NIOUpgradableHTTPClientPipelineConfiguration(upgradeConfiguration: upgrade)
+      // A server may speak first (the bots runtime does): its first messages
+      // can arrive with the upgrade's reply, and must reach the connection.
+      configuration.leftOverBytesStrategy = .forwardBytes
+      return try channel.pipeline.syncOperations.configureUpgradableHTTPClientPipeline(configuration: configuration)
     }
   }
   let bootstrap = ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton).connectTimeout(.seconds(5))

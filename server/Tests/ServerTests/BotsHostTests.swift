@@ -192,11 +192,14 @@ private final class StandInProcess: BotsRuntimeProcess {
     let id = UUID()
     await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
-        let stopped = done.withLock { state in
-          if !state.stopped && !Task.isCancelled { state.waiters[id] = continuation }
-          return state.stopped || Task.isCancelled
+        // Cancellation is read once, under the lock: read twice, a cancel in
+        // between both stored the waiter and resumed it, so it was resumed twice.
+        let ended = done.withLock { state in
+          if state.stopped || Task.isCancelled { return true }
+          state.waiters[id] = continuation
+          return false
         }
-        if stopped { continuation.resume() }
+        if ended { continuation.resume() }
       }
     } onCancel: {
       done.withLock { $0.waiters.removeValue(forKey: id) }?.resume()
@@ -222,8 +225,10 @@ private struct TestServer {
   static func start(name: String, runtime: StandInBotsRuntime, tailnet: StandInTailnet = StandInTailnet(),
                     listen: Bool = false, files: StandInFiles = StandInFiles(),
                     committing: Gate? = nil) async throws -> TestServer {
-    let folder = URL(fileURLWithPath: "/tmp/wvb-\(UUID().uuidString.prefix(8))", isDirectory: true)
-    let socket = folder.path + ".sock"
+    // A test process can exit before `finishLater` removes its folder; with a
+    // whole UUID a new server never opens a folder an earlier run left behind.
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-bots-\(UUID().uuidString)", isDirectory: true)
+    let socket = "/tmp/wvb-\(UUID().uuidString.prefix(8)).sock"
     var options = WovenServer.Options(
       dataFolder: folder, socketPath: socket, listen: listen ? ("127.0.0.1", 0) : nil, appVersion: appVersion,
       machineName: name, tailnet: tailnet, runtimes: [StandInRuntime()], discoveryInterval: .seconds(3600))
