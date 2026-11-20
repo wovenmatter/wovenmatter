@@ -140,7 +140,7 @@ struct BotSettingsBots: View {
         } else { work() }
     }
 
-    /// Each bot's container: its state and previews, Stop, and Rebuild, which recreates it
+    /// Each bot's container: its state, Stop, and Rebuild, which recreates it
     /// from a clean image, keeps its storage and carries over what it installed.
     private func containersSection(_ live: [PiBotSummary]) -> some View {
         SettingsSection(title: "Containers", detail: "A stopped bot starts again on its next tool call.") {
@@ -152,12 +152,6 @@ struct BotSettingsBots: View {
                     }
                     Button { rebuild(bot) } label: { BotSettingsActionLabel(title: "Rebuild", glyph: .rotate) }
                         .accessibilityLabel("Rebuild \(bot.name)")
-                }
-                ForEach(environments[bot.id]?.previews ?? [], id: \.port) { preview in
-                    SettingsRow(title: "Port \(preview.port)", detail: preview.url) {
-                        Button("Stop sharing") { act { try await bots.stopPreview(botID: bot.id, port: preview.port) } }
-                    }
-                    .padding(.leading, 16)
                 }
             }
             SettingsHelp {

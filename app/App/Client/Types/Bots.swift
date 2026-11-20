@@ -11,8 +11,6 @@ enum BotsState: Equatable, Sendable {
     case ready
     /// The home machine is offline, or its server does not answer.
     case unreachable
-    /// The home machine runs another Woven Matter release than this Mac.
-    case needsUpdate
     case failed
 }
 
@@ -546,14 +544,9 @@ struct PiBotOnboardingStatus: Equatable, Sendable {
 /// A bot's container.
 struct PiBotEnvironment: Equatable, Sendable {
     enum State: Equatable, Sendable { case missing, running, stopped, unavailable }
-    struct Preview: Equatable, Sendable {
-        let port: Int
-        let url: String
-    }
     let state: State
     /// Why a running bot is not idle now.
     let busy: String?
-    let previews: [Preview]
 
     var stateText: String {
         switch state {
@@ -569,12 +562,6 @@ struct PiBotEnvironment: Equatable, Sendable {
 struct BotsUpdateProgress: Equatable, Sendable {
     let botID: String?
     let text: String
-}
-
-/// What bots may do through the Woven MCP.
-struct BotToolAccess: Equatable, Sendable {
-    var isEnabled: Bool
-    var groups: Set<WorkspaceToolGroup>
 }
 
 // MARK: - Resources
@@ -675,33 +662,4 @@ enum BotResourcePolicy {
         if gigabytes >= 10 || gigabytes.rounded() == gigabytes { return String(format: "%.0f GB", gigabytes.rounded()) }
         return String(format: "%.1f GB", gigabytes)
     }
-}
-
-// MARK: - Discovery
-
-/// An online tailnet machine and what it needs before it can be the bots' home.
-struct BotDiscoveredDevice: Equatable, Identifiable, Sendable {
-    enum State: Equatable, Sendable {
-        /// Linux without a Woven server: install it over SSH.
-        case installBots
-        /// A Mac without Woven Matter.
-        case installApp
-        /// Its Woven server answers; it is one of the Woven machines.
-        case ready
-        case installing(String)
-        case failed(String)
-    }
-    var id: String { hostName }
-    let hostName: String
-    let displayName: String
-    let platform: Machine.Platform
-    var state: State
-
-    var isInstalling: Bool { if case .installing = state { true } else { false } }
-
-    /// The steps shown for a Mac that cannot host bots yet.
-    static let macSetupSteps = [
-        "Download Woven Matter on that Mac from wovenmatter.com.",
-        "Open it.",
-    ]
 }

@@ -65,7 +65,7 @@ struct BotConversationSurface: View {
 
     var body: some View {
         Group {
-            if isHome, bots.isAvailable {
+            if isHome, bots.isAvailable || bots.isReadingSaved {
                 content
             } else {
                 unavailable
@@ -656,7 +656,8 @@ private struct BotConversationPane: View {
 
     private var composer: some View {
         let ready = controller.isReady
-        let placeholder = !ready ? "Connecting…" : isThread ? "Reply in thread…" : "Message \(bot.name)…"
+        let placeholder = !ready ? (bots.isReadingSaved ? "\(bots.displayName) is unavailable" : "Connecting…")
+            : isThread ? "Reply in thread…" : "Message \(bot.name)…"
         return ConversationComposer(
             placeholder: placeholder,
             draft: draftBinding,
@@ -1088,7 +1089,6 @@ struct BotsUnavailableView: View {
         case .starting: return "Starting bots…"
         case .ready: return "Connecting…"
         case .unreachable: return "\(name) is unavailable"
-        case .needsUpdate: return "Update in Settings → Updates to use these bots"
         case .failed: return "Bots could not start"
         }
     }

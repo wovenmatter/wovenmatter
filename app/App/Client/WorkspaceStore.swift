@@ -119,7 +119,8 @@ final class WorkspaceStore {
         guard let server else { return }
         do {
             let folders = try await server.call(ListFolders())
-            let sessions = try await server.call(ListSessions(includeArchived: true))
+            // Bot chats and Forum rooms show only in the bots' own surfaces.
+            let sessions = try await server.call(ListSessions(includeArchived: true)).filter { $0.runtime != .bots }
             workspaceOverview = WorkspaceOverview(
                 folders: folders.map { folder in
                     WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,
@@ -207,7 +208,7 @@ final class WorkspaceStore {
 
     /// Archived chats.
     func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
-        try await server(for: nil).call(ListSessions(includeArchived: true)).filter(\.archived).map {
+        try await server(for: nil).call(ListSessions(includeArchived: true)).filter { $0.archived && $0.runtime != .bots }.map {
             WorkspaceTrashedConversation(id: $0.id, title: $0.title, trashedAt: $0.createdAt)
         }
     }

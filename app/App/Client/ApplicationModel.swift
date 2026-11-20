@@ -93,6 +93,7 @@ final class ApplicationModel {
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
         documents.attach(server, machines: machines, databases: databases)
+        bots.attach(server, machines: machines, settings: settings)
         server.start()
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] _ in

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WovenProtocol
 
 struct BotConversationKey: Hashable, Sendable {
     /// The bots' home machine.
@@ -10,7 +11,8 @@ struct BotConversationKey: Hashable, Sendable {
 }
 
 /// One open bot conversation: its history, the reply being written, and messages not yet
-/// recorded. Fed by a subscription on the home machine's server while a pane shows it.
+/// recorded. While a pane shows it, it follows one `SubscribeBots(open:)` on this Mac's server;
+/// while the home machine is away it shows the conversation's saved items.
 @MainActor
 @Observable
 final class BotChatStore {
@@ -25,43 +27,190 @@ final class BotChatStore {
     private(set) var stopping = false
     var error: String?
 
+    /// Subscribed to the runtime's conversation, not reading the library's copy.
+    private var isLive = false
+    @ObservationIgnored private weak var bots: BotsStore?
     @ObservationIgnored private var viewers = 0
+    @ObservationIgnored private var following: Task<Void, Never>?
+    @ObservationIgnored private var nextPendingID = 0
 
-    init(key: BotConversationKey) { self.key = key }
+    init(key: BotConversationKey, bots: BotsStore) {
+        self.key = key
+        self.bots = bots
+    }
 
     var isThread: Bool { viewedID != nil && mainID != nil && viewedID != mainID }
+
     /// Ready to take a message: subscribed, loaded, and showing the conversation asked for.
-    private(set) var isReady = false
+    var isReady: Bool {
+        guard isLive, bots?.isConnected == true, !loading, let viewedID else { return false }
+        return key.conversationID.map { $0 == viewedID } ?? (viewedID == mainID)
+    }
 
     /// In a thread, only what was said in the thread. Inherited history stays with its parent.
     var visibleEntries: [PiBotDisplayEntry] {
         isThread ? state.entries.filter { $0.conversationId == viewedID } : state.entries
     }
 
-    func attach() { viewers += 1 }
-    func detach() { viewers = max(0, viewers - 1) }
+    func attach() {
+        viewers += 1
+        if viewers == 1 { open() }
+    }
+
+    func detach() {
+        viewers = max(0, viewers - 1)
+        if viewers == 0 { close() }
+    }
+
+    /// The runtime came or went: follow it, or read the library's copy.
+    func reopen() {
+        if viewers > 0 { open() }
+    }
+
+    private func open() {
+        close()
+        loading = true
+        guard let bots, let server = bots.server else { return }
+        if bots.isConnected {
+            var request: [String: JSONValue] = ["type": .string("conversation.open"), "botId": .string(key.botID)]
+            if let conversationID = key.conversationID { request["conversationId"] = .integer(Int64(conversationID)) }
+            following = Task { [weak self] in
+                await server.follow(SubscribeBots(open: .object(request)), reply: { [weak self] opened in
+                    self?.opened(opened)
+                }, event: { [weak self] event in
+                    self?.receive(event)
+                }, failure: { [weak self] failure in
+                    self?.error = failure.message
+                    self?.loading = false
+                })
+            }
+        } else if bots.isReadingSaved {
+            following = Task { [weak self] in await self?.loadSaved() }
+        }
+    }
+
+    private func close() {
+        following?.cancel()
+        following = nil
+        isLive = false
+    }
+
+    private func opened(_ reply: BotsOpened) {
+        bots?.apply(reply.status)
+        guard let value = reply.opened else { return }
+        do {
+            let snapshot = try value.decode(BotsWire.ConversationSnapshot.self)
+            origin = snapshot.threadOrigin.map(PiBotDisplayEntry.init)
+            viewedID = snapshot.conversationId
+            mainID = snapshot.mainConversationId
+            state = PiBotConversationState(snapshot: snapshot, pending: state.pending)
+            isLive = true
+            loading = false
+            error = nil
+            let botID = key.botID
+            Task { [weak bots] in await bots?.loadThreads(botID: botID) }
+        } catch {
+            self.error = error.localizedDescription
+            loading = false
+        }
+    }
+
+    private func receive(_ event: BotsEvent) {
+        switch event {
+        case .status(let status): bots?.apply(status)
+        case .message(let value):
+            guard case .event(let botID, let conversationID, let event)? = try? value.decode(BotsWire.Message.self),
+                  botID == key.botID, conversationID == viewedID else { return }
+            state.apply(event)
+            if case .error(let message) = event { error = message }
+            if case .run(started: false) = event {
+                // Thread titles may have been generated meanwhile.
+                Task { [weak bots] in await bots?.loadThreads(botID: botID) }
+            }
+        }
+    }
+
+    /// The conversation as the library holds it; sending stays off.
+    private func loadSaved() async {
+        guard let bots, let server = bots.server else { return }
+        let main = bots.savedChat(botID: key.botID, conversationID: nil)
+        mainID = main?.conversationID
+        origin = nil
+        guard let chat = bots.savedChat(botID: key.botID, conversationID: key.conversationID) else {
+            viewedID = key.conversationID ?? mainID
+            state = PiBotConversationState()
+            loading = false
+            return
+        }
+        do {
+            let items = try await server.call(SessionItems(sessionID: chat.session.id))
+            guard !Task.isCancelled else { return }
+            viewedID = chat.conversationID
+            state = PiBotConversationState()
+            state.entries = PiBotDisplayEntry.saved(items, conversationID: chat.conversationID)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+        loading = false
+    }
 
     /// Reports whether the server took the message, so the composer keeps it otherwise.
     func send(text: String, context: String?) async -> Bool {
+        guard isReady, let viewedID, let bots else { return false }
         if text.count > PiBotAttachmentDraft.maxMessageCharacters {
             error = "Message and attachments must total fewer than 100,000 characters."
             return false
         }
-        error = ClientError.notConnected.localizedDescription
-        return false
+        sending = true
+        defer { sending = false }
+        error = nil
+        nextPendingID += 1
+        let pendingID = nextPendingID
+        state.pending.append(.init(id: pendingID, text: text))
+        var fields: [String: JSONValue] = ["botId": .string(key.botID), "conversationId": .integer(Int64(viewedID)),
+                                           "text": .string(text)]
+        if let context, !context.isEmpty { fields["context"] = .string(context) }
+        do {
+            _ = try await bots.call("message.send", fields)
+            return true
+        } catch {
+            state.pending.removeAll { $0.id == pendingID }
+            self.error = error.localizedDescription
+            return false
+        }
     }
 
     func stop() async {
-        error = ClientError.notConnected.localizedDescription
+        guard !stopping, let viewedID, let bots else { return }
+        stopping = true
+        defer { stopping = false }
+        error = nil
+        do {
+            _ = try await bots.call("conversation.abort", ["botId": .string(key.botID), "conversationId": .integer(Int64(viewedID))])
+            // Queued follow-ups went with the reply: they never become entries.
+            state.pending = []
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     func startThread(from entry: PiBotDisplayEntry) async -> PiBotThread? {
-        error = ClientError.notConnected.localizedDescription
-        return nil
+        guard let viewedID, let bots else { return nil }
+        error = nil
+        do {
+            let result = try await bots.call("thread.fork", ["botId": .string(key.botID), "conversationId": .integer(Int64(viewedID)),
+                                                             "entryId": .integer(Int64(entry.id))], as: BotsWire.ThreadResult.self)
+            await bots.loadThreads(botID: key.botID)
+            return PiBotThread(result.thread)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
     }
 }
 
-/// One open Forum room: the Forum itself or one of its threads.
+/// One open Forum room: the Forum itself or one of its threads. Followed like a bot's chat.
 @MainActor
 @Observable
 final class ForumRoomStore {
@@ -72,38 +221,185 @@ final class ForumRoomStore {
 
     let key: BotConversationKey
     private(set) var state = PiBotForumRoomState()
+    /// The room the runtime opened; the Forum's own room id is only known from its answer.
+    private(set) var roomID: Int?
+    private(set) var mainRoomID: Int?
     private(set) var loading = true
     private(set) var sending = false
     private(set) var loadingEarlier = false
     /// Posts sent and not yet back from the server.
     private(set) var pending: [Pending] = []
-    private(set) var isReady = false
     var error: String?
 
+    private var isLive = false
+    @ObservationIgnored private weak var bots: BotsStore?
     @ObservationIgnored private var viewers = 0
+    @ObservationIgnored private var following: Task<Void, Never>?
+    @ObservationIgnored private var nextPendingID = 0
 
-    init(key: BotConversationKey) { self.key = key }
+    init(key: BotConversationKey, bots: BotsStore) {
+        self.key = key
+        self.bots = bots
+    }
 
     var isThread: Bool { key.conversationID != nil }
 
-    func attach() { viewers += 1 }
-    func detach() { viewers = max(0, viewers - 1) }
+    /// Ready to take a post: subscribed, loaded, and showing the room asked for.
+    var isReady: Bool {
+        guard isLive, bots?.isConnected == true, !loading, let roomID else { return false }
+        return key.conversationID.map { $0 == roomID } ?? (roomID == mainRoomID)
+    }
+
+    func attach() {
+        viewers += 1
+        if viewers == 1 { open() }
+    }
+
+    func detach() {
+        viewers = max(0, viewers - 1)
+        if viewers == 0 { close() }
+    }
+
+    /// The runtime came or went: follow it, or read the library's copy.
+    func reopen() {
+        if viewers > 0 { open() }
+    }
+
+    private func open() {
+        close()
+        loading = true
+        guard let bots, let server = bots.server else { return }
+        if bots.isConnected {
+            var request: [String: JSONValue] = ["type": .string("forum.open")]
+            if let roomID = key.conversationID { request["roomId"] = .integer(Int64(roomID)) }
+            following = Task { [weak self] in
+                await server.follow(SubscribeBots(open: .object(request)), reply: { [weak self] opened in
+                    self?.opened(opened)
+                }, event: { [weak self] event in
+                    self?.receive(event)
+                }, failure: { [weak self] failure in
+                    self?.error = failure.message
+                    self?.loading = false
+                })
+            }
+        } else if bots.isReadingSaved {
+            following = Task { [weak self] in await self?.loadSaved() }
+        }
+    }
+
+    private func close() {
+        following?.cancel()
+        following = nil
+        isLive = false
+    }
+
+    private func opened(_ reply: BotsOpened) {
+        bots?.apply(reply.status)
+        guard let value = reply.opened else { return }
+        do {
+            let snapshot = try value.decode(BotsWire.ForumRoomSnapshot.self)
+            roomID = snapshot.roomId
+            mainRoomID = snapshot.mainRoomId
+            state = PiBotForumRoomState(snapshot: snapshot)
+            isLive = true
+            loading = false
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+            loading = false
+        }
+    }
+
+    private func receive(_ event: BotsEvent) {
+        switch event {
+        case .status(let status): bots?.apply(status)
+        case .message(let value):
+            guard let roomID, let message = try? value.decode(BotsWire.Message.self) else { return }
+            switch message {
+            case .forumPost(let post): state.apply(PiBotForumPost(post), roomID: roomID)
+            case .forumThinking(let changed, let botIDs) where changed == roomID: state.thinking = botIDs
+            default: break
+            }
+        }
+    }
+
+    /// The room as the library holds it; posting stays off.
+    private func loadSaved() async {
+        guard let bots, let server = bots.server else { return }
+        guard let room = bots.savedForumRoom(roomID: key.conversationID) else {
+            state = PiBotForumRoomState()
+            loading = false
+            return
+        }
+        do {
+            let items = try await server.call(SessionItems(sessionID: room.session.id))
+            guard !Task.isCancelled else { return }
+            roomID = room.conversationID
+            mainRoomID = bots.savedForumRoom(roomID: nil)?.conversationID
+            state = PiBotForumRoomState(posts: PiBotForumPost.saved(items, roomID: room.conversationID))
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+        loading = false
+    }
 
     /// Reports whether the server took the post, so the composer keeps it otherwise.
     func send(text: String, mentions: [String], everyone: Bool) async -> Bool {
+        guard isReady, let roomID, let bots else { return false }
         if text.count > PiBotAttachmentDraft.maxMessageCharacters {
             error = "Message and attachments must total fewer than 100,000 characters."
             return false
         }
-        error = ClientError.notConnected.localizedDescription
-        return false
+        sending = true
+        defer { sending = false }
+        error = nil
+        nextPendingID += 1
+        let pendingID = nextPendingID
+        pending.append(.init(id: pendingID, text: text))
+        defer { pending.removeAll { $0.id == pendingID } }
+        var fields: [String: JSONValue] = ["roomId": .integer(Int64(roomID)), "text": .string(text)]
+        if everyone { fields["everyone"] = .bool(true) }
+        else if !mentions.isEmpty { fields["mentions"] = .array(mentions.map(JSONValue.string)) }
+        do {
+            let result = try await bots.call("forum.post", fields, as: BotsWire.ForumPostResult.self)
+            // The push usually got here first; either way the post is shown once.
+            if self.roomID == roomID { state.apply(PiBotForumPost(result.post), roomID: roomID) }
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
     }
 
-    func loadEarlier() async {}
+    /// Fetches the page of posts before the oldest one shown.
+    func loadEarlier() async {
+        guard isLive, !loadingEarlier, state.hasEarlier, let roomID, let oldest = state.posts.first?.id, let bots else { return }
+        loadingEarlier = true
+        defer { loadingEarlier = false }
+        do {
+            let page = try await bots.call("forum.posts", ["roomId": .integer(Int64(roomID)), "before": .integer(Int64(oldest))],
+                                           as: BotsWire.ForumPostsPage.self)
+            guard self.roomID == roomID else { return }
+            state.posts = PiBotForumRoomState.merge(state.posts, page.posts.map(PiBotForumPost.init))
+            state.hasEarlier = page.hasEarlier && !page.posts.isEmpty
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 
+    /// The post's thread, created when it has none.
     func startThread(from post: PiBotForumPost) async -> PiBotForumThread? {
-        error = ClientError.notConnected.localizedDescription
-        return nil
+        guard let bots else { return nil }
+        error = nil
+        do {
+            let result = try await bots.call("forum.thread.create", ["postId": .integer(Int64(post.id))], as: BotsWire.ForumThreadResult.self)
+            await bots.refreshForum()
+            return PiBotForumThread(result.thread)
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
     }
 }
 

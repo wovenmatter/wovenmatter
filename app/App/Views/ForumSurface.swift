@@ -465,7 +465,8 @@ private struct ForumPane: View {
 
     private var composer: some View {
         let ready = controller.isReady
-        let placeholder = !ready ? "Connecting…" : isThread ? "Reply in thread…" : "Message the Forum…"
+        let placeholder = !ready ? (bots.isReadingSaved ? "\(bots.displayName) is unavailable" : "Connecting…")
+            : isThread ? "Reply in thread…" : "Message the Forum…"
         return ConversationComposer(
             placeholder: placeholder,
             draft: draftBinding,
