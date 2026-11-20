@@ -244,9 +244,15 @@ func apiKeyIsSealedForEachMachineAndContentIsFetchedByDigest() async throws {
     try await Task.sleep(for: .milliseconds(25))
   }
   #expect(opened == ["openai": "sk-test"])
-  let rows = try await b.server.library.rows("sealed_secrets", where: "name", is: .text("openai"))
-  #expect(Set(rows.compactMap { if case .text(let id)? = $0.values["machine_id"] { id } else { nil } })
-          == [a.server.machineID, b.server.machineID])
+  // Each machine's copy is its own row, written and synced one after another.
+  var sealedFor: Set<String> = []
+  for _ in 0..<200 {
+    let rows = try await b.server.library.rows("sealed_secrets", where: "name", is: .text("openai"))
+    sealedFor = Set(rows.compactMap { if case .text(let id)? = $0.values["machine_id"] { id } else { nil } })
+    if sealedFor.count == 2 { break }
+    try await Task.sleep(for: .milliseconds(25))
+  }
+  #expect(sealedFor == [a.server.machineID, b.server.machineID])
 
   _ = try await onB.call(SetAPIKey(provider: "openai", key: nil))
   for _ in 0..<200 where try await !a.server.secretsForTests.apiKeys().isEmpty { try await Task.sleep(for: .milliseconds(25)) }
