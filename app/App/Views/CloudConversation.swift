@@ -36,9 +36,7 @@ struct CloudConversation: View {
     @State private var scrollState = ConversationScrollState()
     @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
-    @State private var pendingBottomConversationID: String?
-    @State private var bottomPositionRevision = 0
-    @State private var scrollPositionID: String?
+    @State private var scrollPosition = ScrollPosition(idType: String.self)
     @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
@@ -89,6 +87,9 @@ struct CloudConversation: View {
                                     ? "Choose New chat to select an agent, or open an existing conversation."
                                     : "Choose a conversation from All Workspaces."
                             )
+                        } else if session?.hasLoaded != true {
+                            // Its first view has not arrived: nothing yet, then the chat whole.
+                            Color.clear.frame(height: 1)
                         } else if visibleMessages.isEmpty {
                             ConversationEmptyState(
                                 icon: conversation?.runtimeKind == nil
@@ -100,8 +101,7 @@ struct CloudConversation: View {
                                     : "Send a message to start this chat."
                             )
                         } else {
-                            if scrollState.positionedConversationID == conversation?.id,
-                               session?.hasOlderMessages == true,
+                            if session?.hasOlderMessages == true,
                                let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
@@ -112,7 +112,7 @@ struct CloudConversation: View {
                                         // Eager layout must not eagerly fetch history.
                                         guard visible else { return }
                                         Task { @MainActor in
-                                            await prependOlderMessages(keeping: oldestMessageID, using: proxy)
+                                            await prependOlderMessages()
                                         }
                                     }
                             }
@@ -139,7 +139,7 @@ struct CloudConversation: View {
                 // Each chat gets its own scroll view, which opens at the bottom
                 // in its first layout; reusing one would lay the new chat out
                 // at the old offset and move it a turn later.
-                .id(conversation?.id)
+                .id(TranscriptIdentity(conversationID: conversation?.id, hasLoaded: session?.hasLoaded == true))
                 .scrollIndicators(.never)
                 .task(id: [model.navigation.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
@@ -153,9 +153,7 @@ struct CloudConversation: View {
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
-                    bottomPositionRevision += 1
-                    pendingBottomConversationID = nil
-                    scrollPositionID = nil
+                    scrollPosition = ScrollPosition(idType: String.self)
                     scrollState.setNearBottom(false)
                 }
                 .environment(\.conversationActivityDetails) { runID, activityID in
@@ -167,14 +165,12 @@ struct CloudConversation: View {
                 // in the same layout pass; a later scroll would show each
                 // chunk below the edge for a frame and then jump.
                 .defaultScrollAnchor(followsBottom ? .bottom : .top, for: .sizeChanges)
-                .scrollPosition(id: $scrollPositionID, anchor: .bottom)
+                .scrollPosition($scrollPosition, anchor: .bottom)
                 .onScrollPhaseChange { _, phase in
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
                     if isUserScrolling {
                         transcriptOwnsScroll = false
                         scrollInteractionRevision += 1
-                        pendingBottomConversationID = nil
-                        bottomPositionRevision += 1
                     }
                 }
                 .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
@@ -185,11 +181,20 @@ struct CloudConversation: View {
                 } action: { oldGeometry, newGeometry in
                     geometryChanged(from: oldGeometry, to: newGeometry, using: proxy)
                 }
+                .onScrollGeometryChange(for: CGRect.self) { geometry in
+                    // The offset as `scrollTo(y:)` takes it, and the content's size.
+                    CGRect(x: 0, y: geometry.contentOffset.y + geometry.contentInsets.top,
+                           width: geometry.contentSize.width, height: geometry.contentSize.height)
+                } action: { old, new in
+                    // Older rows were laid out above the reader: put the reader
+                    // where it was plus their height in the same pass, so the
+                    // rows on screen stay put.
+                    guard isPrependingHistory, new.height > old.height else { return }
+                    isPrependingHistory = false
+                    scrollPosition.scrollTo(y: old.minY + new.height - old.height)
+                }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
-                }
-                .onChange(of: newestPresentedMessageIdentity, initial: true) { _, identity in
-                    newestMessageChanged(to: identity, hasMessages: !visibleMessages.isEmpty, using: proxy)
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if !scrollState.isNearBottom, conversation != nil {
@@ -239,23 +244,16 @@ struct CloudConversation: View {
         activities: [String: [WorkspaceRunActivityRecord]]
     ) -> some View {
         let message = fragment.message
-        let presentation = session?.messagePresentations[message.id]
         let run = runs[message.id]
         MessageRow(
             message: message,
-            renderedDocument: presentation?.document,
             run: run.flatMap { $0.status == .queued ? nil : $0 },
-            runPresentation: run.flatMap { session?.runPresentations[$0.id] },
             activities: run.map { activities[$0.id] ?? [] } ?? [],
             onOpenAttachment: openAttachment,
             resolveFile: { source in
                 try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: message.libraryItemID, source: source))
             },
             layout: fragment.layout,
-            displayedBody: presentation?.displayedBody,
-            commentaryIDs: presentation?.commentaryIDs,
-            workTimeline: presentation?.workTimeline,
-            streaming: presentation?.isStreaming,
             onNewSession: message.id == session?.goneNoticeID && conversation?.isArchived == false ? onNewSession : nil
         )
     }
@@ -433,7 +431,7 @@ struct CloudConversation: View {
                 isUserScrolling = false
                 scrollInteractionRevision += 1
                 scrollState.setNearBottom(true)
-                scrollPositionID = chatEndID
+                scrollPosition.scrollTo(id: chatEndID, anchor: .bottom)
                 onSend()
             },
             onStop: session.flatMap { session in
@@ -526,19 +524,6 @@ struct CloudConversation: View {
         }
     }
 
-    private var newestPresentedMessageIdentity: String? {
-        guard let conversation,
-              let message = visibleMessages.last,
-              let presentation = session?.messagePresentations[message.id],
-              presentation.source == message.content else { return nil }
-        return [
-            conversation.id,
-            message.id,
-            String(describing: message.status),
-            String(message.content.utf8.count)
-        ].joined(separator: ":")
-    }
-
     private func historyLoaderID(oldestMessageID: String) -> String {
         "chat-history:\(conversation?.id ?? "none"):\(oldestMessageID)"
     }
@@ -551,9 +536,7 @@ struct CloudConversation: View {
         scrollInteractionRevision += 1
         scrollState.conversationChanged(to: conversationID)
         if transcriptOwnsScroll { scrollState.setNearBottom(false) }
-        pendingBottomConversationID = targetsLibraryMessage ? nil : conversationID
-        bottomPositionRevision += 1
-        scrollPositionID = nil
+        scrollPosition = ScrollPosition(idType: String.self)
     }
 
     private func geometryChanged(from oldGeometry: ConversationGeometry, to newGeometry: ConversationGeometry,
@@ -561,21 +544,9 @@ struct CloudConversation: View {
         let followedBottomBeforeGrowth = oldGeometry.contentHeight != newGeometry.contentHeight
             && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
             && model.navigation.libraryMessageTarget?.conversationID != conversation?.id
-        let isPositioningConversation = pendingBottomConversationID == conversation?.id
-            && newestPresentedMessageIdentity != nil
         scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
 
-        if isPositioningConversation {
-            bottomPositionRevision += 1
-            let revision = bottomPositionRevision
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(50))
-                guard revision == bottomPositionRevision,
-                      pendingBottomConversationID == conversation?.id else { return }
-                scrollToConversationBottom(using: proxy)
-                pendingBottomConversationID = nil
-            }
-        } else if followedBottomBeforeGrowth {
+        if followedBottomBeforeGrowth {
             let interactionRevision = scrollInteractionRevision
             let owner = conversation?.id
             Task { @MainActor in
@@ -587,37 +558,10 @@ struct CloudConversation: View {
         }
     }
 
-    private func newestMessageChanged(to identity: String?, hasMessages: Bool, using proxy: ScrollViewProxy) {
-        guard identity != nil, model.navigation.libraryMessageTarget?.conversationID != conversation?.id else { return }
-        let action = scrollState.contentChanged(
-            conversationID: conversation?.id,
-            hasMessages: hasMessages,
-            isPrependingHistory: isPrependingHistory
-        )
-        switch action {
-        case .none:
-            break
-        case .jumpToBottom, .followBottom:
-            let interactionRevision = scrollInteractionRevision
-            let owner = conversation?.id
-            Task { @MainActor in
-                await Task.yield()
-                try? await Task.sleep(for: .milliseconds(50))
-                guard identity == newestPresentedMessageIdentity,
-                      owner == conversation?.id,
-                      interactionRevision == scrollInteractionRevision,
-                      !isPrependingHistory else { return }
-                scrollToConversationBottom(using: proxy)
-            }
-        }
-    }
-
     @MainActor
     private func scrollToLibraryMessage(using proxy: ScrollViewProxy) async {
         guard let item = model.navigation.libraryMessageTarget, item.conversationID == conversation?.id,
               let session else { return }
-        pendingBottomConversationID = nil
-        bottomPositionRevision += 1
         scrollInteractionRevision += 1
         transcriptOwnsScroll = true
         scrollState.setNearBottom(false)
@@ -642,9 +586,8 @@ struct CloudConversation: View {
         }
         libraryHighlightID = shownID
         scrollState.sourceMessagePositioned(in: item.conversationID)
-        scrollPositionID = nil
+        scrollPosition = ScrollPosition(idType: String.self)
         scrollWithoutAnimation(proxy, to: shownID, anchor: .top)
-        pendingBottomConversationID = nil
         try? await Task.sleep(for: .seconds(2))
         if libraryHighlightID == shownID { libraryHighlightID = nil }
         if !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id {
@@ -652,16 +595,14 @@ struct CloudConversation: View {
         }
     }
 
+    /// Pages in older rows above the reader; the scroll geometry moves the
+    /// reader down by their height once they are laid out.
     @MainActor
-    private func prependOlderMessages(keeping anchorMessageID: String, using proxy: ScrollViewProxy) async {
+    private func prependOlderMessages() async {
         guard let session, !isPrependingHistory else { return }
         isPrependingHistory = true
-        let loaded = await session.loadOlderMessages()
-        if loaded, !Task.isCancelled {
-            await Task.yield()
-            await Task.yield()
-            scrollWithoutAnimation(proxy, to: anchorMessageID, anchor: .top)
-        }
+        guard await session.loadOlderMessages() else { return isPrependingHistory = false }
+        try? await Task.sleep(for: .milliseconds(500))
         isPrependingHistory = false
     }
 
@@ -674,7 +615,7 @@ struct CloudConversation: View {
     }
 
     private func scrollToConversationBottom(using proxy: ScrollViewProxy) {
-        scrollPositionID = chatEndID
+        scrollPosition.scrollTo(id: chatEndID, anchor: .bottom)
         scrollWithoutAnimation(proxy, to: chatEndID, anchor: .bottom)
     }
 }
@@ -687,27 +628,21 @@ func nonemptyString(_ value: String?) -> String? {
 
 struct MessageRow: View {
     let message: WorkspaceMessageRecord
-    let renderedDocument: ConversationMarkdownDocument?
     let run: WorkspaceRunRecord?
-    let runPresentation: RunPresentation?
     let activities: [WorkspaceRunActivityRecord]
     let onOpenAttachment: (SessionMessageAttachment) -> Void
     let resolveFile: (String) async throws -> URL
     let layout: ConversationMessageLayout.Row
-    var displayedBody: String? = nil
-    var commentaryIDs: Set<String>? = nil
-    var workTimeline: ConversationWorkTimeline? = nil
-    var streaming: Bool? = nil
     var onNewSession: (() -> Void)? = nil
 
     private var isStreaming: Bool {
-        streaming ?? AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
+        AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
     }
     private var assistantBody: String {
-        displayedBody ?? (isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body)
+        isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
     }
 
-    /// Fallback for a row without a prepared presentation.
+    /// The reply's text, apart from the commentary the work log shows.
     private var transcript: (body: String, commentaryIDs: Set<String>) {
         let work = activities.map(\.activity)
         return ConversationWorkTimeline.displayPartition(
@@ -747,9 +682,8 @@ struct MessageRow: View {
                     if !isUser, let run {
                         ConversationWorkTranscript(
                             run: run,
-                            presentation: runPresentation,
                             records: activities,
-                            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
+                            commentaryIDs: transcript.commentaryIDs,
                             hasFollowingResponse: hasResponseText,
                             timeline: projectedTimeline
                         )
@@ -766,7 +700,7 @@ struct MessageRow: View {
                         VStack(alignment: .leading, spacing: 0) {
                             ConversationResponse(
                                 content: assistantBody,
-                                document: renderedDocument,
+                                document: nil,
                                 isStreaming: isStreaming
                             )
                             .padding(.horizontal, 4)
@@ -802,8 +736,7 @@ struct MessageRow: View {
     }
 
     private var projectedTimeline: ConversationWorkTimeline {
-        workTimeline ?? ConversationWorkTimeline(records: activities,
-            commentaryIDs: commentaryIDs ?? transcript.commentaryIDs)
+        ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
     }
 }
 
@@ -917,4 +850,11 @@ private struct MacAccessNotice: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
     }
+}
+
+/// A transcript's scroll view: one per chat, made again when its first view
+/// arrives, so each opens at the bottom in its first layout.
+private struct TranscriptIdentity: Hashable {
+    let conversationID: String?
+    let hasLoaded: Bool
 }

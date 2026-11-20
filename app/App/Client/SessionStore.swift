@@ -15,8 +15,6 @@ final class SessionStore {
     private(set) var messages: [WorkspaceMessageRecord] = []
     private(set) var runs: [WorkspaceRunRecord] = []
     private(set) var runActivities: [WorkspaceRunActivityRecord] = []
-    private(set) var messagePresentations: [String: MessagePresentation] = [:]
-    private(set) var runPresentations: [String: RunPresentation] = [:]
     private(set) var taskProgress: ConversationTaskProgress?
     private(set) var hasOlderMessages = false
     private(set) var isLoadingOlderMessages = false

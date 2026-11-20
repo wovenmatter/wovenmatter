@@ -1338,8 +1338,8 @@ struct WorkspaceSurface: View {
     let onBotRoute: (BotTarget, ChatPanelID) -> Void
     let onOpenBotLink: (URL, ChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
-    /// The chat each panel shows now (see `conversation(for:)`).
-    @State private var shownConversationIDs: [ChatPanelID: String] = [:]
+    /// The chat each panel shows now, nil for none (see `conversation(for:)`).
+    @State private var shownConversationIDs: [ChatPanelID: String?] = [:]
 
     var body: some View {
         GeometryReader { geometry in
@@ -1552,12 +1552,12 @@ struct WorkspaceSurface: View {
             guard let chosen = chatPanels.panel(id: panelID)?.conversationID else { return }
             await model.sessions.follow(chosen)
         }
-        .onChange(of: conversation?.id, initial: true) { _, shown in shownConversationIDs[panelID] = shown }
+        .onChange(of: conversation?.id, initial: true) { _, shown in shownConversationIDs[panelID] = .some(shown) }
     }
 
-    /// The chat a panel shows. A chosen chat replaces the one on screen once
-    /// its first view has arrived, so the transcript changes in one step
-    /// instead of showing an empty chat first.
+    /// The chat a panel shows. A chosen chat replaces the one on screen, or
+    /// the panel's empty state, once its first view has arrived, so the
+    /// transcript changes in one step instead of showing an empty chat first.
     private func conversation(
         for panelID: ChatPanelID
     ) -> WorkspaceConversationRecord? {
@@ -1565,12 +1565,10 @@ struct WorkspaceSurface: View {
             return nil
         }
         let chosen = conversations.first { $0.id == conversationID }
-        if let shownID = shownConversationIDs[panelID], shownID != conversationID,
-           !model.sessions.session(for: conversationID).hasLoaded,
-           let shown = conversations.first(where: { $0.id == shownID }) {
-            return shown
-        }
-        return chosen
+        guard let shownID = shownConversationIDs[panelID], shownID != conversationID,
+              !model.sessions.session(for: conversationID).hasLoaded else { return chosen }
+        guard let shownID else { return nil }
+        return conversations.first { $0.id == shownID } ?? chosen
     }
 
     private func agent(

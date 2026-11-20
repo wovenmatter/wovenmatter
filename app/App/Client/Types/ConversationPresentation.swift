@@ -81,26 +81,6 @@ struct WorkspaceRunRecord: Identifiable, Hashable, Sendable {
     var completedAt: Date?
 }
 
-/// One message as the transcript draws it.
-struct MessagePresentation: Sendable {
-    let source: String
-    let displayedBody: String
-    let status: MessageStatus
-    let isStreaming: Bool
-    let createdAt: Date
-    let document: ConversationMarkdownDocument?
-    let activities: [WorkspaceRunActivityRecord]
-    let commentaryIDs: Set<String>
-    let workTimeline: ConversationWorkTimeline
-}
-
-/// One run as the transcript draws it.
-struct RunPresentation: Sendable {
-    let source: WorkspaceRunRecord
-    let startedAt: Date?
-    let completedDuration: String?
-}
-
 // MARK: - Goals
 
 /// The goal a session works against until it is met or cleared. While it is

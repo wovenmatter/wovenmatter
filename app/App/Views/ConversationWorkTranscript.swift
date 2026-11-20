@@ -71,14 +71,13 @@ struct ConversationWorkTranscript: View {
 
     init(
         run: WorkspaceRunRecord,
-        presentation: RunPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
-                  presentation: presentation.map { ConversationWorkPresentation(startedAt: $0.startedAt, completedDuration: $0.completedDuration) },
+                  presentation: nil,
                   records: records, commentaryIDs: commentaryIDs,
                   hasFollowingResponse: hasFollowingResponse, timeline: timeline)
     }
