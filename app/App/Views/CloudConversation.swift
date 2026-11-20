@@ -35,8 +35,18 @@ struct CloudConversation: View {
     var onNewSession: (() -> Void)? = nil
     @State private var scrollState = ConversationScrollState()
     @State private var transcriptOwnsScroll = false
+    /// Older rows are being paged in, or are settling under the held row.
     @State private var isPrependingHistory = false
+    /// The row that keeps its place on screen while older rows are laid out above it.
+    @State private var heldRowID: String?
+    @State private var hold = HeldRowPosition()
+    /// The history loader at the top while it is on screen.
+    @State private var visibleLoaderID: String?
+    /// Counts chat changes, so a page-in begun in one chat never acts in another.
+    @State private var historyGeneration = 0
     @State private var scrollPosition = ScrollPosition(idType: String.self)
+    /// The scroll view `scrollPosition` was set for.
+    @State private var scrollPositionOwner: TranscriptIdentity?
     @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
     @State private var isUserScrolling = false
@@ -102,12 +112,15 @@ struct CloudConversation: View {
                         } else {
                             if session?.hasOlderMessages == true,
                                let oldestMessageID = messages.first?.id {
+                                let loaderID = historyLoaderID(oldestMessageID: oldestMessageID)
                                 Color.clear
                                     .frame(height: 1)
                                     .padding(.bottom, 32)
-                                    .id(historyLoaderID(oldestMessageID: oldestMessageID))
+                                    .id(loaderID)
                                     .accessibilityIdentifier("conversation-history-loader")
                                     .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                        if visible { visibleLoaderID = loaderID }
+                                        else if visibleLoaderID == loaderID { visibleLoaderID = nil }
                                         // Eager layout must not eagerly fetch history.
                                         guard visible else { return }
                                         Task { @MainActor in
@@ -120,6 +133,15 @@ struct CloudConversation: View {
                                     messageRow(row, runs: runsByAssistantMessageID, activities: activitiesByRunID)
                                 }
                                 .id(row.id)
+                                .background {
+                                    if row.id == heldRowID {
+                                        Color.clear.onGeometryChange(for: CGFloat.self) { geometry in
+                                            geometry.frame(in: .named(Self.contentSpace)).minY
+                                        } action: { top in
+                                            heldRowMoved(to: top)
+                                        }
+                                    }
+                                }
                                 .background(row.id == libraryHighlightID ? theme.palette.themeWhisper : Color.clear)
                                 .padding(.top, row.id == rows.first?.id ? 0 : row.layout.spacingBefore)
                             }
@@ -129,6 +151,7 @@ struct CloudConversation: View {
                             .padding(.top, 32)
                             .id(chatEndID)
                     }
+                    .coordinateSpace(.named(Self.contentSpace))
                     .frame(maxWidth: 768)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 32)
@@ -138,7 +161,7 @@ struct CloudConversation: View {
                 // Each chat gets its own scroll view, which opens at the bottom
                 // in its first layout; reusing one would lay the new chat out
                 // at the old offset and move it a turn later.
-                .id(TranscriptIdentity(conversationID: conversation?.id, hasLoaded: session?.hasLoaded == true))
+                .id(transcriptIdentity)
                 .scrollIndicators(.never)
                 .task(id: [model.navigation.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
@@ -163,7 +186,7 @@ struct CloudConversation: View {
                 // in the same layout pass; a later scroll would show each
                 // chunk below the edge for a frame and then jump.
                 .defaultScrollAnchor(followsBottom ? .bottom : .top, for: .sizeChanges)
-                .scrollPosition($scrollPosition, anchor: .bottom)
+                .scrollPosition(transcriptPosition, anchor: .bottom)
                 .onScrollPhaseChange { _, phase in
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
                     if isUserScrolling {
@@ -178,17 +201,11 @@ struct CloudConversation: View {
                 } action: { _, newGeometry in
                     geometryChanged(to: newGeometry)
                 }
-                .onScrollGeometryChange(for: CGRect.self) { geometry in
-                    // The offset as `scrollTo(y:)` takes it, and the content's size.
-                    CGRect(x: 0, y: geometry.contentOffset.y + geometry.contentInsets.top,
-                           width: geometry.contentSize.width, height: geometry.contentSize.height)
-                } action: { old, new in
-                    // Older rows were laid out above the reader: put the reader
-                    // where it was plus their height in the same pass, so the
-                    // rows on screen stay put.
-                    guard isPrependingHistory, new.height > old.height else { return }
-                    isPrependingHistory = false
-                    scrollPosition.scrollTo(y: old.minY + new.height - old.height)
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    // The offset as `scrollTo(y:)` takes it.
+                    geometry.contentOffset.y + geometry.contentInsets.top
+                } action: { _, offset in
+                    scrolled(to: offset)
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
@@ -196,6 +213,7 @@ struct CloudConversation: View {
                 .overlay(alignment: .bottomTrailing) {
                     if !scrollState.isNearBottom, conversation != nil {
                         Button("Latest reply", systemImage: "arrow.down") {
+                            releaseHeldRow()
                             transcriptOwnsScroll = false
                             scrollState.setNearBottom(true)
                             scrollToConversationBottom(using: proxy)
@@ -423,10 +441,11 @@ struct CloudConversation: View {
             onCommandNavigation: onCommandNavigation,
             onSend: {
                 guard conversation?.isArchived != true else { return }
+                releaseHeldRow()
                 transcriptOwnsScroll = false
                 isUserScrolling = false
                 scrollState.setNearBottom(true)
-                scrollPosition.scrollTo(id: chatEndID, anchor: .bottom)
+                scroll { $0.scrollTo(id: chatEndID, anchor: .bottom) }
                 onSend()
             },
             onStop: session.flatMap { session in
@@ -491,6 +510,26 @@ struct CloudConversation: View {
             && model.navigation.libraryMessageTarget?.conversationID != conversation?.id
     }
 
+    private var transcriptIdentity: TranscriptIdentity {
+        TranscriptIdentity(conversationID: conversation?.id, hasLoaded: session?.hasLoaded == true)
+    }
+
+    /// The position of the scroll view on screen. A new chat's scroll view
+    /// starts with none, so a scroll set in the last chat never opens it
+    /// away from the bottom.
+    private var transcriptPosition: Binding<ScrollPosition> {
+        let identity = transcriptIdentity
+        return Binding(
+            get: { scrollPositionOwner == identity ? scrollPosition : ScrollPosition(idType: String.self) },
+            set: { scrollPosition = $0; scrollPositionOwner = identity })
+    }
+
+    private func scroll(_ change: (inout ScrollPosition) -> Void) {
+        var position = transcriptPosition.wrappedValue
+        change(&position)
+        transcriptPosition.wrappedValue = position
+    }
+
     private var chatEndID: String {
         "chat-end:\(conversation?.id ?? "none")"
     }
@@ -523,6 +562,14 @@ struct CloudConversation: View {
         "chat-history:\(conversation?.id ?? "none"):\(oldestMessageID)"
     }
 
+    /// The loader the transcript draws now, if it has older rows to page in.
+    private var currentLoaderID: String? {
+        guard session?.hasOlderMessages == true, let oldest = messages.first?.id else { return nil }
+        return historyLoaderID(oldestMessageID: oldest)
+    }
+
+    private static let contentSpace = "conversation-content"
+
     private func conversationChanged(to conversationID: String?) {
         session?.transcriptState.tasksExpanded = false
         isUserScrolling = false
@@ -531,6 +578,11 @@ struct CloudConversation: View {
         scrollState.conversationChanged(to: conversationID)
         if transcriptOwnsScroll { scrollState.setNearBottom(false) }
         scrollPosition = ScrollPosition(idType: String.self)
+        // A page-in begun in the last chat ends there.
+        historyGeneration += 1
+        isPrependingHistory = false
+        visibleLoaderID = nil
+        releaseHeldRow()
     }
 
     /// Growth and shrinking at the live edge keep the bottom through the
@@ -538,6 +590,45 @@ struct CloudConversation: View {
     /// would move the view against a document AppKit has not resized yet.
     private func geometryChanged(to newGeometry: ConversationGeometry) {
         scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
+        // Back at the live edge, the bottom holds instead.
+        if newGeometry.isNearBottom, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
+    }
+
+    private func scrolled(to offset: CGFloat) {
+        hold.offset = offset
+        // The reader moved the held row; it holds where they put it.
+        if isUserScrolling, heldRowID != nil, let top = hold.top { hold.screenTop = top - offset }
+    }
+
+    /// Rows above the held one were laid out or measured again: scroll by
+    /// what they moved it, so it stays where it was on screen, whatever
+    /// else grows below.
+    private func heldRowMoved(to top: CGFloat) {
+        hold.top = top
+        guard let screenTop = hold.screenTop, !followsBottom else {
+            hold.screenTop = top - hold.offset
+            return
+        }
+        let offset = top - screenTop
+        guard abs(offset - hold.offset) >= 0.5 else { return }
+        hold.offset = offset
+        scroll { $0.scrollTo(y: offset) }
+    }
+
+    /// Holds the topmost row whose identity survives older rows arriving: a
+    /// reply's first part can join a turn that starts above it.
+    private func holdTopRow() {
+        let shown = visibleMessages
+        let message = shown.first { $0.role != .assistant } ?? shown.first
+        hold.top = nil
+        hold.screenTop = nil
+        heldRowID = message.flatMap { ConversationMessageLayout.rows(messageID: $0.id, role: $0.role).first?.id }
+    }
+
+    private func releaseHeldRow() {
+        heldRowID = nil
+        hold.top = nil
+        hold.screenTop = nil
     }
 
     @MainActor
@@ -576,15 +667,28 @@ struct CloudConversation: View {
         }
     }
 
-    /// Pages in older rows above the reader; the scroll geometry moves the
-    /// reader down by their height once they are laid out.
+    /// Pages in older rows above the reader. The row at the top keeps its
+    /// place on screen as they are laid out and measured, and the next page
+    /// loads only if the loader is still on screen once they have settled.
     @MainActor
     private func prependOlderMessages() async {
         guard let session, !isPrependingHistory else { return }
+        let generation = historyGeneration
         isPrependingHistory = true
-        guard await session.loadOlderMessages() else { return isPrependingHistory = false }
-        try? await Task.sleep(for: .milliseconds(500))
-        isPrependingHistory = false
+        repeat {
+            holdTopRow()
+            // Where the held row is before anything arrives above it.
+            var waited = 0
+            while hold.screenTop == nil, heldRowID != nil, waited < 50, generation == historyGeneration {
+                try? await Task.sleep(for: .milliseconds(10))
+                waited += 1
+            }
+            guard generation == historyGeneration else { return }
+            guard await session.loadOlderMessages() else { break }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard generation == historyGeneration else { return }
+        } while visibleLoaderID != nil && visibleLoaderID == currentLoaderID
+        if generation == historyGeneration { isPrependingHistory = false }
     }
 
     private func scrollWithoutAnimation(_ proxy: ScrollViewProxy, to id: some Hashable, anchor: UnitPoint) {
@@ -596,7 +700,7 @@ struct CloudConversation: View {
     }
 
     private func scrollToConversationBottom(using proxy: ScrollViewProxy) {
-        scrollPosition.scrollTo(id: chatEndID, anchor: .bottom)
+        scroll { $0.scrollTo(id: chatEndID, anchor: .bottom) }
         scrollWithoutAnimation(proxy, to: chatEndID, anchor: .bottom)
     }
 }
@@ -831,6 +935,16 @@ private struct MacAccessNotice: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
     }
+}
+
+/// Where the held row is, read in layout callbacks and so not observed.
+private final class HeldRowPosition {
+    /// The scroll offset, as `scrollTo(y:)` takes it.
+    var offset: CGFloat = 0
+    /// The held row's top in the content.
+    var top: CGFloat?
+    /// The held row's top from the top of the visible area.
+    var screenTop: CGFloat?
 }
 
 /// A transcript's scroll view: one per chat, made again when its first view
