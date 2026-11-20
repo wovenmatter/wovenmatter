@@ -1153,8 +1153,10 @@ struct WorkspaceView: View {
         model.workspace.markConversationRead(id: conversation.id)
     }
 
-    private func send(from panelID: ChatPanelID) {
-        if let selectedConversation = conversation(in: panelID) {
+    /// Sends the draft of the chat a panel shows, to that chat. While a
+    /// chosen chat loads, the one still on screen is the one its composer shows.
+    private func send(from panelID: ChatPanelID, shownConversationID: String?) {
+        if let selectedConversation = overview?.conversations.first(where: { $0.id == shownConversationID }) {
             let conversationID = selectedConversation.id
             guard submittingConversationIDs.insert(conversationID).inserted else {
                 return
@@ -1329,7 +1331,8 @@ struct WorkspaceSurface: View {
     let onClosePanel: (ChatPanelID) -> Void
     let onNavigatePanel: (ChatPanelDirection) -> Bool
     let onOpenBoardSession: (String) -> Void
-    let onSend: (ChatPanelID) -> Void
+    /// Sends from a panel, naming the chat it shows.
+    let onSend: (ChatPanelID, String?) -> Void
     let onAttachmentAction: (ChatPanelID, ComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, ChatPanelID) -> Void
     let onDropFiles: ([URL], ChatPanelID) -> Bool
@@ -1530,7 +1533,7 @@ struct WorkspaceSurface: View {
                 onActivatePanel: { onActivatePanel(panelID) },
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },
-                onSend: { onSend(panelID) },
+                onSend: { onSend(panelID, conversation?.id) },
                 onAttachmentAction: { onAttachmentAction(panelID, $0) },
                 onRemoveAttachment: { onRemoveAttachment($0, panelID) },
                 onDropFiles: { onDropFiles($0, panelID) },
