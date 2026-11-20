@@ -35,8 +35,6 @@ final class SessionStore {
     private(set) var settings: SessionSettings?
     private(set) var isUpdatingSettings = false
     private(set) var goal: WorkspaceGoal?
-    /// A macOS permission the owning Mac is missing for this session.
-    private(set) var macAccessNotice: MacAccessSessionNotice?
     private(set) var error: String?
 
     private var isFollowing = false
@@ -520,6 +518,9 @@ final class SessionStore {
         self.messages = messages
         self.runs = runs
         runActivities = activities
+        // The running turn's latest checklist, from its plan tool calls.
+        let progress = run == .running ? runs.last.flatMap { ConversationTaskProgress.latest(in: activities, activeRunID: $0.id) } : nil
+        if progress != taskProgress { taskProgress = progress }
         interactions = prompts.map(interaction)
     }
 }

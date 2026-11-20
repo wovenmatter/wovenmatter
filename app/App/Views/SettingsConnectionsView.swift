@@ -231,11 +231,7 @@ struct SettingsConnectionsView: View {
             SettingsSignInHandoff(url: agent.signInURL, code: agent.signInURL == nil ? nil : agent.signInCode)
             if let prompt = agent.prompt {
                 Text(prompt).font(.settingsBody)
-                if agent.promptOptions.isEmpty {
-                    HStack { TextField("Authorization code or redirect URL", text: $answer).wovenInput(); Button("Continue") { agent.respond(answer); answer = "" } }
-                } else {
-                    HStack { ForEach(agent.promptOptions) { option in Button(option.label) { agent.respond(option.id) } } }
-                }
+                HStack { TextField("Authorization code or redirect URL", text: $answer).wovenInput(); Button("Continue") { agent.respond(answer); answer = "" } }
             }
             if agent.error == nil, let notice = agent.notice { SettingsNote(notice) }
             if let error = agent.error { SettingsError(error) }

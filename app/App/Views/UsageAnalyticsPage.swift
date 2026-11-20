@@ -146,13 +146,11 @@ struct UsageAnalyticsPage: View {
     let machines: [UsageMachineSummary]
     let prices: UsagePriceState
     let isRefreshing: Bool
-    let historyImport: UsageHistoryImportProgress?
     let retryPrices: () -> Void
 
     /// Nothing has been read yet for this range, as opposed to a range with no usage.
     private var isAwaitingData: Bool {
         guard snapshot.samples.isEmpty else { return false }
-        if let historyImport { return !historyImport.covers(snapshot.range) }
         return isRefreshing && snapshot.sources.isEmpty
     }
 
@@ -182,7 +180,6 @@ struct UsageAnalyticsPage: View {
                     table: table,
                     prices: prices,
                     isAwaitingData: isAwaitingData,
-                    historyImport: historyImport,
                     retryPrices: retryPrices,
                     chartStyle: $chartStyle,
                     chartMetric: $chartMetric
@@ -555,7 +552,6 @@ private struct UsageAnalyticsReport: View {
     let table: UsageRateTable?
     let prices: UsagePriceState
     let isAwaitingData: Bool
-    let historyImport: UsageHistoryImportProgress?
     let retryPrices: () -> Void
     @Binding var chartStyle: UsageChartStyle
     @Binding var chartMetric: UsageChartMetric
@@ -573,25 +569,10 @@ private struct UsageAnalyticsReport: View {
         }
     }
 
-    /// Set when part of the selected range is still being read.
-    private var importNotice: String? {
-        guard let historyImport, !historyImport.covers(snapshot.range) else { return nil }
-        guard let covered = historyImport.covered else { return "Older usage is still loading." }
-        return "Showing the last \(covered.label) so far. Older usage is still loading."
-    }
-
     private func report(summary: UsageAnalyticsSummary, estimate: UsageCostEstimate?) -> some View {
         VStack(alignment: .leading, spacing: 26) {
             VStack(alignment: .leading, spacing: 12) {
                 heroRow(summary: summary, estimate: estimate)
-                if let importNotice {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.mini)
-                        Text(importNotice)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(WovenPalette.mutedForeground)
-                    }
-                }
                 if chartMetric == .apiEstimate, table == nil {
                     UsagePriceUnavailable(prices: prices, retry: retryPrices)
                 } else if samples.isEmpty {

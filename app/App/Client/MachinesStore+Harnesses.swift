@@ -32,8 +32,7 @@ extension MachinesStore {
     }
 
     func isMaintaining(_ kind: AgentRuntimeKind, on machineID: String) -> Bool {
-        operation(kind, on: machineID) != nil || pendingHarnessInstall?.machineID == machineID
-            && pendingHarnessInstall?.runtimeKind == kind
+        operation(kind, on: machineID) != nil
     }
 
     /// Installs or updates run there; server changes wait for them.
@@ -44,8 +43,6 @@ extension MachinesStore {
     func harnessError(_ kind: AgentRuntimeKind, on machineID: String) -> String? {
         harnessErrors[machineID]?[kind]
     }
-
-    func hasActiveChats(on machineID: String) -> Bool { machinesWithActiveChats.contains(machineID) }
 
     /// Re-reads what is installed and signed in there, Pi Durable's providers included.
     func refreshHarnesses(on machineID: String) {
@@ -84,14 +81,6 @@ extension MachinesStore {
                 await maintain(kind, .install, on: machineID)
             }
         }
-    }
-
-    func confirmPendingHarnessInstall() {
-        pendingHarnessInstall = nil
-    }
-
-    func cancelPendingHarnessInstall() {
-        pendingHarnessInstall = nil
     }
 
     func dismissHarnessSetup(_ machineID: String) {

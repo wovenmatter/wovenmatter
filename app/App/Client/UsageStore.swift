@@ -16,8 +16,6 @@ final class UsageStore {
     /// Every machine whose usage the pages include, this machine first.
     private(set) var machines: [UsageMachineSummary] = []
     private(set) var prices = UsagePriceState()
-    /// Usage is recorded as turns finish, so there is no past history to read.
-    private(set) var historyImport: UsageHistoryImportProgress?
     @ObservationIgnored private weak var server: ServerConnection?
     @ObservationIgnored private weak var machineStore: MachinesStore?
     @ObservationIgnored private var limits: [UsageLimitAccount] = []

@@ -18,10 +18,7 @@ struct HarnessSetupView: View {
         HarnessSetupPresentation.runtimes.first { machines.operation($0, on: machineID) == .install }
     }
     private var busy: Bool { checking || activeInstall != nil }
-    private var maintenanceBusy: Bool {
-        machines.isMaintainingHarnesses(on: machineID) || machines.pendingHarnessInstall?.machineID == machineID
-    }
-    private var hasActiveChats: Bool { machines.hasActiveChats(on: machineID) }
+    private var maintenanceBusy: Bool { machines.isMaintainingHarnesses(on: machineID) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,9 +92,6 @@ struct HarnessSetupView: View {
             }
             .background(theme.palette.themeWhisper)
             .clipShape(DesktopShapes.card)
-            if hasActiveChats {
-                SettingsNote("Finish active local chats before installing or updating harnesses.")
-            }
             SettingsNote("Installed harnesses appear in your sidebar automatically. Sign in opens the harness’s own flow in Terminal; return here when you’re done.")
         }
     }
@@ -139,18 +133,6 @@ struct HarnessSetupView: View {
             SettingsHarnessSignInPanel(model: model, runtimeKind: kind)
             if let message = machines.signInMessage(kind, on: machineID) { SettingsNote(message) }
             if let error = machines.harnessError(kind, on: machineID) { SettingsError(error) }
-            if let pending = machines.pendingHarnessInstall, pending.machineID == machineID, pending.runtimeKind == kind {
-                VStack(alignment: .leading, spacing: 8) {
-                    SettingsNote(pending.notice(on: "this Mac"))
-                    HStack {
-                        Button("Skip this harness") { machines.cancelPendingHarnessInstall(); selected.remove(kind) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                        Spacer()
-                        Button("Install OpenCode 2") { machines.confirmPendingHarnessInstall() }
-                            .buttonStyle(WovenPrimaryButtonStyle())
-                    }
-                }
-            }
         }.padding(.horizontal, 16).padding(.vertical, 12)
     }
 
@@ -212,7 +194,7 @@ struct HarnessSetupView: View {
                 if !selected.isEmpty {
                     Button("Install selected (\(selected.count))") { installSelected() }
                         .buttonStyle(WovenPrimaryButtonStyle())
-                        .disabled(busy || maintenanceBusy || hasActiveChats)
+                        .disabled(busy || maintenanceBusy)
                     Button("Continue") { step = 1 }.buttonStyle(SettingsQuietButtonStyle())
                         .disabled(activeInstall != nil)
                 } else {
@@ -239,13 +221,12 @@ struct HarnessSetupView: View {
     /// This Mac's server installs them in order; installed ones leave the selection.
     private func installSelected() {
         let kinds = HarnessSetupPresentation.runtimes.filter { selected.contains($0) }
-        guard !kinds.isEmpty, !busy, !maintenanceBusy, !hasActiveChats else { return }
+        guard !kinds.isEmpty, !busy, !maintenanceBusy else { return }
         machines.installHarnesses(kinds, on: machineID)
     }
 
-    /// An install already running finishes; a pending OpenCode question does not wait.
+    /// An install already running finishes.
     private func close() {
-        if machines.pendingHarnessInstall?.machineID == machineID { machines.cancelPendingHarnessInstall() }
         HarnessSetupPresentation.shared.dismiss()
     }
 

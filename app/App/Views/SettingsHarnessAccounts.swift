@@ -47,7 +47,6 @@ struct SettingsHarnessAccounts: View {
                     }
                 }
             }
-            .modifier(HarnessInstallerConfirmation(model: machines))
         }
     }
 
@@ -110,7 +109,7 @@ struct SettingsRemoteHarnessSoftware: View {
                             model.install(runtimeKind, on: machine.id)
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(busy || model.hasActiveChats(on: machine.id))
+                        .disabled(busy)
                         .accessibilityLabel("Install " + runtimeKind.displayName)
                     } else if harness?.isSystemInstall != true {
                         SettingsHarnessUpdateButton(model: model, runtimeKind: runtimeKind, machineID: machine.id)
@@ -162,53 +161,8 @@ struct SettingsHarnessUpdateButton: View {
             else { model.checkForUpdates(runtimeKind, on: machineID) }
         }
         .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(checking || model.isMaintaining(runtimeKind, on: machineID)
-            || (hasUpdate && model.hasActiveChats(on: machineID)))
+        .disabled(checking || model.isMaintaining(runtimeKind, on: machineID))
         .accessibilityLabel(label + " for " + runtimeKind.displayName)
     }
 }
 
-/// The one install that asks first: OpenCode 2 replaces OpenCode 1's `opencode` command.
-struct HarnessInstallerConfirmation: ViewModifier {
-    @Bindable var model: MachinesStore
-    /// Only the install for this machine asks here; nil asks for any machine.
-    var machineID: String?
-    /// Off while another view asks the same question.
-    var isActive = true
-    var onCancel: () -> Void = {}
-    @State private var confirming = false
-
-    private var pending: PendingHarnessInstall? {
-        guard isActive, let pending = model.pendingHarnessInstall,
-              machineID == nil || pending.machineID == machineID else { return nil }
-        return pending
-    }
-
-    func body(content: Content) -> some View {
-        content.confirmationDialog("Replace OpenCode 1?", isPresented: Binding(
-            get: { !confirming && pending != nil },
-            set: { if !$0 && !confirming { cancel() } }
-        ), titleVisibility: .visible) {
-            Button("Install OpenCode 2") {
-                // The command is asynchronous. Dismissing this dialog must
-                // not cancel the install before the confirmation arrives.
-                confirming = true
-                model.confirmPendingHarnessInstall()
-            }
-            Button("Cancel", role: .cancel) { cancel() }
-        } message: {
-            if let pending {
-                Text(pending.notice(on: model.machine(id: pending.machineID)?.name ?? "this Mac"))
-            }
-        }
-        .onChange(of: model.pendingHarnessInstall == nil) { _, cleared in
-            if cleared { confirming = false }
-        }
-    }
-
-    private func cancel() {
-        guard pending != nil else { return }
-        model.cancelPendingHarnessInstall()
-        onCancel()
-    }
-}

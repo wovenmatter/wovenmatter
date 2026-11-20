@@ -150,7 +150,6 @@ struct SettingsWorkspacesView: View {
 
     var body: some View {
         workspaceConfirmations
-            .modifier(HarnessInstallerConfirmation(model: model, isActive: setupMachine == nil))
     }
 
     private func presentPendingSetup() {

@@ -179,7 +179,7 @@ final class UpdatesStore {
     /// The newest `sparkle:shortVersionString` in the feed this app updates from.
     static func newestRelease() async throws -> String {
         guard let feed = (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String).flatMap(URL.init(string:)) else {
-            throw ClientError.notOffered("The release check")
+            throw URLError(.badURL)
         }
         let request = URLRequest(url: feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -225,11 +225,7 @@ final class UpdatesStore {
         case .harnesses, .harness: []
         }
         let linuxServers = servers.filter { $0.platform == .linux && $0.appVersion != nil && $0.appVersion != thisMac.appVersion }
-        if updatesThisApp {
-            if let failure = DesktopUpdater.shared.installUpdate() { failures.append(failure) }
-        } else if harnesses.isEmpty && linuxServers.isEmpty {
-            failures = [ClientError.notOffered("Updating this").localizedDescription]
-        }
+        if updatesThisApp, let failure = DesktopUpdater.shared.installUpdate() { failures.append(failure) }
         for machine in linuxServers {
             Task { if let failure = await store.sendUpdateServer(machine.id) { failures.append(failure) } }
         }

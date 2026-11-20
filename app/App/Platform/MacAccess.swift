@@ -1,8 +1,7 @@
 import Foundation
 
-/// One Mac's one-time permission setup (Settings → Permissions & Access on that
-/// Mac). Each Mac's server reports it, so any machine can explain a session that
-/// cannot use something it needs. No credentials, paths or timestamps.
+/// This Mac's one-time permission setup (Settings → Permissions & Access). No
+/// credentials, paths or timestamps.
 struct MacAccessStatus: Codable, Hashable, Sendable {
     enum Item: String, Codable, CaseIterable, Hashable, Sendable {
         case fullDiskAccess, accessibility, screenRecording, automation, microphone
@@ -52,13 +51,11 @@ struct MacAccessStatus: Codable, Hashable, Sendable {
 
     /// A message for a session that runs on this Mac, shown wherever the session
     /// is viewed. Nil when nothing it needs is known to be missing.
-    func sessionNotice(deviceName: String, isThisDevice: Bool, computerUse: Bool = false) -> String? {
+    func sessionNotice(computerUse: Bool = false) -> String? {
         let names = missing(computerUse: computerUse).map(\.displayName)
         guard let last = names.last else { return nil }
         let list = names.count <= 2 ? names.joined(separator: " and ")
             : names.dropLast().joined(separator: ", ") + ", and " + last
-        let subject = isThisDevice ? "This Mac" : deviceName
-        let action = isThisDevice ? "Open Settings → Permissions & Access to set it up." : "Open Settings → Permissions & Access on that Mac."
-        return "\(subject) is missing \(list) for \(appName). \(action)"
+        return "This Mac is missing \(list) for \(appName). Open Settings → Permissions & Access to set it up."
     }
 }

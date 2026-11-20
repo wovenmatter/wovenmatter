@@ -346,28 +346,12 @@ final class MacAccessSetupModel {
     }
 }
 
-struct MacAccessSessionNotice: Equatable {
-    let message: String
-    /// The session runs on this Mac, so Settings → Permissions & Access here can fix it.
-    let isThisMac: Bool
-}
-
 extension ApplicationModel {
-    /// A clear message for a session that runs on a Mac missing a permission it
-    /// needs, shown wherever the session is viewed. This Mac is checked directly;
-    /// another Mac's status is what its server reported. Linux machines have no
-    /// Mac permissions.
-    func macAccessNotice(for conversation: WorkspaceConversationRecord) -> MacAccessSessionNotice? {
-        guard !conversation.isArchived else { return nil }
+    /// A clear message for a session on this Mac when this Mac is missing a
+    /// permission the session needs.
+    func macAccessNotice(for conversation: WorkspaceConversationRecord) -> String? {
+        guard !conversation.isArchived, conversation.machineID == thisMachineID else { return nil }
         let computerUse = agentTools.sessionPolicies[conversation.id]?.enabled.contains(.computer) == true
-        if conversation.machineID == thisMachineID {
-            return MacAccessSetupModel.current()
-                .sessionNotice(deviceName: "This Mac", isThisDevice: true, computerUse: computerUse)
-                .map { MacAccessSessionNotice(message: $0, isThisMac: true) }
-        }
-        guard let machine = machines.machine(id: conversation.machineID), machine.platform == .mac else { return nil }
-        return machines.macAccessStatuses[machine.id]?
-            .sessionNotice(deviceName: machine.name, isThisDevice: false, computerUse: computerUse)
-            .map { MacAccessSessionNotice(message: $0, isThisMac: false) }
+        return MacAccessSetupModel.current().sessionNotice(computerUse: computerUse)
     }
 }

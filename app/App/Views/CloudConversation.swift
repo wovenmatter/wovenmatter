@@ -178,12 +178,6 @@ struct CloudConversation: View {
                 } action: { oldGeometry, newGeometry in
                     geometryChanged(from: oldGeometry, to: newGeometry, using: proxy)
                 }
-                .onChange(of: conversation.flatMap { model.navigation.pendingComposerPrefills[$0.id] }, initial: true) { _, text in
-                    guard let text, let conversationID = conversation?.id else { return }
-                    model.navigation.pendingComposerPrefills[conversationID] = nil
-                    guard !text.isEmpty else { return }
-                    draft = draft.isEmpty ? text : draft + "\n" + text
-                }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
                 }
@@ -350,9 +344,8 @@ struct CloudConversation: View {
 
     @ViewBuilder
     private var notices: some View {
-        if let notice = session?.macAccessNotice {
-            MacAccessNotice(message: notice.message,
-                openSettings: notice.isThisMac ? { model.navigation.pendingConnectionsScope = "permissions" } : nil)
+        if let conversation, let notice = model.macAccessNotice(for: conversation) {
+            MacAccessNotice(message: notice, openSettings: { model.navigation.pendingConnectionsScope = "permissions" })
         }
         if let conversation, !conversation.isArchived, session?.isOwnerReachable == false {
             // Its saved history shows; controls return when its owner reconnects.

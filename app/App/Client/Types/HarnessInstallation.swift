@@ -70,18 +70,6 @@ enum HarnessOperation: Hashable, Sendable {
     case update
 }
 
-/// The one install that asks first: OpenCode 2 replaces OpenCode 1's `opencode` command.
-struct PendingHarnessInstall: Hashable, Sendable {
-    let machineID: String
-    let runtimeKind: AgentRuntimeKind
-    /// The OpenCode 1 version it replaces.
-    let replacingVersion: String
-
-    func notice(on place: String) -> String {
-        "Woven Matter works with OpenCode 2. Its official installer replaces the opencode command from OpenCode \(replacingVersion) on \(place). OpenCode's settings and data are kept."
-    }
-}
-
 /// A harness's own sign-in on one machine, or a Pi Durable provider account. The harness
 /// keeps its credentials; the server only reports whether it has them.
 struct AgentSignInStatus: Identifiable, Hashable, Sendable {

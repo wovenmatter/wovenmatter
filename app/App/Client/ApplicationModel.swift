@@ -7,23 +7,13 @@ enum ClientError: LocalizedError, Equatable {
     case notConnected
     /// The command concerns another machine, whose server the UI is not connected to.
     case machineNotConnected(String)
-    /// The server does not offer this yet.
-    case notOffered(String)
 
     var errorDescription: String? {
         switch self {
         case .notConnected: "Not connected to the Woven server."
         case .machineNotConnected(let name): "\(name) is not connected."
-        case .notOffered(let what): "\(what) is not available yet."
         }
     }
-}
-
-/// Long work this Mac's server reports while the window waits for it.
-struct StartupProgress: Equatable, Sendable {
-    var title: String
-    var detail: String
-    var fraction: Double?
 }
 
 /// The root of the client layer. It owns the connection to this Mac's server,
@@ -33,13 +23,11 @@ struct StartupProgress: Equatable, Sendable {
 @Observable
 final class ApplicationModel {
     enum State: Equatable {
-        case starting
         case ready
         case failed(String)
     }
 
     private(set) var state: State = .ready
-    private(set) var startupProgress: StartupProgress?
     /// This Mac's permanent machine identifier, once its server has answered.
     var thisMachineID: String? { server?.remote?.machine.id }
     /// The connection to this Mac's server, once it has been started.

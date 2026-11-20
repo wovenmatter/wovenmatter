@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Navigation intents one view leaves for another: which settings page or scope to open, composer text to prefill, a library item to send into a chat. UI only.
+/// Navigation intents one view leaves for another: which settings page or scope to open, a library item to send into a chat. UI only.
 @MainActor
 @Observable
 final class NavigationStore {
@@ -16,8 +16,6 @@ final class NavigationStore {
     var pendingBotsSettings = false
     /// Open the bot profiles of the bots on this machine.
     var pendingBotProfilesMachine: String?
-    /// Composer text to place in a session's composer when it next opens, by session id.
-    var pendingComposerPrefills: [String: String] = [:]
     /// A library item chosen to send into the chat it came from.
     var libraryMessageTarget: WorkspaceLibraryItem?
 

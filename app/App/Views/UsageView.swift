@@ -48,7 +48,6 @@ struct UsageView: View {
                     machines: model.usage.machines,
                     prices: model.usage.prices,
                     isRefreshing: model.usage.isRefreshing || model.usage.snapshot == nil,
-                    historyImport: model.usage.historyImport,
                     retryPrices: { Task { await model.usage.loadPrices(force: true) } }
                 )
             case .limits:

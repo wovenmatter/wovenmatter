@@ -77,7 +77,6 @@ struct RemoteHarnessSetupView: View {
         .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .modifier(HarnessInstallerConfirmation(model: model, machineID: machine.id))
         .task {
             selection.selected = Set(savedSelection.split(separator: ",").compactMap { AgentRuntimeKind(rawValue: String($0)) })
                 .union([.defaultAgent])
@@ -142,7 +141,6 @@ struct RemoteHarnessSetupView: View {
     }
 
     private func finish() {
-        if model.pendingHarnessInstall?.machineID == machine.id { model.cancelPendingHarnessInstall() }
         onClose()
     }
 }

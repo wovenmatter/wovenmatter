@@ -12,11 +12,6 @@ import WovenProtocol
 @MainActor
 @Observable
 final class AgentSettingsStore {
-    struct SignInOption: Identifiable, Hashable, Sendable {
-        let id: String
-        let label: String
-    }
-
     // MARK: Pi Durable chat settings
 
     /// "global" for every machine, or a machine ID. The Pi Durable page shows this scope.
@@ -108,12 +103,8 @@ final class AgentSettingsStore {
     private(set) var catalogIncludesAllModels = false
     /// The provider whose models the catalog browser lists.
     var browsingProvider = ""
-    /// The default model the server resolved for `scope`.
-    private(set) var resolvedDefaultModelID: String?
-
     var effectiveDefaultModel: String? {
-        if let resolvedDefaultModelID, isProviderEnabled(for: resolvedDefaultModelID) { return resolvedDefaultModelID }
-        return configuration.defaultModel.flatMap { isProviderEnabled(for: $0) ? $0 : nil }
+        configuration.defaultModel.flatMap { isProviderEnabled(for: $0) ? $0 : nil }
     }
 
     var orderedModels: [PiDurableModel] {
@@ -146,7 +137,6 @@ final class AgentSettingsStore {
     private(set) var signInURL: URL?
     private(set) var signInCode: String?
     private(set) var prompt: String?
-    private(set) var promptOptions: [SignInOption] = []
     private(set) var signInOutcome: ProviderSignInOutcome?
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var flowID: String?
@@ -163,7 +153,6 @@ final class AgentSettingsStore {
         self.scope = scope
         catalog = []
         catalogIncludesAllModels = false
-        resolvedDefaultModelID = nil
         error = nil
         notice = nil
     }
@@ -313,11 +302,10 @@ final class AgentSettingsStore {
         Task { await readAccounts(on: machineID) }
     }
 
-    /// Answers the sign-in's prompt: a code, a redirect URL or one of `promptOptions`.
+    /// Answers the sign-in's prompt: a code or a redirect URL.
     func respond(_ answer: String) {
         guard let server = signInServer, let flowID, let promptID else { return }
         prompt = nil
-        promptOptions = []
         self.promptID = nil
         Task {
             do { _ = try await server.call(AnswerSignIn(flowID: flowID, promptID: promptID, answer: answer)) }
@@ -337,7 +325,6 @@ final class AgentSettingsStore {
         signInURL = nil
         signInCode = nil
         prompt = nil
-        promptOptions = []
         busy = false
     }
 

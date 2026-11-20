@@ -129,9 +129,6 @@ final class MachinesStore {
     var harnessErrors: [String: [AgentRuntimeKind: String]] = [:]
     /// Machines whose harness inventory could not be read.
     var harnessInventoryUnavailable: Set<String> = []
-    /// Machines where running chats hold harness installs and updates.
-    var machinesWithActiveChats: Set<String> = []
-    var pendingHarnessInstall: PendingHarnessInstall?
     /// Machines whose server was just installed, waiting for harness setup.
     var pendingHarnessSetupMachineIDs: Set<String> = []
 
@@ -158,11 +155,6 @@ final class MachinesStore {
     @ObservationIgnored var signInFlowIDs: [String: [AgentRuntimeKind: String]] = [:]
     /// Machines whose runtimes are read again while an adapter installs.
     @ObservationIgnored var adapterWatches: Set<String> = []
-
-    // MARK: Used by settings
-
-    /// Each Mac's permission status, as its server reports it.
-    private(set) var macAccessStatuses: [String: MacAccessStatus] = [:]
 
     init() {}
 

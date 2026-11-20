@@ -93,18 +93,6 @@ enum UsageTimeRange: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// How far reading past usage has reached. History is read newest first, so
-/// recent usage appears at once and older usage follows.
-struct UsageHistoryImportProgress: Hashable, Sendable {
-    /// The widest period fully read so far. Nil before the first batch finishes.
-    let covered: UsageTimeRange?
-
-    func covers(_ range: UsageTimeRange, now: Date = Date(), calendar: Calendar = .current) -> Bool {
-        guard let duration = covered?.duration else { return false }
-        return range.interval(relativeTo: now, calendar: calendar).start >= now.addingTimeInterval(-duration)
-    }
-}
-
 private func saturatedAdd<Value: FixedWidthInteger>(_ lhs: Value, _ rhs: Value) -> Value {
     let (value, overflow) = lhs.addingReportingOverflow(rhs)
     return overflow ? Value.max : value
