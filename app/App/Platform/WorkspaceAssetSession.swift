@@ -1,4 +1,5 @@
 import AppKit
+import Security
 import Observation
 import WovenProtocol
 
@@ -123,6 +124,9 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         if UserDefaults.standard.bool(forKey: Self.clearDataKey) {
             UserDefaults.standard.removeObject(forKey: Self.clearDataKey)
         }
+        // Chromium may reach for the Keychain; it must never prompt. The
+        // bridge refuses to start until this process-wide policy is set.
+        SecKeychainSetUserInteractionAllowed(false)
         try WMBrowserRuntime.shared().start(withProfilePath: nil)
     }
 

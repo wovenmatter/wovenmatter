@@ -36,12 +36,11 @@ final class WovenCuaRuntime {
         directory = nil
     }
 
-    func call(_ tool: String, arguments: [String: JSONValue], callerID: String,
-              admit: @MainActor () async throws -> Void) async throws -> JSONValue {
-        try await admit()
+    func call(_ tool: String, arguments: [String: JSONValue], callerID: String) async throws -> JSONValue {
+        try Task.checkCancellation()
         do {
-            let client = try await connection(callerID: callerID, admit: admit)
-            try await admit()
+            let client = try await connection(callerID: callerID)
+            try Task.checkCancellation()
             let result = try await client.call(method: "tools/call", params: .object([
                 "name": .string(tool), "arguments": .object(arguments)
             ]))
@@ -56,13 +55,13 @@ final class WovenCuaRuntime {
         }
     }
 
-    private func connection(callerID: String, admit: @MainActor () async throws -> Void) async throws -> WovenCuaMCPProcess {
+    private func connection(callerID: String) async throws -> WovenCuaMCPProcess {
         expiry.removeValue(forKey: callerID)?.cancel()
         if let daemon, !daemon.isRunning { stop() }
         if let client = clients[callerID], client.isRunning { return client }
         let retirementDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         while retiring.contains(where: \.isRunning) {
-            try await admit()
+            try Task.checkCancellation()
             guard ContinuousClock.now < retirementDeadline else {
                 throw WorkspaceToolError.invalid("The previous Cua Driver is still stopping. Inspect state after it exits.")
             }
@@ -86,7 +85,7 @@ final class WovenCuaRuntime {
             process.standardInput = pipe
             process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
             process.terminationHandler = { _ in try? FileManager.default.removeItem(at: root) }
-            try await admit()
+            try Task.checkCancellation()
             do { try process.run() }
             catch { try? FileManager.default.removeItem(at: root); throw error }
             daemon = process; lifetime = pipe; directory = root
@@ -95,14 +94,14 @@ final class WovenCuaRuntime {
         let socket = root.appending(path: "driver.sock")
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while !FileManager.default.fileExists(atPath: socket.path) {
-            try await admit()
+            try Task.checkCancellation()
             guard daemon.isRunning, ContinuousClock.now < deadline else {
                 stop()
                 throw WorkspaceToolError.invalid("Cua Driver could not start. Check Woven Matter's macOS permissions.")
             }
             try await Task.sleep(for: .milliseconds(25))
         }
-        try await admit()
+        try Task.checkCancellation()
         let client = try WovenCuaMCPProcess(executable: executable,
             arguments: ["mcp", "--embedded", "--socket", socket.path], environment: environment(root))
         clients[callerID] = client

@@ -3,44 +3,29 @@ import ApplicationServices
 import Foundation
 import WovenProtocol
 
-/// All desktop operations use Cua. Woven retains caller identity, admission,
-/// cancellation and inline-image limits; agents never receive the driver socket.
+/// All desktop operations use Cua. Woven keeps caller identity, cancellation
+/// and inline-image limits; agents never receive the driver socket.
 @MainActor
-public final class WovenComputerAutomation {
-    typealias DriverCall = @MainActor (String, [String: JSONValue], String,
-        @MainActor () async throws -> Void) async throws -> JSONValue
-    private let runtime: WovenCuaRuntime
-    private let driverCall: DriverCall?
-    private let permissionCheck: @MainActor () -> Bool
-    public convenience init() {
-        self.init(executable: Bundle.main.resourceURL?.appending(path: "Cua/cua-driver") ?? URL(fileURLWithPath: "/missing-cua"))
-    }
-    init(executable: URL, permissionCheck: @escaping @MainActor () -> Bool = {
-        CGPreflightScreenCaptureAccess() && AXIsProcessTrusted()
-    }, driverCall: DriverCall? = nil) {
-        runtime = WovenCuaRuntime(executable: executable, bundleID: Bundle.main.bundleIdentifier ?? "wovenmatter.desktop")
-        self.permissionCheck = permissionCheck; self.driverCall = driverCall
-    }
-    public static var permissions: JSONValue {
+final class WovenComputerAutomation {
+    private let runtime = WovenCuaRuntime(
+        executable: Bundle.main.resourceURL?.appending(path: "Cua/cua-driver") ?? URL(fileURLWithPath: "/missing-cua"),
+        bundleID: Bundle.main.bundleIdentifier ?? "wovenmatter.desktop")
+    static var permissions: JSONValue {
         .object(["engine": .string("cua"), "screenRecording": .bool(CGPreflightScreenCaptureAccess()), "accessibility": .bool(AXIsProcessTrusted())])
     }
-    public func revoke(callerID: String) { runtime.revoke(callerID: callerID) }
-    public func revokeAll() { runtime.stop() }
-    public func execute(_ value: JSONValue, callerID: String,
-                        admit: @MainActor () async throws -> Void) async throws -> JSONValue {
-        try await admit(); try Task.checkCancellation()
+    func revokeAll() { runtime.stop() }
+    func execute(_ value: JSONValue, callerID: String) async throws -> JSONValue {
+        try Task.checkCancellation()
         guard let args = value.objectValue, let action = args["action"]?.stringValue else { throw Self.invalid("Provide a computer action.") }
         if action == "status" {
             guard args.count == 1 else { throw Self.invalid("Status accepts only action.") }
             return .object(["content": .array([.object(["type": .string("text"), "text": .string(String(decoding: try JSONEncoder().encode(Self.permissions), as: UTF8.self))])])])
         }
         let call = try Self.invocation(args)
-        guard permissionCheck() else { throw Self.invalid("Grant Woven Matter Screen Recording and Accessibility in macOS System Settings, then reopen the app. Agents cannot grant these permissions.") }
-        try await admit(); try Task.checkCancellation()
-        let result: JSONValue
-        if let driverCall { result = try await driverCall(call.tool, call.arguments, callerID, admit) }
-        else { result = try await runtime.call(call.tool, arguments: call.arguments, callerID: callerID, admit: admit) }
-        try await admit(); try Task.checkCancellation()
+        guard CGPreflightScreenCaptureAccess() && AXIsProcessTrusted() else { throw Self.invalid("Grant Woven Matter Screen Recording and Accessibility in macOS System Settings, then reopen the app. Agents cannot grant these permissions.") }
+        try Task.checkCancellation()
+        let result = try await runtime.call(call.tool, arguments: call.arguments, callerID: callerID)
+        try Task.checkCancellation()
         if result.objectValue?["isError"]?.boolValue == true {
             let text = result.objectValue?["content"]?.arrayValue?.compactMap { $0.objectValue?["text"]?.stringValue }.joined(separator: "\n")
             throw Self.invalid(String((text ?? "Cua refused the action. Inspect fresh state.").prefix(32_768)))

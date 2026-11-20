@@ -63,6 +63,8 @@ final class ApplicationModel {
 
     /// The browser and document tabs of the asset pane. UI only.
     let workspaceAssets = WorkspaceAssetSession()
+    /// Carries out this Mac's server's browser and computer calls.
+    @ObservationIgnored private var uiTools: UIToolsStore?
 
     var activeSessionLimitPresented = false
     var sessionAccessError: String?
@@ -96,6 +98,7 @@ final class ApplicationModel {
         documents.attach(server, machines: machines, databases: databases)
         bots.attach(server, machines: machines, settings: settings)
         server.start()
+        uiTools = UIToolsStore(server: server, assets: workspaceAssets)
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] _ in
                 self?.restartIfAnotherRelease(server.remote)
