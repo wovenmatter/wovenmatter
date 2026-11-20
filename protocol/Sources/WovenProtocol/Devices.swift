@@ -50,3 +50,30 @@ public struct UpdateServer: Request {
   public var machineID: String
   public init(machineID: String) { self.machineID = machineID }
 }
+
+/// Looks at a Linux computer over SSH before the server is installed there.
+/// Changes nothing.
+public struct InspectHost: Request {
+  public static let method = "devices.inspect"
+  public typealias Reply = HostFacts
+  public var host: String
+  public var user: String?
+  public init(host: String, user: String? = nil) {
+    self.host = host
+    self.user = user
+  }
+}
+
+/// What `InspectHost` found. The server can be installed when `problems` is empty.
+public struct HostFacts: Codable, Sendable, Hashable {
+  public var architecture: String
+  public var problems: [String]
+  public var storageCapacityBytes: Int64?
+  public var storageAvailableBytes: Int64?
+  public init(architecture: String, problems: [String], storageCapacityBytes: Int64? = nil, storageAvailableBytes: Int64? = nil) {
+    self.architecture = architecture
+    self.problems = problems
+    self.storageCapacityBytes = storageCapacityBytes
+    self.storageAvailableBytes = storageAvailableBytes
+  }
+}

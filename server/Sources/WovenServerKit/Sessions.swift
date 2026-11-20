@@ -28,6 +28,9 @@ final class RunBoard: Sendable {
     for subscriber in subscribers { subscriber.yield(value) }
   }
 
+  /// Every session that is not idle now.
+  var current: [SessionRunState] { state.withLock { Array($0.states.values) } }
+
   func subscribe() -> ([SessionRunState], AsyncStream<SessionRunState>) {
     let (stream, continuation) = AsyncStream<SessionRunState>.makeStream(bufferingPolicy: .bufferingNewest(4096))
     let id = UUID()

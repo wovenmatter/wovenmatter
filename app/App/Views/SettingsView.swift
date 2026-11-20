@@ -232,6 +232,7 @@ struct SettingsView: View {
         case "github": route = .github
         case "dictation": route = .dictation
         case "workspaces": route = .workspaces(nil)
+        case "background-server": route = .backgroundServer
         #endif
         case "permissions": if route != .permissions { open(.permissions, .permissions, from: .landing) }
         default: if route != .accounts(scope) { open(.accounts, .accounts(scope), from: .landing) }

@@ -16,6 +16,15 @@ func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, 
     return devices.filter { !linked.contains($0.address) }
   }
 
+  router.on(InspectHost.self) { request, _ in
+    guard let install else { throw ProtocolError(.failed, "This machine cannot install the Woven server elsewhere.") }
+    do {
+      return try await install.inspect(host: request.host, user: request.user)
+    } catch let failure as LinuxInstall.Failure {
+      throw ProtocolError(.failed, failure.description)
+    }
+  }
+
   router.on(InstallServer.self) { request, _ in
     guard let install else { throw ProtocolError(.failed, "This machine cannot install the Woven server elsewhere.") }
     do {

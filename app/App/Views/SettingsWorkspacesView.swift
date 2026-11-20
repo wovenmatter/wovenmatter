@@ -15,10 +15,8 @@ struct SettingsWorkspacesView: View {
     @State private var setupMachine: Machine?
     @State private var hostName = ""
     @State private var userName = ""
-    @State private var accessMode: LinuxAccessMode = .fullRoot
     @State private var acknowledgedHostAccess = false
     @State private var pendingRemoval: Machine?
-    @State private var browserMachine: Machine?
     @State private var logsMachine: Machine?
 
     private var trimmedHost: String { hostName.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -86,9 +84,6 @@ struct SettingsWorkspacesView: View {
 
     private var workspacePresentations: some View {
         workspacePage
-        .sheet(item: $browserMachine) { machine in
-            RemoteBrowserView(model: application, machineID: machine.id)
-        }
         .sheet(item: $logsMachine) { machine in
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -108,7 +103,7 @@ struct SettingsWorkspacesView: View {
             .padding(24).frame(width: 760, height: 520)
             .foregroundStyle(WovenPalette.foreground).background(WovenPalette.background)
         }
-        .onChange(of: hostName + userName + accessMode.rawValue) { _, _ in
+        .onChange(of: hostName + userName) { _, _ in
             acknowledgedHostAccess = false
         }
         .onChange(of: model.machines.map(\.id)) { oldIDs, machineIDs in
@@ -133,30 +128,6 @@ struct SettingsWorkspacesView: View {
 
     private var workspaceConfirmations: some View {
         workspacePresentations
-        .confirmationDialog(
-            "Authorize remote host preparation?",
-            isPresented: Binding(
-                get: { model.pendingHostPreparation != nil },
-                set: { if !$0 { model.cancelHostPreparation() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Authorize and prepare") {
-                model.authorizeHostPreparation()
-            }
-            Button("Cancel", role: .cancel) {
-                model.cancelHostPreparation()
-            }
-        } message: {
-            if let pending = model.pendingHostPreparation {
-                Text(
-                    pending.preparationActions
-                        .map { "• \($0)" }
-                        .joined(separator: "\n")
-                    + "\n\nThis prepares \(pending.hostName) and may download packages. Woven Matter will verify the host, then you can add it."
-                )
-            }
-        }
         .confirmationDialog(
             "Remove \(pendingRemoval?.name ?? "machine")?",
             isPresented: Binding(
@@ -214,12 +185,6 @@ struct SettingsWorkspacesView: View {
             Button("Add workspace") { addingMachine = true }
                 .buttonStyle(SettingsQuietButtonStyle())
         }
-        SettingsSection {
-            SettingsSummaryRow("Find on your network") {
-                SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
-                MacTailnetDiscoveryView(model: model)
-            }
-        }
     }
 
     private func statusLabel(_ machine: Machine) -> String {
@@ -252,18 +217,23 @@ struct SettingsWorkspacesView: View {
                 SettingsStatus(statusLabel(machine), tone: isRunning(machine) ? .good : .warning)
                 Menu("Manage") {
                     if let status {
-                        Button("Start") { Task { try? await model.startServer(on: machine.id) } }
-                            .disabled(status.isRunning || maintaining)
-                        Button("Stop") { Task { _ = try? await model.stopServer(on: machine.id, confirmed: false) } }
+                        // A stopped Mac cannot be reached to start it.
+                        if machine.platform == .linux {
+                            Button("Start") { manage { try await model.startServer(on: machine.id) } }
+                                .disabled(status.isRunning || maintaining)
+                        }
+                        Button("Stop") { manage { _ = try await model.stopServer(on: machine.id, confirmed: true) } }
                             .disabled(!status.isRunning || maintaining)
-                        Button("Restart") { model.restartServer(on: machine.id) }
+                        Button("Restart") { manage { _ = try await model.restartServer(on: machine.id, confirmed: true) } }
                             .disabled(!status.isRunning || maintaining)
                         Divider()
                     }
-                    Button("Update server") { model.updateServer(on: machine.id) }
-                        .disabled(maintaining)
-                    Button("View browser") { browserMachine = machine }
+                    if machine.platform == .linux {
+                        Button("Update server") { model.updateServer(on: machine.id) }
+                            .disabled(maintaining)
+                    }
                     Button("Logs") { model.loadLogs(on: machine.id); logsMachine = machine }
+                        .disabled(machine.platform == .mac && !machine.isOnline)
                     Divider()
                     Button("Remove…", role: .destructive) { pendingRemoval = machine }
                         .disabled(maintaining)
@@ -285,15 +255,20 @@ struct SettingsWorkspacesView: View {
         }
     }
 
+    private func manage(_ action: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await action()
+                model.errorMessage = nil
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func detailsSection(_ machine: Machine) -> some View {
         let status = model.serverStatus(on: machine.id)
-        let busy = model.isBusy(machine.id)
         return SettingsSection(title: "Details") {
-            if let accessMode = status?.accessMode, let host = status?.hostName {
-                SettingsSummaryRow("Access", value: accessMode.displayName) {
-                    SettingsNote(hostWarning(user: status?.userName, host: host))
-                }
-            }
             if let status {
                 SettingsSummaryRow("Storage", value: hostStorageLabel(status)) {
                     SettingsValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
@@ -301,48 +276,19 @@ struct SettingsWorkspacesView: View {
                     SettingsValueRow(label: "Host storage", value: hostStorageLabel(status))
                 }
             }
-            browserSandboxRow(machine, status: status, busy: busy)
-        }
-    }
-
-    private func browserSandboxRow(_ machine: Machine, status: MachineServerStatus?, busy: Bool) -> some View {
-        let result = model.browserChecks[machine.id]
-        return SettingsSummaryRow(
-            "Browser sandbox",
-            value: result == nil ? "Not checked" : result?.ok == true ? "Verified" : "Needs attention",
-            tone: result == nil ? .neutral : result?.ok == true ? .good : .warning
-        ) {
-            if let result, !result.ok {
-                if let reason = result.reason { SettingsNote(reason) }
-                if !result.missingLibraries.isEmpty {
-                    SettingsNote("Missing libraries: " + result.missingLibraries.joined(separator: ", "))
-                }
-                if let hint = result.hint { SettingsNote(hint) }
-            }
-            if result == nil { SettingsNote("Connect and verify the host browser to check its sandbox.") }
-            Button("Verify browser") { model.checkBrowserSandbox(on: machine.id) }
-                .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || status?.isRunning != true)
         }
     }
 
     private func machineLocation(_ machine: Machine) -> String {
         let status = model.serverStatus(on: machine.id)
-        guard let host = status?.hostName else { return machine.platform.displayName }
-        return "\(status?.userName.map { "\($0)@" } ?? "")\(host)"
+        return status?.hostName ?? machine.platform.displayName
     }
 
     private var hostCard: some View {
         SettingsSection(title: "Host", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
-            SettingsRow(title: "Workspace access") {
-                SettingsPicker("Workspace access", selection: $accessMode,
-                    options: LinuxAccessMode.allCases, popoverWidth: 220) { $0.displayName }
-            }
-            SettingsNote(accessMode == .fullRoot
-                ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
-                : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
-                    let onlineMachines = model.tailnetDevices.filter { $0.isOnline && $0.platform == .linux }
+                    let onlineMachines = model.tailnetDevices
                     if onlineMachines.isEmpty, !model.isFindingDevices {
                         Text("No online machines discovered")
                             .font(.settingsSecondary)
@@ -398,9 +344,7 @@ struct SettingsWorkspacesView: View {
                         SettingsValueRow(label: "Selected host", value: trimmedHost)
                         SettingsValueRow(
                             label: "Host status",
-                            value: preflight.ready ? "Ready to create a workspace"
-                                : preflight.canPrepare ? "Host preparation available"
-                                : "Needs attention"
+                            value: preflight.ready ? "Ready to create a workspace" : "Needs attention"
                         )
                         SettingsValueRow(
                             label: "Runtime",
@@ -408,28 +352,10 @@ struct SettingsWorkspacesView: View {
                         )
                         SettingsValueRow(label: "Host storage", value: storageCapacityLabel(
                             capacity: preflight.hostStorageCapacityBytes, available: preflight.hostStorageAvailableBytes))
-                        if let warning = preflight.storageWarning, !warning.isEmpty {
-                            storageWarning(warning)
-                        }
                         if !preflight.limitations.isEmpty {
                             Text(preflight.limitations.joined(separator: " "))
                                 .font(.settingsSecondary)
                                 .foregroundStyle(WovenPalette.mutedForeground)
-                        }
-                        if preflight.preparationRequired {
-                            Text("Preparation required")
-                                .font(.settingsSecondary.weight(.semibold))
-                            ForEach(Array(preflight.preparationActions.enumerated()), id: \.offset) { _, action in
-                                Text("• \(action)")
-                                    .font(.settingsSecondary)
-                                    .foregroundStyle(WovenPalette.mutedForeground)
-                            }
-                        }
-                        if preflight.canPrepare {
-                            Button(installing ? "Preparing host…" : "Prepare host") {
-                                model.prepareHost(hostName: trimmedHost, userName: trimmedUser, accessMode: accessMode)
-                            }
-                            .buttonStyle(WovenPrimaryButtonStyle())
                         }
                     }
                 }
@@ -442,7 +368,7 @@ struct SettingsWorkspacesView: View {
 
     private func inspectHost() {
         guard !trimmedHost.isEmpty else { return }
-        model.inspectHost(hostName: trimmedHost, userName: trimmedUser, accessMode: accessMode)
+        model.inspectHost(hostName: trimmedHost, userName: trimmedUser)
     }
 
     private var createCard: some View {
@@ -452,7 +378,7 @@ struct SettingsWorkspacesView: View {
             Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
 
             Button(installing ? "Creating…" : "Create workspace") {
-                model.installServer(hostName: trimmedHost, userName: trimmedUser, accessMode: accessMode)
+                model.installServer(hostName: trimmedHost, userName: trimmedUser)
             }
             .buttonStyle(WovenPrimaryButtonStyle())
             .disabled(installing || currentPreflight?.ready != true || !acknowledgedHostAccess)

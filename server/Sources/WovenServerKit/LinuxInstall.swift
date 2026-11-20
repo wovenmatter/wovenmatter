@@ -26,7 +26,7 @@ struct LinuxInstall: Sendable {
   /// A development instance offers the stand-in runtime there too.
   var standIn: Bool
 
-  var unit: String { "woven-server" + (instance.map { "-" + $0 } ?? "") }
+  var unit: String { Self.unitName(instance: instance) }
 
   /// The release this Mac carries for each architecture, from the app's resources.
   static var standardBundle: URL {
@@ -79,6 +79,8 @@ struct LinuxInstall: Sendable {
       Environment=WOVEN_RESOURCES=\(resources)
       Environment=WOVEN_NODE=\(resources)/node/bin/node
       Environment=PATH=\(path.isEmpty ? "/usr/local/bin:/usr/bin:/bin" : path):\(resources)/node/bin
+      StandardOutput=append:%h/.local/share/\(unit)/data/server.log
+      StandardError=append:%h/.local/share/\(unit)/data/server.log
       Restart=on-failure
       RestartSec=5
       # Another machine removed this one: stay stopped.

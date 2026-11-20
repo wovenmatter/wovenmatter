@@ -69,6 +69,7 @@ public final class WovenServer: Sendable {
   private let endpoint: MCPEndpoint
   private let scheduler: Scheduler
   private let titles: Titles
+  private let keepAwake: KeepAwake
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
   private let watcher = Mutex<Task<Void, Never>?>(nil)
@@ -123,6 +124,9 @@ public final class WovenServer: Sendable {
     let install: LinuxInstall? = nil
     #endif
     registerDevices(&routes, library: library, peers: peers, tailnet: options.tailnet, install: install)
+    registerServerControl(&routes, library: library, sessions: sessions, peers: peers, dataFolder: options.dataFolder,
+                          instance: options.instance, install: install)
+    let keepAwake = KeepAwake(library: library)
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -153,18 +157,20 @@ public final class WovenServer: Sendable {
     }
     let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
                              sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
-                             endpoint: endpoint, scheduler: scheduler, titles: titles)
+                             endpoint: endpoint, scheduler: scheduler, titles: titles, keepAwake: keepAwake)
     pending.server.withLock { $0 = server }
     await peers.start()
     await bots.start()
     await scheduler.start()
+    await keepAwake.start(board: sessions.board)
     server.watchLibrary()
     return server
   }
 
   private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
                github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint, scheduler: Scheduler,
-               titles: Titles) {
+               titles: Titles, keepAwake: KeepAwake) {
+    self.keepAwake = keepAwake
     self.endpoint = endpoint
     self.scheduler = scheduler
     self.titles = titles
@@ -203,6 +209,7 @@ public final class WovenServer: Sendable {
   public func stop() async {
     watcher.withLock { $0?.cancel() }
     await scheduler.stop()
+    await keepAwake.stop()
     for listener in listeners { await listener.stop() }
     endpoint.stop()
     await bots.stop()

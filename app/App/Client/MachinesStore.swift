@@ -92,13 +92,11 @@ final class MachinesStore {
 
     // MARK: Server on each machine
 
-    private(set) var serverStatuses: [String: MachineServerStatus] = [:]
+    /// Machines whose server this UI stopped, until it starts again.
+    private var stoppedMachineIDs: Set<String> = []
     /// Machines whose server is starting, stopping, updating or being removed.
     private(set) var busyMachineIDs: Set<String> = []
     private(set) var serverLogs: [String: String] = [:]
-    private(set) var browserChecks: [String: BrowserSandboxCheck] = [:]
-    private(set) var inspections: [String: RuntimeInspection] = [:]
-    private(set) var inspectionErrors: [String: String] = [:]
     /// Progress of the current install or server change, for the page that started it.
     private(set) var progress: String?
     var errorMessage: String?
@@ -113,18 +111,13 @@ final class MachinesStore {
     private(set) var hostPreflights: [String: HostPreflight] = [:]
     private(set) var inspectingHosts: Set<String> = []
     private(set) var installingHosts: Set<String> = []
-    private(set) var hostMessages: [String: String] = [:]
     var hostErrors: [String: String] = [:]
-    /// Preparation that downloads packages waits for the person to authorize it.
-    private(set) var pendingHostPreparation: HostPreflight?
 
     // MARK: This Mac's power policy
 
-    private(set) var power = MachinePower()
+    private(set) var idleSleepPolicy = IdleSleepPolicy()
     private(set) var isChangingIdleSleepPolicy = false
-    private(set) var isChangingClosedLidPolicy = false
     var idleSleepError: String?
-    var closedLidError: String?
 
     // MARK: Harnesses (see MachinesStore+Harnesses.swift)
 
@@ -213,25 +206,65 @@ final class MachinesStore {
 
     // MARK: Server
 
-    /// Its server is running while the UI is connected to it.
+    /// Its server is running while the UI is connected to it. This Mac's is
+    /// otherwise stopped; another machine's is stopped once this UI stopped it.
     func serverStatus(on machineID: String) -> MachineServerStatus? {
-        if let status = serverStatuses[machineID] { return status }
         guard let machine = machine(id: machineID) else { return nil }
-        return MachineServerStatus(state: machine.isOnline ? .running : .unavailable,
-                                   hostName: statuses.first { $0.machine.id == machineID }?.address)
+        let state: MachineServerStatus.State = machine.isOnline ? .running
+            : machine.isThisMachine || stoppedMachineIDs.contains(machineID) ? .stopped : .unavailable
+        return MachineServerStatus(state: state, hostName: statuses.first { $0.machine.id == machineID }?.address)
     }
     func isBusy(_ machineID: String) -> Bool { busyMachineIDs.contains(machineID) }
 
+    /// This Mac's server through launchd; a Linux machine's over SSH, through
+    /// this Mac's server. Returns once the UI is connected to it.
     func startServer(on machineID: String) async throws {
-        throw ClientError.notConnected
+        busyMachineIDs.insert(machineID)
+        defer { busyMachineIDs.remove(machineID) }
+        if machineID == thisMachine?.id {
+            try await ThisMachineServer.start()
+        } else {
+            guard let server, server.isConnected else { throw ClientError.notConnected }
+            _ = try await server.call(ControlServer(machineID: machineID, action: .start))
+        }
+        stoppedMachineIDs.remove(machineID)
+        for _ in 0..<60 where machine(id: machineID)?.isOnline != true {
+            try await Task.sleep(for: .milliseconds(500))
+        }
     }
 
+    /// Stopping a server with a turn running asks first, unless `confirmed`.
     func stopServer(on machineID: String, confirmed: Bool) async throws -> ServerStopResult {
-        throw ClientError.notConnected
+        try await control(.stop, on: machineID, confirmed: confirmed)
     }
 
-    func restartServer(on machineID: String) {
-        errorMessage = ClientError.notConnected.localizedDescription
+    func restartServer(on machineID: String, confirmed: Bool) async throws -> ServerStopResult {
+        try await control(.restart, on: machineID, confirmed: confirmed)
+    }
+
+    /// Through the machine's own server while the UI is connected to it, else
+    /// over SSH through this Mac's server.
+    private func control(_ action: ServerAction, on machineID: String, confirmed: Bool) async throws -> ServerStopResult {
+        guard let connection = connection(for: machineID) ?? server.flatMap({ $0.isConnected ? $0 : nil }) else {
+            throw ClientError.notConnected
+        }
+        busyMachineIDs.insert(machineID)
+        defer { busyMachineIDs.remove(machineID) }
+        let result = try await connection.call(ControlServer(machineID: machineID, action: action, confirmed: confirmed))
+        guard !result.confirmationRequired else { return ServerStopResult(confirmationRequired: true) }
+        if action == .stop {
+            stoppedMachineIDs.insert(machineID)
+            for _ in 0..<60 where machine(id: machineID)?.isOnline == true {
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        } else {
+            // The server goes down, then answers again.
+            try await Task.sleep(for: .seconds(2))
+            for _ in 0..<60 where machine(id: machineID)?.isOnline != true {
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        return ServerStopResult(confirmationRequired: false)
     }
 
     /// Replaces a Linux machine's server with the release this Mac carries.
@@ -254,22 +287,25 @@ final class MachinesStore {
         }
     }
 
+    /// Reads the end of the server's log, from its own server while the UI is
+    /// connected to it, else over SSH through this Mac's server.
     func loadLogs(on machineID: String) {
-        errorMessage = ClientError.notConnected.localizedDescription
-    }
-
-    func checkBrowserSandbox(on machineID: String) {
-        errorMessage = ClientError.notConnected.localizedDescription
-    }
-
-    /// Asks the machine's server to report its processes; `inspections` updates.
-    func refreshInspection(on machineID: String) {
-        inspectionErrors[machineID] = ClientError.notConnected.localizedDescription
+        guard let connection = connection(for: machineID) ?? server.flatMap({ $0.isConnected ? $0 : nil }) else {
+            return errorMessage = ClientError.notConnected.localizedDescription
+        }
+        Task {
+            do {
+                serverLogs[machineID] = try await connection.call(ServerLog(machineID: machineID))
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     // MARK: Find Devices
 
-    /// Lists tailnet computers without a Woven server, through this Mac's server.
+    /// Lists the tailnet's Linux computers without a Woven server, through this Mac's server.
     func findDevices() {
         guard !isFindingDevices else { return }
         guard let server else { return findDevicesError = ClientError.notConnected.localizedDescription }
@@ -280,10 +316,8 @@ final class MachinesStore {
                 hasSearchedDevices = true
             }
             do {
-                tailnetDevices = try await server.call(FindDevices()).compactMap { device in
-                    guard let platform = device.platform else { return nil }
-                    return TailnetDevice(id: device.name, name: device.name, hostName: device.name, address: device.address,
-                                         platform: platform == .linux ? .linux : .mac, isOnline: true)
+                tailnetDevices = try await server.call(FindDevices()).filter { $0.platform == .linux }.map { device in
+                    TailnetDevice(id: device.name, name: device.name, hostName: device.name, address: device.address)
                 }
                 findDevicesError = nil
             } catch {
@@ -292,33 +326,30 @@ final class MachinesStore {
         }
     }
 
-    /// Before installing on a Linux computer Find Devices listed, it is taken as
-    /// ready; installing checks it over SSH.
-    func inspectHost(hostName: String, userName: String?, accessMode: LinuxAccessMode?) {
-        let platform = tailnetDevices.first { $0.hostName == hostName }?.platform ?? .linux
-        guard platform == .linux else {
-            return hostErrors[hostName] = ClientError.notOffered("Checking another Mac").localizedDescription
-        }
+    /// Looks at a Linux computer over SSH, through this Mac's server. Changes nothing.
+    func inspectHost(hostName: String, userName: String?) {
+        guard let server else { return hostErrors[hostName] = ClientError.notConnected.localizedDescription }
+        guard !inspectingHosts.contains(hostName) else { return }
+        inspectingHosts.insert(hostName)
         hostErrors[hostName] = nil
-        hostPreflights[hostName] = HostPreflight(hostName: hostName, ready: true, architecture: platform.displayName,
-                                                 canPrepare: false)
-    }
-
-    func prepareHost(hostName: String, userName: String?, accessMode: LinuxAccessMode) {
-        hostErrors[hostName] = ClientError.notOffered("Preparing a host").localizedDescription
-    }
-
-    func authorizeHostPreparation() {
-        pendingHostPreparation = nil
-    }
-
-    func cancelHostPreparation() {
-        pendingHostPreparation = nil
+        Task {
+            defer { inspectingHosts.remove(hostName) }
+            do {
+                let facts = try await server.call(InspectHost(host: hostName, user: userName))
+                hostPreflights[hostName] = HostPreflight(hostName: hostName, ready: facts.problems.isEmpty,
+                                                        architecture: facts.architecture, limitations: facts.problems,
+                                                        hostStorageCapacityBytes: facts.storageCapacityBytes,
+                                                        hostStorageAvailableBytes: facts.storageAvailableBytes)
+            } catch {
+                hostPreflights[hostName] = nil
+                hostErrors[hostName] = error.localizedDescription
+            }
+        }
     }
 
     /// Installs and starts the server there over SSH, through this Mac's server,
     /// which replies once the new server answers. The machine then joins on its own.
-    func installServer(hostName: String, userName: String?, accessMode: LinuxAccessMode?) {
+    func installServer(hostName: String, userName: String?) {
         guard let server else { return hostErrors[hostName] = ClientError.notConnected.localizedDescription }
         guard !installingHosts.contains(hostName) else { return }
         installingHosts.insert(hostName)
@@ -340,11 +371,30 @@ final class MachinesStore {
 
     // MARK: Power
 
-    func setIdleSleepPolicy(_ policy: WorkPowerPolicy) async {
-        idleSleepError = ClientError.notConnected.localizedDescription
+    /// This Mac's idle-sleep policy, a setting its server carries out.
+    func loadIdleSleepPolicy() async {
+        guard let server, server.isConnected, let thisID = thisMachine?.id else { return }
+        let key = IdleSleepPolicy.settingKey(machineID: thisID)
+        do {
+            let value = try await server.call(ListSettings()).first { $0.key == key }?.value
+            idleSleepPolicy = (try? value?.decode(IdleSleepPolicy.self)) ?? IdleSleepPolicy()
+        } catch {
+            idleSleepError = error.localizedDescription
+        }
     }
 
-    func setClosedLidPolicy(_ policy: WorkPowerPolicy) async {
-        closedLidError = ClientError.notConnected.localizedDescription
+    func setIdleSleepPolicy(_ policy: IdleSleepPolicy) async {
+        guard let server, server.isConnected, let thisID = thisMachine?.id else {
+            return idleSleepError = ClientError.notConnected.localizedDescription
+        }
+        isChangingIdleSleepPolicy = true
+        defer { isChangingIdleSleepPolicy = false }
+        do {
+            _ = try await server.call(SetSetting(key: IdleSleepPolicy.settingKey(machineID: thisID), value: WovenProtocol.JSONValue(encoding: policy)))
+            idleSleepPolicy = policy
+            idleSleepError = nil
+        } catch {
+            idleSleepError = error.localizedDescription
+        }
     }
 }
