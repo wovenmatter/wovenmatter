@@ -27,8 +27,15 @@ final class BotChatStore {
     private(set) var stopping = false
     var error: String?
 
+    /// Reading the library's copy, which holds older items than those shown.
+    private(set) var hasEarlierSaved = false
+
     /// Subscribed to the runtime's conversation, not reading the library's copy.
     private var isLive = false
+    /// The library's copy is read a page at a time, newest first, as chats are.
+    static let savedPage = 200
+    @ObservationIgnored private var savedSessionID: String?
+    @ObservationIgnored private var oldestSaved: Int?
     @ObservationIgnored private weak var bots: BotsStore?
     @ObservationIgnored private var viewers = 0
     @ObservationIgnored private var following: Task<Void, Never>?
@@ -93,6 +100,8 @@ final class BotChatStore {
         following?.cancel()
         following = nil
         isLive = false
+        hasEarlierSaved = false
+        savedSessionID = nil
     }
 
     private func opened(_ reply: BotsOpened) {
@@ -143,16 +152,34 @@ final class BotChatStore {
             return
         }
         do {
-            let items = try await server.call(SessionItems(sessionID: chat.session.id))
+            let items = try await server.call(SessionItems(sessionID: chat.session.id, beforeSequence: .max, limit: Self.savedPage))
             guard !Task.isCancelled else { return }
             viewedID = chat.conversationID
             state = PiBotConversationState()
             state.entries = PiBotDisplayEntry.saved(items, conversationID: chat.conversationID)
+            savedSessionID = chat.session.id
+            oldestSaved = items.first?.sequence
+            hasEarlierSaved = (items.first?.sequence ?? 1) > 1
             error = nil
         } catch {
             self.error = error.localizedDescription
         }
         loading = false
+    }
+
+    /// Pages in older items of the library's copy.
+    func loadEarlierSaved() async {
+        guard !isLive, hasEarlierSaved, let sessionID = savedSessionID, let oldest = oldestSaved, let viewedID,
+              let server = bots?.library else { return }
+        do {
+            let items = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: oldest, limit: Self.savedPage))
+            guard savedSessionID == sessionID else { return }
+            state.entries = PiBotDisplayEntry.saved(items, conversationID: viewedID) + state.entries
+            oldestSaved = items.first?.sequence ?? oldest
+            hasEarlierSaved = (items.first?.sequence ?? 1) > 1
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     /// Reports whether the server took the message, so the composer keeps it otherwise.
@@ -236,6 +263,8 @@ final class ForumRoomStore {
     @ObservationIgnored private var viewers = 0
     @ObservationIgnored private var following: Task<Void, Never>?
     @ObservationIgnored private var nextPendingID = 0
+    /// The library's copy, while reading it: its session and the oldest item shown.
+    @ObservationIgnored private var saved: (sessionID: String, oldest: Int)?
 
     init(key: BotConversationKey, bots: BotsStore) {
         self.key = key
@@ -291,6 +320,7 @@ final class ForumRoomStore {
         following?.cancel()
         following = nil
         isLive = false
+        saved = nil
     }
 
     private func opened(_ reply: BotsOpened) {
@@ -332,11 +362,14 @@ final class ForumRoomStore {
             return
         }
         do {
-            let items = try await server.call(SessionItems(sessionID: room.session.id))
+            let items = try await server.call(SessionItems(sessionID: room.session.id, beforeSequence: .max,
+                                                           limit: BotChatStore.savedPage))
             guard !Task.isCancelled else { return }
             roomID = room.conversationID
             mainRoomID = bots.savedForumRoom(roomID: nil)?.conversationID
             state = PiBotForumRoomState(posts: PiBotForumPost.saved(items, roomID: room.conversationID))
+            saved = items.first.map { (room.session.id, $0.sequence) }
+            state.hasEarlier = (items.first?.sequence ?? 1) > 1
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -374,7 +407,8 @@ final class ForumRoomStore {
 
     /// Fetches the page of posts before the oldest one shown.
     func loadEarlier() async {
-        guard isLive, !loadingEarlier, state.hasEarlier, let roomID, let oldest = state.posts.first?.id, let bots else { return }
+        guard isLive else { return await loadEarlierSaved() }
+        guard !loadingEarlier, state.hasEarlier, let roomID, let oldest = state.posts.first?.id, let bots else { return }
         loadingEarlier = true
         defer { loadingEarlier = false }
         do {
@@ -383,6 +417,23 @@ final class ForumRoomStore {
             guard self.roomID == roomID else { return }
             state.posts = PiBotForumRoomState.merge(state.posts, page.posts.map(PiBotForumPost.init))
             state.hasEarlier = page.hasEarlier && !page.posts.isEmpty
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Pages in older posts of the library's copy.
+    private func loadEarlierSaved() async {
+        guard !loadingEarlier, state.hasEarlier, let saved, let roomID, let server = bots?.library else { return }
+        loadingEarlier = true
+        defer { loadingEarlier = false }
+        do {
+            let items = try await server.call(SessionItems(sessionID: saved.sessionID, beforeSequence: saved.oldest,
+                                                           limit: BotChatStore.savedPage))
+            guard self.saved?.sessionID == saved.sessionID else { return }
+            state.posts = PiBotForumRoomState.merge(state.posts, PiBotForumPost.saved(items, roomID: roomID))
+            self.saved = (saved.sessionID, items.first?.sequence ?? saved.oldest)
+            state.hasEarlier = (items.first?.sequence ?? 1) > 1
         } catch {
             self.error = error.localizedDescription
         }

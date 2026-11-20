@@ -533,11 +533,12 @@ private struct BotConversationPane: View {
             )
         } else {
             let hidden = max(0, entries.count - shownMessages)
-            if hidden > 0, let firstShown = entries[hidden...].first {
+            if hidden > 0 || controller.hasEarlierSaved, let firstShown = entries[hidden...].first {
                 Button("Show earlier messages") {
                     following = false
                     shownMessages += Self.messagePage
                     Task { @MainActor in
+                        if hidden == 0 { await controller.loadEarlierSaved() }
                         await Task.yield()
                         proxy.scrollTo(firstShown.id, anchor: .top)
                     }

@@ -111,8 +111,8 @@ public struct DeleteSession: Request {
 
 /// A session's saved items from the library, in order. Any server can answer
 /// for any machine's session. With `beforeSequence`, the newest items before
-/// it instead, for paging back. A page with a limit or `beforeSequence` also
-/// stops once its size is large, so it may hold fewer than `limit`.
+/// it instead, for paging back. A page also stops once its size is large, so
+/// it may hold fewer than `limit`.
 public struct SessionItems: Request {
   public static let method = "sessions.items"
   public typealias Reply = [SessionItem]
