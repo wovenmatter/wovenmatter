@@ -396,8 +396,11 @@ func anotherServerSendsUIsToTheHomeMachineAndForwardsCalls() async throws {
 // MARK: Transfer
 
 /// Two linked servers; the first is the bots' home, its stand-in runtime
-/// holding one bot with a chat, a turn's usage, a Forum post and files.
+/// holding one bot with a chat, a turn's usage, a Forum post, a visual reply
+/// it published in the Forum (its HTML in the first server's content store),
+/// a Forum turn's usage, and files.
 private struct TransferSetup {
+  static let visualReplyHTML = Data("<h1>Build times</h1>".utf8)
   let a: TestServer, b: TestServer
   let runtimeA: StandInBotsRuntime, runtimeB: StandInBotsRuntime
   let filesA: StandInFiles, filesB: StandInFiles
@@ -416,6 +419,7 @@ private struct TransferSetup {
     await b.server.discoverMachines()
     let bots = a.folder.appendingPathComponent("bots", isDirectory: true)
     try FileManager.default.createDirectory(at: bots, withIntermediateDirectories: true)
+    let digest = try await a.server.library.storeContent(visualReplyHTML)
     try Data("""
       [{"method": "mirror.bot", "params": {
          "bot": {"id": "b1", "name": "Ada", "kind": "bot", "manager": false, "orchestrator": false, "deleted": false,
@@ -430,8 +434,10 @@ private struct TransferSetup {
          "upTo": 6}},
        {"method": "mirror.forum", "params": {
          "rooms": [{"roomId": 1, "createdAt": "2026-11-01T10:00:00.000Z"}],
-         "posts": [{"id": 7, "roomId": 1, "author": "bot", "botId": "b1", "name": "Ada", "text": "Morning", "createdAt": 3000}],
-         "upTo": 7}}]
+         "posts": [{"id": 7, "roomId": 1, "author": "bot", "botId": "b1", "name": "Ada", "text": "Morning", "createdAt": 3000},
+                   {"id": 8, "roomId": 1, "author": "bot", "botId": "b1", "name": "Ada", "text": "",
+                    "visualReply": {"title": "Build times", "height": 320, "digest": "\(digest)", "size": 20}, "createdAt": 3100}],
+         "upTo": 8}}]
       """.utf8).write(to: bots.appendingPathComponent("bots.json"))
     try Data("{}".utf8).write(to: bots.appendingPathComponent("settings.json"))
     filesA.volumes.withLock { $0["b1"] = Data("Ada's files".utf8) }
@@ -491,6 +497,26 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
     let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
     #expect(usage.totals.requests == 2)
   }
+  // The Forum's visual reply is one small item on both, and its HTML came to the new home.
+  let digest = Library.digest(of: TransferSetup.visualReplyHTML)
+  let expected: [ItemContent] = [.assistantMessage(text: "Morning"),
+                                 .htmlPage(HTMLPage(title: "Build times", height: 320, digest: digest, size: 20))]
+  for client in [setup.onA, setup.onB] {
+    let forum = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .forum })
+    var posts: [SessionItem] = []
+    for _ in 0..<200 {
+      posts = try await client.call(SessionItems(sessionID: forum.session.id))
+      if posts.map(\.content) == expected { break }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+    #expect(posts.map(\.content) == expected)
+    #expect(posts.last?.author == ItemAuthor(botID: "b1", name: "Ada"))
+  }
+  for _ in 0..<200 {
+    if try await b.server.library.hasContent(digest) { break }
+    try await Task.sleep(for: .milliseconds(25))
+  }
+  #expect(try await b.server.library.content(digest)?.data == TransferSetup.visualReplyHTML)
 
   // And back: the first home saves them again under new sessions, though it deleted its old ones.
   _ = try await setup.onB.call(TransferBots(targetMachineID: a.server.machineID))

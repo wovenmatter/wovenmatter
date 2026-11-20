@@ -362,6 +362,8 @@ public enum BotsWire {
     public var botId: String?
     public var name: String
     public var text: String
+    /// A visual reply the bot published here with `render_html`; the post has no text then.
+    public var visualReply: HTMLPage?
     public var mentions: [String]?
     public var scheduled: Bool?
     public var auto: Bool?

@@ -72,17 +72,12 @@ struct BotsHostInterface: Sendable {
     case "mirror.bot":
       let push = try params.decode(MirrorBot.self)
       try await library.saveBotMirror(BotsMirrorMapping.bot(push, home: sessions))
-      // After a transfer the chats' pages are still on the old home: fetched
-      // now, so this home holds them before the old one goes away.
-      let pages = push.items.compactMap(\.page?.digest)
-      if !pages.isEmpty {
-        Task { [library, peers] in
-          for digest in pages where (try? await library.hasContent(digest)) == false { _ = await peers.fetchContent(digest) }
-        }
-      }
+      fetchMissing(push.items.compactMap(\.page?.digest))
       return .object([:])
     case "mirror.forum":
-      try await library.saveBotMirror(BotsMirrorMapping.forum(try params.decode(MirrorForum.self), home: sessions))
+      let push = try params.decode(MirrorForum.self)
+      try await library.saveBotMirror(BotsMirrorMapping.forum(push, home: sessions))
+      fetchMissing(push.posts.compactMap(\.visualReply?.digest))
       return .object([:])
     case "mirror.purge":
       guard let botID = params["botId"]?.string else { throw RuntimeError.failed("mirror.purge needs a botId.") }
@@ -90,6 +85,16 @@ struct BotsHostInterface: Sendable {
       return .object([:])
     default:
       throw RuntimeError.failed("Woven Matter does not offer \(method).")
+    }
+  }
+
+  /// After a transfer the visual replies of the chats and the Forum are still
+  /// on the old home: fetched now, so this home holds them before the old one
+  /// goes away.
+  private func fetchMissing(_ digests: [String]) {
+    guard !digests.isEmpty else { return }
+    Task { [library, peers] in
+      for digest in digests where (try? await library.hasContent(digest)) == false { _ = await peers.fetchContent(digest) }
     }
   }
 
@@ -216,6 +221,8 @@ struct MirrorForum: Decodable, Sendable {
     var botId: String?
     var name: String
     var text: String
+    /// A visual reply the bot published in the room with `render_html`.
+    var visualReply: HTMLPage?
     var createdAt: Double
   }
 
@@ -314,7 +321,7 @@ enum BotsMirrorMapping {
                               createdAt: date(room.createdAt))
       }
       let title = room.title.flatMap { $0.isEmpty ? nil : $0 }
-        ?? push.posts.first { $0.id == parentPost }.flatMap { Library.threadTitle(fromPost: $0.text) }
+        ?? push.posts.first { $0.id == parentPost }.flatMap { Library.threadTitle(fromPost: $0.visualReply?.title ?? $0.text) }
       return BotMirror.Chat(sessionID: session, botID: nil, conversationID: room.roomId, kind: .forumThread,
                             parentConversationID: main, title: title, parentPostID: parentPost,
                             pinned: room.pinned ?? false, createdAt: date(room.createdAt))
@@ -329,7 +336,8 @@ enum BotsMirrorMapping {
       }
       return BotMirror.Item(
         id: "\(session):\(post.id)", sessionID: session,
-        content: post.author == "bot" ? .assistantMessage(text: post.text) : .userMessage(text: post.text),
+        content: post.visualReply.map(ItemContent.htmlPage)
+          ?? (post.author == "bot" ? .assistantMessage(text: post.text) : .userMessage(text: post.text)),
         author: author, createdAt: Date(timeIntervalSince1970: post.createdAt / 1000))
     }
     return BotMirror(bot: nil, chats: chats, items: items, checkpoint: "forum", upTo: push.upTo)

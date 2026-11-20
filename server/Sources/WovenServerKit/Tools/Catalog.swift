@@ -185,9 +185,6 @@ private let pageTools: [WovenTool] = [
                    "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")],
                   required: ["html"]),
     run: { call in
-      guard call.caller.inForum != true else {
-        throw ToolFailure("A page cannot be shown in the Forum. Show it in one of your own chats, or say it in words.")
-      }
       let html = try call.arguments.string("html")
       let given = call.arguments.optionalString("title")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       let title = given.isEmpty ? HTMLPages.title(of: html) ?? "" : given
@@ -210,8 +207,10 @@ private let pageTools: [WovenTool] = [
       let data = Data(page.html.utf8)
       let published = HTMLPage(title: title, height: height, digest: try await tools.library.storeContent(data),
                                size: Int64(data.count))
-      let shown = title.isEmpty ? "Shown in the chat." : "Shown in the chat: “\(title)”."
-      // A bot's chat is its runtime's own; the page reaches it with the call's result.
+      let place = call.caller.inForum == true ? "the Forum" : "the chat"
+      let shown = title.isEmpty ? "Shown in \(place)." : "Shown in \(place): “\(title)”."
+      // A bot's chat and Forum seat are its runtime's own; the visual reply reaches it with the
+      // call's result, and from a seat the runtime posts it to the Forum.
       guard let sessionID = call.caller.sessionID else {
         let note = page.missingImages.isEmpty ? "" : " Local files are not embedded from a bot, so these stay as written "
           + "and will not show: \(page.missingImages.joined(separator: ", ")). Put images in the page as data URIs."
