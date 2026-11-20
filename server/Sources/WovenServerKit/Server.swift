@@ -64,7 +64,7 @@ public final class WovenServer: Sendable {
   private let peers: PeerSync
   private let secrets: Secrets
   private let github: GitHub
-  private let bots: BotsHost
+  let bots: BotsHost
   private let listeners: [Listener]
   private let endpoint: MCPEndpoint
   private let scheduler: Scheduler
@@ -109,7 +109,7 @@ public final class WovenServer: Sendable {
     registerUsage(&routes, library: library, secrets: secrets)
     let bots = BotsHost(library: library, secrets: secrets, peers: peers, dataFolder: options.dataFolder,
                         hosting: options.botsHosting)
-    registerBots(&routes, bots: bots, library: library)
+    registerBots(&routes, bots: bots, library: library, sessions: sessions)
     registerBotsTransfer(&routes, bots: bots)
     let tools = WovenTools(library: library, sessions: sessions, databases: databases, peers: peers, bots: bots)
     registerTools(&routes, tools: tools)
@@ -300,8 +300,9 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     return Done()
   }
   router.on(SessionItems.self) { request, _ in
+    // Every page stops once its size is large, with or without a limit.
     try await library.items(sessionID: request.sessionID, afterSequence: request.afterSequence,
-                            beforeSequence: request.beforeSequence, limit: request.limit)
+                            beforeSequence: request.beforeSequence, limit: request.limit ?? .max)
   }
   router.subscription(SubscribeSession.self) { request, _ in
     try await sessions.host(for: request.sessionID).subscribe()
@@ -335,7 +336,11 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     try await library.settings()
   }
   router.on(SetSetting.self) { request, _ in
-    try await library.setSetting(request.key, to: request.value)
+    // Only `ChooseBotsHome` and a transfer write where the bots live.
+    guard request.key != botsHomeSetting else {
+      throw ProtocolError(.badRequest, "The bots' home is chosen once, then changed by moving the bots.")
+    }
+    return try await library.setSetting(request.key, to: request.value)
   }
 
   router.subscription(SubscribeLibrary.self) { _, _ in

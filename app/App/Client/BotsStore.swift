@@ -115,16 +115,16 @@ final class BotsStore {
         return homeMachine.isThisMachine ? "This Mac" : homeMachine.name
     }
 
-    /// Makes `machineID` the bots' home. Only offered while none is chosen: moving the bots is a
-    /// transfer, not a new home.
+    /// Makes `machineID` the bots' first home. This Mac's server refuses while any machine it
+    /// reaches knows of bots: moving the bots is a transfer, not a new home.
     func chooseHome(_ machineID: String) async {
         guard homeMachineID == nil else { return }
         do {
-            guard let settings else { throw ClientError.notConnected }
-            try await settings.set(botsHomeSetting, to: .string(machineID))
+            guard let library else { throw ClientError.notConnected }
+            _ = try await library.call(ChooseBotsHome(machineID: machineID))
             loadError = nil
         } catch {
-            loadError = error.localizedDescription
+            loadError = (error as? ProtocolError)?.message ?? error.localizedDescription
         }
     }
 

@@ -62,6 +62,18 @@ private final class Counter: Sendable {
   func withLock<T>(_ body: (inout Int) -> T) -> T { value.withLock { body(&$0) } }
 }
 
+/// When the other side last sent anything.
+private final class LastHeard: Sendable {
+  private let value = Mutex(ContinuousClock.now)
+  func now() { value.withLock { $0 = .now } }
+  var silence: Duration { ContinuousClock.now - value.withLock { $0 } }
+}
+
+/// How often each side pings, and how long a silent connection is kept.
+/// A peer that went to sleep or lost power is dropped after `idleLimit`.
+let pingInterval = Duration.seconds(15)
+let idleLimit = Duration.seconds(45)
+
 /// One WebSocket connection carrying protocol messages as text frames.
 final class WebSocketTransport: MessageTransport {
   let incoming: AsyncThrowingStream<String, any Error>
@@ -79,6 +91,7 @@ final class WebSocketTransport: MessageTransport {
     let masked = isClient
     let queued = queued
     let waiters = waiters
+    let heard = LastHeard()
     Task {
       do {
         try await channel.executeThenClose { inbound, writer in
@@ -101,6 +114,7 @@ final class WebSocketTransport: MessageTransport {
             }
             group.addTask {
               for try await frame in inbound {
+                heard.now()
                 switch frame.opcode {
                 case .text:
                   received.yield(String(buffer: frame.unmaskedData))
@@ -112,6 +126,14 @@ final class WebSocketTransport: MessageTransport {
                 default:
                   continue
                 }
+              }
+            }
+            group.addTask {
+              // Pings, and ends a connection that has been silent too long.
+              while heard.silence < idleLimit {
+                try await Task.sleep(for: pingInterval)
+                outbound.yield(Outgoing(frame: WebSocketFrame(fin: true, opcode: .ping, maskKey: masked ? .random() : nil,
+                                                              data: ByteBuffer()), waiter: nil))
               }
             }
             // Whichever side ends first ends the connection.

@@ -100,6 +100,9 @@ events. Its types are defined once in `protocol/`.
   **directly to the owning machine's server** for the live view of anything
   that runs there. Its own server does not relay live streams.
 
+Every connection is pinged every 15 seconds and closed after 45 seconds of
+silence, so a machine that slept or lost power is noticed.
+
 Two machines on different app releases do not sync. The UI says which machine
 needs updating.
 
@@ -261,7 +264,11 @@ The calendar page shows and adds tasks and events.
 
 There is one set of bots and one Forum. They live on one machine that the
 person chooses from their Woven machines; that choice is a synced setting, and
-only that machine's server runs the bots runtime.
+only that machine's server runs the bots runtime. The setting is never written
+as an ordinary setting. The first home is chosen through a request that a
+server accepts only while its library names no home and holds no bots, and
+after every machine it reaches has said the same. Every later change is a
+transfer.
 
 - Any UI talks to the bots and the Forum by connecting directly to the home
   machine's server. A server forwards a bots call to the home machine only when
@@ -283,6 +290,17 @@ only that machine's server runs the bots runtime.
   home: the target removes what it received and the old home starts them
   again. Each side records its step, so a restart ends in one of those two
   states. Sign-ins that are per machine are made again on the new one.
+- Until the switch, the old home asks the target how it stands every few
+  seconds. A target that hears nothing of the transfer for a minute gives it
+  back. An old home that cannot reach the target starts the bots again only
+  once the target has said it gave the transfer back, or 90 seconds after it
+  last asked it anything else. Once the target has begun to switch, nothing
+  gives the transfer back, and an old home that lost the reply waits for the
+  target's answer.
+- Each new home saves the chats under sessions of its own and carries over
+  what the person set on the old ones: title, Trash, folder, pin and read
+  state. Deleting a bot chat deletes it in the bots runtime, so it never comes
+  back.
 
 ## Sign-ins and secrets
 

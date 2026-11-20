@@ -277,17 +277,44 @@ extension Library {
       let bots = try db.query("SELECT id FROM bots WHERE machine_id = ? AND deleted = 0", [.text(machineID)])
         .compactMap { $0.text("id") }
       let chats = try db.query("""
-        SELECT c.bot_id, c.conversation_id FROM bot_chats c JOIN sessions s ON s.id = c.session_id
+        SELECT c.bot_id, c.conversation_id, s.title, s.archived, s.archived_at, s.folder_id, s.pinned, s.read_at, s.created_at
+        FROM bot_chats c JOIN sessions s ON s.id = c.session_id
         WHERE s.machine_id = ? AND s.deleted = 0 AND c.deleted = 0
         """, [.text(machineID)]).map { row in
         let bot = row.text("bot_id") ?? ""
-        return BotsTransferExpected.Chat(botID: bot.isEmpty ? nil : bot, conversationID: Int(row.integer("conversation_id") ?? 0))
+        let session = BotsTransferExpected.CarriedSession(
+          title: row.text("title") ?? "", archived: row.bool("archived"), archivedAt: row.integer("archived_at") ?? 0,
+          folderID: row.text("folder_id"), pinned: row.bool("pinned"), readAt: row.integer("read_at") ?? 0,
+          createdAt: row.integer("created_at") ?? 0)
+        return BotsTransferExpected.Chat(botID: bot.isEmpty ? nil : bot, conversationID: Int(row.integer("conversation_id") ?? 0),
+                                         session: session)
       }
       var checkpoints: [String: Int64] = [:]
       for row in try db.query("SELECT key, entry FROM bot_checkpoints") {
         if let key = row.text("key") { checkpoints[key] = row.integer("entry") ?? 0 }
       }
       return BotsTransferExpected(bots: bots, chats: chats, checkpoints: checkpoints)
+    }
+  }
+
+  /// Before the bots start on a new home: a session for each chat the old
+  /// home held, under the id this machine will save it as (starting
+  /// `sessions`), with what the person set on the old one. The bots' pushes
+  /// then fill it.
+  public func carryBotChats(_ chats: [BotsTransferExpected.Chat], sessions: String) async throws {
+    let machineID = machineID
+    try await write { writer in
+      for chat in chats {
+        let id = chat.botID.map { "bot:\(sessions):\($0):\(chat.conversationID)" } ?? "forum:\(sessions):\(chat.conversationID)"
+        guard try writer.row("sessions", id) == nil else { continue }
+        let carried = chat.session
+        try writer.put("sessions", id: id, [
+          "machine_id": .text(machineID), "runtime": .text(RuntimeKind.bots.rawValue), "title": .text(carried.title),
+          "archived": .integer(carried.archived ? 1 : 0), "archived_at": .integer(carried.archivedAt),
+          "folder_id": carried.folderID.map(SQLValue.text) ?? .null, "pinned": .integer(carried.pinned ? 1 : 0),
+          "read_at": .integer(carried.readAt), "created_at": .integer(carried.createdAt),
+        ])
+      }
     }
   }
 

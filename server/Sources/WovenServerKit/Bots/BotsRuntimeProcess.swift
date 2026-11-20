@@ -23,6 +23,9 @@ struct BotsHosting: Sendable {
   var launch: @Sendable (_ config: URL, _ log: URL) throws -> any BotsRuntimeProcess
   /// Writes each bot's files out of the engine and back, for a transfer.
   var files: BotsFiles = .node
+  /// Called once a transfer's target has begun to make itself the home,
+  /// before it writes the setting. Tests pause here.
+  var committing: @Sendable () async -> Void = {}
 
   static let standard = BotsHosting(engine: { standardBotsEngine(dataFolder: $0) },
                                     launch: { try NodeBotsRuntime(config: $0, log: $1) })

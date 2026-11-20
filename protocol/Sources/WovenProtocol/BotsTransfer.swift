@@ -70,9 +70,37 @@ public struct BotsTransferExpected: Codable, Sendable, Hashable {
     /// Nil for a Forum room.
     public var botID: String?
     public var conversationID: Int
-    public init(botID: String?, conversationID: Int) {
+    /// The old home's session for it, whose state the new home's session takes on.
+    public var session: CarriedSession
+
+    public init(botID: String?, conversationID: Int, session: CarriedSession) {
       self.botID = botID
       self.conversationID = conversationID
+      self.session = session
+    }
+  }
+
+  /// What the person set on a bot chat's session: carried to the session the
+  /// new home saves the chat under.
+  public struct CarriedSession: Codable, Sendable, Hashable {
+    public var title: String
+    public var archived: Bool
+    public var archivedAt: Int64
+    public var folderID: String?
+    public var pinned: Bool
+    /// The newest item seen, by its `createdAt` in milliseconds.
+    public var readAt: Int64
+    public var createdAt: Int64
+
+    public init(title: String, archived: Bool, archivedAt: Int64, folderID: String?, pinned: Bool, readAt: Int64,
+                createdAt: Int64) {
+      self.title = title
+      self.archived = archived
+      self.archivedAt = archivedAt
+      self.folderID = folderID
+      self.pinned = pinned
+      self.readAt = readAt
+      self.createdAt = createdAt
     }
   }
 
@@ -145,7 +173,9 @@ public struct AbortReceivedBots: Request {
 }
 
 /// Whether the target made itself home for a transfer, for an old home that
-/// lost the commit's reply.
+/// lost the commit's reply. While the bots run on the target before the
+/// switch, the old home also sends it every few seconds: a target that hears
+/// nothing of its transfer for a minute gives it back.
 public struct ReceivedBotsState: Request {
   public static let method = "bots.transfer.state"
   public typealias Reply = ReceivedBotsOutcome
@@ -156,7 +186,7 @@ public struct ReceivedBotsState: Request {
 public enum ReceivedBotsOutcome: String, Codable, Sendable, Hashable {
   /// The target is the home.
   case committed
-  /// The target still holds the transfer, not yet committed.
+  /// The target still holds the transfer, not yet committed, or is still giving it back.
   case pending
   /// The target holds nothing of it (aborted, or never received).
   case none

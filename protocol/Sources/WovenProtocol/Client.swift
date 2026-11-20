@@ -22,6 +22,12 @@ public struct ConnectionClosed: Error, Sendable {
   public init() {}
 }
 
+/// No reply arrived within the call's time limit. The other side may still
+/// have carried the request out.
+public struct CallTimedOut: Error, Sendable {
+  public init() {}
+}
+
 /// A live subscription: the reply, then events until it ends.
 public struct ClientSubscription<S: Subscription>: Sendable {
   public let id: String
@@ -69,8 +75,9 @@ public actor Client {
     }
   }
 
-  public func call<R: Request>(_ request: R) async throws -> R.Reply {
-    try await send(R.method, JSONValue(encoding: request), sink: nil).value.decode(R.Reply.self)
+  /// Sends a request and waits for its reply; with `timeout`, for at most that long.
+  public func call<R: Request>(_ request: R, timeout: Duration? = nil) async throws -> R.Reply {
+    try await send(R.method, JSONValue(encoding: request), sink: nil, timeout: timeout).value.decode(R.Reply.self)
   }
 
   /// Opens a subscription. Events that arrive with or right after the reply
@@ -96,11 +103,19 @@ public actor Client {
     closed(ConnectionClosed())
   }
 
-  private func send(_ method: String, _ params: JSONValue, sink: Sink?) async throws -> (id: String, value: JSONValue) {
+  private func send(_ method: String, _ params: JSONValue, sink: Sink?,
+                    timeout: Duration? = nil) async throws -> (id: String, value: JSONValue) {
     if let failure { throw failure }
     nextID += 1
     let id = String(nextID)
     if let sink { sinks[id] = sink }
+    let timer = timeout.map { limit in
+      Task { [weak self] in
+        try await Task.sleep(for: limit)
+        await self?.expire(id)
+      }
+    }
+    defer { timer?.cancel() }
     do {
       let value = try await withCheckedThrowingContinuation { continuation in
         pending[id] = continuation
@@ -116,6 +131,10 @@ public actor Client {
       sinks[id] = nil
       throw error
     }
+  }
+
+  private func expire(_ id: String) {
+    pending.removeValue(forKey: id)?.resume(throwing: CallTimedOut())
   }
 
   private func receive(_ text: String) {

@@ -25,20 +25,25 @@ private final class StandInBotsRuntime: Sendable {
     var received: [JSONValue] = []
     var hostReplies: [String: CheckedContinuation<JSONValue, any Error>] = [:]
     var listener: Listener?
+    var launches = 0
   }
 
   private let state = Mutex(State())
 
   var hosting: BotsHosting { hosting(files: StandInFiles()) }
 
-  func hosting(files: StandInFiles) -> BotsHosting {
-    BotsHosting(engine: { _ in StandInEngine() }, launch: { config, _ in try self.launch(config) }, files: files.files)
+  func hosting(files: StandInFiles, committing: Gate? = nil) -> BotsHosting {
+    BotsHosting(engine: { _ in StandInEngine() }, launch: { config, _ in try self.launch(config) }, files: files.files,
+                committing: { await committing?.pass() })
   }
 
   var received: [JSONValue] { state.withLock { $0.received } }
+  /// How many times the runtime was started.
+  var launches: Int { state.withLock { $0.launches } }
   var connected: Bool { state.withLock { $0.transport != nil } }
 
   private func launch(_ config: URL) throws -> any BotsRuntimeProcess {
+    state.withLock { $0.launches += 1 }
     let values = try Wire.decoder.decode(JSONValue.self, from: Data(contentsOf: config))
     let socket = values["socket"]?.string ?? ""
     let database = URL(fileURLWithPath: values["dataDir"]?.string ?? "").appendingPathComponent("bots.json")
@@ -105,12 +110,57 @@ private final class StandInBotsRuntime: Sendable {
   }
 }
 
+/// A point a transfer step stops at until the test lets it pass.
+private final class Gate: Sendable {
+  private let state = Mutex<(open: Bool, arrived: Bool, passing: [CheckedContinuation<Void, Never>],
+                             watching: [CheckedContinuation<Void, Never>])>((false, false, [], []))
+
+  /// Waits here until `open`.
+  func pass() async {
+    await withCheckedContinuation { continuation in
+      let (open, watchers) = state.withLock { state in
+        state.arrived = true
+        defer { state.watching = [] }
+        if !state.open { state.passing.append(continuation) }
+        return (state.open, state.watching)
+      }
+      for watcher in watchers { watcher.resume() }
+      if open { continuation.resume() }
+    }
+  }
+
+  /// Returns once a step has reached the gate.
+  func reached() async {
+    await withCheckedContinuation { continuation in
+      let arrived = state.withLock { state in
+        if !state.arrived { state.watching.append(continuation) }
+        return state.arrived
+      }
+      if arrived { continuation.resume() }
+    }
+  }
+
+  func open() {
+    let waiting = state.withLock { state in
+      state.open = true
+      defer { state.passing = [] }
+      return state.passing
+    }
+    for continuation in waiting { continuation.resume() }
+  }
+}
+
 /// A container engine's bot files, as a transfer writes them out and reads them in.
 private final class StandInFiles: Sendable {
   let volumes = Mutex<[String: Data]>([:])
   let failImport: Bool
+  /// Reading files in stops here.
+  let importing: Gate?
 
-  init(failImport: Bool = false) { self.failImport = failImport }
+  init(failImport: Bool = false, importing: Gate? = nil) {
+    self.failImport = failImport
+    self.importing = importing
+  }
 
   var files: BotsFiles {
     BotsFiles { action, _, folder in
@@ -119,6 +169,7 @@ private final class StandInFiles: Sendable {
         try FileManager.default.createDirectory(at: folder!, withIntermediateDirectories: true)
         for (bot, data) in self.volumes.withLock({ $0 }) { try data.write(to: folder!.appendingPathComponent(bot + ".tar")) }
       case .import:
+        await self.importing?.pass()
         if self.failImport { throw RuntimeError.failed("The engine refused the files.") }
         for name in try FileManager.default.contentsOfDirectory(atPath: folder!.path) where name.hasSuffix(".tar") {
           let data = try Data(contentsOf: folder!.appendingPathComponent(name))
@@ -166,14 +217,15 @@ private struct TestServer {
   let socket: String
 
   static func start(name: String, runtime: StandInBotsRuntime, tailnet: StandInTailnet = StandInTailnet(),
-                    listen: Bool = false, files: StandInFiles = StandInFiles()) async throws -> TestServer {
+                    listen: Bool = false, files: StandInFiles = StandInFiles(),
+                    committing: Gate? = nil) async throws -> TestServer {
     let folder = URL(fileURLWithPath: "/tmp/wvb-\(UUID().uuidString.prefix(8))", isDirectory: true)
     let socket = folder.path + ".sock"
     var options = WovenServer.Options(
       dataFolder: folder, socketPath: socket, listen: listen ? ("127.0.0.1", 0) : nil, appVersion: appVersion,
       machineName: name, tailnet: tailnet, runtimes: [StandInRuntime()], discoveryInterval: .seconds(3600))
     options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
-    options.botsHosting = runtime.hosting(files: files)
+    options.botsHosting = runtime.hosting(files: files, committing: committing)
     return TestServer(server: try await WovenServer.start(options), folder: folder, socket: socket)
   }
 
@@ -190,7 +242,7 @@ private struct TestServer {
 
   /// Makes this machine the bots' home and waits until its runtime is ready.
   func makeHome(_ client: Client, _ runtime: StandInBotsRuntime) async throws {
-    _ = try await client.call(SetSetting(key: botsHomeSetting, value: .string(server.machineID)))
+    _ = try await client.call(ChooseBotsHome(machineID: server.machineID))
     let subscription = try await client.subscribe(SubscribeBots())
     if subscription.reply.status.state != .ready {
       for try await event in subscription.events {
@@ -336,12 +388,13 @@ private struct TransferSetup {
   let filesA: StandInFiles, filesB: StandInFiles
   let onA: Client, onB: Client
 
-  static func start(failImport: Bool = false) async throws -> TransferSetup {
+  static func start(failImport: Bool = false, importing: Gate? = nil, committing: Gate? = nil) async throws -> TransferSetup {
     let runtimeA = StandInBotsRuntime(), runtimeB = StandInBotsRuntime()
-    let filesA = StandInFiles(), filesB = StandInFiles(failImport: failImport)
+    let filesA = StandInFiles(), filesB = StandInFiles(failImport: failImport, importing: importing)
     let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
     let a = try await TestServer.start(name: "Studio", runtime: runtimeA, tailnet: tailnetA, listen: true, files: filesA)
-    let b = try await TestServer.start(name: "Laptop", runtime: runtimeB, tailnet: tailnetB, listen: true, files: filesB)
+    let b = try await TestServer.start(name: "Laptop", runtime: runtimeB, tailnet: tailnetB, listen: true, files: filesB,
+                                       committing: committing)
     tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
     tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
     await a.server.discoverMachines()
@@ -392,6 +445,9 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
   let setup = try await TransferSetup.start()
   defer { Task { await setup.finish() } }
   let (a, b) = (setup.a, setup.b)
+  // What the person set on a chat goes with it.
+  let before = try #require(try await setup.onA.call(ListSavedBots()).chats.first { $0.kind == .main })
+  _ = try await setup.onA.call(UpdateSession(sessionID: before.session.id, archived: true, folderID: "f1"))
 
   _ = try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID))
 
@@ -414,6 +470,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
     }
     let main = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .main })
     #expect(try await client.call(SessionItems(sessionID: main.session.id)).count == 2)
+    #expect(main.session.archived && main.session.folderID == "f1")
   }
   for server in [a, b] {
     let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
@@ -457,4 +514,64 @@ func aFailedTransferLeavesTheBotsRunningOnTheOldHome() async throws {
   #expect(setup.filesB.volumes.withLock { $0.isEmpty })
   #expect(!FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("bots").path))
   #expect(!FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("bots-incoming").path))
+}
+
+/// Waits until the server's bots report `ready`.
+private func ready(_ client: Client) async throws {
+  let status = try await client.subscribe(SubscribeBots())
+  if status.reply.status.state != .ready {
+    for try await event in status.events {
+      if case .status(let status) = event, status.state == .ready { break }
+    }
+  }
+  try await client.unsubscribe(status.id)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aTransferGivenBackDuringTheInstallNeverStartsTheBotsOnTheTarget() async throws {
+  let importing = Gate()
+  let setup = try await TransferSetup.start(importing: importing)
+  defer { Task { await setup.finish() } }
+  let (a, b) = (setup.a, setup.b)
+
+  let transfer = Task { try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID)) }
+  await importing.reached()
+  let id = try #require(await b.server.bots.incoming?.id)
+  // Given back while the files are being read in: it returns only once the
+  // install has ended and everything it put in place is gone.
+  let abort = Task { try await b.server.bots.abortReceived(id) }
+  importing.open()
+  try await abort.value
+  #expect(setup.runtimeB.launches == 0)
+  #expect(setup.filesB.volumes.withLock { $0.isEmpty })
+  #expect(!FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("bots").path))
+  #expect(!FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("bots-incoming").path))
+
+  await #expect(throws: ProtocolError.self) { _ = try await transfer.value }
+  try await ready(setup.onA)
+  #expect(try await home(setup.onA) == a.server.machineID)
+  #expect(setup.filesA.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
+  #expect(setup.runtimeB.launches == 0)
+}
+
+@Test(.timeLimit(.minutes(1)))
+func onceTheTargetBeginsToCommitNothingGivesTheTransferBack() async throws {
+  let committing = Gate()
+  let setup = try await TransferSetup.start(committing: committing)
+  defer { Task { await setup.finish() } }
+  let (a, b) = (setup.a, setup.b)
+
+  let transfer = Task { try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID)) }
+  await committing.reached()
+  let id = try #require(await b.server.bots.incoming?.id)
+  await #expect(throws: ProtocolError.self) { try await b.server.bots.abortReceived(id) }
+  committing.open()
+  _ = try await transfer.value
+
+  #expect(try await home(setup.onB) == b.server.machineID)
+  #expect(setup.filesB.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
+  #expect(FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("bots/bots.json").path))
+  #expect(setup.runtimeB.connected)
+  #expect(setup.filesA.volumes.withLock { $0.isEmpty })
+  #expect(!FileManager.default.fileExists(atPath: a.folder.appendingPathComponent("bots").path))
 }

@@ -203,3 +203,32 @@ public struct SavedBots: Codable, Sendable, Hashable {
     self.chats = chats
   }
 }
+
+/// Makes `machineID` the bots' first home. `bots.home` is never written as an
+/// ordinary setting: a server accepts this only while its library names no
+/// home and holds no bots, and once every machine it reaches has answered
+/// that it knows none either. Moving the bots later is a transfer.
+public struct ChooseBotsHome: Request {
+  public static let method = "bots.chooseHome"
+  public typealias Reply = Done
+  public var machineID: String
+  public init(machineID: String) { self.machineID = machineID }
+}
+
+/// Between servers, before a first home is chosen: what this machine knows of the bots.
+public struct BotsPresence: Request {
+  public static let method = "bots.presence"
+  public typealias Reply = BotsPresenceReply
+  public init() {}
+}
+
+public struct BotsPresenceReply: Codable, Sendable, Hashable {
+  /// The home this machine's library names.
+  public var homeMachineID: String?
+  /// This machine's library holds bots, or a transfer is under way here.
+  public var hasBots: Bool
+  public init(homeMachineID: String?, hasBots: Bool) {
+    self.homeMachineID = homeMachineID
+    self.hasBots = hasBots
+  }
+}

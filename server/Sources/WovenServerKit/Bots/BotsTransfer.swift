@@ -4,30 +4,43 @@ import WovenLibrary
 import WovenProtocol
 
 // Transfer: the home machine's server moves the bots to another machine's
-// server, over their server-to-server connection.
+// server, over their server-to-server connection. Each side is one state
+// machine; each step below is taken in one place, on the `BotsHost` actor,
+// and kept in a marker file so a restart ends the transfer in one of two
+// states: the bots on the old home, or on the new one.
 //
-// On the old home, in order:
-//  1. The runtime is stopped (running turns are interrupted; Pi Durable picks
-//     its work up again wherever the bots start next). The engine stays up.
-//  2. Each bot's files are written out of the engine as archives into
-//     `D/bots-transfer/files`, and the target is told every file (the bots
-//     folder and the archives) with its size and digest, and what its library
-//     must hold: the bots, chats and checkpoints of this library.
-//  3. The files are sent in pieces, written to disk on the target.
-//  4. The target checks every digest, puts the bots folder in place, reads the
-//     archives into its engine, starts the runtime, and replies once its
-//     library holds every bot and chat under sessions it owns.
-//  5. The switch: the target sets `bots.home` to itself.
-//  6. The old home removes its copy: every container and volume of the bots in
-//     its engine, the bots folder, and the bot chats and Forum rooms it owned.
+// The old home (`OutgoingStep`):
+//  sending     The runtime is stopped (running turns are interrupted; Pi
+//              Durable picks its work up again wherever the bots start next).
+//              Each bot's files are written out of the engine as archives into
+//              `D/bots-transfer/files`; the target is told every file (the bots
+//              folder and the archives) with its size and digest, and what its
+//              library must hold; the files are sent in pieces.
+//  started     The target was asked to start the bots. While it works, the old
+//              home asks it every `heartbeat` how it stands.
+//  committing  The target was asked to become the home. Only its answer (or
+//              its setting arriving by sync) decides what follows; the old home
+//              waits for it however long that takes.
+//  removing    The target is the home. The old home removes every container
+//              and volume of the bots in its engine, the bots folder, and the
+//              bot chats it owned, retrying until it has.
 //
-// Until the switch the target stops what it started and removes what it
-// received when told to, when the old home has been out of reach for a
-// minute, or when it restarts. Before the switch the old home starts its bots
-// again only once the target has answered that it stopped them (or after two
-// minutes out of reach). Each side keeps a marker file of its step, so a
-// server restart ends the transfer in one of two states: the bots on the old
-// home, or on the new one.
+// The target (`IncomingTransfer.Phase`):
+//  receiving   Files arrive in `D/bots-incoming`.
+//  installing  Every digest checked, the bots folder is in place, the archives
+//              are read into the engine, the runtime starts, and the library
+//              is filled until it holds every bot and chat.
+//  confirmed   It holds everything and waits for the commit.
+//  committing  It writes `bots.home` as itself. From here nothing gives the
+//              transfer back.
+//
+// Giving back: before `committing`, the target stops what it started and
+// removes what it received when the old home says so, when it has heard
+// nothing of the transfer for `targetSilence`, or when it restarts. The old
+// home starts its bots again once the target has answered that it gave the
+// transfer back, or, when it cannot reach the target, once `targetSilence`
+// plus `stopMargin` have passed since it last asked the target anything other
+// than to give back: by then the target has stopped by its own rule.
 
 /// How a transfer writes each bot's files out of the engine and back:
 /// `node bots/src/cli.ts files export|import|remove`. Tests give a stand-in.
@@ -88,26 +101,33 @@ struct BotsFiles: Sendable {
 
 /// A transfer this machine receives.
 struct IncomingTransfer: Sendable {
+  enum Phase: Sendable {
+    case receiving, installing, confirmed, committing
+  }
+
   var id: String
   var source: String
   var files: [BotsTransferFile]
   var expected: BotsTransferExpected
-  /// The bots folder is in place and its files may be in the engine.
-  var installed = false
-  /// The runtime runs and the library holds every bot and chat.
-  var confirmedAt: ContinuousClock.Instant?
+  var phase = Phase.receiving
+  /// When the old home last asked anything of this transfer.
   var lastHeard = ContinuousClock.now
+  /// The install, once the old home asked for it.
+  var work: Task<Void, any Error>?
+}
+
+/// The old home's steps.
+enum OutgoingStep: String, Codable {
+  case sending, started, committing, removing
+}
+
+/// The target's steps, as far as a restart needs them.
+private enum IncomingStep: String, Codable {
+  case receiving, installed
 }
 
 /// A side's step, kept in a file so a restart knows how a transfer ended.
-private struct TransferMarker: Codable {
-  enum Step: String, Codable {
-    // The old home's steps.
-    case sending, started, committing, removing
-    // The target's.
-    case receiving, installed
-  }
-
+private struct TransferMarker<Step: Codable & Sendable>: Codable, Sendable {
   var id: String
   /// The other machine.
   var machineID: String
@@ -115,6 +135,19 @@ private struct TransferMarker: Codable {
 }
 
 extension BotsHost {
+  // MARK: Time limits
+
+  /// A target that hears nothing of its transfer for this long gives it back.
+  static let targetSilence = Duration.seconds(60)
+  /// What the target may take to stop the bots once it has given up.
+  static let stopMargin = Duration.seconds(30)
+  /// How often the old home asks the target how it stands while the bots start there.
+  static let heartbeat = Duration.seconds(5)
+  /// The longest the old home waits for the reply to one call.
+  static let callLimit = Duration.seconds(30)
+  /// How long the target has to read the bots in, start them, and hold every chat.
+  static let installLimit = Duration.seconds(15 * 60)
+
   // MARK: Files
 
   private var outgoingFolder: URL { dataFolder.appendingPathComponent("bots-transfer", isDirectory: true) }
@@ -124,14 +157,22 @@ extension BotsHost {
   /// The last transfer this machine committed to as the target.
   private var committedFile: URL { runtimeFolder.appendingPathComponent("transfer-committed") }
 
-  private func writeMarker(_ marker: TransferMarker, to url: URL) throws {
+  private func writeMarker<Step: Codable & Sendable>(_ marker: TransferMarker<Step>, to url: URL) throws {
     try FileManager.default.createDirectory(at: runtimeFolder, withIntermediateDirectories: true,
                                             attributes: [.posixPermissions: 0o700])
     try JSONEncoder().encode(marker).write(to: url, options: .atomic)
   }
 
-  private func readMarker(_ url: URL) -> TransferMarker? {
-    (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(TransferMarker.self, from: $0) }
+  private func readMarker<Step: Codable & Sendable>(_ url: URL, as _: Step.Type) -> TransferMarker<Step>? {
+    (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(TransferMarker<Step>.self, from: $0) }
+  }
+
+  private func step(_ id: String, _ target: String, _ step: OutgoingStep) throws {
+    try writeMarker(TransferMarker(id: id, machineID: target, step: step), to: outgoingMarker)
+  }
+
+  private func committed(_ id: String) -> Bool {
+    (try? String(contentsOf: committedFile, encoding: .utf8)) == id
   }
 
   private func remove(_ url: URL) {
@@ -143,13 +184,17 @@ extension BotsHost {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
   }
 
+  private func name(of machineID: String) async -> String {
+    (try? await library.machine(machineID))?.name ?? machineID
+  }
+
   // MARK: The old home
 
   /// `TransferBots`: runs the transfer to `target` and returns once the bots
   /// run there. The transfer goes on if the caller goes away.
   func transfer(to target: String, caller: Caller) async throws {
-    guard setting == thisMachine, home == thisMachine, hold == nil, outgoing == nil else {
-      if outgoing != nil || hold != nil { throw ProtocolError(.busy, "The bots are already moving.") }
+    guard setting == thisMachine, home == thisMachine, hold == nil, outgoing == nil, incoming == nil, ending == nil else {
+      if setting == thisMachine { throw ProtocolError(.busy, "The bots are already moving.") }
       throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: setting)
     }
     guard target != thisMachine, let machine = try await library.machine(target) else {
@@ -171,8 +216,13 @@ extension BotsHost {
                           transfer: BotsTransferProgress(targetMachineID: target, phase: phase, bytesSent: sent, bytesTotal: total)))
   }
 
+  /// Before asking the target anything but to give back.
+  private func asking() {
+    lastAsked = .now
+  }
+
   private func sendBots(_ id: String, to target: String, client: Client) async throws {
-    try writeMarker(TransferMarker(id: id, machineID: target, step: .sending), to: outgoingMarker)
+    try step(id, target, .sending)
     hold = .sending(target: target)
     progress(target, .stopping)
     await reconcileHome()
@@ -187,7 +237,8 @@ extension BotsHost {
       let files = try Self.listFiles(in: botsFolder, as: "bots") + Self.listFiles(in: archives, as: "files")
       let total = files.reduce(0) { $0 + $1.size }
       progress(target, .copying, sent: 0, total: total)
-      _ = try await client.call(ReceiveBots(transferID: id, files: files, expected: expected))
+      asking()
+      _ = try await client.call(ReceiveBots(transferID: id, files: files, expected: expected), timeout: Self.callLimit)
       var sent: Int64 = 0
       for file in files {
         let url = (file.path.hasPrefix("bots/") ? botsFolder : archives)
@@ -197,7 +248,9 @@ extension BotsHost {
         var offset: Int64 = 0
         repeat {
           let data = try handle.read(upToCount: Self.pieceSize) ?? Data()
-          _ = try await client.call(ReceiveBotsPiece(transferID: id, path: file.path, offset: offset, data: data))
+          asking()
+          _ = try await client.call(ReceiveBotsPiece(transferID: id, path: file.path, offset: offset, data: data),
+                                    timeout: Self.callLimit)
           offset += Int64(data.count)
           sent += Int64(data.count)
           progress(target, .copying, sent: sent, total: total)
@@ -205,29 +258,51 @@ extension BotsHost {
         } while offset < file.size
       }
       progress(target, .starting)
-      try writeMarker(TransferMarker(id: id, machineID: target, step: .started), to: outgoingMarker)
+      try step(id, target, .started)
       started = true
-      _ = try await client.call(StartReceivedBots(transferID: id))
+      try await startThere(id, client: client)
     } catch {
-      await giveUp(id, target: target, started: started)
+      if await giveUp(id, target: target, started: started) { return }
       throw error
     }
-    try writeMarker(TransferMarker(id: id, machineID: target, step: .committing), to: outgoingMarker)
+    try step(id, target, .committing)
     let committed: Bool
     do {
-      _ = try await client.call(CommitReceivedBots(transferID: id))
+      asking()
+      _ = try await client.call(CommitReceivedBots(transferID: id), timeout: Self.callLimit)
       committed = true
     } catch let refused as ProtocolError {
-      await giveUp(id, target: target, started: true)
+      // It answered: it is not the home, and gives the transfer back.
+      if await giveUp(id, target: target, started: true) { return }
       throw refused
     } catch {
       committed = await outcome(id, target: target)
     }
     guard committed else {
-      await giveUp(id, target: target, started: true)
+      if await giveUp(id, target: target, started: true) { return }
       throw ProtocolError(.failed, "The connection to \(await name(of: target)) was lost. The bots run here again.")
     }
     await removeCopy(id, target: target)
+  }
+
+  /// Asks the target to start the bots, and asks how it stands every
+  /// `heartbeat` meanwhile so it knows this machine still waits.
+  private func startThere(_ id: String, client: Client) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask {
+        await self.asking()
+        _ = try await client.call(StartReceivedBots(transferID: id), timeout: Self.installLimit + Self.callLimit)
+      }
+      group.addTask {
+        while true {
+          try await Task.sleep(for: Self.heartbeat)
+          await self.asking()
+          _ = try? await client.call(ReceivedBotsState(transferID: id), timeout: Self.heartbeat)
+        }
+      }
+      try await group.next()
+      group.cancelAll()
+    }
   }
 
   static let pieceSize = 4 << 20
@@ -251,19 +326,19 @@ extension BotsHost {
     return files.sorted { $0.path < $1.path }
   }
 
-  private func name(of machineID: String) async -> String {
-    (try? await library.machine(machineID))?.name ?? machineID
-  }
-
-  /// The commit's reply was lost: asks the target until it says whether it is the home.
+  /// The commit's reply was lost: asks the target until it says whether it
+  /// is the home, or its setting arrives here. Never guesses.
   private func outcome(_ id: String, target: String) async -> Bool {
     while true {
+      if setting == target { return true }
       if let client = await peers.client(for: target) {
-        switch try? await client.call(ReceivedBotsState(transferID: id)) {
+        asking()
+        switch try? await client.call(ReceivedBotsState(transferID: id), timeout: Self.callLimit) {
         case .committed?: return true
         case ReceivedBotsOutcome.none?: return false
         case .pending?:
-          if (try? await client.call(CommitReceivedBots(transferID: id))) != nil { return true }
+          asking()
+          if (try? await client.call(CommitReceivedBots(transferID: id), timeout: Self.callLimit)) != nil { return true }
         case nil: break
         }
       }
@@ -272,30 +347,48 @@ extension BotsHost {
     }
   }
 
-  /// Before the switch: the target gives back what it started, then the bots start here again.
-  private func giveUp(_ id: String, target: String, started: Bool) async {
-    let deadline = ContinuousClock.now + .seconds(120)
-    repeat {
-      if let client = await peers.client(for: target), (try? await client.call(AbortReceivedBots(transferID: id))) != nil {
-        break
+  /// Before the switch: the target gives back what it started, then the
+  /// bots start here again. Returns true when the target turned out to be
+  /// the home after all (this machine then removed its copy).
+  private func giveUp(_ id: String, target: String, started: Bool) async -> Bool {
+    // Once the target cannot have heard anything but "give back" for this
+    // long, it has stopped by its own rule.
+    let quiet = lastAsked + Self.targetSilence + Self.stopMargin
+    while true {
+      if let client = await peers.client(for: target) {
+        do {
+          _ = try await client.call(AbortReceivedBots(transferID: id), timeout: Self.callLimit)
+          break
+        } catch let refused as ProtocolError where refused.code == .busy {
+          // It has begun to make itself the home: only its answer decides.
+          if await outcome(id, target: target) {
+            await removeCopy(id, target: target)
+            return true
+          }
+          break
+        } catch {}
       }
       // A target that never started the bots cleans up by itself.
-      guard started else { break }
+      guard started, ContinuousClock.now < quiet else { break }
+      progress(target, .starting, message: "Waiting for \(await name(of: target)) to stop the bots.")
       try? await Task.sleep(for: .seconds(2))
-    } while ContinuousClock.now < deadline
+    }
     remove(outgoingFolder)
     remove(outgoingMarker)
     hold = nil
     await reconcileHome()
+    return false
   }
 
   /// After the switch: this machine follows the new home and removes its copy.
   private func removeCopy(_ id: String, target: String) async {
-    try? writeMarker(TransferMarker(id: id, machineID: target, step: .removing), to: outgoingMarker)
+    try? step(id, target, .removing)
     hold = .moved(target: target)
     // The value the target wrote, written here too so a restart reads it at once.
     _ = try? await library.setSetting(botsHomeSetting, to: .string(target))
+    setting = target
     await reconcileHome(keepEngine: true)
+    progress(target, .removing)
     do {
       try await prepareEngine()
       try await hosting.files.run(.remove, configURL, nil)
@@ -324,12 +417,21 @@ extension BotsHost {
   /// `ReceiveBots`: a transfer from the home machine's server begins.
   func receive(_ request: ReceiveBots, caller: Caller) async throws {
     let source = caller.hello.machine.id
-    guard caller.hello.role == .server, source == setting else {
+    // The library's value: the cached one may not have caught up with sync yet.
+    let stored = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value.string
+    guard caller.hello.role == .server, source == stored, source != thisMachine else {
       throw ProtocolError(.refused, "Only the bots' home machine sends them.")
     }
+    await ending?.value
     if let incoming {
       guard incoming.id != request.transferID else { throw ProtocolError(.badRequest, "That transfer has begun.") }
-      await abortIncoming()
+      guard await abortIncoming(incoming.id) else { throw ProtocolError(.busy, "This machine is becoming the bots' home.") }
+    }
+    // Nothing held here and nothing outgoing: a removal still under way would
+    // remove what this transfer puts in place.
+    guard incoming == nil, ending == nil, hold == nil, outgoing == nil,
+          readMarker(outgoingMarker, as: OutgoingStep.self) == nil else {
+      throw ProtocolError(.busy, "This machine is still removing its old copy of the bots. Try again shortly.")
     }
     for file in request.files {
       guard Self.safe(file.path) else { throw ProtocolError(.badRequest, "Not a transfer path: \(file.path)") }
@@ -343,7 +445,7 @@ extension BotsHost {
         throw ProtocolError(.failed, "Could not write \(url.path).")
       }
     }
-    try writeMarker(TransferMarker(id: request.transferID, machineID: source, step: .receiving), to: incomingMarker)
+    try writeMarker(TransferMarker(id: request.transferID, machineID: source, step: IncomingStep.receiving), to: incomingMarker)
     incoming = IncomingTransfer(id: request.transferID, source: source, files: request.files, expected: request.expected)
     startWatchdog()
   }
@@ -355,11 +457,17 @@ extension BotsHost {
     return parts[0] == "bots" || (parts[0] == "files" && parts.count == 2 && path.hasSuffix(".tar"))
   }
 
+  /// The old home asked something of transfer `id`.
+  private func heard(_ id: String) {
+    if incoming?.id == id { incoming?.lastHeard = .now }
+  }
+
   /// `ReceiveBotsPiece`: appends to one file.
   func receivePiece(_ request: ReceiveBotsPiece) throws {
-    guard var transfer = incoming, transfer.id == request.transferID, !transfer.installed else {
+    guard let transfer = incoming, transfer.id == request.transferID, transfer.phase == .receiving, transfer.work == nil else {
       throw ProtocolError(.notFound, "No such transfer.")
     }
+    heard(transfer.id)
     guard let file = transfer.files.first(where: { $0.path == request.path }),
           request.offset + Int64(request.data.count) <= file.size else {
       throw ProtocolError(.badRequest, "Not a file of this transfer: \(request.path)")
@@ -370,29 +478,33 @@ extension BotsHost {
       throw ProtocolError(.badRequest, "\(request.path) is not at \(request.offset).")
     }
     try handle.write(contentsOf: request.data)
-    transfer.lastHeard = .now
-    incoming = transfer
   }
 
   /// `StartReceivedBots`: checks, installs, starts, and waits until the
   /// library holds every bot and chat. On any failure it gives everything back.
   func startReceived(_ id: String) async throws {
-    guard let transfer = incoming, transfer.id == id, transfer.confirmedAt == nil else {
-      throw ProtocolError(.notFound, "No such transfer.")
-    }
-    if let incomingWork { return try await incomingWork.value }
+    guard let transfer = incoming, transfer.id == id else { throw ProtocolError(.notFound, "No such transfer.") }
+    heard(id)
+    if let work = transfer.work { return try await work.value }
+    guard transfer.phase == .receiving else { return }
     let work = Task { try await self.install(transfer) }
-    incomingWork = work
-    defer { incomingWork = nil }
+    incoming?.work = work
     do {
       try await work.value
     } catch {
-      if incoming?.id == id { await abortIncoming() }
+      await abortIncoming(id)
       throw ProtocolError(error)
     }
   }
 
+  /// Fails once transfer `id` is no longer the one this machine holds: after
+  /// every wait, the install goes on only while it is.
+  private func stillCurrent(_ id: String) throws {
+    guard incoming?.id == id else { throw ProtocolError(.failed, "The transfer was given up.") }
+  }
+
   private func install(_ transfer: IncomingTransfer) async throws {
+    let id = transfer.id
     for file in transfer.files {
       let url = incomingFolder.appendingPathComponent(file.path)
       let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? -1
@@ -400,8 +512,9 @@ extension BotsHost {
         throw ProtocolError(.failed, "\(file.path) arrived damaged.")
       }
     }
-    try writeMarker(TransferMarker(id: transfer.id, machineID: transfer.source, step: .installed), to: incomingMarker)
-    incoming?.installed = true
+    try stillCurrent(id)
+    try writeMarker(TransferMarker(id: id, machineID: transfer.source, step: IncomingStep.installed), to: incomingMarker)
+    incoming?.phase = .installing
     remove(botsFolder)
     let received = incomingFolder.appendingPathComponent("bots", isDirectory: true)
     if FileManager.default.fileExists(atPath: received.path) {
@@ -410,19 +523,25 @@ extension BotsHost {
       try FileManager.default.createDirectory(at: botsFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
     try await prepareEngine()
+    try stillCurrent(id)
     try await hosting.files.run(.import, configURL, incomingFolder.appendingPathComponent("files", isDirectory: true))
+    try stillCurrent(id)
     // A new stint: whatever bot chats and checkpoints this library still holds
-    // from an earlier one are gone, so the bots save their whole history again.
+    // from an earlier one are gone, so the bots save their whole history again,
+    // under sessions that carry what the person set on the old home's.
     try await library.removeBotChats()
+    try stillCurrent(id)
     tenure.end()
     let sessions = thisMachine + ":" + tenure.current
+    try await library.carryBotChats(transfer.expected.chats, sessions: sessions)
+    try stillCurrent(id)
     hold = .receiving(source: transfer.source)
     await reconcileHome()
-    let deadline = ContinuousClock.now + .seconds(15 * 60)
+    let deadline = ContinuousClock.now + Self.installLimit
     while true {
-      try Task.checkCancellation()
-      guard incoming?.id == transfer.id else { throw ProtocolError(.failed, "The transfer was given up.") }
+      try stillCurrent(id)
       if status.state == .ready, try await library.botsTransferMissing(transfer.expected, sessions: sessions) == nil { break }
+      try stillCurrent(id)
       guard ContinuousClock.now < deadline else {
         let missing = try await library.botsTransferMissing(transfer.expected, sessions: sessions) ?? "nothing"
         throw ProtocolError(.failed, status.state == .ready
@@ -430,51 +549,95 @@ extension BotsHost {
       }
       try await Task.sleep(for: .milliseconds(250))
     }
-    incoming?.confirmedAt = .now
+    try stillCurrent(id)
+    incoming?.phase = .confirmed
   }
 
-  /// `CommitReceivedBots`: this machine becomes the home.
+  /// `CommitReceivedBots`: this machine becomes the home. Once begun, nothing
+  /// gives the transfer back.
   func commitReceived(_ id: String) async throws {
-    if (try? String(contentsOf: committedFile, encoding: .utf8)) == id { return }
-    guard let transfer = incoming, transfer.id == id, transfer.confirmedAt != nil else {
-      throw ProtocolError(.notFound, "No such transfer.")
+    if committed(id) { return }
+    guard let transfer = incoming, transfer.id == id else { throw ProtocolError(.notFound, "No such transfer.") }
+    heard(id)
+    if transfer.phase == .committing {
+      // A repeated commit waits for the first.
+      while incoming?.id == id { try await Task.sleep(for: .milliseconds(50)) }
+      guard committed(id) else { throw ProtocolError(.failed, "The bots could not be moved here.") }
+      return
     }
-    _ = try await library.setSetting(botsHomeSetting, to: .string(thisMachine))
+    guard transfer.phase == .confirmed else { throw ProtocolError(.notFound, "The bots have not started here yet.") }
+    incoming?.phase = .committing
+    await hosting.committing()
+    do {
+      _ = try await library.setSetting(botsHomeSetting, to: .string(thisMachine))
+    } catch {
+      incoming?.phase = .confirmed
+      throw error
+    }
     try? id.write(to: committedFile, atomically: true, encoding: .utf8)
-    finishIncoming()
-    hold = nil
-    await reconcileHome()
-  }
-
-  /// `AbortReceivedBots`.
-  func abortReceived(_ id: String) async {
-    if incoming?.id == id { await abortIncoming() }
-  }
-
-  /// `ReceivedBotsState`.
-  func receivedState(_ id: String) -> ReceivedBotsOutcome {
-    if (try? String(contentsOf: committedFile, encoding: .utf8)) == id { return .committed }
-    return incoming?.id == id ? .pending : .none
-  }
-
-  private func finishIncoming() {
+    setting = thisMachine
     watchdog?.cancel()
     watchdog = nil
     incoming = nil
     remove(incomingFolder)
     remove(incomingMarker)
+    hold = nil
+    await reconcileHome()
   }
 
-  /// Stops what the transfer started here and removes what it received.
-  func abortIncoming() async {
-    guard let transfer = incoming else { return }
-    incomingWork?.cancel()
+  /// `AbortReceivedBots`: replies once this machine holds nothing of the
+  /// transfer; refused once it has begun to make itself the home.
+  func abortReceived(_ id: String) async throws {
+    guard !committed(id), await abortIncoming(id) else {
+      throw ProtocolError(.busy, "\(await name(of: thisMachine)) is becoming the bots' home.")
+    }
+  }
+
+  /// `ReceivedBotsState`.
+  func receivedState(_ id: String) -> ReceivedBotsOutcome {
+    heard(id)
+    if committed(id) { return .committed }
+    return incoming?.id == id || ending != nil ? .pending : .none
+  }
+
+  /// Gives transfer `id` back: from now on it is not current, so the install
+  /// stops at its next step; once the install has ended, what it started is
+  /// stopped and what it received removed. False when the commit has begun.
+  @discardableResult
+  func abortIncoming(_ id: String) async -> Bool {
+    guard let transfer = incoming, transfer.id == id else {
+      await ending?.value
+      return true
+    }
+    guard transfer.phase != .committing else { return false }
+    incoming = nil
     watchdog?.cancel()
     watchdog = nil
-    incoming = nil
-    hold = nil
+    await beginEnding { await self.giveBack(transfer) }.value
+    return true
+  }
+
+  /// Starts a giving back, which `receive` and `ReceivedBotsState` wait for.
+  private func beginEnding(_ body: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
+    endings += 1
+    let mine = endings
+    let task = Task {
+      await body()
+      self.ended(mine)
+    }
+    ending = task
+    return task
+  }
+
+  private func ended(_ number: Int) {
+    if endings == number { ending = nil }
+  }
+
+  private func giveBack(_ transfer: IncomingTransfer) async {
+    _ = try? await transfer.work?.value
+    if case .receiving? = hold { hold = nil }
     await reconcileHome(keepEngine: true)
-    if transfer.installed { await removeReceived() } else { await releaseEngine() }
+    if transfer.work != nil { await removeReceived() } else { await releaseEngine() }
     remove(incomingFolder)
     remove(incomingMarker)
   }
@@ -489,27 +652,15 @@ extension BotsHost {
     tenure.end()
   }
 
-  /// Gives a transfer back when the old home has been out of reach for a
-  /// minute, has sent nothing for ten, or has not committed five minutes
-  /// after the bots started here.
+  /// Gives the transfer back once the old home has asked nothing of it for `targetSilence`.
   private func startWatchdog() {
     watchdog?.cancel()
     watchdog = Task { [weak self] in
-      var unreachableSince: ContinuousClock.Instant?
       while !Task.isCancelled {
-        try? await Task.sleep(for: .seconds(2))
+        try? await Task.sleep(for: .seconds(1))
         guard let self, let transfer = await self.incoming else { return }
-        let now = ContinuousClock.now
-        if await self.peers.client(for: transfer.source) == nil {
-          unreachableSince = unreachableSince ?? now
-        } else {
-          unreachableSince = nil
-        }
-        let lost = unreachableSince.map { now - $0 > .seconds(60) } ?? false
-        let quiet = !transfer.installed && now - transfer.lastHeard > .seconds(600)
-        let late = transfer.confirmedAt.map { now - $0 > .seconds(300) } ?? false
-        if lost || quiet || late {
-          await self.abortIncoming()
+        if transfer.phase != .committing, ContinuousClock.now - transfer.lastHeard > Self.targetSilence {
+          await self.abortIncoming(transfer.id)
           return
         }
       }
@@ -521,37 +672,81 @@ extension BotsHost {
   /// A transfer the last run of this server left: each side ends it in one
   /// of the two states, the bots on the old home or on the new one.
   func recoverTransfer() {
-    if let marker = readMarker(incomingMarker) {
-      Task {
+    if let marker = readMarker(incomingMarker, as: IncomingStep.self) {
+      let (library, me) = (library, thisMachine)
+      _ = beginEnding {
         let setting = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value.string
-        if setting == thisMachine {
-          // It made itself home just before the restart.
-          try? marker.id.write(to: committedFile, atomically: true, encoding: .utf8)
-          remove(incomingFolder)
-          remove(incomingMarker)
-        } else {
-          if marker.step == .installed { await removeReceived() }
-          remove(incomingFolder)
-          remove(incomingMarker)
-        }
+        await self.recoverIncoming(marker, madeHome: setting == me)
       }
     }
-    guard let marker = readMarker(outgoingMarker) else { return }
-    let target = marker.machineID
+    guard let marker = readMarker(outgoingMarker, as: OutgoingStep.self) else { return }
+    let (id, target) = (marker.id, marker.machineID)
     switch marker.step {
     case .removing:
       hold = .moved(target: target)
-      Task { await removeCopy(marker.id, target: target) }
+      Task { await removeCopy(id, target: target) }
     case .committing:
       hold = .sending(target: target)
       Task {
-        if await outcome(marker.id, target: target) { await removeCopy(marker.id, target: target) }
-        else { await giveUp(marker.id, target: target, started: true) }
+        if await outcome(id, target: target) { await removeCopy(id, target: target) }
+        else { _ = await giveUp(id, target: target, started: true) }
       }
-    case .sending, .started, .receiving, .installed:
+    case .sending, .started:
+      // Nothing was asked of the target since this server stopped.
       hold = .sending(target: target)
-      Task { await giveUp(marker.id, target: target, started: marker.step != .sending) }
+      lastAsked = .now
+      Task { _ = await giveUp(id, target: target, started: marker.step == .started) }
     }
+  }
+
+  private func recoverIncoming(_ marker: TransferMarker<IncomingStep>, madeHome: Bool) async {
+    if madeHome {
+      // It made itself home just before the restart.
+      try? marker.id.write(to: committedFile, atomically: true, encoding: .utf8)
+    } else if marker.step == .installed {
+      await removeReceived()
+    }
+    remove(incomingFolder)
+    remove(incomingMarker)
+  }
+
+  // MARK: Choosing the first home
+
+  /// `BotsPresence`: what this machine knows of the bots.
+  func presence() async -> BotsPresenceReply {
+    let stored = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value.string.flatMap { $0.isEmpty ? nil : $0 }
+    let saved = (try? await library.savedBots().bots.isEmpty) == false
+    let moving = hold != nil || incoming != nil || outgoing != nil || ending != nil
+    return BotsPresenceReply(homeMachineID: stored ?? setting, hasBots: saved || moving)
+  }
+
+  /// `ChooseBotsHome`: the first home, only while no machine knows of any bots.
+  func chooseHome(_ machineID: String) async throws {
+    func unknown() async throws {
+      let here = await presence()
+      guard here.homeMachineID == nil, !here.hasBots else {
+        throw ProtocolError(.refused, "The bots already have a home. Moving them is a transfer.")
+      }
+    }
+    try await unknown()
+    let known = try await library.machine(machineID) != nil
+    guard machineID == thisMachine || known else {
+      throw ProtocolError(.badRequest, "Choose one of your machines.")
+    }
+    var askedChosen = machineID == thisMachine
+    for (peerID, client) in await peers.linked() {
+      guard let there = try? await client.call(BotsPresence(), timeout: .seconds(10)) else { continue }
+      if peerID == machineID { askedChosen = true }
+      if there.homeMachineID != nil || there.hasBots {
+        throw ProtocolError(.refused, "\(await name(of: peerID)) knows of the bots already. Wait until it has synced.",
+                            machineID: peerID)
+      }
+    }
+    guard askedChosen else {
+      throw ProtocolError(.ownerUnreachable, "\(await name(of: machineID)) is not reachable.", machineID: machineID)
+    }
+    try await unknown()
+    _ = try await library.setSetting(botsHomeSetting, to: .string(machineID))
   }
 }
 
@@ -579,8 +774,15 @@ func registerBotsTransfer(_ router: inout Router, bots: BotsHost) {
     return Done()
   }
   router.on(AbortReceivedBots.self) { request, _ in
-    await bots.abortReceived(request.transferID)
+    try await bots.abortReceived(request.transferID)
     return Done()
+  }
+  router.on(ChooseBotsHome.self) { request, _ in
+    try await bots.chooseHome(request.machineID)
+    return Done()
+  }
+  router.on(BotsPresence.self) { _, _ in
+    await bots.presence()
   }
   router.on(ReceivedBotsState.self) { request, _ in
     await bots.receivedState(request.transferID)

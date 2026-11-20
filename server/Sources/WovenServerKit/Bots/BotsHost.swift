@@ -67,8 +67,8 @@ actor BotsHost {
 
   /// Where the bots run, as this server acts on it: the setting, unless a transfer holds them.
   private(set) var home: String?
-  /// The setting `bots.home`.
-  private(set) var setting: String?
+  /// The setting `bots.home`. A transfer sets it as soon as it writes it.
+  var setting: String?
   var hold: Hold?
   private(set) var resources = BotsResources.defaults
   private(set) var status = BotsStatus(homeMachineID: nil, state: .off)
@@ -80,9 +80,13 @@ actor BotsHost {
   var engineStarted = false
   // A transfer this server runs, sends or receives (`BotsTransfer.swift`).
   var outgoing: Task<Void, any Error>?
+  /// When the old home last asked the target anything but to give back.
+  var lastAsked = ContinuousClock.now
   var incoming: IncomingTransfer?
-  var incomingWork: Task<Void, any Error>?
   var watchdog: Task<Void, Never>?
+  /// The target giving a transfer back, or a restart ending one.
+  var ending: Task<Void, Never>?
+  var endings = 0
 
   // The connection to this machine's runtime.
   private var connection: (transport: any MessageTransport, generation: Int)?
@@ -625,7 +629,7 @@ actor BotsHost {
 
 // MARK: Routes
 
-func registerBots(_ router: inout Router, bots: BotsHost, library: Library) {
+func registerBots(_ router: inout Router, bots: BotsHost, library: Library, sessions: SessionManager) {
   router.on(BotsCall.self) { request, caller in
     try await bots.call(request.request, caller: caller)
   }
@@ -656,5 +660,24 @@ func registerBots(_ router: inout Router, bots: BotsHost, library: Library) {
     return try await library.updateSession(request.sessionID, title: isBotChat ? nil : request.title, archived: request.archived,
                                            pinned: request.pinned, read: request.read, folderID: folder,
                                            tools: request.tools)
+  }
+  // A bot chat is deleted in the runtime first, so it is gone at the source
+  // and the bots never save it again (on this home or the next). Replaces
+  // the general handler.
+  router.on(DeleteSession.self) { request, caller in
+    if let chat = try await library.savedBots().chats.first(where: { $0.session.id == request.sessionID }) {
+      let delete: JSONValue = switch chat.kind {
+      case .thread: .object(["type": .string("thread.delete"), "botId": .string(chat.botID ?? ""),
+                             "conversationId": .integer(Int64(chat.conversationID))])
+      case .forumThread: .object(["type": .string("forum.thread.delete"), "roomId": .integer(Int64(chat.conversationID))])
+      case .main: throw ProtocolError(.badRequest, "A bot's main chat goes with the bot.")
+      case .forum: throw ProtocolError(.badRequest, "The Forum cannot be deleted.")
+      }
+      _ = try await bots.call(delete, caller: caller)
+    } else {
+      await sessions.close(request.sessionID)
+    }
+    try await library.deleteSession(request.sessionID)
+    return Done()
   }
 }

@@ -73,6 +73,11 @@ actor PeerSync {
     clients[machineID]
   }
 
+  /// Every machine linked now, with its connection.
+  func linked() -> [String: Client] {
+    clients
+  }
+
   /// Where another machine's server was last reached on the tailnet.
   func address(of machineID: String) -> TailnetMachine? {
     statuses[machineID]?.machine
