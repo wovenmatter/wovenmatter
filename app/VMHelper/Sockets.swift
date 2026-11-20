@@ -38,34 +38,6 @@ enum Sockets {
         return fd
     }
 
-    /// Binds 127.0.0.1 only: previews are published to the tailnet by Woven's
-    /// own proxy, never by the VM.
-    static func listenLoopback(port: Int) throws -> (fd: Int32, port: Int) {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw posixError("socket") }
-        var one: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
-        var address = sockaddr_in()
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = in_port_t(UInt16(port).bigEndian)
-        address.sin_addr.s_addr = inet_addr("127.0.0.1")
-        let bound = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-        }
-        guard bound == 0, listen(fd, 128) == 0 else {
-            let error = posixError("bind 127.0.0.1:\(port)")
-            close(fd)
-            throw error
-        }
-        var actual = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        _ = withUnsafeMutablePointer(to: &actual) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
-        }
-        return (fd, Int(UInt16(bigEndian: actual.sin_port)))
-    }
-
     static func setBlocking(_ fd: Int32) {
         let flags = fcntl(fd, F_GETFL)
         if flags >= 0 { _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) }
@@ -89,21 +61,6 @@ enum Sockets {
             }
             return true
         }
-    }
-
-    /// Reads one newline-terminated line, byte by byte so nothing after it is
-    /// consumed (the bytes that follow belong to the spliced stream).
-    static func readLine(_ fd: Int32, limit: Int = 4096) -> String? {
-        var bytes: [UInt8] = []
-        var byte: UInt8 = 0
-        while bytes.count < limit {
-            let count = read(fd, &byte, 1)
-            if count < 0 && errno == EINTR { continue }
-            guard count == 1 else { return nil }
-            if byte == UInt8(ascii: "\n") { return String(decoding: bytes, as: UTF8.self) }
-            bytes.append(byte)
-        }
-        return nil
     }
 
     /// Copies both directions until each one ends on its own. End of stream in
@@ -184,8 +141,7 @@ enum Sockets {
     static let trace = ProcessInfo.processInfo.environment["WOVEN_VM_TRACE"] == "1"
 }
 
-/// Accepts on a listening descriptor without blocking a thread, so a forward
-/// can be cancelled at any time.
+/// Accepts on a listening descriptor without blocking a thread.
 final class Listener: @unchecked Sendable {
     let fd: Int32
     private let source: any DispatchSourceRead

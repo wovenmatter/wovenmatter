@@ -1,5 +1,4 @@
 {
-  "guestVersion": 1,
   "image": {
     "name": "Ubuntu 26.04 LTS (Resolute Raccoon) server cloud image, arm64",
     "serial": "20261108",

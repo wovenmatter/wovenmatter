@@ -37,7 +37,7 @@ if lipo -archs "$main_executable" | grep -qw arm64; then
   # The guest files are sealed resources: exactly the committed copies, one pin for the guest.
   cmp "$repo_root/app/VMHelper/guest-version.json" "${app}/Contents/Resources/WovenVM/guest-version.json"
   for file in agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc \
-      woven-agent.service woven-provision.service woven-update.service woven-egress.service; do
+      woven-agent.service woven-provision.service woven-egress.service; do
     cmp "$repo_root/app/VMHelper/Guest/$file" "${app}/Contents/Resources/WovenVM/$file"
   done
 fi
