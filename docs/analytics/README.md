@@ -2,11 +2,7 @@
 
 ## In the app
 
-The app sends no product analytics. General settings has a **Share product
-analytics** toggle with a link to
-[wovenmatter.com/privacy](https://wovenmatter.com/privacy); it is stored as the
-synced setting `analytics.enabled` (off unless set), and nothing reads it to
-send events. The app-event tiles on the PostHog dashboard show only events from
+The app sends no product analytics and has no setting for them. The app-event tiles on the PostHog dashboard show only events from
 earlier releases.
 
 `country-only.hog` is the PostHog transformation that drops IP and precise

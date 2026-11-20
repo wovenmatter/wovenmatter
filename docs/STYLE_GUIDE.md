@@ -54,16 +54,16 @@ when an intentional design change is accepted.
   their harness names. On the mobile home page and in the New Chat menu Quick
   Chat comes first and the workspaces follow it, each once under its own name.
   A message sent to a Mac or Linux session shows at once with quiet caption
-  progress ("Sending to …", "Starting on …"), never a spinner. Home, Folders, New Chat and Calendar list only paired
+  progress ("Sending to …", "Starting on …"), never a spinner. Home, Folders, New Chat and Calendar list only
   Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
   every saved workspace with its connection state. Never add an "Unavailable
   workspace" group: folders whose workspace is not listed stay in All Workspaces.
   Web search keys (Exa, Brave Search, Firecrawl) live in Settings → Subscriptions & API Keys with
   the model providers. Do not add data-sharing prompts:
   connecting a provider is the user's choice to use it.
-  With no paired Mac the app must still feel complete: no blocking screens, error banners or
-  "not reachable" wording for missing pairing. Home shows one "Connect your Mac" row with a
-  single caption saying what pairing adds; Mac-only pages stay hidden until paired. The
+  With no Mac reachable the app must still feel complete: no blocking screens, error banners or
+  "not reachable" wording. Home shows one "Connect your Mac" row with a
+  single caption saying what a Mac adds; Mac-only pages stay hidden until one is reachable. The
   Quick Chat composer notice reads "Sign in to a model provider to use Quick Chat", then
   "Add a web search key for answers from the web" until a key is saved.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
@@ -308,9 +308,8 @@ when an intentional design change is accepted.
   menu, its agents, and Details; do not lay actions out as a strip of buttons.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
-- **Apple devices:** show this Mac, pairing requests, and paired devices, then Pair a
-  device with its three methods closed until needed. Pairing grants access to all
-  available workspaces; do not add per-device workspace permissions or
+- **Devices:** every machine on your tailnet that runs the Woven server reaches all
+  workspaces; do not add per-device workspace permissions or
   execution-sharing switches.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
@@ -338,7 +337,7 @@ when an intentional design change is accepted.
   Never use `.textFieldStyle(.roundedBorder)`, native blue focus outlines, or a
   custom bright focus border on app forms. Do not disable focus or keyboard
   navigation to hide a ring. Inspect both focused and unfocused states in Green,
-  Cognac, and Dark, including secure fields and pairing dialogs. Native system dialogs
+  Cognac, and Dark, including secure fields. Native system dialogs
   and document content are outside this rule.
 - **Dark content:** apply the theme to app-owned surfaces, including native
   editors, tables, charts, sheets, and popovers. Adapt note ink and highlights
