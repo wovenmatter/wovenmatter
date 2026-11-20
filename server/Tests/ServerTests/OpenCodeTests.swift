@@ -4,7 +4,7 @@ import WovenProtocol
 @testable import WovenServerKit
 
 /// A turn as OpenCode streams it, split at awkward places, becomes text, one
-/// finished tool call and a finished turn with the steps' usage added up.
+/// finished tool call and a finished turn.
 @Test func openCodeTurnBecomesRuntimeEvents() {
   let frames = [
     #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m1","model":{"id":"big","providerID":"p"}}}"#,
@@ -30,17 +30,16 @@ import WovenProtocol
 
   var text = ""
   var finishedCalls: [ToolCall] = []
-  var turn: (failure: String?, usage: TokenUsage?)?
+  var finished: (failure: String?, Bool)?
   for event in events {
     switch event {
     case .text(let delta): text += delta
     case .tool(_, let call, true): finishedCalls.append(call)
-    case .turnFinished(let failure, let usage): turn = (failure, usage)
+    case .turnFinished(let failure, _): finished = (failure, true)
     default: break
     }
   }
   #expect(text == "Files: a.txt")
   #expect(finishedCalls == [ToolCall(name: "read", input: #"{"path":"."}"#, output: "a.txt", title: ".", kind: .read)])
-  #expect(turn?.failure == nil)
-  #expect(turn?.usage == TokenUsage(model: "p/big", input: 15, output: 7, cacheRead: 4, cacheWrite: 2, cost: 0.75))
+  #expect(finished != nil && finished?.failure == nil)
 }

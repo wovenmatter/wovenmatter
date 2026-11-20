@@ -510,7 +510,7 @@ actor SessionHost {
       if let usage, !runtime.kind.usageFromHistory {
         try? await library.recordUsage(sessionID: sessionID, runtime: runtime.kind, model: usage.model ?? configuration.model ?? "",
                                        input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
-                                       cacheWrite: usage.cacheWrite, cost: usage.cost ?? 0)
+                                       cacheWrite: usage.cacheWrite)
       }
       await endTurn()
       if runtimeTurn {

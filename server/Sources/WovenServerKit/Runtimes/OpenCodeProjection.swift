@@ -2,14 +2,13 @@ import Foundation
 import WovenProtocol
 
 /// Turns one OpenCode session's events into runtime events: text deltas,
-/// tool calls with their whole state, reasoning, to-dos and usage, and
-/// closes whatever is open when the turn ends.
+/// tool calls with their whole state, reasoning and to-dos, and closes
+/// whatever is open when the turn ends. Its usage is counted from OpenCode's
+/// own history.
 struct OpenCodeProjection: Sendable {
   private var texts: [String: String] = [:]
   private var openCalls: [String] = []
   private var calls: [String: ToolCall] = [:]
-  private var usage: TokenUsage?
-  private var model: String?
   private var stepFailure: String?
 
   /// The events `event` makes. It is one of this session's own.
@@ -17,14 +16,7 @@ struct OpenCodeProjection: Sendable {
     let data = event["data"] ?? .null
     let message = data["assistantMessageID"]?.string ?? ""
     switch event["type"]?.string {
-    case "session.step.started":
-      if let id = data["model"]?["id"]?.string { model = (data["model"]?["providerID"]?.string ?? "") + "/" + id }
-      return []
-    case "session.step.ended":
-      addUsage(data)
-      return []
     case "session.step.failed":
-      addUsage(data)
       stepFailure = data["error"]?["message"]?.string
       return []
 
@@ -128,8 +120,7 @@ struct OpenCodeProjection: Sendable {
     }
     openCalls.removeAll()
     calls.removeAll()
-    events.append(.turnFinished(failure: failure, usage: usage))
-    usage = nil
+    events.append(.turnFinished(failure: failure, usage: nil))
     stepFailure = nil
     return events
   }
@@ -145,18 +136,6 @@ struct OpenCodeProjection: Sendable {
       calls[id] = call
     }
     return [.tool(callID: id, call: call, finished: finished)]
-  }
-
-  private mutating func addUsage(_ data: JSONValue) {
-    guard let tokens = data["tokens"], tokens != .null else { return }
-    var total = usage ?? TokenUsage(model: model, input: 0, output: 0)
-    total.model = model ?? total.model
-    total.input += Self.count(tokens["input"])
-    total.output += Self.count(tokens["output"]) + Self.count(tokens["reasoning"])
-    total.cacheRead += Self.count(tokens["cache"]?["read"])
-    total.cacheWrite += Self.count(tokens["cache"]?["write"])
-    if let cost = data["cost"]?.double { total.cost = (total.cost ?? 0) + cost }
-    usage = total
   }
 
   private func textKey(_ data: JSONValue) -> String {

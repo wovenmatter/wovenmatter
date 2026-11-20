@@ -300,10 +300,6 @@ private actor ACPState {
   private var ownTurn = false
   private var lastOutput = ContinuousClock.now
   private var turnNumber = 0
-  /// The session's cost so far in US dollars, as `usage_update` reports it,
-  /// and what it was when the running turn began.
-  private var sessionCost: Double?
-  private var costBeforeTurn: Double?
   private var tools: [String: ToolCall] = [:]
   private var thinkingID: String?
   private var thinkingCount = 0
@@ -345,7 +341,6 @@ private actor ACPState {
     // A prompt sent during a turn the agent started itself takes that turn
     // over: its reply ends it.
     if ownTurn { ownTurn = false } else { turnNumber += 1 }
-    costBeforeTurn = sessionCost
     let blocks = try Self.blocks(turn)
     let connection = connection
     Task {
@@ -444,9 +439,7 @@ private actor ACPState {
       case "refusal": "The model declined to answer."
       default: nil
       }
-      var usage = Self.usage(value, model: configuration.model)
-      if usage?.cost == nil, let sessionCost { usage?.cost = max(0, sessionCost - (costBeforeTurn ?? 0)) }
-      emit.yield(.turnFinished(failure: failure, usage: usage))
+      emit.yield(.turnFinished(failure: failure, usage: Self.usage(value, model: configuration.model)))
     case .failure(let error as ACPError) where profile.isMissingSession(error):
       emit.yield(.nativeSessionGone)
     case .failure(let error):
@@ -638,11 +631,8 @@ private actor ACPState {
       capture(update)
       return
     case "usage_update":
-      if let cost = update["cost"], cost["currency"]?.string?.uppercased() ?? "USD" == "USD", let amount = cost["amount"]?.double {
-        sessionCost = amount
-      }
       // Claude Code reports the cost of a model cycle at its end, also of
-      // one it started by itself.
+      // one it started by itself. The cost itself is counted from its history.
       if update["cost"] != nil { endOwnTurn() }
       return
     case "session_info_update":
@@ -828,12 +818,12 @@ private actor ACPState {
     return (try? String(decoding: Wire.encoder.encode(value), as: UTF8.self)) ?? ""
   }
 
+  /// The turn's usage in the prompt's reply, which Pi Durable gives.
   private static func usage(_ result: JSONValue, model: String?) -> TokenUsage? {
     let usage = result["usage"] ?? result["_meta"]?["usage"]
     guard let usage, let input = usage["inputTokens"]?.int, let output = usage["outputTokens"]?.int else { return nil }
     return TokenUsage(model: result["_meta"]?["model"]?.string ?? model, input: Int64(input), output: Int64(output),
-                      cacheRead: Int64(usage["cachedReadTokens"]?.int ?? 0), cacheWrite: Int64(usage["cachedWriteTokens"]?.int ?? 0),
-                      cost: usage["cost"]?.double)
+                      cacheRead: Int64(usage["cachedReadTokens"]?.int ?? 0), cacheWrite: Int64(usage["cachedWriteTokens"]?.int ?? 0))
   }
 
   /// A turn as ACP content blocks: images inline, text files embedded, other

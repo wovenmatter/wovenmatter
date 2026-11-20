@@ -432,13 +432,14 @@ extension Library {
 // MARK: Usage
 
 extension Library {
-  /// Writes one usage record for a finished turn of a session on this machine.
+  /// Writes one usage record for a finished turn of a session on this
+  /// machine, for a runtime without a history of its own (Pi Durable).
   public func recordUsage(sessionID: String?, runtime: RuntimeKind, model: String, input: Int64, output: Int64,
-                          cacheRead: Int64, cacheWrite: Int64, cost: Double) async throws {
+                          cacheRead: Int64, cacheWrite: Int64) async throws {
     try await put("usage_records", id: UUID().uuidString.lowercased(), [
       "machine_id": .text(machineID), "session_id": sessionID.map(SQLValue.text) ?? .null, "runtime": .text(runtime.rawValue),
       "model": .text(model), "input_tokens": .integer(input), "output_tokens": .integer(output),
-      "cache_read_tokens": .integer(cacheRead), "cache_write_tokens": .integer(cacheWrite), "cost": .real(cost),
+      "cache_read_tokens": .integer(cacheRead), "cache_write_tokens": .integer(cacheWrite),
       "recorded_at": .integer(Writer.now()),
     ])
   }

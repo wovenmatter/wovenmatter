@@ -132,7 +132,8 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
 
 /// A turn Woven Matter ran is in the harness's own history too. It is
 /// counted from there once, named as the Woven Matter session, while its
-/// hour is open and after it moves to a synced record.
+/// hour is open and after it moves to a synced record. Another machine sees
+/// nothing of the open hour and the record once it is written.
 @Test func aWovenSessionCountsOnceUnderItsName() async throws {
   let home = try temporary("usage-home")
   let now = Date()
@@ -143,15 +144,27 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   let scanner = UsageScanner(library: library, home: home)
   #expect(await scanner.scan(now: now).records == 0)
 
-  func groups() async throws -> [UsageGroup] {
+  let other = try await Library.open(folder: try temporary("usage-library"), machineName: "b")
+  func sync() async throws {
+    while true {
+      let page = try await library.pull(after: try await other.cursor(for: library.machineID), limit: 100)
+      try await other.apply(page, from: library.machineID)
+      if !page.more { break }
+    }
+  }
+  func groups(_ library: Library) async throws -> [UsageGroup] {
     try await library.usage(from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600), periodSeconds: 3600).groups
   }
-  let open = try await groups()
+  let open = try await groups(library)
   #expect(open.count == 1 && open[0].inWoven && open[0].sessionID == "woven-session" && open[0].amounts.requests == 1)
+  try await sync()
+  #expect(try await groups(other).isEmpty)
 
   #expect(try await library.flushUsage(now: now.addingTimeInterval(2 * 3600)) == 1)
   #expect(await scanner.scan(now: now.addingTimeInterval(2 * 3600)).added == 0)
   let records = try await library.rows("usage_records", where: "session_id", is: .text("woven-session"))
   #expect(records.count == 1 && records[0].values["woven"] == .integer(1))
-  #expect(try await groups() == open)
+  #expect(try await groups(library) == open)
+  try await sync()
+  #expect(try await groups(other) == open)
 }

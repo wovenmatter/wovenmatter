@@ -72,23 +72,21 @@ public struct Turn: Sendable, Hashable {
   }
 }
 
-/// Tokens a turn used, as the runtime reports them.
+/// Tokens a turn used, as a runtime without a history of its own (Pi
+/// Durable) reports them. Harnesses with one are counted from it instead.
 public struct TokenUsage: Sendable, Hashable {
   public var model: String?
   public var input: Int64
   public var output: Int64
   public var cacheRead: Int64
   public var cacheWrite: Int64
-  /// In US dollars, when the runtime reports a cost.
-  public var cost: Double?
 
-  public init(model: String? = nil, input: Int64, output: Int64, cacheRead: Int64 = 0, cacheWrite: Int64 = 0, cost: Double? = nil) {
+  public init(model: String? = nil, input: Int64, output: Int64, cacheRead: Int64 = 0, cacheWrite: Int64 = 0) {
     self.model = model
     self.input = input
     self.output = output
     self.cacheRead = cacheRead
     self.cacheWrite = cacheWrite
-    self.cost = cost
   }
 }
 

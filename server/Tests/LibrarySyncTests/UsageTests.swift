@@ -9,9 +9,9 @@ import WovenProtocol
                            machineName: name)
   }
   let a = try await library("a"), b = try await library("b")
-  try await a.recordUsage(sessionID: "s1", runtime: .codex, model: "gpt", input: 100, output: 10, cacheRead: 5, cacheWrite: 0, cost: 0.5)
-  try await a.recordUsage(sessionID: "s1", runtime: .codex, model: "gpt", input: 50, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.25)
-  try await b.recordUsage(sessionID: "s2", runtime: .claudeCode, model: "claude", input: 7, output: 3, cacheRead: 0, cacheWrite: 2, cost: 0)
+  try await a.recordUsage(sessionID: "s1", runtime: .codex, model: "gpt", input: 100, output: 10, cacheRead: 5, cacheWrite: 0)
+  try await a.recordUsage(sessionID: "s1", runtime: .codex, model: "gpt", input: 50, output: 5, cacheRead: 0, cacheWrite: 0)
+  try await b.recordUsage(sessionID: "s2", runtime: .claudeCode, model: "claude", input: 7, output: 3, cacheRead: 0, cacheWrite: 2)
   while true {
     let page = try await a.pull(after: try await b.cursor(for: a.machineID), limit: 100)
     try await b.apply(page, from: a.machineID)
@@ -19,7 +19,7 @@ import WovenProtocol
   }
 
   let report = try await b.usage(from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(60), periodSeconds: 3600)
-  #expect(report.totals == UsageAmounts(input: 157, output: 18, cacheRead: 5, cacheWrite: 2, cost: 0.75, requests: 3))
+  #expect(report.totals == UsageAmounts(input: 157, output: 18, cacheRead: 5, cacheWrite: 2, requests: 3))
   #expect(report.sessions == 2)
   #expect(Set(report.newestByMachine.keys) == [a.machineID, b.machineID])
   let fromA = report.groups.filter { $0.machineID == a.machineID }
