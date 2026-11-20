@@ -2,9 +2,10 @@ import Foundation
 import Synchronization
 import WovenProtocol
 
-/// Hands browser and computer-use calls to the UI on this Mac and waits for
-/// its answer. macOS ties those permissions to the app, so the server never
-/// carries them out itself. The newest connected UI takes each call.
+/// Hands browser, computer-use and page-preview calls to the UI on this Mac
+/// and waits for its answer. macOS ties those permissions to the app, and only
+/// the app has the chat's web view, so the server never carries them out
+/// itself. The newest connected UI takes each call.
 final class UIToolBroker: Sendable {
   /// How long a UI may take to answer.
   static let answerLimit = Duration.seconds(90)
@@ -30,8 +31,9 @@ final class UIToolBroker: Sendable {
     state.withLock { $0.waiting.removeValue(forKey: id) }?.resume(returning: result)
   }
 
-  /// Asks the newest UI to carry out `tool`; fails at once with none connected.
-  func carryOut(_ tool: String, arguments: JSONValue, sessionID: String?) async -> ToolResult {
+  /// Asks the newest UI to carry out `tool`; fails at once with none
+  /// connected, saying `absent` when given.
+  func carryOut(_ tool: String, arguments: JSONValue, sessionID: String?, absent: String? = nil) async -> ToolResult {
     let id = UUID().uuidString.lowercased()
     let call = UIToolCall(id: id, tool: tool, arguments: arguments, sessionID: sessionID)
     let timer = Task { [weak self] in
@@ -48,7 +50,7 @@ final class UIToolBroker: Sendable {
         return false
       }
       if !sent {
-        continuation.resume(returning: .error(
+        continuation.resume(returning: .error(absent ??
           "The \(tool) tool needs the Woven Matter app open on this machine, and it is not. Ask the person to open it, or do without."))
       }
     }

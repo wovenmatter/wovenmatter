@@ -108,8 +108,8 @@ public struct CallTool: Request {
   }
 }
 
-/// For the UI on the server's own Mac: delivers each browser or computer-use
-/// call the server wants carried out. The UI answers each with `AnswerUITool`.
+/// For the UI on the server's own Mac: delivers each browser, computer-use or
+/// page-preview call the server wants carried out. The UI answers each with `AnswerUITool`.
 public struct SubscribeUITools: Subscription {
   public static let method = "tools.ui.subscribe"
   public typealias Reply = Done
@@ -120,7 +120,7 @@ public struct SubscribeUITools: Subscription {
 /// One call for the UI to carry out.
 public struct UIToolCall: Codable, Sendable, Hashable, Identifiable {
   public var id: String
-  /// `browser` or `computer`.
+  /// `browser`, `computer` or `preview_html`.
   public var tool: String
   public var arguments: JSONValue
   /// The session that made the call, when a session did.

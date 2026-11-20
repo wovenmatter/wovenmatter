@@ -107,3 +107,40 @@ func aUIToolFailsCleanlyWithNoUIConnected() async throws {
   #expect(call.failed)
   #expect(call.output?.contains("needs the Woven Matter app open") == true)
 }
+
+@Test(.timeLimit(.minutes(1)))
+func aPreviewIsCarriedOutByThisMacsUIAndFailsPlainlyWithoutIt() async throws {
+  let host = try await TestServer.start(name: "Studio")
+  defer { host.server.stopLater() }
+  let client = try await host.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Charts"))
+  let image = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).png")
+  try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: image)
+  defer { try? FileManager.default.removeItem(at: image) }
+  let missing = "/nonexistent-\(UUID().uuidString)/chart.png"
+  let arguments = #"{"html":"<p>Hi</p><img src=\"\#(image.path)\"><img src=\"\#(missing)\">","width":390,"appearance":"light"}"#
+
+  let alone = try await callTool(client, from: session.id, "preview_html", arguments)
+  #expect(alone.failed)
+  #expect(alone.output?.contains("`render_html` still works") == true)
+
+  let calls = try await client.subscribe(SubscribeUITools())
+  let asked = Task { () -> UIToolCall? in
+    for try await call in calls.events {
+      _ = try await client.call(AnswerUITool(id: call.id, result: ToolResult(content: [
+        .text(#"{"width":390,"contentHeight":120}"#), .image(data: "iVBORw0KGgo=", mimeType: "image/png")])))
+      return call
+    }
+    return nil
+  }
+  let previewed = try await callTool(client, from: session.id, "preview_html", arguments)
+  let call = try #require(try await asked.value)
+  #expect(call.tool == "preview_html")
+  #expect(call.arguments["width"]?.int == 390)
+  #expect(call.arguments["appearance"]?.string == "light")
+  #expect(call.arguments["html"]?.string?.contains("<p>Hi</p><img src=\"data:image/png;base64,") == true)
+  #expect(!previewed.failed)
+  let output = try JSONDecoder().decode(JSONValue.self, from: Data((previewed.output ?? "").utf8))
+  #expect(output["contentHeight"]?.int == 120)
+  #expect(output["missingImages"]?.array == [.string(missing)])
+}

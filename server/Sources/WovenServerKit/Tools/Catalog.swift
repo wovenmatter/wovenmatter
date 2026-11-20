@@ -551,4 +551,43 @@ private let uiTools: [WovenTool] = [
     run: { call in
       await call.tools.ui.carryOut("computer", arguments: call.arguments.value, sessionID: call.caller.sessionID)
     }),
+  WovenTool(
+    name: "preview_html",
+    description: """
+      Check a page before publishing it with `render_html`. Returns a PNG of the page as the chat shows it, its \
+      console messages, its content height, and `missingImages`: local image paths it refers to that are missing, \
+      unreadable or not images. Width defaults to 728 CSS pixels; use 390 for a phone. Appearance defaults to dark. \
+      Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.
+      """,
+    input: schema(["html": text("The whole self-contained page, at most 512,000 characters."),
+                   "width": integer("240 to 1600 CSS pixels; default 728."),
+                   "appearance": choice(["light", "dark"], "Default dark.")], required: ["html"]),
+    readOnly: true,
+    run: { call in
+      let page = try HTMLPages.prepare(call.arguments.optionalString("html") ?? "")
+      let width = call.arguments.int("width") ?? 728
+      guard call.arguments["width"] == nil || call.arguments.int("width") != nil, (240...1600).contains(width) else {
+        throw ToolFailure("Give `width` from 240 to 1600.")
+      }
+      let appearance = call.arguments.optionalString("appearance") ?? "dark"
+      guard ["light", "dark"].contains(appearance) else { throw ToolFailure("Give `appearance` as light or dark.") }
+      let result = await call.tools.ui.carryOut(
+        "preview_html",
+        arguments: .object(["html": .string(page.html), "width": .integer(Int64(width)), "appearance": .string(appearance)]),
+        sessionID: call.caller.sessionID,
+        absent: "A preview needs the Woven Matter app open on this machine, and it is not. `render_html` still works without it.")
+      return adding(missingImages: page.missingImages, to: result)
+    }),
 ]
+
+/// The preview's measurements with the local images the server could not
+/// embed, which only the server knows.
+private func adding(missingImages: [String], to result: ToolResult) -> ToolResult {
+  guard !result.isError, let index = result.content.firstIndex(where: { if case .text = $0 { true } else { false } }),
+        case .text(let text) = result.content[index],
+        case .object(var fields)? = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)) else { return result }
+  fields["missingImages"] = .array(missingImages.map(JSONValue.string))
+  var result = result
+  result.content[index] = .text(json(JSONValue.object(fields)))
+  return result
+}
