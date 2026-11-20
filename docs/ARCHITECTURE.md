@@ -252,9 +252,19 @@ machine reads its own library and so shows every machine.
   cost when the harness records one, and the harness's own session
   identifier. No text, path or credential is read into the library.
 - The server reads each history on from where it stopped (a digest of the
-  path keys the place, in a local table), at start and every two minutes.
-  Each response is counted by the harness's own identifier, so reading again
-  or a copy in a resumed or forked session never counts twice.
+  path keys the place, in a local table), at start and every two minutes. A
+  file is the same history while its first line is, so one copied back,
+  restored or rewritten whole is read on, not again. A copy of another
+  session's responses in a resumed or forked session is recognised by the
+  session it names and left out. Beyond that, each response is remembered by
+  the harness's own identifier for 60 days, so a file whose first line
+  changed is read again from the start without counting what was seen in
+  that time.
+- Every history may have been written by anyone. A line that is not what its
+  harness writes is skipped; a file that cannot be read (it fails to
+  decompress, or the database is locked or corrupt) is passed over until it
+  changes. Counts are held below a trillion per response, and decompression
+  stops at 256 MiB per file.
 - What it reads is summed per harness session, model and hour in a local
   table. When the hour is over, each sum becomes one synced record, so a year
   of heavy use stays a few thousand rows per machine. The page includes this
