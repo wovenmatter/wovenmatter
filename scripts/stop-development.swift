@@ -4,9 +4,25 @@ import Foundation
 // Use AppKit's normal quit request so pending writes and active execution can
 // refuse a rebuild. Never force-terminate, and never identify an app by name.
 let target = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL.resolvingSymlinksInPath()
+/// The instance's server is the same program run with `--server`. macOS can
+/// list it as an application too; it never answers a quit request, and
+/// stopping it is the caller's next step, not this script's.
+func isServer(_ pid: pid_t) -> Bool {
+    let ps = Process()
+    ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+    ps.arguments = ["-o", "args=", "-p", String(pid)]
+    let output = Pipe()
+    ps.standardOutput = output
+    ps.standardError = FileHandle.nullDevice
+    guard (try? ps.run()) != nil else { return false }
+    let arguments = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    ps.waitUntilExit()
+    return arguments.contains(" --server ")
+}
 func isFrontend(_ application: NSRunningApplication) -> Bool {
     guard !application.isTerminated, application.activationPolicy != .prohibited,
-          application.executableURL?.standardizedFileURL.resolvingSymlinksInPath() == target else { return false }
+          application.executableURL?.standardizedFileURL.resolvingSymlinksInPath() == target,
+          !isServer(application.processIdentifier) else { return false }
     return true
 }
 if CommandLine.arguments.contains("--wait") {
