@@ -257,7 +257,7 @@ func callsAndOpenedConversationsPassThroughToTheRuntime() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func anotherServerForwardsToTheHomeMachine() async throws {
+func anotherServerSendsUIsToTheHomeMachineAndForwardsCalls() async throws {
   let runtime = StandInBotsRuntime()
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(name: "Studio", runtime: runtime, tailnet: tailnetA, listen: true)
@@ -269,17 +269,21 @@ func anotherServerForwardsToTheHomeMachine() async throws {
   await b.server.discoverMachines()
   try await a.makeHome(try await a.connect(), runtime)
 
-  // Once the setting reaches it, the other server follows the home machine's status.
+  // Once the setting reaches it, the other server streams nothing of the bots:
+  // it names the home machine, whose server a UI connects to directly.
   let onB = try await b.connect()
-  let subscription = try await onB.subscribe(SubscribeBots())
-  if subscription.reply.status.state != .ready {
-    for try await event in subscription.events {
-      if case .status(let status) = event, status.state == .ready {
-        #expect(status.homeMachineID == a.server.machineID)
-        break
-      }
+  while true {
+    do {
+      let subscription = try await onB.subscribe(SubscribeBots())
+      try await onB.unsubscribe(subscription.id)
+      try await Task.sleep(for: .milliseconds(50))
+    } catch let error as ProtocolError {
+      #expect(error.code == .notOwner)
+      #expect(error.machineID == a.server.machineID)
+      break
     }
   }
+  // A call (as an agent there makes through the Woven MCP) is still forwarded.
   let reply = try await onB.call(BotsCall(request: json(#"{"type": "bots.list"}"#)))
   #expect(reply["asked"]?["type"]?.string == "bots.list")
 }

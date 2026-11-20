@@ -11,7 +11,7 @@ struct BotConversationKey: Hashable, Sendable {
 }
 
 /// One open bot conversation: its history, the reply being written, and messages not yet
-/// recorded. While a pane shows it, it follows one `SubscribeBots(open:)` on this Mac's server;
+/// recorded. While a pane shows it, it follows one `SubscribeBots(open:)` on the home machine's server;
 /// while the home machine is away it shows the conversation's saved items.
 @MainActor
 @Observable
@@ -132,7 +132,7 @@ final class BotChatStore {
 
     /// The conversation as the library holds it; sending stays off.
     private func loadSaved() async {
-        guard let bots, let server = bots.server else { return }
+        guard let bots, let server = bots.library else { return }
         let main = bots.savedChat(botID: key.botID, conversationID: nil)
         mainID = main?.conversationID
         origin = nil
@@ -325,7 +325,7 @@ final class ForumRoomStore {
 
     /// The room as the library holds it; posting stays off.
     private func loadSaved() async {
-        guard let bots, let server = bots.server else { return }
+        guard let bots, let server = bots.library else { return }
         guard let room = bots.savedForumRoom(roomID: key.conversationID) else {
             state = PiBotForumRoomState()
             loading = false

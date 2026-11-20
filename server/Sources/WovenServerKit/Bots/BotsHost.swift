@@ -14,9 +14,10 @@ import Glibc
 ///   (restarting with backoff up to 30 s), and is the runtime's only client
 ///   over its Unix socket: requests pass through, pushes fan out to
 ///   subscribers, and the runtime's `host` requests are answered here.
-/// - When it names another machine, follows that machine's server for the
-///   status and the messages for everyone, and forwards calls and opened
-///   conversations to it.
+/// - When it names another machine, follows that machine's server for its
+///   status and forwards calls to it (an agent here calls through the Woven
+///   MCP). Subscriptions are refused with `notOwner`: a UI connects to the
+///   home machine's server directly.
 /// - When it is unset, the bots are off.
 actor BotsHost {
   typealias Events = AsyncThrowingStream<BotsEvent, any Error>
@@ -466,20 +467,18 @@ actor BotsHost {
   }
 
   /// `SubscribeBots`: the status and the messages for everyone, or with
-  /// `open` that conversation or Forum room.
+  /// `open` that conversation or Forum room. Only the home machine's server
+  /// answers: a UI connects to it directly, and no server relays its stream.
   func subscribe(open: JSONValue?, caller: Caller) async throws -> (BotsOpened, Events) {
-    // Another server asks only the machine that is home; one that is not says so and ends.
-    if let home, home != thisMachine, caller.hello.role == .server {
-      return (BotsOpened(status: BotsStatus(homeMachineID: home, state: .unreachable,
-                                            message: "This machine does not run the bots.")), Self.ended)
+    if let home, home != thisMachine {
+      throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: home)
     }
     guard let open else {
       let (events, continuation) = makeStream()
       everyone[continuation.id] = continuation.continuation
       return (BotsOpened(status: status), events)
     }
-    guard let home else { return (BotsOpened(status: status), Self.ended) }
-    guard home == thisMachine else { return try await relayOpen(open, home: home, caller: caller) }
+    guard home != nil else { return (BotsOpened(status: status), Self.ended) }
     guard connection != nil, ["conversation.open", "forum.open"].contains(open["type"]?.string) else {
       if connection != nil { throw ProtocolError(.badRequest, "open is a conversation.open or forum.open request.") }
       return (BotsOpened(status: status), Self.ended)
@@ -521,33 +520,6 @@ actor BotsHost {
   private func unreachable(_ home: String) async -> ProtocolError {
     let name = (try? await library.machine(home))?.name ?? home
     return ProtocolError(.ownerUnreachable, "\(name) runs the bots and is not reachable.", machineID: home)
-  }
-
-  /// An opened conversation on the home machine's server, relayed.
-  private func relayOpen(_ open: JSONValue, home: String, caller: Caller) async throws -> (BotsOpened, Events) {
-    guard let client = try? await homeClient(home, caller: caller) else {
-      return (BotsOpened(status: status), Self.ended)
-    }
-    let subscription = try await client.subscribe(SubscribeBots(open: open))
-    let (events, continuation) = Events.makeStream(bufferingPolicy: .bufferingOldest(Self.subscriberBuffer))
-    let forward = Task {
-      do {
-        for try await event in subscription.events {
-          if case .dropped = continuation.yield(event) {
-            continuation.finish(throwing: SubscriberTooSlow())
-            return
-          }
-        }
-        continuation.finish()
-      } catch {
-        continuation.finish(throwing: error)
-      }
-    }
-    continuation.onTermination = { _ in
-      forward.cancel()
-      Task { try? await client.unsubscribe(subscription.id) }
-    }
-    return (subscription.reply, events)
   }
 
   /// Follows the home machine's server: its status, and its messages for

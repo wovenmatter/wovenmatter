@@ -11,31 +11,53 @@ struct BotsCallError: LocalizedError, Equatable {
 }
 
 /// The bots and the Forum, on the bots' home machine: bots, groups, threads, the Forum, onboarding
-/// and resources. There is one set of bots, on one machine chosen from the Woven machines. Every
-/// request goes to this Mac's server, which carries it to the home machine's; while that machine
-/// is away, the bots and their chats show what the library holds.
+/// and resources. There is one set of bots, on one machine chosen from the Woven machines. The UI
+/// connects to the home machine's server directly for the bots and the Forum; while that machine
+/// is away, the bots and their chats show what this Mac's library holds.
 @MainActor
 @Observable
 final class BotsStore {
     init() {}
 
-    @ObservationIgnored private(set) weak var server: ServerConnection?
+    /// This Mac's server, for what the library holds.
+    @ObservationIgnored private(set) weak var library: ServerConnection?
+    @ObservationIgnored private weak var connections: MachineConnections?
+    /// The home machine's server, connected to directly; this Mac's until a home is known.
+    var server: ServerConnection? { connections?.connection(for: homeMachineID) ?? library }
     @ObservationIgnored private weak var machines: MachinesStore?
     @ObservationIgnored private weak var settings: SettingsStore?
     @ObservationIgnored private var following: Task<Void, Never>?
 
-    /// Follows the bots on this Mac's server for as long as the app runs.
-    func attach(_ server: ServerConnection, machines: MachinesStore, settings: SettingsStore) {
-        self.server = server
+    /// Follows the bots on the home machine's server for as long as the app runs, moving to
+    /// another machine's when the home changes. While the home machine cannot be reached the
+    /// bots read as unreachable, from the library.
+    func attach(_ connections: MachineConnections, machines: MachinesStore, settings: SettingsStore) {
+        self.library = connections.local
+        self.connections = connections
         self.machines = machines
         self.settings = settings
         following?.cancel()
         following = Task { [weak self] in
-            await server.follow(SubscribeBots(), reply: { [weak self] opened in
-                self?.apply(opened.status, reload: true)
-            }, event: { [weak self] event in
-                self?.receive(event)
-            })
+            while !Task.isCancelled {
+                guard let server = self?.server else {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    continue
+                }
+                let live = Task { [weak self] in
+                    await server.follow(SubscribeBots(), reply: { [weak self] opened in
+                        self?.apply(opened.status, reload: true)
+                    }, event: { [weak self] event in
+                        self?.receive(event)
+                    })
+                }
+                while !Task.isCancelled, let self, self.server === server {
+                    if !server.isConnected, server !== library, let home = homeMachineID, state != .unreachable {
+                        apply(BotsStatus(homeMachineID: home, state: .unreachable), reload: true)
+                    }
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                live.cancel()
+            }
         }
     }
 
@@ -133,7 +155,7 @@ final class BotsStore {
 
     // MARK: Bots runtime
 
-    /// Connected to the bots runtime through this Mac's server.
+    /// Connected to the bots runtime on the home machine's server.
     var isConnected: Bool { state == .ready && server?.isConnected == true }
     /// The home machine is away: the bots and their chats show what the library holds.
     var isReadingSaved: Bool { homeMachineID != nil && state == .unreachable }
@@ -275,9 +297,9 @@ final class BotsStore {
 
     /// The bots and their chats as the library holds them.
     private func loadSaved() async {
-        guard let server, let home = homeMachineID else { return }
+        guard let library, let home = homeMachineID else { return }
         do {
-            let saved = try await server.call(ListSavedBots())
+            let saved = try await library.call(ListSavedBots())
             guard !isConnected else { return }
             savedChats = saved.chats.filter { $0.session.machineID == home }
             bots = saved.bots.filter { $0.homeMachineID == home && !$0.trashed }
@@ -313,7 +335,7 @@ final class BotsStore {
 
     // MARK: Requests
 
-    /// One request of `bots/src/protocol.ts`, through this Mac's server to the home machine's.
+    /// One request of `bots/src/protocol.ts`, to the home machine's server.
     func call(_ type: String, _ fields: [String: JSONValue] = [:]) async throws -> JSONValue {
         guard let server, isConnected else { throw BotsCallError.notConnected }
         var request = fields
