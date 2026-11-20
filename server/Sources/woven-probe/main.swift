@@ -12,7 +12,10 @@ let usage = """
     sign-in PROVIDER                 run a subscription's sign-in; prompts are read from stdin
     sign-out PROVIDER
     set-key PROVIDER [KEY]           set (or, without KEY, remove) an API key everywhere
-    machines | sessions | folders
+    machines | sessions | folders | settings | folder-create NAME
+    devices                          tailnet computers without a Woven server
+    device-install HOST [USER]       install the Linux server there over SSH
+    device-update MACHINE | remove MACHINE | rename NAME [MACHINE]
     create RUNTIME [TITLE] [--folder ID]
     send SESSION TEXT [--attach FILE]... [--approve OPTION]
                                      send a turn and print the stream until it ends
@@ -209,14 +212,35 @@ do {
   case "machines":
     for status in try await client.call(ListMachines()) {
       out("\(status.machine.id)\t\(status.machine.name)\t\(status.machine.platform.rawValue)\t\(status.online ? "online" : "offline")"
-          + (status.isThisMachine ? "\tthis machine" : ""))
+          + (status.isThisMachine ? "\tthis machine" : "\t\(status.appVersion ?? "-")\t\(status.address ?? "-"):\(status.port.map(String.init) ?? "-")"))
     }
+  case "devices":
+    for device in try await client.call(FindDevices()) {
+      out("\(device.name)\t\(device.address)\t\(device.platform?.rawValue ?? "-")")
+    }
+  case "device-install":
+    _ = try await client.call(InstallServer(host: argument(0, "HOST"), user: arguments.count > 1 ? arguments[1] : nil))
+    out("installed")
+  case "device-update":
+    _ = try await client.call(UpdateServer(machineID: argument(0, "MACHINE")))
+    out("updated")
+  case "remove":
+    _ = try await client.call(RemoveMachine(machineID: argument(0, "MACHINE")))
+    out("removed")
+  case "rename":
+    let machine = try await client.call(RenameMachine(name: argument(0, "NAME"), machineID: arguments.count > 1 ? arguments[1] : nil))
+    out("\(machine.id)\t\(machine.name)")
   case "sessions":
     for session in try await client.call(ListSessions(includeArchived: true)) {
       out("\(session.id)\t\(session.runtime.rawValue)\t\(session.title)\t\(session.directory)\t\(session.model ?? "-")")
     }
   case "folders":
-    for folder in try await client.call(ListFolders()) { out("\(folder.id)\t\(folder.name)\t\(folder.path)") }
+    for folder in try await client.call(ListFolders()) { out("\(folder.id)\t\(folder.name)\t\(folder.machineID)\t\(folder.path)") }
+  case "folder-create":
+    let folder = try await client.call(CreateFolder(name: argument(0, "NAME")))
+    out("\(folder.id)\t\(folder.path)")
+  case "settings":
+    for setting in try await client.call(ListSettings()) { out("\(setting.key)\t\(json(setting.value))") }
   case "create":
     let folder = options("--folder").first
     let runtime = RuntimeKind(rawValue: argument(0, "RUNTIME"))

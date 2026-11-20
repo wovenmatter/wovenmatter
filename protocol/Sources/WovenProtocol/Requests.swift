@@ -31,12 +31,17 @@ public struct RemoveMachine: Request {
   public init(machineID: String) { self.machineID = machineID }
 }
 
-/// Renames the machine of the server asked.
+/// Renames a machine, the one of the server asked when `machineID` is nil.
+/// The name syncs; the newest rename wins.
 public struct RenameMachine: Request {
   public static let method = "machines.rename"
   public typealias Reply = Machine
   public var name: String
-  public init(name: String) { self.name = name }
+  public var machineID: String?
+  public init(name: String, machineID: String? = nil) {
+    self.name = name
+    self.machineID = machineID
+  }
 }
 
 // MARK: Sessions

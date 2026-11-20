@@ -28,6 +28,10 @@ public final class WovenServer: Sendable {
     public var secretStore: (any SecretStore)?
     /// How this machine runs the bots when it is their home; tests give a stand-in.
     var botsHosting: BotsHosting = .standard
+    /// A development instance's name: servers it installs elsewhere are that instance too.
+    public var instance: String?
+    /// It offers the stand-in runtime, and so do servers it installs.
+    public var offersStandIn = false
 
     public init(dataFolder: URL, socketPath: String?, listen: (host: String, port: Int)?, appVersion: String,
                 machineName: String, tailnet: any Tailnet, runtimes: [any Runtime], discoveryInterval: Duration = .seconds(30),
@@ -98,6 +102,14 @@ public final class WovenServer: Sendable {
     await bots.offerTools(tools)
     let endpoint = MCPEndpoint(keys: toolKeys, tools: tools)
     try endpoint.start()
+    #if os(macOS)
+    let install: LinuxInstall? = LinuxInstall(bundle: LinuxInstall.standardBundle, instance: options.instance,
+                                              port: options.listen?.port ?? wovenPort, appVersion: options.appVersion,
+                                              standIn: options.offersStandIn)
+    #else
+    let install: LinuxInstall? = nil
+    #endif
+    registerDevices(&routes, library: library, peers: peers, tailnet: options.tailnet, install: install)
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -238,15 +250,11 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
       }
       let status = statuses[machine.id]
       return MachineStatus(machine: machine, isThisMachine: false, online: status?.online ?? false,
-                           appVersion: status?.appVersion)
+                           appVersion: status?.appVersion, address: status?.machine.host, port: status?.machine.port)
     }
   }
   router.on(RenameMachine.self) { request, _ in
-    try await library.renameMachine(thisMachine, to: request.name)
-  }
-  router.on(RemoveMachine.self) { request, _ in
-    try await library.removeMachine(request.machineID)
-    return Done()
+    try await library.renameMachine(request.machineID ?? thisMachine, to: request.name)
   }
 
   router.on(ListSessions.self) { request, _ in

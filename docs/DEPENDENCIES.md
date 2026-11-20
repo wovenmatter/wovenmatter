@@ -33,7 +33,7 @@ for every package update. Three separate mechanisms do that:
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
-| `remote/library/build-version.json` | Swift toolchain image digest, Static Linux SDK archive SHA-256, and SQLite amalgamation SHA-256 for the Linux `wovenmatter-library` build | Maintenance PR, all together with `app/Package.resolved` |
+| `server/linux-build.json` | The swift.org macOS toolchain package (SHA-256 and signer), the Static Linux SDK archive SHA-256 (as swift.org publishes it), the SQLite amalgamation SHA-256, and the Linux Node archives' SHA-256 (the release in `default-agent/.node-version`) for the Linux `woven-server` release the Mac app carries | Maintenance PR, all together; the toolchain and SDK must be the same Swift release |
 | `app/VMHelper/guest-version.json` and `app/VMHelper/Guest/docker-archive-keyring.asc` | Woven Mac VM guest: Ubuntu cloud image serial, URL, size and SHA-256; Docker apt repository, signing-key fingerprint and file SHA-256, exact `docker-ce` and `containerd.io` versions | Maintenance PR, record and key together |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
@@ -194,6 +194,18 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
   against a disposable native fixture, including background focus preservation.
   Signed-app Accessibility/Screen Recording grants are required for that check.
+- **The Linux server** (`woven-server`). `scripts/prepare-linux-server.sh`
+  cross-compiles it on the Mac, statically linked against musl, for x86_64
+  and aarch64, with the swift.org toolchain (unpacked from its signed package,
+  never installed; swift.org publishes no checksum for it, so its SHA-256 and
+  the Developer ID signer are recorded) and the Static Linux SDK (checksum
+  from swift.org's release list, verified again by `swift sdk install`). Xcode's
+  compiler cannot use that SDK. SQLite is the recorded amalgamation, compiled
+  with FTS5 and math functions. Its child processes get the official Linux
+  Node of `default-agent/.node-version` and Pi Durable's packages installed
+  for Linux with `npm ci`, all shipped in the release, so a target downloads
+  nothing at install. Release builds always build it; Debug builds copy one
+  already built. Maintenance moves the toolchain and SDK together.
 - **Swift on Linux** (`wovenmatter-library` and the portable library targets).
   `apple/swift-crypto` (floor 5.1.1, transitive `swift-asn1`) replaces CryptoKit
   only on Linux: every use is `#if canImport(CryptoKit) … #else import Crypto`,

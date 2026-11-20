@@ -5,7 +5,7 @@ import Synchronization
 /// app's own program run with `--server`:
 ///
 ///     DATA-FOLDER [--socket PATH|none] [--listen HOST:PORT|auto|none] [--port PORT] [--tailnet none]
-///                 [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime]
+///                 [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime] [--instance NAME]
 ///
 /// Opens the library in DATA-FOLDER, listens on a Unix socket for the UI on
 /// this machine (default DATA-FOLDER/server.sock) and on this machine's
@@ -13,6 +13,8 @@ import Synchronization
 /// listens there only when Tailscale is connected. `--tailnet none` keeps the
 /// server to itself: it neither listens for nor looks for other machines.
 /// New blank folders are made in `--folders` (default ~/Woven Matter).
+/// `--instance` names a development instance; servers it installs on other
+/// machines are that instance too (`woven-server-NAME`).
 /// Runs until SIGINT or SIGTERM, then stops cleanly, or until another machine
 /// removes this one; `run` then returns `removedStatus`, the exit status that
 /// says so.
@@ -30,7 +32,7 @@ public enum ServerCommand {
     var arguments = arguments
     guard let folder = arguments.first, !folder.hasPrefix("--") else {
       throw UsageError(description: "usage: DATA-FOLDER [--socket PATH|none] [--listen HOST:PORT|auto|none] [--port PORT] "
-                       + "[--tailnet none] [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime]")
+                       + "[--tailnet none] [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime] [--instance NAME]")
     }
     arguments.removeFirst()
 
@@ -42,6 +44,7 @@ public enum ServerCommand {
     var foldersRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Woven Matter", isDirectory: true)
     var standIn = false
     var port = wovenPort
+    var instance: String?
     while let option = arguments.first {
       arguments.removeFirst()
       func value() throws -> String {
@@ -64,11 +67,12 @@ public enum ServerCommand {
       case "--app-version": appVersion = try value()
       case "--folders": foldersRoot = URL(fileURLWithPath: try value(), isDirectory: true)
       case "--stand-in-runtime": standIn = true
+      case "--instance": instance = try value()
       default: throw UsageError(description: "unknown option \(option)")
       }
     }
 
-    let tailnet: any Tailnet = alone ? NoTailnet() : TailscaleTailnet()
+    let tailnet: any Tailnet = alone ? NoTailnet() : TailscaleTailnet(port: port)
     let this = alone ? nil : try? await tailnet.thisMachine()
     var address: (host: String, port: Int)?
     switch alone ? "none" : listen {
@@ -88,11 +92,14 @@ public enum ServerCommand {
       address = (this.host, port)
     }
 
-    let server = try await WovenServer.start(WovenServer.Options(
+    var options = WovenServer.Options(
       dataFolder: URL(fileURLWithPath: folder, isDirectory: true), socketPath: socketPath, listen: address,
       appVersion: appVersion, machineName: name ?? this?.name ?? localHostName(), tailnet: tailnet,
       runtimes: standardRuntimes(dataFolder: URL(fileURLWithPath: folder, isDirectory: true)) + (standIn ? [StandInRuntime()] : []),
-      foldersRoot: foldersRoot))
+      foldersRoot: foldersRoot)
+    options.instance = instance
+    options.offersStandIn = standIn
+    let server = try await WovenServer.start(options)
     FileHandle.standardOutput.write(Data(("woven-server: machine \(server.machineID) on \(socketPath ?? "no socket")"
           + (address.map { ", \($0.host):\(server.port ?? $0.port)" } ?? "") + "\n").utf8))
 

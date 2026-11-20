@@ -9,6 +9,8 @@ actor PeerSync {
   struct Status: Sendable {
     var online: Bool
     var appVersion: String
+    /// The tailnet address its server answered on.
+    var machine: TailnetMachine
   }
 
   private struct SelfLink: Error {}
@@ -69,6 +71,23 @@ actor PeerSync {
   /// The connection to another machine's server, while it is linked.
   func client(for machineID: String) -> Client? {
     clients[machineID]
+  }
+
+  /// Where another machine's server was last reached on the tailnet.
+  func address(of machineID: String) -> TailnetMachine? {
+    statuses[machineID]?.machine
+  }
+
+  /// Looks at the tailnet until a server answers at `address`, for up to
+  /// `timeout`; true when one did.
+  func waitForServer(at address: String, timeout: Duration) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+      if statuses.values.contains(where: { $0.machine.host == address && $0.online }) { return true }
+      await discover()
+      try? await Task.sleep(for: .seconds(2))
+    }
+    return false
   }
 
   private func unlinked(_ machine: TailnetMachine) {
@@ -154,7 +173,7 @@ actor PeerSync {
       await client.close()
       throw DuplicateLink()
     }
-    statuses[peerID] = Status(online: true, appVersion: remote.appVersion)
+    statuses[peerID] = Status(online: true, appVersion: remote.appVersion, machine: machine)
     defer {
       statuses[peerID]?.online = false
       if clients[peerID] === client { clients[peerID] = nil }

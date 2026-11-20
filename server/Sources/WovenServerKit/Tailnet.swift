@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import WovenProtocol
 
 /// A machine of the tailnet that may run a Woven server.
 public struct TailnetMachine: Sendable, Hashable {
@@ -27,6 +28,14 @@ public protocol Tailnet: Sendable {
   func machines() async throws -> [TailnetMachine]
   /// This machine on the tailnet: its name and the address to listen on.
   func thisMachine() async throws -> TailnetMachine
+  /// The other computers of the tailnet that are online now, for Find Devices.
+  func devices() async throws -> [TailnetDevice]
+}
+
+extension Tailnet {
+  public func devices() async throws -> [TailnetDevice] {
+    try await machines().map { TailnetDevice(name: $0.name, address: $0.host, platform: .linux) }
+  }
 }
 
 /// A tailnet for tests: callers from listed addresses are let in, and the
@@ -62,7 +71,11 @@ public struct TailscaleTailnet: Tailnet {
     public let description: String
   }
 
-  public init() {}
+  /// The port tried on each machine: the one this server listens on, so a
+  /// development instance finds only development instances.
+  public let port: Int
+
+  public init(port: Int = wovenPort) { self.port = port }
 
   public func caller(at address: String) async -> String? {
     guard let status = try? await json(["status", "--json"]),
@@ -88,7 +101,23 @@ public struct TailscaleTailnet: Tailnet {
       guard ["macos", "linux"].contains(os), peer["ShareeNode"] as? Bool != true,
             !suffix.isEmpty, dns.hasSuffix(".\(suffix)."),
             let address = (peer["TailscaleIPs"] as? [String])?.first(where: { !$0.contains(":") }) else { return nil }
-      return TailnetMachine(name: peer["HostName"] as? String ?? dns, host: address)
+      return TailnetMachine(name: peer["HostName"] as? String ?? dns, host: address, port: port)
+    }.sorted { $0.name < $1.name }
+  }
+
+  public func devices() async throws -> [TailnetDevice] {
+    let status = try await json(["status", "--json"])
+    guard status["BackendState"] as? String == "Running" else { throw Unavailable(description: "Tailscale is not connected.") }
+    let peers = (status["Peer"] as? [String: Any] ?? [:]).values.compactMap { $0 as? [String: Any] }
+    return peers.compactMap { peer in
+      guard peer["Online"] as? Bool == true, peer["ShareeNode"] as? Bool != true,
+            let address = (peer["TailscaleIPs"] as? [String])?.first(where: { !$0.contains(":") }) else { return nil }
+      let platform: MachinePlatform? = switch (peer["OS"] as? String ?? "").lowercased() {
+      case "macos": .mac
+      case "linux": .linux
+      default: nil
+      }
+      return TailnetDevice(name: peer["HostName"] as? String ?? address, address: address, platform: platform)
     }.sorted { $0.name < $1.name }
   }
 
@@ -98,7 +127,7 @@ public struct TailscaleTailnet: Tailnet {
           let address = (this["TailscaleIPs"] as? [String])?.first(where: { !$0.contains(":") }) else {
       throw Unavailable(description: "Tailscale is not connected.")
     }
-    return TailnetMachine(name: this["HostName"] as? String ?? address, host: address)
+    return TailnetMachine(name: this["HostName"] as? String ?? address, host: address, port: port)
   }
 
   private static let candidates = [
