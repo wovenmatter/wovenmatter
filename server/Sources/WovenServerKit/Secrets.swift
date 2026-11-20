@@ -103,9 +103,9 @@ public struct KeychainSecretStore: SecretStore {
 }
 #endif
 
-/// Sealing: each synced API key is sealed separately for every machine with
-/// that machine's public key (HPKE, X25519 with ChaCha20-Poly1305), so only
-/// that machine can open its copy.
+/// Sealing: each synced secret (API keys, the GitHub key) is sealed separately
+/// for every machine with that machine's public key (HPKE, X25519 with
+/// ChaCha20-Poly1305), so only that machine can open its copy.
 enum Sealing {
   static let suite = HPKE.Ciphersuite.Curve25519_SHA256_ChachaPoly
   static let info = Data("Woven Matter sealed secret".utf8)
@@ -155,44 +155,65 @@ actor Secrets {
     return Secrets(library: library, store: store, privateKey: key)
   }
 
-  // MARK: API keys (synced, sealed per machine)
+  // MARK: Synced secrets (sealed per machine)
+
+  /// The GitHub SSH key's secret name. It syncs like an API key but is not one.
+  static let gitHubKey = "github-ssh-key"
 
   /// Sets an API key for every machine that has a public key, or removes it everywhere.
   func setAPIKey(_ provider: String, _ key: String?) async throws {
+    guard provider != Self.gitHubKey else { throw RuntimeError.failed("\(provider) is not an API key.") }
+    try await setSecret(provider, key.map { Data($0.utf8) })
+  }
+
+  /// Seals a secret for every machine that has a public key, or unsets it everywhere.
+  func setSecret(_ name: String, _ value: Data?) async throws {
     for (machineID, publicKey) in try await publicKeys() {
-      let id = "\(provider):\(machineID)"
-      if let key {
-        let sealed = try Sealing.seal(Data(key.utf8), name: provider, for: publicKey)
-        try await library.put("sealed_secrets", id: id, ["name": .text(provider), "machine_id": .text(machineID), "sealed": .blob(sealed)])
+      let id = "\(name):\(machineID)"
+      if let value {
+        let sealed = try Sealing.seal(value, name: name, for: publicKey)
+        try await library.put("sealed_secrets", id: id, ["name": .text(name), "machine_id": .text(machineID), "sealed": .blob(sealed)])
       } else if try await library.row("sealed_secrets", id: id) != nil {
         try await library.delete("sealed_secrets", id: id)
       }
     }
   }
 
+  /// This machine's copy of a secret, opened, or nil when it has none.
+  func secret(_ name: String) async throws -> Data? {
+    guard let row = try await library.row("sealed_secrets", id: "\(name):\(library.machineID)"), !row.deleted,
+          case .blob(let sealed)? = row.values["sealed"] else { return nil }
+    return try Sealing.open(sealed, name: name, with: privateKey)
+  }
+
   /// The API keys sealed for this machine, opened, by provider.
   func apiKeys() async throws -> [String: String] {
-    var keys: [String: String] = [:]
+    try await openedSecrets().filter { $0.key != Self.gitHubKey }.mapValues { String(decoding: $0, as: UTF8.self) }
+  }
+
+  /// Every secret sealed for this machine, opened, by name.
+  private func openedSecrets() async throws -> [String: Data] {
+    var secrets: [String: Data] = [:]
     for row in try await library.rows("sealed_secrets", where: "machine_id", is: .text(library.machineID)) {
       guard case .blob(let sealed)? = row.values["sealed"], case .text(let name)? = row.values["name"],
             let opened = try? Sealing.open(sealed, name: name, with: privateKey) else { continue }
-      keys[name] = String(decoding: opened, as: UTF8.self)
+      secrets[name] = opened
     }
-    return keys
+    return secrets
   }
 
-  /// Seals each key this machine holds for every machine that has never
-  /// had a copy, such as one that joined since the key was set.
+  /// Seals each secret this machine holds for every machine that has never
+  /// had a copy, such as one that joined since the secret was set.
   func sealForEveryMachine() async {
-    guard let keys = try? await apiKeys(), !keys.isEmpty, let machines = try? await publicKeys() else { return }
-    for (provider, key) in keys {
+    guard let secrets = try? await openedSecrets(), !secrets.isEmpty, let machines = try? await publicKeys() else { return }
+    for (name, value) in secrets {
       for (machineID, publicKey) in machines {
-        let id = "\(provider):\(machineID)"
+        let id = "\(name):\(machineID)"
         // A row emptied by a removal stays empty; only a machine with no row at all gets a copy.
         if (try? await library.row("sealed_secrets", id: id)) ?? nil != nil { continue }
-        guard let sealed = try? Sealing.seal(Data(key.utf8), name: provider, for: publicKey) else { continue }
+        guard let sealed = try? Sealing.seal(value, name: name, for: publicKey) else { continue }
         _ = try? await library.put("sealed_secrets", id: id,
-                                   ["name": .text(provider), "machine_id": .text(machineID), "sealed": .blob(sealed)])
+                                   ["name": .text(name), "machine_id": .text(machineID), "sealed": .blob(sealed)])
       }
     }
   }

@@ -131,22 +131,11 @@ final class SettingsStore {
     /// Counts an app open or active use; the server samples and sends it when consent allows.
     func recordAnalytics(_ event: ProductAnalyticsEvent) async {}
 
-    // MARK: GitHub
+    // MARK: GitHub (in SettingsStore+GitHub.swift)
 
-    private(set) var github: GitHubSettings?
-    private(set) var githubBusy = false
+    var github: GitHubSettings?
+    var githubBusy = false
     var githubError: String?
-
-    func loadGitHub() async {
-        githubError = ClientError.notConnected.localizedDescription
-    }
-
-    /// True when the command succeeded.
-    @discardableResult
-    func runGitHub(_ command: GitHubSettingsCommand) async -> Bool {
-        githubError = ClientError.notConnected.localizedDescription
-        return false
-    }
 
     // MARK: Woven MCP for outside agents
 

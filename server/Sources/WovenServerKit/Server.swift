@@ -53,6 +53,7 @@ public final class WovenServer: Sendable {
   private let sessions: SessionManager
   private let peers: PeerSync
   private let secrets: Secrets
+  private let github: GitHub
   private let listeners: [Listener]
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
@@ -66,6 +67,8 @@ public final class WovenServer: Sendable {
     let secrets = try await Secrets.open(library: library, store: options.secretStore ?? standardSecretStore(
       dataFolder: options.dataFolder, machineID: library.machineID))
     for runtime in options.runtimes { (runtime as? PiDurableRuntime)?.credentials.attach(secrets) }
+    // Before any runtime starts, so every one inherits the git environment.
+    let github = try await GitHub.start(library: library, secrets: secrets, dataFolder: options.dataFolder)
     let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion)
     let sessions = SessionManager(library: library, runtimes: options.runtimes,
                                   scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
@@ -79,6 +82,7 @@ public final class WovenServer: Sendable {
     let databases = Databases(library: library, peers: peers,
                               folder: options.dataFolder.appendingPathComponent("databases", isDirectory: true))
     registerDatabases(&routes, databases: databases)
+    registerGitHub(&routes, github: github)
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -102,11 +106,12 @@ public final class WovenServer: Sendable {
     } catch {
       for listener in listeners { await listener.stop() }
       await sessions.closeAll()
+      await github.stop()
       await library.close()
       throw error
     }
     let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
-                             sessions: sessions, peers: peers, secrets: secrets, listeners: listeners)
+                             sessions: sessions, peers: peers, secrets: secrets, github: github, listeners: listeners)
     pending.server.withLock { $0 = server }
     await peers.start()
     server.watchLibrary()
@@ -114,13 +119,14 @@ public final class WovenServer: Sendable {
   }
 
   private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
-               listeners: [Listener]) {
+               github: GitHub, listeners: [Listener]) {
     self.library = library
     self.hello = hello
     self.port = port
     self.sessions = sessions
     self.peers = peers
     self.secrets = secrets
+    self.github = github
     self.listeners = listeners
   }
 
@@ -151,6 +157,7 @@ public final class WovenServer: Sendable {
     await peers.stop()
     for transport in connections.withLock({ Array($0.values) }) { transport.close() }
     await sessions.closeAll()
+    await github.stop()
     await library.close()
   }
 
