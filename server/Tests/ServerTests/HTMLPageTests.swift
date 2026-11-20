@@ -67,6 +67,8 @@ func aPublishedPageIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async throws
   await b.server.discoverMachines()
   let onA = try await a.connect(), onB = try await b.connect()
   let session = try await onA.call(CreateSession(runtime: StandInRuntime.kind, title: "Sales"))
+  // No saved selection of tool groups switches it off.
+  _ = try await onA.call(UpdateSession(sessionID: session.id, tools: []))
 
   // The stand-in calls the tool over its tool socket and then reports the call, as a runtime does.
   let html = "<h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 5000)
