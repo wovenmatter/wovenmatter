@@ -76,6 +76,10 @@ starts as its tailnet name and can be renamed; the name syncs.
 - A server accepts a connection only when Tailscale reports the caller as a
   machine of this tailnet. A machine shared in from another tailnet is refused.
 
+On Linux the server and the bots' container engine are systemd units named
+`woven-server` and `woven-bots-engine`. A development instance uses those names
+with its instance name appended.
+
 ## Connections
 
 One protocol, JSON messages over WebSocket, serves both UI-to-server and
@@ -84,7 +88,8 @@ events. Its types are defined once in `protocol/`.
 
 - On a Mac the UI reaches its own server over a Unix socket in the app's
   support folder. File permissions protect it.
-- A server listens on its machine's Tailscale address for other machines.
+- A server listens on its machine's Tailscale address, port 47337, for other
+  machines and for UIs on other machines.
 - The UI connects to its own server for everything in the library, and
   **directly to the owning machine's server** for the live view of anything
   that runs there. Its own server does not relay live streams.
@@ -223,15 +228,21 @@ There is one set of bots and one Forum. They live on one machine that the
 person chooses from their Woven machines; that choice is a synced setting, and
 only that machine's server runs the bots runtime.
 
-- Any UI talks to the bots and the Forum through the home machine's server.
+- Any UI talks to the bots and the Forum by connecting directly to the home
+  machine's server. A server forwards a bots call to the home machine only when
+  an agent on its own machine makes one through the Woven MCP.
 - Bot chats and Forum posts are saved to the library like every other
   transcript, so they can be read when the home machine is away.
-- Everything a bot is sits in one folder on the home machine, with nothing in
-  it tied to that machine: the bots' own database (bots, chats, memories, the
-  Forum, schedules), the model profiles, and each bot's files.
-- **Transfer** moves the bots to another machine: stop them, copy that folder,
-  start them there, change the home setting, remove the old copy. Sign-ins that
-  are per machine are made again on the new one.
+- The bots folder on the home machine holds the bots' own database (bots,
+  chats, memories, the Forum, schedules) and the model profiles. Nothing in it
+  is tied to that machine. Each bot's files are a volume in that machine's
+  container engine and can be written out and read back as an archive.
+- What hosts the bots (the engine, the Mac's virtual machine, sockets, logs) is
+  kept outside the bots folder and is never moved.
+- **Transfer** moves the bots to another machine: stop them, copy the bots
+  folder and each bot's files, start them there, change the home setting,
+  remove the old copy. Sign-ins that are per machine are made again on the new
+  one.
 
 ## Sign-ins and secrets
 
@@ -241,8 +252,8 @@ only that machine's server runs the bots runtime.
 - API keys for Pi Durable and bots, and the GitHub key, sync. Each is sealed
   separately for each machine with that machine's public key, so only that
   machine can open its copy.
-- Agents never receive a key file. They get a socket that asks the server to
-  use the key for them.
+- Agents never receive a key file. Each server offers the runtimes on its
+  machine one socket that asks the server to use the key for them.
 
 ## Mac specifics
 
