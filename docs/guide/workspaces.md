@@ -6,7 +6,7 @@ kept in your library; project files stay in the folder's directory.
 
 ## Create a folder
 
-In the sidebar, choose **New Folder** in the section of the machine that should
+In the sidebar, choose **New folder** in the section of the machine that should
 own it. That machine must be online.
 
 - **Create New** makes an empty directory with the folder's name in

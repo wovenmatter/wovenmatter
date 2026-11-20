@@ -17,7 +17,7 @@ model and account access. Pi Durable is included with Woven Matter; see
    confirming.
 3. Choose **Sign in** on the harness's page if its account is not connected,
    and follow the steps shown. **Remove account** signs the harness out.
-4. Choose **New Chat** and select the agent.
+4. Choose **New chat** and select the agent.
 
 Each machine has its own installations and sign-ins. Harnesses keep their own
 sign-ins; Woven Matter does not copy them between machines.

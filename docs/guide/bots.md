@@ -2,8 +2,8 @@
 
 A bot is a long-running agent with its own Linux container. It keeps its files,
 memory, browser sign-ins and services between conversations, so you can hand it
-ongoing work: watching a project, running a dev server, or coming back to a task
-on a timer. Bots run on Pi Durable and use the models you connect in Woven
+ongoing work: watching a project, running a dev server, or talking a task
+through with other bots in the Forum. Bots run on Pi Durable and use the models you connect in Woven
 Matter.
 
 Every set of bots starts with **Admin Bot**. Ask it to create, rename or
@@ -17,7 +17,9 @@ that syncs, so every machine knows where the bots are.
 
 1. Open **Settings → Bots**.
 2. Under **Where bots run**, choose a machine in **Run bots on**, then confirm
-   **Run bots there**.
+   **Run bots there**. To move them later, choose another machine and confirm
+   **Move bots**. They stop, then start there with their files and
+   conversations; if the move fails, they stay where they were.
 3. On the first run, sign in to a provider in **Subscriptions & API Keys** if you
    haven't yet, then choose Admin Bot's model and select **Use this model**. New
    bots use that model by default.
@@ -115,8 +117,9 @@ page:
 - **Manage → Update bots**: stops running work, saves a snapshot of each bot,
   updates it, and rolls back if something fails.
 
-**Bot access** on the main Bots page chooses which bots may use the Woven tools,
-and **Pause Woven tools for every bot** stops them all at once.
+**Woven MCP access** on the main Bots page opens **Settings → Woven MCP**.
+There **Give bots Woven MCP** turns the Woven tools on or off for every bot,
+and **Bot keys** revokes or reinstates one bot's access.
 
 **Rebuild** recreates a bot's container from a clean image. Its files, home
 folder, restart list, browser profile, memory and conversations stay.

@@ -68,17 +68,23 @@ starts as its tailnet name and can be renamed; the name syncs.
 
 - **Joining is automatic.** A server looks at the tailnet's machine list, tries
   the Woven port on each, and treats those that answer as Woven machines.
-- **Find Devices** lists tailnet machines without a server and installs and
-  starts one over SSH.
-- **Remove** stops and uninstalls the server on that machine, then deletes the
-  machine, its sessions and its folders from every library. There is no way to
+- **Find Devices** lists Linux machines on the tailnet without a server and
+  installs and starts one over SSH.
+- **Remove** deletes the machine, its sessions and its folders from every
+  library. A Linux machine's server is stopped and uninstalled over SSH first;
+  a Mac's server stops itself when the removal reaches it. There is no way to
   hide a machine. A machine that is only switched off stays listed as offline.
 - A server accepts a connection only when Tailscale reports the caller as a
   machine of this tailnet. A machine shared in from another tailnet is refused.
 
-On Linux the server and the bots' container engine are systemd units named
-`woven-server` and `woven-bots-engine`. A development instance uses those names
-with its instance name appended.
+On Linux the server is a systemd user unit, `woven-server`, installed over SSH
+with everything under `~/.local/share/woven-server`. The installer turns on
+lingering for the account, so the server keeps running after the person logs
+out. The bots' container engine is a system unit, `woven-bots-engine`,
+installed once with sudo. A development instance appends its instance name to
+both unit names. It stays off the tailnet unless it is given a port of its own
+(for example 47338); it then listens on that port, finds only servers on that
+port, and installs servers that use it.
 
 ## Connections
 
@@ -86,8 +92,8 @@ One protocol, JSON messages over WebSocket, serves both UI-to-server and
 server-to-server. It has requests with replies, and subscriptions that deliver
 events. Its types are defined once in `protocol/`.
 
-- On a Mac the UI reaches its own server over a Unix socket in the app's
-  support folder. File permissions protect it.
+- On a Mac the UI reaches its own server over a Unix socket that only the
+  person can open.
 - A server listens on its machine's Tailscale address, port 47337, for other
   machines and for UIs on other machines.
 - The UI connects to its own server for everything in the library, and
@@ -135,7 +141,9 @@ digest in a file store beside the library and fetched by digest when needed.
 - **Append-only**: session items, usage records, dictation history. Written
   once by the owning machine, never edited.
 - **Newest write wins**: machines, sessions (title, folder, archived), folders,
-  settings, schedules, sealed secrets, database descriptions.
+  settings, schedules, sealed secrets, database descriptions. Only the owning
+  machine writes its `schedules` rows; a request about another machine's entry
+  is refused with the owner's name, so the caller can send it there.
 - **Newest write wins, loser kept**: notes, pages and apps. Each write records
   the latest write it has seen from each machine. When a received write has
   not seen everything the local one has, the two were edited apart: the newer
@@ -153,6 +161,9 @@ A session is one conversation with one runtime on one machine. The runtimes are
 Codex, Claude Code, Grok Build, OpenCode, Pi Durable and bots. All six sit
 behind one adapter interface in the server and are treated alike:
 
+- Codex and Claude Code run behind ACP adapters. The server installs an
+  adapter by itself, with the npm bundled beside it, as soon as it finds that
+  CLI without one. Installing an adapter never installs or updates the CLI.
 - The runtime keeps its own native log, in its own storage, in its own format.
   Pi Durable and bots use their SDK's stock SQLite storage in their own files.
 - The server keeps the runtime's process alive between turns, as a terminal
@@ -161,9 +172,13 @@ behind one adapter interface in the server and are treated alike:
   clients as it arrives.
 - When an item finishes (a user message, an assistant message, a tool call with
   its result) the server writes it once to `session_items`, in the same step as
-  it announces it. Partial text is never written.
-- A client that subscribes gets the finished items, the item in progress if
-  there is one, then live events.
+  it announces it. Partial text is never written while it streams. When a
+  turn is stopped, what was said so far is saved as the finished item.
+- A tool call's stored input and output are each capped at 256K characters;
+  the start and the end are kept, with a line saying how much was left out.
+- A client that subscribes gets the newest 200 finished items, the item in
+  progress if there is one, then live events. Older items are fetched a page
+  at a time as the person scrolls back.
 
 When the owning machine is unreachable, the session shows its saved items and
 sending is disabled.
@@ -175,8 +190,13 @@ under the old chat.
 Questions, approvals and run state are live state on the owning server. They
 are not stored in the library.
 
-A goal is a prompt that belongs to its session; the session works against it
-until it is met or cleared.
+A goal is a prompt that belongs to its session. Setting one on an idle session
+starts a turn toward it, and each turn that ends with the goal still set is
+followed by one asking the runtime to continue. It ends when the agent calls
+the Woven tool `goal_met` or the person clears it. It pauses after an
+interrupted or failed turn, while a question or approval waits, and after
+three goal turns in a row that neither said nor did anything. The person's
+next message resumes it.
 
 ## Folders and the sidebar
 
@@ -216,11 +236,26 @@ forwarded to that machine's server. Browser and computer-use tools are carried
 out by the UI on that Mac, because macOS ties those permissions to the app
 window; the server asks a connected UI to do them.
 
+- A harness or Pi Durable starts a small local bridge, `harnesses/woven-mcp.mjs`,
+  that speaks MCP over standard input and output and passes it to the server's
+  tool socket, a Unix socket that only the person can open. The bridge first
+  says a key the server gave that runtime in memory, so the server knows who
+  is calling. The bots runtime asks for the tools over its own connection to
+  the server.
+- The tools are in groups, and each session is offered only the groups it may
+  use.
+- Agents outside Woven Matter on that machine can use the same bridge without a
+  key, only while the person turns that on, and only with the groups chosen
+  for them.
+
 ## Scheduling
 
-Each server has one scheduler. Scheduled tasks, timers and wake-ups are all
-entries in it, and each entry belongs to the machine that will run it. The
-calendar page shows and adds entries.
+Each server has one scheduler. Scheduled tasks, calendar events, timers and
+wake-ups are all entries in `schedules`, and each entry belongs to the machine
+that will run it. Only that machine's server writes its entries and fires
+them. A calendar event never fires. An entry that came due while its server
+was off fires once, late, when the server is back; no occurrence fires twice.
+The calendar page shows and adds tasks and events.
 
 ## Bots
 
@@ -239,10 +274,15 @@ only that machine's server runs the bots runtime.
   container engine and can be written out and read back as an archive.
 - What hosts the bots (the engine, the Mac's virtual machine, sockets, logs) is
   kept outside the bots folder and is never moved.
-- **Transfer** moves the bots to another machine: stop them, copy the bots
-  folder and each bot's files, start them there, change the home setting,
-  remove the old copy. Sign-ins that are per machine are made again on the new
-  one.
+- **Transfer** moves the bots to another machine, in this order: the old home
+  stops the bots (running turns are interrupted); writes each bot's files out
+  as archives and sends them with the bots folder in pieces, each checked by
+  digest; the target reads them in, starts the bots and confirms its library
+  holds every bot and chat; the target sets the home to itself; the old home
+  removes its copy. Any failure before the switch leaves the bots on the old
+  home: the target removes what it received and the old home starts them
+  again. Each side records its step, so a restart ends in one of those two
+  states. Sign-ins that are per machine are made again on the new one.
 
 ## Sign-ins and secrets
 
@@ -265,8 +305,9 @@ own signed program. The person grants each permission once. See
 ## Development
 
 `scripts/build_and_run.sh --instance NAME` builds the app and starts it with
-its own data folder and its own server. It never reads or changes the data of
-an installed app.
+its own bundle identifier, data folder and server. It never reads or changes
+the data of an installed app. `--port PORT` puts that instance's server on the
+tailnet on that port.
 
 ## Tests
 

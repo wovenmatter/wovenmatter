@@ -1,6 +1,6 @@
 # Scheduled work and usage
 
-## Scheduled tasks, timers and wake-ups
+## Scheduled tasks, events, timers and wake-ups
 
 A scheduled task runs a prompt in an agent session at a set time, once or on
 repeat, continuing the same session or starting a new one each run. A timer
@@ -18,8 +18,10 @@ machine is back, then carries on from its next time; missed runs are not each
 repeated. An entry whose chat is busy is tried again a little later. A
 one-time timer or wake-up is removed after it fires.
 
-**Calendar** and **Scheduled Tasks** in the sidebar show your entries on every
-machine.
+**Calendar** in the sidebar shows scheduled tasks and calendar events on every
+machine, and adds new ones. A calendar event only marks a time; it runs
+nothing. **Scheduled Tasks** lists the tasks. Timers and wake-ups stay with the
+chats that set them.
 
 ## Usage
 

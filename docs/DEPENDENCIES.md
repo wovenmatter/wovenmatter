@@ -92,14 +92,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Docker's signed APT repository.
 - **Woven Mac VM guest** (the bots engine on a Mac) is an exact selection for
   security and core function: a VM that changed itself broke earlier tests,
-  and Woven must be able to snapshot, update and roll back as one step. The
+  so nothing in it updates on its own. The
   official Ubuntu LTS arm64 cloud image is pinned by serial directory and
   SHA-256; the helper verifies size and digest before converting it.
   `docker-ce`, `docker-ce-cli` and `containerd.io` are exact versions from
   Docker's apt repository, verified with the bundled signing key whose
-  fingerprint and digest are recorded. Installed VMs move to new pins only
-  through Woven's Update action, which snapshots first and rolls back on
-  failure; a new image serial affects only new installs.
+  fingerprint and digest are recorded. A new image serial or package pin
+  affects only new installs; an installed VM keeps what it was built with.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
@@ -141,10 +140,13 @@ the same copy. A failed update is discarded and leaves the working copy active.
 Agent CLIs are the person's own native installs: Woven Matter installs a
 missing one with its vendor's official installer and updates it with the
 vendor's own command, so it records no CLI selection. ACP connectors install
-from npm, exactly as published (`harnesses/install-adapter.mjs`).
-`harnesses/catalog.json` sets no minimum versions for connectors, CLIs or
-SDKs: install and update always take the latest, and only from an explicit
-Settings action. There is no background updater.
+from npm, exactly as published, with the npm bundled beside the server
+(`harnesses/install-adapter.mjs`). The server installs the Codex or Claude Code
+connector by itself as soon as it finds that CLI without one; it never installs
+or updates the CLI to do so. `harnesses/catalog.json` sets no minimum versions
+for connectors, CLIs or SDKs: install and update always take the latest.
+Updates come only from an explicit Settings action. There is no background
+updater.
 
 ## Runtime data
 

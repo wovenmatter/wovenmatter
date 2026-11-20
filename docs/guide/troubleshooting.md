@@ -2,7 +2,7 @@
 
 | Problem | Start here |
 | --- | --- |
-| No agent in New Chat | Check the agent in Settings → Agents, or the machine in Settings → Workspaces; install it, then sign in. **Set up harnesses** in Settings → Agents reopens the guided setup. |
+| No agent in New chat | Check the agent in Settings → Agents, or the machine in Settings → Workspaces; install it, then sign in. **Set up harnesses** in Settings → Agents reopens the guided setup. |
 | Installed but not ready | Installing and signing in are separate; check the agent's page in Settings → Agents. |
 | A folder cannot be created | The machine that will own it must be online. Choose an existing directory with **Link Existing**, or check the error shown. |
 | A draft cannot use a folder | Choose a folder on the agent's machine, or **All Workspaces**. After the first message, start a new chat to use another folder. |

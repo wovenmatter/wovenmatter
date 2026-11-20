@@ -44,7 +44,9 @@ Then:
    host**, and choose **Create workspace**.
 
 The Mac copies the server it carries to that computer and starts it as a
-systemd user service, `woven-server`, under the SSH account. Nothing is
+systemd user service, `woven-server`, under the SSH account, and turns on
+lingering for that account so the server keeps running after you log out
+there. Nothing is
 downloaded on the Linux computer. Agents there run as that account with its
 full permissions; there is no container around them. When the server answers,
 the computer joins your machines and Woven Matter offers to set up its
@@ -59,11 +61,15 @@ Open a machine in **Settings → Workspaces** to see its status and agents.
 **Set up harnesses** installs or signs in to harnesses on it. Its **Manage**
 menu has:
 
+- **Start**, **Stop** and **Restart** for its server. Only a Linux computer's
+  stopped server can be started from here; a Mac starts its own.
 - **Update server**, for a Linux computer: replaces its server with the
   release this Mac carries. Its data stays.
-- **Remove…**: stops and uninstalls the server there, then removes the machine,
-  its chats and its folders from every machine. This cannot be undone. There
-  is no way to hide a machine without removing it.
+- **Logs**: the server's recent log.
+- **Remove…**: removes the machine, its chats and its folders from every
+  machine. On a Linux computer it first stops and uninstalls the server there.
+  This cannot be undone. There is no way to hide a machine without removing
+  it.
 
 ## Chats on another machine
 

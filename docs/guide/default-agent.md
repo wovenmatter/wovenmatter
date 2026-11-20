@@ -1,7 +1,7 @@
 # Pi Durable
 
 **Pi Durable** is included with Woven Matter on every machine. Choose it in
-**New Chat** like any other agent. It has file and shell tools, web search and
+**New chat** like any other agent. It has file and shell tools, web search and
 the Woven tools. You do not need to install Pi, Node or Claude Code.
 
 ## Connect providers

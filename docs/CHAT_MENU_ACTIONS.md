@@ -28,5 +28,4 @@ documents live in the library, so this Mac's server writes every change.
 ## Trash
 
 **Trash** in the sidebar lists archived chats and trashed notes. **Restore** brings
-one back; a note can also be deleted for good, which removes it and its history
-from every library.
+one back. Items stay in Trash until they are restored.

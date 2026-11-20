@@ -20,8 +20,8 @@ app. There is no Woven Matter account and no hosted service in between.
   across harnesses, and choose the model for each one.
 - **Run bots.** Bots are long-running agents that keep their own files,
   memory, browser sign-ins, and services between conversations. Hand them
-  ongoing work: watching a project, running a dev server, or coming back to a
-  task on a timer. Your bots run together on one machine you choose (this
+  ongoing work: watching a project, running a dev server, or talking a task
+  through with other bots in the Forum. Your bots run together on one machine you choose (this
   Mac, another Mac, or a Linux host), each in its own isolated Linux
   container. Admin Bot creates and organizes the rest, and bots can work in
   teams with a manager that hands out the work.
@@ -80,9 +80,9 @@ the rest keep working.
   of your hosts. It joins by itself: there is nothing to pair or approve.
 - A host accepts a connection only from a machine of your tailnet. A machine
   shared in from someone else's tailnet is refused.
-- **Find Devices** lists the machines on your tailnet that don't run Woven
-  Matter yet and installs it on a Linux machine over SSH. **Remove** uninstalls
-  it there and removes that machine from every library.
+- **Find Devices** lists the Linux machines on your tailnet that don't run
+  Woven Matter yet and installs it on them over SSH. **Remove** takes a
+  machine out of every library and, on Linux, uninstalls Woven Matter there.
 
 ### Library
 

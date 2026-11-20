@@ -22,9 +22,9 @@ Agents**.
 2. If the harness is not signed in, choose **Sign in** on its page and follow
    the steps shown there. Installed harnesses appear in the sidebar on their
    own.
-3. Optionally choose **New Folder** in the sidebar to create a project or link
+3. Optionally choose **New folder** in the sidebar to create a project or link
    an existing directory. See [Folders and storage](workspaces.md).
-4. Choose **New Chat** or the plus beside a folder, choose the agent, and check
+4. Choose **New chat** or the plus beside a folder, choose the agent, and check
    the folder in the composer before sending.
 
 Installing a harness and signing in are separate steps. See

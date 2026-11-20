@@ -1,6 +1,6 @@
 # Conversations
 
-Choose **New Chat** and select an agent. The sidebar lists each machine's
+Choose **New chat** and select an agent. The sidebar lists each machine's
 agents under that machine; a chat started there runs on that machine. Select a
 model and thinking level where the harness offers them.
 
