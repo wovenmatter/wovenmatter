@@ -154,7 +154,9 @@ private extension NoteDocument {
   }
 
   mutating func addPageComponent(_ edit: PageEdit) throws {
-    guard let id = edit.id, !id.isEmpty, id.utf8.count <= 1024 else { throw NoteDocumentSafetyError.unsupportedFormat }
+    // An added component may name its id; otherwise it gets a fresh one.
+    let id = edit.id ?? UUID().uuidString.lowercased()
+    guard !id.isEmpty, id.utf8.count <= 1024 else { throw NoteDocumentSafetyError.unsupportedFormat }
     guard !blocks.contains(where: { $0.id == id }) else { throw NoteEditError.boardItemExists(id) }
     let requested: PageComponentKind
     if let kind = edit.kind { requested = kind }

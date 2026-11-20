@@ -28,7 +28,7 @@ extension Library {
   public func createArtifact(id: String = UUID().uuidString.lowercased(), kind: NoteArtifactKind, title: String,
                              folderID: String?, body: String?) async throws -> ArtifactDocument {
     let body = try body ?? NoteDocument(kind: kind).encoded()
-    try await write { writer in
+    _ = try await write { writer in
       try writer.put("artifacts", id: id, [
         "kind": .text(kind.rawValue), "title": .text(title), "folder_id": folderID.map(SQLValue.text) ?? .null,
         "body": .text(body), "preview": .text(Self.preview(body)), "created_at": .integer(Writer.now()),

@@ -57,7 +57,7 @@ extension Library {
     guard !draft.excluded.contains(index) else { return }
     draft.excluded = (draft.excluded + [index]).sorted()
     let excluded = try Self.json(draft.excluded)
-    try await write { writer in
+    _ = try await write { writer in
       try writer.put("schedules", id: id, ["excluded": excluded])
     }
   }

@@ -50,7 +50,7 @@ public final class OpenCodeRuntime: Runtime {
       }
       // Woven's instructions, as one of the session's own instruction entries.
       if let instructions = start.tools?.instructions {
-        try? await client.call("PUT", "/api/experimental/session/" + OpenCodeClient.segment(handle) + "/instructions/entries/woven",
+        _ = try? await client.call("PUT", "/api/experimental/session/" + OpenCodeClient.segment(handle) + "/instructions/entries/woven",
                                body: .object(["value": .string(instructions)]))
       }
       let session = OpenCodeSession(handle: handle, directory: start.directory, client: client, host: host,
