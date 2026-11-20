@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import WovenLibrary
 import WovenProtocol
 
@@ -8,11 +9,14 @@ import WovenProtocol
 struct BotsHostInterface: Sendable {
   let library: Library
   let secrets: Secrets
+  let tenure: BotsTenure
   /// The Woven MCP, once the server has made it.
   let tools = ToolsLink()
 
   /// The home machine: this one.
   private var home: String { library.machineID }
+  /// What the chats' session ids start with: this machine and its stint as the home.
+  private var sessions: String { home + ":" + tenure.current }
 
   func handle(_ method: String, _ params: JSONValue) async throws -> JSONValue {
     switch method {
@@ -63,10 +67,10 @@ struct BotsHostInterface: Sendable {
       }
       return .object(["bots": .object(bots), "forum": .integer(forum)])
     case "mirror.bot":
-      try await library.saveBotMirror(BotsMirrorMapping.bot(try params.decode(MirrorBot.self), home: home))
+      try await library.saveBotMirror(BotsMirrorMapping.bot(try params.decode(MirrorBot.self), home: sessions))
       return .object([:])
     case "mirror.forum":
-      try await library.saveBotMirror(BotsMirrorMapping.forum(try params.decode(MirrorForum.self), home: home))
+      try await library.saveBotMirror(BotsMirrorMapping.forum(try params.decode(MirrorForum.self), home: sessions))
       return .object([:])
     case "mirror.purge":
       guard let botID = params["botId"]?.string else { throw RuntimeError.failed("mirror.purge needs a botId.") }
@@ -206,7 +210,43 @@ struct MirrorForum: Decodable, Sendable {
   var upTo: Int64
 }
 
+/// This machine's stint as the bots' home, in `D/bots-runtime/tenure`: part
+/// of the session ids it saves their chats under. It is new each time the
+/// bots come here, so a machine they come back to never meets the sessions it
+/// deleted when they left (a deletion is final).
+final class BotsTenure: Sendable {
+  let file: URL
+  private let cached = Mutex<String?>(nil)
+
+  init(file: URL) { self.file = file }
+
+  /// The current stint, begun now if there is none.
+  var current: String {
+    cached.withLock { value in
+      if let value { return value }
+      let stored = (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+      let id = stored.flatMap { $0.isEmpty ? nil : $0 } ?? String(UUID().uuidString.lowercased().prefix(8))
+      if stored != id {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? id.write(to: file, atomically: true, encoding: .utf8)
+      }
+      value = id
+      return id
+    }
+  }
+
+  /// The bots left (or never came): the next stint is a new one.
+  func end() {
+    cached.withLock { value in
+      value = nil
+      try? FileManager.default.removeItem(at: file)
+    }
+  }
+}
+
 /// The contract's mapping of a push to the library's sessions and items.
+/// `home` is the session prefix: the home machine and its stint.
 enum BotsMirrorMapping {
   static func botSession(home: String, botID: String, conversationID: Int) -> String {
     "bot:\(home):\(botID):\(conversationID)"

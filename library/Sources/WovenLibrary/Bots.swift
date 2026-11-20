@@ -292,9 +292,10 @@ extension Library {
   }
 
   /// What of `expected` this machine's library does not hold yet as the bots'
-  /// home: a bot, a chat, or a live bot's or the Forum's entries up to the old
-  /// home's checkpoint. Nil when it holds everything.
-  public func botsTransferMissing(_ expected: BotsTransferExpected) async throws -> String? {
+  /// home: a bot, a chat (under session ids starting `sessions`), or a live
+  /// bot's or the Forum's entries up to the old home's checkpoint. Nil when it
+  /// holds everything.
+  public func botsTransferMissing(_ expected: BotsTransferExpected, sessions: String) async throws -> String? {
     let machineID = machineID
     return try await read { db in
       var live: Set<String> = []
@@ -304,7 +305,7 @@ extension Library {
         if !row.bool("trashed") { live.insert(id) }
       }
       for chat in expected.chats {
-        let session = chat.botID.map { "bot:\(machineID):\($0):\(chat.conversationID)" } ?? "forum:\(machineID):\(chat.conversationID)"
+        let session = chat.botID.map { "bot:\(sessions):\($0):\(chat.conversationID)" } ?? "forum:\(sessions):\(chat.conversationID)"
         if try db.query("SELECT id FROM bot_chats WHERE id = ? AND deleted = 0", [.text(session)]).isEmpty { return "chat \(session)" }
       }
       var held: [String: Int64] = [:]

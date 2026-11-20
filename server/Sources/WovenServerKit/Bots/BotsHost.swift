@@ -59,6 +59,7 @@ actor BotsHost {
   let library: Library
   let peers: PeerSync
   private let interface: BotsHostInterface
+  let tenure: BotsTenure
   let hosting: BotsHosting
   let engine: any BotsEngine
   let dataFolder: URL
@@ -100,7 +101,8 @@ actor BotsHost {
   init(library: Library, secrets: Secrets, peers: PeerSync, dataFolder: URL, hosting: BotsHosting = .standard) {
     self.library = library
     self.peers = peers
-    self.interface = BotsHostInterface(library: library, secrets: secrets)
+    self.tenure = BotsTenure(file: dataFolder.appendingPathComponent("bots-runtime/tenure"))
+    self.interface = BotsHostInterface(library: library, secrets: secrets, tenure: tenure)
     self.hosting = hosting
     self.engine = hosting.engine(dataFolder)
     self.dataFolder = dataFolder

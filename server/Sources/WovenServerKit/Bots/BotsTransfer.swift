@@ -308,6 +308,7 @@ extension BotsHost {
     remove(botsFolder)
     remove(outgoingFolder)
     try? await library.removeBotChats()
+    tenure.end()
     remove(outgoingMarker)
     hold = nil
     await reconcileHome()
@@ -405,15 +406,17 @@ extension BotsHost {
     }
     try await prepareEngine()
     try await hosting.files.run(.import, configURL, incomingFolder.appendingPathComponent("files", isDirectory: true))
+    tenure.end()
+    let sessions = thisMachine + ":" + tenure.current
     hold = .receiving(source: transfer.source)
     await reconcileHome()
     let deadline = ContinuousClock.now + .seconds(15 * 60)
     while true {
       try Task.checkCancellation()
       guard incoming?.id == transfer.id else { throw ProtocolError(.failed, "The transfer was given up.") }
-      if status.state == .ready, try await library.botsTransferMissing(transfer.expected) == nil { break }
+      if status.state == .ready, try await library.botsTransferMissing(transfer.expected, sessions: sessions) == nil { break }
       guard ContinuousClock.now < deadline else {
-        let missing = try await library.botsTransferMissing(transfer.expected) ?? "nothing"
+        let missing = try await library.botsTransferMissing(transfer.expected, sessions: sessions) ?? "nothing"
         throw ProtocolError(.failed, status.state == .ready
           ? "\(await name(of: thisMachine)) did not receive \(missing) from the bots." : status.message ?? "The bots did not start.")
       }
@@ -468,11 +471,14 @@ extension BotsHost {
     remove(incomingMarker)
   }
 
-  /// The received bots folder, and anything read into this engine.
+  /// The received bots folder, anything read into this engine, and any chat
+  /// the bots saved here meanwhile.
   private func removeReceived() async {
     if (try? await prepareEngine()) != nil { try? await hosting.files.run(.remove, configURL, nil) }
     await releaseEngine()
     remove(botsFolder)
+    try? await library.removeBotChats()
+    tenure.end()
   }
 
   /// Gives a transfer back when the old home has been out of reach for a

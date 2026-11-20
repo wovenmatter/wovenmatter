@@ -240,7 +240,7 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   let saved = try await client.call(ListSavedBots())
   #expect(saved.bots.map(\.name) == ["Ada"])
   let main = try #require(saved.chats.first { $0.kind == .main })
-  #expect(main.session.id == "bot:\(home.server.machineID):b1:1")
+  #expect(main.session.id.hasPrefix("bot:\(home.server.machineID):") && main.session.id.hasSuffix(":b1:1"))
   #expect(main.session.title == "Ada")
   #expect(main.session.runtime == .bots)
   let items = try await client.call(SessionItems(sessionID: main.session.id))
@@ -412,11 +412,26 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
          saved.chats.allSatisfy({ $0.session.machineID == b.server.machineID }) { break }
       try await Task.sleep(for: .milliseconds(20))
     }
-    #expect(try await client.call(SessionItems(sessionID: "bot:\(b.server.machineID):b1:1")).count == 2)
+    let main = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .main })
+    #expect(try await client.call(SessionItems(sessionID: main.session.id)).count == 2)
   }
   for server in [a, b] {
     let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
     #expect(usage.totals.turns == 2)
+  }
+
+  // And back: the first home saves them again under new sessions, though it deleted its old ones.
+  _ = try await setup.onB.call(TransferBots(targetMachineID: a.server.machineID))
+  #expect(setup.filesA.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
+  for client in [setup.onA, setup.onB] {
+    while true {
+      let saved = try await client.call(ListSavedBots())
+      if try await home(client) == a.server.machineID, saved.chats.count == 2,
+         saved.chats.allSatisfy({ $0.session.machineID == a.server.machineID }) { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    let main = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .main })
+    #expect(try await client.call(SessionItems(sessionID: main.session.id)).count == 2)
   }
 }
 
