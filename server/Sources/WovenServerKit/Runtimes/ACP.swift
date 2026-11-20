@@ -271,6 +271,10 @@ private actor ACPState {
 
   private var turnRunning = false
   private var turnNumber = 0
+  /// The session's cost so far in US dollars, as `usage_update` reports it,
+  /// and what it was when the running turn began.
+  private var sessionCost: Double?
+  private var costBeforeTurn: Double?
   private var tools: [String: ToolCall] = [:]
   private var thinkingID: String?
   private var thinkingCount = 0
@@ -310,6 +314,7 @@ private actor ACPState {
     guard !turnRunning else { throw RuntimeError.failed("A turn is already running.") }
     turnRunning = true
     turnNumber += 1
+    costBeforeTurn = sessionCost
     let blocks = try Self.blocks(turn)
     let connection = connection
     Task {
@@ -345,7 +350,9 @@ private actor ACPState {
       case "refusal": "The model declined to answer."
       default: nil
       }
-      emit.yield(.turnFinished(failure: failure, usage: Self.usage(value, model: configuration.model)))
+      var usage = Self.usage(value, model: configuration.model)
+      if usage?.cost == nil, let sessionCost { usage?.cost = max(0, sessionCost - (costBeforeTurn ?? 0)) }
+      emit.yield(.turnFinished(failure: failure, usage: usage))
     case .failure(let error as ACPError) where profile.isMissingSession(error):
       emit.yield(.nativeSessionGone)
     case .failure(let error):
@@ -533,6 +540,11 @@ private actor ACPState {
     switch kind {
     case "config_option_update", "current_mode_update", "available_commands_update":
       capture(update)
+      return
+    case "usage_update":
+      if let cost = update["cost"], cost["currency"]?.string?.uppercased() ?? "USD" == "USD", let amount = cost["amount"]?.double {
+        sessionCost = amount
+      }
       return
     default:
       break

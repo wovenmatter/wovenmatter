@@ -83,6 +83,7 @@ public final class WovenServer: Sendable {
                               folder: options.dataFolder.appendingPathComponent("databases", isDirectory: true))
     registerDatabases(&routes, databases: databases)
     registerGitHub(&routes, github: github)
+    registerUsage(&routes, library: library, secrets: secrets)
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
