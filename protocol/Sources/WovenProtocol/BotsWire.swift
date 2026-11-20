@@ -76,6 +76,11 @@ public enum BotsWire {
     public var position: Int
   }
 
+  /// `groups.create`.
+  public struct GroupResult: Codable, Sendable, Hashable {
+    public var group: Group
+  }
+
   /// `groups.list`.
   public struct GroupsList: Codable, Sendable, Hashable {
     public var groups: [Group]
@@ -232,20 +237,26 @@ public enum BotsWire {
     public var restartRequired: Bool
   }
 
+  /// `runtime.status`, only what the UI reads: its `image` also carries a key per tool in the
+  /// bots' image, so it has no fixed shape to copy.
+  public struct RuntimeStatus: Decodable, Sendable, Hashable {
+    public struct Image: Decodable, Sendable, Hashable {
+      /// Bots an update moves to a new base image.
+      public var staleBots: Int
+    }
+    public var image: Image?
+  }
+
   // MARK: Containers
 
   public struct EnvironmentSummary: Codable, Sendable, Hashable {
-    public struct Preview: Codable, Sendable, Hashable {
-      public var port: Int
-      public var url: String
-    }
     public var botId: String
     /// "missing", "running", "stopped" or "unavailable".
     public var state: String
     public var busy: String?
     public var lastActivity: Double?
+    /// The bot's restart list; the UI does not show it.
     public var services: [JSONValue]?
-    public var previews: [Preview]?
   }
 
   /// `bots.environment`.

@@ -269,8 +269,7 @@ final class BotsStore {
 
     private func loadRuntimeStatus() async {
         await load { [self] in
-            let status = try await call("runtime.status")
-            botsOnOlderImage = status.objectValue?["image"]?.objectValue?["staleBots"]?.intValue ?? 0
+            botsOnOlderImage = try await call("runtime.status", as: BotsWire.RuntimeStatus.self).image?.staleBots ?? 0
         }
     }
 
@@ -367,9 +366,9 @@ final class BotsStore {
 
     func createGroup(name: String, adding botID: String? = nil) async {
         await attempt {
-            let group = try await call("groups.create", ["name": .string(name)])
-            if let botID, let groupID = group.objectValue?["group"]?.objectValue?["id"]?.stringValue {
-                _ = try await call("bots.setGroup", ["botId": .string(botID), "groupId": .string(groupID)])
+            let group = try await call("groups.create", ["name": .string(name)], as: BotsWire.GroupResult.self).group
+            if let botID {
+                _ = try await call("bots.setGroup", ["botId": .string(botID), "groupId": .string(group.id)])
             }
         }
         await loadGroups()
