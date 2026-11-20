@@ -87,6 +87,7 @@ final class ApplicationModel {
         let server = ServerConnection(endpoint: .unix(path: ThisMachineServer.socketPath))
         self.server = server
         machines.attach(server)
+        usage.attach(server, machines: machines)
         workspace.attach(server, machines: machines)
         settings.attach(server); connections.attach(server, settings: settings); updates.attach(machines)
         sessions.attach(server, workspace: workspace)

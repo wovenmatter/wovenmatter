@@ -3,7 +3,9 @@ import Observation
 
 /// The app release each machine runs and the harness versions on each, as Settings → Updates
 /// shows them. The server runs updates; this holds their state and sends the commands.
-/// This Mac's harness rows come from `MachinesStore`; app releases and bots are not connected yet.
+/// This Mac's harness rows come from `MachinesStore`. The newest release is read from the
+/// app's update feed, and this Mac updates itself through Sparkle. Updating another machine's
+/// Woven Matter and the bots are not connected yet.
 @MainActor
 @Observable
 final class UpdatesStore {
@@ -82,6 +84,12 @@ final class UpdatesStore {
     var machines: [String: MachineState] {
         var result = appStates
         guard let store = machineStore, let thisID = store.thisMachine?.id else { return result }
+        for machine in store.machines {
+            var state = result[machine.id] ?? MachineState()
+            state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: latestVersion)
+            if machine.isThisMachine { state.updatingApp = DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate }
+            result[machine.id] = state
+        }
         var state = result[thisID] ?? MachineState()
         if store.harnessInventoryUnavailable.contains(thisID) && store.harnesses(on: thisID).isEmpty {
             state.harnessError = ClientError.notConnected.localizedDescription
@@ -106,7 +114,16 @@ final class UpdatesStore {
     private(set) var notice: String?
     private(set) var busyConfirmation: BusyConfirmation?
     /// Machines run different Woven Matter releases, so they do not sync.
-    private(set) var versionsDiffer = false
+    var versionsDiffer: Bool {
+        guard let store = machineStore, let this = store.thisMachine?.appVersion else { return false }
+        return store.machines.contains { !$0.isThisMachine && $0.appVersion != nil && $0.appVersion != this }
+    }
+
+    /// True when `version` is older than `latest`, comparing dotted numbers.
+    static func isBehind(_ version: String?, latest: String?) -> Bool {
+        guard let version, let latest else { return false }
+        return version.compare(latest, options: .numeric) == .orderedAscending
+    }
 
     init() {}
 
@@ -136,12 +153,21 @@ final class UpdatesStore {
     /// Whether a request may start: it waits while everything it covers is already updating.
     func canStart(_ request: Request) -> Bool { !isUpdating(request) }
 
+    /// Reads the newest release once, and this Mac's harnesses when they have not been read.
     func loadIfNeeded() {
+        if latestVersion == nil, !checking, !readingRelease {
+            readingRelease = true
+            Task {
+                latestVersion = try? await Self.newestRelease()
+                readingRelease = false
+            }
+        }
         guard let store = machineStore, let thisID = store.thisMachine?.id, !store.hasReadRuntimes else { return }
         store.refreshHarnesses(on: thisID)
     }
+    @ObservationIgnored private var readingRelease = false
 
-    /// Checks this Mac's harnesses for newer releases. The app release is not checked yet.
+    /// Checks the update feed for the newest release and this Mac's harnesses for newer ones.
     func checkAll() async {
         guard let store = machineStore, let thisID = store.thisMachine?.id else {
             failures = [ClientError.notConnected.localizedDescription]
@@ -149,13 +175,38 @@ final class UpdatesStore {
         }
         checking = true
         failures = []
+        async let release = Self.newestRelease()
         await store.checkAllHarnesses(on: thisID)
-        releaseError = ClientError.notOffered("The release check").localizedDescription
+        do {
+            latestVersion = try await release
+            releaseError = nil
+        } catch {
+            releaseError = error.localizedDescription
+        }
         checkedAt = Date()
         checking = false
     }
 
-    /// Runs the harness updates a request covers on this Mac; app and bots updates are not connected yet.
+    /// The newest `sparkle:shortVersionString` in the feed this app updates from.
+    static func newestRelease() async throws -> String {
+        guard let feed = (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String).flatMap(URL.init(string:)) else {
+            throw ClientError.notOffered("The release check")
+        }
+        let request = URLRequest(url: feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        let reader = AppcastVersions()
+        let parser = XMLParser(data: data)
+        parser.delegate = reader
+        guard parser.parse(), let newest = reader.versions.max(by: { isBehind($0, latest: $1) }) else {
+            throw URLError(.cannotParseResponse)
+        }
+        return newest
+    }
+
+    /// Runs the updates a request covers on this Mac: its Woven Matter through Sparkle, which
+    /// restarts the app and with it the server, and its harnesses. Other machines' Woven Matter
+    /// and the bots are not connected yet.
     func start(_ request: Request) {
         guard let store = machineStore, let thisID = store.thisMachine?.id else {
             failures = [ClientError.notConnected.localizedDescription]
@@ -171,9 +222,37 @@ final class UpdatesStore {
             kinds = machineID == thisID ? AgentRuntimeKind.allCases.filter { $0.rawValue == harnessID } : []
         case .apps, .app, .bots: kinds = []
         }
-        if kinds.isEmpty { failures = [ClientError.notConnected.localizedDescription] }
+        let updatesThisApp: Bool = switch request {
+        case .everything, .apps: Self.isBehind(store.thisMachine?.appVersion, latest: latestVersion)
+        case .machine(let id), .app(let id): id == thisID && Self.isBehind(store.thisMachine?.appVersion, latest: latestVersion)
+        case .harnesses, .harness, .bots: false
+        }
+        if updatesThisApp {
+            if let failure = DesktopUpdater.shared.installUpdate() { failures.append(failure) }
+        } else if kinds.isEmpty {
+            failures = [ClientError.notOffered("Updating this").localizedDescription]
+        }
         for kind in kinds { store.update(kind, on: thisID) }
     }
     func confirmBusy() { busyConfirmation = nil }
     func cancelBusy(_ id: UUID) { if busyConfirmation?.id == id { busyConfirmation = nil } }
+}
+
+/// Reads every release version an appcast lists.
+private final class AppcastVersions: NSObject, XMLParserDelegate {
+    private(set) var versions: [String] = []
+    private var text: String?
+
+    func parser(_ parser: XMLParser, didStartElement element: String, namespaceURI: String?, qualifiedName: String?,
+                attributes: [String: String] = [:]) {
+        if element == "sparkle:shortVersionString" { text = "" }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) { text? += string }
+
+    func parser(_ parser: XMLParser, didEndElement element: String, namespaceURI: String?, qualifiedName: String?) {
+        guard element == "sparkle:shortVersionString", let value = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        if !value.isEmpty { versions.append(value) }
+        text = nil
+    }
 }

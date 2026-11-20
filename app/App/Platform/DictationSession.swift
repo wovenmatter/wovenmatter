@@ -44,8 +44,13 @@ import Observation
     }
   }
   public var languageIdentifier: String {
-    didSet { preferences.set(languageIdentifier, forKey: "wovenmatter.dictation.language") }
+    didSet {
+      preferences.set(languageIdentifier, forKey: "wovenmatter.dictation.language")
+      if languageIdentifier != oldValue { languageChanged?(languageIdentifier) }
+    }
   }
+  /// Called when the person picks another language, so it can be synced.
+  @ObservationIgnored public var languageChanged: ((String) -> Void)?
   public var isBusy: Bool { phase != .idle }
   public var isRecording: Bool { phase == .preparing || phase == .recording }
   public var availability: String { "Apple on-device speech · Works offline after language preparation." }

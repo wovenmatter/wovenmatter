@@ -30,6 +30,7 @@ final class SettingsStore {
                                 uniquingKeysWith: { _, newest in newest })
             isLoaded = true
             error = nil
+            applyDictationLanguage()
         } catch {
             self.error = error.localizedDescription
         }

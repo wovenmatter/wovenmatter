@@ -226,6 +226,9 @@ struct SettingsView: View {
         case "general": route = .general
         #if DEBUG
         case "agents": route = .agents
+        case "updates": route = .updates
+        case "github": route = .github
+        case "dictation": route = .dictation
         #endif
         case "permissions": if route != .permissions { open(.permissions, .permissions, from: .landing) }
         default: if route != .accounts(scope) { open(.accounts, .accounts(scope), from: .landing) }

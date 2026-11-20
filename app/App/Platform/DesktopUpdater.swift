@@ -39,6 +39,22 @@ final class DesktopUpdater: NSObject {
         controller?.checkForUpdates(nil)
         #endif
     }
+
+    /// Downloads and installs the newest release through Sparkle, which then
+    /// relaunches the app; the relaunched app restarts this Mac's server on the
+    /// new program. Nil when it started, else why it could not.
+    func installUpdate() -> String? {
+        #if canImport(Sparkle)
+        guard let controller, canCheckForUpdates else {
+            return "Only the installed Woven Matter app updates itself."
+        }
+        errorMessage = nil
+        controller.checkForUpdates(nil)
+        return nil
+        #else
+        return "Only the installed Woven Matter app updates itself."
+        #endif
+    }
 }
 
 #if canImport(Sparkle)
