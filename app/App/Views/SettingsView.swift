@@ -228,6 +228,7 @@ struct SettingsView: View {
         #if DEBUG
         case "agents": route = .agents
         case "updates": route = .updates
+        case "opencode": route = harnessRoute(.opencode, machineID: nil, origin: .agents)
         case "github": route = .github
         case "dictation": route = .dictation
         case "workspaces": route = .workspaces(nil)
@@ -414,7 +415,6 @@ private struct SettingsAgentsView: View {
                     Button("Set up harnesses") { openWindow(id: HarnessSetupPresentation.windowID) }
                         .buttonStyle(SettingsQuietButtonStyle())
                 }
-                if let thisMachineID, let error = model.machines.openCodeErrors[thisMachineID] { SettingsError(error) }
             }
         }
         .task {
@@ -497,9 +497,6 @@ private struct SettingsHarnessView: View {
                 SettingsWorkspacePicker(title: "Applies to", scope: $scope, machines: machines)
             }
             SettingsHarnessAccounts(model: model, runtimeKind: runtimeKind, scope: scope)
-            if runtimeKind == .opencode {
-                SettingsOpenCodeInstances(model: model, scope: scope)
-            }
             SettingsAgentDefaultsSection(model: model, runtime: runtimeKind, scope: scope, managesSharing: true)
         }
         .task(id: machineID) {

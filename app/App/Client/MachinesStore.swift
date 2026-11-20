@@ -8,7 +8,7 @@ import WovenProtocol
 /// and install the server over SSH, and install or update harnesses.
 ///
 /// Per-machine state is keyed by machine id. Harness and sign-in members are in
-/// `MachinesStore+Harnesses.swift`, OpenCode's in `MachinesStore+OpenCode.swift`.
+/// `MachinesStore+Harnesses.swift`.
 @MainActor
 @Observable
 final class MachinesStore {
@@ -158,11 +158,6 @@ final class MachinesStore {
     var removingSignIns: [String: Set<AgentRuntimeKind>] = [:]
     var signInMessages: [String: [AgentRuntimeKind: String]] = [:]
     var signInSessions: [String: [AgentRuntimeKind: HarnessSignInSession]] = [:]
-
-    // MARK: OpenCode (see MachinesStore+OpenCode.swift)
-
-    var openCodeServers: [String: OpenCodeServer] = [:]
-    var openCodeErrors: [String: String] = [:]
 
     // MARK: Used by settings
 
