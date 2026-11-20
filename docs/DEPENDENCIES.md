@@ -26,7 +26,7 @@ for every package update. Three separate mechanisms do that:
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
-| `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
+| `DOCKER_VERSION` and `DOCKER_SHA256` in `bots/engine/bots-engine.py` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
 | `bots/image/toolchain/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot toolchain's copy of the same Node and Playwright selections. Bots get it through the runtime's shared volume, so a change updates them in place and never moves them to a new container | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
 | `bots/image/Dockerfile` and `bots/image/chromium-packages.txt` | The bot base image: the Ubuntu release, its packages (they float and are upgraded at build and by every bots Update), and Chromium's system libraries from Playwright's Ubuntu list. A change moves bots to a new container, carrying what they installed | Refresh `chromium-packages.txt` from `playwright-core`'s native dependency table when Ubuntu or Chromium's libraries change; an update whose Chromium needs more installs them in the container (`playwright install-deps`) |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
@@ -47,13 +47,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 - **Docker Engine** for Linux bots is an exact static release, because the
   bot engine runs as root with a verified, distribution-independent binary set
   (dockerd, containerd, runc, docker-proxy, docker-init) on Ubuntu, Debian and
-  Arch alike. `remote-host.sh` downloads it once per host and the root helper
-  re-verifies the SHA-256 before installing it. Maintenance selects the newest
-  stable `docker-<version>.tgz` (no release candidates) and records both
-  architectures' checksums. Validation: `scripts/test-support/test_bots_engine.py`
-  in CI, and the bots install, egress and uninstall checks on a Linux host
-  before release. Installed hosts pick up a new selection on update; the
-  engine restarts only when its binaries or configuration changed.
+  Arch alike. `bots/engine/bots-engine.py install`, run once with sudo,
+  downloads it and verifies the SHA-256 before installing it. Maintenance
+  selects the newest stable `docker-<version>.tgz` (no release candidates) and
+  records both architectures' checksums. Validation: the bots install, egress
+  and uninstall checks on a Linux host before release. Running the installer
+  again picks up a new selection; the engine restarts only when its binaries
+  or configuration changed.
   The static Linux host and the Mac VM both select Docker 29.10.0. Maintenance
   checks the VM's signed Resolute APT publication independently; a static
   archive cannot replace the VM's managed APT packages.

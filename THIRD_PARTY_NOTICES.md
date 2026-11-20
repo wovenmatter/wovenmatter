@@ -233,9 +233,8 @@ Inside the guest, Docker Engine (Docker CE, containerd, runc and their plugins)
 is installed unmodified from [Docker's signed apt repository](https://download.docker.com/linux/ubuntu)
 at the versions pinned in `guest-version.json`. The app bundles only Docker's
 public repository signing key (`Resources/WovenVM/docker-archive-keyring.asc`),
-verified by fingerprint and SHA-256. On Linux hosts, `remote/host/bots-engine.py`
-installs Docker's official static binaries, pinned with SHA-256 in
-`remote/host/runtime-versions.json`. Docker Engine (Moby) is licensed under
+verified by fingerprint and SHA-256. On Linux machines, `bots/engine/bots-engine.py`
+installs Docker's official static binaries, pinned with SHA-256 in that script. Docker Engine (Moby) is licensed under
 Apache-2.0, containerd and runc under Apache-2.0; their licenses ship with the
 packages and archives. Docker is a trademark of Docker, Inc.
 
