@@ -1,5 +1,4 @@
 import SwiftUI
-import WebKit
 
 /// Debug builds only: with `--debug-open FILE`, every SIGUSR2 reads FILE and
 /// shows what it names (`note:ID`, a window destination such as `library`, or
@@ -84,30 +83,11 @@ enum DebugNavigationSignal {
         let source = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
         source.setEventHandler {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { return }
-            let request = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if request.hasPrefix("web-snapshot:") {
-                snapshotWebViews(to: URL(fileURLWithPath: String(request.dropFirst(13))))
-            } else {
-                NotificationCenter.default.post(name: name, object: request)
-            }
+            NotificationCenter.default.post(name: name, object: text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         source.resume()
         self.source = source
     }
 
-    /// Window captures draw web content blank, so `web-snapshot:PATH` writes
-    /// each visible web view's own snapshot as PATH-N.png.
-    private static func snapshotWebViews(to path: URL) {
-        func webViews(in view: NSView) -> [WKWebView] {
-            (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap(webViews)
-        }
-        let views = NSApp.windows.filter(\.isVisible).compactMap(\.contentView).flatMap(webViews)
-        for (index, webView) in views.enumerated() {
-            webView.takeSnapshot(with: nil) { image, _ in
-                guard let image, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return }
-                try? bitmap.representation(using: .png, properties: [:])?.write(to: path.appendingPathExtension("\(index).png"))
-            }
-        }
-    }
 }
 #endif
