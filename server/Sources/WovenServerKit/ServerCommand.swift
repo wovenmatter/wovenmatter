@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// The server's command line, shared by `woven-server` on Linux and the Mac
 /// app's own program run with `--server`:
@@ -96,12 +97,12 @@ public enum ServerCommand {
           + (address.map { ", \($0.host):\(server.port ?? $0.port)" } ?? ""))
     fflush(stdout)
 
-    let removed = await withTaskGroup(of: Bool.self) { group in
-      group.addTask { await signalled([SIGINT, SIGTERM]); return false }
-      group.addTask { await server.waitUntilRemoved(); return true }
-      let first = await group.next() ?? false
-      group.cancelAll()
-      return first
+    // Whichever comes first. Not a task group: that would wait for the other,
+    // and neither ends when cancelled.
+    let removed = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      let once = Mutex<CheckedContinuation<Bool, Never>?>(continuation)
+      Task { await signalled([SIGINT, SIGTERM]); once.withLock { $0.take() }?.resume(returning: false) }
+      Task { await server.waitUntilRemoved(); once.withLock { $0.take() }?.resume(returning: true) }
     }
     await server.stop()
     if removed {
