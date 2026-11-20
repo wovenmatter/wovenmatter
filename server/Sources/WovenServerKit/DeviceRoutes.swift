@@ -19,7 +19,7 @@ func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, 
   router.on(InspectHost.self) { request, _ in
     guard let install else { throw ProtocolError(.failed, "This machine cannot install the Woven server elsewhere.") }
     do {
-      return try await install.inspect(on: LinuxInstall.target(request.host, user: request.user, on: tailnet))
+      return try await install.inspect(on: LinuxInstall.Target(host: request.host, user: request.user))
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
@@ -27,25 +27,37 @@ func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, 
 
   router.on(InstallServer.self) { request, _ in
     guard let install else { throw ProtocolError(.failed, "This machine cannot install the Woven server elsewhere.") }
-    let target = await LinuxInstall.target(request.host, user: request.user, on: tailnet)
+    let machineID: String
     do {
-      try await install.install(on: target)
+      machineID = try await install.install(on: LinuxInstall.Target(host: request.host, user: request.user))
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
-    guard await peers.waitForServer(at: target.address ?? request.host, timeout: .seconds(120)) else {
-      throw ProtocolError(.failed, "The server was installed on \(request.host) but has not answered yet.")
+    // Once its machine row has arrived, the host and user go with it, so any
+    // Mac reaches it the same way later.
+    let deadline = ContinuousClock.now + .seconds(120)
+    while true {
+      let online = await peers.isOnline(machineID)
+      if online, try await library.machine(machineID) != nil { break }
+      guard ContinuousClock.now < deadline else {
+        throw ProtocolError(.failed, "The server was installed on \(request.host) but has not answered yet.")
+      }
+      await peers.discover()
+      try await Task.sleep(for: .seconds(2))
     }
+    try await library.setSSHRoute(of: machineID, host: request.host, user: request.user)
     return Done()
   }
 
   router.on(UpdateServer.self) { request, _ in
-    let (install, target) = try await linuxTarget(request.machineID, library: library, peers: peers, tailnet: tailnet, install: install)
+    let (install, target) = try await linuxTarget(request.machineID, library: library, install: install)
     do {
       try await install.install(on: target)
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
+    // Looks for it at once rather than at the next discovery.
+    _ = await peers.waitForServer(of: request.machineID, timeout: .seconds(60))
     return Done()
   }
 
@@ -53,12 +65,13 @@ func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, 
     guard let machine = try await library.machine(request.machineID) else { return Done() }
     // A Linux machine's server is stopped and uninstalled there first, its
     // server running or not; a Mac's server learns of its removal by sync and
-    // stops itself.
-    if machine.platform == .linux, let install, let target = await sshTarget(of: machine, peers: peers, tailnet: tailnet) {
+    // stops itself. One that cannot be reached and is not online is removed
+    // anyway: it erases its library if it comes back.
+    if machine.platform == .linux, let install, let target = try await sshTarget(of: machine.id, library: library) {
       do {
         try await install.uninstall(on: target)
       } catch let failure as LinuxInstall.Failure {
-        throw ProtocolError(.failed, failure.description)
+        if await peers.isOnline(machine.id) { throw ProtocolError(.failed, failure.description) }
       }
     }
     try await library.removeMachine(machine.id)

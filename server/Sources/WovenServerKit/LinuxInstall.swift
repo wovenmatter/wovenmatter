@@ -28,26 +28,15 @@ struct LinuxInstall: Sendable {
 
   var unit: String { Self.unitName(instance: instance) }
 
-  /// A computer reached over SSH. SSH connects to `address`, its tailnet
-  /// address, so it reaches that exact node, and takes the person's own
-  /// settings for `name` (user, key, known hosts), as `ssh <name>` would.
+  /// A computer reached over SSH: the host and user exactly as the person
+  /// gave them at install, so their own SSH settings for that host apply
+  /// unchanged, and, for a machine already installed there, its id. Every
+  /// command on an installed machine first checks that the server there is
+  /// that machine, so a host that now names another computer is never changed.
   struct Target: Sendable, Equatable {
-    var name: String
-    var address: String?
+    var host: String
     var user: String?
-  }
-
-  /// Where SSH reaches `host` (a tailnet name, a MagicDNS name or an
-  /// address): the tailnet computer it names, by its tailnet name and
-  /// address. A host the tailnet does not list is reached as given.
-  static func target(_ host: String, user: String?, on tailnet: any Tailnet) async -> Target {
-    let given = host.lowercased()
-    let device = (try? await tailnet.devices())?.first { device in
-      let name = device.name.lowercased()
-      return name == given || device.address == host || given.hasPrefix(name + ".")
-    }
-    guard let device else { return Target(name: host, address: nil, user: user) }
-    return Target(name: isPlainHost(device.name) ? device.name : host, address: device.address, user: user)
+    var machineID: String?
   }
 
   /// The release this Mac carries for each architecture, from the app's resources.
@@ -57,8 +46,10 @@ struct LinuxInstall: Sendable {
   }
 
   /// Copies the release there and (re)starts the unit. The data folder stays.
-  func install(on target: Target) async throws {
-    let host = target.name
+  /// Returns the id of the machine the server there runs as.
+  @discardableResult
+  func install(on target: Target) async throws -> String {
+    let host = target.host
     let facts = try await ssh(target, script: """
       uname -m
       command -v systemctl >/dev/null && echo systemd || echo none
@@ -112,7 +103,7 @@ struct LinuxInstall: Sendable {
       [Install]
       WantedBy=default.target
       """
-    _ = try await ssh(target, input: upload, script: """
+    let installed = try await ssh(target, input: upload, script: """
       set -eu
       root="\(root)"
       mkdir -p "$root/data" "$HOME/.config/systemd/user"
@@ -133,11 +124,18 @@ struct LinuxInstall: Sendable {
       systemctl --user daemon-reload
       systemctl --user enable \(unit).service >/dev/null 2>&1
       systemctl --user restart \(unit).service
+      # The server names its machine once it has started.
+      i=0
+      while [ ! -s "$root/data/machine-id" ] && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
+      cat "$root/data/machine-id"
       """)
     if linger == "no" {
       // Without lingering the unit stops when the person logs out there.
       _ = try? await ssh(target, script: "loginctl enable-linger \"$(id -un)\"")
     }
+    let machineID = installed.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !machineID.isEmpty else { throw Failure(description: "The server on \(host) did not start.") }
+    return machineID
   }
 
   /// Stops and disables the unit and deletes everything it had there.
@@ -156,31 +154,38 @@ struct LinuxInstall: Sendable {
   /// unit file, so it must be plain.
   func ssh(_ target: Target, input: URL? = nil, script: String) async throws -> String {
     guard Self.isPlain(instance ?? "", extra: "._-") else { throw Failure(description: "\(unit) is not a plain unit name.") }
-    let arguments = try Self.sshArguments(target, script: script)
+    let arguments = try sshArguments(target, script: script)
     let result = await ChildProcess.run("/usr/bin/ssh", arguments, mergeErrors: false, input: input, timeout: .seconds(600))
     guard result.status == 0 else {
       let detail = result.errors.trimmingCharacters(in: .whitespacesAndNewlines)
-      throw Failure(description: "SSH to \(target.name) failed\(detail.isEmpty ? "" : ": " + String(detail.suffix(600)))")
+      throw Failure(description: "SSH to \(target.host) failed\(detail.isEmpty ? "" : ": " + String(detail.suffix(600)))")
     }
     return result.output
   }
 
-  /// SSH's arguments for running `script` there. The name and address must be
-  /// IP addresses or plain DNS names, and the user a plain login name, so
-  /// none can be read as an option.
-  static func sshArguments(_ target: Target, script: String) throws -> [String] {
-    guard isPlainHost(target.name), isPlainHost(target.address ?? target.name) else {
-      throw Failure(description: "\(target.name) is not an IP address or a DNS name.")
-    }
-    if let user = target.user, !user.isEmpty, !isPlain(user, extra: "._-") {
+  /// SSH's arguments for running `script` there: the host and user as given,
+  /// and nothing that overrides the person's SSH settings. The host must be an
+  /// IP address or a plain DNS name, the user a plain login name and the
+  /// machine id plain, so none can be read as an option or shell.
+  func sshArguments(_ target: Target, script: String) throws -> [String] {
+    guard Self.isPlainHost(target.host) else { throw Failure(description: "\(target.host) is not an IP address or a DNS name.") }
+    if let user = target.user, !user.isEmpty, !Self.isPlain(user, extra: "._-") {
       throw Failure(description: "\(user) is not a plain user name.")
+    }
+    var script = script
+    if let machineID = target.machineID {
+      guard !machineID.isEmpty, Self.isPlain(machineID, extra: "-") else { throw Failure(description: "\(machineID) is not a machine id.") }
+      script = """
+        if [ "$(cat "$HOME/.local/share/\(unit)/data/machine-id" 2>/dev/null)" != "\(machineID)" ]; then
+          echo "\(target.host) is not this machine: its Woven server (\(unit)) is another machine's or is not installed there." >&2
+          exit 97
+        fi
+        """ + "\n" + script
     }
     var arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15"]
     if let user = target.user, !user.isEmpty { arguments += ["-l", user] }
-    // Only the address is overridden: the settings for the name still apply.
-    if let address = target.address { arguments += ["-o", "HostName=\(address)"] }
     // SSH joins its arguments into one command line for the remote shell.
-    return arguments + ["--", target.name, "sh -c " + quoted(script)]
+    return arguments + ["--", target.host, "sh -c " + Self.quoted(script)]
   }
 
   static func quoted(_ text: String) -> String {

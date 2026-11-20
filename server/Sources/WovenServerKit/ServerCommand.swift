@@ -114,6 +114,9 @@ public enum ServerCommand {
     }
     options.offersStandIn = standIn
     let server = try await WovenServer.start(options)
+    // Which machine this data folder is, for a Mac reaching it over SSH to
+    // check it has the machine it means before changing anything.
+    try Data((server.machineID + "\n").utf8).write(to: options.dataFolder.appendingPathComponent("machine-id"), options: .atomic)
     FileHandle.standardOutput.write(Data(("woven-server: machine \(server.machineID) on \(socketPath ?? "no socket")"
           + (address.map { ", \($0.host):\(server.port ?? $0.port)" } ?? "") + "\n").utf8))
 

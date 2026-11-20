@@ -20,22 +20,20 @@ func registerServerControl(_ router: inout Router, library: Library, sessions: S
       if request.action != .start { try controlSelf(request.action, instance: instance) }
       return ServerControlResult(confirmationRequired: false)
     }
-    let (install, target) = try await linuxTarget(request.machineID, library: library, peers: peers, tailnet: tailnet, install: install)
+    let (install, target) = try await linuxTarget(request.machineID, library: library, install: install)
     do {
       try await install.control(request.action, on: target)
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
     // Looks for it at once rather than at the next discovery.
-    if request.action != .stop, let address = target.address {
-      _ = await peers.waitForServer(at: address, timeout: .seconds(60))
-    }
+    if request.action != .stop { _ = await peers.waitForServer(of: request.machineID, timeout: .seconds(60)) }
     return ServerControlResult(confirmationRequired: false)
   }
 
   router.on(ServerLog.self) { request, _ in
     if request.machineID == library.machineID { return tail(of: log) }
-    let (install, target) = try await linuxTarget(request.machineID, library: library, peers: peers, tailnet: tailnet, install: install)
+    let (install, target) = try await linuxTarget(request.machineID, library: library, install: install)
     do {
       return try await install.log(on: target)
     } catch let failure as LinuxInstall.Failure {
@@ -44,29 +42,25 @@ func registerServerControl(_ router: inout Router, library: Library, sessions: S
   }
 }
 
-/// A Linux machine and where this machine reaches it over SSH, for a request
+/// A Linux machine and how this machine reaches it over SSH, for a request
 /// that needs both; refused when either is missing.
-func linuxTarget(_ machineID: String, library: Library, peers: PeerSync, tailnet: any Tailnet,
+func linuxTarget(_ machineID: String, library: Library,
                  install: LinuxInstall?) async throws -> (LinuxInstall, LinuxInstall.Target) {
   guard let install else { throw ProtocolError(.failed, "This machine cannot reach another machine's server over SSH.") }
   guard let machine = try await library.machine(machineID), machine.platform == .linux else {
     throw ProtocolError(.notFound, "No Linux machine \(machineID).")
   }
-  guard let target = await sshTarget(of: machine, peers: peers, tailnet: tailnet) else {
-    throw ProtocolError(.ownerUnreachable, "\(machine.name) has not been reached on the tailnet.", machineID: machine.id)
+  guard let target = try await sshTarget(of: machine.id, library: library) else {
+    throw ProtocolError(.failed, "\(machine.name) was not installed from a Mac, so it cannot be reached over SSH.")
   }
   return (install, target)
 }
 
-/// Where this machine reaches a Linux machine over SSH: the tailnet computer
-/// its server was last reached at, else the one of its name (a stopped
-/// server's machine, after this server restarted). nil when neither is online.
-func sshTarget(of machine: Machine, peers: PeerSync, tailnet: any Tailnet) async -> LinuxInstall.Target? {
-  if let address = await peers.address(of: machine.id) {
-    return LinuxInstall.Target(name: address.name, address: address.host, user: nil)
-  }
-  let target = await LinuxInstall.target(machine.name, user: nil, on: tailnet)
-  return target.address == nil ? nil : target
+/// The host and user given when the machine was installed, exactly, with its
+/// id so the commands check they reached it. nil when it was not installed
+/// from a Mac.
+func sshTarget(of machineID: String, library: Library) async throws -> LinuxInstall.Target? {
+  try await library.sshRoute(of: machineID).map { LinuxInstall.Target(host: $0.host, user: $0.user, machineID: machineID) }
 }
 
 /// Stops or restarts this server a moment after the reply has gone.
@@ -117,7 +111,7 @@ extension LinuxInstall {
 
   /// Whether the server can be installed there, and its storage. Changes nothing.
   func inspect(on target: Target) async throws -> HostFacts {
-    let host = target.name
+    let host = target.host
     let lines = try await ssh(target, script: """
       uname -m
       command -v systemctl >/dev/null && echo systemd || echo none

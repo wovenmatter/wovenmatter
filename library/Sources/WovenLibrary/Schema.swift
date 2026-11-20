@@ -131,6 +131,10 @@ public enum Schema {
       // Sealed secrets for this machine are sealed with this key.
       .text("public_key"),
       .integer("created_at", 0),
+      // A Linux machine installed from a Mac: the SSH host and user given at
+      // install, which every later SSH action on it reuses exactly.
+      .text("ssh_host", ""),
+      .text("ssh_user", ""),
     ]),
     Table("sessions", .newestWins, [
       .text("machine_id", ""),

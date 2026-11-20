@@ -83,12 +83,17 @@ actor PeerSync {
     statuses[machineID]?.machine
   }
 
-  /// Looks at the tailnet until a server answers at `address`, for up to
-  /// `timeout`; true when one did.
-  func waitForServer(at address: String, timeout: Duration) async -> Bool {
+  /// Whether this server is linked to that machine's server now.
+  func isOnline(_ machineID: String) -> Bool {
+    statuses[machineID]?.online == true
+  }
+
+  /// Looks at the tailnet until that machine's server answers, for up to
+  /// `timeout`; true when it did.
+  func waitForServer(of machineID: String, timeout: Duration) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
-      if statuses.values.contains(where: { $0.machine.host == address && $0.online }) { return true }
+      if statuses[machineID]?.online == true { return true }
       await discover()
       try? await Task.sleep(for: .seconds(2))
     }

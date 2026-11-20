@@ -28,6 +28,25 @@ extension Library {
     }
   }
 
+  /// How a Mac reaches this Linux machine over SSH: the host and user given
+  /// when it was installed, or nil when it was not installed from a Mac.
+  public func sshRoute(of id: String) async throws -> (host: String, user: String?)? {
+    try await read { db in
+      guard let row = try db.query("SELECT ssh_host, ssh_user FROM machines WHERE id = ? AND deleted = 0", [.text(id)]).first,
+            let host = row.text("ssh_host"), !host.isEmpty else { return nil }
+      let user = row.text("ssh_user") ?? ""
+      return (host, user.isEmpty ? nil : user)
+    }
+  }
+
+  /// Records how this machine was installed over SSH, for every Mac.
+  public func setSSHRoute(of id: String, host: String, user: String?) async throws {
+    try await write { writer in
+      guard try writer.row("machines", id) != nil else { throw LibraryError(.notFound, "No machine \(id).") }
+      _ = try writer.put("machines", id: id, ["ssh_host": .text(host), "ssh_user": .text(user ?? "")])
+    }
+  }
+
   /// Deletes a machine with its sessions (and their transcripts) and its
   /// folders, schedules, databases and sealed secrets, in every library.
   public func removeMachine(_ id: String) async throws {
