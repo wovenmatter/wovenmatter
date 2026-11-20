@@ -26,6 +26,8 @@ public final class WovenServer: Sendable {
     /// Where this machine's private key and subscription sign-ins are kept;
     /// nil for the Keychain on a Mac and a private file on Linux.
     public var secretStore: (any SecretStore)?
+    /// How this machine runs the bots when it is their home; tests give a stand-in.
+    var botsHosting: BotsHosting = .standard
 
     public init(dataFolder: URL, socketPath: String?, listen: (host: String, port: Int)?, appVersion: String,
                 machineName: String, tailnet: any Tailnet, runtimes: [any Runtime], discoveryInterval: Duration = .seconds(30),
@@ -54,6 +56,7 @@ public final class WovenServer: Sendable {
   private let peers: PeerSync
   private let secrets: Secrets
   private let github: GitHub
+  private let bots: BotsHost
   private let listeners: [Listener]
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
@@ -84,6 +87,9 @@ public final class WovenServer: Sendable {
     registerDatabases(&routes, databases: databases)
     registerGitHub(&routes, github: github)
     registerUsage(&routes, library: library, secrets: secrets)
+    let bots = BotsHost(library: library, secrets: secrets, peers: peers, dataFolder: options.dataFolder,
+                        hosting: options.botsHosting)
+    registerBots(&routes, bots: bots, library: library)
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -112,15 +118,16 @@ public final class WovenServer: Sendable {
       throw error
     }
     let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
-                             sessions: sessions, peers: peers, secrets: secrets, github: github, listeners: listeners)
+                             sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners)
     pending.server.withLock { $0 = server }
     await peers.start()
+    await bots.start()
     server.watchLibrary()
     return server
   }
 
   private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
-               github: GitHub, listeners: [Listener]) {
+               github: GitHub, bots: BotsHost, listeners: [Listener]) {
     self.library = library
     self.hello = hello
     self.port = port
@@ -128,6 +135,7 @@ public final class WovenServer: Sendable {
     self.peers = peers
     self.secrets = secrets
     self.github = github
+    self.bots = bots
     self.listeners = listeners
   }
 
@@ -155,6 +163,7 @@ public final class WovenServer: Sendable {
   public func stop() async {
     watcher.withLock { $0?.cancel() }
     for listener in listeners { await listener.stop() }
+    await bots.stop()
     await peers.stop()
     for transport in connections.withLock({ Array($0.values) }) { transport.close() }
     await sessions.closeAll()
