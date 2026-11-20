@@ -32,6 +32,7 @@ actor Scheduler {
   private var watcher: Task<Void, Never>?
   private var sleeper: Task<Void, Never>?
   private var poked = false
+  private var stopped = false
 
   init(library: Library, sessions: SessionManager, now: @escaping @Sendable () -> Date) {
     self.library = library
@@ -45,7 +46,7 @@ actor Scheduler {
       for await _ in changes { await self?.poke() }
     }
     loop = Task { [weak self] in
-      while !Task.isCancelled, let self {
+      while !Task.isCancelled, let self, await !self.stopped {
         let delay = await self.pass()
         await self.sleep(delay)
       }
@@ -53,6 +54,7 @@ actor Scheduler {
   }
 
   func stop() async {
+    stopped = true
     watcher?.cancel()
     loop?.cancel()
     sleeper?.cancel()
@@ -66,6 +68,7 @@ actor Scheduler {
   }
 
   private func sleep(_ delay: TimeInterval) async {
+    guard !stopped else { return }
     if poked {
       poked = false
       return
