@@ -746,7 +746,7 @@ struct MessageRow: View {
                             presentation: runPresentation,
                             records: activities,
                             commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
-                            hasFollowingResponse: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            hasFollowingResponse: hasResponseText,
                             timeline: projectedTimeline
                         )
                     }
@@ -759,13 +759,19 @@ struct MessageRow: View {
                             onOpenAttachment: onOpenAttachment
                         )
                     } else if showsAssistantBody {
-                        ConversationResponse(
-                            content: assistantBody,
-                            document: renderedDocument,
-                            isStreaming: isStreaming
-                        )
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
+                        VStack(alignment: .leading, spacing: 0) {
+                            ConversationResponse(
+                                content: assistantBody,
+                                document: renderedDocument,
+                                isStreaming: isStreaming
+                            )
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            // The running turn's dots, under the text it is writing.
+                            if run?.status == .running && hasResponseText {
+                                ConversationRunningDots().padding(.top, 4)
+                            }
+                        }
                         if !isStreaming {
                             ConversationFilePreviews(content: assistantBody, messageID: message.libraryItemID, resolveFile: resolveFile)
                         }
@@ -776,6 +782,11 @@ struct MessageRow: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// Text the work transcript leaves to the response below it.
+    private var hasResponseText: Bool {
+        !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var showsAssistantBody: Bool {

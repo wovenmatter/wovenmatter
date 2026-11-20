@@ -404,7 +404,10 @@ when an intentional design change is accepted.
   reopenable disclosure. Show supplied subagent rows at their event position.
   Preserve the reader's position; follow new work
   or reasoning only from the live edge. Between a tool and the next visible output,
-  use a static Thinking label. Keep detail-loading text quiet ("Loading details…")
+  use a static Thinking label. Thinking is marked with a static brain, in chats
+  and bot chats. While a turn runs, one row of three small dots sits under the
+  last thing it shows, its strong dot stepping left to right, still under
+  Reduce Motion. Keep detail-loading text quiet ("Loading details…")
   and never add a separate mobile running spinner below the transcript.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including

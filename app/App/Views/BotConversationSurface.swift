@@ -905,13 +905,15 @@ private struct BotStreamingMessage: View {
                     .padding(.vertical, 2)
             } else {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
+                    Image(systemName: "brain").frame(width: 17)
+                        .foregroundStyle(WovenPalette.mutedForeground)
                     Text("Thinking…")
                         .font(.system(size: 13))
                         .foregroundStyle(WovenPalette.mutedForeground)
                 }
                 .padding(.horizontal, 4)
             }
+            ConversationRunningDots().padding(.horizontal, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

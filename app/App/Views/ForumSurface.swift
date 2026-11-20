@@ -368,7 +368,8 @@ private struct ForumPane: View {
     @ViewBuilder private var thinkingRow: some View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
             HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
+                Image(systemName: "brain").frame(width: 17)
+                    .foregroundStyle(WovenPalette.mutedForeground)
                 Text(text)
                     .font(.system(size: 13))
                     .foregroundStyle(WovenPalette.mutedForeground)

@@ -169,12 +169,16 @@ struct ConversationWorkTranscript: View {
                 }
                 if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
-                        Image(systemName: "sparkles").frame(width: 17)
+                        Image(systemName: "brain").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
                     }
                     .foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.top, 12)
                     .accessibilityLabel("Thinking")
+                }
+                // A response below takes the dots under its text instead.
+                if isRunning && !hasFollowingResponse {
+                    ConversationRunningDots().padding(.top, 6)
                 }
             }
         }
@@ -270,7 +274,7 @@ private struct ConversationThinkingBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Thinking", systemImage: "sparkles")
+            Label("Thinking", systemImage: "brain")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(WovenPalette.mutedForeground)
             ConversationBoundedWorkList(
@@ -649,7 +653,7 @@ private struct ConversationActivityRow: View {
         if activity.subagents != nil { return "person.2" }
         return switch activity.kind {
         case .assistant: "text.bubble"
-        case .thought: "sparkles"
+        case .thought: "brain"
         case .tool: ConversationToolAction(activity).systemImage
         case .plan: "list.bullet.clipboard"
         case .fileChange: "pencil.and.outline"
