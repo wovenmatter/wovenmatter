@@ -28,7 +28,6 @@ struct SettingsConnectionsView: View {
     var embedded = false
     var onConnected: ((String) -> Void)?
     @State private var keyDrafts: [String: String] = [:]
-    @State private var keyLabels: [String: String] = [:]
     @State private var expandedKeyFolds: [String: Bool] = [:]
     @State private var answer = ""
     @Environment(\.wovenTheme) private var theme
@@ -43,8 +42,8 @@ struct SettingsConnectionsView: View {
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .task(id: target) { if !embedded { agent.changeScope(initialScope) }; agent.loadAccounts(on: target) }
         .onDisappear { if !embedded { agent.cancel() } }
-        // A key, label or answer typed for one machine is never saved to another.
-        .onChange(of: target) { _, _ in keyDrafts = [:]; keyLabels = [:]; expandedKeyFolds = [:]; answer = "" }
+        // A key or answer typed for one machine is never saved to another.
+        .onChange(of: target) { _, _ in keyDrafts = [:]; expandedKeyFolds = [:]; answer = "" }
         .onChange(of: agent.signInOutcome) { _, outcome in
             guard focus == .providers, let outcome, outcome.error == nil,
                   outcome.notice?.hasPrefix("Connected.") == true else { return }
@@ -178,19 +177,16 @@ struct SettingsConnectionsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Each provider keeps one key: Remove it to add another.
     private func apiKeyContent(_ id: String) -> some View {
-        let stored = connections.accounts[id] ?? []
-        let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
+        let accounts = connections.accounts[id] ?? []
         return VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+            ForEach(accounts) { account in
                 DisclosureGroup {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
                             .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                         HStack {
-                            Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, on: target) } }.disabled(account.isSelected)
-                            Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1, on: target) } }.disabled(account.isSelected || index <= 1)
-                            Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1, on: target) } }.disabled(account.isSelected || index == accounts.count - 1)
                             Spacer()
                             Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, on: target) } }
                         }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
@@ -199,15 +195,12 @@ struct SettingsConnectionsView: View {
                     HStack {
                         Text(account.label)
                         Spacer()
-                        Text(account.isSelected ? "Primary" : "Backup \(index)").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                         Text("Credential saved").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
             }
-            if accounts.count < ProviderAccount.limit {
+            if accounts.isEmpty {
                 keyEntry(id)
-            } else {
-                Text("Four connections maximum. Remove one to add another.").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             }
             signInStatus(id)
         }
@@ -221,17 +214,12 @@ struct SettingsConnectionsView: View {
 
     private func keyEntry(_ id: String) -> some View {
         HStack {
-            if focus != .webSearch {
-                TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).wovenInput().frame(maxWidth: 160)
-            }
             SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .wovenInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in
-                    guard await agent.saveKey(keyDrafts[id] ?? "", provider: id,
-                                              label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id], on: target) else { return }
+                    guard await agent.saveKey(keyDrafts[id] ?? "", provider: id, on: target) else { return }
                     keyDrafts[id] = nil
-                    keyLabels[id] = nil
                     if let onConnected, ProviderConnectionID(rawValue: id)?.isSearchProvider != true { onConnected(id) }
                     else { agent.loadAccounts(on: target) }
                 }

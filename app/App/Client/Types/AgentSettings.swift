@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A provider Pi Durable and bots can use: a subscription, an API key or a web
 /// search key. Sign-ins and keys are per machine.
@@ -37,12 +38,8 @@ enum ProviderConnectionID: String, CaseIterable, Identifiable, Hashable, Sendabl
     }
 }
 
-/// One saved account or key for a provider on one machine. The first selected
-/// one is used; the others are backups in order.
+/// The sign-in or key a provider has on one machine.
 struct ProviderAccount: Identifiable, Hashable, Sendable {
-    /// At most this many accounts per provider and machine.
-    static let limit = 4
-
     let id: String
     var label: String
     var createdAt: Date?
@@ -63,12 +60,8 @@ struct ProviderSignInOutcome: Hashable, Sendable {
 }
 
 /// An OpenAI Responses-compatible model server on a machine or the tailnet.
-struct LocalModelServer: Identifiable, Hashable, Sendable {
-    let id: String
-    var url: String
-    var models: [String]
-    var verifiedAt: Date
-
+extension LocalModelServer: @retroactive Identifiable {
+    static let providerPrefix = "local-server-"
     var name: String { URL(string: url)?.host ?? "Local Model Server" }
 }
 

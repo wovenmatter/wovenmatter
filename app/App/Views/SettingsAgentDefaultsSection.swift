@@ -186,7 +186,8 @@ struct SettingsAgentDefaultsSection: View {
         let selectedModel = runtime == .defaultAgent ? model.connections.configuration.defaultModel : resolved.model
         defer { if requestID == request { loading = false } }
         do {
-            let result = try await model.settings.sessionOptions(runtime: runtime, machineID: machineID, model: selectedModel)
+            let result = try await model.settings.sessionOptions(runtime: runtime, machineID: machineID, machines: model.machines,
+                                                                  model: selectedModel)
             guard requestID == request, !Task.isCancelled else { return }
             metadata = result
         } catch {

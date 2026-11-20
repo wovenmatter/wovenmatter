@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 struct LocalModelServerConnections: View {
     @Bindable var agent: AgentSettingsStore

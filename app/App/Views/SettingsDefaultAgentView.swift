@@ -563,10 +563,10 @@ private struct SettingsAgentCatalogBrowseControls: View {
     var offersEnabledModels = false
     let setBrowsingAllModels: (Bool) -> Void
 
+    /// The enabled providers with credentials, then the machine's model servers, which are always enabled.
     private var availableProviders: [String] {
-        agent.configuration.providers.filter { provider in
-            connections.availableModelProviderIDs.contains(provider) || connections.localServers.contains { $0.id == provider }
-        }
+        agent.configuration.providers.filter { connections.availableModelProviderIDs.contains($0) }
+            + connections.localServers.map(\.id)
     }
 
     var body: some View {
@@ -578,7 +578,8 @@ private struct SettingsAgentCatalogBrowseControls: View {
                     agent.browsingProvider = $0
                     setBrowsingAllModels(true)
                 }), options: availableProviders) { provider in
-                    ProviderConnectionID.allCases.first { $0.id == provider }?.name ?? provider
+                    ProviderConnectionID.allCases.first { $0.id == provider }?.name
+                        ?? connections.localServers.first { $0.id == provider }.map { "Local · \($0.name)" } ?? provider
                 }
             }
             HStack(spacing: 8) {

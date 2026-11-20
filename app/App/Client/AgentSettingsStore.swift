@@ -7,8 +7,8 @@ import WovenProtocol
 ///
 /// Pi Durable's chat settings are the synced setting `piDurable` (every machine)
 /// or `piDurable.<machineID>` (a machine that keeps its own); its default model is
-/// the defaults for new chats' model. Sign-ins and keys go through this Mac's
-/// server, which is the only one connected.
+/// the defaults for new chats' model. A machine's sign-ins, model servers, SDK
+/// and catalog go to that machine's server over the UI's direct connection.
 @MainActor
 @Observable
 final class AgentSettingsStore {
@@ -21,11 +21,13 @@ final class AgentSettingsStore {
 
     /// "global" for every machine, or a machine ID. The Pi Durable page shows this scope.
     private(set) var scope = "global"
-    @ObservationIgnored private weak var server: ServerConnection?
+    @ObservationIgnored private weak var machines: MachinesStore?
     @ObservationIgnored private weak var store: SettingsStore?
+    /// This Mac's server.
+    private var server: ServerConnection? { machines?.server }
 
-    func attach(_ server: ServerConnection, settings: SettingsStore) {
-        self.server = server
+    func attach(_ machines: MachinesStore, settings: SettingsStore) {
+        self.machines = machines
         store = settings
     }
 
@@ -123,7 +125,7 @@ final class AgentSettingsStore {
 
     // MARK: Per-machine connections
 
-    /// Machine ID → its accounts, provider states and local model servers.
+    /// Machine ID → its sign-ins and keys, provider states and local model servers.
     private(set) var machineConnections: [String: MachineProviderConnections] = [:]
     private(set) var sdkStates: [String: PiDurableSDKState] = [:]
 
@@ -149,6 +151,8 @@ final class AgentSettingsStore {
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var flowID: String?
     @ObservationIgnored private var promptID: String?
+    /// The server the sign-in runs on, which its answers go to.
+    @ObservationIgnored private weak var signInServer: ServerConnection?
 
     init() {}
 
@@ -170,7 +174,8 @@ final class AgentSettingsStore {
         write(value ? nil : settings.global, scope: scope)
     }
 
-    /// The catalog is every model of the providers this Mac is connected to.
+    /// The catalog is every model of the providers the scope's machine is
+    /// connected to; this Mac's for every machine.
     func loadCatalog(includeAllModels: Bool, provider: String? = nil) {
         if let provider { browsingProvider = provider }
         Task { await readCatalog(refresh: false) }
@@ -179,8 +184,8 @@ final class AgentSettingsStore {
     func refreshCatalog() { Task { await readCatalog(refresh: true) } }
 
     private func readCatalog(refresh: Bool) async {
-        guard let server, server.isConnected else { return error = ClientError.notConnected.localizedDescription }
         let requested = scope
+        guard let server = connectedServer(for: scope == "global" ? nil : scope) else { return }
         busy = true
         defer { busy = false }
         do {
@@ -236,7 +241,7 @@ final class AgentSettingsStore {
 
     // MARK: Commands: accounts on a machine
 
-    /// Reads Pi Durable's providers and whether each is connected there.
+    /// Reads Pi Durable's providers, whether each is connected there, and its model servers.
     func loadAccounts(on machineID: String?) {
         guard let machineID else { return }
         Task { await readAccounts(on: machineID) }
@@ -246,7 +251,7 @@ final class AgentSettingsStore {
         guard let server = connectedServer(for: machineID) else { return }
         do {
             let list = try await server.call(ListSignIns())
-            var connections = MachineProviderConnections()
+            var connections = MachineProviderConnections(localServers: try await server.call(ListLocalModelServers()))
             for signIn in list {
                 connections.accounts[signIn.provider] = signIn.connected
                     ? [ProviderAccount(id: signIn.provider, label: signIn.name, createdAt: nil, isSelected: true)] : []
@@ -269,6 +274,7 @@ final class AgentSettingsStore {
         error = nil
         notice = nil
         busy = true
+        signInServer = server
         var openings = 0
         signInTask = Task { [weak self] in
             await server.follow(StartSignIn(provider: provider), reply: { [weak self] flowID in
@@ -309,7 +315,7 @@ final class AgentSettingsStore {
 
     /// Answers the sign-in's prompt: a code, a redirect URL or one of `promptOptions`.
     func respond(_ answer: String) {
-        guard let server, let flowID, let promptID else { return }
+        guard let server = signInServer, let flowID, let promptID else { return }
         prompt = nil
         promptOptions = []
         self.promptID = nil
@@ -325,6 +331,7 @@ final class AgentSettingsStore {
         signInTask = nil
         flowID = nil
         promptID = nil
+        signInServer = nil
         signInProvider = nil
         signInMachineID = nil
         signInURL = nil
@@ -335,7 +342,7 @@ final class AgentSettingsStore {
     }
 
     /// Sets the provider's API key for every machine. True when the key was saved.
-    func saveKey(_ key: String, provider: String, label: String?, on machineID: String?) async -> Bool {
+    func saveKey(_ key: String, provider: String, on machineID: String?) async -> Bool {
         guard let server, server.isConnected else {
             error = ClientError.notConnected.localizedDescription
             return false
@@ -352,11 +359,6 @@ final class AgentSettingsStore {
             return false
         }
     }
-
-    /// Each provider keeps one sign-in or key, so there is no order to change.
-    func selectAccount(_ id: String, provider: String, on machineID: String?) async {}
-
-    func moveAccount(_ id: String, provider: String, offset: Int, on machineID: String?) async {}
 
     /// Signs a subscription out on that machine, or removes an API key from every machine.
     func removeAccount(_ id: String, provider: String, on machineID: String?) async {
@@ -381,30 +383,41 @@ final class AgentSettingsStore {
         signIn(provider, on: machineID)
     }
 
-    /// This Mac's server, when `machineID` is this Mac; otherwise says that machine is not connected.
-    private func connectedServer(for machineID: String) -> ServerConnection? {
-        guard let server, server.isConnected else {
-            error = ClientError.notConnected.localizedDescription
+    /// The connection to that machine's server (this Mac's for nil), or nil
+    /// with `error` saying which one is not connected.
+    private func connectedServer(for machineID: String?) -> ServerConnection? {
+        do {
+            return try requireServer(for: machineID)
+        } catch {
+            self.error = error.localizedDescription
             return nil
         }
-        guard machineID == server.remote?.machine.id else {
-            error = ClientError.notOffered("Another machine's sign-ins").localizedDescription
-            return nil
-        }
-        return server
+    }
+
+    private func requireServer(for machineID: String?) throws -> ServerConnection {
+        guard let machines else { throw ClientError.notConnected }
+        return try machines.requireConnection(for: machineID)
     }
 
     // MARK: Commands: local model servers
 
-    /// The server keeps no local model servers yet, so there are none to list.
-    func reloadLocalServers(on machineID: String?) async throws {}
+    /// Reads the model servers Pi Durable uses on that machine.
+    func reloadLocalServers(on machineID: String?) async throws {
+        guard let machineID = machineID ?? machines?.thisMachine?.id else { return }
+        machineConnections[machineID, default: MachineProviderConnections()].localServers =
+            try await requireServer(for: machineID).call(ListLocalModelServers())
+    }
 
+    /// Checks a model server from that machine and saves it there. Reconnecting a
+    /// saved one keeps its URL, and its key when `key` is empty.
     func connectLocalServer(url: String, key: String, replacing server: LocalModelServer?, on machineID: String?) async throws {
-        throw ClientError.notOffered("Adding a model server")
+        _ = try await requireServer(for: machineID).call(ConnectLocalModelServer(url: url, key: key, replacing: server?.id))
+        try await reloadLocalServers(on: machineID)
     }
 
     func removeLocalServer(_ server: LocalModelServer, on machineID: String?) async throws {
-        throw ClientError.notOffered("Removing a model server")
+        _ = try await requireServer(for: machineID).call(RemoveLocalModelServer(id: server.id))
+        try await reloadLocalServers(on: machineID)
     }
 
     // MARK: Commands: Pi Durable SDK
@@ -437,6 +450,17 @@ final class AgentSettingsStore {
 
     private func isProviderEnabled(for model: String) -> Bool {
         let provider = String(model.split(separator: "/", maxSplits: 1).first ?? "")
-        return configuration.providers.contains(provider)
+        // A machine's model servers are always enabled.
+        return configuration.providers.contains(provider) || provider.hasPrefix(LocalModelServer.providerPrefix)
+    }
+}
+
+extension MachinesStore {
+    /// The connection to that machine's server (this Mac's for nil), or the
+    /// error saying which one the UI is not connected to.
+    func requireConnection(for machineID: String?) throws -> ServerConnection {
+        if let connection = connection(for: machineID) { return connection }
+        guard let machineID, machineID != thisMachine?.id, server?.isConnected == true else { throw ClientError.notConnected }
+        throw ClientError.machineNotConnected(machine(id: machineID)?.name ?? "That machine")
     }
 }

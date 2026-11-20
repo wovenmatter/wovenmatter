@@ -53,10 +53,11 @@ extension SettingsStore {
     }
 
     /// The options a new chat with `runtime` on that machine can choose from: what the
-    /// runtime last reported on this Mac. `model` is not used; the levels are the current model's.
-    func sessionOptions(runtime: AgentRuntimeKind, machineID: String?, model: String?) async throws -> SessionSettings {
-        guard let server, server.isConnected else { throw ClientError.notConnected }
-        if let machineID, machineID != server.remote?.machine.id { throw ClientError.notOffered("Another machine's options") }
+    /// runtime last reported to that machine's server (this Mac's for every machine).
+    /// `model` is not used; the levels are the current model's.
+    func sessionOptions(runtime: AgentRuntimeKind, machineID: String?, machines: MachinesStore,
+                        model: String?) async throws -> SessionSettings {
+        let server = try machines.requireConnection(for: machineID)
         guard let configuration = try await server.call(GetRuntimeConfiguration(runtime: runtime.runtime)) else {
             throw RuntimeOptionsUnknown(runtime: runtime)
         }
@@ -94,8 +95,8 @@ extension SettingsStore {
     }
 }
 
-/// The runtime has not reported its options on this Mac since its server started.
+/// The runtime has not reported its options on that machine since its server started.
 struct RuntimeOptionsUnknown: LocalizedError {
     let runtime: AgentRuntimeKind
-    var errorDescription: String? { "Start a chat with \(runtime.displayName) on this Mac to see its options." }
+    var errorDescription: String? { "Start a chat with \(runtime.displayName) on this machine to see its options." }
 }

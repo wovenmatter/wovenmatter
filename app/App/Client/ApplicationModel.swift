@@ -95,7 +95,7 @@ final class ApplicationModel {
         machines.attach(machineConnections)
         usage.attach(server, machines: machines)
         workspace.attach(server, machines: machines)
-        settings.attach(server); connections.attach(server, settings: settings); updates.attach(machines)
+        settings.attach(server); connections.attach(machines, settings: settings); updates.attach(machines)
         sessions.attach(server, workspace: workspace)
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
