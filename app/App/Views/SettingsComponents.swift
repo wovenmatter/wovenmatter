@@ -958,7 +958,7 @@ struct SettingsHarnessSignInControl: View {
                 }
             }
         }
-        if runtimeKind == .opencode {
+        if runtimeKind == .opencode, onThisMac {
             SettingsRow(title: "Add another key", detail: "OpenCode's picker opens in Terminal.") { signInButton }
         }
     }
@@ -976,14 +976,12 @@ struct SettingsHarnessSignInControl: View {
         }
     }
 
+    /// OpenCode's picker runs in Terminal, so only this Mac can add its keys.
+    private var onThisMac: Bool { target != nil && target == model.thisMachineID }
+
     @ViewBuilder private var signInButton: some View {
         if runtimeKind == .opencode {
-            Button(opening ? "Opening…" : "Add key…") {
-                if let target { machines.openTerminalSignIn(runtimeKind, on: target) }
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            .disabled(busy || notInstalled)
-            .help("Opens OpenCode's sign-in in Terminal. Return here when finished.")
+            if onThisMac { openCodeButton }
         } else if methods.count == 1, let method = methods.first {
             Button(method.title) { begin(method) }
                 .buttonStyle(SettingsQuietButtonStyle())
@@ -998,6 +996,15 @@ struct SettingsHarnessSignInControl: View {
             .disabled(busy || notInstalled)
             .accessibilityLabel("Sign in to \(runtimeKind.displayName)")
         }
+    }
+
+    private var openCodeButton: some View {
+            Button(opening ? "Opening…" : "Add key…") {
+                if let target { machines.openTerminalSignIn(runtimeKind, on: target) }
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(busy || notInstalled)
+            .help("Opens OpenCode's sign-in in Terminal. Return here when finished.")
     }
 
     private func begin(_ method: HarnessSignInFlow.Method) {

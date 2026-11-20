@@ -7,27 +7,56 @@ import Foundation
 public struct RuntimeStatus: Codable, Sendable, Hashable {
   public var runtime: RuntimeKind
   public var name: String
-  /// Everything the runtime needs is here (its CLI and, where it has one, its adapter).
+  /// Its CLI or SDK is here.
   public var installed: Bool
+  /// Whether its ACP adapter is here; nil for a runtime without one.
+  public var adapterInstalled: Bool?
+  /// The server is installing its adapter now.
+  public var installingAdapter: Bool
   /// The CLI's or SDK's version number, as it reports it.
   public var version: String?
   /// Whether the CLI reports a sign-in; nil when the runtime has no sign-in
   /// of its own (Pi Durable's are listed by `ListSignIns`) or it could not tell.
   public var signedIn: Bool?
+  /// The accounts the CLI reports, when it names them.
+  public var accounts: [RuntimeAccount]
   /// What is missing or what went wrong, for people.
   public var detail: String?
   /// The newest release, when the request asked for it and it could be found.
   public var latestVersion: String?
 
-  public init(runtime: RuntimeKind, name: String, installed: Bool, version: String? = nil, signedIn: Bool? = nil,
-              detail: String? = nil, latestVersion: String? = nil) {
+  public init(runtime: RuntimeKind, name: String, installed: Bool, adapterInstalled: Bool? = nil,
+              installingAdapter: Bool = false, version: String? = nil, signedIn: Bool? = nil,
+              accounts: [RuntimeAccount] = [], detail: String? = nil, latestVersion: String? = nil) {
     self.runtime = runtime
     self.name = name
     self.installed = installed
+    self.adapterInstalled = adapterInstalled
+    self.installingAdapter = installingAdapter
     self.version = version
     self.signedIn = signedIn
+    self.accounts = accounts
     self.detail = detail
     self.latestVersion = latestVersion
+  }
+
+  /// A session can start with it: the CLI and, where it has one, the adapter are here.
+  public var isReady: Bool { installed && adapterInstalled != false }
+}
+
+/// One account a harness CLI is signed in with.
+public struct RuntimeAccount: Codable, Sendable, Hashable {
+  /// How it signs in ("API key", "OAuth", "Claude subscription").
+  public var method: String
+  public var name: String?
+  /// What `SignOut` names to remove this account alone (OpenCode keeps several);
+  /// nil when signing out removes the CLI's one sign-in.
+  public var credential: String?
+
+  public init(method: String, name: String?, credential: String? = nil) {
+    self.method = method
+    self.name = name
+    self.credential = credential
   }
 }
 
@@ -158,15 +187,26 @@ public enum SignInEvent: Codable, Sendable, Hashable {
   }
 }
 
-/// Runs a subscription's sign-in flow on the machine asked. The reply is the
-/// flow's identifier (for `AnswerSignIn`); events follow until it finishes
-/// or fails. Unsubscribing cancels it.
+/// Runs a sign-in flow on the machine asked: a Pi Durable subscription's
+/// (`provider`), or a harness CLI's own sign-in (`runtime`, with the catalog's
+/// `signInMethod` and, for a key method, the `key`). The reply is the flow's
+/// identifier (for `AnswerSignIn`); events follow until it finishes or fails.
+/// Unsubscribing cancels it.
 public struct StartSignIn: Subscription {
   public static let method = "signIns.start"
   public typealias Reply = String
   public typealias Event = SignInEvent
   public var provider: String
+  public var runtime: RuntimeKind?
+  public var signInMethod: String?
+  public var key: String?
   public init(provider: String) { self.provider = provider }
+  public init(runtime: RuntimeKind, signInMethod: String, key: String? = nil) {
+    self.provider = runtime.rawValue
+    self.runtime = runtime
+    self.signInMethod = signInMethod
+    self.key = key
+  }
 }
 
 public struct AnswerSignIn: Request {
@@ -220,10 +260,18 @@ public struct ListProviderModels: Request {
   public init(refresh: Bool = false) { self.refresh = refresh }
 }
 
-/// Removes a subscription's sign-in from the machine asked.
+/// Removes a subscription's sign-in from the machine asked, or signs a harness
+/// CLI out there (`runtime`; `credential` removes one OpenCode account).
 public struct SignOut: Request {
   public static let method = "signIns.signOut"
   public typealias Reply = Done
   public var provider: String
+  public var runtime: RuntimeKind?
+  public var credential: String?
   public init(provider: String) { self.provider = provider }
+  public init(runtime: RuntimeKind, credential: String? = nil) {
+    self.provider = runtime.rawValue
+    self.runtime = runtime
+    self.credential = credential
+  }
 }

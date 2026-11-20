@@ -78,11 +78,24 @@ public final class OpenCodeRuntime: Runtime {
       .map { $0.hasPrefix("v") ? String($0.dropFirst()) : $0 }
     // A private server answers, so the person's background service is not started.
     var signedIn: Bool?
+    var accounts: [RuntimeAccount] = []
     if let listed = try? await Self.run(executable, ["auth", "list", "--standalone", "--format", "json"], environment: host.environment()),
        listed.status == 0, case .array(let integrations)? = try? OpenCodeSSEParser.decode(listed.output) {
       signedIn = integrations.contains { !($0["connections"]?.array ?? []).isEmpty }
+      // Each saved account, removable one at a time by its integration and credential ids.
+      for integration in integrations {
+        guard let integrationID = integration["id"]?.string else { continue }
+        let integrationName = integration["name"]?.string ?? integrationID
+        for connection in integration["connections"]?.array ?? [] {
+          let label = connection["label"]?.string
+          let method = connection["method"]?.string == "oauth" ? "OAuth" : connection["method"]?.string == "key" ? "API key" : "Saved credential"
+          accounts.append(RuntimeAccount(method: method,
+                                         name: label == nil || label == integrationName ? integrationName : "\(integrationName) · \(label!)",
+                                         credential: connection["id"]?.string.map { "\(integrationID) \($0)" }))
+        }
+      }
     }
-    return RuntimeStatus(runtime: kind, name: "OpenCode", installed: true, version: version, signedIn: signedIn)
+    return RuntimeStatus(runtime: kind, name: "OpenCode", installed: true, version: version, signedIn: signedIn, accounts: accounts)
   }
 
   public func install() async throws {

@@ -65,10 +65,12 @@ final class MachinesStore {
         return connection
     }
 
-    /// Reads a machine's runtimes each time the UI connects to its server.
+    /// Reads a machine's runtimes each time the UI connects to its server,
+    /// this Mac's too (after its server restarts, for one).
     private func connectionsChanged() {
         guard let connections else { return }
-        let connected = Set(connections.remotes.filter { $0.value.isConnected }.map(\.key))
+        var connected = Set(connections.remotes.filter { $0.value.isConnected }.map(\.key))
+        if connections.local.isConnected, let thisID = connections.thisMachineID { connected.insert(thisID) }
         for machineID in connected.subtracting(connectedMachineIDs) {
             Task { await readRuntimes(on: machineID, checkForUpdates: false) }
         }
@@ -151,6 +153,11 @@ final class MachinesStore {
     var removingSignIns: [String: Set<AgentRuntimeKind>] = [:]
     var signInMessages: [String: [AgentRuntimeKind: String]] = [:]
     var signInSessions: [String: [AgentRuntimeKind: HarnessSignInSession]] = [:]
+    /// Each running harness sign-in's subscription and the server's flow id.
+    @ObservationIgnored var signInTasks: [String: [AgentRuntimeKind: Task<Void, Never>]] = [:]
+    @ObservationIgnored var signInFlowIDs: [String: [AgentRuntimeKind: String]] = [:]
+    /// Machines whose runtimes are read again while an adapter installs.
+    @ObservationIgnored var adapterWatches: Set<String> = []
 
     // MARK: Used by settings
 

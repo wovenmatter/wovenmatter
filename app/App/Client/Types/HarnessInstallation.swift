@@ -97,8 +97,9 @@ struct AgentSignInStatus: Identifiable, Hashable, Sendable {
     struct Account: Hashable, Sendable {
         var method: String
         var name: String?
-        /// OpenCode keeps several keys and removes them one at a time.
-        var isRemovable = false
+        /// OpenCode keeps several keys and removes them one at a time, by this.
+        var credential: String?
+        var isRemovable: Bool { credential != nil }
     }
 
     let id: String

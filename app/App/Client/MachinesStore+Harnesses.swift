@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WovenProtocol
 
@@ -163,30 +164,51 @@ extension MachinesStore {
             var withLatest = status
             withLatest.latestVersion = checked ?? nil
             let failures = harnessFailures[machineID]?[kind] ?? 0
-            let component = HarnessComponent(
+            var components = [HarnessComponent(
                 id: kind.rawValue,
                 displayName: kind == .defaultAgent ? "Pi Durable SDK" : "\(status.name) CLI",
                 installedVersion: status.version,
                 updateVersion: withLatest.updateAvailable ? withLatest.latestVersion : nil,
                 isInstalled: status.installed,
-                isSystemInstall: false)
+                isSystemInstall: false)]
+            if let adapter = status.adapterInstalled {
+                components.append(HarnessComponent(id: kind.rawValue + "-adapter", displayName: "\(status.name) ACP adapter",
+                                                   isInstalled: adapter, isSystemInstall: false))
+            }
             let state: HarnessInstallation.State = !status.installed ? (status.version == nil ? .notInstalled : .unavailable)
+                : !status.isReady ? .notInstalled
                 : status.signedIn == false && kind != .defaultAgent ? .signInRequired : .ready
             installations[kind] = HarnessInstallation(
-                runtimeKind: kind, state: state, components: [component], isInstalled: status.installed,
+                runtimeKind: kind, state: state, components: components, isInstalled: status.isReady,
                 isSystemInstall: false, path: nil,
                 versionCheckAvailable: checked.map { $0 != nil } ?? true,
                 failureCount: failures,
                 diagnostic: failures > 0 ? harnessErrors[machineID]?[kind] : nil)
             guard kind != .defaultAgent else { continue }
             let signInState: AgentSignInStatus.State = !status.installed ? .notInstalled
-                : status.signedIn == true ? .verified : status.signedIn == false ? .signInRequired : .notChecked
-            signIns[kind] = AgentSignInStatus(id: kind.rawValue, name: status.name, state: signInState,
-                                              detail: status.detail ?? "")
+                : status.signedIn == true ? (kind == .opencode ? .credentialsPresent : .verified)
+                : status.signedIn == false ? .signInRequired : .notChecked
+            signIns[kind] = AgentSignInStatus(
+                id: kind.rawValue, name: status.name, state: signInState, detail: status.detail ?? "",
+                accounts: status.accounts.map { .init(method: $0.method, name: $0.name, credential: $0.credential) })
             signInMessages[machineID]?[kind] = nil
         }
         harnessInstallations[machineID] = installations
         signInStatuses[machineID] = signIns
+        watchAdapterInstalls(on: machineID)
+    }
+
+    /// While the server installs an adapter there, reads that machine's runtimes
+    /// again every few seconds, so the harness turns ready without a step.
+    private func watchAdapterInstalls(on machineID: String) {
+        guard machineRuntimes[machineID]?.contains(where: \.installingAdapter) == true,
+              !adapterWatches.contains(machineID) else { return }
+        adapterWatches.insert(machineID)
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            adapterWatches.remove(machineID)
+            await readRuntimes(on: machineID, checkForUpdates: false)
+        }
     }
 
     /// That machine's server is not connected, so its inventory cannot be read.
@@ -246,17 +268,65 @@ extension MachinesStore {
         checkingSignIns[machineID]?.remove(kind)
     }
 
-    /// Starts the harness's own sign-in there. A key method passes `key`.
+    /// Starts the harness's own sign-in on that machine's server. A key method passes `key`.
     func startSignIn(_ kind: AgentRuntimeKind, method: HarnessSignInMethod, key: String? = nil, on machineID: String) {
-        setSignInMessage(kind, on: machineID)
+        guard let server = connection(for: machineID) else {
+            signInMessages[machineID, default: [:]][kind] = ClientError.machineNotConnected(machine(id: machineID)?.name ?? "That machine")
+                .localizedDescription
+            return
+        }
+        cancelSignIn(kind, on: machineID)
+        signInMessages[machineID]?[kind] = nil
+        signInSessions[machineID, default: [:]][kind] = HarnessSignInSession(runtimeKind: kind, method: method)
+        var openings = 0
+        signInTasks[machineID, default: [:]][kind] = Task { [weak self] in
+            await server.follow(StartSignIn(runtime: kind.runtime, signInMethod: method.id, key: key), reply: { [weak self] flowID in
+                openings += 1
+                // A reconnect would start the sign-in again; it ends instead.
+                guard openings == 1 else { self?.endSignIn(kind, on: machineID, .failed, error: ClientError.notConnected.localizedDescription); return }
+                self?.signInFlowIDs[machineID, default: [:]][kind] = flowID
+                self?.signInSessions[machineID]?[kind]?.state = .waiting
+            }, event: { [weak self] event in
+                switch event {
+                case .open(let url, let code, _):
+                    self?.signInSessions[machineID]?[kind]?.url = URL(string: url)
+                    self?.signInSessions[machineID]?[kind]?.code = code
+                case .prompt: break
+                case .finished: self?.endSignIn(kind, on: machineID, .succeeded)
+                case .failed(let message): self?.endSignIn(kind, on: machineID, .failed, error: message)
+                }
+            }, failure: { [weak self] failure in
+                self?.endSignIn(kind, on: machineID, .failed, error: failure.localizedDescription)
+            })
+        }
+    }
+
+    private func endSignIn(_ kind: AgentRuntimeKind, on machineID: String, _ state: HarnessSignInSession.State, error: String? = nil) {
+        guard signInSessions[machineID]?[kind]?.isActive == true else { return }
+        signInSessions[machineID]?[kind]?.state = state
+        signInSessions[machineID]?[kind]?.error = error
+        signInTasks[machineID]?[kind]?.cancel()
+        signInTasks[machineID]?[kind] = nil
+        signInFlowIDs[machineID]?[kind] = nil
+        if state == .succeeded { Task { await readRuntimes(on: machineID, checkForUpdates: false) } }
     }
 
     /// Sends a code from the sign-in page to the waiting sign-in.
     func submitSignInCode(_ kind: AgentRuntimeKind, code: String, on machineID: String) {
-        setSignInMessage(kind, on: machineID)
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, let flowID = signInFlowIDs[machineID]?[kind], let server = connection(for: machineID) else { return }
+        signInSessions[machineID]?[kind]?.sentCode = true
+        Task {
+            do { _ = try await server.call(AnswerSignIn(flowID: flowID, promptID: "code", answer: code)) }
+            catch { signInMessages[machineID, default: [:]][kind] = error.localizedDescription }
+        }
     }
 
+    /// Stops a sign-in in progress; leaving the flow stops its command on the server.
     func cancelSignIn(_ kind: AgentRuntimeKind, on machineID: String) {
+        signInTasks[machineID]?[kind]?.cancel()
+        signInTasks[machineID]?[kind] = nil
+        signInFlowIDs[machineID]?[kind] = nil
         signInSessions[machineID]?[kind] = nil
     }
 
@@ -266,22 +336,52 @@ extension MachinesStore {
 
     /// Signs the harness out there with its own logout command.
     func signOut(_ kind: AgentRuntimeKind, on machineID: String) async {
-        setSignInMessage(kind, on: machineID)
+        await sendSignOut(SignOut(runtime: kind.runtime), kind, on: machineID)
     }
 
-    /// Removes one saved OpenCode key.
+    /// Removes one saved OpenCode account.
     func removeCredential(_ account: AgentSignInStatus.Account, _ kind: AgentRuntimeKind, on machineID: String) async {
-        setSignInMessage(kind, on: machineID)
+        guard let credential = account.credential else { return }
+        await sendSignOut(SignOut(runtime: kind.runtime, credential: credential), kind, on: machineID)
     }
 
-    /// OpenCode only: its own interactive sign-in, in Terminal on that Mac.
+    private func sendSignOut(_ request: SignOut, _ kind: AgentRuntimeKind, on machineID: String) async {
+        guard let server = connection(for: machineID) else {
+            signInMessages[machineID, default: [:]][kind] = ClientError.machineNotConnected(machine(id: machineID)?.name ?? "That machine")
+                .localizedDescription
+            return
+        }
+        removingSignIns[machineID, default: []].insert(kind)
+        defer { removingSignIns[machineID]?.remove(kind) }
+        do {
+            _ = try await server.call(request)
+            signInMessages[machineID]?[kind] = nil
+        } catch {
+            signInMessages[machineID, default: [:]][kind] = error.localizedDescription
+        }
+        await readRuntimes(on: machineID, checkForUpdates: false)
+    }
+
+    /// OpenCode only: its own interactive `opencode auth login`, in Terminal on
+    /// this Mac. Its saved keys show once the person returns.
     func openTerminalSignIn(_ kind: AgentRuntimeKind, on machineID: String) {
-        setSignInMessage(kind, on: machineID)
-    }
-
-    /// The server runs no harness sign-in or sign-out commands yet.
-    private func setSignInMessage(_ kind: AgentRuntimeKind, on machineID: String) {
-        signInMessages[machineID, default: [:]][kind] = ClientError.notOffered("Signing in to \(kind.displayName) from Woven Matter")
-            .localizedDescription
+        guard kind == .opencode, machineID == thisMachine?.id else { return }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = ["\(home)/.opencode/bin", "\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .joined(separator: ":")
+        let script = FileManager.default.temporaryDirectory.appendingPathComponent("opencode-sign-in-\(UUID().uuidString).command")
+        do {
+            try "#!/bin/zsh\nrm -f \"$0\"\nexport PATH='\(path)':\"$PATH\"\nopencode auth login\n"
+                .write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+            openingSignIns[machineID, default: []].insert(kind)
+            NSWorkspace.shared.open(script)
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                openingSignIns[machineID]?.remove(kind)
+            }
+        } catch {
+            signInMessages[machineID, default: [:]][kind] = error.localizedDescription
+        }
     }
 }

@@ -439,7 +439,9 @@ private struct SettingsAgentsView: View {
         }
         if machines.isCheckingHarness(runtime, on: thisMachineID) { return ("Checking", .neutral) }
         guard let harness = machines.harness(runtime, on: thisMachineID) else { return ("Checking", .neutral) }
-        guard harness.isInstalled else { return ("Not installed", .neutral) }
+        guard harness.isInstalled else {
+            return harness.components.contains(where: \.isInstalled) ? ("Adapter required", .warning) : ("Not installed", .neutral)
+        }
         switch harness.state {
         case .ready, .notInstalled: break
         case .signInRequired: return ("Sign in required", .warning)

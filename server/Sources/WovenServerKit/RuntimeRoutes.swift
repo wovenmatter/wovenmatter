@@ -5,18 +5,22 @@ import WovenProtocol
 /// Requests about the runtimes on this machine and Pi Durable's sign-ins.
 func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets: Secrets) {
   let flows = SignInFlows()
+  let lastStatuses = Mutex<[RuntimeKind: RuntimeStatus]>([:])
 
   router.on(ListRuntimes.self) { request, _ in
     let runtimes = await sessions.allRuntimes
     return await withTaskGroup(of: RuntimeStatus.self) { group in
       for runtime in runtimes {
         group.addTask {
-          // One slow CLI must not hold up the list: it is reported as not answering.
-          let late = RuntimeStatus(runtime: runtime.kind, name: Harness.named(runtime.kind)?.displayName ?? runtime.kind.rawValue,
-                                   installed: false, detail: "It did not answer in time.")
+          // One slow CLI must not hold up the list: it is reported as it last
+          // answered, or as not answering when it never has.
+          let late = lastStatuses.withLock { $0[runtime.kind] }
+            ?? RuntimeStatus(runtime: runtime.kind, name: Harness.named(runtime.kind)?.displayName ?? runtime.kind.rawValue,
+                             installed: false, detail: "It did not answer in time.")
           return await firstOf(seconds: statusLimit, or: late) {
             var status = await runtime.status()
             if request.checkForUpdates { status.latestVersion = await latestRelease(runtime.kind) }
+            lastStatuses.withLock { $0[runtime.kind] = status }
             return status
           }
         }
@@ -52,6 +56,10 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
     return Done()
   }
   router.on(SignOut.self) { request, _ in
+    if let runtime = request.runtime {
+      try await harnessSignOut(runtime, credential: request.credential)
+      return Done()
+    }
     try await secrets.setSubscription(request.provider, nil)
     return Done()
   }
@@ -62,6 +70,18 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
     return Done()
   }
   router.subscription(StartSignIn.self) { request, _ in
+    if request.runtime != nil {
+      let flowID = UUID().uuidString.lowercased()
+      let events = try harnessSignIn(request, answers: flows.open(flowID))
+      let (relayed, continuation) = AsyncThrowingStream<SignInEvent, any Error>.makeStream(bufferingPolicy: .bufferingNewest(64))
+      let relay = Task {
+        defer { flows.close(flowID) }
+        do { for try await event in events { continuation.yield(event) } } catch {}
+        continuation.finish()
+      }
+      continuation.onTermination = { _ in relay.cancel() }
+      return (flowID, relayed)
+    }
     guard let pi = await sessions.runtime(.piDurable) as? PiDurableRuntime else {
       throw ProtocolError(.badRequest, "This machine has no Pi Durable runtime.")
     }
