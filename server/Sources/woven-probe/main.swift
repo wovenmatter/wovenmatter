@@ -9,6 +9,8 @@ let usage = """
     runtimes                         which runtimes are installed and signed in here
     install RUNTIME                  install or update a runtime
     sign-ins                         Pi Durable's providers on this machine
+    sign-in PROVIDER                 run a subscription's sign-in; prompts are read from stdin
+    sign-out PROVIDER
     set-key PROVIDER [KEY]           set (or, without KEY, remove) an API key everywhere
     machines | sessions | folders
     create RUNTIME [TITLE] [--folder ID]
@@ -168,6 +170,24 @@ do {
     for signIn in try await client.call(ListSignIns()) {
       out("\(signIn.provider)\t\(signIn.kind.rawValue)\t\(signIn.connected ? "connected" : "-")\t\(signIn.name)")
     }
+  case "sign-in":
+    let flow = try await client.subscribe(StartSignIn(provider: argument(0, "PROVIDER")))
+    for try await event in flow.events {
+      switch event {
+      case .open(let url, let code, let instructions):
+        out("open \(url)" + (code.map { "  code \($0)" } ?? "") + (instructions.map { "  (\($0))" } ?? ""))
+      case .prompt(let id, let message):
+        out("\(message) ", terminator: "")
+        _ = try await client.call(AnswerSignIn(flowID: flow.reply, promptID: id, answer: readLine() ?? ""))
+      case .finished(let signIn):
+        out("signed in: \(signIn.name) \(signIn.connected ? "connected" : "not connected")")
+      case .failed(let message):
+        out("failed: \(message)")
+      }
+    }
+  case "sign-out":
+    _ = try await client.call(SignOut(provider: argument(0, "PROVIDER")))
+    out("done")
   case "set-key":
     _ = try await client.call(SetAPIKey(provider: argument(0, "PROVIDER"), key: arguments.count > 1 ? arguments[1] : nil))
     out("done")

@@ -307,7 +307,7 @@ private actor ACPState {
       } catch {
         result = .failure(error)
       }
-      await self.promptEnded(result)
+      self.promptEnded(result)
     }
   }
 
@@ -627,10 +627,15 @@ private actor ACPState {
       default: break
       }
     }
+    // Codex streams a command's output in metadata, a piece at a time.
+    let streamed = update["_meta"]?["terminal_output_delta"]?["data"]?.string ?? update["_meta"]?["mcp_output_delta"]?["data"]?.string
     if !parts.isEmpty {
       call.output = parts.joined(separator: "\n\n")
+    } else if let streamed {
+      call.output = (call.output ?? "") + streamed
     } else if let output = update["rawOutput"], output != .null {
-      call.output = text(output)
+      let readable = ["formatted_output", "aggregated_output", "stdout", "output"].lazy.compactMap { output[$0]?.string }.first
+      if let readable { call.output = readable } else if call.output?.isEmpty ?? true { call.output = text(output) }
     }
   }
 
