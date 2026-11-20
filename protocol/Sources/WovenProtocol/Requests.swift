@@ -67,21 +67,27 @@ public struct CreateSession: Request {
   }
 }
 
-/// Changes a session's title, folder or archived flag. Fields left nil stay.
+/// Changes a session's title, folder, archived or pinned flag, or whether the
+/// person has read it. Fields left nil stay.
 public struct UpdateSession: Request {
   public static let method = "sessions.update"
   public typealias Reply = Session
   public var sessionID: String
   public var title: String?
   public var archived: Bool?
+  public var pinned: Bool?
+  /// True marks everything in it read; false marks it unread again.
+  public var read: Bool?
   public var folderID: String?
   /// Takes the session out of its folder; wins over `folderID`.
   public var removeFromFolder: Bool?
-  public init(sessionID: String, title: String? = nil, archived: Bool? = nil, folderID: String? = nil,
-              removeFromFolder: Bool? = nil) {
+  public init(sessionID: String, title: String? = nil, archived: Bool? = nil, pinned: Bool? = nil, read: Bool? = nil,
+              folderID: String? = nil, removeFromFolder: Bool? = nil) {
     self.sessionID = sessionID
     self.title = title
     self.archived = archived
+    self.pinned = pinned
+    self.read = read
     self.folderID = folderID
     self.removeFromFolder = removeFromFolder
   }
@@ -222,22 +228,43 @@ public struct CreateFolder: Request {
   }
 }
 
-public struct RenameFolder: Request {
-  public static let method = "folders.rename"
+/// Changes a folder's name, pinned flag or position. Fields left nil stay.
+public struct UpdateFolder: Request {
+  public static let method = "folders.update"
   public typealias Reply = Folder
   public var folderID: String
-  public var name: String
-  public init(folderID: String, name: String) {
+  public var name: String?
+  public var pinned: Bool?
+  public var position: Int?
+  public init(folderID: String, name: String? = nil, pinned: Bool? = nil, position: Int? = nil) {
     self.folderID = folderID
     self.name = name
+    self.pinned = pinned
+    self.position = position
   }
 }
 
+/// Removes a folder from every library. With `deleteDirectory`, also deletes
+/// the directory the server made for it; only the owning machine's server
+/// does that, and never for a directory the person linked.
 public struct DeleteFolder: Request {
   public static let method = "folders.delete"
   public typealias Reply = Done
   public var folderID: String
-  public init(folderID: String) { self.folderID = folderID }
+  public var deleteDirectory: Bool
+  public init(folderID: String, deleteDirectory: Bool = false) {
+    self.folderID = folderID
+    self.deleteDirectory = deleteDirectory
+  }
+}
+
+/// The directories directly inside `path` on the machine of the server asked
+/// (its home directory when nil), for choosing a folder's location.
+public struct ListDirectories: Request {
+  public static let method = "folders.directories"
+  public typealias Reply = DirectoryListing
+  public var path: String?
+  public init(path: String? = nil) { self.path = path }
 }
 
 // MARK: Settings

@@ -144,6 +144,9 @@ public enum Schema {
       .text("thinking"),
       .text("permission"),
       .integer("archived", 0),
+      .integer("pinned", 0),
+      // The newest item the person has seen, by its `created_at`.
+      .integer("read_at", 0),
       .text("goal"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
@@ -151,6 +154,11 @@ public enum Schema {
       .text("machine_id", ""),
       .text("name", ""),
       .text("path", ""),
+      .integer("pinned", 0),
+      // Order in the sidebar among the machine's folders.
+      .integer("position", 0),
+      // The server made the directory, so deleting the folder may delete it.
+      .integer("managed", 0),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
     // `id` is the setting's key, so two machines setting one key write one row.

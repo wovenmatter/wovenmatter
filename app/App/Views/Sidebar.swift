@@ -1932,7 +1932,7 @@ struct ConversationListMeta: Equatable, Sendable {
         foldersByID: [String: WorkspaceFolderRecord]
     ) -> ConversationListMeta {
         let runtime = agent?.runtimeKind ?? conversation.runtimeKind
-        let agentLabel = agent.map(agentDisplayName) ?? runtime?.displayName ?? "Unknown agent"
+        let agentLabel = agent.map(agentDisplayName) ?? conversation.runtimeName
 
         let folderLabel: String
         if let folderID = conversation.folderID,
@@ -1948,7 +1948,7 @@ struct ConversationListMeta: Equatable, Sendable {
             folderLabel: folderLabel,
             locationLabel: machine?.name ?? "Unknown",
             locationKind: machine?.isThisMachine == false ? .remoteWorkspace : .workspaceAgent,
-            runtimeLabel: runtime?.displayName,
+            runtimeLabel: runtime?.displayName ?? conversation.runtimeName,
             runtimeKind: runtime
         )
     }
@@ -2076,9 +2076,7 @@ final class ListPresentationCache: @unchecked Sendable {
             return cached
         }
 
-        let fallbackPreview = conversation.runtimeKind?.displayName
-            ?? agent.map(agentDisplayName)
-            ?? "Conversation"
+        let fallbackPreview = agent.map(agentDisplayName) ?? conversation.runtimeName
         let presentation = ConversationRowPresentation(
             conversation: conversation,
             agent: agent,

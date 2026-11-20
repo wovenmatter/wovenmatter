@@ -69,37 +69,60 @@ extension Library {
 
   public func session(_ id: String) async throws -> Session? {
     try await read { db in
-      try db.query("SELECT * FROM sessions WHERE id = ? AND deleted = 0", [.text(id)]).first.map(Self.session)
+      try db.query(Self.sessionSelect + " WHERE s.id = ? AND s.deleted = 0", [.text(id)]).first.map(Self.session)
     }
   }
 
-  /// Sessions, newest first.
+  /// Sessions, most recently active first.
   public func sessions(machineID: String? = nil, includeArchived: Bool = false) async throws -> [Session] {
     try await read { db in
-      var sql = "SELECT * FROM sessions WHERE deleted = 0"
+      var sql = Self.sessionSelect + " WHERE s.deleted = 0"
       var values: [SQLValue] = []
       if let machineID {
-        sql += " AND machine_id = ?"
+        sql += " AND s.machine_id = ?"
         values.append(.text(machineID))
       }
-      if !includeArchived { sql += " AND archived = 0" }
-      return try db.query(sql + " ORDER BY created_at DESC, id", values).map(Self.session)
+      if !includeArchived { sql += " AND s.archived = 0" }
+      return try db.query(sql + " ORDER BY last_at DESC, s.id", values).map(Self.session)
     }
   }
 
-  /// Changes a session's title, folder or archived flag; nil leaves a field.
-  public func updateSession(_ id: String, title: String? = nil, archived: Bool? = nil, folderID: String?? = nil,
-                            goal: String?? = nil) async throws -> Session {
+  /// A session row with what lists show of its transcript, from its newest
+  /// item and its newest message, in one query.
+  private static let sessionSelect = """
+    SELECT s.*, COALESCE(last.created_at, s.created_at) AS last_at, last.kind AS last_kind,
+      substr(json_extract(message.body, '$.text'), 1, 400) AS preview_text
+    FROM sessions s
+    LEFT JOIN session_items last ON last.id = (
+      SELECT id FROM session_items WHERE session_id = s.id AND deleted = 0 ORDER BY sequence DESC LIMIT 1)
+    LEFT JOIN session_items message ON message.id = (
+      SELECT id FROM session_items WHERE session_id = s.id AND deleted = 0
+        AND kind IN ('userMessage', 'assistantMessage') ORDER BY sequence DESC LIMIT 1)
+    """
+
+  /// Changes a session's title, folder, archived or pinned flag; nil leaves a
+  /// field. `read` true marks every item so far read, false marks it unread.
+  public func updateSession(_ id: String, title: String? = nil, archived: Bool? = nil, pinned: Bool? = nil,
+                            read: Bool? = nil, folderID: String?? = nil, goal: String?? = nil) async throws -> Session {
     var values: [String: SQLValue] = [:]
     if let title { values["title"] = .text(title) }
     if let archived { values["archived"] = .integer(archived ? 1 : 0) }
+    if let pinned { values["pinned"] = .integer(pinned ? 1 : 0) }
     if let folderID { values["folder_id"] = folderID.map(SQLValue.text) ?? .null }
     if let goal { values["goal"] = goal.map(SQLValue.text) ?? .null }
-    let changes = values
+    let fixed = values
     try await write { writer in
       guard let row = try writer.row("sessions", id), !row.bool("deleted") else {
         throw LibraryError(.notFound, "No session \(id).")
       }
+      var changes = fixed
+      if let read {
+        // Read up to the newest item, by the owner's clock that stamped it.
+        let newest = try writer.db.query("SELECT MAX(created_at) AS newest FROM session_items WHERE session_id = ? AND deleted = 0",
+                                         [.text(id)]).first?.integer("newest") ?? 0
+        changes["read_at"] = .integer(read ? newest : 0)
+      }
+      changes = changes.filter { row[$0.key] != $0.value }
       if !changes.isEmpty { try writer.put("sessions", id: id, changes) }
     }
     guard let session = try await session(id) else { throw LibraryError(.notFound, "No session \(id).") }
@@ -154,13 +177,22 @@ extension Library {
 
   // MARK: Folders
 
-  public func createFolder(name: String, path: String) async throws -> Folder {
-    let folder = Folder(id: UUID().uuidString.lowercased(), machineID: machineID, name: name, path: path, createdAt: Self.now())
-    try await put("folders", id: folder.id, [
-      "machine_id": .text(machineID), "name": .text(name), "path": .text(path),
-      "created_at": .integer(Self.millis(folder.createdAt)),
-    ])
-    return folder
+  /// A new folder on this machine, after its other folders. `managed` says
+  /// the server made `path` for it.
+  public func createFolder(name: String, path: String, managed: Bool = false) async throws -> Folder {
+    let machineID = machineID
+    return try await write { writer in
+      let last = try writer.db.query("SELECT MAX(position) AS last FROM folders WHERE machine_id = ? AND deleted = 0",
+                                     [.text(machineID)]).first?.integer("last")
+      let folder = Folder(id: UUID().uuidString.lowercased(), machineID: machineID, name: name, path: path,
+                          position: last.map { Int($0) + 1 } ?? 0, managed: managed, createdAt: Self.now())
+      try writer.put("folders", id: folder.id, [
+        "machine_id": .text(machineID), "name": .text(name), "path": .text(path),
+        "position": .integer(Int64(folder.position)), "managed": .integer(managed ? 1 : 0),
+        "created_at": .integer(Self.millis(folder.createdAt)),
+      ])
+      return folder
+    }
   }
 
   public func folder(_ id: String) async throws -> Folder? {
@@ -169,20 +201,28 @@ extension Library {
     }
   }
 
+  /// Folders in sidebar order.
   public func folders(machineID: String? = nil) async throws -> [Folder] {
     try await read { db in
       if let machineID {
-        return try db.query("SELECT * FROM folders WHERE deleted = 0 AND machine_id = ? ORDER BY name, id", [.text(machineID)])
-          .map(Self.folder)
+        return try db.query("SELECT * FROM folders WHERE deleted = 0 AND machine_id = ? ORDER BY position, name, id",
+                            [.text(machineID)]).map(Self.folder)
       }
-      return try db.query("SELECT * FROM folders WHERE deleted = 0 ORDER BY name, id").map(Self.folder)
+      return try db.query("SELECT * FROM folders WHERE deleted = 0 ORDER BY position, name, id").map(Self.folder)
     }
   }
 
-  public func renameFolder(_ id: String, to name: String) async throws -> Folder {
+  /// Changes a folder's name, pinned flag or position; nil leaves a field.
+  public func updateFolder(_ id: String, name: String? = nil, pinned: Bool? = nil, position: Int? = nil) async throws -> Folder {
+    var values: [String: SQLValue] = [:]
+    if let name { values["name"] = .text(name) }
+    if let pinned { values["pinned"] = .integer(pinned ? 1 : 0) }
+    if let position { values["position"] = .integer(Int64(position)) }
+    let requested = values
     try await write { writer in
       guard let row = try writer.row("folders", id), !row.bool("deleted") else { throw LibraryError(.notFound, "No folder \(id).") }
-      try writer.put("folders", id: id, ["name": .text(name)])
+      let changes = requested.filter { row[$0.key] != $0.value }
+      if !changes.isEmpty { try writer.put("folders", id: id, changes) }
     }
     guard let folder = try await folder(id) else { throw LibraryError(.notFound, "No folder \(id).") }
     return folder
@@ -284,12 +324,23 @@ extension Library {
             platform: MachinePlatform(rawValue: row.text("platform") ?? "") ?? .mac)
   }
 
+  /// Maps a row of `sessionSelect`.
   private static func session(_ row: Row) -> Session {
-    Session(id: row.text("id") ?? "", machineID: row.text("machine_id") ?? "",
-            runtime: RuntimeKind(rawValue: row.text("runtime") ?? ""), title: row.text("title") ?? "",
-            folderID: row.text("folder_id"), directory: row.text("directory") ?? "", model: row.text("model"),
-            thinking: row.text("thinking"), permission: row.text("permission"), archived: row.bool("archived"), goal: row.text("goal"),
-            createdAt: row.date("created_at"))
+    let lastAt = row.integer("last_at") ?? 0
+    let unread = row.text("last_kind").map { $0 != "userMessage" } == true && lastAt > (row.integer("read_at") ?? 0)
+    return Session(id: row.text("id") ?? "", machineID: row.text("machine_id") ?? "",
+                   runtime: RuntimeKind(rawValue: row.text("runtime") ?? ""), title: row.text("title") ?? "",
+                   folderID: row.text("folder_id"), directory: row.text("directory") ?? "", model: row.text("model"),
+                   thinking: row.text("thinking"), permission: row.text("permission"), archived: row.bool("archived"),
+                   pinned: row.bool("pinned"), goal: row.text("goal"), createdAt: row.date("created_at"),
+                   lastActivityAt: row.date("last_at"), preview: row.text("preview_text").flatMap(Self.preview),
+                   unread: unread)
+  }
+
+  /// One line from the start of a message: whitespace runs become one space.
+  private static func preview(_ text: String) -> String? {
+    let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    return line.isEmpty ? nil : String(line.prefix(200))
   }
 
   private static func item(_ row: Row) throws -> SessionItem {
@@ -300,7 +351,8 @@ extension Library {
 
   private static func folder(_ row: Row) -> Folder {
     Folder(id: row.text("id") ?? "", machineID: row.text("machine_id") ?? "", name: row.text("name") ?? "",
-           path: row.text("path") ?? "", createdAt: row.date("created_at"))
+           path: row.text("path") ?? "", pinned: row.bool("pinned"), position: Int(row.integer("position") ?? 0),
+           managed: row.bool("managed"), createdAt: row.date("created_at"))
   }
 
   private static func setting(_ row: Row) throws -> Setting {

@@ -20,12 +20,41 @@ final class WorkspaceStore {
 
     @ObservationIgnored private weak var server: ServerConnection?
     @ObservationIgnored private weak var machines: MachinesStore?
+    /// What this Mac's sessions that are not idle are doing, as its server reports it.
+    @ObservationIgnored private var runStates: [String: SessionRunState] = [:]
+    @ObservationIgnored private var followingRunStates: Task<Void, Never>?
 
     init() {}
 
     func attach(_ server: ServerConnection, machines: MachinesStore) {
         self.server = server
         self.machines = machines
+        followingRunStates?.cancel()
+        followingRunStates = Task { [weak self] in
+            await server.follow(SubscribeRunStates(), reply: { [weak self] states in
+                self?.runStates = [:]
+                for state in states { self?.runStates[state.sessionID] = state }
+                self?.applyRunStates()
+            }, event: { [weak self] state in
+                self?.runStates[state.sessionID] = state
+                self?.applyRunStates()
+            })
+        }
+    }
+
+    /// Sets each listed session's activity from `runStates`. Other machines'
+    /// sessions are idle until the UI connects to their servers.
+    private func applyRunStates() {
+        guard var overview = workspaceOverview else { return }
+        for index in overview.conversations.indices {
+            overview.conversations[index].activity = Self.activity(runStates[overview.conversations[index].id])
+        }
+        if overview != workspaceOverview { workspaceOverview = overview }
+    }
+
+    private static func activity(_ state: SessionRunState?) -> SessionActivity {
+        guard let state, state.run == .running else { return .idle }
+        return state.awaiting ? .blocked : .working
     }
 
     /// This Mac's server, for a command on something `machineID` owns. Only
@@ -73,28 +102,36 @@ final class WorkspaceStore {
         do {
             let folders = try await server.call(ListFolders())
             let sessions = try await server.call(ListSessions(includeArchived: true))
-            let positions = Dictionary(uniqueKeysWithValues: folders.enumerated().map { ($1.id, $0) })
             workspaceOverview = WorkspaceOverview(
                 folders: folders.map { folder in
-                    WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: positions[folder.id] ?? 0,
-                                          isPinned: false, machineID: folder.machineID, rootPath: folder.path,
-                                          managedRoot: false, referencePaths: [])
+                    WorkspaceFolderRecord(id: folder.id, name: folder.name, icon: nil, position: folder.position,
+                                          isPinned: folder.pinned, machineID: folder.machineID, rootPath: folder.path,
+                                          managedRoot: folder.managed, referencePaths: [])
                 },
-                conversations: sessions.map(Self.record),
+                conversations: sessions.map(record),
                 notes: (try? await server.call(ListArtifacts()).map(Self.noteRecord)) ?? workspaceOverview?.notes ?? [])
         } catch {
             folderMutationError = error.localizedDescription
         }
     }
 
-    private static func record(_ session: Session) -> WorkspaceConversationRecord {
+    private func record(_ session: Session) -> WorkspaceConversationRecord {
         let kind = AgentRuntimeKind(runtime: session.runtime)
         return WorkspaceConversationRecord(
             id: session.id, machineID: session.machineID,
             agentID: kind.map { WorkspaceAgent.id(machineID: session.machineID, runtime: $0) }, runtimeKind: kind,
-            title: session.title, unread: false, lastMessagePreview: nil, lastMessageAt: session.createdAt,
-            isScheduledTask: false, folderID: session.folderID, isPinned: false, isArchived: session.archived,
-            activity: .idle)
+            runtimeName: runtimeName(session.runtime),
+            title: session.title, unread: session.unread, lastMessagePreview: session.preview,
+            lastMessageAt: session.lastActivityAt, isScheduledTask: false, folderID: session.folderID,
+            isPinned: session.pinned, isArchived: session.archived, activity: Self.activity(runStates[session.id]))
+    }
+
+    /// A runtime's name: the UI's own for the runtimes it offers, else the
+    /// name this Mac's server gives it (the dev instance's stand-in, say).
+    private func runtimeName(_ runtime: RuntimeKind) -> String {
+        if let kind = AgentRuntimeKind(runtime: runtime) { return kind.displayName }
+        if runtime == .bots { return "Bots" }
+        return machines?.runtimes.first { $0.runtime == runtime }?.name ?? runtime.rawValue
     }
 
     // MARK: Sessions
@@ -113,9 +150,14 @@ final class WorkspaceStore {
     }
 
     func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
+        if case .setPinned(let pinned) = mutation {
+            // Pinning is the person's, so this Mac's server writes it whoever owns the session.
+            _ = try await server(for: nil).call(UpdateSession(sessionID: id, pinned: pinned))
+            return await refresh()
+        }
         let server = try server(for: conversation(id: id)?.machineID)
         switch mutation {
-        case .setPinned: throw ClientError.notOffered("Pinning chats")
+        case .setPinned: break
         case .rename(let title): _ = try await server.call(UpdateSession(sessionID: id, title: title))
         case .moveToTrash: _ = try await server.call(UpdateSession(sessionID: id, archived: true))
         case .restore: _ = try await server.call(UpdateSession(sessionID: id, archived: false))
@@ -126,7 +168,20 @@ final class WorkspaceStore {
         await refresh()
     }
 
-    func markConversationRead(id: String) {}
+    /// Records that the person has seen everything in the session so far,
+    /// when it shows as unread.
+    func markConversationRead(id: String) {
+        guard let index = workspaceOverview?.conversations.firstIndex(where: { $0.id == id }),
+              workspaceOverview?.conversations[index].unread == true, let server = try? server(for: nil) else { return }
+        workspaceOverview?.conversations[index].unread = false
+        Task {
+            do {
+                _ = try await server.call(UpdateSession(sessionID: id, read: true))
+            } catch {
+                await refresh()
+            }
+        }
+    }
 
     func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
         throw ClientError.notConnected
@@ -215,18 +270,41 @@ final class WorkspaceStore {
     }
 
     func renameFolder(id: String, name: String) async -> Bool {
-        await folderMutation(id) { try await $0.call(RenameFolder(folderID: id, name: name)) }
+        await folderMutation(id) { try await $0.call(UpdateFolder(folderID: id, name: name)) }
     }
 
-    func setFolderPinned(id: String, isPinned: Bool) async -> Bool { failFolderMutation(.notOffered("Pinning folders")) }
+    /// Pinning and order are the person's, so this Mac's server writes them
+    /// whichever machine owns the folder.
+    func setFolderPinned(id: String, isPinned: Bool) async -> Bool {
+        await folderMutation(id, onOwner: false) { try await $0.call(UpdateFolder(folderID: id, pinned: isPinned)) }
+    }
 
+    /// Swaps the folder with its neighbour among its machine's pinned or other
+    /// folders, then numbers that machine's folders in the order shown.
     func moveFolder(id: String, direction: WorkspaceFolderMoveDirection) async -> Bool {
-        failFolderMutation(.notOffered("Ordering folders"))
+        guard let folder = folder(id: id) else { return false }
+        let sections = FolderSections(folders: folders(on: folder.machineID))
+        var pinned = sections.pinned, unpinned = sections.unpinned
+        func swap(_ group: inout [WorkspaceFolderRecord]) -> Bool {
+            guard let index = group.firstIndex(where: { $0.id == id }) else { return false }
+            let target = direction == .up ? index - 1 : index + 1
+            guard group.indices.contains(target) else { return false }
+            group.swapAt(index, target)
+            return true
+        }
+        guard folder.isPinned ? swap(&pinned) : swap(&unpinned) else { return false }
+        let moves = (pinned + unpinned).enumerated().filter { $1.position != $0 }
+        return await folderMutation(id, onOwner: false) { server in
+            for (position, folder) in moves {
+                _ = try await server.call(UpdateFolder(folderID: folder.id, position: position))
+            }
+        }
     }
 
-    /// Removes the folder from every library. Its directory stays on disk.
+    /// Removes the folder from every library. With `deleteRoot`, its owner's
+    /// server also deletes the directory it made for it; a linked directory stays.
     func deleteFolder(id: String, deleteRoot: Bool) async -> Bool {
-        await folderMutation(id) { try await $0.call(DeleteFolder(folderID: id)) }
+        await folderMutation(id) { try await $0.call(DeleteFolder(folderID: id, deleteDirectory: deleteRoot)) }
     }
 
     func setFolderReferencePaths(id: String, paths: [String]) async -> Bool {
@@ -234,16 +312,22 @@ final class WorkspaceStore {
     }
 
     /// The directories directly inside `path` on `machineID` (its home when nil),
-    /// for linking an existing directory on another machine.
+    /// for linking an existing directory on another machine. Its own server lists them.
     func directories(on machineID: String, path: String?) async throws -> MachineDirectoryListing {
-        throw ClientError.notOffered("Browsing another machine's directories")
+        let listing = try await server(for: machineID).call(ListDirectories(path: path))
+        return MachineDirectoryListing(
+            path: listing.path, parent: listing.parent,
+            directories: listing.directories.map { MachineDirectoryListing.Directory(name: $0.name, path: $0.path) },
+            truncated: listing.truncated)
     }
 
     func clearFolderMutationError() { folderMutationError = nil }
 
-    private func folderMutation<T>(_ id: String, _ body: (ServerConnection) async throws -> T) async -> Bool {
+    /// Runs `body` on the folder's owner's server, or this Mac's when `onOwner` is false.
+    private func folderMutation<T>(_ id: String, onOwner: Bool = true,
+                                   _ body: (ServerConnection) async throws -> T) async -> Bool {
         do {
-            _ = try await body(try server(for: folder(id: id)?.machineID))
+            _ = try await body(try server(for: onOwner ? folder(id: id)?.machineID : nil))
             folderMutationError = nil
             await refresh()
             return true

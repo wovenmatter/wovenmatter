@@ -228,7 +228,8 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
   }
   router.on(UpdateSession.self) { request, _ in
     let folder: String?? = request.removeFromFolder == true ? .some(nil) : request.folderID.map { .some($0) }
-    return try await library.updateSession(request.sessionID, title: request.title, archived: request.archived, folderID: folder)
+    return try await library.updateSession(request.sessionID, title: request.title, archived: request.archived,
+                                           pinned: request.pinned, read: request.read, folderID: folder)
   }
   router.on(DeleteSession.self) { request, _ in
     await sessions.close(request.sessionID)

@@ -74,6 +74,10 @@ public final class StandInRuntime: Runtime {
     self.gate = gate
   }
 
+  public func status() async -> RuntimeStatus {
+    RuntimeStatus(runtime: kind, name: "Stand-in", installed: true)
+  }
+
   public func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
     if let handle = start.nativeHandle {
       guard store.resume(handle) else { throw RuntimeError.nativeSessionGone }

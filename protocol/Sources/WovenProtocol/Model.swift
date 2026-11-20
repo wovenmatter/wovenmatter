@@ -83,13 +83,22 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
   public var thinking: String?
   public var permission: String?
   public var archived: Bool
+  public var pinned: Bool
   /// The goal the session works against until it is met or cleared.
   public var goal: String?
   public var createdAt: Date
+  /// When its newest item was saved, or when it was created.
+  public var lastActivityAt: Date
+  /// The start of its last user or assistant message.
+  public var preview: String?
+  /// Its newest item is not the person's own message and came after they
+  /// last read it.
+  public var unread: Bool
 
   public init(id: String, machineID: String, runtime: RuntimeKind, title: String, folderID: String?,
               directory: String = "", model: String? = nil, thinking: String? = nil, permission: String? = nil,
-              archived: Bool, goal: String?, createdAt: Date) {
+              archived: Bool, pinned: Bool = false, goal: String?, createdAt: Date, lastActivityAt: Date? = nil,
+              preview: String? = nil, unread: Bool = false) {
     self.id = id
     self.machineID = machineID
     self.runtime = runtime
@@ -100,8 +109,12 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
     self.thinking = thinking
     self.permission = permission
     self.archived = archived
+    self.pinned = pinned
     self.goal = goal
     self.createdAt = createdAt
+    self.lastActivityAt = lastActivityAt ?? createdAt
+    self.preview = preview
+    self.unread = unread
   }
 }
 
@@ -601,14 +614,52 @@ public struct Folder: Codable, Sendable, Hashable, Identifiable {
   public var machineID: String
   public var name: String
   public var path: String
+  public var pinned: Bool
+  /// Order in the sidebar among the machine's folders, lowest first.
+  public var position: Int
+  /// The server made the directory (rather than the person linking one), so
+  /// deleting the folder may delete the directory too.
+  public var managed: Bool
   public var createdAt: Date
 
-  public init(id: String, machineID: String, name: String, path: String, createdAt: Date) {
+  public init(id: String, machineID: String, name: String, path: String, pinned: Bool = false, position: Int = 0,
+              managed: Bool = false, createdAt: Date) {
     self.id = id
     self.machineID = machineID
     self.name = name
     self.path = path
+    self.pinned = pinned
+    self.position = position
+    self.managed = managed
     self.createdAt = createdAt
+  }
+}
+
+/// One directory on a machine and the directories directly inside it.
+public struct DirectoryListing: Codable, Sendable, Hashable {
+  public struct Entry: Codable, Sendable, Hashable {
+    public var name: String
+    public var path: String
+
+    public init(name: String, path: String) {
+      self.name = name
+      self.path = path
+    }
+  }
+
+  public var path: String
+  /// Nil at the root.
+  public var parent: String?
+  /// Sorted by name; hidden ones are left out.
+  public var directories: [Entry]
+  /// More directories exist than were listed.
+  public var truncated: Bool
+
+  public init(path: String, parent: String?, directories: [Entry], truncated: Bool) {
+    self.path = path
+    self.parent = parent
+    self.directories = directories
+    self.truncated = truncated
   }
 }
 

@@ -38,6 +38,8 @@ struct WorkspaceConversationRecord: Identifiable, Hashable, Sendable {
     let machineID: String
     var agentID: String?
     var runtimeKind: AgentRuntimeKind?
+    /// The name of the runtime it runs on, for every runtime a server has.
+    var runtimeName: String
     var title: String
     var unread: Bool
     var lastMessagePreview: String?
