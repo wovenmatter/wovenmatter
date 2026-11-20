@@ -331,7 +331,13 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     return (current, changes.throwing)
   }
   router.on(SendTurn.self) { request, _ in
-    try await sessions.host(for: request.sessionID).send(request.text, attachments: request.attachments)
+    // The person's open artifacts and tabs reach the runtime only; the text alone is saved.
+    let context = request.context.flatMap { $0.isEmpty ? nil : $0 }
+    if let context, context.utf16.count > SendTurn.maximumContextLength {
+      throw ProtocolError(.badRequest, "The message context is longer than \(SendTurn.maximumContextLength) characters.")
+    }
+    try await sessions.host(for: request.sessionID).send(request.text, attachments: request.attachments,
+                                                         delivered: context.map { "\($0)\n\n\(request.text)" })
     return Done()
   }
   router.on(ConfigureSession.self) { request, _ in

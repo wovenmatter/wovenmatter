@@ -195,6 +195,21 @@ func aTurnTheRuntimeStartsItselfRunsAndIsSavedWithoutAnotherMessage() async thro
 }
 
 @Test(.timeLimit(.minutes(1)))
+func whatThePersonHasOpenReachesTheRuntimeButIsNotSaved() async throws {
+  let host = try await TestServer.start(runtime: StandInRuntime())
+  defer { host.server.stopLater() }
+  let client = try await host.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "hello", context: "Workspace snapshot: Plans"))
+  for try await event in subscription.events where event == .runState(.idle) { break }
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(items.first?.content == .userMessage(text: "hello"))
+  #expect(assistantTexts(items) == ["Turn 1: Workspace snapshot: Plans\n\nhello"])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func secondServerReceivesTheSessionBySyncAndServesItReadOnly() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)

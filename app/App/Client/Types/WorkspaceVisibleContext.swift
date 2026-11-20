@@ -29,13 +29,30 @@ public struct WorkspaceVisibleContext: Codable, Equatable, Sendable {
       self.url = safeURL; self.title = String(title.prefix(160)); self.active = active
     }
   }
-  public let artifacts: [Artifact]
-  public let browserTabs: [BrowserTab]
+  public private(set) var artifacts: [Artifact]
+  public private(set) var browserTabs: [BrowserTab]
   public init(artifacts: [Artifact], browserTabs: [BrowserTab]) {
     self.artifacts = Array(artifacts.prefix(WorkspaceAssetTabs.maximumNotes))
     self.browserTabs = Array(browserTabs.prefix(WorkspaceAssetTabs.maximumBrowsers))
   }
+  /// What sessions and bots are sent with the person's message, at most
+  /// `SendTurn.maximumContextLength` long. A snapshot that does not fit loses
+  /// browser tabs, then artifacts, last first and the selected tab last,
+  /// until it does.
   public var promptContext: String? {
+    var trimmed = self
+    while true {
+      guard let text = trimmed.fullPromptContext else { return nil }
+      if text.utf16.count <= SendTurn.maximumContextLength { return text }
+      if let index = trimmed.browserTabs.lastIndex(where: { !$0.active }) ?? trimmed.browserTabs.indices.last {
+        trimmed.browserTabs.remove(at: index)
+      } else if let index = trimmed.artifacts.lastIndex(where: { !$0.active }) ?? trimmed.artifacts.indices.last {
+        trimmed.artifacts.remove(at: index)
+      }
+    }
+  }
+
+  private var fullPromptContext: String? {
     guard !artifacts.isEmpty || !browserTabs.isEmpty else { return nil }
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

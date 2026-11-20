@@ -201,7 +201,8 @@ final class SessionStore {
             }
         }
         error = nil
-        _ = try await owner.call(SendTurn(sessionID: sessionID, text: input.text, attachments: attachments))
+        _ = try await owner.call(SendTurn(sessionID: sessionID, text: input.text, attachments: attachments,
+                                            context: input.visibleWorkspace?.promptContext))
     }
 
     func stop() async {

@@ -149,17 +149,24 @@ public struct SubscribeRunStates: Subscription {
 
 /// Sends a turn. Replies once the message is saved and the runtime took it.
 /// Each attachment's content is already in the server's content store
-/// (`PutContent`).
+/// (`PutContent`). `context` is what the person had open beside the chat
+/// when they sent it: the runtime receives it before the text, and only the
+/// text is saved.
 public struct SendTurn: Request {
   public static let method = "session.send"
   public typealias Reply = Done
+  /// The longest `context`, in UTF-16 code units (JavaScript's string
+  /// length), for sessions and bots alike.
+  public static let maximumContextLength = 4_000
   public var sessionID: String
   public var text: String
   public var attachments: [Attachment]
-  public init(sessionID: String, text: String, attachments: [Attachment] = []) {
+  public var context: String?
+  public init(sessionID: String, text: String, attachments: [Attachment] = [], context: String? = nil) {
     self.sessionID = sessionID
     self.text = text
     self.attachments = attachments
+    self.context = context
   }
 
   public init(from decoder: any Decoder) throws {
@@ -167,6 +174,7 @@ public struct SendTurn: Request {
     sessionID = try container.decode(String.self, forKey: .sessionID)
     text = try container.decode(String.self, forKey: .text)
     attachments = try container.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
+    context = try container.decodeIfPresent(String.self, forKey: .context)
   }
 }
 

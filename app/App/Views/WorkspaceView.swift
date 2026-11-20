@@ -1426,9 +1426,7 @@ struct WorkspaceSurface: View {
         guard panelID == .primary else { return nil }
         _ = assets.pageRevision
         let notes = model.workspace.workspaceOverview?.notes ?? []
-        let snapshot = assets.snapshot(notes: notes) { $0.title }
-        guard let context = snapshot?.promptContext else { return nil }
-        return context.count <= 4_000 ? context : nil
+        return assets.snapshot(notes: notes) { $0.title }?.promptContext
     }
 
     @ViewBuilder private func chatPanel(
