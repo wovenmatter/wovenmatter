@@ -82,20 +82,36 @@ func aBotStartsSteersAndFollowsASessionOnAnotherMachine() async throws {
   let sent = await tools.call("send_to_session", arguments: .object([
     "sessionID": .string(sessionID), "text": .string("Count the files too.")]), caller: bot)
   #expect(!sent.isError, "\(text(sent))")
-  #expect(try await eventually { try await a.server.library.session(sessionID) != nil })
   let listed = text(await tools.call("list_sessions", arguments: .object([:]), caller: bot))
   #expect(listed.contains("\(sessionID) | Map | \(StandInRuntime.kind.rawValue) | Laptop |") && listed.contains("| running"), "\(listed)")
   let reading = text(await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot))
   #expect(reading.hasPrefix("Session \(sessionID): Map (\(StandInRuntime.kind.rawValue)) on Laptop, running"), "\(reading)")
 
+  // A caller that never touched the session may not stop it; the bot that started it may.
+  let stranger = ToolCaller(machineID: a.server.machineID, botID: "b2")
+  let refused = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: stranger)
+  #expect(refused.isError && text(refused).contains("only a session you started"), "\(text(refused))")
+  let stopped = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot)
+  #expect(text(stopped) == "Stopped Map.", "\(text(stopped))")
+  #expect(try await eventually {
+    try await onB.call(SessionItems(sessionID: sessionID)).contains { $0.content == .notice(Notice(kind: .interrupted, text: "Stopped by Scout.")) }
+  })
   await gate.open()
+
+  // It goes on when the bot sends to it again, and every message on B is the bot's.
+  let again = await tools.call("send_to_session", arguments: .object([
+    "sessionID": .string(sessionID), "text": .string("Keep going.")]), caller: bot)
+  #expect(!again.isError, "\(text(again))")
   #expect(try await eventually {
     let read = text(await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot))
-    return read.contains(", idle") && read.contains("Scout: Count the files too.") && read.contains("+ This message is from the bot")
+    return read.contains(", idle") && read.contains("Scout: Keep going.") && read.contains("This message is from the bot")
   })
+  let idle = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot)
+  #expect(text(idle) == "Nothing was running in Map.", "\(text(idle))")
   let messages = try await onB.call(SessionItems(sessionID: sessionID)).filter {
     if case .userMessage = $0.content { true } else { false }
   }
-  #expect(messages.map(\.content) == [.userMessage(text: "Map the repo."), .userMessage(text: "Count the files too.")])
+  #expect(messages.map(\.content) == [.userMessage(text: "Map the repo."), .userMessage(text: "Count the files too."),
+                                       .userMessage(text: "Keep going.")])
   #expect(messages.allSatisfy { $0.author == ItemAuthor(botID: "b1", name: "Scout") })
 }

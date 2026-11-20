@@ -46,6 +46,15 @@ private extension WovenTools {
     id == machineID ? "this machine" : ((try? await library.machine(id))?.name ?? id)
   }
 
+  /// Waits, a few seconds at most, until sync has brought another
+  /// machine's new session here.
+  func waitForSession(_ id: String) async {
+    for _ in 0..<400 {
+      if (try? await library.session(id)) != nil { return }
+      try? await Task.sleep(for: .milliseconds(25))
+    }
+  }
+
   func session(_ id: String) async throws -> Session {
     guard let session = try await library.session(id) else { throw ToolFailure("No session \(id).") }
     return session
@@ -163,14 +172,19 @@ private let sessionTools: [WovenTool] = [
         guard let folder = try await tools.library.folder(folderID) else { throw ToolFailure("No folder \(folderID).") }
         owner = folder.machineID
       }
-      if let forwarded = try await call.forward(to: owner) { return forwarded }
+      if let forwarded = try await call.forward(to: owner) {
+        // The caller addresses the session next from here: this machine holds it before it hears.
+        if let id = forwarded.meta?["sessionID"]?.string { await tools.waitForSession(id) }
+        return forwarded
+      }
       let runtime = RuntimeKind(rawValue: try call.arguments.string("runtime"))
       guard await tools.sessions.supports(runtime) else { throw ToolFailure("This machine has no \(runtime.rawValue) runtime.") }
       let session = try await tools.sessions.create(runtime: runtime, title: try call.arguments.string("title"),
                                                     folderID: call.arguments.optionalString("folderID"))
       try await tools.sessions.host(for: session.id).send(try call.arguments.string("message"), attachments: [],
                                                          author: try await tools.author(call.caller))
-      return .text("Started session \(session.id) on \(await tools.machineName(session.machineID)).")
+      return ToolResult(content: [.text("Started session \(session.id) on \(await tools.machineName(session.machineID)).")],
+                        meta: .object(["sessionID": .string(session.id)]))
     }),
   WovenTool(
     name: "send_to_session",
@@ -187,6 +201,26 @@ private let sessionTools: [WovenTool] = [
       try await call.tools.sessions.host(for: session.id).send(try call.arguments.string("text"), attachments: [],
                                                               author: try await call.tools.author(call.caller))
       return .text("Sent to \(session.title).")
+    }),
+  WovenTool(
+    name: "stop_session",
+    description: "Stop the running turn of an agent session you manage, on any machine, as the person's Stop does: one you started or have sent a message to. Never your own. The session stays, says you stopped it, and goes on with `send_to_session`. Fails while its machine is offline.",
+    input: schema(["sessionID": text("The session to stop.")], required: ["sessionID"]),
+    forBots: true,
+    groups: [.sessions],
+    run: { call in
+      let session = try await call.tools.session(try call.arguments.string("sessionID"))
+      guard session.id != call.caller.sessionID else { throw ToolFailure("That is your own session.") }
+      guard session.runtime != .bots else { throw ToolFailure("That is a bot chat, not an agent session.") }
+      if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
+      // Decided on the owning machine, from what is saved: the caller is an author in the session.
+      let author = try await call.tools.author(call.caller)
+      guard author.sessionID != nil || author.botID != nil,
+            try await call.tools.library.hasItem(in: session.id, from: author) else {
+        throw ToolFailure("You can stop only a session you started or have sent a message to.")
+      }
+      let running = try await call.tools.sessions.host(for: session.id).interrupt(by: author.name)
+      return .text(running ? "Stopped \(session.title)." : "Nothing was running in \(session.title).")
     }),
 ]
 
@@ -569,27 +603,12 @@ private let botTools: [WovenTool] = [
         } ?? "This message is from an agent outside Woven Matter, not the person."),
       ]
       if call.arguments.bool("newThread") == true { request["newThread"] = .bool(true) }
+      // Saved in the bot's chat as from that session, not the person.
+      if let sessionID = author.sessionID {
+        request["from"] = .object(["name": .string(String(author.name.prefix(200))), "sessionId": .string(sessionID)])
+      }
       _ = try await tools.bots.call(.object(request), caller: tools.localCaller)
       return .text("Sent.")
-    }),
-  WovenTool(
-    name: "post_to_forum",
-    description: "Post to the bots' Forum, optionally asking particular bots (or every bot) to reply.",
-    input: schema(["text": text("The post."),
-                   "mentions": .object(["type": .string("array"), "items": .object(["type": .string("string")]),
-                                        "description": .string("Bot ids asked to reply.")]),
-                   "everyone": flag("Ask every bot in the Forum.")], required: ["text"]),
-    forBots: false,
-    groups: [.sessions],
-    run: { call in
-      let tools = call.tools
-      let name = try await tools.author(call.caller).name.trimmingCharacters(in: .whitespacesAndNewlines)
-      var request: [String: JSONValue] = ["type": .string("forum.post"), "text": .string(try call.arguments.string("text")),
-                                          "agent": .string(name.isEmpty ? "An agent" : String(name.prefix(200)))]
-      if let mentions = call.arguments["mentions"] { request["mentions"] = mentions }
-      if let everyone = call.arguments.bool("everyone") { request["everyone"] = .bool(everyone) }
-      _ = try await tools.bots.call(.object(request), caller: tools.localCaller)
-      return .text("Posted.")
     }),
 ]
 

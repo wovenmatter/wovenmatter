@@ -281,16 +281,20 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   let client = try await home.connect()
   try await home.makeHome(client, runtime)
 
+  // A session's message, the model's thinking, and a call whose output is over the cap sessions keep.
+  let long = String(repeating: "x", count: ToolOutput.limit + 10)
   let push = json("""
     {"bot": {"id": "b1", "name": "Ada", "kind": "bot", "manager": false, "orchestrator": false, "deleted": false,
              "createdAt": "2026-11-01T10:00:00.000Z"},
      "conversations": [{"conversationId": 1, "kind": "main", "createdAt": "2026-11-01T10:00:00.000Z"}],
      "items": [
-       {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello"},
+       {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello",
+        "from": {"name": "Build", "sessionId": "s-1"}},
        {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi",
         "usage": {"model": "p/m", "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}},
-       {"key": "4.1", "conversationId": 1, "createdAt": 2001, "kind": "tool",
-        "tool": {"name": "bash", "input": "ls", "output": "a", "failed": false}}],
+       {"key": "4.1", "conversationId": 1, "createdAt": 2001, "kind": "thinking", "text": "Look first."},
+       {"key": "4.2", "conversationId": 1, "createdAt": 2002, "kind": "tool",
+        "tool": {"name": "bash", "input": "ls", "output": "\(long)", "failed": false}}],
      "upTo": 4}
     """)
   _ = try await runtime.host("mirror.bot", push)
@@ -302,7 +306,7 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
     """))
 
   let checkpoints = try await runtime.host("mirror.checkpoints", .object([:]))
-  #expect(checkpoints == json(#"{"bots": {"b1": 4}, "forum": 7}"#))
+  #expect(checkpoints == json(#"{"bots": {"b1": 4}, "forum": 7, "seats": {}}"#))
 
   let saved = try await client.call(ListSavedBots())
   #expect(saved.bots.map(\.name) == ["Ada"])
@@ -311,11 +315,15 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   #expect(main.session.title == "Ada")
   #expect(main.session.runtime == .bots)
   let items = try await client.call(SessionItems(sessionID: main.session.id))
-  #expect(items.map(\.sequence) == [1, 2, 3])
+  #expect(items.map(\.sequence) == [1, 2, 3, 4])
   #expect(items.map(\.content) == [
     .userMessage(text: "Hello"), .assistantMessage(text: "Hi"),
-    .toolCall(ToolCall(name: "bash", input: "ls", output: "a", kind: .execute)),
+    .toolCall(ToolCall(name: "thinking", input: "", output: "Look first.", title: "Thinking", kind: .thinking)),
+    .toolCall(ToolOutput.capped(ToolCall(name: "bash", input: "ls", output: long, kind: .execute))),
   ])
+  #expect(items.first?.author == ItemAuthor(botID: nil, name: "Build", sessionID: "s-1"))
+  guard case .toolCall(let call) = items.last?.content else { return }
+  #expect(call.output?.contains("characters left out") == true)
 
   let forum = try #require(saved.chats.first { $0.kind == .forum })
   #expect(forum.session.title == "Forum")
@@ -429,14 +437,17 @@ private struct TransferSetup {
            {"key": "3", "conversationId": 1, "createdAt": 1000, "kind": "user", "text": "Hello"},
            {"key": "4", "conversationId": 1, "createdAt": 2000, "kind": "assistant", "text": "Hi",
             "usage": {"model": "p/m", "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
-         "forumUsage": [{"key": "6", "roomId": 1, "createdAt": 3000,
-                         "usage": {"model": "p/m", "input": 7, "output": 2, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
-         "upTo": 6}},
+         "upTo": 4}},
        {"method": "mirror.forum", "params": {
          "rooms": [{"roomId": 1, "createdAt": "2026-11-01T10:00:00.000Z"}],
          "posts": [{"id": 7, "roomId": 1, "author": "bot", "botId": "b1", "name": "Ada", "text": "Morning", "createdAt": 3000},
                    {"id": 8, "roomId": 1, "author": "bot", "botId": "b1", "name": "Ada", "text": "",
                     "visualReply": {"title": "Build times", "height": 320, "digest": "\(digest)", "size": 20}, "createdAt": 3100}],
+         "seatItems": [{"botId": "b1", "name": "Ada", "item": {"key": "6", "conversationId": 1, "createdAt": 3050, "kind": "tool",
+                        "tool": {"name": "bash", "input": "ls", "output": "a", "failed": false}}}],
+         "seatUsage": [{"botId": "b1", "key": "6", "roomId": 1, "createdAt": 3050,
+                        "usage": {"model": "p/m", "input": 7, "output": 2, "cacheRead": 0, "cacheWrite": 0, "cost": 0.01}}],
+         "seats": {"b1": 6},
          "upTo": 8}}]
       """.utf8).write(to: bots.appendingPathComponent("bots.json"))
     try Data("{}".utf8).write(to: bots.appendingPathComponent("settings.json"))
@@ -500,6 +511,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
   // The Forum's visual reply is one small item on both, and its HTML came to the new home.
   let digest = Library.digest(of: TransferSetup.visualReplyHTML)
   let expected: [ItemContent] = [.assistantMessage(text: "Morning"),
+                                 .toolCall(ToolCall(name: "bash", input: "ls", output: "a", kind: .execute)),
                                  .visualReply(VisualReply(title: "Build times", height: 320, digest: digest, size: 20))]
   for client in [setup.onA, setup.onB] {
     let forum = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .forum })
@@ -615,4 +627,24 @@ func onceTheTargetBeginsToCommitNothingGivesTheTransferBack() async throws {
   #expect(setup.runtimeB.connected)
   #expect(setup.filesA.volumes.withLock { $0.isEmpty })
   #expect(!FileManager.default.fileExists(atPath: a.folder.appendingPathComponent("bots").path))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aSessionMessagesABotAsItself() async throws {
+  let runtime = StandInBotsRuntime()
+  let home = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { home.finishLater() }
+  let client = try await home.connect()
+  try await home.makeHome(client, runtime)
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Build"))
+  let tools = try #require(await home.server.bots.toolsForTests)
+
+  // A session a bot sent off reports back: the bot's chat gets it as from that session.
+  let result = await tools.call("message_bot", arguments: .object(["botID": .string("b1"), "text": .string("Done.")]),
+                                caller: ToolCaller(machineID: home.server.machineID, sessionID: session.id))
+  #expect(!result.isError)
+  let sent = try #require(runtime.received.last { $0["type"]?.string == "message.send" })
+  #expect(sent["text"]?.string == "Done.")
+  #expect(sent["from"] == .object(["name": .string("Build"), "sessionId": .string(session.id)]))
+  #expect(sent["context"]?.string?.contains(session.id) == true)
 }

@@ -232,6 +232,8 @@ actor SessionHost {
   private var interrupted = false
   /// Stops so far, so a steer can tell one came while the runtime answered.
   private var stops = 0
+  /// Who stopped the running turn, when another session or a bot did.
+  private var stoppedBy: String?
   /// The turn running continues a goal, and whether it has said or done anything.
   private var goalTurn = false
   private var turnActed = false
@@ -442,13 +444,20 @@ actor SessionHost {
     resolvePrompt(promptID)
   }
 
-  func interrupt() async throws {
+  /// Stops the running turn, as Stop does. `stopper`, another session or a
+  /// bot, is named in a notice once the turn has ended. Returns whether a
+  /// turn was running.
+  @discardableResult
+  func interrupt(by stopper: String? = nil) async throws -> Bool {
     await enter()
     defer { leave() }
+    let running = run == .running
     interrupted = true
     stops += 1
     clearPrompts()
+    if running, let stopper { stoppedBy = stopper }
     try await live?.interrupt()
+    return running
   }
 
   /// Stops the runtime's process; the next turn resumes the native session.
@@ -546,6 +555,11 @@ actor SessionHost {
       await saving { try await self.finishOpenItems() }
       if let failure {
         await saving { try await self.finish(.notice(Notice(kind: .failure, text: failure)), id: UUID().uuidString.lowercased()) }
+      }
+      if let stopper = stoppedBy {
+        stoppedBy = nil
+        await saving { try await self.finish(.notice(Notice(kind: .interrupted, text: "Stopped by \(stopper).")),
+                                             id: UUID().uuidString.lowercased()) }
       }
       // A harness with its own history is counted from there (`UsageScanner`).
       if let usage, !runtime.kind.usageFromHistory {
