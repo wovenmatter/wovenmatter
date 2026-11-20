@@ -158,8 +158,8 @@ public protocol RuntimeSession: Sendable {
   /// Changes the model, thinking level or permission mode; replies with what
   /// the runtime confirmed.
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration
-  /// Answers a prompt with an option's `id`, or free text.
-  func answer(promptID: String, with answer: String) async throws
+  /// Answers a prompt the runtime asked.
+  func answer(promptID: String, with answer: PromptAnswer) async throws
   func interrupt() async throws
   /// Ends the process. The native session stays for a later resume.
   func stop() async

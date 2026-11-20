@@ -222,48 +222,85 @@ extension OpenCodeProjection {
   }
 
   /// The body of a reply to a permission request.
-  static func permissionReply(_ answer: String) -> OpenCodeJSON {
-    if permissionOptions.contains(where: { $0.id == answer }) { return ["decision": .string(answer)] }
-    return ["decision": "reject", "message": .string(answer)]
+  static func permissionReply(_ answer: PromptAnswer) -> OpenCodeJSON {
+    switch answer {
+    case .option(let id) where permissionOptions.contains(where: { $0.id == id }): ["decision": .string(id)]
+    case .text(let text): ["decision": "reject", "message": .string(text)]
+    default: ["decision": "reject"]
+    }
   }
 
-  /// A form OpenCode asks the person to fill in, as a prompt. A form of one
-  /// field with fixed choices offers them as options.
+  /// A form OpenCode asks the person to fill in, in the one prompt shape.
   static func formPrompt(_ form: OpenCodeJSON) -> Prompt {
-    let fields = visibleFields(form)
-    let lines = [form["title"].text] + fields.compactMap { field -> String? in
-      let text = [field["title"].string, field["description"].string].compactMap { $0 }.joined(separator: ": ")
-      return text.isEmpty || fields.count == 1 && text == form["title"].text ? nil : text
-    }
-    var options: [PromptOption] = []
-    if fields.count == 1 {
-      let field = fields[0]
-      options = field["options"].array.map { PromptOption(id: $0["value"].text, name: $0["label"].string ?? $0["value"].text) }
-      if options.isEmpty, field["type"].text == "boolean" {
-        options = [PromptOption(id: "true", name: "Yes"), PromptOption(id: "false", name: "No")]
+    let fields = visibleFields(form).map { field -> PromptField in
+      let options = field["options"].array.map {
+        PromptOption(id: $0["value"].text, name: $0["label"].string ?? $0["value"].text, detail: $0["description"].string)
       }
+      let kind: PromptField.Kind = switch field["type"].text {
+      case "multiselect": .choices
+      case "select", "radio": .choice
+      case "number": .number
+      case "integer": .integer
+      case "boolean": .boolean
+      default: options.isEmpty ? .text : .choice
+      }
+      return PromptField(id: field["key"].text, title: field["title"].string ?? field["key"].text, detail: field["description"].string,
+                         kind: kind, required: field["required"].bool ?? false, options: options,
+                         initial: field["default"].isNull ? nil : JSONValue(field["default"]),
+                         placeholder: field["placeholder"].string, multiline: field["type"].text == "textarea",
+                         minimum: field["minimum"].number, maximum: field["maximum"].number)
     }
-    return Prompt(id: form["id"].text, kind: .question, text: lines.filter { !$0.isEmpty }.joined(separator: "\n"),
-                  options: options)
+    return PromptForms.prompt(id: form["id"].text, message: form["title"].text, fields: fields)
   }
 
-  /// The body of a reply to a form: the answer for its one field, or a JSON
-  /// object of answers by field key.
-  static func formReply(_ form: OpenCodeJSON, answer: String) -> OpenCodeJSON {
-    if case .object(let answers)? = try? OpenCodeJSON.decode(Data(answer.utf8)) {
-      return ["answer": .object(answers)]
+  /// The body of a reply to a form, from the answer for its fields.
+  static func formReply(_ form: OpenCodeJSON, answer: PromptAnswer) throws -> OpenCodeJSON {
+    let fields = formPrompt(form).fields
+    let values: [String: JSONValue]
+    switch answer {
+    case .values(let given): values = given
+    case .option(let id) where fields.count == 1: values = [fields[0].id: .string(id)]
+    case .text(let text) where fields.count == 1: values = [fields[0].id: .string(text)]
+    default: throw RuntimeError.failed("That answer does not fit what was asked.")
     }
-    guard let field = visibleFields(form).first else { return ["answer": [:]] }
-    let value: OpenCodeJSON = switch field["type"].text {
-    case "multiselect": .array([.string(answer)])
-    case "number", "integer": Double(answer).map(OpenCodeJSON.number) ?? .string(answer)
-    case "boolean": .bool(["true", "yes", "y", "1"].contains(answer.lowercased()))
-    default: .string(answer)
+    try PromptForms.check(values, against: fields)
+    // Hidden fields keep their defaults.
+    var answers: [String: OpenCodeJSON] = [:]
+    for field in form["fields"].array where field["hidden"].bool == true && !field["default"].isNull {
+      answers[field["key"].text] = field["default"]
     }
-    return ["answer": .object([field["key"].text: value])]
+    for (key, value) in values { answers[key] = OpenCodeJSON(value) }
+    return ["answer": .object(answers)]
   }
 
   private static func visibleFields(_ form: OpenCodeJSON) -> [OpenCodeJSON] {
     form["fields"].array.filter { $0["hidden"].bool != true && $0["type"].text != "external" }
+  }
+}
+
+extension JSONValue {
+  init(_ value: OpenCodeJSON) {
+    switch value {
+    case .object(let object): self = .object(object.mapValues(JSONValue.init))
+    case .array(let array): self = .array(array.map(JSONValue.init))
+    case .string(let text): self = .string(text)
+    case .number(let number): self = number.rounded() == number && abs(number) < 1e15 ? .integer(Int64(number)) : .double(number)
+    case .bool(let bool): self = .bool(bool)
+    case .null: self = .null
+    }
+  }
+}
+
+extension OpenCodeJSON {
+  init(_ value: JSONValue) {
+    switch value {
+    case .object(let object): self = .object(object.mapValues(OpenCodeJSON.init))
+    case .array(let array): self = .array(array.map(OpenCodeJSON.init))
+    case .string(let text): self = .string(text)
+    case .integer(let number): self = .number(Double(number))
+    case .double(let number): self = .number(number)
+    case .bool(let bool): self = .bool(bool)
+    case .null: self = .null
+    }
   }
 }

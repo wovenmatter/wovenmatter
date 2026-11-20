@@ -105,21 +105,83 @@ final class SessionStore {
     }
 
     func answer(_ interactionID: String, with response: SessionInteractionResponse) async {
-        let answer: String
+        guard let prompt = prompts.first(where: { $0.id == interactionID }) else { return }
+        let answer: PromptAnswer
         switch response {
-        case .option(let id): answer = id
+        case .option(let id): answer = .option(id)
         case .answers(let answers):
-            answer = answers.values.map {
-                switch $0 {
-                case .single(let value): value
-                case .multiple(let values): values.joined(separator: ", ")
-                }
-            }.joined(separator: "\n")
-        case .formValues, .cancelled:
-            error = ClientError.notOffered("This answer").localizedDescription
-            return
+            switch answers.values.first {
+            case .single(let id): answer = .option(id)
+            case .multiple(let ids): answer = .values([prompt.fields.first?.id ?? "answer": .array(ids.map(JSONValue.string))])
+            case nil: answer = .declined
+            }
+        case .formValues(let values):
+            if prompt.fields.isEmpty, case .string(let text)? = values[Self.freeTextField] {
+                answer = .text(text)
+            } else {
+                answer = .values(values.mapValues(Self.json))
+            }
+        case .cancelled: answer = .declined
         }
         await command { _ = try await $0.call(AnswerPrompt(sessionID: self.sessionID, promptID: interactionID, answer: answer)) }
+    }
+
+    /// The one field of a question answered in free text.
+    private static let freeTextField = "answer"
+
+    private static func json(_ value: SessionFormValue) -> JSONValue {
+        switch value {
+        case .string(let text): .string(text)
+        case .strings(let values): .array(values.map(JSONValue.string))
+        case .number(let number): number.rounded() == number && abs(number) < 1e15 ? .integer(Int64(number)) : .double(number)
+        case .boolean(let flag): .bool(flag)
+        }
+    }
+
+    private static func formValue(_ value: JSONValue?) -> SessionFormValue? {
+        switch value {
+        case .string(let text): .string(text)
+        case .array(let values): .strings(values.compactMap { if case .string(let text) = $0 { text } else { nil } })
+        case .integer(let number): .number(Double(number))
+        case .double(let number): .number(number)
+        case .bool(let flag): .boolean(flag)
+        default: nil
+        }
+    }
+
+    /// A prompt in the one card shape the chat shows.
+    private func interaction(_ prompt: Prompt) -> SessionInteraction {
+        let choices = { (options: [PromptOption]) in options.map { SessionChoice(id: $0.id, label: $0.name, detail: $0.detail) } }
+        let request: SessionInteraction.Request
+        switch prompt.kind {
+        case .approval:
+            request = .approval(title: prompt.text, options: choices(prompt.options))
+        case .question where !prompt.options.isEmpty:
+            request = .questions(title: nil, questions: [SessionQuestion(id: prompt.fields.first?.id ?? Self.freeTextField,
+                                                                         prompt: prompt.text, options: choices(prompt.options),
+                                                                         allowsMultiple: false)])
+        case .question, .form:
+            let fields = prompt.fields.isEmpty
+                ? [PromptField(id: Self.freeTextField, title: "Answer", multiline: true)] : prompt.fields
+            request = .form(message: prompt.text, fields: fields.map { field in
+                let kind: SessionFormField.Kind = switch field.kind {
+                case .text: .text
+                case .choice: .singleChoice
+                case .choices: .multipleChoice
+                case .number: .number
+                case .integer: .integer
+                case .boolean: .boolean
+                }
+                let counted = field.kind == .text || field.kind == .choices
+                return SessionFormField(
+                    id: field.id, title: field.title, detail: field.detail, kind: kind, required: field.required,
+                    options: choices(field.options), initialValue: Self.formValue(field.initial), placeholder: field.placeholder,
+                    multiline: field.multiline, minimum: counted ? nil : field.minimum, maximum: counted ? nil : field.maximum,
+                    minimumLength: counted ? field.minimum.map { Int($0) } : nil,
+                    maximumLength: counted ? field.maximum.map { Int($0) } : nil)
+            })
+        }
+        return SessionInteraction(id: prompt.id, sessionID: sessionID, request: request)
     }
 
     func updateSettings(_ change: SessionSettingsChange) async {
@@ -290,10 +352,6 @@ final class SessionStore {
         self.messages = messages
         self.runs = runs
         runActivities = activities
-        interactions = prompts.map { prompt in
-            SessionInteraction(id: prompt.id, sessionID: sessionID, request: prompt.kind == .approval || !prompt.options.isEmpty
-                ? .approval(title: prompt.text, options: prompt.options.map { SessionChoice(id: $0.id, label: $0.name) })
-                : .questions(title: prompt.text, questions: []))
-        }
+        interactions = prompts.map(interaction)
     }
 }

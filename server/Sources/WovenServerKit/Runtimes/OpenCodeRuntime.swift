@@ -429,12 +429,16 @@ final class OpenCodeSession: RuntimeSession {
     return await configuration
   }
 
-  func answer(promptID: String, with answer: String) async throws {
+  func answer(promptID: String, with answer: PromptAnswer) async throws {
     guard let pending = state.withLock({ $0.prompts[promptID] }) else { return }
     let asker = "/api/session/" + OpenCodeClient.segment(pending.sessionID)
     if let form = pending.form {
-      try await client.call("POST", asker + "/form/" + OpenCodeClient.segment(promptID) + "/reply",
-                            body: OpenCodeProjection.formReply(form, answer: answer))
+      if answer == .declined {
+        try await client.call("POST", asker + "/form/" + OpenCodeClient.segment(promptID))
+      } else {
+        try await client.call("POST", asker + "/form/" + OpenCodeClient.segment(promptID) + "/reply",
+                              body: try OpenCodeProjection.formReply(form, answer: answer))
+      }
     } else {
       try await client.call("POST", asker + "/permission/" + OpenCodeClient.segment(promptID) + "/reply",
                             body: OpenCodeProjection.permissionReply(answer))

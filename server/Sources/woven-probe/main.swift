@@ -130,10 +130,11 @@ func show(_ configuration: SessionConfiguration) {
       if untilIdle && running && state != .running { return }
     case .awaiting(let prompt):
       endLine()
-      out("? \(prompt.kind.rawValue) \(prompt.id): \(prompt.text) options: " + prompt.options.map { "\($0.id) (\($0.name))" }.joined(separator: ", "))
+      out("? \(prompt.kind.rawValue) \(prompt.id): \(prompt.text) options: " + prompt.options.map { "\($0.id) (\($0.name))" }.joined(separator: ", ")
+          + (prompt.fields.isEmpty ? "" : " fields: " + prompt.fields.map { "\($0.id) (\($0.kind.rawValue))" }.joined(separator: ", ")))
       if let approve, let option = prompt.options.first(where: { $0.id == approve || $0.name == approve }) ?? prompt.options.first {
         out("  answering \(option.id)")
-        _ = try await client.call(AnswerPrompt(sessionID: sessionID, promptID: prompt.id, answer: option.id))
+        _ = try await client.call(AnswerPrompt(sessionID: sessionID, promptID: prompt.id, answer: .option(option.id)))
       }
     case .answered(let id):
       out("answered \(id)")
@@ -244,7 +245,12 @@ do {
     let model = options("--model").first, thinking = options("--thinking").first, permission = options("--permission").first
     show(try await client.call(ConfigureSession(sessionID: argument(0, "SESSION"), model: model, thinking: thinking, permission: permission)))
   case "answer":
-    _ = try await client.call(AnswerPrompt(sessionID: argument(0, "SESSION"), promptID: argument(1, "PROMPT"), answer: argument(2, "ANSWER")))
+    // A JSON object answers a form; anything else is an option's id.
+    let text = argument(2, "ANSWER")
+    let answer: PromptAnswer = if let values = try? Wire.decoder.decode([String: JSONValue].self, from: Data(text.utf8)) {
+      .values(values)
+    } else { .option(text) }
+    _ = try await client.call(AnswerPrompt(sessionID: argument(0, "SESSION"), promptID: argument(1, "PROMPT"), answer: answer))
     out("done")
   case "interrupt":
     _ = try await client.call(InterruptTurn(sessionID: argument(0, "SESSION")))

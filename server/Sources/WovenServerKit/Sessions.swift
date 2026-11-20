@@ -1,10 +1,43 @@
 import Foundation
+import Synchronization
 import WovenLibrary
 import WovenProtocol
 
 /// A subscriber fell too far behind; its subscription ends so it can subscribe again.
 struct SubscriberTooSlow: Error, CustomStringConvertible {
   var description: String { "This subscriber fell too far behind. Subscribe again." }
+}
+
+/// What this machine's sessions are doing, for lists: every session that is
+/// not idle, and the subscribers that hear each change.
+final class RunBoard: Sendable {
+  private struct State {
+    var states: [String: SessionRunState] = [:]
+    var subscribers: [UUID: AsyncStream<SessionRunState>.Continuation] = [:]
+  }
+
+  private let state = Mutex(State())
+
+  func set(_ value: SessionRunState) {
+    let subscribers = state.withLock { state -> [AsyncStream<SessionRunState>.Continuation] in
+      let idle = value.run == .idle && !value.awaiting
+      guard state.states[value.sessionID] != value, !(idle && state.states[value.sessionID] == nil) else { return [] }
+      state.states[value.sessionID] = idle ? nil : value
+      return Array(state.subscribers.values)
+    }
+    for subscriber in subscribers { subscriber.yield(value) }
+  }
+
+  func subscribe() -> ([SessionRunState], AsyncStream<SessionRunState>) {
+    let (stream, continuation) = AsyncStream<SessionRunState>.makeStream(bufferingPolicy: .bufferingNewest(4096))
+    let id = UUID()
+    let current = state.withLock { state in
+      state.subscribers[id] = continuation
+      return Array(state.states.values)
+    }
+    continuation.onTermination = { [weak self] _ in _ = self?.state.withLock { $0.subscribers.removeValue(forKey: id) } }
+    return (current, stream)
+  }
 }
 
 /// The sessions this machine owns, each with its host while it is in use.
@@ -14,6 +47,7 @@ actor SessionManager {
   private let scratch: URL
   private var hosts: [String: SessionHost] = [:]
   private var watcher: Task<Void, Never>?
+  nonisolated let board = RunBoard()
 
   init(library: Library, runtimes: [any Runtime], scratch: URL) {
     self.library = library
@@ -79,7 +113,7 @@ actor SessionManager {
     }
     let gone = try await library.nativeSession(for: sessionID)?.gone == true
     if let host = hosts[sessionID] { return host }
-    let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone)
+    let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board)
     hosts[sessionID] = host
     return host
   }
@@ -117,6 +151,7 @@ actor SessionHost {
   private let sessionID: String
   private let library: Library
   private let runtime: any Runtime
+  private let board: RunBoard
   private var live: (any RuntimeSession)?
   private var generation = 0
   private var run: RunState
@@ -129,10 +164,11 @@ actor SessionHost {
   private var busy = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
 
-  init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool) {
+  init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard) {
     self.sessionID = sessionID
     self.library = library
     self.runtime = runtime
+    self.board = board
     run = gone ? .nativeSessionGone : .idle
   }
 
@@ -196,7 +232,7 @@ actor SessionHost {
     return configuration
   }
 
-  func answer(promptID: String, with answer: String) async throws {
+  func answer(promptID: String, with answer: PromptAnswer) async throws {
     await enter()
     defer { leave() }
     guard let live, prompts.contains(where: { $0.id == promptID }) else {
@@ -233,6 +269,7 @@ actor SessionHost {
     defer { leave() }
     await shutDown()
     dropOpenItems()
+    board.set(SessionRunState(sessionID: sessionID, run: .idle))
     for continuation in subscribers.values { continuation.finish() }
     subscribers.removeAll()
   }
@@ -285,6 +322,7 @@ actor SessionHost {
     case .prompt(let prompt):
       prompts.append(prompt)
       broadcast(.awaiting(prompt))
+      post()
     case .promptResolved(let id):
       resolvePrompt(id)
     case .configuration(let configuration):
@@ -457,16 +495,24 @@ actor SessionHost {
     guard prompts.contains(where: { $0.id == id }) else { return }
     prompts.removeAll { $0.id == id }
     broadcast(.answered(promptID: id))
+    post()
   }
 
   private func clearPrompts() {
     for prompt in prompts { broadcast(.answered(promptID: prompt.id)) }
     prompts.removeAll()
+    post()
   }
 
   private func setRun(_ state: RunState) {
     run = state
     broadcast(.runState(state))
+    post()
+  }
+
+  /// Tells the lists what this session is doing now.
+  private func post() {
+    board.set(SessionRunState(sessionID: sessionID, run: run, awaiting: !prompts.isEmpty))
   }
 
   /// Hands an event to every subscriber without waiting. One that has fallen

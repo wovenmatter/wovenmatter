@@ -123,7 +123,7 @@ private final class StandInSession: RuntimeSession {
     turn.withLock { $0 = task }
   }
 
-  func answer(promptID: String, with answer: String) async throws {
+  func answer(promptID: String, with answer: PromptAnswer) async throws {
     emit.yield(.promptResolved(id: promptID))
   }
 

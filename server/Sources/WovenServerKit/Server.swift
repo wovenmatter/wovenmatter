@@ -236,6 +236,10 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
   router.subscription(SubscribeSession.self) { request, _ in
     try await sessions.host(for: request.sessionID).subscribe()
   }
+  router.subscription(SubscribeRunStates.self) { _, _ in
+    let (current, changes) = sessions.board.subscribe()
+    return (current, changes.throwing)
+  }
   router.on(SendTurn.self) { request, _ in
     try await sessions.host(for: request.sessionID).send(request.text, attachments: request.attachments)
     return Done()

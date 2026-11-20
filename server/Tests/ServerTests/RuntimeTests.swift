@@ -61,16 +61,17 @@ private struct Host {
 }
 
 /// Sends a turn and collects its events until the session is idle again,
-/// answering any approval with `approve`.
+/// answering any approval with `approve` and any other prompt with `answer`.
 @discardableResult
-private func turn(_ client: Client, _ sessionID: String, _ text: String, approve: String? = nil) async throws -> [SessionEvent] {
+private func turn(_ client: Client, _ sessionID: String, _ text: String, approve: String? = nil,
+                  answer: ((Prompt) -> PromptAnswer)? = nil) async throws -> [SessionEvent] {
   let subscription = try await client.subscribe(SubscribeSession(sessionID: sessionID))
   _ = try await client.call(SendTurn(sessionID: sessionID, text: text))
   var events: [SessionEvent] = []
   for try await event in subscription.events {
     events.append(event)
-    if case .awaiting(let prompt) = event, let approve {
-      _ = try await client.call(AnswerPrompt(sessionID: sessionID, promptID: prompt.id, answer: approve))
+    if case .awaiting(let prompt) = event, let reply = prompt.kind == .approval ? approve.map(PromptAnswer.option) : answer?(prompt) {
+      _ = try await client.call(AnswerPrompt(sessionID: sessionID, promptID: prompt.id, answer: reply))
     }
     if event == .runState(.idle) { break }
   }
@@ -114,6 +115,28 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsApprovalsAndUsage() async thr
   let usage = try await host.server.library.rows("usage_records", where: "session_id", is: .text(session.id))
   #expect(usage.count == 2)
   #expect(usage.allSatisfy { $0.values["input_tokens"] == .integer(3) && $0.values["model"] == .text("fake-large") })
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aRuntimesQuestionReachesTheChatAndItsAnswerReturns() async throws {
+  let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+  let host = try await Host.start(runtime: try fakeRuntime(store: store))
+  defer { Task { await host.server.stop() } }
+  let client = try await host.connect()
+  let session = try await client.call(CreateSession(runtime: .codex, title: "Chat"))
+
+  var asked: Prompt?
+  let events = try await turn(client, session.id, "a question") { prompt in
+    asked = prompt
+    return .option("blue")
+  }
+  #expect(asked?.kind == .question)
+  #expect(asked?.text == "Which colour?")
+  #expect(asked?.options.map(\.id) == ["red", "blue"])
+  #expect(events.contains(.answered(promptID: asked?.id ?? "")))
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(assistantTexts(items).last?.hasSuffix("a question (blue)") == true)
 }
 
 @Test(.timeLimit(.minutes(1)))

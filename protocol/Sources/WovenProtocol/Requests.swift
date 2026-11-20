@@ -120,6 +120,15 @@ public struct SubscribeSession: Subscription {
   public init(sessionID: String) { self.sessionID = sessionID }
 }
 
+/// What the sessions this machine owns are doing, for lists: replies with
+/// every session that is not idle, then delivers each change.
+public struct SubscribeRunStates: Subscription {
+  public static let method = "sessions.runStates"
+  public typealias Reply = [SessionRunState]
+  public typealias Event = SessionRunState
+  public init() {}
+}
+
 /// Sends a turn. Replies once the message is saved and the runtime took it.
 /// Each attachment's content is already in the server's content store
 /// (`PutContent`).
@@ -161,15 +170,14 @@ public struct ConfigureSession: Request {
   }
 }
 
-/// Answers a question or approval the runtime is waiting on: an option's
-/// `id`, or free text when the prompt offers no options.
+/// Answers a prompt the runtime is waiting on.
 public struct AnswerPrompt: Request {
   public static let method = "session.answer"
   public typealias Reply = Done
   public var sessionID: String
   public var promptID: String
-  public var answer: String
-  public init(sessionID: String, promptID: String, answer: String) {
+  public var answer: PromptAnswer
+  public init(sessionID: String, promptID: String, answer: PromptAnswer) {
     self.sessionID = sessionID
     self.promptID = promptID
     self.answer = answer

@@ -305,36 +305,144 @@ public enum RunState: String, Codable, Sendable, Hashable {
   case nativeSessionGone
 }
 
+/// What one session on the server asked is doing now. Live state.
+public struct SessionRunState: Codable, Sendable, Hashable {
+  public var sessionID: String
+  public var run: RunState
+  /// The turn waits on the person: an approval, a question or a form.
+  public var awaiting: Bool
+
+  public init(sessionID: String, run: RunState, awaiting: Bool = false) {
+    self.sessionID = sessionID
+    self.run = run
+    self.awaiting = awaiting
+  }
+}
+
 /// One answer a prompt offers.
 public struct PromptOption: Codable, Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String
+  public var detail: String?
 
-  public init(id: String, name: String) {
+  public init(id: String, name: String, detail: String? = nil) {
     self.id = id
     self.name = name
+    self.detail = detail
   }
 }
 
-/// A question or an approval the runtime is waiting on.
+/// One field of a form a runtime asks the person to fill in.
+public struct PromptField: Codable, Sendable, Hashable, Identifiable {
+  public enum Kind: String, Codable, Sendable, Hashable {
+    case text
+    /// One of `options`; the value is an option's `id`.
+    case choice
+    /// Any of `options`; the value is an array of option ids.
+    case choices
+    case number
+    case integer
+    case boolean
+  }
+
+  /// The key the answer gives this field's value under.
+  public var id: String
+  public var title: String
+  public var detail: String?
+  public var kind: Kind
+  public var required: Bool
+  public var options: [PromptOption]
+  /// The value the field starts with.
+  public var initial: JSONValue?
+  public var placeholder: String?
+  public var multiline: Bool
+  /// Bounds of a number, or of a text's length or a choice count.
+  public var minimum: Double?
+  public var maximum: Double?
+
+  public init(id: String, title: String, detail: String? = nil, kind: Kind = .text, required: Bool = true,
+              options: [PromptOption] = [], initial: JSONValue? = nil, placeholder: String? = nil, multiline: Bool = false,
+              minimum: Double? = nil, maximum: Double? = nil) {
+    self.id = id
+    self.title = title
+    self.detail = detail
+    self.kind = kind
+    self.required = required
+    self.options = options
+    self.initial = initial
+    self.placeholder = placeholder
+    self.multiline = multiline
+    self.minimum = minimum
+    self.maximum = maximum
+  }
+}
+
+/// Something the runtime waits on the person for, in one shape for every
+/// runtime: an approval (pick one of `options`), a question (pick one of
+/// `options`, or answer in text when there are none), or a form (fill in
+/// `fields`).
 public struct Prompt: Codable, Sendable, Hashable, Identifiable {
   public enum Kind: String, Codable, Sendable, Hashable {
-    case question
     case approval
+    case question
+    case form
   }
 
   public var id: String
   public var kind: Kind
   public var text: String
-  /// The answers offered, when the runtime offers a fixed set; the answer is
-  /// an option's `id`. With none, the answer is free text.
   public var options: [PromptOption]
+  public var fields: [PromptField]
 
-  public init(id: String, kind: Kind, text: String, options: [PromptOption] = []) {
+  public init(id: String, kind: Kind, text: String, options: [PromptOption] = [], fields: [PromptField] = []) {
     self.id = id
     self.kind = kind
     self.text = text
     self.options = options
+    self.fields = fields
+  }
+}
+
+/// The person's answer to a prompt. Encoded with a `type` field.
+public enum PromptAnswer: Codable, Sendable, Hashable {
+  /// One of the prompt's options, by `id`.
+  case option(String)
+  /// Free text, for a question without options.
+  case text(String)
+  /// A form's values, by field `id`.
+  case values([String: JSONValue])
+  /// The person declined to answer.
+  case declined
+
+  private enum Key: String, CodingKey { case type, id, text, values }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: Key.self)
+    switch try container.decode(String.self, forKey: .type) {
+    case "option": self = .option(try container.decode(String.self, forKey: .id))
+    case "text": self = .text(try container.decode(String.self, forKey: .text))
+    case "values": self = .values(try container.decode([String: JSONValue].self, forKey: .values))
+    case "declined": self = .declined
+    case let other:
+      throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown answer type \(other)")
+    }
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: Key.self)
+    switch self {
+    case .option(let id):
+      try container.encode("option", forKey: .type)
+      try container.encode(id, forKey: .id)
+    case .text(let text):
+      try container.encode("text", forKey: .type)
+      try container.encode(text, forKey: .text)
+    case .values(let values):
+      try container.encode("values", forKey: .type)
+      try container.encode(values, forKey: .values)
+    case .declined:
+      try container.encode("declined", forKey: .type)
+    }
   }
 }
 

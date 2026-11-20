@@ -5,7 +5,7 @@ import Foundation
 // runtime's does, and deleting the file loses it. Each turn answers
 // "pid <process> turn <n>: <text>" and makes one tool call; a turn whose text
 // contains "permission" first asks for permission and says which option was
-// chosen.
+// chosen; one containing "question" asks a one-field form and says the answer.
 
 let store = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FAKE_ACP_STORE"] ?? NSTemporaryDirectory())
 let pid = ProcessInfo.processInfo.processIdentifier
@@ -43,6 +43,19 @@ func file(_ session: String) -> URL { store.appendingPathComponent(session) }
     update(session, ["sessionUpdate": "tool_call_update", "toolCallId": "call-\(number)", "status": "completed",
                      "content": [["type": "content", "content": ["type": "text", "text": "a.txt"]]]])
     send(["id": id, "result": ["stopReason": "end_turn", "usage": ["inputTokens": 3, "outputTokens": 2]]])
+  }
+  if text.contains("question") {
+    nextRequest += 1
+    waiting[nextRequest] = { result in
+      let content = result["content"] as? [String: Any]
+      finish(result["action"] as? String == "accept" ? content?["colour"] as? String : result["action"] as? String)
+    }
+    send(["id": nextRequest, "method": "elicitation/create", "params": [
+      "sessionId": session, "mode": "form", "message": "Which colour?",
+      "requestedSchema": ["type": "object", "required": ["colour"],
+                          "properties": ["colour": ["type": "string", "enum": ["red", "blue"]]]],
+    ]])
+    return
   }
   guard text.contains("permission") else { return finish(nil) }
   nextRequest += 1

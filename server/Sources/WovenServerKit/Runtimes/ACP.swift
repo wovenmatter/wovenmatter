@@ -23,8 +23,9 @@ struct ACPProfile: Sendable {
   var arguments: [String]
   var environment: [String: String]
   var protocolVersion: Int = 1
-  /// The client capabilities sent with `initialize`.
-  var clientCapabilities: JSONValue = .object([:])
+  /// The client capabilities sent with `initialize`. Forms (`elicitation/create`)
+  /// reach the chat as prompts.
+  var clientCapabilities: JSONValue = .object(["elicitation": .object(["form": .object([:])])])
   /// Whether an error from `session/load` means the native session is gone.
   var isMissingSession: @Sendable (ACPError) -> Bool = { $0.code == ACPError.notFound }
   /// Permission modes fixed when the process starts, for runtimes that take
@@ -235,7 +236,7 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
     try await state.configure(choices)
   }
 
-  func answer(promptID: String, with answer: String) async throws {
+  func answer(promptID: String, with answer: PromptAnswer) async throws {
     try await state.answer(promptID: promptID, with: answer)
   }
 
@@ -274,7 +275,20 @@ private actor ACPState {
   private var thinkingID: String?
   private var thinkingCount = 0
   private var planID: String?
-  private var permissionRequests: [String: (id: JSONValue, options: [PromptOption])] = [:]
+  /// What the agent waits on, by prompt id: a permission request's options,
+  /// or a form's fields.
+  private enum Waiting {
+    case permission(id: JSONValue, options: [PromptOption])
+    case form(id: JSONValue, fields: [PromptField])
+
+    var requestID: JSONValue {
+      switch self {
+      case .permission(let id, _), .form(let id, _): id
+      }
+    }
+  }
+
+  private var waiting: [String: Waiting] = [:]
 
   init(connection: ACPConnection, profile: ACPProfile, emit: AsyncStream<RuntimeEvent>.Continuation, directory: String) {
     self.connection = connection
@@ -345,25 +359,42 @@ private actor ACPState {
     await connection.notify("session/cancel", .object(["sessionId": .string(sessionID)]))
   }
 
-  func answer(promptID: String, with answer: String) async throws {
-    guard let request = permissionRequests.removeValue(forKey: promptID) else {
-      throw RuntimeError.failed("Nothing is waiting for that answer.")
+  func answer(promptID: String, with answer: PromptAnswer) async throws {
+    guard let request = waiting[promptID] else { throw RuntimeError.failed("Nothing is waiting for that answer.") }
+    let result: JSONValue
+    switch (request, answer) {
+    case (.permission(_, let options), .option(let optionID)):
+      guard options.contains(where: { $0.id == optionID }) else { throw RuntimeError.failed("That is not one of the answers offered.") }
+      result = .object(["outcome": .object(["outcome": .string("selected"), "optionId": .string(optionID)])])
+    case (.permission, .declined):
+      result = .object(["outcome": .object(["outcome": .string("cancelled")])])
+    case (.form(_, let fields), .values(let values)):
+      try PromptForms.check(values, against: fields)
+      result = .object(["action": .string("accept"), "content": .object(values)])
+    case (.form(_, let fields), .option(let value)) where fields.count == 1:
+      try PromptForms.check([fields[0].id: .string(value)], against: fields)
+      result = .object(["action": .string("accept"), "content": .object([fields[0].id: .string(value)])])
+    case (.form(_, let fields), .text(let text)) where fields.count == 1 && fields[0].kind == .text:
+      result = .object(["action": .string("accept"), "content": .object([fields[0].id: .string(text)])])
+    case (.form, .declined):
+      result = .object(["action": .string("decline")])
+    default:
+      throw RuntimeError.failed("That answer does not fit what was asked.")
     }
-    guard request.options.contains(where: { $0.id == answer }) else {
-      permissionRequests[promptID] = request
-      throw RuntimeError.failed("That is not one of the answers offered.")
-    }
-    await connection.respond(request.id, result: .object(["outcome": .object([
-      "outcome": .string("selected"), "optionId": .string(answer),
-    ])]))
+    waiting[promptID] = nil
+    await connection.respond(request.requestID, result: result)
     emit.yield(.promptResolved(id: promptID))
   }
 
   private func withdrawPermissions() {
-    let open = permissionRequests
-    permissionRequests.removeAll()
+    let open = waiting
+    waiting.removeAll()
     for (promptID, request) in open {
-      Task { await connection.respond(request.id, result: .object(["outcome": .object(["outcome": .string("cancelled")])])) }
+      let result: JSONValue = switch request {
+      case .permission: .object(["outcome": .object(["outcome": .string("cancelled")])])
+      case .form: .object(["action": .string("cancel")])
+      }
+      Task { await connection.respond(request.requestID, result: result) }
       emit.yield(.promptResolved(id: promptID))
     }
   }
@@ -469,10 +500,21 @@ private actor ACPState {
     switch message {
     case .notification("session/update", let params):
       update(params["update"] ?? .null)
+    case .notification("$/cancel_request", let params):
+      // The agent withdrew a request it made; forget the prompt it became.
+      guard let requestID = params["requestId"] ?? params["id"],
+            let (promptID, request) = waiting.first(where: { $0.value.requestID == requestID }) else { return }
+      waiting[promptID] = nil
+      let result: JSONValue = if case .form = request { .object(["action": .string("cancel")]) }
+        else { .object(["outcome": .object(["outcome": .string("cancelled")])]) }
+      await connection.respond(requestID, result: result)
+      emit.yield(.promptResolved(id: promptID))
     case .notification(let method, let params):
       await profile.handleNotification?(method, params)
     case .request(let id, "session/request_permission", let params):
       permissionRequest(id: id, params)
+    case .request(let id, "elicitation/create", let params):
+      await elicitation(id: id, params)
     case .request(let id, let method, let params):
       if let handle = profile.handleRequest {
         do {
@@ -480,8 +522,6 @@ private actor ACPState {
         } catch {
           await connection.respond(id, error: "\(error)")
         }
-      } else if method == "elicitation/create" {
-        await connection.respond(id, result: .object(["action": .string("decline")]))
       } else {
         await connection.respond(id, error: "Woven Matter does not offer \(method).", code: -32601)
       }
@@ -576,9 +616,22 @@ private actor ACPState {
       return
     }
     let promptID = UUID().uuidString.lowercased()
-    permissionRequests[promptID] = (id, options)
+    waiting[promptID] = .permission(id: id, options: options)
     let title = params["toolCall"]?["title"]?.string ?? "The agent asks for permission."
     emit.yield(.prompt(Prompt(id: promptID, kind: .approval, text: title, options: options)))
+  }
+
+  /// A form the agent asks the person to fill in (MCP-style elicitation).
+  /// One the chat cannot show is declined.
+  private func elicitation(id: JSONValue, _ params: JSONValue) async {
+    guard params["mode"]?.string ?? "form" == "form", let schema = params["requestedSchema"],
+          let fields = PromptForms.fields(schema), !fields.isEmpty else {
+      await connection.respond(id, result: .object(["action": .string("decline")]))
+      return
+    }
+    let promptID = UUID().uuidString.lowercased()
+    waiting[promptID] = .form(id: id, fields: fields)
+    emit.yield(.prompt(PromptForms.prompt(id: promptID, message: params["message"]?.string ?? "", fields: fields)))
   }
 
   // MARK: Shapes
