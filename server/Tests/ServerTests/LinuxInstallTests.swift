@@ -9,9 +9,9 @@ import Testing
 @Test
 func sshUsesTheInstalledRouteAndRefusesAnotherMachine() async throws {
   let install = LinuxInstall(bundle: URL(fileURLWithPath: "/"), instance: "check", port: 0, appVersion: "0", standIn: false)
-  let target = LinuxInstall.Target(host: "workstation.example.ts.net", user: "person", machineID: "machine-a")
+  let target = LinuxInstall.Target(host: "linux-machine.example.ts.net", user: "person", machineID: "machine-a")
   let arguments = try install.sshArguments(target, script: "echo changed")
-  #expect(Array(arguments.suffix(2).prefix(1)) == ["workstation.example.ts.net"])
+  #expect(Array(arguments.suffix(2).prefix(1)) == ["linux-machine.example.ts.net"])
   #expect(arguments.contains("person"))
   #expect(!arguments.contains { $0.hasPrefix("HostName") })
 
