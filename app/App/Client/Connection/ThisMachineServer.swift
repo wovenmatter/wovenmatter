@@ -10,7 +10,8 @@ import Foundation
 /// is its own), keeps its job file in its data folder so it never starts at
 /// login, and offers the stand-in runtime. It stays off the tailnet unless its
 /// data folder holds `tailnet-port` (written by `build_and_run.sh --port`):
-/// then it listens on that port and finds only servers on that port.
+/// then it listens on that port and finds only servers on that port, and on
+/// each port listed in `tailnet-peer-ports`, another instance on this Mac.
 enum ThisMachineServer {
     static var label: String { (Bundle.main.bundleIdentifier ?? "wovenmatter.desktop") + ".server" }
     static var dataFolder: URL { AppDataFolder.url }
@@ -58,6 +59,10 @@ enum ThisMachineServer {
             if let text = try? String(contentsOf: dataFolder.appending(path: "tailnet-port"), encoding: .utf8),
                let port = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
                 arguments += ["--listen", "auto", "--port", String(port)]
+                let peers = (try? String(contentsOf: dataFolder.appending(path: "tailnet-peer-ports"), encoding: .utf8)) ?? ""
+                for peer in peers.split(whereSeparator: \.isWhitespace) where Int(peer) != nil {
+                    arguments += ["--peer-port", String(peer)]
+                }
             } else {
                 arguments += ["--tailnet", "none"]
             }

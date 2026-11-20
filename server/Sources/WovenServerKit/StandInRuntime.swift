@@ -166,10 +166,10 @@ private final class StandInSession: RuntimeSession {
   }
 
   private static func mcpCall(socketPath: String, key: String, name: String, arguments: String) -> (text: String, failed: Bool) {
-    #if canImport(Darwin)
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    #else
+    #if canImport(Glibc)
     let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     #endif
     defer { close(fd) }
     var address = sockaddr_un()

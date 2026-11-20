@@ -2,7 +2,7 @@
 # Builds the Linux server release the Mac app carries and installs over SSH:
 # OUTPUT/linux-<arch>/woven-server.gz (statically linked, any distribution) and
 # OUTPUT/linux-<arch>/resources.tar.gz (Node, Pi Durable with its Linux
-# packages, the harness catalog and adapters), for x86_64 and aarch64.
+# packages, the harness catalog and adapters, the bots runtime), for x86_64 and aarch64.
 #
 # It cross-compiles on this Mac with the swift.org toolchain and its Static
 # Linux SDK (musl); Xcode's compiler cannot use that SDK. Every download is
@@ -113,7 +113,17 @@ for arch in x86_64 aarch64; do
   )
   find "$resources/default-agent/node_modules" -type f -name '*.map' -delete
   rsync -a --exclude=.DS_Store "$root/harnesses/" "$resources/harnesses/"
-  tar -czf "$release/resources.tar.gz" -C "$resources" node default-agent harnesses
+  # The bots runtime, so this machine can be the bots' home: its sources, the engine
+  # installer and its production packages for Linux, without its own copy of the SDK it
+  # loads from Pi Durable's (as prepare-bots.sh does for the Mac).
+  rsync -a --exclude=/node_modules --exclude=/test --exclude=.DS_Store --exclude='*.map' "$root/bots/" "$resources/bots/"
+  (
+    cd -P "$resources/bots"
+    PATH="$mac_node:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund --os=linux --cpu="$node_arch" --libc=glibc >/dev/null
+  )
+  find "$resources/bots/node_modules" -type f -name '*.map' -delete
+  python3 -I "$root/scripts/prune-bots-sdk.py" "$resources/bots"
+  tar -czf "$release/resources.tar.gz" -C "$resources" node default-agent harnesses bots
   echo "Built $release ($(du -sh "$release" | cut -f1))"
 done
 rm -rf "$built"; mv "$staging" "$built"

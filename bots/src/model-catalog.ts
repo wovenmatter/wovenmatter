@@ -15,10 +15,10 @@ import {
  * Pi's live model catalog for bots. pi-ai ships each provider's models as a list inside the
  * package, which is as new as the package; Pi itself keeps current by reading the catalog its
  * service publishes (`pi.dev`). Bots do the same through pi-ai's own hook (a provider's
- * `refreshModels`, a `ModelsStore`, `Models.refresh()`), under the rules the default agent and the
- * iPhone app apply (docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md, "Provider model metadata"): the same
- * request, the same checks, the same four hours, and no fetch at launch or on a timer (a start
- * reads a provider's catalog only when a profile names a model of it that is not known).
+ * `refreshModels`, a `ModelsStore`, `Models.refresh()`), under the rules the default agent
+ * applies: the same request, the same checks, the same four hours, and no fetch at launch or on
+ * a timer (a start reads a provider's catalog only when a profile names a model of it that is not
+ * known).
  *
  * The live catalog adds to the list pi-ai ships and wins where both name a model, as in Pi's own
  * coding agent. It never takes a shipped model away: a bot keeps running on the model it has.

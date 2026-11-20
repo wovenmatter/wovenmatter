@@ -1,11 +1,13 @@
 import Foundation
 import Synchronization
+import WovenProtocol
 
 /// The server's command line, shared by `woven-server` on Linux and the Mac
 /// app's own program run with `--server`:
 ///
 ///     DATA-FOLDER [--socket PATH|none] [--listen HOST:PORT|auto|none] [--port PORT] [--tailnet none]
 ///                 [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime] [--instance NAME]
+///                 [--peer-port PORT]...
 ///
 /// Opens the library in DATA-FOLDER, listens on a Unix socket for the UI on
 /// this machine (default DATA-FOLDER/server.sock) and on this machine's
@@ -14,7 +16,9 @@ import Synchronization
 /// server to itself: it neither listens for nor looks for other machines.
 /// New blank folders are made in `--folders` (default ~/Woven Matter).
 /// `--instance` names a development instance; servers it installs on other
-/// machines are that instance too (`woven-server-NAME`).
+/// machines are that instance too (`woven-server-NAME`). `--peer-port`, for
+/// development, also looks for a server on this machine's own tailnet address
+/// at that port, so two instances on one Mac find each other.
 /// Runs until SIGINT or SIGTERM, then stops cleanly, or until another machine
 /// removes this one; `run` then returns `removedStatus`, the exit status that
 /// says so.
@@ -45,6 +49,7 @@ public enum ServerCommand {
     var standIn = false
     var port = wovenPort
     var instance: String?
+    var peerPorts: [Int] = []
     while let option = arguments.first {
       arguments.removeFirst()
       func value() throws -> String {
@@ -68,12 +73,16 @@ public enum ServerCommand {
       case "--folders": foldersRoot = URL(fileURLWithPath: try value(), isDirectory: true)
       case "--stand-in-runtime": standIn = true
       case "--instance": instance = try value()
+      case "--peer-port":
+        guard let number = Int(try value()), (1...65535).contains(number) else { throw UsageError(description: "--peer-port takes a number") }
+        peerPorts.append(number)
       default: throw UsageError(description: "unknown option \(option)")
       }
     }
 
-    let tailnet: any Tailnet = alone ? NoTailnet() : TailscaleTailnet(port: port)
+    var tailnet: any Tailnet = alone ? NoTailnet() : TailscaleTailnet(port: port)
     let this = alone ? nil : try? await tailnet.thisMachine()
+    if let this, !peerPorts.isEmpty { tailnet = AlsoOnThisMachine(base: tailnet, this: this, ports: peerPorts) }
     var address: (host: String, port: Int)?
     switch alone ? "none" : listen {
     case "none":
@@ -98,6 +107,10 @@ public enum ServerCommand {
       runtimes: standardRuntimes(dataFolder: URL(fileURLWithPath: folder, isDirectory: true)) + (standIn ? [StandInRuntime()] : []),
       foldersRoot: foldersRoot)
     options.instance = instance
+    // A development instance on Linux runs its bots in its own engine, `woven-bots-engine-NAME`.
+    if let instance, ProcessInfo.processInfo.environment["WOVEN_BOTS_ENGINE_INSTANCE"] == nil {
+      setenv("WOVEN_BOTS_ENGINE_INSTANCE", instance, 1)
+    }
     options.offersStandIn = standIn
     let server = try await WovenServer.start(options)
     FileHandle.standardOutput.write(Data(("woven-server: machine \(server.machineID) on \(socketPath ?? "no socket")"
@@ -148,4 +161,21 @@ private struct NoTailnet: Tailnet {
   func caller(at address: String) async -> String? { nil }
   func machines() async throws -> [TailnetMachine] { [] }
   func thisMachine() async throws -> TailnetMachine { throw Alone() }
+}
+
+/// The tailnet, plus servers of other development instances on this machine's
+/// own address (`--peer-port`).
+private struct AlsoOnThisMachine: Tailnet {
+  let base: any Tailnet
+  let this: TailnetMachine
+  let ports: [Int]
+
+  func caller(at address: String) async -> String? { await base.caller(at: address) }
+  func thisMachine() async throws -> TailnetMachine { try await base.thisMachine() }
+  func devices() async throws -> [TailnetDevice] { try await base.devices() }
+
+  func machines() async throws -> [TailnetMachine] {
+    let others = (try? await base.machines()) ?? []
+    return others + ports.map { TailnetMachine(name: "\(this.name)-\($0)", host: this.host, port: $0) }
+  }
 }

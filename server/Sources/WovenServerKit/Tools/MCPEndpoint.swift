@@ -88,10 +88,10 @@ final class MCPEndpoint: Sendable {
   func start() throws {
     let path = keys.socketPath
     unlink(path)
-    #if canImport(Darwin)
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    #else
+    #if canImport(Glibc)
     let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     #endif
     guard fd >= 0 else { throw ToolFailure("The tool socket could not be made.") }
     var address = sockaddr_un()

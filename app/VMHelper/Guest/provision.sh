@@ -93,26 +93,30 @@ prepare_data_disk() {
     # sparse: nothing is written for space that bots never use.
     mkfs.ext4 -q -L woven-data -m 0 -i 65536 -E lazy_itable_init=1,lazy_journal_init=1,nodiscard "$device"
   fi
-  mkdir -p "$data" /var/lib/docker /var/lib/containerd
+  mkdir -p "$data"
   sed -i '/# woven-data$/d' /etc/fstab
   cat >>/etc/fstab <<EOF
 LABEL=woven-data $data ext4 defaults,noinit_itable,commit=2,x-systemd.device-timeout=60 0 2 # woven-data
-$data/docker /var/lib/docker none bind,x-systemd.requires-mounts-for=$data 0 0 # woven-data
-$data/containerd /var/lib/containerd none bind,x-systemd.requires-mounts-for=$data 0 0 # woven-data
 EOF
   systemctl daemon-reload
   mountpoint -q "$data" || mount "$data"
   resize2fs "$device" >/dev/null 2>&1 || true
   mkdir -p "$data/docker" "$data/containerd"
-  mountpoint -q /var/lib/docker || mount /var/lib/docker
-  mountpoint -q /var/lib/containerd || mount /var/lib/containerd
   if [ -f /etc/woven/disk-cap ]; then /usr/local/lib/woven/disk-cap.sh "$(cat /etc/woven/disk-cap)"; fi
 }
 
 install_docker() {
-  install -d -m 0755 /etc/docker /etc/apt/keyrings
+  install -d -m 0755 /etc/docker /etc/containerd /etc/apt/keyrings
+  # Docker's and containerd's data roots are on the data disk, so a new system
+  # disk (a guest update) finds the bots' volumes and images where they were.
+  # Written before the packages install, which then keep them.
+  cat >/etc/containerd/config.toml <<'EOF'
+root = "/var/lib/woven-data/containerd"
+disabled_plugins = ["cri"]
+EOF
   cat >/etc/docker/daemon.json <<'EOF'
 {
+  "data-root": "/var/lib/woven-data/docker",
   "log-driver": "local",
   "log-opts": { "max-size": "20m", "max-file": "3" },
   "live-restore": true,
@@ -152,7 +156,7 @@ EOF
     mkdir -p "/etc/systemd/system/$unit.d"
     cat >"/etc/systemd/system/$unit.d/woven.conf" <<'EOF'
 [Unit]
-RequiresMountsFor=/var/lib/docker /var/lib/containerd /var/lib/woven-data
+RequiresMountsFor=/var/lib/woven-data
 After=woven-egress.service
 Wants=woven-egress.service
 EOF

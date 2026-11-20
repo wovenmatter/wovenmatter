@@ -42,6 +42,7 @@ let usage = """
     bots                             the bots and their chats as the library holds them
     bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
     bots-follow [OPEN_JSON]          print the bots' status and messages (or one opened conversation's)
+    bots-transfer MACHINE            move the bots to that machine, as Settings → Bots does
   """
 
 func fail(_ message: String) -> Never {
@@ -387,6 +388,9 @@ do {
   case "bots-call":
     let request = try Wire.decoder.decode(JSONValue.self, from: Data(argument(0, "JSON").utf8))
     out(json(try await client.call(BotsCall(request: request))))
+  case "bots-transfer":
+    _ = try await client.call(TransferBots(targetMachineID: argument(0, "MACHINE")))
+    out("transferred")
   case "bots-follow":
     let open = try arguments.first.map { try Wire.decoder.decode(JSONValue.self, from: Data($0.utf8)) }
     let subscription = try await client.subscribe(SubscribeBots(open: open))
