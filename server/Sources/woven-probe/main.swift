@@ -29,6 +29,7 @@ let usage = """
     versions ID                      an artifact's version history
     trash ID | restore ID
     app-state ID KEY JSON            set one key of an app's saved state
+    setting KEY JSON                 set a synced setting, e.g. setting bots.home '"MACHINE"'
     databases | db-create NAME | db-execute ID SQL | db-query ID SQL
     bots                             the bots and their chats as the library holds them
     bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
@@ -325,6 +326,9 @@ do {
       out("chat \(chat.session.id)\t\(chat.kind.rawValue)\t\(chat.session.title)\tconversation \(chat.conversationID)"
           + (chat.parentConversationID.map { "\tparent \($0)" } ?? "") + (chat.session.pinned ? "\tpinned" : ""))
     }
+  case "setting":
+    let value = try Wire.decoder.decode(JSONValue.self, from: Data(argument(1, "JSON").utf8))
+    out(json(try await client.call(SetSetting(key: argument(0, "KEY"), value: value))))
   case "bots-call":
     let request = try Wire.decoder.decode(JSONValue.self, from: Data(argument(0, "JSON").utf8))
     out(json(try await client.call(BotsCall(request: request))))
