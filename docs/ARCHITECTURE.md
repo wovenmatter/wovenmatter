@@ -283,7 +283,9 @@ server offers it to the runtimes on its machine and carries the tools out. A
 tool that concerns another machine (a database it owns, a session it runs) is
 forwarded to that machine's server. Browser and computer-use tools are carried
 out by the UI on that Mac, because macOS ties those permissions to the app
-window; the server asks a connected UI to do them.
+window; the server asks a connected UI to do them. So is `preview_html`, which
+renders a page in the chat viewer's sandbox in a web view no window holds and
+returns a screenshot; it saves nothing.
 
 - A harness or Pi Durable starts a small local bridge, `harnesses/woven-mcp.mjs`,
   that speaks MCP over standard input and output and passes it to the server's

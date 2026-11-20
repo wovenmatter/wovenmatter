@@ -35,7 +35,8 @@ Library, start or message other sessions on any of your machines, talk to
 your bots, schedule tasks and timers, and use the browser in the Woven Matter
 window. The computer tool lets an agent see and use other apps on your Mac once
 Accessibility and Screen Recording are allowed in **Settings → Permissions &
-Access**. Browser and computer tools need the app open.
+Access**. Browser and computer tools, and an agent's preview of a page before
+it publishes it, need the app open.
 
 ## Attachments
 
