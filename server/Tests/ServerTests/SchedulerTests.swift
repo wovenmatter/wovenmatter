@@ -62,7 +62,7 @@ func anEntryFiresOnceAcrossARestart() async throws {
   await first.server.stop()
 
   let second = try await TestServer.start(folder: first.folder, store: store)
-  defer { Task { await second.server.stop() } }
+  defer { second.server.stopLater() }
   let again = try await second.connect()
   try await Task.sleep(for: .seconds(2))
   #expect(try await runs(again).count == 1)
@@ -85,7 +85,7 @@ func runsMissedWhileTheServerWasOffRunOnceLateThenCarryOn() async throws {
   // Ten minutes later: ten runs were missed.
   let later: TimeInterval = 600
   let second = try await TestServer.start(folder: first.folder, store: store, offset: later)
-  defer { Task { await second.server.stop() } }
+  defer { second.server.stopLater() }
   let again = try await second.connect()
   try await waitFor { try await runs(again).count >= 1 }
   try await Task.sleep(for: .seconds(1))
@@ -100,7 +100,7 @@ func runsMissedWhileTheServerWasOffRunOnceLateThenCarryOn() async throws {
 @Test(.timeLimit(.minutes(1)))
 func aGoalContinuesUntilTheAgentSaysItIsMet() async throws {
   let host = try await TestServer.start(store: StandInRuntime.NativeStore())
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let client = try await host.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
   _ = try await client.call(SetGoal(sessionID: session.id, goal: "The page builds."))

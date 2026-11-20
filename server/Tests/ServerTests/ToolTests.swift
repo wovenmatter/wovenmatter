@@ -56,7 +56,7 @@ private func messageFromAnotherSession(_ client: Client, in sessionID: String) a
 @Test(.timeLimit(.minutes(1)))
 func aSessionIsRefusedTheToolsOfAGroupItMayNotUse() async throws {
   let host = try await TestServer.start(name: "Studio")
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let client = try await host.connect()
   let caller = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Planner"))
   let target = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
@@ -73,7 +73,7 @@ func aToolForAnotherMachineIsForwardedToItsOwner() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(name: "Studio", tailnet: tailnetA, listen: true)
   let b = try await TestServer.start(name: "Laptop", tailnet: tailnetB, listen: true)
-  defer { Task { await a.server.stop(); await b.server.stop() } }
+  defer { a.server.stopLater(); b.server.stopLater() }
   tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
   await a.server.discoverMachines()
@@ -99,7 +99,7 @@ func aToolForAnotherMachineIsForwardedToItsOwner() async throws {
 @Test(.timeLimit(.minutes(1)))
 func aUIToolFailsCleanlyWithNoUIConnected() async throws {
   let host = try await TestServer.start(name: "Studio")
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let client = try await host.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Browsing"))
 

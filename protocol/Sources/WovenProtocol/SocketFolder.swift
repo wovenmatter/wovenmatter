@@ -67,5 +67,13 @@ public enum SocketFolder {
     }
   }
 
+  /// Removes the sockets `names` of `dataFolder`, then its directory unless
+  /// something else, such as another process's live socket, is still in it.
+  public static func remove(_ names: [String], for dataFolder: URL) {
+    let directory = directory(for: dataFolder)
+    for name in names { unlink(directory.appendingPathComponent(name).path) }
+    rmdir(directory.path)
+  }
+
   private static var parent: URL { URL(fileURLWithPath: "/tmp/woven-\(getuid())", isDirectory: true) }
 }

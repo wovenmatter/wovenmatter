@@ -3,6 +3,9 @@ import Synchronization
 import Testing
 import WovenLibrary
 import WovenProtocol
+#if canImport(Glibc)
+import Glibc
+#endif
 @testable import WovenServerKit
 
 private let appVersion = "test"
@@ -234,6 +237,13 @@ private struct TestServer {
     try? FileManager.default.removeItem(at: folder)
   }
 
+  /// `finish` for a `defer`: the sockets go now, the rest once the server stops.
+  func finishLater() {
+    try? FileManager.default.removeItem(at: SocketFolder.directory(for: folder))
+    unlink(socket)
+    Task { await finish() }
+  }
+
   func connect() async throws -> Client {
     let client = Client(transport: try await connectWebSocket(.unix(path: socket)))
     _ = try await client.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: appVersion))
@@ -262,7 +272,7 @@ private func json(_ text: String) -> JSONValue {
 func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   let runtime = StandInBotsRuntime()
   let home = try await TestServer.start(name: "Studio", runtime: runtime)
-  defer { Task { await home.finish() } }
+  defer { home.finishLater() }
   let client = try await home.connect()
   try await home.makeHome(client, runtime)
 
@@ -312,7 +322,7 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
 func callsAndOpenedConversationsPassThroughToTheRuntime() async throws {
   let runtime = StandInBotsRuntime()
   let home = try await TestServer.start(name: "Studio", runtime: runtime)
-  defer { Task { await home.finish() } }
+  defer { home.finishLater() }
   let client = try await home.connect()
   try await home.makeHome(client, runtime)
 
@@ -352,7 +362,7 @@ func anotherServerSendsUIsToTheHomeMachineAndForwardsCalls() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(name: "Studio", runtime: runtime, tailnet: tailnetA, listen: true)
   let b = try await TestServer.start(name: "Laptop", runtime: StandInBotsRuntime(), tailnet: tailnetB, listen: true)
-  defer { Task { await a.finish(); await b.finish() } }
+  defer { a.finishLater(); b.finishLater() }
   tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
   await a.server.discoverMachines()
@@ -430,9 +440,9 @@ private struct TransferSetup {
     return TransferSetup(a: a, b: b, runtimeA: runtimeA, runtimeB: runtimeB, filesA: filesA, filesB: filesB, onA: onA, onB: onB)
   }
 
-  func finish() async {
-    await a.finish()
-    await b.finish()
+  func finishLater() {
+    a.finishLater()
+    b.finishLater()
   }
 }
 
@@ -443,7 +453,7 @@ private func home(_ client: Client) async throws -> String? {
 @Test(.timeLimit(.minutes(1)))
 func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
   let setup = try await TransferSetup.start()
-  defer { Task { await setup.finish() } }
+  defer { setup.finishLater() }
   let (a, b) = (setup.a, setup.b)
   // What the person set on a chat goes with it.
   let before = try #require(try await setup.onA.call(ListSavedBots()).chats.first { $0.kind == .main })
@@ -495,7 +505,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
 @Test(.timeLimit(.minutes(1)))
 func aFailedTransferLeavesTheBotsRunningOnTheOldHome() async throws {
   let setup = try await TransferSetup.start(failImport: true)
-  defer { Task { await setup.finish() } }
+  defer { setup.finishLater() }
   let (a, b) = (setup.a, setup.b)
 
   await #expect(throws: ProtocolError.self) {
@@ -531,7 +541,7 @@ private func ready(_ client: Client) async throws {
 func aTransferGivenBackDuringTheInstallNeverStartsTheBotsOnTheTarget() async throws {
   let importing = Gate()
   let setup = try await TransferSetup.start(importing: importing)
-  defer { Task { await setup.finish() } }
+  defer { setup.finishLater() }
   let (a, b) = (setup.a, setup.b)
 
   let transfer = Task { try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID)) }
@@ -558,7 +568,7 @@ func aTransferGivenBackDuringTheInstallNeverStartsTheBotsOnTheTarget() async thr
 func onceTheTargetBeginsToCommitNothingGivesTheTransferBack() async throws {
   let committing = Gate()
   let setup = try await TransferSetup.start(committing: committing)
-  defer { Task { await setup.finish() } }
+  defer { setup.finishLater() }
   let (a, b) = (setup.a, setup.b)
 
   let transfer = Task { try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID)) }

@@ -138,10 +138,13 @@ struct LinuxInstall: Sendable {
     return machineID
   }
 
-  /// Stops and disables the unit and deletes everything it had there.
+  /// Stops and disables the unit and deletes everything it had there, its
+  /// socket directory under /tmp included.
   func uninstall(on target: Target) async throws {
     _ = try await ssh(target, script: """
       systemctl --user disable --now \(unit).service >/dev/null 2>&1 || true
+      sockets="$("$HOME/.local/share/\(unit)/release/woven-server" --socket-folder "$HOME/.local/share/\(unit)/data" 2>/dev/null)" || true
+      case "$sockets" in "/tmp/woven-$(id -u)/"?*) rm -rf "$sockets" ;; esac
       rm -f "$HOME/.config/systemd/user/\(unit).service"
       systemctl --user daemon-reload || true
       systemctl --user reset-failed \(unit).service >/dev/null 2>&1 || true

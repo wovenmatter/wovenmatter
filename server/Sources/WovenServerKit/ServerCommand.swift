@@ -19,6 +19,8 @@ import WovenProtocol
 /// machines are that instance too (`woven-server-NAME`). `--peer-port`, for
 /// development, also looks for a server on this machine's own tailnet address
 /// at that port, so two instances on one Mac find each other.
+/// `--socket-folder DATA-FOLDER` prints that data folder's socket directory
+/// instead, for an uninstall to remove it.
 /// Runs until SIGINT or SIGTERM, then stops cleanly, or until another machine
 /// removes this one; `run` then returns `removedStatus`, the exit status that
 /// says so.
@@ -34,6 +36,10 @@ public enum ServerCommand {
   @discardableResult
   public static func run(_ arguments: [String]) async throws -> Int32 {
     var arguments = arguments
+    if arguments.count == 2, arguments[0] == "--socket-folder" {
+      print(SocketFolder.directory(for: URL(fileURLWithPath: arguments[1], isDirectory: true)).path)
+      return 0
+    }
     guard let folder = arguments.first, !folder.hasPrefix("--") else {
       throw UsageError(description: "usage: DATA-FOLDER [--socket PATH|none] [--listen HOST:PORT|auto|none] [--port PORT] "
                        + "[--tailnet none] [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime] [--instance NAME]")

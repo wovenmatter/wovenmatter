@@ -51,7 +51,7 @@ private func linkedPair() async throws -> (owner: TestServer, other: TestServer,
 @Test(.timeLimit(.minutes(1)))
 func writeThroughAnotherServerIsCarriedOutByTheOwnerAndReadFromTheCopy() async throws {
   let (a, b, onB, database) = try await linkedPair()
-  defer { Task { await a.server.stop(); await b.server.stop() } }
+  defer { a.server.stopLater(); b.server.stopLater() }
 
   let written = try await onB.call(ExecuteDatabase(databaseID: database.id, sql: "INSERT INTO t VALUES (2), (3)"))
   #expect(written.changes == 2)
@@ -68,7 +68,7 @@ func writeThroughAnotherServerIsCarriedOutByTheOwnerAndReadFromTheCopy() async t
 @Test(.timeLimit(.minutes(1)))
 func writeWhileTheOwnerIsUnreachableFailsClearly() async throws {
   let (a, b, onB, database) = try await linkedPair()
-  defer { Task { await b.server.stop() } }
+  defer { b.server.stopLater() }
   await a.server.stop()
 
   let error = await #expect(throws: ProtocolError.self) {
@@ -82,7 +82,7 @@ func writeWhileTheOwnerIsUnreachableFailsClearly() async throws {
 @Test(.timeLimit(.minutes(1)))
 func writesCannotEscapeTheirDatabaseAndQueriesCannotWrite() async throws {
   let host = try await TestServer.start(name: "Studio")
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let client = try await host.connect()
   let database = try await client.call(CreateDatabase(name: "Readings"))
   _ = try await client.call(ExecuteDatabase(databaseID: database.id, sql: "CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)"))

@@ -88,7 +88,7 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsApprovalsAndUsage() async thr
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
   let host = try await Host.start(runtime: try fakeRuntime(store: store))
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let client = try await host.connect()
   let session = try await client.call(CreateSession(runtime: .codex, title: "Chat"))
   #expect(!session.directory.isEmpty && FileManager.default.fileExists(atPath: session.directory))
@@ -122,7 +122,7 @@ func aRuntimesQuestionReachesTheChatAndItsAnswerReturns() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
   let host = try await Host.start(runtime: try fakeRuntime(store: store))
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let client = try await host.connect()
   let session = try await client.call(CreateSession(runtime: .codex, title: "Chat"))
 
@@ -154,7 +154,7 @@ func acpSessionResumesAfterRestartAndSaysWhenTheRuntimeLostIt() async throws {
 
   // The runtime loses one native session while the server is down.
   let second = try await Host.start(folder: first.folder, runtime: runtime)
-  defer { Task { await second.server.stop() } }
+  defer { second.server.stopLater() }
   let handle = try await second.server.library.nativeSession(for: lost.id)!.handle
   try FileManager.default.removeItem(at: store.appendingPathComponent(handle))
   let again = try await second.connect()
@@ -193,7 +193,7 @@ func serverStoppedMidTurnLeavesOneNotice() async throws {
   await first.server.stop()
 
   let second = try await Host.start(folder: first.folder, runtime: StandInRuntime(store: store))
-  defer { Task { await second.server.stop() } }
+  defer { second.server.stopLater() }
   let items = try await (try await second.connect()).call(SessionItems(sessionID: session.id))
   let notices = items.compactMap { if case .notice(let notice) = $0.content { notice.kind } else { nil } }
   #expect(notices == [.interrupted])
@@ -213,7 +213,7 @@ func apiKeyIsSealedForEachMachineAndContentIsFetchedByDigest() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await Host.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)
   let b = try await Host.start(runtime: StandInRuntime(), tailnet: tailnetB, listen: true)
-  defer { Task { await a.server.stop(); await b.server.stop() } }
+  defer { a.server.stopLater(); b.server.stopLater() }
   tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
   await a.server.discoverMachines()

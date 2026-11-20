@@ -11,7 +11,7 @@ func noteWrittenByTwoWritersOnOneServerKeepsTheNewerAndTheOtherInHistory() async
                                     machineName: "test", tailnet: StandInTailnet(), runtimes: [StandInRuntime()])
   options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
   let server = try await WovenServer.start(options)
-  defer { Task { await server.stop() } }
+  defer { server.stopLater() }
   func connect() async throws -> Client {
     let client = Client(transport: try await connectWebSocket(.unix(path: socket)))
     _ = try await client.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: "test"))

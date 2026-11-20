@@ -2,6 +2,9 @@ import Foundation
 import Synchronization
 import WovenLibrary
 import WovenProtocol
+#if canImport(Glibc)
+import Glibc
+#endif
 
 /// The background server of one machine: the only thing that touches its
 /// library, the owner of everything that runs there, and the end of every
@@ -73,6 +76,8 @@ public final class WovenServer: Sendable {
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
   private let watcher = Mutex<Task<Void, Never>?>(nil)
+  let dataFolder: URL
+  let socketPath: String?
 
   public static func start(_ options: Options) async throws -> WovenServer {
     let library = try await Library.open(folder: options.dataFolder, machineName: options.machineName)
@@ -156,7 +161,8 @@ public final class WovenServer: Sendable {
       await library.close()
       throw error
     }
-    let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
+    let server = WovenServer(library: library, dataFolder: options.dataFolder, socketPath: options.socketPath,
+                             hello: hello, port: listeners.compactMap(\.port).first,
                              sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
                              endpoint: endpoint, scheduler: scheduler, titles: titles, keepAwake: keepAwake)
     pending.server.withLock { $0 = server }
@@ -168,10 +174,12 @@ public final class WovenServer: Sendable {
     return server
   }
 
-  private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
+  private init(library: Library, dataFolder: URL, socketPath: String?, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
                github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint, scheduler: Scheduler,
                titles: Titles, keepAwake: KeepAwake) {
     self.keepAwake = keepAwake
+    self.dataFolder = dataFolder
+    self.socketPath = socketPath
     self.endpoint = endpoint
     self.scheduler = scheduler
     self.titles = titles
@@ -218,6 +226,9 @@ public final class WovenServer: Sendable {
     for transport in connections.withLock({ Array($0.values) }) { transport.close() }
     await sessions.closeAll()
     await github.stop()
+    // While the library is still held, so no next server has made its sockets yet.
+    if let socketPath { unlink(socketPath) }
+    SocketFolder.remove(["server.sock", "tools.sock", "agent.sock", "runtime.sock"], for: dataFolder)
     await library.close()
   }
 

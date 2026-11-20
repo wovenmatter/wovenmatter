@@ -83,7 +83,7 @@ private func assistantTexts(_ items: [SessionItem]) -> [String] {
 func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async throws {
   let gate = StandInRuntime.Gate()
   let host = try await TestServer.start(runtime: StandInRuntime(gate: gate))
-  defer { Task { await host.server.stop() } }
+  defer { host.server.stopLater() }
   let early = try await host.connect()
   let session = try await early.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let first = try await early.subscribe(SubscribeSession(sessionID: session.id))
@@ -128,7 +128,7 @@ func secondServerReceivesTheSessionBySyncAndServesItReadOnly() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)
   let b = try await TestServer.start(runtime: StandInRuntime(), tailnet: tailnetB, listen: true)
-  defer { Task { await a.server.stop(); await b.server.stop() } }
+  defer { a.server.stopLater(); b.server.stopLater() }
   tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
   await a.server.discoverMachines()
@@ -167,7 +167,7 @@ func restartResumesTheSameNativeSession() async throws {
   await first.server.stop()
 
   let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store))
-  defer { Task { await second.server.stop() } }
+  defer { second.server.stopLater() }
   let again = try await second.connect()
   try await turn(again, session.id, "two")
 
@@ -189,7 +189,7 @@ func lostNativeSessionGivesANoticeAndNeverAFreshSession() async throws {
   store.forgetAll()
 
   let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store))
-  defer { Task { await second.server.stop() } }
+  defer { second.server.stopLater() }
   let again = try await second.connect()
   for _ in 0..<2 {
     let error = await #expect(throws: ProtocolError.self) {
