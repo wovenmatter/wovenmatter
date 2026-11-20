@@ -577,8 +577,6 @@ private let uiTools: [WovenTool] = [
                    "frame": text("A frame selector."), "name": text("Upload file name."), "mimeType": text("Upload type."),
                    "data": text("Upload content, base64."), "id": text("A download id."), "offset": integer("Byte offset.")],
                   required: ["action"]),
-    // It acts on this machine; a bot lives in its own.
-    forBots: false,
     groups: [.browser],
     run: { call in
       await call.tools.ui.carryOut("browser", arguments: call.arguments.value, sessionID: call.caller.sessionID)
@@ -608,8 +606,6 @@ private let uiTools: [WovenTool] = [
                    "includeScreenshot": flag("Include an image with the snapshot."),
                    "treeFormat": choice(["markdown", "elements", "both"], "How the tree is shown.")],
                   required: ["action"]),
-    // It acts on this machine; a bot lives in its own.
-    forBots: false,
     groups: [.computer],
     run: { call in
       await call.tools.ui.carryOut("computer", arguments: call.arguments.value, sessionID: call.caller.sessionID)
@@ -626,10 +622,9 @@ private let uiTools: [WovenTool] = [
                    "width": integer("240 to 1600 CSS pixels; default 728."),
                    "appearance": choice(["light", "dark"], "Default dark.")], required: ["html"]),
     readOnly: true,
-    // It reads this machine's files and renders on its network; a bot lives in its own machine.
-    forBots: false,
     run: { call in
-      let page = try HTMLPages.prepare(call.arguments.optionalString("html") ?? "")
+      // A bot runs in its own machine: nothing on this one is read for it.
+      let page = try HTMLPages.prepare(call.arguments.optionalString("html") ?? "", readingDisk: call.caller.botID == nil)
       let width = call.arguments.int("width") ?? 728
       guard call.arguments["width"] == nil || call.arguments.int("width") != nil, (240...1600).contains(width) else {
         throw ToolFailure("Give `width` from 240 to 1600.")

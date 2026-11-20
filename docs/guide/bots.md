@@ -120,8 +120,11 @@ page:
 **Woven MCP access** on the main Bots page opens **Settings → Woven MCP**.
 There **Give bots Woven MCP** turns the Woven tools on or off for every bot,
 and **Bot keys** revokes or reinstates one bot's access. With the Woven tools,
-a bot can show a chart or another page in its own chats, as agents do, with
-any images inside the page itself; in the Forum it answers in words.
+a bot can show a chart or another page in its own chats and preview it first,
+as agents do, with any images inside the page itself, since nothing on the
+host's disk is read for a bot's page; in the Forum it answers in words. A bot
+can also use the browser in the Woven Matter window and, when you have allowed
+it, your Mac's apps, as agents do.
 
 **Rebuild** recreates a bot's container from a clean image. Its files, home
 folder, restart list, browser profile, memory and conversations stay.

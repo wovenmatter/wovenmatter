@@ -54,25 +54,36 @@ func everyRuntimesReportOfTheCallIsKeptWithoutThePage() {
   }
 }
 
-@Test
-func aBotCannotUseTheHostsToolsAndNothingOnItIsReadForItsPage() async throws {
+@Test(.timeLimit(.minutes(1)))
+func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsPage() async throws {
   let host = try await PageServer.start(tailnet: StandInTailnet())
   defer { host.server.stopLater() }
   let tools = try #require(await host.server.bots.toolsForTests)
   let offered = tools.listing(forBots: true).compactMap { $0["name"]?.string }
-  #expect(offered.contains("render_html") && !offered.contains("preview_html"))
-  #expect(!offered.contains("browser") && !offered.contains("computer"))
+  #expect(["render_html", "preview_html", "browser", "computer"].allSatisfy(offered.contains))
   let bot = ToolCaller(machineID: host.server.machineID, botID: "b1")
-  // Each is refused for being a bot's call, not for want of a UI.
-  for (name, action) in [("preview_html", "html"), ("browser", "action"), ("computer", "action")] {
-    let result = await tools.call(name, arguments: .object([action: .string("tabs")]), caller: bot)
-    #expect(result == .error("Bots cannot use \(name)."))
-  }
+  #expect(await tools.call("list_bots", arguments: .object([:]), caller: bot) == .error("Bots cannot use list_bots."))
 
   let image = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).png")
   try (Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data(repeating: 7, count: 24)).write(to: image)
   defer { try? FileManager.default.removeItem(at: image) }
   let html = "<p>Hi</p><img src=\"\(image.path)\">"
+
+  let ui = try await host.connect()
+  let calls = try await ui.subscribe(SubscribeUITools())
+  let asked = Task { () -> UIToolCall? in
+    for try await call in calls.events {
+      _ = try await ui.call(AnswerUITool(id: call.id, result: ToolResult(content: [.text(#"{"contentHeight":120}"#)])))
+      return call
+    }
+    return nil
+  }
+  let previewed = await tools.call("preview_html", arguments: .object(["html": .string(html)]), caller: bot)
+  #expect(try #require(try await asked.value).arguments["html"]?.string == html)
+  guard case .text(let text)? = previewed.content.first else { Issue.record("No preview text"); return }
+  let output = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
+  #expect(output["missingImages"]?.array == [.string(image.path)])
+
   let result = await tools.call("render_html", arguments: .object(["html": .string(html)]), caller: bot)
   #expect(!result.isError)
   let digest = try #require(result.meta?["wovenPage"]?["digest"]?.string)
