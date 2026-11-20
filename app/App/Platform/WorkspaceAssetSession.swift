@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import WovenProtocol
 
 /// Lives above the pane's SwiftUI branches, so chat selection, resizing and
 /// temporary utility screens cannot destroy browser sessions.

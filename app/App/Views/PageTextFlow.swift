@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 struct PageTextFlow: View {
     @Binding var document: NoteDocument

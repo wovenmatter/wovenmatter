@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 /// A note's retained versions, including the side that lost when two machines
 /// edited it apart.

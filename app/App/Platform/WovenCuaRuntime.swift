@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import WovenProtocol
 
 /// The signed GUI spawns the bundled driver directly so macOS attributes its
 /// permissions to Woven Matter. Neither agents nor the background server receive

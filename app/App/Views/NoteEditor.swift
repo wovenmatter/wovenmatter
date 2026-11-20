@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import WovenProtocol
 
 private extension NSAttributedString.Key {
     static let noteBlockID = Self("wovenmatter.note.block-id")

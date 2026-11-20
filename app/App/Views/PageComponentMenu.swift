@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WovenProtocol
 
 /// One entry in a Page menu, rendered by SwiftUI menus and AppKit context menus alike.
 indirect enum PageMenuEntry {

@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 struct PageCursor: Equatable {
     var selection: Set<String>

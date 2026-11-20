@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A note, page or app while it is open: its title and its document as the
 /// server holds it, with this Mac's edits applied.

@@ -3,6 +3,7 @@ import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import WovenProtocol
 
 /// Images on a Page are stored in the Page itself, made small enough to fit
 /// beside its writing. They come from the library's saved images, from Files,

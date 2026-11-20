@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A pane owns one decoded document. Repeated binding reads (including each
 /// spreadsheet cell) reuse it until the actual persisted/draft source changes.

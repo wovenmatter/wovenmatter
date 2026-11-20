@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 /// A task on a Page is one line: a title, optional instructions, and who it
 /// is assigned to. Assigning never sends; Send starts each agent's or bot's own

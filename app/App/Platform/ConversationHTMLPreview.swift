@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import WovenProtocol
 
 /// A private ephemeral browser, separate from the user's browser tabs.
 @MainActor final class ConversationHTMLPreview {

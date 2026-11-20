@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 struct PageAssetEmbed: View {
     @Bindable var model: ApplicationModel

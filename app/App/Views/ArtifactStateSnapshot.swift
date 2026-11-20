@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// The WebKit document sees a value projection, never host persistence objects.
 struct DesktopArtifactStateSnapshot: Encodable, Equatable {

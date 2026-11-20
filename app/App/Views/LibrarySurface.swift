@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 struct LibrarySurface: View {
     @Environment(\.wovenTheme) private var theme

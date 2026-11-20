@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// Whether a machine holding databases is this Mac or another machine.
 enum DatabaseSourceKind: String, CaseIterable, Sendable {

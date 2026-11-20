@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// Immutable, bounded metadata captured when Send is pressed. It conveys
 /// awareness, never page contents, authentication or permission to use tools.

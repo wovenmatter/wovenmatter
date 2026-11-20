@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WovenProtocol
 
 enum WorkspaceListMode: String, CaseIterable {
     case chats

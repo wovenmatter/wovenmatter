@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WovenProtocol
 
 /// Open notes, pages and apps: their documents, edits, version history, app state
 /// and linked database rows. Every machine edits a document through its own

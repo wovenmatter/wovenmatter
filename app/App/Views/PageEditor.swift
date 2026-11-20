@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenProtocol
 
 /// A Page is a document. Rich text stays in ordinary contiguous Notes editors;
 /// sections, tasks, images and embedded artifacts provide the boundaries between those flows.

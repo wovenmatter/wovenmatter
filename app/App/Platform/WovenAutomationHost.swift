@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A browser, computer-use or HTML-preview tool call this Mac's server asks a
 /// connected UI to carry out. macOS ties those permissions to the app window,

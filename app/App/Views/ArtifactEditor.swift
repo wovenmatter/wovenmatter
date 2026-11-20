@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import WovenProtocol
 
 struct SpreadsheetEditor: View {
     @Binding var document: NoteDocument

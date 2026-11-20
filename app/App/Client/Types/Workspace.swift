@@ -1,4 +1,5 @@
 import Foundation
+import WovenProtocol
 
 /// A name plus a directory on one machine. It belongs to that machine.
 struct WorkspaceFolderRecord: Identifiable, Hashable, Sendable {

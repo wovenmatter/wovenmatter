@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import WovenProtocol
 
 final class ScrollHoverCoordinator: @unchecked Sendable {
     var isScrolling = false

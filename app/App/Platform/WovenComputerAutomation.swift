@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import WovenProtocol
 
 /// All desktop operations use Cua. Woven retains caller identity, admission,
 /// cancellation and inline-image limits; agents never receive the driver socket.
