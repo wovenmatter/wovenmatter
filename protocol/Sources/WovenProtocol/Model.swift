@@ -536,9 +536,13 @@ public struct SessionConfiguration: Codable, Sendable, Hashable {
   public var thinkingLevels: [SessionOption]
   public var permissionModes: [SessionOption]
   public var commands: [SessionCommand]
+  /// The session's goal, so a goal set or cleared from any UI reaches every
+  /// open view at once.
+  public var goal: String?
 
   public init(model: String? = nil, thinking: String? = nil, permission: String? = nil, models: [SessionOption] = [],
-              thinkingLevels: [SessionOption] = [], permissionModes: [SessionOption] = [], commands: [SessionCommand] = []) {
+              thinkingLevels: [SessionOption] = [], permissionModes: [SessionOption] = [], commands: [SessionCommand] = [],
+              goal: String? = nil) {
     self.model = model
     self.thinking = thinking
     self.permission = permission
@@ -546,6 +550,7 @@ public struct SessionConfiguration: Codable, Sendable, Hashable {
     self.thinkingLevels = thinkingLevels
     self.permissionModes = permissionModes
     self.commands = commands
+    self.goal = goal
   }
 }
 

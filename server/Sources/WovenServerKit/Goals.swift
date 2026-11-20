@@ -47,6 +47,7 @@ enum Goals {
     let goal = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
     let value = goal?.isEmpty == false ? goal : nil
     _ = try await library.updateSession(sessionID, goal: .some(value))
+    await host.goalChanged(value)
     if let value {
       // A turn already running continues toward it when it ends.
       do {

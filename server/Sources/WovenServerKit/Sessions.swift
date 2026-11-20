@@ -50,6 +50,8 @@ final class RuntimeConfigurations: Sendable {
 
   func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
     guard !configuration.models.isEmpty || !configuration.permissionModes.isEmpty else { return }
+    var configuration = configuration
+    configuration.goal = nil
     known.withLock { $0[kind] = configuration }
   }
 
@@ -241,6 +243,7 @@ actor SessionHost {
     let id = UUID()
     subscribers[id] = continuation
     continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
+    configuration.goal = session.goal
     var shown = configuration
     if live == nil {
       shown.model = shown.model ?? session.model
@@ -304,6 +307,7 @@ actor SessionHost {
     defer { leave() }
     guard let goal = try await library.session(sessionID)?.goal else { throw ProtocolError(.notFound, "This session has no goal.") }
     _ = try await library.updateSession(sessionID, goal: .some(nil))
+    goalChanged(nil)
     let account = evidence.trimmingCharacters(in: .whitespacesAndNewlines)
     try await finish(.notice(Notice(kind: .goalMet, text: "Goal met: \(goal)" + (account.isEmpty ? "" : "\n\n" + account))),
                      id: UUID().uuidString.lowercased())
@@ -537,7 +541,16 @@ actor SessionHost {
     }
   }
 
+  /// Tells every open view the session's goal now.
+  func goalChanged(_ goal: String?) {
+    guard goal != configuration.goal else { return }
+    configuration.goal = goal
+    broadcast(.configuration(configuration))
+  }
+
   private func adopt(_ configuration: SessionConfiguration) {
+    var configuration = configuration
+    configuration.goal = self.configuration.goal
     guard configuration != self.configuration else { return }
     self.configuration = configuration
     configurations.set(runtime.kind, configuration)
