@@ -171,3 +171,22 @@ private func contents(_ library: Library) async throws -> Set<SyncRow> {
   }
   #expect(try await contents(a) == contents(b))
 }
+
+@Test func editOnAMachineWhoseClockIsFarBehindStillReplacesTheRowEverywhere() async throws {
+  let a = try await makeLibrary("a"), b = try await makeLibrary("b")
+  try await a.setSetting("theme", to: .string("dark"))
+  // A's clock runs an hour fast: its row carries a stamp an hour ahead.
+  let ahead = Int64(Date().timeIntervalSince1970 * 1000) + 3_600_000
+  let digits = String(ahead, radix: 16)
+  let stamp = String(repeating: "0", count: 12 - digits.count) + digits + ".000000." + a.machineID
+  var rows = try await a.pull(after: 0).rows
+  rows = rows.map { $0.table == "settings" ? SyncRow(table: $0.table, id: $0.id, stamp: stamp, deleted: $0.deleted, values: $0.values) : $0 }
+  try await a.apply(SyncPage(rows: rows, next: 0, more: false), from: b.machineID)
+  try await sync(b, from: a)
+
+  try await b.setSetting("theme", to: .string("light"))
+  try await sync(a, from: b)
+
+  for library in [a, b] { #expect(try await library.setting("theme")?.value == .string("light")) }
+  #expect(try await contents(a) == contents(b))
+}

@@ -41,7 +41,8 @@ struct Stamp: Equatable {
 /// The library's clock. Each local write gets a stamp later than every stamp
 /// this library has written, and than every stamp it has received unless that
 /// stamp is further ahead of this machine's wall clock than `maxLead`: a
-/// machine whose clock runs fast cannot drag the others' clocks with it.
+/// machine whose clock runs fast cannot drag the others' clocks with it. A
+/// write that replaces a row is always stamped later than that row.
 struct HybridClock {
   /// How far a received stamp may move this clock ahead of the wall clock.
   static let maxLead: Int64 = 5 * 60 * 1000
@@ -54,7 +55,14 @@ struct HybridClock {
     self.last = Stamp(text: last)
   }
 
-  mutating func tick(now: Date = Date()) -> String {
+  /// A stamp for a local write. With `over`, the stamp of the row being
+  /// replaced, it is also later than that stamp, however far ahead it is,
+  /// so the write always replaces that row on every machine.
+  mutating func tick(over replaced: String? = nil, now: Date = Date()) -> String {
+    if let floor = replaced.flatMap(Stamp.init(text:)),
+       last.map({ ($0.time, $0.count) < (floor.time, floor.count) }) ?? true {
+      last = Stamp(time: floor.time, count: floor.count, machine: machine)
+    }
     let wall = Self.millis(now)
     let next: Stamp
     if let last, last.time >= wall {

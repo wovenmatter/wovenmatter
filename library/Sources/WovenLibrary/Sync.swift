@@ -94,12 +94,6 @@ extension SyncRow {
   }
 
   var approximateSize: Int {
-    values.values.reduce(id.utf8.count + stamp.utf8.count + 64) { total, value in
-      switch value {
-      case .text(let text): total + text.utf8.count
-      case .blob(let data): total + data.count * 4 / 3
-      default: total + 16
-      }
-    }
+    id.utf8.count + stamp.utf8.count + Writer.size(of: values)
   }
 }

@@ -85,7 +85,12 @@ final class Writer {
     }
     let declared = Set(table.columns.map(\.name))
     var columns = values.filter { declared.contains($0.key) }
-    let stamp = clock.tick()
+    // Every row must travel in one sync message, so one too large is refused here.
+    let whole = (current?.values(excluding: []) ?? [:]).merging(columns) { _, new in new }
+    guard Self.size(of: whole) <= Self.maximumRowSize else {
+      throw LibraryError(.invalid, "This \(tableName) row is too large to sync.")
+    }
+    let stamp = clock.tick(over: current?.text("stamp"))
     columns["stamp"] = .text(stamp)
     columns["changed"] = .integer(nextChanged())
     if table.keepsLoser {
@@ -114,7 +119,7 @@ final class Writer {
       try put(table.name, id: id, Self.cleared(table, keeping: key))
       return
     }
-    try writeMarker(table, id: id, stamp: clock.tick())
+    try writeMarker(table, id: id, stamp: clock.tick(over: current.text("stamp")))
     try cascade(from: table, id: id)
   }
 
@@ -151,8 +156,15 @@ final class Writer {
     }
 
     switch table.rule {
-    case .local, .appendOnly:
+    case .local:
       return false
+    case .appendOnly:
+      // Two machines can save the same version for different reasons; every
+      // library keeps the one that ranks first, so all end with the same row.
+      guard table.name == Self.versionsTable,
+            Self.reasonRank(incoming.values["reason"]) < Self.reasonRank(local["reason"]) else { return false }
+      try store(table, incoming)
+      return true
     case .newestWins:
       guard incoming.stamp > localStamp else { return false }
       try store(table, incoming)
@@ -191,6 +203,30 @@ final class Writer {
   }
 
   // MARK: Helpers
+
+  /// The largest row written, well inside the 64 MB a message may be once
+  /// encoded as JSON.
+  static let maximumRowSize = 16 << 20
+
+  /// About how large a row is as it travels.
+  static func size(of values: [String: SQLValue]) -> Int {
+    values.values.reduce(64) { total, value in
+      switch value {
+      case .text(let text): total + text.utf8.count
+      case .blob(let data): total + data.count * 4 / 3
+      default: total + 16
+      }
+    }
+  }
+
+  private static let versionsTable = "artifact_versions"
+
+  /// A version lost in a conflict ranks first, then one saved before a
+  /// restore, then a checkpoint.
+  private static func reasonRank(_ value: SQLValue?) -> Int {
+    guard case .text(let reason) = value ?? .null else { return 0 }
+    return ["conflict", "restore", "checkpoint"].firstIndex(of: reason) ?? 0
+  }
 
   private func nextChanged() -> Int64 {
     counter += 1
@@ -242,21 +278,21 @@ final class Writer {
   private func cascade(from parent: Table, id: String) throws {
     for child in Schema.synced {
       for link in child.parents where link.table == parent.name {
-        let ids = try db.query("SELECT id FROM \(child.name) WHERE \(link.column) = ? AND deleted = 0", [.text(id)])
-          .compactMap { $0.text("id") }
-        for childID in ids {
+        let rows = try db.query("SELECT id, stamp FROM \(child.name) WHERE \(link.column) = ? AND deleted = 0", [.text(id)])
+        for row in rows {
+          guard let childID = row.text("id") else { continue }
           if child.rule == .appendOnly {
             try db.run("DELETE FROM \(child.name) WHERE id = ?", [.text(childID)])
           } else if let key = child.naturalKey {
             var columns = Self.cleared(child, keeping: key)
-            columns["stamp"] = .text(clock.tick())
+            columns["stamp"] = .text(clock.tick(over: row.text("stamp")))
             columns["changed"] = .integer(nextChanged())
             let names = Array(columns.keys)
             try db.run("UPDATE \(child.name) SET \(names.map { "\($0) = ?" }.joined(separator: ", ")) WHERE id = ?",
                        names.map { columns[$0]! } + [.text(childID)])
             continue
           } else {
-            try writeMarker(child, id: childID, stamp: clock.tick())
+            try writeMarker(child, id: childID, stamp: clock.tick(over: row.text("stamp")))
           }
           try cascade(from: child, id: childID)
         }
@@ -280,7 +316,9 @@ final class Writer {
                  values: [String: SQLValue], reason: String = "conflict") throws -> Bool {
     let history = try synced(historyName)
     let versionID = "\(id):\(stamp)"
-    guard try row(history.name, versionID) == nil, let link = history.parents.first(where: { $0.table == table.name }) else {
+    let existing = try row(history.name, versionID)
+    guard existing.map({ Self.reasonRank(.text(reason)) < Self.reasonRank($0["reason"]) }) ?? true,
+          let link = history.parents.first(where: { $0.table == table.name }) else {
       return false
     }
     var columns: [String: SQLValue] = [
@@ -291,7 +329,7 @@ final class Writer {
     for column in history.columns where columns[column.name] == nil {
       columns[column.name] = values[column.name] ?? column.fallback ?? .null
     }
-    try insert(history.name, columns, replacing: false)
+    try insert(history.name, columns, replacing: existing != nil)
     return true
   }
 }
