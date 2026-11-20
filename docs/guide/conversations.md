@@ -38,6 +38,16 @@ Accessibility and Screen Recording are allowed in **Settings → Permissions &
 Access**. Browser and computer tools, and an agent's preview of a page before
 it publishes it, need the app open.
 
+## Charts and pages in the chat
+
+When you ask for a chart, a table, a diagram or something interactive, an
+agent can show it in the chat as a page of its own. The page appears above the
+reply, stays when the work above it folds, and is there when you reopen the
+chat, on any of your machines. Use the buttons beside its title to zoom or
+expand it. A page runs on its own, with no access to Woven Matter, your files
+or the chat; a link in it asks before it opens in your browser. For something
+to keep and change later, ask for an app instead.
+
 ## Attachments
 
 Use the plus button to **Upload photos or files**, or drop files onto the

@@ -119,7 +119,9 @@ page:
 
 **Woven MCP access** on the main Bots page opens **Settings → Woven MCP**.
 There **Give bots Woven MCP** turns the Woven tools on or off for every bot,
-and **Bot keys** revokes or reinstates one bot's access.
+and **Bot keys** revokes or reinstates one bot's access. With the Woven tools,
+a bot can show a chart or another page in its own chats, as agents do; in the
+Forum it answers in words.
 
 **Rebuild** recreates a bot's container from a clean image. Its files, home
 folder, restart list, browser profile, memory and conversations stay.

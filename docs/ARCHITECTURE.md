@@ -139,8 +139,9 @@ later for a deleted parent are refused. Settings and sealed secrets are the
 exception: they are keyed by name, so they are never deleted. Unsetting one
 writes an empty value, and the newest write wins as usual.
 
-Large content (attachments, images, database copies) is stored by content
-digest in a file store beside the library and fetched by digest when needed.
+Large content (attachments, images, database copies, the pages agents show in
+chats) is stored by content digest in a file store beside the library and
+fetched by digest when needed.
 
 ### What syncs how
 
@@ -194,6 +195,16 @@ behind one adapter interface in the server and are treated alike:
   turn is stopped, what was said so far is saved as the finished item.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
+- An agent shows a chart, a table or anything interactive with the Woven tool
+  `render_html`: one self-contained page, at most 512,000 characters, with its
+  absolute local image paths embedded (each a real image of at most 10 MiB, the
+  page at most 25 MiB) on the machine the session runs on. The page is stored
+  once, in the content store; the session gets one small item, `htmlPage`
+  (title, starting height, digest), saved when the tool is called, after the
+  reply so far. The runtime's own report of the call keeps only the page's
+  length, and the chat shows the page in its place. The chat shows it above the
+  reply in an opaque sandboxed frame, with no access to the app, its tools or
+  the session, and a machine that does not hold it fetches it by digest.
 - A client that subscribes gets the newest 200 finished items, the item in
   progress if there is one, then live events. Older items are fetched a page
   at a time as the person scrolls back.
@@ -294,7 +305,7 @@ returns a screenshot; it saves nothing.
   is calling. The bots runtime asks for the tools over its own connection to
   the server.
 - The tools are in groups, and each session is offered only the groups it may
-  use.
+  use. A tool in no group (goals, places, `render_html`) is always offered.
 - Agents outside Woven Matter on that machine can use the same bridge without a
   key, only while the person turns that on, and only with the groups chosen
   for them.
@@ -322,7 +333,9 @@ transfer.
   machine's server. A server forwards a bots call to the home machine only when
   an agent on its own machine makes one through the Woven MCP.
 - Bot chats and Forum posts are saved to the library like every other
-  transcript, so they can be read when the home machine is away.
+  transcript, so they can be read when the home machine is away. A page a bot
+  shows in its own chat is saved there as an `htmlPage` item in place of its
+  call; Forum posts are text, so `render_html` is refused in the Forum.
 - The bots folder on the home machine holds the bots' own database (bots,
   chats, memories, the Forum, schedules) and the model profiles. Nothing in it
   is tied to that machine. Each bot's files are a volume in that machine's
