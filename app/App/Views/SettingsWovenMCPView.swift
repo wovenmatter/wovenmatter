@@ -19,7 +19,6 @@ struct SettingsWovenMCPView: View {
         ) {
             WorkspaceToolDefaultsCard(tools: model.agentTools, onOpenPermissions: onOpenPermissions)
             SettingsMCPAccessSection(settings: model.settings)
-            ExecutorConnectionsCard(model: model, tools: model.agentTools)
         }
     }
 }

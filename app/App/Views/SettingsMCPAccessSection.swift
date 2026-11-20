@@ -8,7 +8,7 @@ struct SettingsMCPAccessSection: View {
     private var access: WovenMCPAccess? { settings.mcpAccess }
     private var busy: Bool { settings.mcpAccessBusy }
     private var exposedCount: Int {
-        WorkspaceToolGroup.configurableCases.filter { access?.groups.contains($0) == true }.count
+        WorkspaceToolGroup.allCases.filter { access?.groups.contains($0) == true }.count
     }
 
     var body: some View {
@@ -40,8 +40,8 @@ struct SettingsMCPAccessSection: View {
                     .disabled(busy)
             }
             if let access, access.isEnabled {
-                SettingsSummaryRow("Tools exposed", value: "\(exposedCount) of \(WorkspaceToolGroup.configurableCases.count)") {
-                    ForEach(WorkspaceToolGroup.configurableCases) { group in
+                SettingsSummaryRow("Tools exposed", value: "\(exposedCount) of \(WorkspaceToolGroup.allCases.count)") {
+                    ForEach(WorkspaceToolGroup.allCases) { group in
                         Toggle(group.title, isOn: Binding(get: { settings.mcpAccess?.groups.contains(group) ?? false },
                             set: { value in Task { await settings.setMCPAccessGroup(group, enabled: value) } }))
                     }

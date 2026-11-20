@@ -197,12 +197,6 @@ struct ConversationComposer: View {
                 .scrollIndicators(.never)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let agentTools, let sessionID, !agentTools.policy(for: sessionID).enabled.contains(.history),
-               attachments.contains(where: { if case .reference(let reference) = $0 { return reference.kind == .conversation }; return false }) {
-                Text("Conversation history is off. Attached sessions grant read-only access to those sessions only.")
-                    .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             if isCollapsed {
                 HStack(alignment: .bottom, spacing: 2) {
                     composerTextEditor(maximumVisibleLines: 3)

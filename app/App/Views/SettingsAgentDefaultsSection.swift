@@ -31,7 +31,7 @@ struct SettingsAgentDefaultsSection: View {
     }
     private var toolsEnabled: Bool { !enabledTools.subtracting(["goals"]).isEmpty }
     private var toolsSummary: String {
-        let groups = WorkspaceToolGroup.configurableCases
+        let groups = WorkspaceToolGroup.allCases
         let count = groups.filter { enabledTools.contains($0.rawValue) }.count
         return count == 0 ? "Off" : "\(count) of \(groups.count) tools"
     }
@@ -91,7 +91,7 @@ struct SettingsAgentDefaultsSection: View {
                 ? WorkspaceToolSettings().enabledByDefault.map(\.rawValue).sorted() : []))
         }))
         if toolsEnabled {
-            ForEach(WorkspaceToolGroup.configurableCases) { group in
+            ForEach(WorkspaceToolGroup.allCases) { group in
                 Toggle(group.title, isOn: Binding(get: { enabledTools.contains(group.rawValue) }, set: { enabled in
                     var tools = enabledTools
                     if enabled { tools.insert(group.rawValue) } else { tools.remove(group.rawValue) }

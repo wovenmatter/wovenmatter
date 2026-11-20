@@ -546,7 +546,6 @@ struct ConversationRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibility.label)
         .accessibilityValue(accessibility.value
-            + (appModel?.agentTools.relationships[conversation.id]?.coordinatorID != nil ? ", actively coordinated" : "")
             + (appModel?.agentTools.timers.contains(where: { $0.sessionID == conversation.id && !$0.isPaused }) == true ? ", active timer" : ""))
         .accessibilityHint(accessibility.hint)
         .scrollAwareHover($hovered, token: "conversation:\(conversation.id)")

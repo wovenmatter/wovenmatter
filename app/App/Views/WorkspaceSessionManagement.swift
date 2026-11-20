@@ -3,34 +3,11 @@ import SwiftUI
 struct WorkspaceSessionManagementControls: View {
     @Bindable var tools: AgentToolsStore
     @Environment(\.workspaceApplicationModel) private var model
-    @Environment(\.openWorkspaceConversation) private var open
     let sessionID: String
     @State private var editingTimer: WorkspaceSessionTimer?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            let relationship = tools.relationships[sessionID]
-            if let coordinator = relationship?.coordinatorID {
-                Divider()
-                Button("Managed by \(title(coordinator))") { open(coordinator) }
-                    .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
-                Toggle("Notify coordinator", isOn: Binding(get: { tools.relationships[sessionID]?.notificationsEnabled ?? true },
-                    set: { enabled in Task { await tools.setNotifications(sessionID: sessionID, enabled: enabled) } }))
-                Button("End coordination") { Task { await tools.endCoordination(sessionID: sessionID) } }
-                    .buttonStyle(SettingsQuietButtonStyle())
-            }
-            let managed = tools.relationships.values.filter { $0.coordinatorID == sessionID }.sorted { title($0.sessionID) < title($1.sessionID) }
-            if !managed.isEmpty {
-                Divider()
-                Text("Managing \(managed.count) \(managed.count == 1 ? "session" : "sessions")").font(.system(size: 12, weight: .medium))
-                ForEach(managed, id: \.sessionID) { relation in
-                    HStack {
-                        Button(title(relation.sessionID)) { open(relation.sessionID) }.lineLimit(1).buttonStyle(.plain)
-                        Spacer()
-                        Button("Release") { Task { await tools.endCoordination(sessionID: relation.sessionID) } }.buttonStyle(.plain)
-                    }
-                }
-            }
             let timers = tools.timers.filter { $0.sessionID == sessionID }
             let enabled = tools.policy(for: sessionID).enabled.contains(.timers)
             if enabled || !timers.isEmpty {
@@ -38,8 +15,11 @@ struct WorkspaceSessionManagementControls: View {
                 HStack {
                     Text("Session timers").font(.system(size: 12, weight: .medium))
                     Spacer()
-                    Button("Add") { editingTimer = .init(sessionID: sessionID, instruction: "", nextFireAt: Date().addingTimeInterval(300)) }
-                        .buttonStyle(.plain).disabled(!enabled)
+                    Button("Add") {
+                        if let machineID { editingTimer = .init(sessionID: sessionID, machineID: machineID, instruction: "",
+                                                                nextFireAt: Date().addingTimeInterval(300)) }
+                    }
+                    .buttonStyle(.plain).disabled(!enabled || machineID == nil)
                 }
                 ForEach(timers) { timer in
                     VStack(alignment: .leading, spacing: 5) {
@@ -63,9 +43,8 @@ struct WorkspaceSessionManagementControls: View {
             WorkspaceTimerEditor(tools: tools, initial: timer)
         }
     }
-    private func title(_ id: String) -> String {
-        model?.workspace.workspaceOverview?.conversations.first { $0.id == id }?.title ?? "Unavailable session"
-    }
+
+    private var machineID: String? { model?.workspace.conversation(id: sessionID)?.machineID }
 }
 
 private struct WorkspaceTimerEditor: View {

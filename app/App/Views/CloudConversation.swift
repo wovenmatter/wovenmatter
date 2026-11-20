@@ -7,25 +7,6 @@ private struct ConversationMessageRow: Identifiable {
     var id: String { layout.id }
 }
 
-private enum ConversationDisplayRow: Identifiable {
-    case message(ConversationMessageRow)
-    case receipt(WorkspaceSessionDelivery)
-    case incomingCommand(WorkspaceSessionDelivery)
-
-    var id: String {
-        switch self {
-        case .message(let row): row.id
-        case .receipt(let receipt): WorkspaceConversationTimelineItem.receipt(receipt).id
-        case .incomingCommand(let receipt): WorkspaceConversationTimelineItem.incomingCommand(receipt).id
-        }
-    }
-
-    var spacingBefore: Double {
-        if case .message(let row) = self { return row.layout.spacingBefore }
-        return 32
-    }
-}
-
 struct CloudConversation: View {
     @Environment(\.openDocumentPreview) private var openPreview
     @Environment(\.wovenTheme) private var theme
@@ -52,7 +33,6 @@ struct CloudConversation: View {
     let onCommandNavigation: (ComposerNavigationDirection) -> Bool
     /// Starts a new chat in this one's place, when its native session is gone.
     var onNewSession: (() -> Void)? = nil
-    @State private var toolObservationToken = UUID()
     @State private var scrollState = ConversationScrollState()
     @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
@@ -89,16 +69,9 @@ struct CloudConversation: View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
         let visibleMessages = self.visibleMessages
-        let timeline = WorkspaceConversationTimelineItem.weave(messages: visibleMessages,
-            receipts: conversation.flatMap { model.agentTools.receipts[$0.id] } ?? [], sessionID: conversation?.id ?? "")
-        let rows = timeline.flatMap { item -> [ConversationDisplayRow] in
-            switch item {
-            case .receipt(let receipt): return [.receipt(receipt)]
-            case .incomingCommand(let receipt): return [.incomingCommand(receipt)]
-            case .message(let message):
-                return ConversationMessageLayout.rows(messageID: message.id, role: message.role)
-                    .map { .message(ConversationMessageRow(message: message, layout: $0)) }
-            }
+        let rows = visibleMessages.flatMap { message in
+            ConversationMessageLayout.rows(messageID: message.id, role: message.role)
+                .map { ConversationMessageRow(message: message, layout: $0) }
         }
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
@@ -116,7 +89,7 @@ struct CloudConversation: View {
                                     ? "Choose New chat to select an agent, or open an existing conversation."
                                     : "Choose a conversation from All Workspaces."
                             )
-                        } else if timeline.isEmpty {
+                        } else if visibleMessages.isEmpty {
                             ConversationEmptyState(
                                 icon: conversation?.runtimeKind == nil
                                     ? (agent.map { agentIconGlyph($0) } ?? .messageSquare)
@@ -143,27 +116,13 @@ struct CloudConversation: View {
                                         }
                                     }
                             }
-                            if let sessionID = conversation?.id, model.agentTools.hasOlderReceipts.contains(sessionID) {
-                                Button("Load earlier session activity") {
-                                    Task { await model.agentTools.loadOlderReceipts(sessionID: sessionID) }
-                                }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                                .padding(.bottom, 32)
-                            }
                             ForEach(rows) { row in
                                 VStack(spacing: 0) {
-                                    switch row {
-                                    case .receipt(let receipt):
-                                        WorkspaceOutgoingReceipt(receipt: receipt)
-                                    case .incomingCommand(let receipt):
-                                        WorkspaceIncomingCommandReceipt(receipt: receipt)
-                                    case .message(let fragment):
-                                        messageRow(fragment, runs: runsByAssistantMessageID, activities: activitiesByRunID)
-                                    }
+                                    messageRow(row, runs: runsByAssistantMessageID, activities: activitiesByRunID)
                                 }
                                 .id(row.id)
                                 .background(row.id == libraryHighlightID ? theme.palette.themeWhisper : Color.clear)
-                                .padding(.top, row.id == rows.first?.id ? 0 : row.spacingBefore)
+                                .padding(.top, row.id == rows.first?.id ? 0 : row.layout.spacingBefore)
                             }
                         }
                         Color.clear
@@ -181,7 +140,6 @@ struct CloudConversation: View {
                 .task(id: [model.navigation.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
                 }
-                .onDisappear { model.agentTools.observeSessionFromUI(nil, token: toolObservationToken) }
                 .environment(\.conversationSubagentHistory) { request in
                     guard let session else { throw ClientError.notConnected }
                     return try await session.subagentHistory(request)
@@ -615,7 +573,6 @@ struct CloudConversation: View {
 
     private func conversationChanged(to conversationID: String?) {
         session?.transcriptState.tasksExpanded = false
-        model.agentTools.observeSessionFromUI(conversationID, token: toolObservationToken)
         isUserScrolling = false
         let targetsLibraryMessage = model.navigation.libraryMessageTarget?.conversationID == conversationID
         transcriptOwnsScroll = targetsLibraryMessage
