@@ -35,10 +35,10 @@ public enum ConversationHTMLDocument {
       });
       let last=0,queued=false;
       const measure=()=>{queued=false;const b=document.body;if(!b)return;
-        const h=Math.ceil(Math.max(b.getBoundingClientRect().height,b.scrollHeight));
+        const h=Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,b.scrollHeight));
         if(h!==last){last=h;parent.postMessage({kind:'size',height:h},'*');}};
       const schedule=()=>{if(!queued){queued=true;requestAnimationFrame(measure);setTimeout(measure,0);}};
-      addEventListener('DOMContentLoaded',()=>{new ResizeObserver(schedule).observe(document.body);measure();});
+      addEventListener('DOMContentLoaded',()=>{const o=new ResizeObserver(schedule);o.observe(document.documentElement);o.observe(document.body);measure();});
       addEventListener('load',()=>{measure();parent.postMessage({kind:'ready'},'*');});
       document.addEventListener('click',e=>{const a=e.composedPath().find(x=>x?.matches?.('a[href]'));if(!a||!e.isTrusted)return;
         const u=new URL(a.href,document.baseURI);if(/^https?:$/.test(u.protocol)){e.preventDefault();parent.postMessage({kind:'link',url:u.href},'*');}},true);

@@ -204,7 +204,9 @@ behind one adapter interface in the server and are treated alike:
   reply so far. The runtime's own report of the call keeps only the page's
   length, and the chat shows the page in its place. The chat shows it above the
   reply in an opaque sandboxed frame, with no access to the app, its tools or
-  the session, and a machine that does not hold it fetches it by digest.
+  the session, and a machine that does not hold it fetches it by digest. The
+  frame takes the height of the page's content as it changes, so a page sized
+  by the viewport (vh, vmin, vmax) is refused.
 - A client that subscribes gets the newest 200 finished items, the item in
   progress if there is one, then live events. Older items are fetched a page
   at a time as the person scrolls back.
