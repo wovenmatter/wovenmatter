@@ -230,6 +230,10 @@ struct SettingsView: View {
         case "updates": route = .updates
         case "woven-mcp": route = .wovenMCP
         case "opencode": route = harnessRoute(.opencode, machineID: nil, origin: .agents)
+        case "codex": route = harnessRoute(.codex, machineID: nil, origin: .agents)
+        case "claude-code": route = harnessRoute(.claudeCode, machineID: nil, origin: .agents)
+        case "grok-build": route = harnessRoute(.grokBuild, machineID: nil, origin: .agents)
+        case "pi-durable": route = harnessRoute(.defaultAgent, machineID: nil, origin: .agents)
         case "github": route = .github
         case "dictation": route = .dictation
         case "workspaces": route = .workspaces(nil)
@@ -307,7 +311,7 @@ struct SettingsView: View {
             VStack(spacing: 2) {
                 SettingsDestinationRow(
                     title: "General",
-                    detail: "Version, appearance, conversation titles, and privacy.",
+                    detail: "Version, appearance, and conversation titles.",
                     icon: { LucideIcon(glyph: .settings, size: 15) },
                     action: { route = .general }
                 )
