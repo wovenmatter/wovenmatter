@@ -74,6 +74,11 @@ public final class WovenServer: Sendable {
     var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
     registerFolders(&routes, library: library, root: options.foldersRoot)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
+    registerArtifacts(&routes, library: library, sessions: sessions)
+    registerLibraryItems(&routes, library: library)
+    let databases = Databases(library: library, peers: peers,
+                              folder: options.dataFolder.appendingPathComponent("databases", isDirectory: true))
+    registerDatabases(&routes, databases: databases)
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet

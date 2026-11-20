@@ -20,9 +20,12 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
   case pageSectionNotEmpty(String)
   case pagePositionInvalid(String)
   case pageSubtreeConflict(id: String, currentRevision: String)
+  /// The change needs the revision it was made against.
+  case revisionRequired(String)
 
   public var errorDescription: String? {
     switch self {
+    case .revisionRequired(let message): message
     case .pageTargetMissing(let id): "Page section \(id) does not exist. Read the Page and choose a current section."
     case .pageMoveIntoOwnSubtree(let id): "Page section \(id) cannot move inside itself."
     case .pageDepthExceeded(let id): "Component \(id) would nest more than \(NoteDocument.maximumPageDepth) sections deep."

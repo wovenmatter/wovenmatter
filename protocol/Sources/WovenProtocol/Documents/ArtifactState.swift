@@ -225,29 +225,6 @@ public extension NoteDocument {
     var copy = self; copy.artifactState = state; return copy
   }
 
-  /// Reconciles state carried by a whole-document draft with the row it lands on. A draft
-  /// that did not touch a key takes the current entry, so a stale code draft cannot rewind
-  /// saved input. A key both sides changed differently throws `conflict` for recovery to keep.
-  static func mergeArtifactState(base: [String: ArtifactStateEntry]?, draft: [String: ArtifactStateEntry]?,
-                                 current: [String: ArtifactStateEntry]?, at timestamp: String) throws -> [String: ArtifactStateEntry]? {
-    let baseState = base ?? [:], draftState = draft ?? [:]
-    var merged = current ?? [:]
-    var changed = false
-    for key in Set(baseState.keys).union(draftState.keys).sorted() {
-      let wanted = draftState[key]?.value
-      guard wanted != baseState[key]?.value, wanted != merged[key]?.value else { continue }
-      guard merged[key]?.value == baseState[key]?.value else {
-        throw ArtifactStateError.conflict(key: key, current: merged[key])
-      }
-      let version = max(merged[key]?.version ?? 0, draftState[key]?.version ?? 0) + 1
-      merged[key] = ArtifactStateEntry(value: wanted, version: version, updatedAt: timestamp)
-      changed = true
-    }
-    // Same bounds as keyed edits, so a draft that clears many keys stays saveable.
-    if changed { try evictArtifactTombstones(&merged) }
-    return changed ? merged : current
-  }
-
   private static func validateArtifactKey(_ key: String) throws {
     guard key.utf8.count <= ArtifactStateLimits.maximumKeyBytes,
           ArtifactStateLimits.keyPrefixes.contains(where: { key.hasPrefix($0) && key.utf8.count > $0.utf8.count }),
@@ -278,9 +255,9 @@ public extension NoteDocument {
         }
       case .array(let children):
         for child in children { try visit(child, depth: depth + 1) }
-      case .number(let number):
+      case .double(let number):
         guard number.isFinite else { throw ArtifactStateError.invalidValue("App state numbers must be finite.") }
-      case .string, .bool, .null:
+      case .integer, .string, .bool, .null:
         break
       }
     }

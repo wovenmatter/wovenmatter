@@ -1,6 +1,3 @@
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
 import Foundation
 
 public enum BoardItemRole: String, Codable, CaseIterable, Sendable { case content, instructions }
@@ -56,17 +53,6 @@ public struct BoardTaskAssignee: Codable, Equatable, Identifiable, Sendable {
   /// asks it to stop that chat or tell the bot it is no longer needed.
   public enum State: String, Codable, CaseIterable, Sendable {
     case assigned, sending, sent, stopping, stopped, failed
-    /// Later states win when two writers changed one assignee at once.
-    var rank: Int {
-      switch self {
-      case .assigned: 0
-      case .sending: 1
-      case .failed: 2
-      case .sent: 3
-      case .stopping: 4
-      case .stopped: 5
-      }
-    }
   }
   public var id: String
   public var kind: Kind
@@ -171,37 +157,6 @@ public struct BoardTask: Codable, Equatable, Sendable {
     outcome.utf8.count <= Self.maximumOutcomeBytes
       && details.utf8.count <= Self.maximumDetailsBytes && assignees.count <= Self.maximumAssignees
       && Set(assignees.map(\.id)).count == assignees.count && assignees.allSatisfy(\.isValid)
-  }
-
-  /// Combines two writers' assignees. Each assignee merges on its own: one side's
-  /// additions and removals both stay, and a later state wins over an earlier one.
-  static func mergeAssignees(base: [BoardTaskAssignee], local: [BoardTaskAssignee], remote: [BoardTaskAssignee]) -> [BoardTaskAssignee] {
-    let b = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    let l = Dictionary(local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    let r = Dictionary(remote.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    var result: [BoardTaskAssignee] = []
-    var seen = Set<String>()
-    for id in (remote + local).map(\.id) where seen.insert(id).inserted {
-      switch (l[id], r[id]) {
-      case let (local?, remote?):
-        if local == remote || local == b[id] { result.append(remote) }
-        else if remote == b[id] { result.append(local) }
-        else {
-          var merged = remote
-          if local.state.rank > remote.state.rank { merged.state = local.state; merged.message = local.message }
-          // A chat or thread, once known on either side, is never forgotten.
-          if merged.conversationID == nil { merged.conversationID = local.conversationID }
-          result.append(merged)
-        }
-      case let (local?, nil):
-        // Removed remotely: gone unless this side changed it since.
-        if b[id] == nil || b[id] != local { result.append(local) }
-      case let (nil, remote?):
-        if b[id] == nil || b[id] != remote { result.append(remote) }
-      case (nil, nil): break
-      }
-    }
-    return Array(result.prefix(maximumAssignees))
   }
 }
 

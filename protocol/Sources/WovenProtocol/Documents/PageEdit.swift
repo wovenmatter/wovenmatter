@@ -290,7 +290,7 @@ private extension NoteDocument {
     if range.count > 1, edit.removal == nil { throw NoteEditError.pageSectionNotEmpty(id) }
     if edit.removal == .removeSubtree {
       guard let expected = edit.expectedSubtreeRevision else {
-        throw WorkspaceToolError.revisionRequired("Removing this component and its contents requires subtreeRevision. Read the Page and pass its current value.")
+        throw NoteEditError.revisionRequired("Removing this component and its contents requires subtreeRevision. Read the Page and pass its current value.")
       }
       let current = pageSubtreeRevision(for: id)
       guard expected == current else { throw NoteEditError.pageSubtreeConflict(id: id, currentRevision: current) }
@@ -318,7 +318,7 @@ private extension NoteDocument {
       throw NoteEditError.blockNotFound(id)
     }
     if revisionRequired, edit.expectedRevision == nil {
-      throw WorkspaceToolError.revisionRequired("This Page change requires componentRevision. Read the Page and pass the component's current revision.")
+      throw NoteEditError.revisionRequired("This Page change requires componentRevision. Read the Page and pass the component's current revision.")
     }
     if let expected = edit.expectedRevision {
       let current = boardItemRevision(for: id)

@@ -1,6 +1,3 @@
-#if canImport(CryptoKit)
-import CryptoKit
-#endif
 import Foundation
 
 /// Where one block of a Page sits. `blocks` stays flat and in reading order, so note

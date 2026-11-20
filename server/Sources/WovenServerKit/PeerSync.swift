@@ -66,6 +66,11 @@ actor PeerSync {
     }
   }
 
+  /// The connection to another machine's server, while it is linked.
+  func client(for machineID: String) -> Client? {
+    clients[machineID]
+  }
+
   private func unlinked(_ machine: TailnetMachine) {
     links[machine] = nil
   }
