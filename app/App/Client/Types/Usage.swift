@@ -260,7 +260,7 @@ struct UsageModelRollup: Identifiable, Hashable, Sendable {
         sessions = Set(samples.map { "\($0.sourceID):\($0.sessionID)" }).count
         canonicalModels = Array(Set(samples.map(\.canonicalModel))).sorted()
         billingRoutes = Self.rows(samples) { $0.billingRoute }
-        harnesses = Self.rows(samples) { $0.harness }
+        harnesses = Self.rows(samples) { $0.application == $0.harness ? $0.harness : "\($0.harness) · \($0.application)" }
     }
 
     static func aggregate(_ samples: [UsageSample]) -> [Self] {

@@ -3,7 +3,8 @@ import Observation
 import WovenProtocol
 
 /// Usage records, analytics, provider limits, per-machine usage and the price table.
-/// This Mac's server sums every machine's synced records; limits are this Mac's own sign-ins.
+/// This Mac's server sums every machine's synced records, which cover every harness on
+/// that machine, inside Woven Matter or not; limits are this Mac's own sign-ins.
 @MainActor
 @Observable
 final class UsageStore {
@@ -115,16 +116,19 @@ final class UsageStore {
         let provider = provider(runtime: group.runtime, model: group.model)
         let bare = group.model.split(separator: "/").last.map(String.init) ?? group.model
         let family = bare.replacingOccurrences(of: #"-\d{8}$"#, with: "", options: .regularExpression)
-        let harness = AgentRuntimeKind(runtime: group.runtime)?.displayName ?? group.runtime.rawValue
+        let harness = group.runtime == .piCLI ? "Pi CLI"
+            : AgentRuntimeKind(runtime: group.runtime)?.displayName ?? group.runtime.rawValue
+        // Usage outside Woven Matter has the harness's own session.
+        let session = group.sessionID ?? group.nativeSessionID.map { "\(group.runtime.rawValue):\($0)" } ?? ""
         return UsageSample(
             id: "\(group.machineID):\(index)", provider: provider, timestamp: group.latest,
-            sessionID: group.sessionID ?? "", model: group.model, canonicalModel: bare,
+            sessionID: session, model: group.model, canonicalModel: bare,
             modelFamily: family.isEmpty ? "Unknown" : family, billingProvider: provider.displayName,
-            billingRoute: provider.displayName, reasoningLevel: nil, harness: harness, application: "Woven Matter",
-            agent: nil, workspace: nil,
+            billingRoute: provider.displayName, reasoningLevel: nil, harness: harness,
+            application: group.inWoven ? "Woven Matter" : harness, agent: nil, workspace: nil,
             tokens: UsageTokenCounts(inputTokens: group.amounts.input, cachedInputTokens: group.amounts.cacheRead,
                                      cacheCreationTokens: group.amounts.cacheWrite, outputTokens: group.amounts.output),
-            requestCount: group.amounts.turns, costUSD: group.amounts.cost > 0 ? group.amounts.cost : nil,
+            requestCount: group.amounts.requests, costUSD: group.amounts.cost > 0 ? group.amounts.cost : nil,
             sourceID: group.machineID, machineID: group.machineID)
     }
 
