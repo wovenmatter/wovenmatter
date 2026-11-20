@@ -10,6 +10,8 @@ struct BotsHostInterface: Sendable {
   let library: Library
   let secrets: Secrets
   let tenure: BotsTenure
+  /// Where the pages of chats that came with the bots are fetched from.
+  let peers: PeerSync
   /// The Woven MCP, once the server has made it.
   let tools = ToolsLink()
 
@@ -68,7 +70,16 @@ struct BotsHostInterface: Sendable {
       }
       return .object(["bots": .object(bots), "forum": .integer(forum)])
     case "mirror.bot":
-      try await library.saveBotMirror(BotsMirrorMapping.bot(try params.decode(MirrorBot.self), home: sessions))
+      let push = try params.decode(MirrorBot.self)
+      try await library.saveBotMirror(BotsMirrorMapping.bot(push, home: sessions))
+      // After a transfer the chats' pages are still on the old home: fetched
+      // now, so this home holds them before the old one goes away.
+      let pages = push.items.compactMap(\.page?.digest)
+      if !pages.isEmpty {
+        Task { [library, peers] in
+          for digest in pages where (try? await library.hasContent(digest)) == false { _ = await peers.fetchContent(digest) }
+        }
+      }
       return .object([:])
     case "mirror.forum":
       try await library.saveBotMirror(BotsMirrorMapping.forum(try params.decode(MirrorForum.self), home: sessions))

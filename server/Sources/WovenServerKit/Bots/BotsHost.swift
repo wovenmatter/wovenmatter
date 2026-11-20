@@ -107,7 +107,7 @@ actor BotsHost {
     self.library = library
     self.peers = peers
     self.tenure = BotsTenure(file: dataFolder.appendingPathComponent("bots-runtime/tenure"))
-    self.interface = BotsHostInterface(library: library, secrets: secrets, tenure: tenure)
+    self.interface = BotsHostInterface(library: library, secrets: secrets, tenure: tenure, peers: peers)
     self.hosting = hosting
     self.engine = hosting.engine(dataFolder, instance)
     self.dataFolder = dataFolder
