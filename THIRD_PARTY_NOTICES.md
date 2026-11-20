@@ -6,39 +6,6 @@ notice files (for example inside bundled `node_modules`, `Resources/BrowserLicen
 or a container image), those files are retained unchanged. The app's own copy
 of these attributions is `app/App/ThirdPartyNotices.txt`.
 
-## Executor
-
-Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,
-through its public API. The local and remote installers use the unmodified
-`executor` npm package, selected at installation, and retain its upstream license and bundled dependency notices. Those dependencies remain subject to their own
-licenses.
-
-Source: [UsefulSoftwareCo/executor](https://github.com/UsefulSoftwareCo/executor).
-
-Executor is licensed under the MIT License, reproduced below.
-
-MIT License
-
-Copyright (c) 2026 Rhys Sullivan
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 ## Harnesses
 
 Woven Matter works with these third-party coding agents. It does not bundle
@@ -186,16 +153,14 @@ and `ws` from [websockets/ws](https://github.com/websockets/ws) under MIT.
 Their upstream licenses remain in the bundled Node dependencies. Playwright
 connects to Woven Matter’s bundled CEF rather than installing another browser.
 
-The automation server and Executor client bundle the
-`@modelcontextprotocol/server` and `@modelcontextprotocol/client` packages from
+Pi Durable and the bots runtime bundle `@modelcontextprotocol/sdk` from
 [the MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-under Apache-2.0. Their complete upstream licenses and notices remain in the
+as a dependency of their Pi packages. Their complete upstream licenses and notices remain in the
 bundled Node dependencies.
 
 ## Bots runtime
 
-The bots runtime (`bots/`, shipped under `Resources/bots` and in Linux host
-releases) is ported from Woven Matter's Pi Bot server. It bundles the locked
+The bots runtime (`bots/`, shipped under `Resources/bots`) is ported from Woven Matter's Pi Bot server. It bundles the locked
 production dependencies in `bots/package-lock.json`, installed unmodified with
 `npm ci --omit=dev`: `@earendil-works/pi-durable`, `@earendil-works/pi-ai` and
 `@earendil-works/chord` from
@@ -379,29 +344,15 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## Swift packages
 
-The Linux library (`wovenmatter-library`, shipped in Linux host releases) uses
+The background server uses [SwiftNIO](https://github.com/apple/swift-nio) for
+its WebSocket server and client, with its dependencies
+[Swift Atomics](https://github.com/apple/swift-atomics),
+[Swift Collections](https://github.com/apple/swift-collections) and
+[Swift System](https://github.com/apple/swift-system). On Linux it also uses
 [Swift Crypto](https://github.com/apple/swift-crypto) and its dependency
 [Swift ASN.1](https://github.com/apple/swift-asn1) in place of Apple's
-CryptoKit, as recorded in `app/Package.resolved`. Both are licensed under the
-Apache License 2.0, copyright Apple Inc. and the SwiftCrypto and SwiftASN1
-project authors. The Mac app uses CryptoKit and does not link them.
-
-## Executor container image
-
-The standalone Executor image (`remote/Executor.Dockerfile`) installs
-Archive::Tar from its checksummed CPAN release under the same terms as
-Perl; its module documentation is retained. It replaces the Executor runtime's
-bundled sharp selection with the locked sharp release and the corresponding prebuilt
-libvips packages. Their Apache-2.0, LGPL-3.0-or-later, and dependency notices
-remain in the installed packages. The replacement changes dependency selection
-and does not modify upstream source.
-
-## Debian security rebuilds
-
-The Executor image rebuilds selected Debian runtime libraries from authenticated
-Debian source packages. Reviewed Ubuntu or upstream security patches are
-applied where Debian stable has not yet published a fixed binary. Package
-copyright files remain under `/usr/share/doc`; exact source versions, patch
-origins, hashes, and Debian build provenance are retained under
-`/usr/local/share/wovenmatter/security/provenance` in the image and in
-`remote/security/backports.json` in this repository.
+CryptoKit. The selections are recorded in `server/Package.resolved` and
+`app/Package.resolved`. All are licensed under the Apache License 2.0,
+copyright Apple Inc. and the respective project authors. The Linux server
+statically links [SQLite](https://www.sqlite.org), which is in the public
+domain.

@@ -24,12 +24,10 @@ body:
       options:
         - Mac app
         - Harness or conversation
-        - Linux host or remote workspace
-        - Library sync or device pairing
+        - Linux host or another machine
+        - Library sync
         - Bots
-        - Executor apps
         - Browser or Computer Use
-        - iPhone app (beta)
         - Build, validation, or release tooling
         - Documentation
         - Not sure
