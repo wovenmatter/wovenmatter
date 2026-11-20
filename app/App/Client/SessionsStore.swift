@@ -28,6 +28,22 @@ final class SessionsStore {
         return store
     }
 
+    /// How many views follow each chat's live view now.
+    @ObservationIgnored private var followers: [String: Int] = [:]
+
+    /// Follows a chat's live view until the task is cancelled. When no view
+    /// follows it any more, its store is let go.
+    func follow(_ sessionID: String) async {
+        let store = session(for: sessionID)
+        followers[sessionID, default: 0] += 1
+        await store.follow()
+        followers[sessionID, default: 1] -= 1
+        if followers[sessionID] == 0 {
+            followers[sessionID] = nil
+            if stores[sessionID] === store { stores[sessionID] = nil }
+        }
+    }
+
     /// The store of a chat that has been opened, if any.
     func conversationState(for sessionID: String) -> SessionStore? {
         stores[sessionID]

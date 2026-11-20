@@ -163,7 +163,6 @@ struct ConversationWorkTranscript: View {
                                 }
                             }
                         }
-                        .environment(\.conversationArchiveConversationID, run.conversationID)
                         .padding(.top, 14)
                         .transition(reduceMotion ? .identity : .opacity)
                     }

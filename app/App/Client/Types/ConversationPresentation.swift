@@ -108,31 +108,3 @@ struct WorkspaceGoal: Identifiable, Hashable, Sendable {
 enum WorkspaceGoalMutation: Hashable, Sendable {
     case clear(id: String)
 }
-
-// MARK: - Subagent history
-
-/// A page of a Pi Durable subagent's archived native records.
-struct SubagentArchiveRequest: Hashable, Sendable {
-    let conversationID: String
-    let sourceID: String
-    let nativeSessionID: String
-    let nativeConversationID: String
-    var after: Int64
-    var eventID: String?
-    /// Byte offset into one record's payload.
-    var offset = 0
-}
-
-struct SubagentArchiveRecord: Identifiable, Hashable, Sendable {
-    let id: String
-    let kind: String?
-    let text: String?
-    let payload: String?
-    let payloadHasMore: Bool
-}
-
-struct SubagentArchivePage: Hashable, Sendable {
-    let records: [SubagentArchiveRecord]
-    let hasMore: Bool
-    let nextCursor: Int64
-}

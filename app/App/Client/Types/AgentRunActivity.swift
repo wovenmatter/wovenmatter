@@ -105,9 +105,6 @@ public struct AgentRunSubagent: Codable, Equatable, Identifiable, Sendable {
   public let detail: String?
   public let activity: [AgentRunSubagentActivity]?
   public let history: [AgentRunSubagentActivity]?
-  public let sourceID: String?
-  public let nativeSessionID: String?
-  public let nativeConversationID: String?
 
   public var isActive: Bool {
     !["idle", "completed", "done", "succeeded", "failed", "error", "cancelled", "canceled", "stopped", "aborted"]

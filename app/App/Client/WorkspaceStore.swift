@@ -242,35 +242,11 @@ final class WorkspaceStore {
     /// the session with every saved item as JSON. Items come from this Mac's
     /// library, so a chat whose owner is away exports too.
     func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
-        let server = try server(for: nil)
-        guard let session = try await server.call(ListSessions(includeArchived: true)).first(where: { $0.id == id }) else {
-            throw ProtocolError(.notFound, "No chat \(id).")
-        }
-        var items: [SessionItem] = []
-        while true {
-            let page = try await server.call(SessionItems(sessionID: id, afterSequence: items.last?.sequence ?? 0, limit: 1000))
-            items += page
-            if page.count < 1000 { break }
-        }
+        let (session, items) = try await savedChat(id)
         let data: Data
         switch format {
         case .messages:
-            let dates = ISO8601DateFormatter()
-            var sections = ["# " + session.title]
-            for item in items {
-                let role: String, text: String, attachments: [Attachment]
-                switch item.content {
-                case .userMessage(let body, let files): (role, text, attachments) = ("User", body, files)
-                case .assistantMessage(let body): (role, text, attachments) = ("Assistant", body, [])
-                default: continue
-                }
-                var section = "## \(role) · \(dates.string(from: item.createdAt))\n\n\(text)"
-                for file in attachments {
-                    section += "\n\nAttachment: \(file.name) (\(file.mimeType), \(file.size) bytes)"
-                }
-                sections.append(section)
-            }
-            data = Data((sections.joined(separator: "\n\n") + "\n").utf8)
+            data = Self.messagesMarkdown(session, items)
         case .fullRun:
             struct FullRun: Encodable {
                 let exportedAt: Date
@@ -286,6 +262,67 @@ final class WorkspaceStore {
             .appendingPathExtension(format.fileExtension)
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    /// A chat and every item saved of it, from this Mac's library.
+    private func savedChat(_ id: String) async throws -> (Session, [SessionItem]) {
+        let server = try server(for: nil)
+        guard let session = try await server.call(ListSessions(includeArchived: true)).first(where: { $0.id == id }) else {
+            throw ProtocolError(.notFound, "No chat \(id).")
+        }
+        var items: [SessionItem] = []
+        while true {
+            let page = try await server.call(SessionItems(sessionID: id, afterSequence: items.last?.sequence ?? 0, limit: 1000))
+            items += page
+            if page.count < 1000 { break }
+        }
+        return (session, items)
+    }
+
+    private static func messagesMarkdown(_ session: Session, _ items: [SessionItem]) -> Data {
+        let dates = ISO8601DateFormatter()
+        var sections = ["# " + session.title]
+        for item in items {
+            let role: String, text: String, attachments: [Attachment]
+            switch item.content {
+            case .userMessage(let body, let files): (role, text, attachments) = ("User", body, files)
+            case .assistantMessage(let body): (role, text, attachments) = ("Assistant", body, [])
+            default: continue
+            }
+            var section = "## \(role) · \(dates.string(from: item.createdAt))\n\n\(text)"
+            for file in attachments {
+                section += "\n\nAttachment: \(file.name) (\(file.mimeType), \(file.size) bytes)"
+            }
+            sections.append(section)
+        }
+        return Data((sections.joined(separator: "\n\n") + "\n").utf8)
+    }
+
+    /// A note or chat attached to a message, as the file the runtime is
+    /// given: the note as it exports, the chat's messages as Markdown with
+    /// its id for `read_session`. Stored in this Mac's content store.
+    func referenceAttachment(_ reference: AgentMessageReferenceDraft) async throws -> (data: Data, attachment: Attachment) {
+        let data: Data, name: String, mimeType: String
+        if reference.kind == .conversation {
+            let (session, items) = try await savedChat(reference.resourceID)
+            data = Data("Woven session \(session.id)\n\n".utf8) + Self.messagesMarkdown(session, items)
+            name = NoteExportFile.basename(session.title) + ".md"
+            mimeType = "text/markdown"
+        } else {
+            let export = try await exportNote(id: reference.resourceID)
+            defer { try? FileManager.default.removeItem(at: export.url) }
+            data = try Data(contentsOf: export.url)
+            name = export.suggestedFilename
+            mimeType = switch export.fileExtension {
+            case "md": "text/markdown"
+            case "csv": "text/csv"
+            case "html": "text/html"
+            case "json": "application/json"
+            default: "text/plain"
+            }
+        }
+        let stored = try await server(for: nil).call(PutContent(data: data))
+        return (data, Attachment(name: name, mimeType: mimeType, digest: stored.digest, size: stored.size))
     }
 
     /// Chats in Trash, most recently trashed first.

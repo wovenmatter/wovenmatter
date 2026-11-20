@@ -140,10 +140,6 @@ struct CloudConversation: View {
                 .task(id: [model.navigation.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
                 }
-                .environment(\.conversationSubagentHistory) { request in
-                    guard let session else { throw ClientError.notConnected }
-                    return try await session.subagentHistory(request)
-                }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1

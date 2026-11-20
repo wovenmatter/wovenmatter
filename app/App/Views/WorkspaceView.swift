@@ -1532,7 +1532,7 @@ struct WorkspaceSurface: View {
         .task(id: conversation?.id) {
             guard let conversation else { return }
             // The open chat follows its live state until it closes.
-            await model.sessions.session(for: conversation.id).follow()
+            await model.sessions.follow(conversation.id)
         }
     }
 

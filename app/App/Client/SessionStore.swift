@@ -132,7 +132,10 @@ final class SessionStore {
     func refresh() async {
         guard let server else { return }
         do {
-            items = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: .max, limit: Self.pageSize))
+            let saved = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: .max, limit: Self.pageSize))
+            // The owner's live snapshot, if it arrived meanwhile, is newer than the library's copy.
+            guard !isFollowing else { return }
+            items = saved
             project()
         } catch {
             self.error = error.localizedDescription
@@ -173,12 +176,19 @@ final class SessionStore {
         }
         var attachments: [Attachment] = []
         for draft in input.attachments {
-            guard case .file(let file) = draft else { throw ClientError.notOffered("Attaching notes and chats") }
-            if owner !== server {
-                let data = try await Task.detached { try Data(contentsOf: file.localURL) }.value
-                _ = try await owner.call(PutContent(data: data))
+            switch draft {
+            case .file(let file):
+                if owner !== server {
+                    let data = try await Task.detached { try Data(contentsOf: file.localURL) }.value
+                    _ = try await owner.call(PutContent(data: data))
+                }
+                attachments.append(Attachment(name: file.fileName, mimeType: file.mimeType, digest: file.contentHash, size: file.sizeBytes))
+            case .reference(let reference):
+                guard let workspace else { throw ClientError.notConnected }
+                let (data, attachment) = try await workspace.referenceAttachment(reference)
+                if owner !== server { _ = try await owner.call(PutContent(data: data)) }
+                attachments.append(attachment)
             }
-            attachments.append(Attachment(name: file.fileName, mimeType: file.mimeType, digest: file.contentHash, size: file.sizeBytes))
         }
         error = nil
         _ = try await owner.call(SendTurn(sessionID: sessionID, text: input.text, attachments: attachments))
@@ -219,8 +229,7 @@ final class SessionStore {
         return AgentRunSubagent(
             id: id, name: call.title, task: task, modelID: nil, provider: nil, connectionID: nil, connectionLabel: nil,
             accessKind: nil, thinking: nil, state: live ? "running" : call.failed ? "failed" : "completed",
-            executionStatus: nil, result: call.output, detail: nil, activity: nil, history: nil, sourceID: nil,
-            nativeSessionID: nil, nativeConversationID: nil)
+            executionStatus: nil, result: call.output, detail: nil, activity: nil, history: nil)
     }
 
     /// The one field of a question answered in free text.
@@ -316,10 +325,6 @@ final class SessionStore {
         runActivities.first { $0.runID == runID && $0.activity.id == activityID }?.activity
     }
 
-    func subagentHistory(_ request: SubagentArchiveRequest) async throws -> SubagentArchivePage {
-        throw ClientError.notOffered("Subagent history")
-    }
-
     /// Runs `body` on the owner's connection.
     private func command(_ body: (ServerConnection) async throws -> Void) async {
         guard let owner, owner.isConnected else { return error = ClientError.notConnected.localizedDescription }
@@ -335,6 +340,7 @@ final class SessionStore {
 
     private func apply(_ snapshot: SessionSnapshot) {
         isFollowing = true
+        error = nil
         items = snapshot.items
         inProgress = snapshot.inProgress
         prompts = snapshot.prompts
@@ -345,6 +351,7 @@ final class SessionStore {
     }
 
     private func apply(_ event: SessionEvent) {
+        if updateInPlace(event) { return }
         switch event {
         case .itemStarted(let item):
             inProgress.removeAll { $0.id == item.id }
@@ -379,9 +386,51 @@ final class SessionStore {
             prompts.removeAll { $0.id == promptID }
         case .configuration(let configuration):
             apply(configuration)
+            applyGoal(configuration.goal)
         }
         project()
     }
+
+    /// Streamed text and tool output change only the item in progress, so
+    /// they update its message or activity where it is drawn, without
+    /// rebuilding the transcript. Returns false when it is not drawn yet.
+    private func updateInPlace(_ event: SessionEvent) -> Bool {
+        switch event {
+        case .text(let itemID, let delta):
+            guard let index = inProgress.firstIndex(where: { $0.id == itemID }),
+                  case .assistantMessage(let text) = inProgress[index].content,
+                  let shown = messages.lastIndex(where: { $0.id == itemID }) else { return false }
+            inProgress[index].content = .assistantMessage(text: text + delta)
+            messages[shown].content = text + delta
+            return true
+        case .toolOutput(let itemID, let delta):
+            guard let index = inProgress.firstIndex(where: { $0.id == itemID }),
+                  case .toolCall(var call) = inProgress[index].content,
+                  let shown = runActivities.lastIndex(where: { $0.id == itemID }) else { return false }
+            call.output = (call.output ?? "") + delta
+            inProgress[index].content = .toolCall(call)
+            let record = runActivities[shown]
+            runActivities[shown] = WorkspaceRunActivityRecord(
+                id: record.id, runID: record.runID, conversationID: record.conversationID,
+                activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0),
+                createdAt: record.createdAt, sequence: record.sequence)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
+        AgentRunActivity(
+            id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
+            title: call.title ?? call.name, status: live ? "running" : call.failed ? "failed" : "completed",
+            toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
+            planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
+            rawInputJSON: call.input, rawOutputJSON: call.output,
+            subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil)
+    }
+
+    private static let timestamps = ISO8601DateFormatter()
 
     private func apply(_ configuration: SessionConfiguration) {
         func metadata(_ options: [SessionOption]) -> [String: SessionOptionMetadata] {
@@ -407,7 +456,6 @@ final class SessionStore {
         let entries = items.sorted { $0.sequence < $1.sequence }.map {
             (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author)
         } + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none) }
-        let formatter = ISO8601DateFormatter()
         var goneNotice: String?
 
         func currentRun(at date: Date) -> Int {
@@ -445,14 +493,8 @@ final class SessionStore {
                 let run = currentRun(at: entry.date)
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
-                    activity: AgentRunActivity(
-                        id: entry.id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
-                        title: call.title ?? call.name, status: entry.live ? "running" : call.failed ? "failed" : "completed",
-                        toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
-                        planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
-                        rawInputJSON: call.input, rawOutputJSON: call.output,
-                        subagents: call.kind == .task ? [Self.child(call, id: entry.id, live: entry.live)] : nil),
-                    createdAt: formatter.string(from: entry.date), sequence: Int64(position)))
+                    activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
+                    createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }
                 if notice.kind == .failure, !runs.isEmpty {
