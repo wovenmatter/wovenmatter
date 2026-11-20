@@ -300,8 +300,13 @@ extension BotsHost {
       try await prepareEngine()
       try await hosting.files.run(.remove, configURL, nil)
     } catch {
-      // Left for the next start to try again.
+      // Tried again in a minute, and at the next start.
+      FileHandle.standardError.write(Data("woven-server: the bots' old copy was not removed yet: \(ProtocolError(error).message)\n".utf8))
       await releaseEngine()
+      Task {
+        try? await Task.sleep(for: .seconds(60))
+        if hold == .moved(target: target) { await removeCopy(id, target: target) }
+      }
       return
     }
     await releaseEngine()
