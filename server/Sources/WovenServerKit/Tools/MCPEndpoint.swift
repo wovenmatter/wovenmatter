@@ -39,6 +39,9 @@ enum ToolGrant: Sendable, Hashable {
   /// A runtime that serves several sessions through one bridge (OpenCode),
   /// naming the native session in each call.
   case runtime(RuntimeKind)
+  /// An agent outside Woven Matter on this machine; its bridge says no key.
+  /// It is answered only while outside agents are turned on.
+  case outside
 }
 
 /// The keys of this server's tool socket.
@@ -51,15 +54,26 @@ final class ToolKeys: Sendable {
   /// The access a runtime is given for `grant`. The bridge runs with Node,
   /// which every machine that runs agents has.
   func access(_ grant: ToolGrant) -> ToolAccess? {
-    let node = Resources.node ?? "node"
     let key = grants.withLock { grants -> String in
       if let existing = grants.first(where: { $0.value == grant })?.key { return existing }
       let key = UUID().uuidString.lowercased() + UUID().uuidString.lowercased()
       grants[key] = grant
       return key
     }
-    return ToolAccess(command: node, arguments: [Resources.harnesses.appendingPathComponent("woven-mcp.mjs").path, socketPath],
+    let bridge = bridge
+    return ToolAccess(command: bridge[0], arguments: Array(bridge.dropFirst()),
                       environment: ["WOVEN_MCP_KEY": key], instructions: WovenInstructions.text)
+  }
+
+  /// Node, the bridge and this socket.
+  private var bridge: [String] {
+    [Resources.node ?? "node", Resources.harnesses.appendingPathComponent("woven-mcp.mjs").path, socketPath]
+  }
+
+  /// The bridge as a shell command line, for an outside agent's MCP settings.
+  var outsideCommand: String {
+    bridge.map { $0.contains(where: { " '\"$\\".contains($0) }) ? "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" : $0 }
+      .joined(separator: " ")
   }
 
   func grant(for key: String) -> ToolGrant? { grants.withLock { $0[key] } }
@@ -158,8 +172,12 @@ private final class MCPConnection: @unchecked Sendable {
         buffer.removeSubrange(buffer.startIndex...end)
         guard let message = try? Wire.decoder.decode(JSONValue.self, from: line) else { continue }
         if grant == nil {
-          guard let key = message["key"]?.string, let found = keys.grant(for: key) else { break reading }
-          grant = found
+          if let key = message["key"]?.string, !key.isEmpty {
+            guard let found = keys.grant(for: key) else { break reading }
+            grant = found
+          } else {
+            grant = .outside
+          }
           continue
         }
         let grant = grant!
@@ -188,13 +206,28 @@ private final class MCPConnection: @unchecked Sendable {
     case "ping":
       result = .object([:])
     case "tools/list":
-      // A session is shown only the groups it may use.
-      let enabled: Set<ToolGroup>? = if case .session(let id) = grant { await tools.enabledGroups(sessionID: id) } else { nil }
-      result = .object(["tools": .array(tools.listing(enabled: enabled))])
+      // A session, or an outside agent, is shown only the groups it may use.
+      let enabled: Set<ToolGroup>?
+      switch grant {
+      case .session(let id): enabled = await tools.enabledGroups(sessionID: id)
+      case .outside:
+        let outside = await outsideAgents(tools.library)
+        enabled = outside.isEnabled ? outside.groups : nil
+      case .runtime: enabled = nil
+      }
+      let answered = grant != .outside || enabled != nil
+      result = .object(["tools": .array(answered ? tools.listing(enabled: enabled) : [])])
     case "tools/call":
       let outcome: ToolResult
-      if let caller = await caller(grant, params) {
-        outcome = await tools.call(params["name"]?.string ?? "", arguments: params["arguments"] ?? .object([:]), caller: caller)
+      let name = params["name"]?.string ?? ""
+      let outside = grant == .outside ? await outsideAgents(tools.library) : nil
+      if let outside, !outside.isEnabled {
+        outcome = .error("Woven Matter does not answer outside agents on this machine. Turn on Expose Woven MCP in its Settings.")
+      } else if let outside, let tool = tools.catalog.first(where: { $0.name == name }), !WovenTools.allowed(tool, outside.groups),
+                let group = tool.groups.min(by: { $0.rawValue < $1.rawValue }) {
+        outcome = .error("\(group.title) is not exposed to outside agents.")
+      } else if let caller = await caller(grant, params) {
+        outcome = await tools.call(name, arguments: params["arguments"] ?? .object([:]), caller: caller)
       } else {
         outcome = .error("This session is not one Woven Matter runs, so it cannot use Woven tools.")
       }
@@ -218,6 +251,8 @@ private final class MCPConnection: @unchecked Sendable {
       guard let native = params["_meta"]?["ai.opencode/sessionID"]?.string,
             let id = try? await tools.library.session(runtime: kind, nativeHandle: native) else { return nil }
       return ToolCaller(machineID: tools.machineID, sessionID: id)
+    case .outside:
+      return ToolCaller(machineID: tools.machineID)
     }
   }
 
@@ -236,5 +271,36 @@ private final class MCPConnection: @unchecked Sendable {
         }
       }
     }
+  }
+}
+
+// MARK: Outside agents
+
+/// The setting for one machine's outside agents: `{"enabled": Bool, "groups": [name]}`.
+private func outsideAgentsKey(_ machineID: String) -> String { "tools.outside.\(machineID)" }
+
+/// Whether this machine answers outside agents, and the groups they may use;
+/// until set, off with the standard groups.
+private func outsideAgents(_ library: Library) async -> (isEnabled: Bool, groups: Set<ToolGroup>) {
+  let value = (try? await library.setting(outsideAgentsKey(library.machineID)))?.value
+  let groups = value?["groups"]?.array.map { Set($0.compactMap { $0.string.flatMap(ToolGroup.init(rawValue:)) }) }
+  return (value?["enabled"]?.bool == true, groups ?? ToolGroup.standard)
+}
+
+func registerOutsideAgents(_ router: inout Router, keys: ToolKeys, library: Library) {
+  @Sendable func access() async -> OutsideAgentAccess {
+    let outside = await outsideAgents(library)
+    return OutsideAgentAccess(isEnabled: outside.isEnabled, groups: outside.groups, command: keys.outsideCommand)
+  }
+  router.on(GetOutsideAgentAccess.self) { _, caller in
+    guard case .local = caller.origin else { throw ProtocolError(.refused, "Only the UI on this machine reads this.") }
+    return await access()
+  }
+  router.on(SetOutsideAgentAccess.self) { request, caller in
+    guard case .local = caller.origin else { throw ProtocolError(.refused, "Only the UI on this machine changes this.") }
+    let groups = ToolGroup.allCases.filter(request.groups.contains).map { JSONValue.string($0.rawValue) }
+    _ = try await library.setSetting(outsideAgentsKey(library.machineID),
+                                     to: .object(["enabled": .bool(request.isEnabled), "groups": .array(groups)]))
+    return await access()
   }
 }

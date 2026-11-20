@@ -63,24 +63,3 @@ enum GitHubSettingsCommand: Hashable, Sendable {
 enum GitHubSSHKeys {
     static let openSSHHeader = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
 }
-
-// MARK: - Woven MCP for outside agents
-
-/// Whether agents outside Woven Matter may reach the Woven MCP on the tailnet, and which tools.
-struct WovenMCPAccess: Hashable, Sendable {
-    var isEnabled: Bool
-    var groups: Set<WorkspaceToolGroup>
-    var endpointURL: String
-    var exposureError: String?
-}
-
-// MARK: - Analytics
-
-enum ProductAnalyticsPolicy {
-    static let url = URL(string: "https://wovenmatter.com/privacy")!
-}
-
-enum ProductAnalyticsEvent: Hashable, Sendable {
-    case interfaceOpened
-    case active
-}

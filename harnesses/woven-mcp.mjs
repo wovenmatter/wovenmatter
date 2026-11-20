@@ -1,15 +1,16 @@
 // The Woven MCP as a stdio MCP server, for runtimes that start one: it
 // connects to the Woven server's tool socket (owner-only, on this machine),
 // says the key the server gave this runtime, then passes MCP's
-// newline-delimited JSON-RPC through in both directions.
+// newline-delimited JSON-RPC through in both directions. Started without a
+// key, it speaks for an agent outside Woven Matter.
 //
-//     node woven-mcp.mjs SOCKET        (key in WOVEN_MCP_KEY)
+//     node woven-mcp.mjs SOCKET        (key, if any, in WOVEN_MCP_KEY)
 import { connect } from 'node:net';
 
 const [socketPath] = process.argv.slice(2);
-const key = process.env.WOVEN_MCP_KEY;
-if (!socketPath || !key) {
-  process.stderr.write('usage: WOVEN_MCP_KEY=… node woven-mcp.mjs SOCKET\n');
+const key = process.env.WOVEN_MCP_KEY ?? '';
+if (!socketPath) {
+  process.stderr.write('usage: [WOVEN_MCP_KEY=…] node woven-mcp.mjs SOCKET\n');
   process.exit(2);
 }
 

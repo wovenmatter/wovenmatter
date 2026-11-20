@@ -106,7 +106,6 @@ struct DatabasesView: View {
                 Task {
                     defer { isCreatingDatabase = false }
                     if let id = await model.databases.create(machineID: sourceID, name: name) {
-                        await model.settings.recordAnalytics(.active)
                         selectedSourceID = sourceID
                         selectedDatabaseID = id
                         showsCreateDatabase = false

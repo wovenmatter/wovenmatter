@@ -14,7 +14,6 @@ struct SettingsUpdatesView: View {
     private var thisMacState: UpdatesStore.MachineState { thisMac.map { updates.state(of: $0.id) } ?? .init() }
 
     var body: some View {
-        let shownBusy = updates.busyConfirmation?.id
         SettingsPage(
             title: "Updates",
             detail: "Woven Matter and its harnesses on this Mac and your other devices.",
@@ -30,14 +29,6 @@ struct SettingsUpdatesView: View {
             updates.loadIfNeeded()
             await model.bots.refresh()
         }
-        .alert(busyTitle, isPresented: Binding(
-            get: { updates.busyConfirmation != nil }, set: { if !$0, let shownBusy { updates.cancelBusy(shownBusy) } }
-        ), presenting: updates.busyConfirmation) { confirmation in
-            Button("Update now", role: .destructive) { updates.confirmBusy() }
-            Button("Cancel", role: .cancel) { updates.cancelBusy(confirmation.id) }
-        } message: { confirmation in
-            Text(confirmation.items.joined(separator: "\n\n"))
-        }
     }
 
     // MARK: This Mac, then all your devices
@@ -52,7 +43,7 @@ struct SettingsUpdatesView: View {
     private var thisMacIsBehind: Bool { thisMacState.appUpdateAvailable }
 
     private var appsAvailable: Bool {
-        model.machines.machines.contains { updates.state(of: $0.id).appUpdateAvailable || updates.state(of: $0.id).botsOutdated }
+        model.machines.machines.contains { updates.state(of: $0.id).appUpdateAvailable }
     }
 
     private var harnessesAvailable: Bool {
@@ -81,13 +72,6 @@ struct SettingsUpdatesView: View {
                         .disabled(!updates.canStart(.app(machineID: thisMac.id)))
                 }
             }
-            ForEach(updates.progress) { line in
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    SettingsNote(line.text)
-                }
-            }
-            if let notice = updates.notice { SettingsNote(notice) }
             if updates.releaseError != nil {
                 SettingsNote("The newest release couldn't be checked, so devices are compared with this Mac.")
             }
@@ -168,27 +152,23 @@ struct SettingsUpdatesView: View {
             updateRow("Update everything on this device", detail: everythingDetail(machine),
                       request: .machine(machine.id), available: !offline && state.hasUpdate,
                       accessibility: "Update everything on \(machine.name)")
-            appRow(machine, state)
-            if hasBots(machine) { bots(machine, state) }
+            if machine.isThisMachine || machine.platform == .linux { appRow(machine, state) }
             harnessRows(machine, state)
         }
     }
 
     private func everythingDetail(_ machine: Machine) -> String {
         let product = machine.platform == .linux ? "the Woven server" : "Woven Matter"
-        return hasBots(machine) ? "Updates \(product), the bots, and every harness on this device."
-            : "Updates \(product) and every harness on this device."
+        return "Updates \(product) and every harness on this device."
     }
 
-    /// A device's Woven Matter or Woven server, alone.
+    /// This Mac's Woven Matter or a Linux machine's Woven server, alone.
     private func appRow(_ machine: Machine, _ state: UpdatesStore.MachineState) -> some View {
-        let linux = machine.platform == .linux
         let outdated = state.appUpdateAvailable
         let request = UpdatesStore.Request.app(machineID: machine.id)
         let detail = machine.isThisMachine ? Self.thisMacAbout
-            : linux && outdated && state.appWaitsForThisMac ? "Update this Mac first. Its Woven Matter brings this server's update."
-            : linux ? "This updates the Woven server on this device."
-            : "This updates the Woven Matter desktop app on this device."
+            : outdated && state.appWaitsForThisMac ? "Update this Mac first. Its Woven Matter brings this server's update."
+            : "This updates the Woven server on this device."
         return SettingsRow(title: "Update just Woven Matter", detail: detail) {
             if state.updatingApp { ProgressView().controlSize(.small) }
             else if !machine.isOnline { SettingsStatus("Offline", tone: .neutral) }
@@ -198,23 +178,6 @@ struct SettingsUpdatesView: View {
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(!outdated || state.appWaitsForThisMac || !updates.canStart(request))
                 .accessibilityLabel("Update just Woven Matter on \(machine.isThisMachine ? "this Mac" : machine.name)")
-        }
-    }
-
-    private func bots(_ machine: Machine, _ state: UpdatesStore.MachineState) -> some View {
-        let outdated = state.botsOutdated
-        let updating = state.updatingBots || model.bots.updating
-        let behind = state.botsToUpdate
-        let request = UpdatesStore.Request.bots(machineID: machine.id)
-        let detail = behind == 0 ? "They keep their files and sign-ins."
-            : behind == 1 ? "1 bot has newer tools waiting." : "\(behind) bots have newer tools waiting."
-        return SettingsRow(title: "Update just the bots", detail: detail) {
-            if updating { ProgressView().controlSize(.small) }
-            else { SettingsStatus(outdated ? "Update available" : "Up to date", tone: outdated ? .warning : .good) }
-            Button(updating ? "Updating…" : "Update") { updates.start(request) }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(!outdated || updating || model.bots.state != .ready || !updates.canStart(request))
-                .accessibilityLabel("Update just the bots on \(machine.isThisMachine ? "this Mac" : machine.name)")
         }
     }
 
@@ -254,10 +217,6 @@ struct SettingsUpdatesView: View {
             if let error = harness.error { SettingsError(error) }
         }
     }
-
-    // MARK: Dialogs
-
-    private var busyTitle: String { "Before you update" }
 }
 
 /// Elsewhere in Settings, mismatched versions are one line that opens Settings → Updates.

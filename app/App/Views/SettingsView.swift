@@ -228,6 +228,7 @@ struct SettingsView: View {
         #if DEBUG
         case "agents": route = .agents
         case "updates": route = .updates
+        case "woven-mcp": route = .wovenMCP
         case "opencode": route = harnessRoute(.opencode, machineID: nil, origin: .agents)
         case "github": route = .github
         case "dictation": route = .dictation

@@ -4,8 +4,9 @@ import Observation
 /// The app release each machine runs and the harness versions on each, as Settings → Updates
 /// shows them. The server runs updates; this holds their state and sends the commands.
 /// Harness rows come from `MachinesStore`. The newest release is read from the app's update
-/// feed, and this Mac updates itself through Sparkle. A Linux machine's server is updated by
-/// this Mac's server to the release this Mac carries. Updating the bots is not connected yet.
+/// feed, and this Mac updates itself through Sparkle; every Mac updates itself, and the bots
+/// come with the app. A Linux machine's server is updated by this Mac's server to the release
+/// this Mac carries.
 @MainActor
 @Observable
 final class UpdatesStore {
@@ -19,10 +20,8 @@ final class UpdatesStore {
         case harnesses
         /// Everything on one machine.
         case machine(String)
-        /// Woven Matter alone on one machine.
+        /// Woven Matter alone on this Mac or a Linux machine.
         case app(machineID: String)
-        /// The bots, on their home machine.
-        case bots(machineID: String)
         case harness(machineID: String, harnessID: String)
     }
 
@@ -40,33 +39,18 @@ final class UpdatesStore {
 
     /// What one machine has to update.
     struct MachineState: Equatable, Sendable {
-        /// A newer Woven Matter release than the one it runs is published.
+        /// A newer Woven Matter release than the one it runs is published. Never set for another
+        /// Mac, which updates itself.
         var appUpdateAvailable = false
         /// A Linux machine takes the server release this Mac carries, so this Mac updates first.
         var appWaitsForThisMac = false
         var updatingApp = false
-        /// Its bots are behind its Woven Matter.
-        var botsOutdated = false
-        /// Bots whose next update changes their container.
-        var botsToUpdate = 0
-        var updatingBots = false
         /// Its harnesses; nil until the machine has reported them.
         var harnesses: [Harness]?
         var harnessError: String?
 
-        var hasUpdate: Bool { appUpdateAvailable || botsOutdated || (harnesses ?? []).contains(where: \.updateAvailable) }
-        var isUpdating: Bool { updatingApp || updatingBots || (harnesses ?? []).contains(where: \.updating) }
-    }
-
-    /// Running work that an update would stop, waiting for the user to agree.
-    struct BusyConfirmation: Identifiable, Equatable, Sendable {
-        let id: UUID
-        let items: [String]
-    }
-
-    struct ProgressLine: Identifiable, Equatable, Sendable {
-        let id: String
-        let text: String
+        var hasUpdate: Bool { appUpdateAvailable || (harnesses ?? []).contains(where: \.updateAvailable) }
+        var isUpdating: Bool { updatingApp || (harnesses ?? []).contains(where: \.updating) }
     }
 
     /// The newest published release, once checked.
@@ -74,24 +58,24 @@ final class UpdatesStore {
     private(set) var checking = false
     private(set) var checkedAt: Date?
     private(set) var releaseError: String?
-    /// The app and bots part of each machine, by machine id.
-    private var appStates: [String: MachineState] = [:]
     @ObservationIgnored private weak var machineStore: MachinesStore?
 
     func attach(_ machines: MachinesStore) { machineStore = machines }
 
-    /// Per machine, by machine id: the app and bots part, with its harnesses once read.
-    /// A machine behind the newest release, or behind another machine, has an update:
+    /// Per machine, by machine id: its Woven Matter, with its harnesses once read. This Mac or
+    /// a Linux machine behind the newest release, or behind another machine, has an update:
     /// machines on different releases do not sync.
     var machines: [String: MachineState] {
-        var result = appStates
+        var result: [String: MachineState] = [:]
         guard let store = machineStore, let thisVersion = store.thisMachine?.appVersion else { return result }
         let target = store.machines.compactMap(\.appVersion).reduce(latestVersion ?? thisVersion) {
             Self.isBehind($0, latest: $1) ? $1 : $0
         }
         for machine in store.machines {
-            var state = result[machine.id] ?? MachineState()
-            state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: target)
+            var state = MachineState()
+            if machine.isThisMachine || machine.platform == .linux {
+                state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: target)
+            }
             if machine.isThisMachine {
                 state.updatingApp = DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate
             } else if machine.platform == .linux {
@@ -118,10 +102,7 @@ final class UpdatesStore {
         }
         return result
     }
-    private(set) var progress: [ProgressLine] = []
     private(set) var failures: [String] = []
-    private(set) var notice: String?
-    private(set) var busyConfirmation: BusyConfirmation?
     /// Machines run different Woven Matter releases, so they do not sync.
     var versionsDiffer: Bool {
         guard let store = machineStore, let this = store.thisMachine?.appVersion else { return false }
@@ -153,7 +134,6 @@ final class UpdatesStore {
         case .harnesses: machines.values.contains { ($0.harnesses ?? []).contains(where: \.updating) }
         case .machine(let id): state(of: id).isUpdating
         case .app(let id): state(of: id).updatingApp
-        case .bots(let id): state(of: id).updatingBots
         case .harness(let machineID, let harnessID):
             (state(of: machineID).harnesses ?? []).contains { $0.id == harnessID && $0.updating }
         }
@@ -215,8 +195,7 @@ final class UpdatesStore {
 
     /// Runs the updates a request covers: this Mac's Woven Matter through Sparkle, which
     /// restarts the app and with it the server; a Linux machine's server, on another release
-    /// than this Mac's, through this Mac's server; and each machine's harnesses. The bots are
-    /// not connected yet.
+    /// than this Mac's, through this Mac's server; and each machine's harnesses.
     func start(_ request: Request) {
         guard let store = machineStore, let thisMac = store.thisMachine else {
             failures = [ClientError.notConnected.localizedDescription]
@@ -233,17 +212,17 @@ final class UpdatesStore {
         case .machine(let id): harnesses = outdated(id).map { (id, $0) }
         case .harness(let machineID, let harnessID):
             harnesses = AgentRuntimeKind.allCases.filter { $0.rawValue == harnessID }.map { (machineID, $0) }
-        case .apps, .app, .bots: break
+        case .apps, .app: break
         }
         let updatesThisApp: Bool = switch request {
         case .everything, .apps: Self.isBehind(thisMac.appVersion, latest: latestVersion)
         case .machine(let id), .app(let id): id == thisMac.id && Self.isBehind(thisMac.appVersion, latest: latestVersion)
-        case .harnesses, .harness, .bots: false
+        case .harnesses, .harness: false
         }
         let servers: [Machine] = switch request {
         case .everything, .apps: store.otherMachines
         case .machine(let id), .app(let id): store.otherMachines.filter { $0.id == id }
-        case .harnesses, .harness, .bots: []
+        case .harnesses, .harness: []
         }
         let linuxServers = servers.filter { $0.platform == .linux && $0.appVersion != nil && $0.appVersion != thisMac.appVersion }
         if updatesThisApp {
@@ -256,8 +235,6 @@ final class UpdatesStore {
         }
         for (machineID, kind) in harnesses { store.update(kind, on: machineID) }
     }
-    func confirmBusy() { busyConfirmation = nil }
-    func cancelBusy(_ id: UUID) { if busyConfirmation?.id == id { busyConfirmation = nil } }
 }
 
 /// Reads every release version an appcast lists.

@@ -113,6 +113,7 @@ public final class WovenServer: Sendable {
     registerBotsTransfer(&routes, bots: bots)
     let tools = WovenTools(library: library, sessions: sessions, databases: databases, peers: peers, bots: bots)
     registerTools(&routes, tools: tools)
+    registerOutsideAgents(&routes, keys: toolKeys, library: library)
     await bots.offerTools(tools)
     let endpoint = MCPEndpoint(keys: toolKeys, tools: tools)
     try endpoint.start()

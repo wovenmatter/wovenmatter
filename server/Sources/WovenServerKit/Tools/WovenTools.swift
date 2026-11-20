@@ -124,7 +124,7 @@ final class WovenTools: Sendable {
     return ToolGroup.standard
   }
 
-  private static func allowed(_ tool: WovenTool, _ enabled: Set<ToolGroup>?) -> Bool {
+  static func allowed(_ tool: WovenTool, _ enabled: Set<ToolGroup>?) -> Bool {
     guard let enabled, !tool.groups.isEmpty else { return true }
     return !tool.groups.isDisjoint(with: enabled)
   }

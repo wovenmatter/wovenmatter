@@ -3,9 +3,8 @@ import Observation
 import WovenProtocol
 
 /// Synced settings shown in Settings: conversation titles, the Mac surface
-/// profile, analytics consent, the GitHub key and identity, Woven MCP access for
-/// outside agents. Defaults for new chats and dictation history are in the
-/// extensions.
+/// profile, the GitHub key and identity, Woven MCP access for outside agents.
+/// Defaults for new chats and dictation history are in the extensions.
 @MainActor
 @Observable
 final class SettingsStore {
@@ -59,7 +58,6 @@ final class SettingsStore {
         static let titleThinking = "titles.thinking"
         static let theme = "mac.theme"
         static let sidebarStyle = "mac.sidebarStyle"
-        static let analytics = "analytics.enabled"
     }
 
     var titleGenerationSettings: ConversationTitleGenerationSettings {
@@ -126,27 +124,6 @@ final class SettingsStore {
         }
     }
 
-    // MARK: Analytics
-
-    /// The synced consent; nil until the server has answered.
-    var analyticsPreference: Bool? { isLoaded ? bool(Key.analytics) ?? false : nil }
-    private(set) var analyticsError: String?
-    var analyticsEnabled: Bool { analyticsPreference ?? false }
-
-    func refreshAnalytics() async { await reload() }
-
-    func setAnalyticsEnabled(_ enabled: Bool) async {
-        do {
-            try await set(Key.analytics, to: .bool(enabled))
-            analyticsError = nil
-        } catch {
-            analyticsError = error.localizedDescription
-        }
-    }
-
-    /// Counts an app open or active use; the server samples and sends it when consent allows.
-    func recordAnalytics(_ event: ProductAnalyticsEvent) async {}
-
     // MARK: GitHub (in SettingsStore+GitHub.swift)
 
     var github: GitHubSettings?
@@ -155,19 +132,35 @@ final class SettingsStore {
 
     // MARK: Woven MCP for outside agents
 
-    private(set) var mcpAccess: WovenMCPAccess?
+    /// Whether this Mac's server answers agents outside Woven Matter, their tools, and the command they start.
+    private(set) var mcpAccess: OutsideAgentAccess?
     private(set) var mcpAccessBusy = false
     private(set) var mcpAccessError: String?
 
-    func refreshMCPAccess() async {
-        mcpAccessError = ClientError.notConnected.localizedDescription
-    }
+    func refreshMCPAccess() async { await performMCPAccess(GetOutsideAgentAccess()) }
 
     func setMCPAccessEnabled(_ enabled: Bool) async {
-        mcpAccessError = ClientError.notConnected.localizedDescription
+        guard let access = mcpAccess else { return }
+        await performMCPAccess(SetOutsideAgentAccess(isEnabled: enabled, groups: access.groups))
     }
 
-    func setMCPAccessGroup(_ group: WorkspaceToolGroup, enabled: Bool) async {
-        mcpAccessError = ClientError.notConnected.localizedDescription
+    func setMCPAccessGroup(_ group: ToolGroup, enabled: Bool) async {
+        guard let access = mcpAccess else { return }
+        var groups = access.groups
+        if enabled { groups.insert(group) } else { groups.remove(group) }
+        await performMCPAccess(SetOutsideAgentAccess(isEnabled: access.isEnabled, groups: groups))
+    }
+
+    private func performMCPAccess<R: Request>(_ request: R) async where R.Reply == OutsideAgentAccess {
+        guard !mcpAccessBusy else { return }
+        guard let server, server.isConnected else { return mcpAccessError = ClientError.notConnected.localizedDescription }
+        mcpAccessBusy = true
+        defer { mcpAccessBusy = false }
+        do {
+            mcpAccess = try await server.call(request)
+            mcpAccessError = nil
+        } catch {
+            mcpAccessError = error.localizedDescription
+        }
     }
 }

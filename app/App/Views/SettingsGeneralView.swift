@@ -44,7 +44,6 @@ struct SettingsGeneralView: View {
             versionSection
             appearanceSection
             SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
-            ProductAnalyticsSettingsSection(settings: model.settings)
         }
         .onChange(of: storedTheme) { _, _ in
             model.settings.persistMacSurfaceProfileFromUserDefaults()
