@@ -22,6 +22,15 @@ public struct ListMachines: Request {
   public init() {}
 }
 
+/// Removes another machine: deletes it, its sessions and its folders from
+/// every library. A machine cannot remove itself.
+public struct RemoveMachine: Request {
+  public static let method = "machines.remove"
+  public typealias Reply = Done
+  public var machineID: String
+  public init(machineID: String) { self.machineID = machineID }
+}
+
 /// Renames the machine of the server asked.
 public struct RenameMachine: Request {
   public static let method = "machines.rename"
@@ -112,18 +121,48 @@ public struct SubscribeSession: Subscription {
 }
 
 /// Sends a turn. Replies once the message is saved and the runtime took it.
+/// Each attachment's content is already in the server's content store
+/// (`PutContent`).
 public struct SendTurn: Request {
   public static let method = "session.send"
   public typealias Reply = Done
   public var sessionID: String
   public var text: String
-  public init(sessionID: String, text: String) {
+  public var attachments: [Attachment]
+  public init(sessionID: String, text: String, attachments: [Attachment] = []) {
     self.sessionID = sessionID
     self.text = text
+    self.attachments = attachments
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    sessionID = try container.decode(String.self, forKey: .sessionID)
+    text = try container.decode(String.self, forKey: .text)
+    attachments = try container.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
   }
 }
 
-/// Answers a question or approval the runtime is waiting on.
+/// Changes a session's model, thinking level or permission mode. Fields left
+/// nil stay. Starts the runtime's process if it is not running. Replies with
+/// the configuration the runtime confirmed.
+public struct ConfigureSession: Request {
+  public static let method = "session.configure"
+  public typealias Reply = SessionConfiguration
+  public var sessionID: String
+  public var model: String?
+  public var thinking: String?
+  public var permission: String?
+  public init(sessionID: String, model: String? = nil, thinking: String? = nil, permission: String? = nil) {
+    self.sessionID = sessionID
+    self.model = model
+    self.thinking = thinking
+    self.permission = permission
+  }
+}
+
+/// Answers a question or approval the runtime is waiting on: an option's
+/// `id`, or free text when the prompt offers no options.
 public struct AnswerPrompt: Request {
   public static let method = "session.answer"
   public typealias Reply = Done
@@ -162,13 +201,14 @@ public struct ListFolders: Request {
   public init(machineID: String? = nil) { self.machineID = machineID }
 }
 
-/// Creates a folder on the machine of the server asked.
+/// Creates a folder on the machine of the server asked, for an existing
+/// directory there, or with `path` nil for a new blank directory it makes.
 public struct CreateFolder: Request {
   public static let method = "folders.create"
   public typealias Reply = Folder
   public var name: String
-  public var path: String
-  public init(name: String, path: String) {
+  public var path: String?
+  public init(name: String, path: String? = nil) {
     self.name = name
     self.path = path
   }
@@ -234,7 +274,16 @@ public struct SyncPull: Request {
   }
 }
 
-/// Part of a file in the content store, by digest.
+/// Puts a file into the server's content store, for attaching to a turn.
+public struct PutContent: Request {
+  public static let method = "content.put"
+  public typealias Reply = ContentRef
+  public var data: Data
+  public init(data: Data) { self.data = data }
+}
+
+/// Part of a file in the content store, by digest. A local caller may ask
+/// for content another machine holds; the server fetches it first.
 public struct FetchContent: Request {
   public static let method = "content.fetch"
   public typealias Reply = ContentChunk

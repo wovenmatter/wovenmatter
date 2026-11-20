@@ -90,3 +90,14 @@ public struct ContentChunk: Codable, Sendable, Hashable {
     self.size = size
   }
 }
+
+/// A file in the content store.
+public struct ContentRef: Codable, Sendable, Hashable {
+  public var digest: String
+  public var size: Int64
+
+  public init(digest: String, size: Int64) {
+    self.digest = digest
+    self.size = size
+  }
+}

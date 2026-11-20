@@ -1,13 +1,30 @@
 import Foundation
 
+/// Which kind of computer a machine is.
+public enum MachinePlatform: String, Codable, Sendable, Hashable {
+  case mac
+  case linux
+
+  /// The platform this code runs on.
+  public static var current: MachinePlatform {
+    #if os(Linux)
+    .linux
+    #else
+    .mac
+    #endif
+  }
+}
+
 /// A Mac or Linux computer on the person's tailnet that runs the server.
 public struct Machine: Codable, Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String
+  public var platform: MachinePlatform
 
-  public init(id: String, name: String) {
+  public init(id: String, name: String, platform: MachinePlatform = .current) {
     self.id = id
     self.name = name
+    self.platform = platform
   }
 }
 
@@ -57,18 +74,31 @@ public struct Session: Codable, Sendable, Hashable, Identifiable {
   public var runtime: RuntimeKind
   public var title: String
   public var folderID: String?
+  /// Where the runtime works on the owning machine: the folder's directory,
+  /// or a scratch directory of the session's own.
+  public var directory: String
+  /// The model, thinking level and permission mode last chosen, by the
+  /// runtime's own identifiers.
+  public var model: String?
+  public var thinking: String?
+  public var permission: String?
   public var archived: Bool
   /// The goal the session works against until it is met or cleared.
   public var goal: String?
   public var createdAt: Date
 
   public init(id: String, machineID: String, runtime: RuntimeKind, title: String, folderID: String?,
+              directory: String = "", model: String? = nil, thinking: String? = nil, permission: String? = nil,
               archived: Bool, goal: String?, createdAt: Date) {
     self.id = id
     self.machineID = machineID
     self.runtime = runtime
     self.title = title
     self.folderID = folderID
+    self.directory = directory
+    self.model = model
+    self.thinking = thinking
+    self.permission = permission
     self.archived = archived
     self.goal = goal
     self.createdAt = createdAt
@@ -93,6 +123,68 @@ public struct SessionItem: Codable, Sendable, Hashable, Identifiable {
   }
 }
 
+/// A file attached to a user message, stored in the content store by digest.
+public struct Attachment: Codable, Sendable, Hashable {
+  public var name: String
+  public var mimeType: String
+  public var digest: String
+  public var size: Int64
+
+  public init(name: String, mimeType: String, digest: String, size: Int64) {
+    self.name = name
+    self.mimeType = mimeType
+    self.digest = digest
+    self.size = size
+  }
+}
+
+/// What sort of activity a tool call is, for showing it.
+public struct ToolKind: RawRepresentable, Codable, Sendable, Hashable {
+  public var rawValue: String
+  public init(rawValue: String) { self.rawValue = rawValue }
+
+  public init(from decoder: any Decoder) throws {
+    rawValue = try decoder.singleValueContainer().decode(String.self)
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
+
+  public static let read = ToolKind(rawValue: "read")
+  public static let edit = ToolKind(rawValue: "edit")
+  public static let delete = ToolKind(rawValue: "delete")
+  public static let move = ToolKind(rawValue: "move")
+  public static let search = ToolKind(rawValue: "search")
+  public static let execute = ToolKind(rawValue: "execute")
+  public static let fetch = ToolKind(rawValue: "fetch")
+  /// The runtime's reasoning, shown as activity; `output` is its text.
+  public static let thinking = ToolKind(rawValue: "thinking")
+  /// A plan or to-do list; `plan` holds its entries.
+  public static let plan = ToolKind(rawValue: "plan")
+  /// A child task (subagent); `output` is its result.
+  public static let task = ToolKind(rawValue: "task")
+  public static let other = ToolKind(rawValue: "other")
+}
+
+/// One entry of a plan or to-do list.
+public struct PlanEntry: Codable, Sendable, Hashable {
+  public enum Status: String, Codable, Sendable, Hashable {
+    case pending
+    case inProgress
+    case completed
+  }
+
+  public var text: String
+  public var status: Status
+
+  public init(text: String, status: Status) {
+    self.text = text
+    self.status = status
+  }
+}
+
 /// A tool the runtime called, with its result once there is one.
 public struct ToolCall: Codable, Sendable, Hashable {
   public var name: String
@@ -100,12 +192,21 @@ public struct ToolCall: Codable, Sendable, Hashable {
   public var input: String
   public var output: String?
   public var failed: Bool
+  /// What the runtime calls this call, for people ("Read main.swift").
+  public var title: String?
+  public var kind: ToolKind?
+  /// The entries, when this is a plan or to-do update.
+  public var plan: [PlanEntry]?
 
-  public init(name: String, input: String, output: String? = nil, failed: Bool = false) {
+  public init(name: String, input: String, output: String? = nil, failed: Bool = false, title: String? = nil,
+              kind: ToolKind? = nil, plan: [PlanEntry]? = nil) {
     self.name = name
     self.input = input
     self.output = output
     self.failed = failed
+    self.title = title
+    self.kind = kind
+    self.plan = plan
   }
 }
 
@@ -128,6 +229,8 @@ public struct Notice: Codable, Sendable, Hashable {
     public static let nativeSessionGone = Kind(rawValue: "nativeSessionGone")
     /// A turn failed.
     public static let failure = Kind(rawValue: "failure")
+    /// The server stopped while a turn was running; its reply may be cut short.
+    public static let interrupted = Kind(rawValue: "interrupted")
   }
 
   public var kind: Kind
@@ -141,17 +244,19 @@ public struct Notice: Codable, Sendable, Hashable {
 
 /// What a session item holds. Encoded with a `type` field.
 public enum ItemContent: Codable, Sendable, Hashable {
-  case userMessage(text: String)
+  case userMessage(text: String, attachments: [Attachment] = [])
   case assistantMessage(text: String)
   case toolCall(ToolCall)
   case notice(Notice)
 
-  private enum Key: String, CodingKey { case type, text, call, notice }
+  private enum Key: String, CodingKey { case type, text, attachments, call, notice }
 
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: Key.self)
     switch try container.decode(String.self, forKey: .type) {
-    case "userMessage": self = .userMessage(text: try container.decode(String.self, forKey: .text))
+    case "userMessage":
+      self = .userMessage(text: try container.decode(String.self, forKey: .text),
+                          attachments: try container.decodeIfPresent([Attachment].self, forKey: .attachments) ?? [])
     case "assistantMessage": self = .assistantMessage(text: try container.decode(String.self, forKey: .text))
     case "toolCall": self = .toolCall(try container.decode(ToolCall.self, forKey: .call))
     case "notice": self = .notice(try container.decode(Notice.self, forKey: .notice))
@@ -163,9 +268,10 @@ public enum ItemContent: Codable, Sendable, Hashable {
   public func encode(to encoder: any Encoder) throws {
     var container = encoder.container(keyedBy: Key.self)
     switch self {
-    case .userMessage(let text):
+    case .userMessage(let text, let attachments):
       try container.encode("userMessage", forKey: .type)
       try container.encode(text, forKey: .text)
+      if !attachments.isEmpty { try container.encode(attachments, forKey: .attachments) }
     case .assistantMessage(let text):
       try container.encode("assistantMessage", forKey: .type)
       try container.encode(text, forKey: .text)
@@ -199,6 +305,17 @@ public enum RunState: String, Codable, Sendable, Hashable {
   case nativeSessionGone
 }
 
+/// One answer a prompt offers.
+public struct PromptOption: Codable, Sendable, Hashable, Identifiable {
+  public var id: String
+  public var name: String
+
+  public init(id: String, name: String) {
+    self.id = id
+    self.name = name
+  }
+}
+
 /// A question or an approval the runtime is waiting on.
 public struct Prompt: Codable, Sendable, Hashable, Identifiable {
   public enum Kind: String, Codable, Sendable, Hashable {
@@ -209,10 +326,11 @@ public struct Prompt: Codable, Sendable, Hashable, Identifiable {
   public var id: String
   public var kind: Kind
   public var text: String
-  /// The answers offered, when the runtime offers a fixed set.
-  public var options: [String]
+  /// The answers offered, when the runtime offers a fixed set; the answer is
+  /// an option's `id`. With none, the answer is free text.
+  public var options: [PromptOption]
 
-  public init(id: String, kind: Kind, text: String, options: [String] = []) {
+  public init(id: String, kind: Kind, text: String, options: [PromptOption] = []) {
     self.id = id
     self.kind = kind
     self.text = text
@@ -220,21 +338,75 @@ public struct Prompt: Codable, Sendable, Hashable, Identifiable {
   }
 }
 
+/// One value a session setting can take, as the runtime reports it.
+public struct SessionOption: Codable, Sendable, Hashable, Identifiable {
+  public var id: String
+  public var name: String
+  public var detail: String?
+
+  public init(id: String, name: String, detail: String? = nil) {
+    self.id = id
+    self.name = name
+    self.detail = detail
+  }
+}
+
+/// A slash command the runtime offers in the composer.
+public struct SessionCommand: Codable, Sendable, Hashable {
+  public var name: String
+  public var detail: String?
+  public var hint: String?
+
+  public init(name: String, detail: String? = nil, hint: String? = nil) {
+    self.name = name
+    self.detail = detail
+    self.hint = hint
+  }
+}
+
+/// A session's model, thinking level and permission mode, what each can be,
+/// and its slash commands: one shape for every runtime. The lists are what
+/// the runtime reports while its process runs; they are empty otherwise.
+public struct SessionConfiguration: Codable, Sendable, Hashable {
+  public var model: String?
+  public var thinking: String?
+  public var permission: String?
+  public var models: [SessionOption]
+  public var thinkingLevels: [SessionOption]
+  public var permissionModes: [SessionOption]
+  public var commands: [SessionCommand]
+
+  public init(model: String? = nil, thinking: String? = nil, permission: String? = nil, models: [SessionOption] = [],
+              thinkingLevels: [SessionOption] = [], permissionModes: [SessionOption] = [], commands: [SessionCommand] = []) {
+    self.model = model
+    self.thinking = thinking
+    self.permission = permission
+    self.models = models
+    self.thinkingLevels = thinkingLevels
+    self.permissionModes = permissionModes
+    self.commands = commands
+  }
+}
+
 /// Everything a subscriber needs before live events: the finished items, the
-/// items in progress, run state and open prompts, all taken at one instant.
+/// items in progress, run state, open prompts and the configuration, all
+/// taken at one instant.
 public struct SessionSnapshot: Codable, Sendable, Hashable {
   public var session: Session
   public var items: [SessionItem]
   public var inProgress: [LiveItem]
   public var run: RunState
   public var prompts: [Prompt]
+  public var configuration: SessionConfiguration
 
-  public init(session: Session, items: [SessionItem], inProgress: [LiveItem], run: RunState, prompts: [Prompt]) {
+  public init(session: Session, items: [SessionItem], inProgress: [LiveItem], run: RunState, prompts: [Prompt],
+              configuration: SessionConfiguration = SessionConfiguration()) {
     self.session = session
     self.items = items
     self.inProgress = inProgress
     self.run = run
     self.prompts = prompts
+    self.configuration = configuration
   }
 }
 
@@ -248,13 +420,17 @@ public enum SessionEvent: Codable, Sendable, Hashable {
   case toolActivity(itemID: String, call: ToolCall)
   /// An item finished and is now stored in the library.
   case itemFinished(SessionItem)
+  /// An item in progress ended without being saved; forget it.
+  case itemDropped(itemID: String)
   case runState(RunState)
   /// The runtime is waiting for an answer.
   case awaiting(Prompt)
   /// A prompt was answered or withdrawn.
   case answered(promptID: String)
+  /// The model, thinking level, permission mode or what they can be changed.
+  case configuration(SessionConfiguration)
 
-  private enum Key: String, CodingKey { case type, item, itemID, delta, call, run, prompt, promptID }
+  private enum Key: String, CodingKey { case type, item, itemID, delta, call, run, prompt, promptID, configuration }
 
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: Key.self)
@@ -265,9 +441,11 @@ public enum SessionEvent: Codable, Sendable, Hashable {
     case "toolActivity": self = .toolActivity(itemID: try container.decode(String.self, forKey: .itemID),
                                               call: try container.decode(ToolCall.self, forKey: .call))
     case "itemFinished": self = .itemFinished(try container.decode(SessionItem.self, forKey: .item))
+    case "itemDropped": self = .itemDropped(itemID: try container.decode(String.self, forKey: .itemID))
     case "runState": self = .runState(try container.decode(RunState.self, forKey: .run))
     case "awaiting": self = .awaiting(try container.decode(Prompt.self, forKey: .prompt))
     case "answered": self = .answered(promptID: try container.decode(String.self, forKey: .promptID))
+    case "configuration": self = .configuration(try container.decode(SessionConfiguration.self, forKey: .configuration))
     case let other:
       throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown event type \(other)")
     }
@@ -290,6 +468,9 @@ public enum SessionEvent: Codable, Sendable, Hashable {
     case .itemFinished(let item):
       try container.encode("itemFinished", forKey: .type)
       try container.encode(item, forKey: .item)
+    case .itemDropped(let itemID):
+      try container.encode("itemDropped", forKey: .type)
+      try container.encode(itemID, forKey: .itemID)
     case .runState(let run):
       try container.encode("runState", forKey: .type)
       try container.encode(run, forKey: .run)
@@ -299,6 +480,9 @@ public enum SessionEvent: Codable, Sendable, Hashable {
     case .answered(let promptID):
       try container.encode("answered", forKey: .type)
       try container.encode(promptID, forKey: .promptID)
+    case .configuration(let configuration):
+      try container.encode("configuration", forKey: .type)
+      try container.encode(configuration, forKey: .configuration)
     }
   }
 }

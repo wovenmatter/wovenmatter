@@ -17,9 +17,13 @@ public struct Caller: Sendable {
 
 /// Handlers by method. Adding a request is one `on` call.
 struct Router: Sendable {
+  /// Encoded events of one subscription. The connection pulls them only as
+  /// fast as it can send them; whoever produces them bounds what waits.
+  typealias Events = AsyncThrowingStream<JSONValue, any Error>
+
   enum Outcome: Sendable {
     case reply(JSONValue)
-    case subscription(JSONValue, AsyncStream<JSONValue>)
+    case subscription(JSONValue, Events)
   }
 
   typealias Handler = @Sendable (JSONValue, Caller) async throws -> Outcome
@@ -32,18 +36,12 @@ struct Router: Sendable {
   }
 
   mutating func subscription<S: Subscription>(
-    _ type: S.Type, _ handle: @escaping @Sendable (S, Caller) async throws -> (S.Reply, AsyncStream<S.Event>)
+    _ type: S.Type, _ handle: @escaping @Sendable (S, Caller) async throws -> (S.Reply, AsyncThrowingStream<S.Event, any Error>)
   ) {
     handlers[S.method] = { params, caller in
       let (reply, events) = try await handle(try Self.decode(S.self, params), caller)
-      let (encoded, continuation) = AsyncStream<JSONValue>.makeStream()
-      let forward = Task {
-        for await event in events {
-          if let value = try? JSONValue(encoding: event) { continuation.yield(value) }
-        }
-        continuation.finish()
-      }
-      continuation.onTermination = { _ in forward.cancel() }
+      let box = IteratorBox(events.makeAsyncIterator())
+      let encoded = Events(unfolding: { try await box.next().map { try JSONValue(encoding: $0) } })
       return .subscription(try JSONValue(encoding: reply), encoded)
     }
   }
@@ -60,6 +58,27 @@ struct Router: Sendable {
   }
 }
 
+/// Lets one consumer pull from a stream's iterator through a `@Sendable` closure.
+private final class IteratorBox<Element: Sendable>: @unchecked Sendable {
+  private var iterator: AsyncThrowingStream<Element, any Error>.Iterator
+  init(_ iterator: AsyncThrowingStream<Element, any Error>.Iterator) { self.iterator = iterator }
+  func next() async throws -> Element? { try await iterator.next() }
+}
+
+extension AsyncStream where Element: Sendable {
+  /// The same events as a stream that never fails.
+  var throwing: AsyncThrowingStream<Element, any Error> {
+    let box = PlainIteratorBox(makeAsyncIterator())
+    return AsyncThrowingStream(unfolding: { await box.next() })
+  }
+}
+
+private final class PlainIteratorBox<Element: Sendable>: @unchecked Sendable {
+  private var iterator: AsyncStream<Element>.Iterator
+  init(_ iterator: AsyncStream<Element>.Iterator) { self.iterator = iterator }
+  func next() async -> Element? { await iterator.next() }
+}
+
 extension ProtocolError {
   /// Any error as the protocol reports it.
   init(_ error: any Error) {
@@ -73,6 +92,8 @@ extension ProtocolError {
       case .invalid: self.init(.badRequest, error.description)
       case .closed: self.init(.failed, error.description)
       }
+    case let error as SubscriberTooSlow:
+      self.init(.tooSlow, error.description)
     default:
       self.init(.failed, String(describing: error))
     }
@@ -80,8 +101,12 @@ extension ProtocolError {
 }
 
 /// The server's side of one connection: waits for the hello, answers it, then
-/// serves requests concurrently and forwards subscription events.
+/// serves requests concurrently and forwards subscription events, each only
+/// as fast as the connection takes them.
 actor ServerConnection {
+  /// How long a new connection may take to say hello.
+  static let helloLimit = Duration.seconds(10)
+
   private let transport: any MessageTransport
   private let router: Router
   private let origin: Caller.Origin
@@ -98,11 +123,17 @@ actor ServerConnection {
 
   /// Serves until the connection closes.
   func run() async {
+    let transport = transport
+    let timer = Task {
+      try await Task.sleep(for: Self.helloLimit)
+      transport.close()
+    }
     do {
       for try await text in transport.incoming {
         guard let message = try? Message(text: text) else { continue }
         guard let caller else {
           guard case .hello(let remote) = message else { break }
+          timer.cancel()
           caller = Caller(origin: origin, hello: remote)
           try transport.send(Message.hello(hello).text())
           continue
@@ -113,9 +144,14 @@ actor ServerConnection {
           reply(id, .success(try JSONValue(encoding: Done())))
           continue
         }
+        guard tasks[id] == nil else {
+          reply(id, .failure(ProtocolError(.badRequest, "Request id \(id) is already in use on this connection.")))
+          continue
+        }
         tasks[id] = Task { await self.serve(id, method, params, caller) }
       }
     } catch {}
+    timer.cancel()
     for task in tasks.values { task.cancel() }
     tasks.removeAll()
     transport.close()
@@ -128,8 +164,14 @@ actor ServerConnection {
         reply(id, .success(value))
       case .subscription(let value, let events):
         reply(id, .success(value))
-        for await event in events { send(.event(subscription: id, data: event)) }
-        if !Task.isCancelled { send(.end(subscription: id, error: nil)) }
+        do {
+          for try await event in events {
+            try await transport.sendWhenWritten(try Message.event(subscription: id, data: event).text())
+          }
+          if !Task.isCancelled { send(.end(subscription: id, error: nil)) }
+        } catch {
+          if !Task.isCancelled { send(.end(subscription: id, error: ProtocolError(error))) }
+        }
       }
     } catch {
       reply(id, .failure(ProtocolError(error)))

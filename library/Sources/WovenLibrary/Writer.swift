@@ -31,7 +31,8 @@ final class Writer {
                         counter: existing?.integer("changed") ?? 0)
     _ = try writer.transaction { writer in
       if try writer.row("machines", machineID) == nil {
-        try writer.put("machines", id: machineID, ["name": .text(machineName), "created_at": .integer(Writer.now())])
+        try writer.put("machines", id: machineID, ["name": .text(machineName), "platform": .text(MachinePlatform.current.rawValue),
+                                                 "created_at": .integer(Writer.now())])
       }
     }
     return writer

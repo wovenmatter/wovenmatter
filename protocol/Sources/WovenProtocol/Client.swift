@@ -7,7 +7,14 @@ public protocol MessageTransport: Sendable {
   var incoming: AsyncThrowingStream<String, any Error> { get }
   /// Queues a message for sending, in order.
   func send(_ text: String) throws
+  /// Sends a message and returns once it has been written, so a sender that
+  /// waits on this never queues more than the connection takes.
+  func sendWhenWritten(_ text: String) async throws
   func close()
+}
+
+extension MessageTransport {
+  public func sendWhenWritten(_ text: String) async throws { try send(text) }
 }
 
 /// The connection closed before the reply arrived.

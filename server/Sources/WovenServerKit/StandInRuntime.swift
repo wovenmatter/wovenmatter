@@ -98,7 +98,14 @@ private final class StandInSession: RuntimeSession {
     self.gate = gate
   }
 
-  func send(_ text: String) async throws {
+  var configuration: SessionConfiguration {
+    SessionConfiguration(model: "stand-in", models: [SessionOption(id: "stand-in", name: "Stand-in")])
+  }
+
+  func configure(_ choices: SessionChoices) async throws -> SessionConfiguration { configuration }
+
+  func send(_ input: Turn) async throws {
+    let text = input.text
     let number = store.nextTurn(nativeHandle)
     let emit = emit
     let gate = gate
@@ -108,9 +115,10 @@ private final class StandInSession: RuntimeSession {
       if Task.isCancelled { return }
       emit.yield(.text(text))
       emit.yield(.messageFinished)
-      emit.yield(.toolStarted(callID: "echo-\(number)", name: "echo", input: "{\"text\":\"\(text)\"}"))
-      emit.yield(.toolFinished(callID: "echo-\(number)", output: text, failed: false))
-      emit.yield(.turnFinished(failure: nil))
+      emit.yield(.tool(callID: "echo-\(number)", call: ToolCall(name: "echo", input: "{\"text\":\"\(text)\"}"), finished: false))
+      emit.yield(.tool(callID: "echo-\(number)", call: ToolCall(name: "echo", input: "{\"text\":\"\(text)\"}", output: text),
+                       finished: true))
+      emit.yield(.turnFinished(failure: nil, usage: TokenUsage(model: "stand-in", input: 10, output: 5)))
     }
     turn.withLock { $0 = task }
   }
@@ -121,7 +129,7 @@ private final class StandInSession: RuntimeSession {
 
   func interrupt() async throws {
     turn.withLock { $0?.cancel() }
-    emit.yield(.turnFinished(failure: nil))
+    emit.yield(.turnFinished(failure: nil, usage: nil))
   }
 
   func stop() async {

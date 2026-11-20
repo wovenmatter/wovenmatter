@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import WovenLibrary
 import WovenProtocol
-import WovenServerKit
+@testable import WovenServerKit
 
 private let appVersion = "test"
 
@@ -12,13 +12,15 @@ private struct TestServer {
   let folder: URL
   let socket: String
 
-  static func start(folder: URL? = nil, runtime: StandInRuntime, tailnet: StandInTailnet = StandInTailnet(),
+  static func start(folder: URL? = nil, runtime: any Runtime, tailnet: StandInTailnet = StandInTailnet(),
                     listen: Bool = false) async throws -> TestServer {
     let folder = folder ?? FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
     let socket = "/tmp/wvt-\(UUID().uuidString.prefix(8)).sock"
-    let server = try await WovenServer.start(WovenServer.Options(
+    var options = WovenServer.Options(
       dataFolder: folder, socketPath: socket, listen: listen ? ("127.0.0.1", 0) : nil, appVersion: appVersion,
-      machineName: "test", tailnet: tailnet, runtimes: [runtime], discoveryInterval: .seconds(3600)))
+      machineName: "test", tailnet: tailnet, runtimes: [runtime], discoveryInterval: .seconds(3600))
+    options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
+    let server = try await WovenServer.start(options)
     return TestServer(server: server, folder: folder, socket: socket)
   }
 
@@ -61,8 +63,9 @@ private struct View {
     case .itemFinished(let item):
       inProgress.removeAll { $0.id == item.id }
       items.append(item)
+    case .itemDropped(let id): inProgress.removeAll { $0.id == id }
     case .runState(let state): run = state
-    case .awaiting, .answered: break
+    case .awaiting, .answered, .configuration: break
     }
   }
 }
@@ -138,14 +141,14 @@ func secondServerReceivesTheSessionBySyncAndServesItReadOnly() async throws {
     try await Task.sleep(for: .milliseconds(25))
   }
   #expect(copied == onAItems)
-  #expect(try await onB.call(ListSessions()).map(\.machineID) == [a.server.library.machineID])
-  #expect(try await onB.call(ListMachines()).first { $0.machine.id == a.server.library.machineID }?.online == true)
+  #expect(try await onB.call(ListSessions()).map(\.machineID) == [a.server.machineID])
+  #expect(try await onB.call(ListMachines()).first { $0.machine.id == a.server.machineID }?.online == true)
 
   let refused = await #expect(throws: ProtocolError.self) {
     _ = try await onB.call(SendTurn(sessionID: session.id, text: "from b"))
   }
   #expect(refused?.code == .notOwner)
-  #expect(refused?.machineID == a.server.library.machineID)
+  #expect(refused?.machineID == a.server.machineID)
   #expect(try await onB.call(SessionItems(sessionID: session.id)) == onAItems)
 }
 

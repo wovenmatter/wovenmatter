@@ -21,9 +21,15 @@ public final class WovenServer: Sendable {
     public var runtimes: [any Runtime]
     /// How often the tailnet is looked at for new machines.
     public var discoveryInterval: Duration
+    /// Where new blank folders are made.
+    public var foldersRoot: URL
+    /// Where this machine's private key and subscription sign-ins are kept;
+    /// nil for the Keychain on a Mac and a private file on Linux.
+    public var secretStore: (any SecretStore)?
 
     public init(dataFolder: URL, socketPath: String?, listen: (host: String, port: Int)?, appVersion: String,
-                machineName: String, tailnet: any Tailnet, runtimes: [any Runtime], discoveryInterval: Duration = .seconds(30)) {
+                machineName: String, tailnet: any Tailnet, runtimes: [any Runtime], discoveryInterval: Duration = .seconds(30),
+                foldersRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Woven Matter")) {
       self.dataFolder = dataFolder
       self.socketPath = socketPath
       self.listen = listen
@@ -32,27 +38,43 @@ public final class WovenServer: Sendable {
       self.tailnet = tailnet
       self.runtimes = runtimes
       self.discoveryInterval = discoveryInterval
+      self.foldersRoot = foldersRoot
+      self.secretStore = nil
     }
   }
 
-  public let library: Library
+  let library: Library
   public let hello: Hello
   /// The TCP port other machines reach this server on, when it listens.
   public let port: Int?
+  var secretsForTests: Secrets { secrets }
+  /// This machine's permanent identifier.
+  public var machineID: String { library.machineID }
   private let sessions: SessionManager
   private let peers: PeerSync
+  private let secrets: Secrets
   private let listeners: [Listener]
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
+  private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
+  private let watcher = Mutex<Task<Void, Never>?>(nil)
 
   public static func start(_ options: Options) async throws -> WovenServer {
     let library = try await Library.open(folder: options.dataFolder, machineName: options.machineName)
     guard let machine = try await library.machine(library.machineID) else {
       throw ProtocolError(.failed, "The library has no row for this machine.")
     }
+    let secrets = try await Secrets.open(library: library, store: options.secretStore ?? standardSecretStore(
+      dataFolder: options.dataFolder, machineID: library.machineID))
+    for runtime in options.runtimes { (runtime as? PiDurableRuntime)?.credentials.attach(secrets) }
     let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion)
-    let sessions = SessionManager(library: library, runtimes: options.runtimes)
+    let sessions = SessionManager(library: library, runtimes: options.runtimes,
+                                  scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
+    await sessions.start()
     let peers = PeerSync(library: library, tailnet: options.tailnet, hello: hello, interval: options.discoveryInterval)
-    let router = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
+    var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
+    registerFolders(&routes, library: library, root: options.foldersRoot)
+    registerRuntimes(&routes, sessions: sessions, secrets: secrets)
+    let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
 
@@ -74,22 +96,26 @@ public final class WovenServer: Sendable {
       }
     } catch {
       for listener in listeners { await listener.stop() }
+      await sessions.closeAll()
       await library.close()
       throw error
     }
     let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
-                             sessions: sessions, peers: peers, listeners: listeners)
+                             sessions: sessions, peers: peers, secrets: secrets, listeners: listeners)
     pending.server.withLock { $0 = server }
     await peers.start()
+    server.watchLibrary()
     return server
   }
 
-  private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, listeners: [Listener]) {
+  private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
+               listeners: [Listener]) {
     self.library = library
     self.hello = hello
     self.port = port
     self.sessions = sessions
     self.peers = peers
+    self.secrets = secrets
     self.listeners = listeners
   }
 
@@ -98,14 +124,49 @@ public final class WovenServer: Sendable {
     await peers.discover()
   }
 
+  /// Returns once another machine has removed this one. The server has
+  /// stopped serving by then; the caller should stop it and exit. The next
+  /// start erases the library and begins as a new machine.
+  public func waitUntilRemoved() async {
+    await withCheckedContinuation { continuation in
+      let done = removal.withLock { state in
+        if state.removed { return true }
+        state.waiters.append(continuation)
+        return false
+      }
+      if done { continuation.resume() }
+    }
+  }
+
   /// Stops listening, closes every connection, stops every runtime process,
   /// and closes the library.
   public func stop() async {
+    watcher.withLock { $0?.cancel() }
     for listener in listeners { await listener.stop() }
     await peers.stop()
     for transport in connections.withLock({ Array($0.values) }) { transport.close() }
     await sessions.closeAll()
     await library.close()
+  }
+
+  /// Seals API keys for machines that lack a copy, and notices when this
+  /// machine has been removed.
+  private func watchLibrary() {
+    let changes = library.changes()
+    let task = Task { [weak self] in
+      await self?.secrets.sealForEveryMachine()
+      for await _ in changes { await self?.secrets.sealForEveryMachine() }
+      guard let self, self.library.isRemoved else { return }
+      for listener in self.listeners { await listener.stop() }
+      for transport in self.connections.withLock({ Array($0.values) }) { transport.close() }
+      let waiters = self.removal.withLock { state in
+        state.removed = true
+        defer { state.waiters.removeAll() }
+        return state.waiters
+      }
+      for waiter in waiters { waiter.resume() }
+    }
+    watcher.withLock { $0 = task }
   }
 
   fileprivate func serve(_ transport: any MessageTransport, origin: Caller.Origin, router: Router, hello: Hello) async {
@@ -149,21 +210,16 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
   router.on(RenameMachine.self) { request, _ in
     try await library.renameMachine(thisMachine, to: request.name)
   }
+  router.on(RemoveMachine.self) { request, _ in
+    try await library.removeMachine(request.machineID)
+    return Done()
+  }
 
   router.on(ListSessions.self) { request, _ in
     try await library.sessions(machineID: request.machineID, includeArchived: request.includeArchived)
   }
   router.on(CreateSession.self) { request, _ in
-    guard await sessions.supports(request.runtime) else {
-      throw ProtocolError(.badRequest, "This machine has no \(request.runtime.rawValue) runtime.")
-    }
-    if let folderID = request.folderID {
-      guard let folder = try await library.folder(folderID) else { throw ProtocolError(.notFound, "No folder \(folderID).") }
-      guard folder.machineID == thisMachine else {
-        throw ProtocolError(.notOwner, "That folder is on another machine.", machineID: folder.machineID)
-      }
-    }
-    return try await library.createSession(runtime: request.runtime, title: request.title, folderID: request.folderID)
+    try await sessions.create(runtime: request.runtime, title: request.title, folderID: request.folderID)
   }
   router.on(UpdateSession.self) { request, _ in
     let folder: String?? = request.removeFromFolder == true ? .some(nil) : request.folderID.map { .some($0) }
@@ -181,8 +237,12 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     try await sessions.host(for: request.sessionID).subscribe()
   }
   router.on(SendTurn.self) { request, _ in
-    try await sessions.host(for: request.sessionID).send(request.text)
+    try await sessions.host(for: request.sessionID).send(request.text, attachments: request.attachments)
     return Done()
+  }
+  router.on(ConfigureSession.self) { request, _ in
+    try await sessions.host(for: request.sessionID).configure(
+      SessionChoices(model: request.model, thinking: request.thinking, permission: request.permission))
   }
   router.on(AnswerPrompt.self) { request, _ in
     try await sessions.host(for: request.sessionID).answer(promptID: request.promptID, with: request.answer)
@@ -194,20 +254,6 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
   }
   router.on(StopSession.self) { request, _ in
     await sessions.close(request.sessionID)
-    return Done()
-  }
-
-  router.on(ListFolders.self) { request, _ in
-    try await library.folders(machineID: request.machineID)
-  }
-  router.on(CreateFolder.self) { request, _ in
-    try await library.createFolder(name: request.name, path: request.path)
-  }
-  router.on(RenameFolder.self) { request, _ in
-    try await library.renameFolder(request.folderID, to: request.name)
-  }
-  router.on(DeleteFolder.self) { request, _ in
-    try await library.deleteFolder(request.folderID)
     return Done()
   }
 
@@ -226,7 +272,7 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
       continuation.finish()
     }
     continuation.onTermination = { _ in forward.cancel() }
-    return (LibraryEvent(changed: library.changed), events)
+    return (LibraryEvent(changed: library.changed), events.throwing)
   }
   router.on(SyncPull.self) { request, caller in
     // Two machines on different app releases do not sync.
@@ -234,6 +280,9 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
       throw ProtocolError(.versionMismatch, "This machine runs \(appVersion).", machineID: thisMachine)
     }
     return try await library.pull(after: request.after, limit: min(max(request.limit, 1), 2000))
+  }
+  router.on(PutContent.self) { request, _ in
+    ContentRef(digest: try await library.storeContent(request.data), size: Int64(request.data.count))
   }
   router.on(FetchContent.self) { request, caller in
     if let chunk = try await library.content(request.digest, offset: request.offset, length: min(request.length, 16 << 20)) {

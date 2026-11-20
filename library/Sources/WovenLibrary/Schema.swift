@@ -126,6 +126,8 @@ public enum Schema {
     // Newest write wins.
     Table("machines", .newestWins, [
       .text("name", ""),
+      // "mac" or "linux".
+      .text("platform", "mac"),
       // Sealed secrets for this machine are sealed with this key.
       .text("public_key"),
       .integer("created_at", 0),
@@ -135,6 +137,12 @@ public enum Schema {
       .text("runtime", ""),
       .text("title", ""),
       .text("folder_id"),
+      // Where the runtime works on the owning machine.
+      .text("directory", ""),
+      // The last model, thinking level and permission mode chosen.
+      .text("model"),
+      .text("thinking"),
+      .text("permission"),
       .integer("archived", 0),
       .text("goal"),
       .integer("created_at", 0),
@@ -257,6 +265,8 @@ public enum Schema {
       .text("handle", ""),
       // The runtime said the native session no longer exists.
       .integer("gone", 0),
+      // A turn is running. Still set at start, the server stopped mid-turn.
+      .integer("turn_running", 0),
       .integer("updated_at", 0),
     ]),
     Table("schedule_state", .local, [

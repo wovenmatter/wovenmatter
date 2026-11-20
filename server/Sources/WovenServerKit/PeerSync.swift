@@ -12,6 +12,8 @@ actor PeerSync {
   }
 
   private struct SelfLink: Error {}
+  /// Another link already reaches the same machine (by its identifier).
+  private struct DuplicateLink: Error {}
 
   private let library: Library
   private let tailnet: any Tailnet
@@ -49,28 +51,54 @@ actor PeerSync {
     clients.removeAll()
   }
 
-  /// Looks at the tailnet now and connects to any machine not yet linked.
+  /// Looks at the tailnet now, connects to any address not yet linked, and
+  /// drops links to addresses the tailnet no longer lists (a renamed or
+  /// readdressed machine), so no dead duplicate stays behind.
   func discover() async {
     guard let machines = try? await tailnet.machines() else { return }
+    let listed = Set(machines)
+    for (machine, task) in links where !listed.contains(machine) {
+      task.cancel()
+      links[machine] = nil
+    }
     for machine in machines where links[machine] == nil {
       links[machine] = Task { [weak self] in await self?.link(machine) }
     }
   }
 
-  /// Fetches a file this machine lacks from whichever linked machine has it.
+  private func unlinked(_ machine: TailnetMachine) {
+    links[machine] = nil
+  }
+
+  /// Fetches a file this machine lacks from whichever linked machine has
+  /// it, writing it to disk piece by piece rather than holding it in memory.
   func fetchContent(_ digest: String) async -> Bool {
     for client in clients.values {
-      var data = Data()
+      guard let file = try? library.incomingFile() else { return false }
       do {
-        while true {
-          let chunk = try await client.call(FetchContent(digest: digest, offset: Int64(data.count)))
-          data.append(chunk.data)
-          if chunk.data.isEmpty || Int64(data.count) >= chunk.size { break }
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: file)
+        var received: Int64 = 0
+        do {
+          while true {
+            let chunk = try await client.call(FetchContent(digest: digest, offset: received))
+            try handle.write(contentsOf: chunk.data)
+            received += Int64(chunk.data.count)
+            if chunk.data.isEmpty || received >= chunk.size { break }
+          }
+          try handle.close()
+        } catch {
+          try? handle.close()
+          throw error
         }
-        guard Library.digest(of: data) == digest else { continue }
-        try await library.storeContent(data)
+        guard try Library.digest(ofFile: file) == digest else {
+          try? FileManager.default.removeItem(at: file)
+          continue
+        }
+        try await library.storeContent(movingFile: file)
         return true
       } catch {
+        try? FileManager.default.removeItem(at: file)
         continue
       }
     }
@@ -85,6 +113,10 @@ actor PeerSync {
         try await follow(machine)
         delay = .seconds(1)
       } catch is SelfLink {
+        return
+      } catch is DuplicateLink {
+        // The other link serves that machine; discovery may try this address again later.
+        unlinked(machine)
         return
       } catch {}
       try? await Task.sleep(for: delay)
@@ -112,6 +144,10 @@ actor PeerSync {
     guard peerID != library.machineID else {
       await client.close()
       throw SelfLink()
+    }
+    if clients[peerID] != nil {
+      await client.close()
+      throw DuplicateLink()
     }
     statuses[peerID] = Status(online: true, appVersion: remote.appVersion)
     defer {

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import NIOCore
 import NIOHTTP1
 import NIOPosix
@@ -16,25 +17,83 @@ public enum Endpoint: Sendable, Hashable {
 /// The largest message either side accepts. Sync pages stay well below it.
 let maximumMessageSize = 64 << 20
 
+/// The most bytes a connection queues for sending. A peer that does not read
+/// what it is sent is disconnected rather than allowed to grow memory.
+let maximumQueuedBytes = 2 * maximumMessageSize
+
+/// A frame waiting to be written; `waiter` names who waits for it.
+private struct Outgoing: Sendable {
+  let frame: WebSocketFrame
+  let waiter: UInt64?
+}
+
+/// Senders waiting for their frames to be written. Whatever is still waiting
+/// when the connection ends is told it was not.
+private final class Waiters: Sendable {
+  private let state = Mutex<(next: UInt64, open: Bool, waiting: [UInt64: @Sendable (Bool) -> Void])>((0, true, [:]))
+
+  func add(_ waiter: @escaping @Sendable (Bool) -> Void) -> UInt64? {
+    state.withLock { state in
+      guard state.open else { return nil }
+      state.next += 1
+      state.waiting[state.next] = waiter
+      return state.next
+    }
+  }
+
+  func done(_ id: UInt64?, _ written: Bool) {
+    guard let id else { return }
+    state.withLock { $0.waiting.removeValue(forKey: id) }?(written)
+  }
+
+  func endAll() {
+    let all = state.withLock { state in
+      state.open = false
+      defer { state.waiting.removeAll() }
+      return Array(state.waiting.values)
+    }
+    for waiter in all { waiter(false) }
+  }
+}
+
+/// Bytes waiting to be written.
+private final class Counter: Sendable {
+  private let value = Mutex<Int>(0)
+  func withLock<T>(_ body: (inout Int) -> T) -> T { value.withLock { body(&$0) } }
+}
+
 /// One WebSocket connection carrying protocol messages as text frames.
 final class WebSocketTransport: MessageTransport {
   let incoming: AsyncThrowingStream<String, any Error>
-  private let outbound: AsyncStream<WebSocketFrame>.Continuation
+  private let outbound: AsyncStream<Outgoing>.Continuation
   private let masked: Bool
+  private let queued = Counter()
+  private let waiters = Waiters()
 
   init(channel: NIOAsyncChannel<WebSocketFrame, WebSocketFrame>, isClient: Bool) {
     let (incoming, received) = AsyncThrowingStream<String, any Error>.makeStream()
-    let (frames, outbound) = AsyncStream<WebSocketFrame>.makeStream()
+    let (frames, outbound) = AsyncStream<Outgoing>.makeStream()
     self.incoming = incoming
     self.outbound = outbound
     self.masked = isClient
     let masked = isClient
+    let queued = queued
+    let waiters = waiters
     Task {
       do {
         try await channel.executeThenClose { inbound, writer in
           try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-              for await frame in frames { try await writer.write(frame) }
+              for await outgoing in frames {
+                queued.withLock { $0 -= outgoing.frame.length }
+                do {
+                  try await writer.write(outgoing.frame)
+                  waiters.done(outgoing.waiter, true)
+                } catch {
+                  waiters.done(outgoing.waiter, false)
+                  throw error
+                }
+              }
               var reason = ByteBuffer()
               reason.write(webSocketErrorCode: .normalClosure)
               let close = WebSocketFrame(fin: true, opcode: .connectionClose, maskKey: masked ? .random() : nil, data: reason)
@@ -46,8 +105,8 @@ final class WebSocketTransport: MessageTransport {
                 case .text:
                   received.yield(String(buffer: frame.unmaskedData))
                 case .ping:
-                  outbound.yield(WebSocketFrame(fin: true, opcode: .pong, maskKey: masked ? .random() : nil,
-                                                data: frame.unmaskedData))
+                  outbound.yield(Outgoing(frame: WebSocketFrame(fin: true, opcode: .pong, maskKey: masked ? .random() : nil,
+                                                                data: frame.unmaskedData), waiter: nil))
                 case .connectionClose:
                   return
                 default:
@@ -65,12 +124,43 @@ final class WebSocketTransport: MessageTransport {
         received.finish(throwing: error)
       }
       outbound.finish()
+      waiters.endAll()
     }
   }
 
   func send(_ text: String) throws {
+    guard enqueue(text, waiter: nil) else { throw ConnectionClosed() }
+  }
+
+  func sendWhenWritten(_ text: String) async throws {
+    let written: Bool = await withCheckedContinuation { continuation in
+      guard let waiter = waiters.add({ continuation.resume(returning: $0) }) else {
+        continuation.resume(returning: false)
+        return
+      }
+      _ = enqueue(text, waiter: waiter)
+    }
+    if !written { throw ConnectionClosed() }
+  }
+
+  /// Queues a frame; false when the connection is closed or over its limit.
+  /// A waiter is told either way.
+  private func enqueue(_ text: String, waiter: UInt64?) -> Bool {
     let frame = WebSocketFrame(fin: true, opcode: .text, maskKey: masked ? .random() : nil, data: ByteBuffer(string: text))
-    if case .terminated = outbound.yield(frame) { throw ConnectionClosed() }
+    let over = queued.withLock { total in
+      total += frame.length
+      return total > maximumQueuedBytes
+    }
+    if over {
+      waiters.done(waiter, false)
+      close()
+      return false
+    }
+    if case .terminated = outbound.yield(Outgoing(frame: frame, waiter: waiter)) {
+      waiters.done(waiter, false)
+      return false
+    }
+    return true
   }
 
   func close() {

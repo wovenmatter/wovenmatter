@@ -45,6 +45,50 @@ extension Library {
     return digest
   }
 
+  /// Moves a file that is already complete into the store under its digest,
+  /// without reading it into memory. The file is gone from `url` after.
+  @discardableResult
+  public func storeContent(movingFile file: URL) async throws -> String {
+    let digest = try Self.digest(ofFile: file)
+    let url = try fileURL(digest)
+    let size = Int64((try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? 0)
+    if FileManager.default.fileExists(atPath: url.path) {
+      try? FileManager.default.removeItem(at: file)
+    } else {
+      try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+      do { try FileManager.default.moveItem(at: file, to: url) } catch {
+        guard FileManager.default.fileExists(atPath: url.path) else { throw error }
+        try? FileManager.default.removeItem(at: file)
+      }
+    }
+    try await write { writer in
+      try writer.db.run("INSERT OR IGNORE INTO files (digest, size, added_at) VALUES (?, ?, ?)",
+                        [.text(digest), .integer(size), .integer(Writer.now())])
+    }
+    return digest
+  }
+
+  /// The SHA-256 digest of a file, read in pieces.
+  public static func digest(ofFile file: URL) throws -> String {
+    let handle = try FileHandle(forReadingFrom: file)
+    defer { try? handle.close() }
+    var hasher = SHA256()
+    while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+  }
+
+  /// The stored file for a digest on this machine, or nil when it is not held here.
+  public func contentFile(_ digest: String) async throws -> URL? {
+    guard try await hasContent(digest) else { return nil }
+    return try fileURL(digest)
+  }
+
+  /// Where a file being received for the store is written first.
+  public func incomingFile() throws -> URL {
+    try FileManager.default.createDirectory(at: filesFolder, withIntermediateDirectories: true)
+    return filesFolder.appendingPathComponent("incoming-\(UUID().uuidString)")
+  }
+
   public func hasContent(_ digest: String) async throws -> Bool {
     try await read { db in
       try !db.query("SELECT digest FROM files WHERE digest = ?", [.text(digest)]).isEmpty

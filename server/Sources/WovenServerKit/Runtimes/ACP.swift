@@ -1,0 +1,702 @@
+import Foundation
+import Synchronization
+import WovenProtocol
+
+// The Agent Client Protocol core: JSON-RPC over a runtime's stdio, shared by
+// Codex, Claude Code, Grok Build and Pi Durable. Each differs only in its
+// `ACPProfile`.
+
+/// An error the agent answered a request with.
+struct ACPError: Error, CustomStringConvertible {
+  let code: Int
+  let message: String
+  var description: String { message }
+
+  /// ACP's "resource not found".
+  static let notFound = -32002
+}
+
+/// What makes one ACP runtime different from another.
+struct ACPProfile: Sendable {
+  var kind: RuntimeKind
+  var executable: String
+  var arguments: [String]
+  var environment: [String: String]
+  var protocolVersion: Int = 1
+  /// The client capabilities sent with `initialize`.
+  var clientCapabilities: JSONValue = .object([:])
+  /// Whether an error from `session/load` means the native session is gone.
+  var isMissingSession: @Sendable (ACPError) -> Bool = { $0.code == ACPError.notFound }
+  /// Permission modes fixed when the process starts, for runtimes that take
+  /// them as a launch flag rather than over ACP.
+  var launchPermissions: [SessionOption] = []
+  /// Answers a request the agent makes that ACP does not define; nil to
+  /// refuse it.
+  var handleRequest: (@Sendable (String, JSONValue) async throws -> JSONValue)?
+  /// Receives a notification the agent sends that ACP does not define.
+  var handleNotification: (@Sendable (String, JSONValue) async -> Void)?
+  /// Where the process's standard error goes.
+  var logFile: URL?
+}
+
+/// A runtime spoken to over ACP, one process per session.
+struct ACPRuntime: Runtime {
+  let kind: RuntimeKind
+  let profile: @Sendable (RuntimeStart) async throws -> ACPProfile
+  let statusCheck: @Sendable () async -> RuntimeStatus
+  let installer: @Sendable () async throws -> Void
+
+  func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
+    try await ACPSession.open(profile: try await profile(start), start: start)
+  }
+
+  func status() async -> RuntimeStatus { await statusCheck() }
+  func install() async throws { try await installer() }
+}
+
+/// JSON-RPC over one child process: requests with replies, and everything
+/// the agent sends handed in order to `incoming`.
+actor ACPConnection {
+  enum Incoming: Sendable {
+    case notification(method: String, params: JSONValue)
+    case request(id: JSONValue, method: String, params: JSONValue)
+  }
+
+  private let child: ChildProcess
+  private var nextID = 0
+  private var pending: [Int: CheckedContinuation<JSONValue, any Error>] = [:]
+  private var closed = false
+  nonisolated let incoming: AsyncStream<Incoming>
+  private let deliver: AsyncStream<Incoming>.Continuation
+
+  init(child: ChildProcess) {
+    self.child = child
+    (incoming, deliver) = AsyncStream<Incoming>.makeStream()
+  }
+
+  func start() {
+    let lines = child.lines
+    Task {
+      for await line in lines { self.receive(line) }
+      self.ended()
+    }
+  }
+
+  func request(_ method: String, _ params: JSONValue) async throws -> JSONValue {
+    if closed { throw RuntimeError.failed("The runtime's process has ended.") }
+    nextID += 1
+    let id = nextID
+    let message = JSONValue.object(["jsonrpc": .string("2.0"), "id": .integer(Int64(id)), "method": .string(method), "params": params])
+    return try await withCheckedThrowingContinuation { continuation in
+      pending[id] = continuation
+      child.send(Self.text(message))
+    }
+  }
+
+  func notify(_ method: String, _ params: JSONValue) {
+    child.send(Self.text(.object(["jsonrpc": .string("2.0"), "method": .string(method), "params": params])))
+  }
+
+  func respond(_ id: JSONValue, result: JSONValue) {
+    child.send(Self.text(.object(["jsonrpc": .string("2.0"), "id": id, "result": result])))
+  }
+
+  func respond(_ id: JSONValue, error message: String, code: Int = -32603) {
+    child.send(Self.text(.object(["jsonrpc": .string("2.0"), "id": id,
+                                  "error": .object(["code": .integer(Int64(code)), "message": .string(message)])])))
+  }
+
+  var isClosed: Bool { closed }
+
+  func stop() async {
+    await child.stop()
+  }
+
+  private func receive(_ line: String) {
+    guard let message = try? Wire.decoder.decode(JSONValue.self, from: Data(line.utf8)), case .object(let body) = message else { return }
+    let method = body["method"]?.string
+    let params = body["params"] ?? .object([:])
+    if let method {
+      if let id = body["id"], id != .null {
+        deliver.yield(.request(id: id, method: method, params: params))
+      } else {
+        deliver.yield(.notification(method: method, params: params))
+      }
+      return
+    }
+    guard let id = body["id"]?.int, let continuation = pending.removeValue(forKey: id) else { return }
+    if case .object(let error)? = body["error"] {
+      var text = error["message"]?.string ?? "The runtime failed."
+      if let detail = error["data"]?["message"]?.string ?? error["data"]?["details"]?.string, !text.contains(detail) {
+        text += ": " + detail
+      }
+      continuation.resume(throwing: ACPError(code: error["code"]?.int ?? -32603, message: text))
+    } else {
+      continuation.resume(returning: body["result"] ?? .null)
+    }
+  }
+
+  private func ended() {
+    closed = true
+    for continuation in pending.values { continuation.resume(throwing: RuntimeError.failed("The runtime's process ended.")) }
+    pending.removeAll()
+    deliver.finish()
+  }
+
+  private static func text(_ value: JSONValue) -> String {
+    (try? String(decoding: Wire.encoder.encode(value), as: UTF8.self)) ?? "{}"
+  }
+}
+
+/// One ACP native session and its process, kept alive between turns.
+final class ACPSession: RuntimeSession, @unchecked Sendable {
+  let nativeHandle: String
+  let events: AsyncStream<RuntimeEvent>
+  private let emit: AsyncStream<RuntimeEvent>.Continuation
+  private let connection: ACPConnection
+  private let profile: ACPProfile
+  private let state: ACPState
+
+  var configuration: SessionConfiguration {
+    get async { await state.configuration }
+  }
+
+  private init(nativeHandle: String, connection: ACPConnection, profile: ACPProfile, state: ACPState,
+               events: AsyncStream<RuntimeEvent>, emit: AsyncStream<RuntimeEvent>.Continuation) {
+    self.nativeHandle = nativeHandle
+    self.connection = connection
+    self.profile = profile
+    self.state = state
+    self.events = events
+    self.emit = emit
+  }
+
+  static func open(profile: ACPProfile, start: RuntimeStart) async throws -> ACPSession {
+    let child = try ChildProcess(executable: profile.executable, arguments: profile.arguments, directory: start.directory,
+                                 environment: profile.environment, logFile: profile.logFile)
+    let connection = ACPConnection(child: child)
+    await connection.start()
+    let (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
+    let state = ACPState(connection: connection, profile: profile, emit: emit, directory: start.directory)
+    // Everything the agent says goes through `state`, in order, from the start.
+    let incoming = connection.incoming
+    Task {
+      for await message in incoming { await state.receive(message) }
+      await state.processEnded()
+    }
+    do {
+      let initialized = try await connection.request("initialize", .object([
+        "protocolVersion": .integer(Int64(profile.protocolVersion)),
+        "clientCapabilities": profile.clientCapabilities,
+        "clientInfo": .object(["name": .string("Woven Matter"), "version": .string("1")]),
+      ]))
+      let handle: String
+      if let existing = start.nativeHandle {
+        guard initialized["agentCapabilities"]?["loadSession"]?.bool == true else {
+          throw RuntimeError.failed("\(profile.kind.rawValue) cannot resume a session.")
+        }
+        await state.setReplaying(true)
+        do {
+          let loaded = try await connection.request("session/load", .object([
+            "sessionId": .string(existing), "cwd": .string(start.directory), "mcpServers": .array([]),
+          ]))
+          await state.setReplaying(false)
+          await state.capture(loaded)
+        } catch let error as ACPError where profile.isMissingSession(error) {
+          throw RuntimeError.nativeSessionGone
+        }
+        handle = existing
+      } else {
+        let created = try await connection.request("session/new", .object([
+          "cwd": .string(start.directory), "mcpServers": .array([]),
+        ]))
+        guard let id = created["sessionId"]?.string, !id.isEmpty else {
+          throw RuntimeError.failed("\(profile.kind.rawValue) did not start a session.")
+        }
+        handle = id
+        await state.capture(created)
+      }
+      await state.setSession(handle)
+      let session = ACPSession(nativeHandle: handle, connection: connection, profile: profile, state: state,
+                               events: events, emit: emit)
+      if !start.choices.isEmpty { _ = try? await session.configure(start.choices) }
+      return session
+    } catch {
+      await connection.stop()
+      throw error
+    }
+  }
+
+  func send(_ turn: Turn) async throws {
+    try await state.prompt(turn)
+  }
+
+  func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
+    try await state.configure(choices)
+  }
+
+  func answer(promptID: String, with answer: String) async throws {
+    try await state.answer(promptID: promptID, with: answer)
+  }
+
+  func interrupt() async throws {
+    await state.cancel()
+  }
+
+  func stop() async {
+    await state.cancel()
+    await connection.stop()
+  }
+}
+
+/// The state of one ACP session: its configuration, the turn in progress
+/// and what the agent is waiting on. Every message from the agent is handled
+/// here in the order it arrived.
+private actor ACPState {
+  private let connection: ACPConnection
+  private let profile: ACPProfile
+  private let emit: AsyncStream<RuntimeEvent>.Continuation
+  private let directory: String
+  private var sessionID: String?
+  private var replaying = false
+  private(set) var configuration = SessionConfiguration()
+
+  /// How each setting is changed: an ACP config option, or the older method.
+  private var modelOption: String?
+  private var thinkingOption: String?
+  private var permissionOption: String?
+  private var usesSetModel = false
+  private var usesSetMode = false
+
+  private var turnRunning = false
+  private var turnNumber = 0
+  private var tools: [String: ToolCall] = [:]
+  private var thinkingID: String?
+  private var thinkingCount = 0
+  private var planID: String?
+  private var permissionRequests: [String: (id: JSONValue, options: [PromptOption])] = [:]
+
+  init(connection: ACPConnection, profile: ACPProfile, emit: AsyncStream<RuntimeEvent>.Continuation, directory: String) {
+    self.connection = connection
+    self.profile = profile
+    self.emit = emit
+    self.directory = directory
+    if !profile.launchPermissions.isEmpty {
+      configuration.permissionModes = profile.launchPermissions
+    }
+  }
+
+  func setSession(_ id: String) { sessionID = id }
+  func setReplaying(_ value: Bool) { replaying = value }
+
+  // MARK: Turns
+
+  func prompt(_ turn: Turn) throws {
+    guard let sessionID else { throw RuntimeError.failed("The session is not open.") }
+    guard !turnRunning else { throw RuntimeError.failed("A turn is already running.") }
+    turnRunning = true
+    turnNumber += 1
+    let blocks = try Self.blocks(turn)
+    let connection = connection
+    Task {
+      let result: Result<JSONValue, any Error>
+      do {
+        result = .success(try await connection.request("session/prompt", .object([
+          "sessionId": .string(sessionID), "prompt": .array(blocks),
+        ])))
+      } catch {
+        result = .failure(error)
+      }
+      await self.promptEnded(result)
+    }
+  }
+
+  private func promptEnded(_ result: Result<JSONValue, any Error>) {
+    guard turnRunning else { return }
+    turnRunning = false
+    endActivity(planToo: true)
+    for (callID, var call) in tools {
+      if call.output == nil { call.failed = true }
+      emit.yield(.tool(callID: callID, call: call, finished: true))
+    }
+    tools.removeAll()
+    withdrawPermissions()
+    emit.yield(.messageFinished)
+    switch result {
+    case .success(let value):
+      let reason = value["stopReason"]?.string ?? "end_turn"
+      let failure: String? = switch reason {
+      case "max_tokens": "The reply reached its length limit."
+      case "max_turn_requests": "The turn reached its limit of model requests."
+      case "refusal": "The model declined to answer."
+      default: nil
+      }
+      emit.yield(.turnFinished(failure: failure, usage: Self.usage(value, model: configuration.model)))
+    case .failure(let error as ACPError) where profile.isMissingSession(error):
+      emit.yield(.nativeSessionGone)
+    case .failure(let error):
+      emit.yield(.turnFinished(failure: "\(error)", usage: nil))
+    }
+  }
+
+  func cancel() async {
+    withdrawPermissions()
+    guard let sessionID, turnRunning else { return }
+    await connection.notify("session/cancel", .object(["sessionId": .string(sessionID)]))
+  }
+
+  func answer(promptID: String, with answer: String) async throws {
+    guard let request = permissionRequests.removeValue(forKey: promptID) else {
+      throw RuntimeError.failed("Nothing is waiting for that answer.")
+    }
+    guard request.options.contains(where: { $0.id == answer }) else {
+      permissionRequests[promptID] = request
+      throw RuntimeError.failed("That is not one of the answers offered.")
+    }
+    await connection.respond(request.id, result: .object(["outcome": .object([
+      "outcome": .string("selected"), "optionId": .string(answer),
+    ])]))
+    emit.yield(.promptResolved(id: promptID))
+  }
+
+  private func withdrawPermissions() {
+    let open = permissionRequests
+    permissionRequests.removeAll()
+    for (promptID, request) in open {
+      Task { await connection.respond(request.id, result: .object(["outcome": .object(["outcome": .string("cancelled")])])) }
+      emit.yield(.promptResolved(id: promptID))
+    }
+  }
+
+  func processEnded() {
+    if turnRunning { promptEnded(.failure(RuntimeError.failed("The runtime's process ended during the turn."))) }
+    emit.yield(.exited)
+    emit.finish()
+  }
+
+  // MARK: Configuration
+
+  func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
+    guard let sessionID else { throw RuntimeError.failed("The session is not open.") }
+    if let model = choices.model, model != configuration.model {
+      if let id = modelOption {
+        capture(try await connection.request("session/set_config_option", .object([
+          "sessionId": .string(sessionID), "configId": .string(id), "value": .string(model)])))
+      } else if usesSetModel {
+        capture(try await connection.request("session/set_model", .object(["sessionId": .string(sessionID), "modelId": .string(model)])))
+        configuration.model = model
+      } else {
+        throw RuntimeError.failed("\(profile.kind.rawValue) does not let the model be chosen.")
+      }
+    }
+    if let thinking = choices.thinking, thinking != configuration.thinking {
+      guard let id = thinkingOption else { throw RuntimeError.failed("This model has no thinking levels to choose from.") }
+      capture(try await connection.request("session/set_config_option", .object([
+        "sessionId": .string(sessionID), "configId": .string(id), "value": .string(thinking)])))
+    }
+    if let permission = choices.permission, permission != configuration.permission {
+      if let id = permissionOption {
+        capture(try await connection.request("session/set_config_option", .object([
+          "sessionId": .string(sessionID), "configId": .string(id), "value": .string(permission)])))
+      } else if usesSetMode {
+        capture(try await connection.request("session/set_mode", .object(["sessionId": .string(sessionID), "modeId": .string(permission)])))
+        configuration.permission = permission
+      } else if profile.launchPermissions.contains(where: { $0.id == permission }) {
+        throw RuntimeError.failed("\(profile.kind.rawValue) takes its permission mode when it starts; start a new session for this one.")
+      } else {
+        throw RuntimeError.failed("\(profile.kind.rawValue) has no permission modes to choose from.")
+      }
+    }
+    return configuration
+  }
+
+  /// Takes in whatever configuration a response or update carries.
+  func capture(_ value: JSONValue) {
+    let before = configuration
+    if let options = value["configOptions"]?.array {
+      modelOption = nil
+      thinkingOption = nil
+      permissionOption = nil
+      for option in options {
+        guard let id = option["id"]?.string else { continue }
+        let current = option["currentValue"]?.string
+        let values = Self.choices(option["options"])
+        switch option["category"]?.string ?? id {
+        case "model":
+          modelOption = id
+          configuration.model = current
+          configuration.models = values
+        case "thought_level", "reasoning", "effort", "thinking":
+          thinkingOption = id
+          configuration.thinking = current
+          configuration.thinkingLevels = values
+        case "mode", "permission":
+          permissionOption = id
+          configuration.permission = current
+          configuration.permissionModes = values
+        default: continue
+        }
+      }
+      if thinkingOption == nil {
+        configuration.thinking = nil
+        configuration.thinkingLevels = []
+      }
+    }
+    if modelOption == nil, let models = value["models"], case .array(let available)? = models["availableModels"] {
+      usesSetModel = true
+      configuration.model = models["currentModelId"]?.string
+      configuration.models = available.compactMap { model in
+        model["modelId"]?.string.map { SessionOption(id: $0, name: model["name"]?.string ?? $0, detail: model["description"]?.string) }
+      }
+    }
+    if permissionOption == nil, let modes = value["modes"], case .array(let available)? = modes["availableModes"] {
+      usesSetMode = true
+      configuration.permission = modes["currentModeId"]?.string
+      configuration.permissionModes = Self.choices(.array(available), key: "id")
+    }
+    if permissionOption == nil, let current = value["currentModeId"]?.string { configuration.permission = current }
+    if let commands = value["availableCommands"]?.array {
+      configuration.commands = commands.compactMap { command in
+        command["name"]?.string.map { SessionCommand(name: $0, detail: command["description"]?.string, hint: command["input"]?["hint"]?.string) }
+      }
+    }
+    if configuration != before && sessionID != nil { emit.yield(.configuration(configuration)) }
+  }
+
+  // MARK: Messages from the agent
+
+  func receive(_ message: ACPConnection.Incoming) async {
+    switch message {
+    case .notification("session/update", let params):
+      update(params["update"] ?? .null)
+    case .notification(let method, let params):
+      await profile.handleNotification?(method, params)
+    case .request(let id, "session/request_permission", let params):
+      permissionRequest(id: id, params)
+    case .request(let id, let method, let params):
+      if let handle = profile.handleRequest {
+        do {
+          await connection.respond(id, result: try await handle(method, params))
+        } catch {
+          await connection.respond(id, error: "\(error)")
+        }
+      } else if method == "elicitation/create" {
+        await connection.respond(id, result: .object(["action": .string("decline")]))
+      } else {
+        await connection.respond(id, error: "Woven Matter does not offer \(method).", code: -32601)
+      }
+    }
+  }
+
+  private func update(_ update: JSONValue) {
+    guard let kind = update["sessionUpdate"]?.string else { return }
+    switch kind {
+    case "config_option_update", "current_mode_update", "available_commands_update":
+      capture(update)
+      return
+    default:
+      break
+    }
+    // A resumed session replays its history; the library already has it.
+    guard !replaying else { return }
+    switch kind {
+    case "agent_message_chunk":
+      guard let text = update["content"]?["text"]?.string else { return }
+      endActivity(planToo: false)
+      emit.yield(.text(text))
+    case "agent_thought_chunk":
+      guard let text = update["content"]?["text"]?.string else { return }
+      let id: String
+      if let thinkingID {
+        id = thinkingID
+      } else {
+        emit.yield(.messageFinished)
+        thinkingCount += 1
+        id = "thinking-\(turnNumber)-\(thinkingCount)"
+        thinkingID = id
+        tools[id] = ToolCall(name: "thinking", input: "", output: "", title: "Thinking", kind: .thinking)
+      }
+      tools[id]?.output = (tools[id]?.output ?? "") + text
+      if let call = tools[id] { emit.yield(.tool(callID: id, call: call, finished: false)) }
+    case "tool_call", "tool_call_update":
+      guard let callID = update["toolCallId"]?.string else { return }
+      endActivity(planToo: false)
+      var call = tools[callID] ?? ToolCall(name: update["kind"]?.string ?? "tool", input: "")
+      Self.merge(update, into: &call)
+      let status = update["status"]?.string
+      let finished = status == "completed" || status == "failed"
+      if status == "failed" { call.failed = true }
+      if finished {
+        if call.output == nil { call.output = "" }
+        tools[callID] = nil
+      } else {
+        tools[callID] = call
+      }
+      emit.yield(.tool(callID: callID, call: call, finished: finished))
+    case "plan":
+      let entries = (update["entries"]?.array ?? []).compactMap { entry -> PlanEntry? in
+        guard let text = entry["content"]?.string else { return nil }
+        let status: PlanEntry.Status = switch entry["status"]?.string {
+        case "completed": .completed
+        case "in_progress": .inProgress
+        default: .pending
+        }
+        return PlanEntry(text: text, status: status)
+      }
+      let id = planID ?? "plan-\(turnNumber)"
+      planID = id
+      let input = (try? String(decoding: Wire.encoder.encode(update["entries"] ?? .array([])), as: UTF8.self)) ?? "[]"
+      let call = ToolCall(name: "plan", input: input, output: "", title: "Plan", kind: .plan, plan: entries)
+      tools[id] = call
+      emit.yield(.tool(callID: id, call: call, finished: false))
+    default:
+      return
+    }
+  }
+
+  /// Ends the reasoning in progress, and the plan when the turn ends.
+  private func endActivity(planToo: Bool) {
+    if let id = thinkingID, let call = tools.removeValue(forKey: id) {
+      emit.yield(.tool(callID: id, call: call, finished: true))
+    }
+    thinkingID = nil
+    if planToo, let id = planID, let call = tools.removeValue(forKey: id) {
+      emit.yield(.tool(callID: id, call: call, finished: true))
+      planID = nil
+    }
+  }
+
+  private func permissionRequest(id: JSONValue, _ params: JSONValue) {
+    let options = (params["options"]?.array ?? []).compactMap { option -> PromptOption? in
+      guard let optionID = option["optionId"]?.string else { return nil }
+      return PromptOption(id: optionID, name: option["name"]?.string ?? optionID)
+    }
+    guard !options.isEmpty else {
+      Task { await connection.respond(id, result: .object(["outcome": .object(["outcome": .string("cancelled")])])) }
+      return
+    }
+    let promptID = UUID().uuidString.lowercased()
+    permissionRequests[promptID] = (id, options)
+    let title = params["toolCall"]?["title"]?.string ?? "The agent asks for permission."
+    emit.yield(.prompt(Prompt(id: promptID, kind: .approval, text: title, options: options)))
+  }
+
+  // MARK: Shapes
+
+  private static func choices(_ value: JSONValue?, key: String = "value") -> [SessionOption] {
+    var result: [SessionOption] = []
+    for option in value?.array ?? [] {
+      // Options may come grouped.
+      if let group = option["options"]?.array {
+        result += choices(.array(group), key: key)
+        continue
+      }
+      guard let id = option[key]?.string ?? option["id"]?.string else { continue }
+      result.append(SessionOption(id: id, name: option["name"]?.string ?? id, detail: option["description"]?.string))
+    }
+    return result
+  }
+
+  private static func merge(_ update: JSONValue, into call: inout ToolCall) {
+    if let title = update["title"]?.string { call.title = title }
+    if let kind = update["kind"]?.string {
+      call.name = kind
+      call.kind = switch kind {
+      case "read": .read
+      case "edit": .edit
+      case "delete": .delete
+      case "move": .move
+      case "search": .search
+      case "execute": .execute
+      case "fetch": .fetch
+      case "think": .thinking
+      default: .other
+      }
+    }
+    if update["_meta"]?["wovenKind"]?.string == "task" { call.kind = .task }
+    if let input = update["rawInput"], input != .null { call.input = text(input) }
+    var parts: [String] = []
+    for item in update["content"]?.array ?? [] {
+      switch item["type"]?.string {
+      case "content":
+        if let text = item["content"]?["text"]?.string { parts.append(text) }
+      case "diff":
+        if let path = item["path"]?.string { parts.append("Edited \(path)") }
+      case "terminal":
+        if let id = item["terminalId"]?.string { parts.append("Terminal \(id)") }
+      default: break
+      }
+    }
+    if !parts.isEmpty {
+      call.output = parts.joined(separator: "\n\n")
+    } else if let output = update["rawOutput"], output != .null {
+      call.output = text(output)
+    }
+  }
+
+  private static func text(_ value: JSONValue) -> String {
+    if case .string(let text) = value { return text }
+    return (try? String(decoding: Wire.encoder.encode(value), as: UTF8.self)) ?? ""
+  }
+
+  private static func usage(_ result: JSONValue, model: String?) -> TokenUsage? {
+    let usage = result["usage"] ?? result["_meta"]?["usage"]
+    guard let usage, let input = usage["inputTokens"]?.int, let output = usage["outputTokens"]?.int else { return nil }
+    return TokenUsage(model: result["_meta"]?["model"]?.string ?? model, input: Int64(input), output: Int64(output),
+                      cacheRead: Int64(usage["cachedReadTokens"]?.int ?? 0), cacheWrite: Int64(usage["cachedWriteTokens"]?.int ?? 0),
+                      cost: usage["cost"]?.double)
+  }
+
+  /// A turn as ACP content blocks: images inline, text files embedded, other
+  /// files linked by path (and named in the text, since some adapters reduce
+  /// a link to a mention).
+  private static func blocks(_ turn: Turn) throws -> [JSONValue] {
+    var files: [JSONValue] = []
+    var linked: [String] = []
+    for attachment in turn.attachments {
+      let uri = attachment.file.absoluteString
+      if attachment.mimeType.hasPrefix("image/") {
+        let data = try Data(contentsOf: attachment.file)
+        files.append(.object(["type": .string("image"), "mimeType": .string(attachment.mimeType),
+                              "data": .string(data.base64EncodedString())]))
+      } else if attachment.mimeType.hasPrefix("text/"), attachment.size < 1 << 20,
+                let text = String(data: try Data(contentsOf: attachment.file), encoding: .utf8) {
+        files.append(.object(["type": .string("resource"), "resource": .object([
+          "uri": .string(uri), "mimeType": .string(attachment.mimeType), "text": .string(text)])]))
+      } else {
+        linked.append("\(attachment.name): \(attachment.file.path)")
+        files.append(.object(["type": .string("resource_link"), "uri": .string(uri), "name": .string(attachment.name),
+                              "mimeType": .string(attachment.mimeType), "size": .integer(attachment.size)]))
+      }
+    }
+    var text = turn.text
+    if !linked.isEmpty {
+      text += (text.isEmpty ? "" : "\n\n") + "Attached files:\n" + linked.map { "- " + $0 }.joined(separator: "\n")
+    }
+    return (text.isEmpty ? [] : [.object(["type": .string("text"), "text": .string(text)])]) + files
+  }
+}
+
+extension JSONValue {
+  subscript(_ key: String) -> JSONValue? {
+    if case .object(let object) = self { object[key] } else { nil }
+  }
+
+  var string: String? { if case .string(let value) = self { value } else { nil } }
+  var bool: Bool? { if case .bool(let value) = self { value } else { nil } }
+  var array: [JSONValue]? { if case .array(let value) = self { value } else { nil } }
+  var int: Int? {
+    switch self {
+    case .integer(let value): Int(value)
+    case .double(let value): Int(value)
+    default: nil
+    }
+  }
+  var double: Double? {
+    switch self {
+    case .integer(let value): Double(value)
+    case .double(let value): value
+    default: nil
+    }
+  }
+}

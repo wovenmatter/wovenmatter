@@ -15,7 +15,7 @@ public struct TailnetMachine: Sendable, Hashable {
 }
 
 /// The port every Woven server listens on, on its tailnet address.
-public let wovenPort = 7337
+public let wovenPort = 47337
 
 /// What the server asks of the network. Tailscale is the security boundary:
 /// this decides who may connect, and which machines to try.

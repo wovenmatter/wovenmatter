@@ -1,5 +1,4 @@
 {
-  "schemaVersion": 4,
   "harnesses": [
     {
       "id": "codex",
@@ -52,12 +51,7 @@
           }
         ]
       },
-      "capabilities": [
-        "conversations",
-        "resume",
-        "permissions",
-        "attachments"
-      ]
+      "runtime": "codex"
     },
     {
       "id": "claude_code",
@@ -84,13 +78,13 @@
       },
       "authentication": {
         "statusCommands": [
-          "claude auth status --json >/dev/null"
+          "claude auth status --json"
         ],
         "signOutCommand": "claude auth logout",
         "discoveries": [
           {
             "displayName": "Claude account",
-            "statusCommand": "claude auth status --json >/dev/null"
+            "statusCommand": "claude auth status --json"
           }
         ],
         "methods": [
@@ -112,12 +106,7 @@
           }
         ]
       },
-      "capabilities": [
-        "conversations",
-        "resume",
-        "permissions",
-        "attachments"
-      ]
+      "runtime": "claudeCode"
     },
     {
       "id": "grok_build",
@@ -125,8 +114,6 @@
       "transport": "agent-stdio",
       "command": "grok",
       "arguments": [
-        "--permission-mode",
-        "auto",
         "agent",
         "stdio"
       ],
@@ -166,16 +153,39 @@
           }
         ]
       },
-      "capabilities": [
-        "conversations",
-        "resume",
-        "permissions"
-      ]
+      "runtime": "grokBuild",
+      "permissionModes": [
+        {
+          "id": "default",
+          "name": "Ask"
+        },
+        {
+          "id": "acceptEdits",
+          "name": "Accept edits"
+        },
+        {
+          "id": "auto",
+          "name": "Auto"
+        },
+        {
+          "id": "dontAsk",
+          "name": "Don't ask"
+        },
+        {
+          "id": "bypassPermissions",
+          "name": "Bypass permissions"
+        },
+        {
+          "id": "plan",
+          "name": "Plan"
+        }
+      ],
+      "defaultPermission": "auto"
     },
     {
       "id": "opencode",
       "displayName": "OpenCode",
-      "transport": "opencode-v2",
+      "transport": "opencode",
       "command": "opencode",
       "arguments": [],
       "cliCommand": "opencode",
@@ -197,13 +207,16 @@
         "discoveries": [],
         "methods": []
       },
-      "capabilities": [
-        "conversations",
-        "resume",
-        "permissions",
-        "attachments",
-        "shared-sessions",
-        "server"
+      "runtime": "openCode"
+    },
+    {
+      "id": "pi_durable",
+      "runtime": "piDurable",
+      "displayName": "Pi Durable",
+      "transport": "acp",
+      "command": "node",
+      "arguments": [
+        "src/main.mjs"
       ]
     }
   ]

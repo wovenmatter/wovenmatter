@@ -156,6 +156,8 @@ public struct ProtocolError: Error, Codable, Sendable, Hashable {
     public static let nativeSessionGone = Code(rawValue: "nativeSessionGone")
     /// A turn is already running.
     public static let busy = Code(rawValue: "busy")
+    /// The subscriber fell too far behind and its subscription ended; subscribe again.
+    public static let tooSlow = Code(rawValue: "tooSlow")
     /// Anything else that went wrong on the server.
     public static let failed = Code(rawValue: "failed")
   }
