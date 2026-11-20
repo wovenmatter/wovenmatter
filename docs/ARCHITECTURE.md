@@ -335,6 +335,15 @@ window holds, and returns a screenshot; it saves nothing.
 - Agents outside Woven Matter on that machine can use the same bridge without a
   key, only while the person turns that on, and only with the groups chosen
   for them.
+- Sessions and bots alike start (`start_session`), steer (`send_to_session`)
+  and stop (`stop_session`) agent sessions on any machine; each call is carried
+  out by the session's owner. A caller may stop only a session it manages: one
+  where it is the author of an item, because it started it or sent it a
+  message. `start_session` returns once the caller's machine holds the new
+  session, so the next call can name it. A message from a session or a bot is
+  saved as theirs. A session reports back to a bot with `message_bot`, which
+  the bot's chat saves as from that session. Only bots post to the Forum, with
+  their own tools.
 
 ## Scheduling
 
@@ -363,13 +372,21 @@ transfer.
   bot shows in its own chat is saved there as a `visualReply` item in place of
   its call. A visual reply it publishes during a Forum turn is a post of its own in
   the room or thread it is answering in, in order with its words: the bots'
-  database keeps a small reference beside the post, and the library one
+  database keeps a small reference with the post, and the library one
   `visualReply` item. Its HTML is stored once, in the content store, and a new
   home fetches by digest what it does not hold as the posts arrive.
+- A bot's items are a session's kinds, saved through the same writer: messages
+  (one from another session under its name), the model's thinking, tool calls
+  with their input and output under the same cap, visual replies, failures and
+  stops as notices, and one usage record per model turn.
 - A bot hears the Forum and each thread it is in through a seat: a
-  conversation of its own, which is not saved to the library. Only its posts
-  are. Each of a seat's model turns is recorded as usage under the room, as a
-  chat's are under the chat.
+  conversation of its own. Its posts, and its tool calls and thinking there,
+  are saved in the room under its name, in time order; what it says in its
+  seat without posting stays private. Each of a seat's model turns is recorded
+  as usage under the room, also after the seat is gone (its thread deleted,
+  the bot switched out). A Forum post carries the person's open notes to the
+  bots as a chat message does, and Stop in a room stops the bots working there
+  only; Pause stops every room.
 - The bots folder on the home machine holds the bots' own database (bots,
   chats, memories, the Forum, schedules) and the model profiles. Nothing in it
   is tied to that machine. Each bot's files are a volume in that machine's
