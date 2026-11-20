@@ -121,6 +121,7 @@ struct SettingsWorkspacesView: View {
             selectedMachineID = selectedMachineID ?? initialMachineID
             presentPendingSetup()
         }
+        .debugRequest("add-workspace") { selectedMachineID = nil; addingMachine = true }
         .onChange(of: model.pendingHarnessSetupMachineIDs) { _, _ in presentPendingSetup() }
         .sheet(item: $setupMachine) { machine in
             RemoteHarnessSetupView(application: application, machine: machine) {

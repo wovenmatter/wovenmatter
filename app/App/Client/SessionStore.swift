@@ -22,7 +22,7 @@ final class SessionStore {
     private(set) var isLoadingOlderMessages = false
 
     /// False while the owning machine cannot be reached: its saved items show and sending is disabled.
-    var isOwnerReachable: Bool { isFollowing && server?.isConnected == true }
+    var isOwnerReachable: Bool { isFollowing && owner?.isConnected == true }
     /// A turn is running on the owner.
     var isRunning: Bool { run == .running }
     /// The runtime no longer has this chat's native session: it can only be read.
@@ -45,7 +45,12 @@ final class SessionStore {
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
     @ObservationIgnored private var prompts: [Prompt] = []
+    /// This Mac's server, which answers `SessionItems` from its synced library.
     @ObservationIgnored private weak var server: ServerConnection?
+    /// The owning machine's server, which runs the session and streams it.
+    private var owner: ServerConnection?
+    /// The owner a `notOwner` refusal named, when the library said otherwise.
+    @ObservationIgnored private var namedOwnerID: String?
     @ObservationIgnored private weak var workspace: WorkspaceStore?
 
     init(sessionID: String) {
@@ -65,22 +70,60 @@ final class SessionStore {
 
     // MARK: Commands
 
-    /// Subscribes to the owner's live view until the task is cancelled. Only
-    /// this Mac's server is connected so far, so another machine's chat shows
-    /// its saved items.
+    /// Follows the owner's live view until the task is cancelled, over the
+    /// UI's own connection to the owning machine's server. While that
+    /// connection is down the saved items from this Mac's server show and
+    /// sending is disabled; when it returns the live view resumes on its own.
     func follow() async {
-        guard let server else { return }
-        await server.follow(
-            SubscribeSession(sessionID: sessionID),
-            reply: { [weak self] snapshot in self?.apply(snapshot) },
-            event: { [weak self] event in self?.apply(event) },
-            failure: { [weak self] failure in
-                guard let self else { return }
-                isFollowing = false
-                if failure.code == .notOwner { Task { await self.refresh() } } else { error = failure.message }
-            })
+        while !Task.isCancelled {
+            guard let owner = ownerConnection() else {
+                self.owner = nil
+                await showSaved()
+                try? await Task.sleep(for: .milliseconds(500))
+                continue
+            }
+            self.owner = owner
+            let live = Task { [weak self, sessionID] in
+                await owner.follow(
+                    SubscribeSession(sessionID: sessionID),
+                    reply: { [weak self] snapshot in self?.apply(snapshot) },
+                    event: { [weak self] event in self?.apply(event) },
+                    failure: { [weak self] failure in
+                        guard let self else { return }
+                        isFollowing = false
+                        if failure.code == .notOwner, let machineID = failure.machineID {
+                            namedOwnerID = machineID
+                        } else {
+                            error = failure.message
+                        }
+                    })
+            }
+            // Until the owner's connection is replaced; saved items while it is down.
+            while !Task.isCancelled, ownerConnection() === owner {
+                if !owner.isConnected { await showSaved() }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            live.cancel()
+        }
         isFollowing = false
     }
+
+    /// The owner's connection: the machine the library names, or the one a refusal named.
+    private func ownerConnection() -> ServerConnection? {
+        workspace?.ownerConnection(ofSession: sessionID, ownerID: namedOwnerID)
+    }
+
+    /// Leaves the live view for the saved items, once each time the owner is lost.
+    private func showSaved() async {
+        guard isFollowing || items.isEmpty && !hasReadSaved else { return }
+        isFollowing = false
+        hasReadSaved = true
+        inProgress = []
+        prompts = []
+        run = .idle
+        await refresh()
+    }
+    @ObservationIgnored private var hasReadSaved = false
 
     /// Reads the finished items again.
     func refresh() async {
@@ -97,15 +140,21 @@ final class SessionStore {
     @discardableResult
     func loadOlderMessages() async -> Bool { false }
 
+    /// Sends a turn to the owner. Attachments go into the owner's content store
+    /// first, since the turn refers to them by digest.
     func send(_ input: AgentMessageInput) async throws {
-        guard let server, isOwnerReachable else { throw ClientError.notConnected }
+        guard let owner, isOwnerReachable else { throw ClientError.notConnected }
         var attachments: [Attachment] = []
         for draft in input.attachments {
             guard case .file(let file) = draft else { throw ClientError.notOffered("Attaching notes and chats") }
+            if owner !== server {
+                let data = try await Task.detached { try Data(contentsOf: file.localURL) }.value
+                _ = try await owner.call(PutContent(data: data))
+            }
             attachments.append(Attachment(name: file.fileName, mimeType: file.mimeType, digest: file.contentHash, size: file.sizeBytes))
         }
         error = nil
-        _ = try await server.call(SendTurn(sessionID: sessionID, text: input.text, attachments: attachments))
+        _ = try await owner.call(SendTurn(sessionID: sessionID, text: input.text, attachments: attachments))
     }
 
     func stop() async {
@@ -236,10 +285,11 @@ final class SessionStore {
         throw ClientError.notOffered("Subagent history")
     }
 
+    /// Runs `body` on the owner's connection.
     private func command(_ body: (ServerConnection) async throws -> Void) async {
-        guard let server, server.isConnected else { return error = ClientError.notConnected.localizedDescription }
+        guard let owner, owner.isConnected else { return error = ClientError.notConnected.localizedDescription }
         do {
-            try await body(server)
+            try await body(owner)
             error = nil
         } catch {
             self.error = error.localizedDescription

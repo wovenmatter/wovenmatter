@@ -8,7 +8,9 @@ import Foundation
 /// The installed app's agent is a login item in ~/Library/LaunchAgents. A dev
 /// instance has its own label, data folder and socket (its bundle identifier
 /// is its own), keeps its job file in its data folder so it never starts at
-/// login, stays off the tailnet, and offers the stand-in runtime.
+/// login, and offers the stand-in runtime. It stays off the tailnet unless its
+/// data folder holds `tailnet-port` (written by `build_and_run.sh --port`):
+/// then it listens on that port and finds only servers on that port.
 enum ThisMachineServer {
     static var label: String { (Bundle.main.bundleIdentifier ?? "wovenmatter.desktop") + ".server" }
     static var dataFolder: URL { AppDataFolder.url }
@@ -51,7 +53,14 @@ enum ThisMachineServer {
         var arguments = [Bundle.main.executableURL?.path ?? "", ServerEntry.argument, dataFolder.path,
                          "--socket", socketPath, "--app-version", version]
         if isDevelopmentInstance {
-            arguments += ["--tailnet", "none", "--folders", dataFolder.appending(path: "Folders").path, "--stand-in-runtime"]
+            arguments += ["--folders", dataFolder.appending(path: "Folders").path, "--stand-in-runtime",
+                          "--instance", AppDataFolder.developmentInstance ?? "dev"]
+            if let text = try? String(contentsOf: dataFolder.appending(path: "tailnet-port"), encoding: .utf8),
+               let port = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                arguments += ["--listen", "auto", "--port", String(port)]
+            } else {
+                arguments += ["--tailnet", "none"]
+            }
         } else {
             arguments += ["--listen", "auto"]
         }

@@ -3,9 +3,9 @@ import Observation
 
 /// The app release each machine runs and the harness versions on each, as Settings → Updates
 /// shows them. The server runs updates; this holds their state and sends the commands.
-/// This Mac's harness rows come from `MachinesStore`. The newest release is read from the
-/// app's update feed, and this Mac updates itself through Sparkle. Updating another machine's
-/// Woven Matter and the bots are not connected yet.
+/// Harness rows come from `MachinesStore`. The newest release is read from the app's update
+/// feed, and this Mac updates itself through Sparkle. A Linux machine's server is updated by
+/// this Mac's server to the release this Mac carries. Updating the bots is not connected yet.
 @MainActor
 @Observable
 final class UpdatesStore {
@@ -80,33 +80,42 @@ final class UpdatesStore {
 
     func attach(_ machines: MachinesStore) { machineStore = machines }
 
-    /// Per machine, by machine id: the app and bots part, with this Mac's harnesses.
+    /// Per machine, by machine id: the app and bots part, with its harnesses once read.
+    /// A machine behind the newest release, or behind another machine, has an update:
+    /// machines on different releases do not sync.
     var machines: [String: MachineState] {
         var result = appStates
-        guard let store = machineStore, let thisID = store.thisMachine?.id else { return result }
+        guard let store = machineStore, let thisVersion = store.thisMachine?.appVersion else { return result }
+        let target = store.machines.compactMap(\.appVersion).reduce(latestVersion ?? thisVersion) {
+            Self.isBehind($0, latest: $1) ? $1 : $0
+        }
         for machine in store.machines {
             var state = result[machine.id] ?? MachineState()
-            state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: latestVersion)
-            if machine.isThisMachine { state.updatingApp = DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate }
+            state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: target)
+            if machine.isThisMachine {
+                state.updatingApp = DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate
+            } else if machine.platform == .linux {
+                state.appWaitsForThisMac = state.appUpdateAvailable && !Self.isBehind(machine.appVersion, latest: thisVersion)
+                state.updatingApp = store.isBusy(machine.id)
+            }
+            if store.harnessInventoryUnavailable.contains(machine.id) && store.harnesses(on: machine.id).isEmpty {
+                state.harnessError = (machine.isThisMachine ? ClientError.notConnected : .machineNotConnected(machine.name))
+                    .localizedDescription
+            } else if store.runtimesRead.contains(machine.id) {
+                state.harnesses = store.harnesses(on: machine.id).filter(\.isInstalled).map { harness in
+                    let kind = harness.runtimeKind
+                    let installed = harness.installedVersion
+                    let latest = harness.components.first?.updateVersion
+                    return Harness(id: kind.rawValue, name: kind.displayName,
+                                   versions: latest.map { "\(installed ?? "?") → \($0)" } ?? installed,
+                                   updateAvailable: harness.updateAvailable,
+                                   checking: store.isCheckingHarness(kind, on: machine.id),
+                                   updating: store.operation(kind, on: machine.id) != nil,
+                                   error: store.harnessError(kind, on: machine.id))
+                }
+            }
             result[machine.id] = state
         }
-        var state = result[thisID] ?? MachineState()
-        if store.harnessInventoryUnavailable.contains(thisID) && store.harnesses(on: thisID).isEmpty {
-            state.harnessError = ClientError.notConnected.localizedDescription
-        } else if store.hasReadRuntimes {
-            state.harnesses = store.harnesses(on: thisID).filter(\.isInstalled).map { harness in
-                let kind = harness.runtimeKind
-                let installed = harness.installedVersion
-                let latest = harness.components.first?.updateVersion
-                return Harness(id: kind.rawValue, name: kind.displayName,
-                               versions: latest.map { "\(installed ?? "?") → \($0)" } ?? installed,
-                               updateAvailable: harness.updateAvailable,
-                               checking: store.isCheckingHarness(kind, on: thisID),
-                               updating: store.operation(kind, on: thisID) != nil,
-                               error: store.harnessError(kind, on: thisID))
-            }
-        }
-        result[thisID] = state
         return result
     }
     private(set) var progress: [ProgressLine] = []
@@ -162,21 +171,21 @@ final class UpdatesStore {
                 readingRelease = false
             }
         }
-        guard let store = machineStore, let thisID = store.thisMachine?.id, !store.hasReadRuntimes else { return }
-        store.refreshHarnesses(on: thisID)
+        guard let store = machineStore else { return }
+        for machine in store.onlineMachines where !store.runtimesRead.contains(machine.id) { store.refreshHarnesses(on: machine.id) }
     }
     @ObservationIgnored private var readingRelease = false
 
-    /// Checks the update feed for the newest release and this Mac's harnesses for newer ones.
+    /// Checks the update feed for the newest release and each online machine's harnesses for newer ones.
     func checkAll() async {
-        guard let store = machineStore, let thisID = store.thisMachine?.id else {
+        guard let store = machineStore, store.thisMachine != nil else {
             failures = [ClientError.notConnected.localizedDescription]
             return
         }
         checking = true
         failures = []
         async let release = Self.newestRelease()
-        await store.checkAllHarnesses(on: thisID)
+        for machine in store.onlineMachines { await store.checkAllHarnesses(on: machine.id) }
         do {
             latestVersion = try await release
             releaseError = nil
@@ -204,35 +213,48 @@ final class UpdatesStore {
         return newest
     }
 
-    /// Runs the updates a request covers on this Mac: its Woven Matter through Sparkle, which
-    /// restarts the app and with it the server, and its harnesses. Other machines' Woven Matter
-    /// and the bots are not connected yet.
+    /// Runs the updates a request covers: this Mac's Woven Matter through Sparkle, which
+    /// restarts the app and with it the server; a Linux machine's server, on another release
+    /// than this Mac's, through this Mac's server; and each machine's harnesses. The bots are
+    /// not connected yet.
     func start(_ request: Request) {
-        guard let store = machineStore, let thisID = store.thisMachine?.id else {
+        guard let store = machineStore, let thisMac = store.thisMachine else {
             failures = [ClientError.notConnected.localizedDescription]
             return
         }
         failures = []
-        let outdated = store.harnesses(on: thisID).filter(\.updateAvailable).map(\.runtimeKind)
-        let kinds: [AgentRuntimeKind]
+        func outdated(_ machineID: String) -> [AgentRuntimeKind] {
+            store.harnesses(on: machineID).filter(\.updateAvailable).map(\.runtimeKind)
+        }
+        var harnesses: [(machineID: String, kind: AgentRuntimeKind)] = []
         switch request {
-        case .everything, .harnesses: kinds = outdated
-        case .machine(let id): kinds = id == thisID ? outdated : []
+        case .everything, .harnesses:
+            for machine in store.onlineMachines { harnesses += outdated(machine.id).map { (machine.id, $0) } }
+        case .machine(let id): harnesses = outdated(id).map { (id, $0) }
         case .harness(let machineID, let harnessID):
-            kinds = machineID == thisID ? AgentRuntimeKind.allCases.filter { $0.rawValue == harnessID } : []
-        case .apps, .app, .bots: kinds = []
+            harnesses = AgentRuntimeKind.allCases.filter { $0.rawValue == harnessID }.map { (machineID, $0) }
+        case .apps, .app, .bots: break
         }
         let updatesThisApp: Bool = switch request {
-        case .everything, .apps: Self.isBehind(store.thisMachine?.appVersion, latest: latestVersion)
-        case .machine(let id), .app(let id): id == thisID && Self.isBehind(store.thisMachine?.appVersion, latest: latestVersion)
+        case .everything, .apps: Self.isBehind(thisMac.appVersion, latest: latestVersion)
+        case .machine(let id), .app(let id): id == thisMac.id && Self.isBehind(thisMac.appVersion, latest: latestVersion)
         case .harnesses, .harness, .bots: false
         }
+        let servers: [Machine] = switch request {
+        case .everything, .apps: store.otherMachines
+        case .machine(let id), .app(let id): store.otherMachines.filter { $0.id == id }
+        case .harnesses, .harness, .bots: []
+        }
+        let linuxServers = servers.filter { $0.platform == .linux && $0.appVersion != nil && $0.appVersion != thisMac.appVersion }
         if updatesThisApp {
             if let failure = DesktopUpdater.shared.installUpdate() { failures.append(failure) }
-        } else if kinds.isEmpty {
+        } else if harnesses.isEmpty && linuxServers.isEmpty {
             failures = [ClientError.notOffered("Updating this").localizedDescription]
         }
-        for kind in kinds { store.update(kind, on: thisID) }
+        for machine in linuxServers {
+            Task { if let failure = await store.sendUpdateServer(machine.id) { failures.append(failure) } }
+        }
+        for (machineID, kind) in harnesses { store.update(kind, on: machineID) }
     }
     func confirmBusy() { busyConfirmation = nil }
     func cancelBusy(_ id: UUID) { if busyConfirmation?.id == id { busyConfirmation = nil } }

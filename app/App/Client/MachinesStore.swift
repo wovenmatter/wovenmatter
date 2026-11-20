@@ -14,22 +14,30 @@ import WovenProtocol
 final class MachinesStore {
     /// Every machine in the library as this Mac's server reports it.
     private var statuses: [MachineStatus] = []
-    /// The runtimes this Mac's server has, as it last reported them.
-    var runtimes: [RuntimeStatus] = []
-    @ObservationIgnored weak var server: ServerConnection?
+    /// Each machine's runtimes, by machine id, as its own server last reported them.
+    var machineRuntimes: [String: [RuntimeStatus]] = [:]
+    /// This Mac's runtimes.
+    var runtimes: [RuntimeStatus] { thisMachine.flatMap { machineRuntimes[$0.id] } ?? [] }
+    /// This Mac's connection and the direct connections to the other machines.
+    @ObservationIgnored private(set) weak var connections: MachineConnections?
+    /// The connection to this Mac's server.
+    var server: ServerConnection? { connections?.local }
+    /// Machines whose connection was connected when last looked at.
+    @ObservationIgnored private var connectedMachineIDs: Set<String> = []
 
     /// This machine first, then the others by name. This Mac is online while
-    /// the UI is connected to its server.
+    /// the UI is connected to its server, another machine while the UI's
+    /// direct connection to its server is connected.
     var machines: [Machine] {
-        let connected = server?.isConnected == true
-        return statuses.map { status in
-            Machine(id: status.machine.id, name: status.machine.name,
-                    platform: status.machine.platform == .linux ? .linux : .mac,
-                    isThisMachine: status.isThisMachine,
-                    isOnline: status.isThisMachine ? connected : connected && status.online,
-                    appVersion: status.appVersion,
-                    runtimes: status.isThisMachine
-                        ? runtimes.filter(\.installed).compactMap { AgentRuntimeKind(runtime: $0.runtime) } : [])
+        statuses.map { status in
+            let connection = status.isThisMachine ? server : connections?.remotes[status.machine.id]
+            let runtimes = machineRuntimes[status.machine.id] ?? []
+            return Machine(id: status.machine.id, name: status.machine.name,
+                           platform: status.machine.platform == .linux ? .linux : .mac,
+                           isThisMachine: status.isThisMachine,
+                           isOnline: connection?.isConnected == true,
+                           appVersion: (status.isThisMachine ? nil : connection?.remote?.appVersion) ?? status.appVersion,
+                           runtimes: runtimes.filter(\.installed).compactMap { AgentRuntimeKind(runtime: $0.runtime) })
         }.sorted { ($0.isThisMachine ? 0 : 1, $0.name.localizedLowercase, $0.id)
             < ($1.isThisMachine ? 0 : 1, $1.name.localizedLowercase, $1.id) }
     }
@@ -38,7 +46,7 @@ final class MachinesStore {
     var agents: [WorkspaceAgent] {
         machines.flatMap { machine in
             machine.runtimes.map { kind in
-                let signedIn = runtimes.first { AgentRuntimeKind(runtime: $0.runtime) == kind }?.signedIn
+                let signedIn = machineRuntimes[machine.id]?.first { AgentRuntimeKind(runtime: $0.runtime) == kind }?.signedIn
                 return WorkspaceAgent(id: WorkspaceAgent.id(machineID: machine.id, runtime: kind), displayName: kind.displayName,
                                       iconKey: kind.rawValue, runtimeKind: kind, machineID: machine.id,
                                       status: !machine.isOnline ? .offline : signedIn == false ? .needsAuthentication : .ready)
@@ -46,8 +54,25 @@ final class MachinesStore {
         }
     }
 
-    func attach(_ server: ServerConnection) {
-        self.server = server
+    func attach(_ connections: MachineConnections) {
+        self.connections = connections
+        connections.whenChanged { [weak self] in self?.connectionsChanged() }
+    }
+
+    /// The connection to `machineID`'s server, when the UI is connected to it now.
+    func connection(for machineID: String?) -> ServerConnection? {
+        guard let connection = connections?.connection(for: machineID), connection.isConnected else { return nil }
+        return connection
+    }
+
+    /// Reads a machine's runtimes each time the UI connects to its server.
+    private func connectionsChanged() {
+        guard let connections else { return }
+        let connected = Set(connections.remotes.filter { $0.value.isConnected }.map(\.key))
+        for machineID in connected.subtracting(connectedMachineIDs) {
+            Task { await readRuntimes(on: machineID, checkForUpdates: false) }
+        }
+        connectedMachineIDs = connected
     }
 
     /// Reads the machines and this Mac's runtimes again.
@@ -55,13 +80,14 @@ final class MachinesStore {
         guard let server else { return }
         do {
             statuses = try await server.call(ListMachines())
+            connections?.update(statuses)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
         // Each runtime's status runs its CLI, so library changes do not read
         // them again; Settings and installs do (`refreshHarnesses`).
-        if !hasReadRuntimes { await readRuntimes(checkForUpdates: false) }
+        if !hasReadRuntimes, let thisID = thisMachine?.id { await readRuntimes(on: thisID, checkForUpdates: false) }
     }
 
     // MARK: Server on each machine
@@ -118,8 +144,11 @@ final class MachinesStore {
     var latestVersions: [String: [AgentRuntimeKind: String?]] = [:]
     /// Install or update attempts that failed in a row, per machine and harness.
     var harnessFailures: [String: [AgentRuntimeKind: Int]] = [:]
-    var hasReadRuntimes = false
-    @ObservationIgnored var runtimeRead: Task<Void, Never>?
+    /// Machines whose runtimes have been read.
+    var runtimesRead: Set<String> = []
+    /// This Mac's runtimes have been read.
+    var hasReadRuntimes: Bool { thisMachine.map { runtimesRead.contains($0.id) } ?? false }
+    @ObservationIgnored var runtimeReads: [String: Task<Void, Never>] = [:]
 
     var signInStatuses: [String: [AgentRuntimeKind: AgentSignInStatus]] = [:]
     /// Pi Durable's provider accounts on each machine.
@@ -166,10 +195,10 @@ final class MachinesStore {
         }
     }
 
-    /// A machine is renamed by its own server.
+    /// Any machine can be renamed through this Mac's server; the name syncs.
     func rename(_ machineID: String, to name: String) async throws {
-        guard let server, machineID == thisMachine?.id else { throw ClientError.notConnected }
-        _ = try await server.call(RenameMachine(name: name))
+        guard let server, server.isConnected else { throw ClientError.notConnected }
+        _ = try await server.call(RenameMachine(name: name, machineID: machineID))
         await reload()
     }
 
@@ -189,7 +218,13 @@ final class MachinesStore {
 
     // MARK: Server
 
-    func serverStatus(on machineID: String) -> MachineServerStatus? { serverStatuses[machineID] }
+    /// Its server is running while the UI is connected to it.
+    func serverStatus(on machineID: String) -> MachineServerStatus? {
+        if let status = serverStatuses[machineID] { return status }
+        guard let machine = machine(id: machineID) else { return nil }
+        return MachineServerStatus(state: machine.isOnline ? .running : .unavailable,
+                                   hostName: statuses.first { $0.machine.id == machineID }?.address)
+    }
     func isBusy(_ machineID: String) -> Bool { busyMachineIDs.contains(machineID) }
 
     func startServer(on machineID: String) async throws {
@@ -204,8 +239,24 @@ final class MachinesStore {
         errorMessage = ClientError.notConnected.localizedDescription
     }
 
+    /// Replaces a Linux machine's server with the release this Mac carries.
     func updateServer(on machineID: String) {
-        errorMessage = ClientError.notConnected.localizedDescription
+        Task { _ = await sendUpdateServer(machineID) }
+    }
+
+    /// Sends `UpdateServer` to this Mac's server; returns an error's text, or nil once it is done.
+    func sendUpdateServer(_ machineID: String) async -> String? {
+        guard let server else { return ClientError.notConnected.localizedDescription }
+        busyMachineIDs.insert(machineID)
+        defer { busyMachineIDs.remove(machineID) }
+        do {
+            _ = try await server.call(UpdateServer(machineID: machineID))
+            await reload()
+            return nil
+        } catch {
+            errorMessage = error.localizedDescription
+            return error.localizedDescription
+        }
     }
 
     func loadLogs(on machineID: String) {
@@ -223,19 +274,43 @@ final class MachinesStore {
 
     // MARK: Find Devices
 
+    /// Lists tailnet computers without a Woven server, through this Mac's server.
     func findDevices() {
-        hasSearchedDevices = true
-        findDevicesError = ClientError.notConnected.localizedDescription
+        guard !isFindingDevices else { return }
+        guard let server else { return findDevicesError = ClientError.notConnected.localizedDescription }
+        isFindingDevices = true
+        Task {
+            defer {
+                isFindingDevices = false
+                hasSearchedDevices = true
+            }
+            do {
+                tailnetDevices = try await server.call(FindDevices()).compactMap { device in
+                    guard let platform = device.platform else { return nil }
+                    return TailnetDevice(id: device.name, name: device.name, hostName: device.name, address: device.address,
+                                         platform: platform == .linux ? .linux : .mac, isOnline: true)
+                }
+                findDevicesError = nil
+            } catch {
+                findDevicesError = error.localizedDescription
+            }
+        }
     }
 
-    /// Inspects a tailnet computer over SSH: for a Mac, whether Woven Matter is
-    /// installed; for Linux, whether the server can be installed there.
+    /// Before installing on a Linux computer Find Devices listed, it is taken as
+    /// ready; installing checks it over SSH.
     func inspectHost(hostName: String, userName: String?, accessMode: LinuxAccessMode?) {
-        hostErrors[hostName] = ClientError.notConnected.localizedDescription
+        let platform = tailnetDevices.first { $0.hostName == hostName }?.platform ?? .linux
+        guard platform == .linux else {
+            return hostErrors[hostName] = ClientError.notOffered("Checking another Mac").localizedDescription
+        }
+        hostErrors[hostName] = nil
+        hostPreflights[hostName] = HostPreflight(hostName: hostName, ready: true, architecture: platform.displayName,
+                                                 canPrepare: false)
     }
 
     func prepareHost(hostName: String, userName: String?, accessMode: LinuxAccessMode) {
-        hostErrors[hostName] = ClientError.notConnected.localizedDescription
+        hostErrors[hostName] = ClientError.notOffered("Preparing a host").localizedDescription
     }
 
     func authorizeHostPreparation() {
@@ -246,9 +321,26 @@ final class MachinesStore {
         pendingHostPreparation = nil
     }
 
-    /// Installs and starts the server there over SSH. The machine then joins on its own.
+    /// Installs and starts the server there over SSH, through this Mac's server,
+    /// which replies once the new server answers. The machine then joins on its own.
     func installServer(hostName: String, userName: String?, accessMode: LinuxAccessMode?) {
-        hostErrors[hostName] = ClientError.notConnected.localizedDescription
+        guard let server else { return hostErrors[hostName] = ClientError.notConnected.localizedDescription }
+        guard !installingHosts.contains(hostName) else { return }
+        installingHosts.insert(hostName)
+        hostErrors[hostName] = nil
+        let known = Set(machines.map(\.id))
+        Task {
+            defer { installingHosts.remove(hostName) }
+            do {
+                _ = try await server.call(InstallServer(host: hostName, user: userName))
+                tailnetDevices.removeAll { $0.hostName == hostName }
+                hostPreflights[hostName] = nil
+                await reload()
+                pendingHarnessSetupMachineIDs.formUnion(Set(machines.map(\.id)).subtracting(known))
+            } catch {
+                hostErrors[hostName] = error.localizedDescription
+            }
+        }
     }
 
     // MARK: Power

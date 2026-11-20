@@ -12,6 +12,7 @@ run_development_build() {
 mode=run
 instance="${WOVENMATTER_DEV_INSTANCE:-}"
 plan_only=false
+tailnet_port=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     run|debug|logs|verify) mode="$1"; shift ;;
@@ -20,8 +21,11 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { printf 'Missing value for %s\n' "$1" >&2; exit 64; }
       instance="$2"; shift 2 ;;
     --plan) plan_only=true; shift ;;
+    --port)
+      [ "$#" -ge 2 ] || { printf 'Missing value for %s\n' "$1" >&2; exit 64; }
+      tailnet_port="$2"; shift 2 ;;
     --help|-h)
-      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] --instance name [--plan]'
+      printf '%s\n' 'usage: scripts/build_and_run.sh [run|debug|logs|verify] --instance name [--port PORT] [--plan]'
       exit 0 ;;
     *) printf 'Unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
@@ -49,6 +53,10 @@ app="${derived_data}/Build/Products/Debug/${product_name}.app"
 executable="${app}/Contents/MacOS/${product_name}"
 printf 'Development instance: %s\nBundle identifier: %s\nData folder: %s\n' "$instance" "$bundle_id" "$support_directory"
 mkdir -p "$derived_data" "$package_cache"
+# --port puts this instance's server on the tailnet on that port; without it, it stays off.
+mkdir -p "$support_directory"
+if [ -n "$tailnet_port" ]; then printf '%s\n' "$tailnet_port" > "$support_directory/tailnet-port"
+else rm -f "$support_directory/tailnet-port"; fi
 build_lock="$cache_root/build.lock"
 if ! mkdir "$build_lock" 2>/dev/null; then
   printf 'This instance is already building. If no launcher is running, remove %s.\n' "$build_lock" >&2; exit 75

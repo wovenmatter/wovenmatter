@@ -26,9 +26,9 @@ struct StartupProgress: Equatable, Sendable {
     var fraction: Double?
 }
 
-/// The root of the client layer. It owns the connection to this Mac's server
-/// (and, later, direct connections to other machines' servers for live views)
-/// and the per-area stores the views read. It does no server work itself.
+/// The root of the client layer. It owns the connection to this Mac's server,
+/// the direct connections to other machines' servers for live views, and the
+/// per-area stores the views read. It does no server work itself.
 @MainActor
 @Observable
 final class ApplicationModel {
@@ -44,6 +44,8 @@ final class ApplicationModel {
     var thisMachineID: String? { server?.remote?.machine.id }
     /// The connection to this Mac's server, once it has been started.
     private(set) var server: ServerConnection?
+    /// This Mac's connection and one to each other machine's server.
+    private(set) var machineConnections: MachineConnections?
     @ObservationIgnored private var following: Task<Void, Never>?
 
     let navigation = NavigationStore()
@@ -88,7 +90,9 @@ final class ApplicationModel {
         }
         let server = ServerConnection(endpoint: .unix(path: ThisMachineServer.socketPath))
         self.server = server
-        machines.attach(server)
+        let machineConnections = MachineConnections(local: server)
+        self.machineConnections = machineConnections
+        machines.attach(machineConnections)
         usage.attach(server, machines: machines)
         workspace.attach(server, machines: machines)
         settings.attach(server); connections.attach(server, settings: settings); updates.attach(machines)
@@ -96,7 +100,8 @@ final class ApplicationModel {
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
         documents.attach(server, machines: machines, databases: databases)
-        bots.attach(server, machines: machines, settings: settings)
+        bots.attach(machineConnections, machines: machines, settings: settings)
+        calendar.attach(server, workspace: workspace, machines: machines)
         server.start()
         uiTools = UIToolsStore(server: server, assets: workspaceAssets)
         following = Task { [weak self] in
@@ -132,6 +137,7 @@ final class ApplicationModel {
         await documents.reload()
         await databases.refresh()
         await settings.reload()
+        await calendar.reload()
     }
 
     /// A server left running by another release of the app is restarted once,

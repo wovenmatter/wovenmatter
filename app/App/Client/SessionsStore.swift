@@ -39,8 +39,8 @@ final class SessionsStore {
     var defaultAgentFallbackNotice: String?
 
     /// Uploads files to be attached to a message and returns their composer chips.
-    /// Each file goes into this Mac's server's content store, where the turn
-    /// that sends it finds it by digest.
+    /// Each file goes into this Mac's server's content store; a turn to another
+    /// machine's session puts it into that machine's store too (`SessionStore.send`).
     func stageMessageAttachments(_ files: [(url: URL, mimeType: String)]) async throws -> [AgentMessageAttachmentDraft] {
         guard let server, server.isConnected else { throw ClientError.notConnected }
         var drafts: [AgentMessageAttachmentDraft] = []

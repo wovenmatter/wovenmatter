@@ -20,33 +20,65 @@ final class WorkspaceStore {
 
     @ObservationIgnored private weak var server: ServerConnection?
     @ObservationIgnored private weak var machines: MachinesStore?
-    /// What this Mac's sessions that are not idle are doing, as its server reports it.
-    @ObservationIgnored private var runStates: [String: SessionRunState] = [:]
-    @ObservationIgnored private var followingRunStates: Task<Void, Never>?
+    /// What the sessions that are not idle are doing, as each connected
+    /// machine's server reports its own.
+    @ObservationIgnored private var runStateFollowers: [ObjectIdentifier: RunStateFollower] = [:]
+
+    /// One machine's `SubscribeRunStates`, kept open on its connection.
+    private struct RunStateFollower {
+        let connection: ServerConnection
+        let task: Task<Void, Never>
+        var states: [String: SessionRunState] = [:]
+    }
 
     init() {}
 
     func attach(_ server: ServerConnection, machines: MachinesStore) {
         self.server = server
         self.machines = machines
-        followingRunStates?.cancel()
-        followingRunStates = Task { [weak self] in
-            await server.follow(SubscribeRunStates(), reply: { [weak self] states in
-                self?.runStates = [:]
-                for state in states { self?.runStates[state.sessionID] = state }
-                self?.applyRunStates()
-            }, event: { [weak self] state in
-                self?.runStates[state.sessionID] = state
-                self?.applyRunStates()
-            })
-        }
+        for follower in runStateFollowers.values { follower.task.cancel() }
+        runStateFollowers = [:]
+        followRunStates()
+        machines.connections?.whenChanged { [weak self] in self?.followRunStates() }
         followRuntimeNames()
+    }
+
+    /// Follows `SubscribeRunStates` on every machine's connection, and drops
+    /// a machine's states while its connection is down.
+    private func followRunStates() {
+        let connections = machines?.connections?.all ?? []
+        let current = Set(connections.map(ObjectIdentifier.init))
+        for (id, follower) in runStateFollowers where !current.contains(id) {
+            follower.task.cancel()
+            runStateFollowers[id] = nil
+        }
+        for connection in connections {
+            let id = ObjectIdentifier(connection)
+            if !connection.isConnected { runStateFollowers[id]?.states = [:] }
+            guard runStateFollowers[id] == nil else { continue }
+            let task = Task { [weak self] in
+                await connection.follow(SubscribeRunStates(), reply: { [weak self] states in
+                    self?.runStateFollowers[id]?.states = Dictionary(states.map { ($0.sessionID, $0) }, uniquingKeysWith: { $1 })
+                    self?.applyRunStates()
+                }, event: { [weak self] state in
+                    self?.runStateFollowers[id]?.states[state.sessionID] = state
+                    self?.applyRunStates()
+                })
+            }
+            runStateFollowers[id] = RunStateFollower(connection: connection, task: task)
+        }
+        applyRunStates()
+    }
+
+    private func runState(_ sessionID: String) -> SessionRunState? {
+        for follower in runStateFollowers.values { if let state = follower.states[sessionID] { return state } }
+        return nil
     }
 
     /// Names runtimes again when this Mac's server reports its runtimes, which
     /// it may do after the sessions were listed.
     private func followRuntimeNames() {
-        withObservationTracking { _ = machines?.runtimes } onChange: { [weak self] in
+        withObservationTracking { _ = machines?.machineRuntimes } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if var overview = workspaceOverview {
@@ -60,12 +92,12 @@ final class WorkspaceStore {
         }
     }
 
-    /// Sets each listed session's activity from `runStates`. Other machines'
-    /// sessions are idle until the UI connects to their servers.
+    /// Sets each listed session's activity from its owner's run states. A
+    /// machine the UI is not connected to shows its sessions idle.
     private func applyRunStates() {
         guard var overview = workspaceOverview else { return }
         for index in overview.conversations.indices {
-            overview.conversations[index].activity = Self.activity(runStates[overview.conversations[index].id])
+            overview.conversations[index].activity = Self.activity(runState(overview.conversations[index].id))
         }
         if overview != workspaceOverview { workspaceOverview = overview }
     }
@@ -75,15 +107,22 @@ final class WorkspaceStore {
         return state.awaiting ? .blocked : .working
     }
 
-    /// This Mac's server, for a command on something `machineID` owns. Only
-    /// this Mac's server is connected so far; another machine's things wait
-    /// for a direct connection to it.
-    private func server(for machineID: String?) throws -> ServerConnection {
+    /// The server for a command on something `machineID` owns: this Mac's for
+    /// its own things and for nil, else the UI's direct connection to the owner.
+    func server(for machineID: String?) throws -> ServerConnection {
         guard let server, server.isConnected else { throw ClientError.notConnected }
-        if let machineID, machineID != machines?.thisMachine?.id {
+        guard let machineID, machineID != machines?.thisMachine?.id else { return server }
+        guard let owner = machines?.connection(for: machineID) else {
             throw ClientError.machineNotConnected(machines?.machine(id: machineID)?.name ?? "That machine")
         }
-        return server
+        return owner
+    }
+
+    /// The connection to the server that owns the session, connected or not;
+    /// nil while the session's owner is not known or has no address yet.
+    func ownerConnection(ofSession sessionID: String, ownerID: String? = nil) -> ServerConnection? {
+        guard let machineID = ownerID ?? conversation(id: sessionID)?.machineID else { return nil }
+        return machines?.connections?.connection(for: machineID)
     }
 
     func agents(on machineID: String) -> [WorkspaceAgent] {
@@ -142,15 +181,15 @@ final class WorkspaceStore {
             runtime: session.runtime, runtimeName: runtimeName(session.runtime),
             title: session.title, unread: session.unread, lastMessagePreview: session.preview,
             lastMessageAt: session.lastActivityAt, isScheduledTask: false, folderID: session.folderID,
-            isPinned: session.pinned, isArchived: session.archived, activity: Self.activity(runStates[session.id]))
+            isPinned: session.pinned, isArchived: session.archived, activity: Self.activity(runState(session.id)))
     }
 
     /// A runtime's name: the UI's own for the runtimes it offers, else the
-    /// name this Mac's server gives it (the dev instance's stand-in, say).
+    /// name a machine's server gives it (the dev instance's stand-in, say).
     private func runtimeName(_ runtime: RuntimeKind) -> String {
         if let kind = AgentRuntimeKind(runtime: runtime) { return kind.displayName }
         if runtime == .bots { return "Bots" }
-        return machines?.runtimes.first { $0.runtime == runtime }?.name ?? runtime.rawValue
+        return machines?.machineRuntimes.values.joined().first { $0.runtime == runtime }?.name ?? runtime.rawValue
     }
 
     // MARK: Sessions

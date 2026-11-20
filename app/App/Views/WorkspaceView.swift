@@ -177,6 +177,8 @@ struct WorkspaceView: View {
         // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
         .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.homeMachineID ?? "", botID: $0)) }
         .debugRequest("bots-settings") { openBotSettings() }
+        // `settings-page:NAME` opens a Settings page, as `--settings-page` does at launch.
+        .debugCommand("settings-page:") { model.navigation.pendingConnectionsScope = $0 }
         .onChange(of: model.navigation.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
