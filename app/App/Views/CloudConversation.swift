@@ -159,7 +159,10 @@ struct CloudConversation: View {
                     return try await session.activityDetails(runID: runID, activityID: activityID)
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .defaultScrollAnchor(.top, for: .sizeChanges)
+                // Following the latest reply, growth keeps the bottom in place
+                // in the same layout pass; a later scroll would show each
+                // chunk below the edge for a frame and then jump.
+                .defaultScrollAnchor(followsBottom ? .bottom : .top, for: .sizeChanges)
                 .scrollPosition(id: $scrollPositionID, anchor: .bottom)
                 .onScrollPhaseChange { _, phase in
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
@@ -484,6 +487,12 @@ struct CloudConversation: View {
     }
 
     // MARK: Transcript
+
+    /// The reader is at the live edge and nothing else owns the scroll.
+    private var followsBottom: Bool {
+        scrollState.isNearBottom && !transcriptOwnsScroll && !isUserScrolling && !isPrependingHistory
+            && model.navigation.libraryMessageTarget?.conversationID != conversation?.id
+    }
 
     private var chatEndID: String {
         "chat-end:\(conversation?.id ?? "none")"
