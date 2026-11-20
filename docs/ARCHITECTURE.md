@@ -156,7 +156,8 @@ digest in a file store beside the library and fetched by digest when needed.
   becomes current and the other is saved in that artifact's version history.
   No separate copy appears.
 - **Never syncs**: sync cursors, this machine's identifier, live state, native
-  session handles' process state, provider sign-ins.
+  session handles' process state, provider sign-ins, how far the harness
+  histories have been read.
 
 Rows that belong to a machine (sessions, folders, databases, schedules) carry
 that machine's identifier in a column. Ownership is never held in a side table.
@@ -214,6 +215,37 @@ the Woven tool `goal_met` or the person clears it. It pauses after an
 interrupted or failed turn, while a question or approval waits, and after
 three goal turns in a row that neither said nor did anything. The person's
 next message resumes it.
+
+## Usage
+
+Each server counts the usage of every harness on its own machine, whether the
+work was done in Woven Matter or not, and writes it to the library as usage
+records, which sync like any other append-only rows. The Usage page on any
+machine reads its own library and so shows every machine.
+
+- **Codex, Claude Code, Grok Build, OpenCode and the Pi CLI** are counted only
+  from their own history: Codex's rollouts (`~/.codex/sessions` and
+  `archived_sessions`, compressed ones too), Claude Code's transcripts
+  (`~/.claude/projects`), Grok Build's `updates.jsonl` (`~/.grok/sessions`),
+  OpenCode's database (`~/.local/share/opencode/opencode.db`) and the Pi CLI's
+  sessions (`~/.pi/agent/sessions`). A turn Woven Matter runs with one of them
+  writes no usage of its own; its usage is in that history and is counted from
+  there, once. Woven Matter's own record of which native session each of its
+  sessions is (`native_sessions`) names the session and marks it as made in
+  Woven Matter.
+- **Pi Durable** writes one record per turn, and **bots** one per model turn,
+  from what the runtime reports. Nothing else counts them.
+- Only counts leave a history: the harness, model, time, tokens by kind, the
+  cost when the harness records one, and the harness's own session
+  identifier. No text, path or credential is read into the library.
+- The server reads each history on from where it stopped (a digest of the
+  path keys the place, in a local table), at start and every two minutes.
+  Each response is counted by the harness's own identifier, so reading again
+  or a copy in a resumed or forked session never counts twice.
+- What it reads is summed per harness session, model and hour in a local
+  table. When the hour is over, each sum becomes one synced record, so a year
+  of heavy use stays a few thousand rows per machine. The page includes this
+  machine's hour in progress.
 
 ## Folders and the sidebar
 
