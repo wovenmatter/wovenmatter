@@ -11,9 +11,14 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
     return await withTaskGroup(of: RuntimeStatus.self) { group in
       for runtime in runtimes {
         group.addTask {
-          var status = await runtime.status()
-          if request.checkForUpdates { status.latestVersion = await latestRelease(runtime.kind) }
-          return status
+          // One slow CLI must not hold up the list: it is reported as not answering.
+          let late = RuntimeStatus(runtime: runtime.kind, name: Harness.named(runtime.kind)?.displayName ?? runtime.kind.rawValue,
+                                   installed: false, detail: "It did not answer in time.")
+          return await firstOf(seconds: statusLimit, or: late) {
+            var status = await runtime.status()
+            if request.checkForUpdates { status.latestVersion = await latestRelease(runtime.kind) }
+            return status
+          }
         }
       }
       var statuses: [RuntimeStatus] = []
@@ -111,4 +116,26 @@ private final class SignInFlows: Sendable {
   func close(_ id: String) {
     flows.withLock { $0.removeValue(forKey: id) }?.finish()
   }
+}
+
+/// How long one runtime's status may take in a list.
+private let statusLimit = 20.0
+
+/// The value `body` returns, or `fallback` when it takes longer than `seconds`.
+/// `body` is cancelled then, and not waited for.
+func firstOf<T: Sendable>(seconds: Double, or fallback: T, _ body: @escaping @Sendable () async -> T) async -> T {
+  let (results, deliver) = AsyncStream<T>.makeStream()
+  let work = Task { deliver.yield(await body()) }
+  let timer = Task {
+    try await Task.sleep(for: .seconds(seconds))
+    deliver.yield(fallback)
+  }
+  var result = fallback
+  for await value in results {
+    result = value
+    break
+  }
+  work.cancel()
+  timer.cancel()
+  return result
 }

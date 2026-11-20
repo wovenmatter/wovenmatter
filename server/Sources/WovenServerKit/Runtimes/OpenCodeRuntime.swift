@@ -80,10 +80,10 @@ public final class OpenCodeRuntime: Runtime {
   public func install() async throws {
     let result: (status: Int32, output: Data)
     if let executable {
-      result = try await Self.run(executable, ["upgrade"], mergeErrors: true)
+      result = try await Self.run(executable, ["upgrade"], mergeErrors: true, timeout: .seconds(600))
     } else {
       result = try await Self.run(URL(fileURLWithPath: "/bin/bash"), ["-c", "curl -fsSL https://opencode.ai/v2/install | bash"],
-                                  mergeErrors: true)
+                                  mergeErrors: true, timeout: .seconds(600))
     }
     guard result.status == 0 else {
       let tail = String(decoding: result.output.suffix(2_000), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -101,29 +101,11 @@ public final class OpenCodeRuntime: Runtime {
   }
 
   /// Runs a command to its end and returns its exit status and output.
-  static func run(_ executable: URL, _ arguments: [String], environment: [String: String]? = nil, mergeErrors: Bool = false)
-    async throws -> (status: Int32, output: Data)
-  {
-    try await withCheckedThrowingContinuation { continuation in
-      DispatchQueue.global().async {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        if let environment { process.environment = environment }
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = mergeErrors ? output : FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        do {
-          try process.run()
-          let data = output.fileHandleForReading.readDataToEndOfFile()
-          process.waitUntilExit()
-          continuation.resume(returning: (process.terminationStatus, data))
-        } catch {
-          continuation.resume(throwing: error)
-        }
-      }
-    }
+  static func run(_ executable: URL, _ arguments: [String], environment: [String: String] = [:], mergeErrors: Bool = false,
+                  timeout: Duration = .seconds(30)) async throws -> (status: Int32, output: Data) {
+    let result = await ChildProcess.run(executable.path, arguments, environment: environment, mergeErrors: mergeErrors,
+                                        timeout: timeout)
+    return (result.status, Data(result.output.utf8))
   }
 }
 

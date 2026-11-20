@@ -112,36 +112,55 @@ final class ChildProcess: Sendable {
     return nil
   }
 
-  /// Runs a command to completion and returns its exit status and output.
+  /// Runs a command to completion and returns its exit status and output
+  /// (standard error too, unless `mergeErrors` is false). It never holds a
+  /// thread while it waits, and returns by `timeout` whatever the command or
+  /// anything it started does: the command is then stopped and the status is -1.
   static func run(_ executable: String, _ arguments: [String], directory: String? = nil,
-                  environment: [String: String] = [:], timeout: Duration = .seconds(60)) async -> (status: Int32, output: String) {
-    await withCheckedContinuation { continuation in
-      DispatchQueue.global().async {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = searchPath(env["PATH"])
-        for (key, value) in environment { env[key] = value }
-        process.environment = env
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = output
-        process.standardInput = FileHandle.nullDevice
-        do { try process.run() } catch {
-          continuation.resume(returning: (-1, String(describing: error)))
-          return
-        }
-        let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
-        let seconds = Double(timeout.components.seconds)
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: timer)
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        timer.cancel()
-        continuation.resume(returning: (process.terminationStatus, String(decoding: data.suffix(65536), as: UTF8.self)))
-      }
+                  environment: [String: String] = [:], mergeErrors: Bool = true,
+                  timeout: Duration = .seconds(60)) async -> (status: Int32, output: String) {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory) }
+    var env = ProcessInfo.processInfo.environment
+    env["PATH"] = searchPath(env["PATH"])
+    for (key, value) in environment { env[key] = value }
+    process.environment = env
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = mergeErrors ? output : FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+    let collected = Mutex(Data())
+    output.fileHandleForReading.readabilityHandler = { handle in
+      let data = handle.availableData
+      collected.withLock { if $0.count < 1 << 20 { $0.append(data) } }
     }
+    let (ended, finish) = AsyncStream<Int32>.makeStream()
+    process.terminationHandler = { finish.yield($0.terminationStatus) }
+    do { try process.run() } catch {
+      output.fileHandleForReading.readabilityHandler = nil
+      return (-1, String(describing: error))
+    }
+    let timer = Task {
+      try await Task.sleep(for: timeout)
+      finish.yield(-1)
+      process.terminate()
+      try await Task.sleep(for: .seconds(2))
+      if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+    }
+    var status: Int32 = -1
+    for await value in ended {
+      status = value
+      break
+    }
+    if status != -1 { timer.cancel() }
+    // What was written just before the end; a process it left behind may keep the pipe open.
+    try? await Task.sleep(for: .milliseconds(50))
+    output.fileHandleForReading.readabilityHandler = nil
+    try? output.fileHandleForReading.close()
+    let data = collected.withLock { $0 }
+    return (status, String(decoding: data.suffix(65536), as: UTF8.self))
   }
 
   /// Runs a shell command line.
