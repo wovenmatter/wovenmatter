@@ -1,7 +1,7 @@
 # Your machines
 
 Woven Matter runs on your Macs and Linux computers. Each one runs its own Woven
-server and keeps a full copy of your library: chats, notes, pages, apps,
+server and keeps a full copy of your library: chats, notes, pages, sheets, apps,
 schedules and settings. Every Mac and Linux computer on your Tailscale network
 that runs the server is one of your machines. Tailscale decides who may
 connect, and a machine shared in from someone else's tailnet is refused.

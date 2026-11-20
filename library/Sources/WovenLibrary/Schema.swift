@@ -253,7 +253,7 @@ public enum Schema {
       .integer("parent_conversation_id"),
     ], parents: [Parent(column: "session_id", table: "sessions")]),
 
-    // Newest write wins, loser kept: notes, pages and apps.
+    // Newest write wins, loser kept: notes, pages, sheets and apps.
     Table("artifacts", .newestWinsKeepLoser(history: "artifact_versions"), [
       .text("kind", ""),
       .text("title", ""),

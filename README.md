@@ -86,10 +86,10 @@ the rest keep working.
 
 ### Library
 
-- Every host keeps a full copy of the library in SQLite: notes, pages, apps,
-  conversations, schedules, settings, and files.
+- Every host keeps a full copy of the library in SQLite: notes, pages, sheets,
+  apps, conversations, schedules, settings, and files.
 - Sync runs between every online host, and a host catches up when it comes
-  back online. When two hosts edit the same note, page, or app apart, the
+  back online. When two hosts edit the same note, page, sheet, or app apart, the
   newer edit wins and the other is kept in its version history.
 - Hosts sync only when they run the same release. Settings → Updates shows
   which machine needs updating.

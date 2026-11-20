@@ -11,7 +11,7 @@ or **App**.
 
 - A **Note** is plain writing.
 - A **Page** is a flowing document of components: text, tasks, tables, nested
-  sections, and embedded notes, sheets, apps or pages.
+  sections, and embedded notes, sheets or apps.
 - A **Sheet** is a table.
 - An **App** is a live HTML document, such as a dashboard or calculator. It keeps
   what you type into its controls, and it can show data from a database.
@@ -19,8 +19,9 @@ or **App**.
 Artifacts, browser pages and document previews share one tab strip beside the
 chat. Closing a tab keeps the saved item.
 
-Agents work with these through the Woven tools: they can find, read, create and
-edit them, and you see their changes in the editor.
+Agents work with these through the Woven tools: they can find and read all four,
+create and edit notes, pages and apps, and rename sheets. You see their changes
+in the editor.
 
 ## Version history
 

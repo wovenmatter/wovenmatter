@@ -151,7 +151,7 @@ fetched by digest when needed.
   settings, schedules, sealed secrets, database descriptions. Only the owning
   machine writes its `schedules` rows; a request about another machine's entry
   is refused with the owner's name, so the caller can send it there.
-- **Newest write wins, loser kept**: notes, pages and apps. Each write records
+- **Newest write wins, loser kept**: notes, pages, sheets and apps. Each write records
   the latest write it has seen from each machine. When a received write has
   not seen everything the local one has, the two were edited apart: the newer
   becomes current and the other is saved in that artifact's version history.
@@ -287,7 +287,7 @@ online or offline, titled by the machine's name. Each section lists that
 machine's agents and folders. Starting a chat from a section runs it on that
 machine. A new folder is created by the machine that will own it.
 
-## Notes, pages and apps
+## Notes, pages, sheets and apps
 
 These are documents in the library. Any machine can edit them at any time
 through its own server, online or not. Conflicts follow the rule above.
@@ -297,8 +297,8 @@ of the app's document, and it can read from databases.
 
 ## Databases
 
-A database is a named SQLite file that notes, pages and apps link to for live
-data. It is separate from the library.
+A database is a named SQLite file that notes, pages, sheets and apps link to
+for live data. It is separate from the library.
 
 - It lives on one owning machine. That machine's server is its only writer.
 - Any machine can write to it: the write goes to the owner's server through the

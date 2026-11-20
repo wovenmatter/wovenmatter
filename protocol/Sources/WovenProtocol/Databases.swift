@@ -1,6 +1,6 @@
 import Foundation
 
-// Databases: named SQLite files that notes, pages and apps link to for live
+// Databases: named SQLite files that notes, pages, sheets and apps link to for live
 // data. Each lives on one owning machine, whose server is its only writer. A
 // write made through any other machine's server is forwarded to the owner.
 // After each committed write the owner publishes a copy into the content

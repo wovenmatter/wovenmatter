@@ -30,7 +30,7 @@ still need your answer in every mode.
 ## Woven tools
 
 Every agent reaches Woven Matter through the Woven MCP. With it, agents can
-read and edit notes, pages and apps, query and write databases, search the
+read notes, pages, sheets and apps and edit all but sheets, query and write databases, search the
 Library, start or message other sessions on any of your machines, talk to
 your bots, schedule tasks and timers, and use the browser in the Woven Matter
 window. The computer tool lets an agent see and use other apps on your Mac once

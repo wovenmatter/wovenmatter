@@ -50,6 +50,39 @@ private extension WovenTools {
     guard let session = try await library.session(id) else { throw ToolFailure("No session \(id).") }
     return session
   }
+
+  /// What the sessions are doing now, which is live state on each owner:
+  /// this machine's, and those of each linked machine that answers; nil for
+  /// a machine that did not.
+  func runStates(of machineIDs: Set<String>) async -> [String: [String: SessionRunState]] {
+    var result: [String: [String: SessionRunState]] = [:]
+    if machineIDs.contains(machineID) { result[machineID] = byID(sessions.board.current) }
+    for (id, client) in await peers.linked() where id != machineID && machineIDs.contains(id) {
+      let asked = await firstOf(seconds: 5, or: [SessionRunState]?.none) {
+        guard let subscription = try? await client.subscribe(SubscribeRunStates()) else { return nil }
+        try? await client.unsubscribe(subscription.id)
+        return subscription.reply
+      }
+      if let asked { result[id] = byID(asked) }
+    }
+    return result
+  }
+
+  private func byID(_ states: [SessionRunState]) -> [String: SessionRunState] {
+    Dictionary(states.map { ($0.sessionID, $0) }, uniquingKeysWith: { first, _ in first })
+  }
+}
+
+/// A session's run state as an agent reads it; unknown while its machine
+/// does not answer.
+private func describe(_ session: Session, in states: [String: [String: SessionRunState]]) -> String {
+  guard let known = states[session.machineID] else { return "state unknown (its machine is not answering)" }
+  guard let state = known[session.id] else { return "idle" }
+  switch state.run {
+  case .running: return state.awaiting ? "running, waiting on the person" : "running"
+  case .nativeSessionGone: return "ended (its runtime no longer has it)"
+  case .idle: return state.awaiting ? "waiting on the person" : "idle"
+  }
 }
 
 // MARK: Sessions
@@ -57,7 +90,7 @@ private extension WovenTools {
 private let sessionTools: [WovenTool] = [
   WovenTool(
     name: "list_sessions",
-    description: "List agent sessions (chats) on every machine, newest first: id, title, runtime, machine, last activity. Filter by machine or by words in the title.",
+    description: "List agent sessions (chats) on every machine, newest first: id, title, runtime, machine, last activity, and whether a turn is running. Filter by machine or by words in the title.",
     input: schema(["machineID": text("Only this machine's sessions."), "query": text("Words the title contains."),
                    "includeArchived": flag("Include archived sessions.")]),
     readOnly: true,
@@ -70,15 +103,17 @@ private let sessionTools: [WovenTool] = [
         sessions = sessions.filter { $0.title.lowercased().contains(query) }
       }
       var result: [String] = []
-      for session in sessions.prefix(100) {
+      let shown = sessions.prefix(100)
+      let states = await tools.runStates(of: Set(shown.map(\.machineID)))
+      for session in shown {
         let mine = session.id == call.caller.sessionID ? " (you)" : ""
-        result.append("\(session.id) | \(session.title)\(mine) | \(session.runtime.rawValue) | \(await tools.machineName(session.machineID)) | \(session.lastActivityAt.formatted(.iso8601))")
+        result.append("\(session.id) | \(session.title)\(mine) | \(session.runtime.rawValue) | \(await tools.machineName(session.machineID)) | \(session.lastActivityAt.formatted(.iso8601)) | \(describe(session, in: states))")
       }
       return lines(result)
     }),
   WovenTool(
     name: "read_session",
-    description: "Read a session's saved transcript: messages and tool calls in order, each with its sequence number. Returns the last `limit` items, or those after `afterSequence`. Works for any machine's session, and for bot chats and the Forum.",
+    description: "Read a session's saved transcript: whether a turn is running, then messages and tool calls in order, each with its sequence number. Returns the last `limit` items, or those after `afterSequence`. Works for any machine's session, and for bot chats and the Forum.",
     input: schema(["sessionID": text("The session."), "afterSequence": integer("Only items after this sequence number."),
                    "limit": integer("At most this many items (default 40).")], required: ["sessionID"]),
     readOnly: true,
@@ -88,7 +123,9 @@ private let sessionTools: [WovenTool] = [
       let limit = min(max(call.arguments.int("limit") ?? 40, 1), 200)
       var items = try await call.tools.library.items(sessionID: session.id, afterSequence: call.arguments.int("afterSequence") ?? 0)
       if call.arguments.int("afterSequence") == nil { items = Array(items.suffix(limit)) } else { items = Array(items.prefix(limit)) }
-      var result = ["Session \(session.id): \(session.title) (\(session.runtime.rawValue))"]
+      let states = await call.tools.runStates(of: [session.machineID])
+      var result = ["Session \(session.id): \(session.title) (\(session.runtime.rawValue)) on "
+                    + "\(await call.tools.machineName(session.machineID)), \(describe(session, in: states))"]
       for item in items {
         let who = item.author?.name
         switch item.content {
@@ -111,7 +148,7 @@ private let sessionTools: [WovenTool] = [
     }),
   WovenTool(
     name: "start_session",
-    description: "Start a new agent session on a machine and give it a first message. It runs on that machine with the runtime given (from `list_places`). Use only when the work needs another agent; it does not report back by itself, so read it later with `read_session`.",
+    description: "Start a new agent session on a machine and give it a first message. It runs on that machine with the runtime given (from `list_places`). Use only when the work needs another agent; it does not report back by itself, so read it later with `read_session`, which says whether its turn is still running.",
     input: schema(["runtime": text("The runtime, as `list_places` names it (codex, claudeCode, grokBuild, openCode, piDurable)."),
                    "title": text("A short title."), "message": text("The first message: everything the agent needs."),
                    "folderID": text("Work in this folder (it decides the machine)."),
@@ -143,7 +180,9 @@ private let sessionTools: [WovenTool] = [
     run: { call in
       let session = try await call.tools.session(try call.arguments.string("sessionID"))
       guard session.id != call.caller.sessionID else { throw ToolFailure("That is your own session.") }
-      guard session.runtime != .bots else { throw ToolFailure("That is a bot chat; use `message_bot`.") }
+      guard session.runtime != .bots else {
+        throw ToolFailure(call.caller.botID == nil ? "That is a bot chat; use `message_bot`." : "That is a bot chat, not an agent session.")
+      }
       if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
       try await call.tools.sessions.host(for: session.id).send(try call.arguments.string("text"), attachments: [],
                                                               author: try await call.tools.author(call.caller))
@@ -222,9 +261,9 @@ private let visualReplyTools: [WovenTool] = [
     }),
 ]
 
-// MARK: Notes, pages and apps
+// MARK: Notes, pages, sheets and apps
 
-private let artifactKinds: [String: NoteArtifactKind] = ["note": .note, "page": .canvas, "app": .html, "sheet": .spreadsheet]
+private let artifactKinds: [String: NoteArtifactKind] = ["note": .note, "page": .canvas, "sheet": .spreadsheet, "app": .html]
 
 private func kindName(_ kind: NoteArtifactKind) -> String {
   artifactKinds.first { $0.value == kind }?.key ?? kind.rawValue
@@ -243,14 +282,14 @@ private func checked(_ document: NoteDocument) throws -> String {
 private let artifactTools: [WovenTool] = [
   WovenTool(
     name: "list_artifacts",
-    description: "List notes, pages, apps and sheets, most recently changed first: id, kind, title, a preview.",
-    input: schema(["kind": choice(["note", "page", "app", "sheet"], "Only this kind."), "query": text("Words the title or text contains.")]),
+    description: "List notes, pages, sheets and apps, most recently changed first: id, kind, title, a preview.",
+    input: schema(["kind": choice(["note", "page", "sheet", "app"], "Only this kind."), "query": text("Words the title or text contains.")]),
     readOnly: true,
     groups: [.notes],
     run: { call in
       var artifacts = try await call.tools.library.artifacts()
       if let kind = call.arguments.optionalString("kind") {
-        guard let wanted = artifactKinds[kind] else { throw ToolFailure("kind is note, page, app or sheet.") }
+        guard let wanted = artifactKinds[kind] else { throw ToolFailure("kind is note, page, sheet or app.") }
         artifacts = artifacts.filter { $0.kind == wanted }
       }
       if let query = call.arguments.optionalString("query")?.lowercased(), !query.isEmpty {
@@ -262,7 +301,7 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "read_artifact",
-    description: "Read a note, page, app or sheet. Returns its title, its `basedOn` stamp for `edit_artifact`, and its content: a note's text, an app's HTML and saved state, or a page's components with their ids and revisions.",
+    description: "Read a note, page, sheet or app. Returns its title, its `basedOn` stamp for `edit_artifact`, and its content: a note's text, a page's components with their ids and revisions, a sheet's rows of cells, or an app's HTML and saved state.",
     input: schema(["artifactID": text("The artifact.")], required: ["artifactID"]),
     readOnly: true,
     groups: [.notes],
@@ -283,7 +322,7 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_artifact",
-    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML document). An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the app has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
+    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML document); a sheet cannot be created here. An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the app has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
     input: schema(["kind": choice(["note", "page", "app"], "What to create."), "title": text("Its title."),
                    "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
                    "html": text("An app's whole HTML document."), "folderID": text("File it in this folder."),
@@ -306,7 +345,7 @@ private let artifactTools: [WovenTool] = [
   WovenTool(
     name: "edit_artifact",
     description: """
-      Change a note, page or app you have read. Pass the `basedOn` stamp from `read_artifact`. Give any of: `title`; \
+      Change a note, page or app you have read, or rename a sheet. Pass the `basedOn` stamp from `read_artifact`. Give any of: `title`; \
       a note's whole new `text`; an app's whole new `html`; `appState` edits; or `pageEdits` for a page. Each page \
       edit is an object with `action` (add, update, move, remove, setPurpose), `id` and `expectedRevision` from the \
       outline (for update, move and remove), `kind` (text, task or section, for add), `patch` (`text`, and for a \
@@ -431,7 +470,7 @@ private let databaseTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_database",
-    description: "Create an empty database that notes, pages and apps can link to. It belongs to the machine given (default this one).",
+    description: "Create an empty database that notes, pages, sheets and apps can link to. It belongs to the machine given (default this one).",
     input: schema(["name": text("Its name."), "description": text("What it holds."),
                    "machineID": text("The machine that owns it.")], required: ["name"]),
     groups: [.notes],
@@ -449,25 +488,34 @@ private let databaseTools: [WovenTool] = [
 private let placeTools: [WovenTool] = [
   WovenTool(
     name: "list_places",
-    description: "The person's machines (id, name, online) with each one's folders (id, name, path, and other directories its agents may use). Use the ids with `start_session` and `create_database`.",
+    description: "The person's machines (id, name, online, the runtimes `start_session` can use there) with each one's folders (id, name, path, and other directories its agents may use). Use the ids with `start_session` and `create_database`.",
     input: schema([:]),
     readOnly: true,
     run: { call in
       let tools = call.tools
+      let here = await tools.sessions.allRuntimes.map(\.kind.rawValue).sorted().joined(separator: ", ")
+      // Another machine's server asks only for this machine's runtimes.
+      if call.forwarded { return .text(here) }
       let statuses = await tools.peers.statuses
+      let linked = await tools.peers.linked()
       let folders = try await tools.library.folders()
       var result: [String] = []
       for machine in try await tools.library.machines() {
-        let here = machine.id == tools.machineID
-        let online = here || statuses[machine.id]?.online == true
-        result.append("machine \(machine.id) | \(machine.name)\(here ? " (this machine)" : "") | \(machine.platform.rawValue) | \(online ? "online" : "offline")")
+        let isHere = machine.id == tools.machineID
+        let online = isHere || statuses[machine.id]?.online == true
+        var runtimes = isHere ? here : "unknown"
+        if !isHere, online, let client = linked[machine.id],
+           let answer = try? await client.call(CallTool(name: call.name, arguments: .object([:]), caller: call.caller),
+                                               timeout: .seconds(5)),
+           !answer.isError, case .text(let text)? = answer.content.first {
+          runtimes = text
+        }
+        result.append("machine \(machine.id) | \(machine.name)\(isHere ? " (this machine)" : "") | \(machine.platform.rawValue) | \(online ? "online" : "offline") | runtimes: \(runtimes)")
         for folder in folders where folder.machineID == machine.id {
           result.append("  folder \(folder.id) | \(folder.name) | \(folder.path)")
           for reference in folder.references { result.append("    other directory | \(reference)") }
         }
       }
-      let runtimes = await tools.sessions.allRuntimes.map(\.kind.rawValue).sorted()
-      result.append("Runtimes on this machine: " + runtimes.joined(separator: ", "))
       return lines(result)
     }),
   WovenTool(
@@ -515,7 +563,9 @@ private let botTools: [WovenTool] = [
       var request: [String: JSONValue] = [
         "type": .string("message.send"), "botId": .string(try call.arguments.string("botID")),
         "text": .string(try call.arguments.string("text")),
-        "context": .string("This message is from the agent session “\(author.name)”, not the person."),
+        "context": .string(author.sessionID.map {
+          "This message is from the agent session “\(author.name)” (\($0)), not the person; `send_to_session` reaches it."
+        } ?? "This message is from an agent outside Woven Matter, not the person."),
       ]
       if call.arguments.bool("newThread") == true { request["newThread"] = .bool(true) }
       _ = try await tools.bots.call(.object(request), caller: tools.localCaller)
