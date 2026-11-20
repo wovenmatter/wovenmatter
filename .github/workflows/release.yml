@@ -123,7 +123,7 @@ jobs:
           WOVENMATTER_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: scripts/build-release.sh "$VERSION" notarize-dmg
 
-      - name: 'Release 6/6: manifest, checksums, signed full-only feed, reconstruction'
+      - name: 'Release 6/6: signed full-only feed, checksums, reconstruction'
         env:
           VERSION: ${{ steps.source.outputs.version }}
           WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key

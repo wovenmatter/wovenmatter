@@ -6,26 +6,28 @@ description: Cut, prepare, verify, and publish a WovenMatter macOS release.
 A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
 
 1. **Check and update.** Run `scripts/release-check.py`. It reports what is behind
-   upstream stable releases (npm lockfiles, Swift packages, and the Node, CEF and
-   Sparkle records) and known vulnerabilities in shipped code. If anything is
-   outdated, update all of it to current stable releases, majors included,
-   following `docs/DEPENDENCIES.md` (lockfiles, records, checksums, notices and
-   generated resources together), validate it with `scripts/test-changes.sh`, and
-   open one PR. Give Trey the PR link and a short report on each known
-   vulnerability: severity, whether it ships, and what you recommend (update,
-   hold a version, replace, or accept). If nothing is outdated, there is no PR;
-   give the report alone.
+   upstream stable releases (the npm lockfiles in `default-agent`, `bots` and
+   `harnesses/npm-runtime`; the Swift package graphs; the Node, npm, CEF, Sparkle,
+   Cua Driver and VM guest records; and the Swift toolchain and SQLite in
+   `server/linux-build.json`) and known vulnerabilities in shipped code. If
+   anything is outdated, update all of it to current stable releases, majors
+   included, following `docs/DEPENDENCIES.md` (lockfiles, records, checksums,
+   notices and generated resources together), validate it with
+   `scripts/test-changes.sh`, and open one PR. Give Trey the PR link and a short
+   report on each known vulnerability: severity, whether it ships, and what you
+   recommend (update, hold a version, replace, or accept). If nothing is
+   outdated, there is no PR; give the report alone.
 2. **Go-ahead.** Wait for Trey. He merges the PR and says go, or you work through
    the findings together first.
 3. **Build and describe, in parallel.** Run `scripts/cut-release.sh build X.Y.Z`
-   in the background. It makes a fresh worktree of current `origin/main`, then
-   builds the Linux library binaries in Docker on the workstation while it
+   in the background. It makes a fresh worktree of current `origin/main` and
    compiles the production Release app here (ad-hoc signed; a Debug app is never
-   a distribution artifact), puts the library into the app and checks it. It
-   uploads nothing. Meanwhile draft the release description and go over it with
-   Trey. Never wait on a step that does not depend on another: run independent
-   work at the same time, and ship the moment both the build and the approval
-   are done.
+   a distribution artifact). That compile also builds everything the app
+   carries: the Linux `woven-server` for x86_64 and aarch64, Pi Durable, the
+   bots runtime, the VM helper, the power helper, Cua and the browser. It then
+   checks the app and uploads nothing. Meanwhile draft the release description
+   and go over it with Trey. Ship the moment both the build and the approval are
+   done.
 4. **Ship.** Once the build passed and Trey approved the exact description, run
    `scripts/cut-release.sh ship X.Y.Z`. It uploads that build to the private
    draft and pushes the annotated `vX.Y.Z` tag. The tag starts
@@ -37,8 +39,7 @@ A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
 Use a supplied version as given. If none is supplied, choose it from the change
 range since the previous public release: the next unused patch version for a
 maintenance-only release, otherwise the unused semantic version that the new
-capabilities or compatibility changes call for. State it; ask first only when a
-material version-policy or compatibility question makes it genuinely ambiguous.
+capabilities call for. State it; ask first only when it is genuinely ambiguous.
 A release request, a stated version, or approval of a previous release is not
 description approval. Release preparation runs no test suites beyond the
 dependency PR's validation, and does not trigger, wait for, or rerun CI. The
@@ -64,11 +65,15 @@ never includes authentication recovery; only the user operates account login.
 If the signing workflow fails, find the cause, fix it on main, delete the
 unpublished tag, and build and ship again with the same version; only a published
 version is final. Never publish two releases with the same version. Its six named
-phase steps show live progress and record per-phase timings. After a successful
-run, verify through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
-The script checks source, workflow, assets, checksums, signing, notarization,
-and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
-It keeps downloaded bytes, never results, in a private local store; the later
+phase steps show live progress and record per-phase timings; the failing step and
+its `release-timing` lines show where it stopped. A new attempt builds and ships
+again; it never resumes a failed phase. Diagnose before retrying; do not
+substitute repeated builds for diagnosis.
+
+After a successful run, verify with
+`scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`. It checks
+source, workflow, assets, checksums, signing, notarization and Gatekeeper, and
+keeps downloaded bytes, never results, in a private local store; the later
 `--approved-notes` run rehashes them, repeats every check, and refuses a draft or
 asset changed since verification. Do not clear that store between the two runs.
 
@@ -76,9 +81,11 @@ Approval of the exact description persists for the same release; do not request 
 again merely because the build finished. Publication still requires a successful
 workflow and standard artifact verification.
 
-Write the release description from the material changes since the previous
-public release. Inspect the complete commit/PR range and underlying changes;
-do not simply repeat commit titles. Use this structure for every release:
+## The description
+
+Write it from the material changes since the previous public release. Inspect the
+complete commit/PR range and underlying changes; do not simply repeat commit
+titles. Use this structure:
 
 1. A short opening explanation led by major user-facing capabilities. It
    begins "Woven Matter vX.Y.Z", with the `v`, matching the release title. Put
@@ -90,7 +97,6 @@ do not simply repeat commit titles. Use this structure for every release:
 5. A **Full changelog** link comparing the previous release tag with the new tag.
 6. **How to update** — the final section, using this exact copy:
    "Go to Settings > Updates to check for and install the update."
-   (Through v0.4.4 it read "Settings > General": earlier apps had no Updates page.)
 
 Use the same badge image, label, and Apple logo as the README, but link directly
 to this release's DMG, never `/releases/latest`. For version `X.Y.Z`:
@@ -108,17 +114,16 @@ Write in plain, natural language and say concretely what users can now do or
 what works better. Keep implementation details out unless they materially affect
 users. Do not claim unverified functionality or pad the notes with internal
 maintenance. If a change requires an upgrade action, explain it in the relevant
-feature or improvement bullet; keep the final update instructions consistent.
-Distinguish agent tools from conversation permissions instead of referring to
-both with an ambiguous phrase such as "Full access."
+bullet. Distinguish agent tools from conversation permissions instead of
+referring to both with an ambiguous phrase such as "Full access."
 
 Save the description in a UTF-8 Markdown file and update the private draft with
 `gh release edit vX.Y.Z --notes-file /absolute/path/to/notes.md`. Present the full
 description to Trey along with the exact commit, validation result, and draft
 URL. If that exact description has not already been approved, stop and wait for
-his explicit approval; leave the release private. Apply
-requested edits and show the revised description for approval. Any later change
-to the description or release commit requires fresh approval.
+his explicit approval; leave the release private. Apply requested edits and show
+the revised description for approval. Any later change to the description or
+release commit requires fresh approval.
 
 Only after approval, publish with
 `scripts/publish-release.sh --approved-notes /absolute/path/to/notes.md vX.Y.Z EXPECTED_COMMIT_SHA`.
@@ -127,50 +132,23 @@ never supply it preemptively. The script publishes the supplied text and repeats
 artifact verification. Its default invocation only verifies and leaves the draft
 private. Never bypass this gate with direct GitHub publication commands.
 
-Report the exact commit, validation result, and release URL with its verified
-public state after publication.
+A running build or background waiter is not proof of publication. After
+publication, read back public state (`isDraft=false`), source provenance, and the
+exact release body against the approved UTF-8 file, and verify the download badge
+targets an existing release asset. Report the exact commit, validation result, and
+release URL with its verified public state only after these checks.
 
+## Packaging rules
 
-## Full-update packaging that shipped successfully
+See [desktop updates](../../../docs/DESKTOP_UPDATES.md).
 
-Use the current scripts and [desktop update documentation](../../../docs/DESKTOP_UPDATES.md).
-Release 0.3.2 from `fb415bf38ae575adfd46fdac1295aca363e75dfe` shipped
-through this path; Trey confirmed the installed 0.3.1 → 0.3.2 update worked.
-
-- Keep Chromium/CEF and other dependencies current. Do not downgrade the browser
-  to reduce packaging cost.
-- Ship full signed Sparkle updates. After signing, notarizing, and stapling the
-  app and DMG, generate the feed once from the final archive. Its input directory
-  contains only the new DMG; `generate_appcast` uses `--maximum-deltas 0`.
-  Do not download older DMGs as delta bases or restore background preparation
-  and feed regeneration. Feed, inventory, and update-path checks reject deltas.
-- Use ordinary zlib level 6 DMG compression. The retired 512 MiB compatibility
-  cap and compression retries are gone; do not reintroduce them.
+- Keep Chromium/CEF and other dependencies current. Do not downgrade to reduce
+  packaging cost.
+- Ship full signed Sparkle updates only: generate the feed once from the final
+  notarized DMG, alone in its input folder, with `--maximum-deltas 0`. Never
+  download older DMGs as delta bases.
+- Ordinary zlib level 6 DMG compression; no size cap or compression retries.
 - Keep both notarization submissions: the app's own stapled ticket is required
-  inside the DMG. Dropping one needs a separate signed experiment first.
-- Retain feed/payload signatures, provenance, exact asset inventory, checksums,
-  notarization, Gatekeeper, and full-update reconstruction verification.
-- Keep generator start/elapsed-time logging. Do not add an arbitrary ten-minute
-  cutoff; the signing job currently has a 60-minute timeout.
-
-Failed attempts spent a long time generating deltas across a Chromium upgrade
-against two older releases. Memory pressure was suspected, not measured. Do not
-claim a proven Sparkle runtime defect or assume compression fixes binary-diff
-cost. Keep deltas out of ordinary release preparation.
-
-## Background execution and completion
-
-Record the exact source SHA from the build and the workflow run URL from the ship
-step. Draft and review the description while the build runs.
-If publication is already explicitly approved, continue after workflow success
-with the standard verification and approved-notes publication commands above.
-A running build or background waiter is not proof of publication.
-
-On failure, collect diagnostics and report the actual blocker before restarting
-or changing the pipeline. Do not substitute repeated builds for diagnosis. The
-failing phase step and its `release-timing` lines identify where it stopped.
-Once the cause is understood, a new attempt builds and ships again; it never
-resumes a failed phase.
-After publication, read back public state (`isDraft=false`), source provenance,
-and the exact release body against the approved UTF-8 file. Verify the download
-badge targets an existing release asset. Report success only after these checks.
+  inside the DMG.
+- Keep feed and archive signatures, provenance, the exact asset inventory,
+  checksums, notarization, Gatekeeper and full-update reconstruction checks.

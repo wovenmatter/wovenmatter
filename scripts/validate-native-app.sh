@@ -14,8 +14,9 @@ case "$bundle_id" in
   *) printf 'Unexpected bundle identifier: %s\n' "$bundle_id" >&2; exit 1 ;;
 esac
 test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$info_plist")" = true
-test ! -e "${app}/Contents/Library/LaunchAgents"
-test ! -e "${app}/Contents/MacOS/WovenMatterLocalService"
+# The app's own program is this Mac's background server (app/App/ServerEntry.swift).
+# grep reads all input (no -q): an early exit would SIGPIPE nm under pipefail.
+nm -j "$main_executable" | grep WovenServerKit >/dev/null
 
 power_helper="${app}/Contents/Library/LaunchServices/WovenMatterPowerHelper"
 power_daemon="${app}/Contents/Library/LaunchDaemons/wovenmatter.desktop.power-helper.plist"
@@ -69,10 +70,8 @@ PY
 python3 "$(cd "$(dirname "$0")" && pwd)/validate-cua.py" "${resources}/Cua/cua-driver"
 test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
-test -f "${resources}/default-agent/src/executor/broker.mjs"
 test -f "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json"
 test -f "${resources}/default-agent/node_modules/@earendil-works/pi-durable/package.json"
-test -f "${resources}/default-agent/src/durable-session.mjs"
 pi_dependency_root() {
   "${resources}/default-agent/bin/node" --input-type=module --eval \
     'import { createRequire } from "node:module"; import { dirname } from "node:path";
@@ -91,11 +90,11 @@ for modules in "${resources}/default-agent/node_modules" "${resources}/default-a
   test ! -e "$modules/.bin/esbuild"
   test ! -L "$modules/.bin/esbuild"
 done
-# Import the actual trimmed integration, not just package manifests. No account
-# checks, model discovery, credentials, or provider requests occur here.
+# Import the actual trimmed agent and its SDKs, not just package manifests. Importing
+# starts nothing: no account checks, model discovery, credentials or provider requests.
 "${resources}/default-agent/bin/node" --input-type=module --eval \
   'import { pathToFileURL } from "node:url"; await import(pathToFileURL(process.argv[1]));' \
-  "${resources}/default-agent/src/engine.mjs"
+  "${resources}/default-agent/src/agent.mjs"
 test -f "${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
 claude_arch="$(uname -m)"
 if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
@@ -118,54 +117,24 @@ test ! -e "$bots/node_modules/@earendil-works"
 test "$("${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$bots/package.json")"
 test -f "${resources}/harnesses/catalog.json"
 test -f "${resources}/harnesses/woven-mcp.mjs"
-test ! -e "${resources}/harnesses/mcp"
-test ! -e "${resources}/wovenmatter"
-test ! -e "${resources}/wovenmatter-remote.py"
-test ! -e "${resources}/harnesses/cli"
-test ! -e "${resources}/default-agent/src/automation-mcp.mjs"
-test ! -e "${resources}/default-agent/src/cli-context.mjs"
-test -f "${resources}/remote/Executor.Dockerfile"
-test -f "${resources}/remote/executor-deploy.sh"
-test -f "${resources}/remote/package.json"
-test -f "${resources}/remote/src/server.mjs"
-test -f "${resources}/remote-host.sh"
-test -f "${resources}/executor-docker.sh"
-test -f "${resources}/remote/host/build-bundle.sh"
-test -f "${resources}/remote/host/bin/wm-exec"
-test -f "${resources}/remote/host/runtime-versions.json"
-test -f "${resources}/scripts/remote-host.sh"
 test -f "${resources}/default-agent/.node-version"
-test ! -e "${resources}/catalog.json"
-test ! -e "${resources}/initialize-workspace.sh"
-test ! -e "${resources}/remote/test"
-test ! -e "${resources}/remote/.env.example"
-test ! -e "${resources}/remote/compose.yaml"
-test ! -e "${resources}/remote/Dockerfile"
-test ! -e "${resources}/remote/build-image.sh"
-test ! -e "${resources}/remote/entrypoint.sh"
 
-if nm -j "$main_executable" | grep -Eq \
-  'MacPlatform|IsolatedAgent|ServerAgent|WovenMatterLocalService|Containerization|Peekaboo|AXorcist'; then
-  printf '%s\n' 'Removed runtime architecture symbols found in the app executable.' >&2
-  exit 1
-fi
-
-# Opened from Finder or launchd, the app has no shell environment, and
-# Tailscale's app binary then starts as its GUI instead of answering. The app
-# must hand every child the switch that selects Tailscale's CLI. Its Serve
-# helper mode runs one child without opening a window or a workspace, and
-# stops it when the heartbeat pipe on its standard input closes: the sleep
-# holds that pipe open and so also limits how long this check can take.
-tailscale_probe="$(mktemp -d)"
-tailscale_probe_status=0
-env -i "$main_executable" --tailscale-serve-supervisor /bin/sh -c 'printenv TAILSCALE_BE_CLI > "$0"' \
-  "$tailscale_probe/switch" < <(exec sleep 30 2>/dev/null) || tailscale_probe_status=$?
-tailscale_switch="$(cat "$tailscale_probe/switch" 2>/dev/null || true)"
-rm -rf "$tailscale_probe"
-if [ "$tailscale_switch" != 1 ]; then
-  printf 'The app starts child processes without TAILSCALE_BE_CLI=1 (its helper exited with status %s).\n' \
-    "$tailscale_probe_status" >&2
-  exit 1
-fi
+# The Linux server this Mac installs over SSH (scripts/prepare-linux-server.sh): a
+# static woven-server and its resources for each architecture LinuxInstall accepts.
+python3 -I - "${resources}/linux-server" <<'PY'
+import gzip, pathlib, sys, tarfile
+root = pathlib.Path(sys.argv[1])
+for arch, machine in (('x86_64', 0x3E), ('aarch64', 0xB7)):
+    release = root / f'linux-{arch}'
+    with gzip.open(release / 'woven-server.gz') as server:
+        header = server.read(20)
+    assert header[:4] == b'\x7fELF' and int.from_bytes(header[18:20], 'little') == machine, \
+        f'linux-{arch}/woven-server.gz is not a Linux {arch} executable'
+    with tarfile.open(release / 'resources.tar.gz') as resources:
+        names = set(resources.getnames())
+    for required in ('node/bin/node', 'default-agent/src/main.mjs',
+                     'default-agent/node_modules/@earendil-works/pi-durable/package.json', 'harnesses/catalog.json'):
+        assert required in names, f'linux-{arch}/resources.tar.gz lacks {required}'
+PY
 
 printf '%s\n' 'Native app validation passed.'

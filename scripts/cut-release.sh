@@ -2,16 +2,14 @@
 # Cuts a release from this Mac in two steps.
 #
 #   scripts/cut-release.sh build X.Y.Z
-#     Fresh worktree of current origin/main, Linux library binaries built in
-#     Docker on a build host, production Release app compiled here (ad-hoc
-#     signed) and checked. Uploads nothing.
+#     Fresh worktree of current origin/main, production Release app compiled
+#     here (ad-hoc signed; the compile also builds the Linux woven-server for
+#     x86_64 and aarch64 into the app) and checked. Uploads nothing.
 #   scripts/cut-release.sh ship X.Y.Z
 #     Uploads that exact build to the private draft and pushes the tag, which
 #     starts .github/workflows/release.yml to sign, notarize and package it.
 #
 # Publication stays behind scripts/publish-release.sh and approved notes.
-# WOVENMATTER_LINUX_BUILD_HOST: SSH host with Docker for the Linux library
-# (default: workstation), or "local" for Docker on this machine.
 set -euo pipefail
 
 usage() { echo 'usage: scripts/cut-release.sh build|ship X.Y.Z' >&2; exit 64; }
@@ -20,7 +18,6 @@ command="$1"
 version="$2"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
 tag="v$version"
-linux_host="${WOVENMATTER_LINUX_BUILD_HOST:-workstation}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work="/private/tmp/wovenmatter-release-$version"
 source="$work/source"
@@ -37,24 +34,6 @@ refuse_existing() {
     gh release view "$tag" --json isDraft --jq .isDraft | grep -qx true \
       || { echo "$tag is already public." >&2; exit 65; }
   fi
-}
-
-# Builds the packed Linux library binaries into $1.
-linux_library() {
-  local output="$1"
-  mkdir -p "$output"
-  if [ "$linux_host" = local ]; then
-    scripts/build-linux-library.sh --docker --output "$output"
-  else
-    local remote_dir
-    remote_dir="$(ssh "$linux_host" mktemp -d)"
-    git archive HEAD | ssh "$linux_host" "tar -x -C '$remote_dir'"
-    ssh "$linux_host" "cd '$remote_dir' && scripts/build-linux-library.sh --docker --output '$remote_dir/out'"
-    ssh "$linux_host" "tar -C '$remote_dir/out' -c ." | tar -x -C "$output"
-    # Docker leaves root-owned output behind.
-    ssh "$linux_host" "sudo rm -rf '$remote_dir'"
-  fi
-  scripts/verify-linux-library.sh "$output"
 }
 
 compile_app() {
@@ -81,31 +60,11 @@ build() {
   build_number="$(git rev-list --count HEAD)"
   echo "Building $tag (build $build_number) from $revision."
 
-  # The app only carries the Linux library as a verbatim resource, so build the
-  # library on the Linux host while the app compiles here, then copy it into the
-  # finished app and reseal it (ad hoc; the release workflow re-signs it).
-  step "Building Linux library binaries on $linux_host while compiling the Release app"
-  linux_library "$work/linux-library" > "$work/linux-library.log" 2>&1 &
-  local linux_pid=$!
-  if ! compile_app "$work/build"; then
-    kill "$linux_pid" 2>/dev/null || true
-    exit 1
-  fi
-  step 'App compiled; waiting for the Linux library'
-  if ! wait "$linux_pid"; then
-    tail -40 "$work/linux-library.log" >&2
-    echo 'The Linux library build failed.' >&2
-    exit 1
-  fi
-  tail -3 "$work/linux-library.log"
+  step 'Compiling the Release app'
+  compile_app "$work/build"
   local app="$work/build/DerivedData/Build/Products/Release/Woven Matter.app"
-  local bundled="$app/Contents/Resources/remote/host/library"
-  rm -rf "$bundled"
-  mkdir -p "$bundled"
-  cp -R "$work/linux-library/." "$bundled/"
-  scripts/verify-linux-library.sh "$bundled"
-  codesign --force --sign - --preserve-metadata=identifier,entitlements "$app"
 
+  # Includes the Linux server for x86_64 and aarch64, Pi Durable, the bots and the VM helper.
   step 'Checking the app'
   python3 scripts/validate-release-metadata.py verify "$version" "$build_number" "$revision" \
     --plist "$app/Contents/Info.plist"
