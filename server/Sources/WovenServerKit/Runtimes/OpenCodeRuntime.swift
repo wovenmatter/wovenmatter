@@ -11,6 +11,9 @@ import WovenProtocol
 /// thinking slot the current model's variants.
 public final class OpenCodeRuntime: Runtime {
   public var kind: RuntimeKind { .openCode }
+  /// One Woven MCP bridge serves the whole OpenCode process, which names the
+  /// native session in each tool call.
+  public var sharesToolBridge: Bool { true }
 
   private let folder: URL
   private let explicitExecutable: URL?
@@ -26,7 +29,7 @@ public final class OpenCodeRuntime: Runtime {
 
   public func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
     guard let executable else { throw RuntimeError.failed("OpenCode is not installed.") }
-    let (client, generation) = try await host.acquire(executable: executable)
+    let (client, generation) = try await host.acquire(executable: executable, tools: start.tools)
     do {
       let handle: String
       if let resumed = start.nativeHandle {
@@ -44,6 +47,11 @@ public final class OpenCodeRuntime: Runtime {
         }
         handle = try await client.call("POST", "/api/session", body: .object(body))["data"]["id"].text
         guard !handle.isEmpty else { throw RuntimeError.failed("OpenCode did not create a session.") }
+      }
+      // Woven's instructions, as one of the session's own instruction entries.
+      if let instructions = start.tools?.instructions {
+        try? await client.call("PUT", "/api/experimental/session/" + OpenCodeClient.segment(handle) + "/instructions/entries/woven",
+                               body: ["value": .string(instructions)])
       }
       let session = OpenCodeSession(handle: handle, directory: start.directory, client: client, host: host,
                                     generation: generation)
@@ -123,6 +131,8 @@ actor OpenCodeHost {
 
   private let folder: URL
   private var server: Server?
+  /// The Woven MCP, given to the process in its configuration when it starts.
+  private var tools: ToolAccess?
   private var starting: Task<Server, any Error>?
   private var generation = 0
   private var users = 0
@@ -147,7 +157,8 @@ actor OpenCodeHost {
 
   /// The running server, started if there is none; the caller is one more
   /// user until it calls `release`.
-  func acquire(executable: URL) async throws -> (OpenCodeClient, Int) {
+  func acquire(executable: URL, tools: ToolAccess? = nil) async throws -> (OpenCodeClient, Int) {
+    if let tools { self.tools = tools }
     if let server, starting == nil {
       users += 1
       return (server.client, server.generation)
@@ -206,7 +217,15 @@ actor OpenCodeHost {
     process.executableURL = executable
     process.arguments = ["serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"]
     process.currentDirectoryURL = folder
-    process.environment = environment(password: password)
+    var environment = environment(password: password)
+    if let tools {
+      let config: OpenCodeJSON = ["mcp": ["woven": [
+        "type": "local", "command": .array(([tools.command] + tools.arguments).map(OpenCodeJSON.string)),
+        "environment": .object(tools.environment.mapValues(OpenCodeJSON.string)),
+      ]]]
+      environment["OPENCODE_CONFIG_CONTENT"] = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+    }
+    process.environment = environment
     let input = Pipe()
     let output = Pipe()
     process.standardInput = input

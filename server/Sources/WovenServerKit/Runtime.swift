@@ -31,12 +31,17 @@ public struct RuntimeStart: Sendable {
   public var nativeHandle: String?
   /// What the session last chose; the runtime applies what it can.
   public var choices: SessionChoices
+  /// The Woven MCP and Woven's instructions, which the runtime hands its
+  /// native session in its own way; nil when this machine cannot offer them.
+  public var tools: ToolAccess?
 
-  public init(sessionID: String, directory: String, nativeHandle: String?, choices: SessionChoices = SessionChoices()) {
+  public init(sessionID: String, directory: String, nativeHandle: String?, choices: SessionChoices = SessionChoices(),
+              tools: ToolAccess? = nil) {
     self.sessionID = sessionID
     self.directory = directory
     self.nativeHandle = nativeHandle
     self.choices = choices
+    self.tools = tools
   }
 }
 
@@ -135,6 +140,9 @@ public protocol Runtime: Sendable {
   func status() async -> RuntimeStatus
   /// Installs it, or updates it to the latest release.
   func install() async throws
+  /// One Woven MCP bridge serves all its sessions, and it names the session
+  /// in each call (OpenCode), rather than one bridge per session.
+  var sharesToolBridge: Bool { get }
 }
 
 extension Runtime {
@@ -143,6 +151,7 @@ extension Runtime {
   }
 
   public func install() async throws {}
+  public var sharesToolBridge: Bool { false }
 }
 
 /// One native session with its process, kept alive between turns.

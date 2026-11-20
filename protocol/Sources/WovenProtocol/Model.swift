@@ -142,14 +142,17 @@ public struct SessionItem: Codable, Sendable, Hashable, Identifiable {
 }
 
 /// The speaker of an item in a chat with several: a bot by its identifier,
-/// with the name it had when it spoke.
+/// or another session that sent it through the Woven MCP, with the name it
+/// had when it spoke.
 public struct ItemAuthor: Codable, Sendable, Hashable {
   public var botID: String?
   public var name: String
+  public var sessionID: String?
 
-  public init(botID: String?, name: String) {
+  public init(botID: String?, name: String, sessionID: String? = nil) {
     self.botID = botID
     self.name = name
+    self.sessionID = sessionID
   }
 }
 

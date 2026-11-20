@@ -78,12 +78,12 @@ const usageTotals = state => {
 };
 
 export class Session {
-  static async open({ models, settings = {}, dataDirectory, sessionId, cwd, mcpServers, notify, create }) {
+  static async open({ models, settings = {}, dataDirectory, sessionId, cwd, mcpServers, systemPrompt, notify, create }) {
     const path = databasePath(dataDirectory);
     if (!create && (!uuid.test(sessionId ?? '') || !sessionExists(path, sessionId))) throw new AgentError('There is no Pi Durable session with that ID.', SESSION_NOT_FOUND);
     const root = await directory(cwd);
     const session = new Session(models, settings, sessionId, root, notify);
-    await session.start(path, mcpServers ?? []);
+    await session.start(path, mcpServers ?? [], systemPrompt);
     return session;
   }
   constructor(models, settings, sessionId, cwd, notify) {
@@ -91,7 +91,7 @@ export class Session {
     this.send = update => notify('session/update', { sessionId, update });
     this.busy = false;
   }
-  async start(path, mcpServers) {
+  async start(path, mcpServers, systemPrompt) {
     this.mcp = await connectMcp(mcpServers, this.cwd);
     const instructions = await projectInstructions(this.cwd);
     const registry = createRegistry();
@@ -102,7 +102,7 @@ export class Session {
     registry.install(this.mcp.extension);
     registry.install(defineExtension({ name: 'woven-context', sections: [
       section('environment', () => `Working directory: ${this.cwd}`, { tag: false }),
-      section('woven', () => this.mcp.instructions.join('\n\n') || undefined, { tag: false }),
+      section('woven', () => [systemPrompt, ...this.mcp.instructions].filter(Boolean).join('\n\n') || undefined, { tag: false }),
       section('project', () => instructions || undefined, { tag: false }),
     ] }));
     this.storage = await openNodeSqliteStorage(path, { prefix: tablePrefix(this.sessionId) });

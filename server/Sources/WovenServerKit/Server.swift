@@ -58,6 +58,7 @@ public final class WovenServer: Sendable {
   private let github: GitHub
   private let bots: BotsHost
   private let listeners: [Listener]
+  private let endpoint: MCPEndpoint
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
   private let removal = Mutex<(removed: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
   private let watcher = Mutex<Task<Void, Never>?>(nil)
@@ -73,8 +74,10 @@ public final class WovenServer: Sendable {
     // Before any runtime starts, so every one inherits the git environment.
     let github = try await GitHub.start(library: library, secrets: secrets, dataFolder: options.dataFolder)
     let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion)
+    let toolKeys = ToolKeys(socketPath: MCPEndpoint.socketPath(in: options.dataFolder))
     let sessions = SessionManager(library: library, runtimes: options.runtimes,
-                                  scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
+                                  scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true),
+                                  toolKeys: toolKeys)
     await sessions.start()
     let peers = PeerSync(library: library, tailnet: options.tailnet, hello: hello, interval: options.discoveryInterval)
     var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
@@ -90,6 +93,11 @@ public final class WovenServer: Sendable {
     let bots = BotsHost(library: library, secrets: secrets, peers: peers, dataFolder: options.dataFolder,
                         hosting: options.botsHosting)
     registerBots(&routes, bots: bots, library: library)
+    let tools = WovenTools(library: library, sessions: sessions, databases: databases, peers: peers, bots: bots)
+    registerTools(&routes, tools: tools)
+    await bots.offerTools(tools)
+    let endpoint = MCPEndpoint(keys: toolKeys, tools: tools)
+    try endpoint.start()
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -112,13 +120,15 @@ public final class WovenServer: Sendable {
       }
     } catch {
       for listener in listeners { await listener.stop() }
+      endpoint.stop()
       await sessions.closeAll()
       await github.stop()
       await library.close()
       throw error
     }
     let server = WovenServer(library: library, hello: hello, port: listeners.compactMap(\.port).first,
-                             sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners)
+                             sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
+                             endpoint: endpoint)
     pending.server.withLock { $0 = server }
     await peers.start()
     await bots.start()
@@ -127,7 +137,8 @@ public final class WovenServer: Sendable {
   }
 
   private init(library: Library, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
-               github: GitHub, bots: BotsHost, listeners: [Listener]) {
+               github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint) {
+    self.endpoint = endpoint
     self.library = library
     self.hello = hello
     self.port = port
@@ -163,6 +174,7 @@ public final class WovenServer: Sendable {
   public func stop() async {
     watcher.withLock { $0?.cancel() }
     for listener in listeners { await listener.stop() }
+    endpoint.stop()
     await bots.stop()
     await peers.stop()
     for transport in connections.withLock({ Array($0.values) }) { transport.close() }

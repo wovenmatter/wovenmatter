@@ -139,7 +139,7 @@ extension Library {
   /// Saves a finished item of a session this machine owns, as the next in
   /// its sequence. Only the owning machine writes a session's items.
   public func appendItem(sessionID: String, id: String = UUID().uuidString.lowercased(),
-                         content: ItemContent, createdAt: Date = Date()) async throws -> SessionItem {
+                         content: ItemContent, author: ItemAuthor? = nil, createdAt: Date = Date()) async throws -> SessionItem {
     let body = String(decoding: try Wire.encoder.encode(content), as: UTF8.self)
     let machineID = machineID
     // Stored to the millisecond, so the item announced equals the item read back.
@@ -153,10 +153,12 @@ extension Library {
       }
       let last = try writer.db.query("SELECT MAX(sequence) AS last FROM session_items WHERE session_id = ?",
                                      [.text(sessionID)]).first?.integer("last") ?? 0
-      let item = SessionItem(id: id, sessionID: sessionID, sequence: Int(last) + 1, createdAt: createdAt, content: content)
+      let item = SessionItem(id: id, sessionID: sessionID, sequence: Int(last) + 1, createdAt: createdAt, content: content,
+                             author: author)
       try writer.put("session_items", id: id, [
         "session_id": .text(sessionID), "sequence": .integer(Int64(item.sequence)),
         "kind": .text(content.kindName), "body": .text(body), "created_at": .integer(Self.millis(createdAt)),
+        "author": try author.map { .text(String(decoding: try Wire.encoder.encode($0), as: UTF8.self)) } ?? .null,
       ])
       return item
     }
@@ -271,6 +273,14 @@ extension Library {
       try db.query("SELECT handle, gone FROM native_sessions WHERE session_id = ?", [.text(sessionID)]).first.map {
         NativeSession(handle: $0.text("handle") ?? "", gone: $0.bool("gone"))
       }
+    }
+  }
+
+  /// The session a runtime's native session serves, by the runtime's handle.
+  public func session(runtime: RuntimeKind, nativeHandle: String) async throws -> String? {
+    try await read { db in
+      try db.query("SELECT session_id FROM native_sessions WHERE runtime = ? AND handle = ?",
+                   [.text(runtime.rawValue), .text(nativeHandle)]).first?.text("session_id")
     }
   }
 

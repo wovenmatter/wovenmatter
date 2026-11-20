@@ -58,12 +58,14 @@ actor SessionManager {
   private let library: Library
   private let runtimes: [RuntimeKind: any Runtime]
   private let scratch: URL
+  private let toolKeys: ToolKeys?
   private var hosts: [String: SessionHost] = [:]
   private var watcher: Task<Void, Never>?
   nonisolated let board = RunBoard()
   nonisolated let configurations = RuntimeConfigurations()
 
-  init(library: Library, runtimes: [any Runtime], scratch: URL) {
+  init(library: Library, runtimes: [any Runtime], scratch: URL, toolKeys: ToolKeys? = nil) {
+    self.toolKeys = toolKeys
     self.library = library
     self.runtimes = Dictionary(runtimes.map { ($0.kind, $0) }, uniquingKeysWith: { first, _ in first })
     self.scratch = scratch
@@ -135,7 +137,8 @@ actor SessionManager {
     let gone = try await library.nativeSession(for: sessionID)?.gone == true
     if let host = hosts[sessionID] { return host }
     let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
-                           configurations: configurations)
+                           configurations: configurations,
+                           tools: toolKeys?.access(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)))
     hosts[sessionID] = host
     return host
   }
@@ -175,6 +178,7 @@ actor SessionHost {
   private let runtime: any Runtime
   private let board: RunBoard
   private let configurations: RuntimeConfigurations
+  private let tools: ToolAccess?
   private var live: (any RuntimeSession)?
   private var generation = 0
   private var run: RunState
@@ -188,7 +192,8 @@ actor SessionHost {
   private var waiting: [CheckedContinuation<Void, Never>] = []
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
-       configurations: RuntimeConfigurations) {
+       configurations: RuntimeConfigurations, tools: ToolAccess? = nil) {
+    self.tools = tools
     self.sessionID = sessionID
     self.library = library
     self.runtime = runtime
@@ -219,7 +224,9 @@ actor SessionHost {
                             configuration: shown), events)
   }
 
-  func send(_ text: String, attachments: [Attachment]) async throws {
+  /// `author` marks a message another session or a bot sent through the
+  /// Woven MCP; the runtime is told who it is from.
+  func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil) async throws {
     await enter()
     defer { leave() }
     switch run {
@@ -235,11 +242,15 @@ actor SessionHost {
       files.append(TurnAttachment(name: attachment.name, mimeType: attachment.mimeType, size: attachment.size, file: file))
     }
     let live = try await openLive()
-    try await finish(.userMessage(text: text, attachments: attachments), id: UUID().uuidString.lowercased())
+    try await finish(.userMessage(text: text, attachments: attachments), id: UUID().uuidString.lowercased(), author: author)
     try? await library.setTurnRunning(sessionID, true)
     setRun(.running)
+    let delivered = author.map { author in
+      let from = author.sessionID.map { "the agent session “\(author.name)” (\($0))" } ?? "the bot \(author.name)"
+      return "This message is from \(from), not the person.\n\n" + text
+    } ?? text
     do {
-      try await live.send(Turn(text: text, attachments: files))
+      try await live.send(Turn(text: delivered, attachments: files))
     } catch {
       try? await library.setTurnRunning(sessionID, false)
       setRun(.idle)
@@ -400,11 +411,12 @@ actor SessionHost {
     let opened: any RuntimeSession
     do {
       opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: native?.handle,
-                                                   choices: choices))
+                                                   choices: choices, tools: tools))
     } catch RuntimeError.nativeSessionGone {
       // Nothing was ever said in this chat, so a new native session loses nothing.
       if try await library.hasItems(sessionID) == false {
-        opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: nil, choices: choices))
+        opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: nil, choices: choices,
+                                                     tools: tools))
       } else {
         try await nativeSessionGone()
         throw Self.goneError
@@ -476,9 +488,9 @@ actor SessionHost {
   }
 
   /// Writes a finished item to the library, then announces it.
-  private func finish(_ content: ItemContent, id: String) async throws {
+  private func finish(_ content: ItemContent, id: String, author: ItemAuthor? = nil) async throws {
     do {
-      let item = try await library.appendItem(sessionID: sessionID, id: id, content: content)
+      let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author)
       inProgress.removeAll { $0.id == id }
       broadcast(.itemFinished(item))
     } catch {

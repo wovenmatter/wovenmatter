@@ -38,6 +38,8 @@ struct ACPProfile: Sendable {
   var handleNotification: (@Sendable (String, JSONValue) async -> Void)?
   /// Where the process's standard error goes.
   var logFile: URL?
+  /// The Woven MCP and instructions for the native session.
+  var tools: ToolAccess?
 }
 
 /// A runtime spoken to over ACP, one process per session.
@@ -191,6 +193,19 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
         "clientCapabilities": profile.clientCapabilities,
         "clientInfo": .object(["name": .string("Woven Matter"), "version": .string("1")]),
       ]))
+      // The Woven MCP as a stdio server, and Woven's instructions as ACP's
+      // system prompt addition, or Grok's rules where that is not offered.
+      var sessionParams: [String: JSONValue] = [
+        "cwd": .string(start.directory), "mcpServers": .array(profile.tools.map { [$0.acpServer] } ?? []),
+      ]
+      if let instructions = profile.tools?.instructions {
+        if initialized["agentCapabilities"]?["sessionCapabilities"]?["systemPrompt"] != nil {
+          sessionParams["systemPrompt"] = .object(["mode": .string("append"),
+                                                   "content": .array([.object(["type": .string("text"), "text": .string(instructions)])])])
+        } else if profile.kind == .grokBuild {
+          sessionParams["_meta"] = .object(["rules": .string(instructions)])
+        }
+      }
       let handle: String
       if let existing = start.nativeHandle {
         guard initialized["agentCapabilities"]?["loadSession"]?.bool == true else {
@@ -198,9 +213,9 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
         }
         await state.setReplaying(true)
         do {
-          let loaded = try await connection.request("session/load", .object([
-            "sessionId": .string(existing), "cwd": .string(start.directory), "mcpServers": .array([]),
-          ]))
+          var params = sessionParams
+          params["sessionId"] = .string(existing)
+          let loaded = try await connection.request("session/load", .object(params))
           await state.setReplaying(false)
           await state.capture(loaded)
         } catch let error as ACPError where profile.isMissingSession(error) {
@@ -208,9 +223,7 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
         }
         handle = existing
       } else {
-        let created = try await connection.request("session/new", .object([
-          "cwd": .string(start.directory), "mcpServers": .array([]),
-        ]))
+        let created = try await connection.request("session/new", .object(sessionParams))
         guard let id = created["sessionId"]?.string, !id.isEmpty else {
           throw RuntimeError.failed("\(profile.kind.rawValue) did not start a session.")
         }

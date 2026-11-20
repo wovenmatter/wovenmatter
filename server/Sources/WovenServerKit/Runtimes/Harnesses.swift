@@ -104,7 +104,7 @@ private func acpHarness(_ kind: RuntimeKind, dataFolder: URL, cliVariable: Strin
       throw RuntimeError.failed("\(name)'s adapter is not installed on this machine.")
     }
     return ACPProfile(kind: kind, executable: adapter.path, arguments: harness.arguments, environment: [cliVariable: cli],
-                      isMissingSession: missing, logFile: logFile(dataFolder, kind, start.sessionID))
+                      isMissingSession: missing, logFile: logFile(dataFolder, kind, start.sessionID), tools: start.tools)
   }, statusCheck: {
     guard let harness else { return RuntimeStatus(runtime: kind, name: name, installed: false, detail: "Not in the harness catalog.") }
     let cli = harness.cliCommand.flatMap { ChildProcess.find($0) }
@@ -133,7 +133,8 @@ private func grokBuild(dataFolder: URL) -> ACPRuntime {
     let permission = start.choices.permission.flatMap { choice in modes.contains { $0.id == choice } ? choice : nil }
       ?? harness.defaultPermission ?? "auto"
     return ACPProfile(kind: kind, executable: grok, arguments: ["--permission-mode", permission] + harness.arguments,
-                      environment: [:], launchPermissions: modes, logFile: logFile(dataFolder, kind, start.sessionID))
+                      environment: [:], launchPermissions: modes, logFile: logFile(dataFolder, kind, start.sessionID),
+                      tools: start.tools)
   }, statusCheck: {
     guard let harness else { return RuntimeStatus(runtime: kind, name: name, installed: false, detail: "Not in the harness catalog.") }
     let cli = ChildProcess.find(harness.command)

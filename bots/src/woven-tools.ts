@@ -1,15 +1,64 @@
-import type { Extension } from "@earendil-works/pi-durable";
-import type { HostCall } from "./host/channel.ts";
+import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
+import type { HostChannel } from "./host/channel.ts";
+
+/** One Woven tool as the server's catalog describes it (MCP's `tools/list` shape). */
+type CatalogTool = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  annotations?: { readOnlyHint?: boolean };
+};
 
 /**
- * Where Woven tools attach for a bot. The server says whether the bot may use them
- * (`tools.access`, from Settings → Bots → Bot access); when it may, the Woven tool catalog's
- * extension is returned here and installed on the bot's harness. The catalog is not offered to
- * bots yet, so no bot gets Woven tools today.
+ * A bot's Woven tools: the server's one catalog, carried out by the server. The server says
+ * whether the bot may use them (`bots.wovenTools`: paused for all, or this bot switched off), and
+ * it is asked again every time the server connects, not only when the bot opens: a bot that was
+ * off when it opened gets the tools once a later connection allows them. The server checks the
+ * same setting on every call, so a bot turned off later is refused.
  */
-export async function wovenTools(botId: string, call: HostCall): Promise<Extension | undefined> {
-  const { allowed } = await call("tools.access", { botId });
-  if (!allowed) return undefined;
-  // The Woven tool catalog's extension is returned here once bots are offered it.
-  return undefined;
+export function wovenTools(botId: string, host: HostChannel, install: (extension: Extension) => void): void {
+  let installed = false;
+  const ask = async () => {
+    if (installed || !host.connected) return;
+    const reply = await host.call("tools.list", { botId });
+    if (!reply.allowed || installed) return;
+    installed = true;
+    install(extension(botId, host, reply.tools, reply.instructions));
+  };
+  host.onConnected(() => void ask().catch(() => {}));
+  void ask().catch(() => {});
+}
+
+function extension(botId: string, host: HostChannel, tools: CatalogTool[], instructions: string): Extension {
+  return defineExtension({
+    name: "woven",
+    sections: [section("woven", () => instructions, { tag: false })],
+    tools: tools.map((tool) =>
+      defineTool({
+        name: `woven_${tool.name}`,
+        description: tool.description,
+        parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
+        ...(tool.annotations?.readOnlyHint ? { replay: "safe" as const } : {}),
+        execute: async (args) => {
+          try {
+            const result = await host.call("tools.call", { botId, name: tool.name, arguments: args ?? {} });
+            return {
+              output: result.content.map((block) =>
+                block.type === "image"
+                  ? { type: "image" as const, data: block.data, mimeType: block.mimeType }
+                  : { type: "text" as const, text: block.text },
+              ),
+              isError: result.isError,
+            };
+          } catch (error) {
+            return {
+              output: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }],
+              isError: true,
+            };
+          }
+        },
+      }),
+    ),
+  });
 }

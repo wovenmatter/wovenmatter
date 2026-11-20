@@ -85,6 +85,11 @@ actor BotsHost {
   private var logURL: URL { runtimeFolder.appendingPathComponent("runtime.log") }
   private var socketPath: String { runtimeFolder.appendingPathComponent("runtime.sock").path }
 
+  /// The Woven MCP, offered to the bots when this machine is their home.
+  func offerTools(_ tools: WovenTools) {
+    interface.tools.attach(tools)
+  }
+
   // MARK: Lifetime
 
   func start() {

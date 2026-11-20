@@ -8,6 +8,8 @@ import WovenProtocol
 struct BotsHostInterface: Sendable {
   let library: Library
   let secrets: Secrets
+  /// The Woven MCP, once the server has made it.
+  let tools = ToolsLink()
 
   /// The home machine: this one.
   private var home: String { library.machineID }
@@ -38,6 +40,21 @@ struct BotsHostInterface: Sendable {
     case "tools.access":
       guard let botID = params["botId"]?.string else { throw RuntimeError.failed("tools.access needs a botId.") }
       return .object(["allowed": .bool(await toolsAllowed(botID))])
+    case "tools.list":
+      // Asked again on every connection, so a changed setting applies then.
+      guard let botID = params["botId"]?.string else { throw RuntimeError.failed("tools.list needs a botId.") }
+      guard await toolsAllowed(botID), let tools = tools.current else { return .object(["allowed": .bool(false)]) }
+      return .object(["allowed": .bool(true), "tools": .array(tools.listing(forBots: true)),
+                      "instructions": .string(WovenInstructions.text)])
+    case "tools.call":
+      guard let botID = params["botId"]?.string, let name = params["name"]?.string else {
+        throw RuntimeError.failed("tools.call needs a botId and a name.")
+      }
+      guard await toolsAllowed(botID), let tools = tools.current else {
+        return try JSONValue(encoding: ToolResult.error("Woven tools are turned off for this bot in Settings."))
+      }
+      return try JSONValue(encoding: await tools.call(name, arguments: params["arguments"] ?? .object([:]),
+                                                      caller: ToolCaller(machineID: home, botID: botID)))
     case "mirror.checkpoints":
       var bots: [String: JSONValue] = [:]
       var forum: Int64 = 0

@@ -86,7 +86,7 @@ export type BotAgentOptions = {
   readonly web?: WebToolsOptions;
   readonly env?: BotEnvironmentAdapter;
   /** The bot's Woven tools, when the server allows them (`woven-tools.ts`). */
-  readonly wovenTools?: () => Promise<Extension | undefined>;
+  readonly wovenTools?: (install: (extension: Extension) => void) => void;
   readonly onReport?: (error: unknown, info: unknown) => void;
   readonly compaction?: CompactionConfig;
   /** Fetch for provider requests (native compaction and generation); tests inject a fake. */
@@ -345,10 +345,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     },
     attach: (harness) => {
       native.harness.attach(harness);
-      void options
-        .wovenTools?.()
-        .then((woven) => woven && registry.install(woven))
-        .catch(() => {});
+      options.wovenTools?.((woven) => registry.install(woven));
     },
     conversationCreated: (tx, conversation) => {
       // Without a main model the conversation starts unconfigured; choosing one applies it.

@@ -792,6 +792,30 @@ export type HostMethods = {
   "git.agent": { params: { botId: string; message: string }; data: { message: string } };
   /** Whether the bot may use Woven tools (`bots.wovenTools`). */
   "tools.access": { params: { botId: string }; data: { allowed: boolean } };
+  /** The Woven tool catalog and instructions, when the bot may use them; asked on every connection. */
+  "tools.list": {
+    params: { botId: string };
+    data:
+      | { allowed: false }
+      | {
+          allowed: true;
+          tools: {
+            name: string;
+            description: string;
+            inputSchema: Record<string, unknown>;
+            annotations?: { readOnlyHint?: boolean };
+          }[];
+          instructions: string;
+        };
+  };
+  /** One Woven tool call, carried out by the server (which checks access again). */
+  "tools.call": {
+    params: { botId: string; name: string; arguments: Record<string, unknown> };
+    data: {
+      content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+      isError: boolean;
+    };
+  };
   "mirror.checkpoints": { params: Empty; data: MirrorCheckpoints };
   "mirror.bot": { params: MirrorBot; data: Empty };
   "mirror.forum": { params: MirrorForum; data: Empty };

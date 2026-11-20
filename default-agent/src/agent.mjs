@@ -24,7 +24,7 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
     await ready;
     if (method === 'initialize') return {
       protocolVersion: 1,
-      agentCapabilities: { loadSession: true, promptCapabilities: { image: true, embeddedContext: true } },
+      agentCapabilities: { loadSession: true, promptCapabilities: { image: true, embeddedContext: true }, sessionCapabilities: { systemPrompt: {} } },
       agentInfo: { name: 'pi-durable', title: 'Pi Durable', version: 'current' },
       authMethods: [],
     };
@@ -34,7 +34,7 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
       if (sessions.has(sessionId)) throw new AgentError('This session is already open.');
       // Pi Durable's settings for this machine, read once when the session opens.
       const settings = await rpc.request('woven/settings', {}).then(reply => reply?.settings ?? {}, () => ({}));
-      const session = await Session.open({ models, settings, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, notify: rpc.notify, create });
+      const session = await Session.open({ models, settings, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, systemPrompt: appended(params.systemPrompt), notify: rpc.notify, create });
       sessions.set(sessionId, session);
       const configOptions = await session.configOptions();
       return create ? { sessionId, configOptions } : { configOptions };
@@ -45,6 +45,15 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
     if (method === 'session/prompt') return session.prompt(params.prompt);
     if (method === 'session/cancel') { await session.cancel(); return {}; }
     return { configOptions: await session.setConfigOption(params.configId, params.value) };
+  }
+
+  // ACP's system prompt addition: only `append`, only text.
+  function appended(prompt) {
+    if (prompt == null) return undefined;
+    if (prompt.mode !== 'append' || !Array.isArray(prompt.content) || prompt.content.some(block => block?.type !== 'text')) {
+      throw new AgentError('Pi Durable takes a system prompt addition in append mode, as text.', -32602);
+    }
+    return prompt.content.map(block => block.text).join('\n\n');
   }
 
   const shutdown = async () => {
