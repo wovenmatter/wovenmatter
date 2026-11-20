@@ -40,18 +40,18 @@ public final class OpenCodeRuntime: Runtime {
         }
         handle = resumed
       } else {
-        var body: [String: OpenCodeJSON] = ["location": ["directory": .string(start.directory)]]
+        var body: [String: JSONValue] = ["location": .object(["directory": .string(start.directory)])]
         if let agent = start.choices.permission { body["agent"] = .string(agent) }
         if let model = start.choices.model.flatMap({ OpenCodeSession.modelReference($0, variant: start.choices.thinking) }) {
           body["model"] = model
         }
-        handle = try await client.call("POST", "/api/session", body: .object(body))["data"]["id"].text
+        handle = try await client.call("POST", "/api/session", body: .object(body))["data"]?["id"]?.string ?? ""
         guard !handle.isEmpty else { throw RuntimeError.failed("OpenCode did not create a session.") }
       }
       // Woven's instructions, as one of the session's own instruction entries.
       if let instructions = start.tools?.instructions {
         try? await client.call("PUT", "/api/experimental/session/" + OpenCodeClient.segment(handle) + "/instructions/entries/woven",
-                               body: ["value": .string(instructions)])
+                               body: .object(["value": .string(instructions)]))
       }
       let session = OpenCodeSession(handle: handle, directory: start.directory, client: client, host: host,
                                     generation: generation)
@@ -79,8 +79,8 @@ public final class OpenCodeRuntime: Runtime {
     // A private server answers, so the person's background service is not started.
     var signedIn: Bool?
     if let listed = try? await Self.run(executable, ["auth", "list", "--standalone", "--format", "json"], environment: host.environment()),
-       listed.status == 0, case .array(let integrations)? = try? OpenCodeJSON.decode(listed.output) {
-      signedIn = integrations.contains { !$0["connections"].array.isEmpty }
+       listed.status == 0, case .array(let integrations)? = try? OpenCodeSSEParser.decode(listed.output) {
+      signedIn = integrations.contains { !($0["connections"]?.array ?? []).isEmpty }
     }
     return RuntimeStatus(runtime: kind, name: "OpenCode", installed: true, version: version, signedIn: signedIn)
   }
@@ -219,10 +219,10 @@ actor OpenCodeHost {
     process.currentDirectoryURL = folder
     var environment = environment(password: password)
     if let tools {
-      let config: OpenCodeJSON = ["mcp": ["woven": [
-        "type": "local", "command": .array(([tools.command] + tools.arguments).map(OpenCodeJSON.string)),
-        "environment": .object(tools.environment.mapValues(OpenCodeJSON.string)),
-      ]]]
+      let config: JSONValue = .object(["mcp": .object(["woven": .object([
+        "type": .string("local"), "command": .array(([tools.command] + tools.arguments).map(JSONValue.string)),
+        "environment": .object(tools.environment.mapValues(JSONValue.string)),
+      ])])])
       environment["OPENCODE_CONFIG_CONTENT"] = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
     }
     process.environment = environment
@@ -241,7 +241,7 @@ actor OpenCodeHost {
     let address: URL
     do {
       let line = try await Self.firstLine(of: output, process: process)
-      guard let url = (try? OpenCodeJSON.decode(line))?["url"].string.flatMap(URL.init(string:)) else {
+      guard let url = (try? OpenCodeSSEParser.decode(line))?["url"]?.string.flatMap(URL.init(string:)) else {
         throw RuntimeError.failed("OpenCode's server did not say where it listens.")
       }
       address = url
@@ -305,9 +305,9 @@ actor OpenCodeHost {
     }
   }
 
-  private func route(_ event: OpenCodeJSON) {
-    let data = event["data"]
-    let type = event["type"].text
+  private func route(_ event: JSONValue) {
+    let data = event["data"] ?? .null
+    let type = event["type"]?.string ?? ""
     if type == "server.connected" {
       connected = true
       return
@@ -318,8 +318,8 @@ actor OpenCodeHost {
       for session in sessions.values { session.reloadSoon() }
       return
     }
-    guard let id = data["sessionID"].string ?? data["form"]["sessionID"].string else { return }
-    if type == "session.created", let parent = data["parentID"].string, let owner = sessions[parent] != nil ? parent : parents[parent] {
+    guard let id = data["sessionID"]?.string ?? data["form"]?["sessionID"]?.string else { return }
+    if type == "session.created", let parent = data["parentID"]?.string, let owner = sessions[parent] != nil ? parent : parents[parent] {
       parents[id] = owner
     }
     if let session = sessions[id] {
@@ -349,7 +349,7 @@ final class OpenCodeSession: RuntimeSession {
     /// The OpenCode session that asked: this one or one of its subagents.
     var sessionID: String
     /// The form, for a question; nil for a permission request.
-    var form: OpenCodeJSON?
+    var form: JSONValue?
   }
 
   private struct State {
@@ -387,12 +387,12 @@ final class OpenCodeSession: RuntimeSession {
   private var path: String { "/api/session/" + OpenCodeClient.segment(nativeHandle) }
 
   func send(_ turn: Turn) async throws {
-    let files: [OpenCodeJSON] = try turn.attachments.map { attachment in
+    let files: [JSONValue] = try turn.attachments.map { attachment in
       if attachment.mimeType.hasPrefix("image/") {
         let data = try Data(contentsOf: attachment.file)
-        return ["uri": .string("data:\(attachment.mimeType);base64," + data.base64EncodedString()), "name": .string(attachment.name)]
+        return .object(["uri": .string("data:\(attachment.mimeType);base64," + data.base64EncodedString()), "name": .string(attachment.name)])
       }
-      return ["uri": .string(attachment.file.absoluteURL.absoluteString), "name": .string(attachment.name)]
+      return .object(["uri": .string(attachment.file.absoluteURL.absoluteString), "name": .string(attachment.name)])
     }
     let commands = state.withLock { $0.configuration.commands.map(\.name) }
     state.withLock { $0.running = true }
@@ -400,9 +400,9 @@ final class OpenCodeSession: RuntimeSession {
       if turn.text.hasPrefix("/"), let name = turn.text.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init),
          commands.contains(name) {
         let rest = turn.text.dropFirst(name.count + 1).trimmingCharacters(in: .whitespaces)
-        try await client.call("POST", path + "/command", body: ["name": .string(name), "text": .string(rest), "files": .array(files)])
+        try await client.call("POST", path + "/command", body: .object(["name": .string(name), "text": .string(rest), "files": .array(files)]))
       } else {
-        try await client.call("POST", path + "/prompt", body: ["text": .string(turn.text), "files": .array(files)])
+        try await client.call("POST", path + "/prompt", body: .object(["text": .string(turn.text), "files": .array(files)]))
       }
     } catch {
       state.withLock { $0.running = false }
@@ -412,7 +412,7 @@ final class OpenCodeSession: RuntimeSession {
 
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
     if let agent = choices.permission {
-      try await client.call("POST", path + "/agent", body: ["agent": .string(agent)])
+      try await client.call("POST", path + "/agent", body: .object(["agent": .string(agent)]))
     }
     if choices.model != nil || choices.thinking != nil {
       if state.withLock({ $0.variants.isEmpty }) { try await reloadConfiguration() }
@@ -422,7 +422,7 @@ final class OpenCodeSession: RuntimeSession {
         var variant = choices.thinking ?? (model == current.model ? current.thinking : nil)
         if let chosen = variant, !offered.contains(chosen) { variant = nil }
         if let reference = Self.modelReference(model, variant: variant) {
-          try await client.call("POST", path + "/model", body: ["model": reference])
+          try await client.call("POST", path + "/model", body: .object(["model": reference]))
         }
       }
     }
@@ -463,20 +463,21 @@ final class OpenCodeSession: RuntimeSession {
   // MARK: From the host
 
   /// One event of this session, or of one of its subagents (`sessionID`).
-  func receive(_ event: OpenCodeJSON, from sessionID: String) {
-    let data = event["data"]
-    switch event["type"].text {
+  func receive(_ event: JSONValue, from sessionID: String) {
+    let data = event["data"] ?? .null
+    switch event["type"]?.string {
     case "permission.asked":
       ask(OpenCodeProjection.permissionPrompt(data), Pending(sessionID: sessionID))
     case "form.created":
-      ask(OpenCodeProjection.formPrompt(data["form"]), Pending(sessionID: sessionID, form: data["form"]))
+      let form = data["form"] ?? .null
+      ask(OpenCodeProjection.formPrompt(form), Pending(sessionID: sessionID, form: form))
     case "permission.replied":
-      resolve(data["requestID"].text)
+      resolve(data["requestID"]?.string ?? "")
     case "form.replied", "form.cancelled":
-      resolve(data["id"].text)
+      resolve(data["id"]?.string ?? "")
     default:
       guard sessionID == nativeHandle else { return }
-      switch event["type"].text {
+      switch event["type"]?.string {
       case "session.deleted":
         emit.yield(.nativeSessionGone)
       case "session.model.selected", "session.agent.selected":
@@ -553,27 +554,37 @@ final class OpenCodeSession: RuntimeSession {
     async let models = client.call("GET", "/api/model", query: location)
     async let agents = client.call("GET", "/api/agent", query: location)
     async let commands = client.call("GET", "/api/command", query: location)
-    let session = (try await info)["data"]
-    var model = session["model"]
-    if model.isNull { model = try await client.call("GET", "/api/model/default", query: location)["data"] }
-    let available = (try await models)["data"].array.filter { $0["enabled"].bool != false }
-    let primary = (try await agents)["data"].array.filter { $0["mode"].text != "subagent" && $0["hidden"].bool != true }
-    let offered = (try await commands)["data"].array
+    let session = (try await info)["data"] ?? .null
+    var model = session["model"] ?? .null
+    if model == .null { model = try await client.call("GET", "/api/model/default", query: location)["data"] ?? .null }
+    let available = ((try await models)["data"]?.array ?? []).filter { $0["enabled"]?.bool != false }
+    let primary = ((try await agents)["data"]?.array ?? []).filter {
+      $0["mode"]?.string != "subagent" && $0["hidden"]?.bool != true
+    }
+    let offered = (try await commands)["data"]?.array ?? []
 
-    let current = model["id"].string.map { model["providerID"].text + "/" + $0 }
+    func reference(_ entry: JSONValue) -> String {
+      (entry["providerID"]?.string ?? "") + "/" + (entry["id"]?.string ?? "")
+    }
+    let current = model["id"]?.string.map { _ in reference(model) }
     var variants: [String: [String]] = [:]
-    for entry in available { variants[entry["providerID"].text + "/" + entry["id"].text] = entry["variants"].array.map { $0["id"].text } }
-    let agent = session["agent"].string ?? primary.first(where: { $0["id"].text == "build" })?["id"].string ?? primary.first?["id"].string
+    for entry in available {
+      variants[reference(entry)] = (entry["variants"]?.array ?? []).map { $0["id"]?.string ?? "" }
+    }
+    let agent = session["agent"]?.string ?? primary.first(where: { $0["id"]?.string == "build" })?["id"]?.string
+      ?? primary.first?["id"]?.string
     let configuration = SessionConfiguration(
       model: current,
-      thinking: session["model"]["variant"].string,
+      thinking: session["model"]?["variant"]?.string,
       permission: agent,
       models: available.map { entry in
-        SessionOption(id: entry["providerID"].text + "/" + entry["id"].text, name: entry["name"].text, detail: entry["providerID"].string)
+        SessionOption(id: reference(entry), name: entry["name"]?.string ?? "", detail: entry["providerID"]?.string)
       },
       thinkingLevels: (current.flatMap { variants[$0] } ?? []).map { SessionOption(id: $0, name: $0.capitalized) },
-      permissionModes: primary.map { SessionOption(id: $0["id"].text, name: $0["name"].text, detail: $0["description"].string) },
-      commands: offered.map { SessionCommand(name: $0["name"].text, detail: $0["description"].string) })
+      permissionModes: primary.map {
+        SessionOption(id: $0["id"]?.string ?? "", name: $0["name"]?.string ?? "", detail: $0["description"]?.string)
+      },
+      commands: offered.map { SessionCommand(name: $0["name"]?.string ?? "", detail: $0["description"]?.string) })
     state.withLock {
       $0.configuration = configuration
       $0.variants = variants
@@ -581,9 +592,9 @@ final class OpenCodeSession: RuntimeSession {
   }
 
   /// OpenCode's model reference for "provider/model".
-  static func modelReference(_ model: String, variant: String?) -> OpenCodeJSON? {
+  static func modelReference(_ model: String, variant: String?) -> JSONValue? {
     guard let slash = model.firstIndex(of: "/") else { return nil }
-    var reference: [String: OpenCodeJSON] = [
+    var reference: [String: JSONValue] = [
       "providerID": .string(String(model[..<slash])), "id": .string(String(model[model.index(after: slash)...])),
     ]
     if let variant { reference["variant"] = .string(variant) }

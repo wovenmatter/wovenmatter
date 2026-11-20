@@ -113,12 +113,14 @@ final class ChildProcess: Sendable {
   }
 
   /// Runs a command to completion and returns its exit status and output
-  /// (standard error too, unless `mergeErrors` is false). It never holds a
+  /// (standard error too, unless `mergeErrors` is false: it is then returned
+  /// apart). `input` is a file given as its standard input. It never holds a
   /// thread while it waits, and returns by `timeout` whatever the command or
   /// anything it started does: the command is then stopped and the status is -1.
+  @discardableResult
   static func run(_ executable: String, _ arguments: [String], directory: String? = nil,
-                  environment: [String: String] = [:], mergeErrors: Bool = true,
-                  timeout: Duration = .seconds(60)) async -> (status: Int32, output: String) {
+                  environment: [String: String] = [:], mergeErrors: Bool = true, input: URL? = nil,
+                  timeout: Duration = .seconds(60)) async -> (status: Int32, output: String, errors: String) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -127,20 +129,27 @@ final class ChildProcess: Sendable {
     env["PATH"] = searchPath(env["PATH"])
     for (key, value) in environment { env[key] = value }
     process.environment = env
-    let output = Pipe()
+    let output = Pipe(), errors = Pipe()
     process.standardOutput = output
-    process.standardError = mergeErrors ? output : FileHandle.nullDevice
-    process.standardInput = FileHandle.nullDevice
-    let collected = Mutex(Data())
-    output.fileHandleForReading.readabilityHandler = { handle in
-      let data = handle.availableData
-      collected.withLock { if $0.count < 1 << 20 { $0.append(data) } }
+    process.standardError = mergeErrors ? output : errors
+    do {
+      process.standardInput = try input.map { try FileHandle(forReadingFrom: $0) } ?? FileHandle.nullDevice
+    } catch {
+      return (-1, "", String(describing: error))
+    }
+    let pipes = mergeErrors ? [output] : [output, errors]
+    let collected = Mutex([Data(), Data()])
+    for (index, pipe) in pipes.enumerated() {
+      pipe.fileHandleForReading.readabilityHandler = { handle in
+        let data = handle.availableData
+        collected.withLock { if $0[index].count < 1 << 20 { $0[index].append(data) } }
+      }
     }
     let (ended, finish) = AsyncStream<Int32>.makeStream()
     process.terminationHandler = { finish.yield($0.terminationStatus) }
     do { try process.run() } catch {
-      output.fileHandleForReading.readabilityHandler = nil
-      return (-1, String(describing: error))
+      for pipe in pipes { pipe.fileHandleForReading.readabilityHandler = nil }
+      return (-1, "", String(describing: error))
     }
     let timer = Task {
       try await Task.sleep(for: timeout)
@@ -157,14 +166,17 @@ final class ChildProcess: Sendable {
     if status != -1 { timer.cancel() }
     // What was written just before the end; a process it left behind may keep the pipe open.
     try? await Task.sleep(for: .milliseconds(50))
-    output.fileHandleForReading.readabilityHandler = nil
-    try? output.fileHandleForReading.close()
+    for pipe in pipes {
+      pipe.fileHandleForReading.readabilityHandler = nil
+      try? pipe.fileHandleForReading.close()
+    }
     let data = collected.withLock { $0 }
-    return (status, String(decoding: data.suffix(65536), as: UTF8.self))
+    return (status, String(decoding: data[0].suffix(65536), as: UTF8.self), String(decoding: data[1].suffix(65536), as: UTF8.self))
   }
 
   /// Runs a shell command line.
-  static func shell(_ command: String, timeout: Duration = .seconds(60)) async -> (status: Int32, output: String) {
+  @discardableResult
+  static func shell(_ command: String, timeout: Duration = .seconds(60)) async -> (status: Int32, output: String, errors: String) {
     await run("/bin/sh", ["-c", command], timeout: timeout)
   }
 }

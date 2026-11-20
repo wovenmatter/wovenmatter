@@ -165,15 +165,35 @@ extension Library {
   }
 
   /// A session's saved items in order, after `afterSequence`.
-  public func items(sessionID: String, afterSequence: Int = 0, limit: Int? = nil) async throws -> [SessionItem] {
+  /// A session's items in order: those after `afterSequence`, or with
+  /// `beforeSequence` the newest before it. A page with a limit or
+  /// `beforeSequence` ends once its size reaches `byteBudget` (with at least
+  /// one item), so it always fits in one message.
+  public func items(sessionID: String, afterSequence: Int = 0, beforeSequence: Int? = nil, limit: Int? = nil,
+                    byteBudget: Int = 8 << 20) async throws -> [SessionItem] {
     try await read { db in
-      var sql = "SELECT * FROM session_items WHERE session_id = ? AND sequence > ? AND deleted = 0 ORDER BY sequence"
+      var sql = "SELECT * FROM session_items WHERE session_id = ? AND sequence > ? AND deleted = 0"
       var values: [SQLValue] = [.text(sessionID), .integer(Int64(afterSequence))]
+      if let beforeSequence {
+        sql += " AND sequence < ? ORDER BY sequence DESC"
+        values.append(.integer(Int64(beforeSequence)))
+      } else {
+        sql += " ORDER BY sequence"
+      }
       if let limit {
         sql += " LIMIT ?"
         values.append(.integer(Int64(limit)))
       }
-      return try db.query(sql, values).map(Self.item)
+      guard limit != nil || beforeSequence != nil else { return try db.query(sql, values).map(Self.item) }
+      var rows: [Row] = []
+      var bytes = 0
+      for row in try db.query(sql, values) {
+        if !rows.isEmpty && bytes >= byteBudget { break }
+        rows.append(row)
+        bytes += Writer.size(of: row.values(excluding: []))
+      }
+      if beforeSequence != nil { rows.reverse() }
+      return try rows.map(Self.item)
     }
   }
 

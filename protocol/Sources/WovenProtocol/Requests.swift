@@ -107,16 +107,20 @@ public struct DeleteSession: Request {
 }
 
 /// A session's saved items from the library, in order. Any server can answer
-/// for any machine's session.
+/// for any machine's session. With `beforeSequence`, the newest items before
+/// it instead, for paging back. A page with a limit or `beforeSequence` also
+/// stops once its size is large, so it may hold fewer than `limit`.
 public struct SessionItems: Request {
   public static let method = "sessions.items"
   public typealias Reply = [SessionItem]
   public var sessionID: String
   public var afterSequence: Int
+  public var beforeSequence: Int?
   public var limit: Int?
-  public init(sessionID: String, afterSequence: Int = 0, limit: Int? = nil) {
+  public init(sessionID: String, afterSequence: Int = 0, beforeSequence: Int? = nil, limit: Int? = nil) {
     self.sessionID = sessionID
     self.afterSequence = afterSequence
+    self.beforeSequence = beforeSequence
     self.limit = limit
   }
 }

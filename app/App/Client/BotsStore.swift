@@ -67,7 +67,7 @@ final class BotsStore {
     private var status: BotsStatus?
 
     /// The machine the bots live on; nil until one is chosen.
-    var homeMachineID: String? { status?.homeMachineID ?? settings?.values[botsHomeSetting]?.stringValue }
+    var homeMachineID: String? { status?.homeMachineID ?? settings?.values[botsHomeSetting]?.string }
     var homeMachine: Machine? { homeMachineID.flatMap { id in machines?.machines.first { $0.id == id } } }
 
     /// The bots runtime on the home machine.
@@ -117,7 +117,7 @@ final class BotsStore {
     /// The limits set for bots there; nil means the defaults.
     var resources: BotResourceSettings? {
         guard let fields = settings?.values[Self.resourcesSetting]?.objectValue else { return nil }
-        func bytes(_ key: String) -> Int64? { fields[key]?.intValue.map(Int64.init) }
+        func bytes(_ key: String) -> Int64? { fields[key]?.int.map(Int64.init) }
         return BotResourceSettings(poolBytes: bytes("poolBytes"), perBotBytes: bytes("perBotBytes"), diskBytes: bytes("diskBytes"))
     }
 
@@ -132,8 +132,8 @@ final class BotsStore {
     // MARK: Bot access
 
     /// Every bot's Woven tools are paused.
-    var toolsPaused: Bool { wovenTools["paused"]?.boolValue ?? false }
-    private var deniedBots: [String] { (wovenTools["denied"]?.arrayValue ?? []).compactMap(\.stringValue) }
+    var toolsPaused: Bool { wovenTools["paused"]?.bool ?? false }
+    private var deniedBots: [String] { (wovenTools["denied"]?.array ?? []).compactMap(\.string) }
     private var wovenTools: [String: JSONValue] { settings?.values[botsWovenToolsSetting]?.objectValue ?? [:] }
 
     func mayUseWovenTools(_ botID: String) -> Bool { !deniedBots.contains(botID) }

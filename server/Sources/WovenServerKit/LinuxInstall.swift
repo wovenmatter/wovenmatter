@@ -1,5 +1,8 @@
 import Foundation
 import WovenProtocol
+#if canImport(Glibc)
+import Glibc
+#endif
 
 /// Installs, updates and uninstalls the Linux server on another computer over
 /// SSH, with the person's own SSH setup. The server runs there as a systemd
@@ -44,7 +47,9 @@ struct LinuxInstall: Sendable {
     guard ["x86_64", "aarch64"].contains(arch) else { throw Failure(description: "\(host) is \(arch); the server runs on x86_64 and aarch64.") }
     guard facts[1] == "systemd" else { throw Failure(description: "\(host) has no systemd to run the server.") }
     let linger = facts[2].trimmingCharacters(in: .whitespaces)
-    let path = facts[3...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    let reported = facts[3...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    // It goes into the unit file, so only a plain one-line PATH is used.
+    let path = reported.contains(where: { $0.isNewline || $0 == "%" || $0 == "\\" }) ? "" : reported
 
     let release = bundle.appendingPathComponent("linux-\(arch)", isDirectory: true)
     for file in ["woven-server.gz", "resources.tar.gz"] where !FileManager.default.fileExists(atPath: release.appendingPathComponent(file).path) {
@@ -121,13 +126,21 @@ struct LinuxInstall: Sendable {
       """)
   }
 
-  /// Runs `script` with `sh` there and returns its standard output.
-  private func ssh(_ host: String, _ user: String?, input: URL? = nil, script: String) async throws -> String {
+  /// Runs `script` with `sh` there and returns its standard output. The host
+  /// must be an IP address or a plain DNS name, and the user a plain login
+  /// name, so neither can be read as an option; the unit's name goes into
+  /// shell lines and the unit file, so it must be plain too.
+  func ssh(_ host: String, _ user: String?, input: URL? = nil, script: String) async throws -> String {
+    guard Self.isPlainHost(host) else { throw Failure(description: "\(host) is not an IP address or a DNS name.") }
+    if let user, !user.isEmpty, !Self.isPlain(user, extra: "._-") {
+      throw Failure(description: "\(user) is not a plain user name.")
+    }
+    guard Self.isPlain(instance ?? "", extra: "._-") else { throw Failure(description: "\(unit) is not a plain unit name.") }
     var arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15"]
     if let user, !user.isEmpty { arguments += ["-l", user] }
     // SSH joins its arguments into one command line for the remote shell.
-    arguments += [host, "sh -c " + Self.quoted(script)]
-    let result = try await Self.run("/usr/bin/ssh", arguments, input: input, timeout: .seconds(600))
+    arguments += ["--", host, "sh -c " + Self.quoted(script)]
+    let result = await ChildProcess.run("/usr/bin/ssh", arguments, mergeErrors: false, input: input, timeout: .seconds(600))
     guard result.status == 0 else {
       let detail = result.errors.trimmingCharacters(in: .whitespacesAndNewlines)
       throw Failure(description: "SSH to \(host) failed\(detail.isEmpty ? "" : ": " + String(detail.suffix(600)))")
@@ -139,30 +152,21 @@ struct LinuxInstall: Sendable {
     "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
   }
 
-  /// Runs a command with an optional file as its standard input; output and
-  /// errors are kept apart.
-  private static func run(_ executable: String, _ arguments: [String], input: URL?,
-                          timeout: Duration) async throws -> (status: Int32, output: String, errors: String) {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    let output = Pipe(), errors = Pipe()
-    process.standardOutput = output
-    process.standardError = errors
-    process.standardInput = try input.map { try FileHandle(forReadingFrom: $0) } ?? FileHandle.nullDevice
-    // Not waitUntilExit: off the main thread it can miss the exit and wait forever.
-    let (exited, exit) = AsyncStream<Void>.makeStream()
-    process.terminationHandler = { _ in exit.yield(); exit.finish() }
-    try process.run()
-    let watchdog = Task {
-      try await Task.sleep(for: timeout)
-      process.terminate()
+  /// Letters, digits and `extra`, not starting with `-`. Empty is plain.
+  private static func isPlain(_ text: String, extra: String) -> Bool {
+    !text.hasPrefix("-") && text.unicodeScalars.allSatisfy {
+      ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || extra.unicodeScalars.contains($0)
     }
-    async let out = Task.detached { output.fileHandleForReading.readDataToEndOfFile() }.value
-    async let err = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }.value
-    let (outData, errData) = await (out, err)
-    for await _ in exited {}
-    watchdog.cancel()
-    return (process.terminationStatus, String(decoding: outData, as: UTF8.self), String(decoding: errData, as: UTF8.self))
+  }
+
+  /// An IPv4 or IPv6 address, or a DNS name of letters, digits, hyphens and dots.
+  static func isPlainHost(_ host: String) -> Bool {
+    var v4 = in_addr(), v6 = in6_addr()
+    if inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1 { return true }
+    let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+    return !host.isEmpty && host.count <= 253 && labels.allSatisfy { label in
+      !label.isEmpty && label.count <= 63 && !label.hasPrefix("-") && !label.hasSuffix("-")
+        && isPlain(String(label), extra: "-")
+    }
   }
 }

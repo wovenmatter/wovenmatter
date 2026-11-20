@@ -16,7 +16,7 @@ final class WovenComputerAutomation {
     func revokeAll() { runtime.stop() }
     func execute(_ value: JSONValue, callerID: String) async throws -> JSONValue {
         try Task.checkCancellation()
-        guard let args = value.objectValue, let action = args["action"]?.stringValue else { throw Self.invalid("Provide a computer action.") }
+        guard let args = value.objectValue, let action = args["action"]?.string else { throw Self.invalid("Provide a computer action.") }
         if action == "status" {
             guard args.count == 1 else { throw Self.invalid("Status accepts only action.") }
             return .object(["content": .array([.object(["type": .string("text"), "text": .string(String(decoding: try JSONEncoder().encode(Self.permissions), as: UTF8.self))])])])
@@ -26,15 +26,15 @@ final class WovenComputerAutomation {
         try Task.checkCancellation()
         let result = try await runtime.call(call.tool, arguments: call.arguments, callerID: callerID)
         try Task.checkCancellation()
-        if result.objectValue?["isError"]?.boolValue == true {
-            let text = result.objectValue?["content"]?.arrayValue?.compactMap { $0.objectValue?["text"]?.stringValue }.joined(separator: "\n")
+        if result.objectValue?["isError"]?.bool == true {
+            let text = result.objectValue?["content"]?.array?.compactMap { $0.objectValue?["text"]?.string }.joined(separator: "\n")
             throw Self.invalid(String((text ?? "Cua refused the action. Inspect fresh state.").prefix(32_768)))
         }
         return try Self.inlineImages(result)
     }
     struct Invocation: Equatable { let tool: String; let arguments: [String: JSONValue] }
     static func invocation(_ args: [String: JSONValue]) throws -> Invocation {
-        let action = args["action"]?.stringValue ?? ""
+        let action = args["action"]?.string ?? ""
         var allowed: Set<String> = ["action"], input: [String: JSONValue] = [:]
         let tool: String
         switch action {
@@ -54,17 +54,17 @@ final class WovenComputerAutomation {
             input["timeout_ms"] = .number(3000)
             for key in ["query", "since"] { if let value = args[key] { input[key] = try string(value, key, 1024) } }
             if let format = args["treeFormat"] {
-                guard ["markdown", "elements", "both"].contains(format.stringValue ?? "") else { throw invalid("Unknown treeFormat.") }
+                guard ["markdown", "elements", "both"].contains(format.string ?? "") else { throw invalid("Unknown treeFormat.") }
                 input["tree_format"] = format
             }
             if let value = args["includeScreenshot"] {
-                guard value.boolValue != nil else { throw invalid("includeScreenshot must be boolean.") }
+                guard value.bool != nil else { throw invalid("includeScreenshot must be boolean.") }
                 input["include_screenshot"] = value
             }
         case "screenshot": tool = "get_desktop_state"; input["max_image_dimension"] = .number(1280)
         case "click", "type", "press", "scroll", "drag", "move":
             allowed.formUnion(["pid", "windowID", "scope", "deliveryMode"])
-            let scope = args["scope"]?.stringValue ?? "window", delivery = args["deliveryMode"]?.stringValue ?? "background"
+            let scope = args["scope"]?.string ?? "window", delivery = args["deliveryMode"]?.string ?? "background"
             guard ["window", "desktop"].contains(scope), ["background", "foreground"].contains(delivery),
                   scope != "desktop" || delivery == "foreground" else { throw invalid("Use background for windows; desktop input requires explicit deliveryMode foreground.") }
             if scope == "window" {
@@ -89,20 +89,20 @@ final class WovenComputerAutomation {
             switch action {
             case "click":
                 tool = "click"; allowed.formUnion(["button", "clickCount"])
-                let button = args["button"]?.stringValue ?? "left"
+                let button = args["button"]?.string ?? "left"
                 guard ["left", "right", "middle"].contains(button) else { throw invalid("Unknown mouse button.") }
                 input["button"] = .string(button); input["count"] = try integer(args["clickCount"] ?? .number(1), "clickCount", 1...3)
             case "type": tool = "type_text"; allowed.insert("text"); input["text"] = try string(args["text"], "text", 4096)
             case "press":
                 allowed.insert("key")
-                let key = try string(args["key"], "key", 100).stringValue!
+                let key = try string(args["key"], "key", 100).string!
                 let keys = key.split(whereSeparator: { $0 == "+" || $0 == "," }).map(String.init)
                 if keys.count > 1 { tool = "hotkey"; input["keys"] = .array(keys.map(JSONValue.string)) }
                 else { tool = "press_key"; input["key"] = .string(key) }
             case "scroll":
                 tool = "scroll"; allowed.formUnion(["x", "y", "direction", "amount"])
                 input["x"] = try coordinate(args["x"], "x"); input["y"] = try coordinate(args["y"], "y")
-                let direction = args["direction"]?.stringValue ?? "down"
+                let direction = args["direction"]?.string ?? "down"
                 guard ["up", "down", "left", "right"].contains(direction) else { throw invalid("Invalid scroll direction.") }
                 input["direction"] = .string(direction); input["amount"] = try integer(args["amount"] ?? .number(5), "amount", 1...50)
             case "drag":
@@ -119,20 +119,20 @@ final class WovenComputerAutomation {
     }
     private static func invalid(_ message: String) -> WorkspaceToolError { .invalid(message) }
     private static func integer(_ value: JSONValue?, _ name: String, _ range: ClosedRange<Int>) throws -> JSONValue {
-        guard let n = value?.intValue, range.contains(n) else { throw invalid("\(name) must be an integer in \(range).") }; return .number(Double(n))
+        guard let n = value?.int, range.contains(n) else { throw invalid("\(name) must be an integer in \(range).") }; return .number(Double(n))
     }
     private static func coordinate(_ value: JSONValue?, _ name: String) throws -> JSONValue {
-        guard let n = value?.doubleValue, n.isFinite, (0...100_000).contains(n) else { throw invalid("Provide a nonnegative screenshot pixel coordinate for \(name).") }; return .number(n)
+        guard let n = value?.double, n.isFinite, (0...100_000).contains(n) else { throw invalid("Provide a nonnegative screenshot pixel coordinate for \(name).") }; return .number(n)
     }
     private static func string(_ value: JSONValue?, _ name: String, _ maximum: Int) throws -> JSONValue {
-        guard let s = value?.stringValue, !s.isEmpty, s.utf8.count <= maximum else { throw invalid("Provide \(name) within \(maximum) UTF-8 bytes.") }; return .string(s)
+        guard let s = value?.string, !s.isEmpty, s.utf8.count <= maximum else { throw invalid("Provide \(name) within \(maximum) UTF-8 bytes.") }; return .string(s)
     }
     private static func inlineImages(_ result: JSONValue) throws -> JSONValue {
-        guard var object = result.objectValue, let content = object["content"]?.arrayValue else { throw invalid("Invalid Cua tool result.") }
+        guard var object = result.objectValue, let content = object["content"]?.array else { throw invalid("Invalid Cua tool result.") }
         object["content"] = .array(try content.map { block in
             guard var image = block.objectValue, image["type"] == .string("image") else { return block }
             // Preserve dimensions so Cua's screenshot-coordinate transform stays valid.
-            guard let encoded = image["data"]?.stringValue, let data = Data(base64Encoded: encoded),
+            guard let encoded = image["data"]?.string, let data = Data(base64Encoded: encoded),
                   let bitmap = NSBitmapImageRep(data: data), bitmap.pixelsWide <= 1280, bitmap.pixelsHigh <= 1280,
                   let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.55]), jpeg.count <= 650_000 else {
                 throw invalid("Cua screenshot exceeds the inline image limit. Use a narrower window snapshot.")

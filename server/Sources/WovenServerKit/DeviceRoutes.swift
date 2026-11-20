@@ -39,7 +39,7 @@ func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, 
       throw ProtocolError(.ownerUnreachable, "\(machine.name) has not been reached on the tailnet.", machineID: machine.id)
     }
     do {
-      try await install.install(host: address.name, user: nil)
+      try await install.install(host: address.host, user: nil)
     } catch let failure as LinuxInstall.Failure {
       throw ProtocolError(.failed, failure.description)
     }
@@ -52,7 +52,7 @@ func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, 
     // server learns of its removal by sync and stops itself.
     if machine.platform == .linux, let install, let address = await peers.address(of: machine.id) {
       do {
-        try await install.uninstall(host: address.name, user: nil)
+        try await install.uninstall(host: address.host, user: nil)
       } catch let failure as LinuxInstall.Failure {
         throw ProtocolError(.failed, failure.description)
       }

@@ -539,7 +539,8 @@ public struct SessionConfiguration: Codable, Sendable, Hashable {
   }
 }
 
-/// Everything a subscriber needs before live events: the finished items, the
+/// Everything a subscriber needs before live events: the newest finished
+/// items (older ones come from `SessionItems` with `beforeSequence`), the
 /// items in progress, run state, open prompts and the configuration, all
 /// taken at one instant.
 public struct SessionSnapshot: Codable, Sendable, Hashable {
@@ -567,8 +568,10 @@ public enum SessionEvent: Codable, Sendable, Hashable {
   case itemStarted(LiveItem)
   /// More text for an assistant item in progress.
   case text(itemID: String, delta: String)
-  /// A tool call in progress changed.
+  /// A tool call in progress changed. Output it had keeps unless this one has some.
   case toolActivity(itemID: String, call: ToolCall)
+  /// More output for a tool call in progress.
+  case toolOutput(itemID: String, delta: String)
   /// An item finished and is now stored in the library.
   case itemFinished(SessionItem)
   /// An item in progress ended without being saved; forget it.
@@ -591,6 +594,8 @@ public enum SessionEvent: Codable, Sendable, Hashable {
                               delta: try container.decode(String.self, forKey: .delta))
     case "toolActivity": self = .toolActivity(itemID: try container.decode(String.self, forKey: .itemID),
                                               call: try container.decode(ToolCall.self, forKey: .call))
+    case "toolOutput": self = .toolOutput(itemID: try container.decode(String.self, forKey: .itemID),
+                                          delta: try container.decode(String.self, forKey: .delta))
     case "itemFinished": self = .itemFinished(try container.decode(SessionItem.self, forKey: .item))
     case "itemDropped": self = .itemDropped(itemID: try container.decode(String.self, forKey: .itemID))
     case "runState": self = .runState(try container.decode(RunState.self, forKey: .run))
@@ -616,6 +621,10 @@ public enum SessionEvent: Codable, Sendable, Hashable {
       try container.encode("toolActivity", forKey: .type)
       try container.encode(itemID, forKey: .itemID)
       try container.encode(call, forKey: .call)
+    case .toolOutput(let itemID, let delta):
+      try container.encode("toolOutput", forKey: .type)
+      try container.encode(itemID, forKey: .itemID)
+      try container.encode(delta, forKey: .delta)
     case .itemFinished(let item):
       try container.encode("itemFinished", forKey: .type)
       try container.encode(item, forKey: .item)

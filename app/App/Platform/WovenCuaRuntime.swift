@@ -109,7 +109,7 @@ final class WovenCuaRuntime {
             "protocolVersion": .string("2025-06-18"), "capabilities": .object([:]),
             "clientInfo": .object(["name": .string("woven"), "version": .string("1")])
         ]))
-        guard initialized.objectValue?["protocolVersion"]?.stringValue == "2025-06-18" else {
+        guard initialized.objectValue?["protocolVersion"]?.string == "2025-06-18" else {
             throw WorkspaceToolError.invalid("Cua Driver selected an unsupported MCP protocol.")
         }
         try client.notify(method: "notifications/initialized", params: .object([:]))
@@ -206,7 +206,7 @@ final class WovenCuaMCPProcess {
             guard !line.isEmpty else { continue }
             guard let message = try? JSONDecoder().decode(JSONValue.self, from: line),
                   let object = message.objectValue else { stop(); return }
-            guard let id = object["id"]?.stringValue, let continuation = pending.removeValue(forKey: id) else { continue }
+            guard let id = object["id"]?.string, let continuation = pending.removeValue(forKey: id) else { continue }
             if object["error"] != nil {
                 continuation.resume(throwing: WorkspaceToolError.invalid("Cua rejected the operation. Inspect fresh state before retrying."))
             } else if let result = object["result"] { continuation.resume(returning: result) }

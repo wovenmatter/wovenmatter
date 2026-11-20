@@ -180,6 +180,10 @@ actor SessionManager {
 actor SessionHost {
   /// Events a subscriber may fall behind by before its subscription ends.
   static let subscriberBuffer = 4096
+  /// The most finished items a snapshot carries; older ones are paged in.
+  static let snapshotItems = 200
+  /// Goal turns in a row that do nothing before the goal stops continuing.
+  static let idleGoalTurnLimit = 3
 
   private let sessionID: String
   private let library: Library
@@ -198,8 +202,16 @@ actor SessionHost {
   private var subscribers: [UUID: AsyncThrowingStream<SessionEvent, any Error>.Continuation] = [:]
   private var busy = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
-  /// The last turn was interrupted, so a goal does not continue it.
+  /// The last turn was interrupted, so a goal does not continue it. Only the
+  /// person's own message clears it.
   private var interrupted = false
+  /// The turn running continues a goal, and whether it has said or done anything.
+  private var goalTurn = false
+  private var turnActed = false
+  private var idleGoalTurns = 0
+  /// Output of a tool call in progress past `ToolOutput.limit`: its start,
+  /// its latest end and how much fell between, by item.
+  private var overflow: [String: (head: String, tail: String, omitted: Int)] = [:]
   private let firstMessages: FirstMessageHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
@@ -220,7 +232,7 @@ actor SessionHost {
     await enter()
     defer { leave() }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }
-    let items = try await library.items(sessionID: sessionID)
+    let items = try await library.items(sessionID: sessionID, beforeSequence: .max, limit: Self.snapshotItems)
     let (events, continuation) = AsyncThrowingStream<SessionEvent, any Error>.makeStream(
       bufferingPolicy: .bufferingOldest(Self.subscriberBuffer))
     let id = UUID()
@@ -242,12 +254,20 @@ actor SessionHost {
   func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil) async throws {
     await enter()
     defer { leave() }
+    let continuesGoal = author?.source == .goal
+    // A stop that came after the goal's next turn was queued holds.
+    if continuesGoal && interrupted { return }
     switch run {
     case .nativeSessionGone: throw Self.goneError
     case .running: throw ProtocolError(.busy, "A turn is already running.")
     case .idle: break
     }
-    interrupted = false
+    if author == nil {
+      interrupted = false
+      idleGoalTurns = 0
+    }
+    goalTurn = continuesGoal
+    turnActed = false
     let empty = (try? await library.hasItems(sessionID)) == false
     let first = author == nil && empty
     var files: [TurnAttachment] = []
@@ -358,6 +378,7 @@ actor SessionHost {
     guard generation == self.generation else { return }
     switch event {
     case .text(let delta):
+      turnActed = true
       let id: String
       if let current = assistantItemID {
         id = current
@@ -375,13 +396,15 @@ actor SessionHost {
     case .messageFinished:
       await saving { try await self.finishAssistant() }
     case .tool(let callID, let call, let finished):
+      if call.kind != .thinking { turnActed = true }
       await saving { try await self.finishAssistant() }
       if let id = toolItemIDs[callID] {
+        let whole = withOutput(call, of: id)
         if finished {
           toolItemIDs[callID] = nil
-          await saving { try await self.finish(.toolCall(call), id: id) }
+          await saving { try await self.finish(.toolCall(whole), id: id) }
         } else if let index = inProgress.firstIndex(where: { $0.id == id }) {
-          inProgress[index].content = .toolCall(call)
+          inProgress[index].content = .toolCall(whole)
           broadcast(.toolActivity(itemID: id, call: call))
         }
       } else {
@@ -395,6 +418,9 @@ actor SessionHost {
           broadcast(.itemStarted(item))
         }
       }
+    case .toolOutput(let callID, let delta):
+      guard let id = toolItemIDs[callID] else { return }
+      appendOutput(delta, to: id)
     case .prompt(let prompt):
       prompts.append(prompt)
       broadcast(.awaiting(prompt))
@@ -415,7 +441,16 @@ actor SessionHost {
                                        cacheWrite: usage.cacheWrite, cost: usage.cost ?? 0)
       }
       await endTurn()
-      if failure == nil { await continueGoal() }
+      guard failure == nil else { return }
+      idleGoalTurns = goalTurn && !turnActed ? idleGoalTurns + 1 : 0
+      if idleGoalTurns >= Self.idleGoalTurnLimit {
+        idleGoalTurns = 0
+        interrupted = true
+        await saving { try await self.finish(.notice(Notice(kind: .interrupted, text: Self.idleGoalText)),
+                                             id: UUID().uuidString.lowercased()) }
+      } else {
+        await continueGoal()
+      }
     case .nativeSessionGone:
       await saving { try await self.finishOpenItems() }
       let gone = live
@@ -433,6 +468,9 @@ actor SessionHost {
   }
 
   // MARK: Helpers
+
+  private static let idleGoalText =
+    "Stopped working toward the goal: the last three turns did nothing. Send a message to resume."
 
   private static let goneError = ProtocolError(
     .nativeSessionGone, "The runtime no longer has this chat's session. Start a new session to continue.")
@@ -528,8 +566,53 @@ actor SessionHost {
     }
   }
 
-  /// Writes a finished item to the library, then announces it.
+  /// Adds streamed output to a tool call in progress and passes it on.
+  /// Past the limit only its start and latest end are kept, and nothing more
+  /// is passed on until the call finishes.
+  private func appendOutput(_ delta: String, to id: String) {
+    let keep = ToolOutput.limit / 2
+    if var kept = overflow[id] {
+      let tail = (kept.tail + delta).unicodeScalars
+      if tail.count > keep { kept.omitted += tail.count - keep }
+      kept.tail = String(tail.suffix(keep))
+      overflow[id] = kept
+      return
+    }
+    guard let index = inProgress.firstIndex(where: { $0.id == id }), case .toolCall(var call) = inProgress[index].content else { return }
+    let output = (call.output ?? "") + delta
+    let scalars = output.unicodeScalars
+    if output.utf8.count > ToolOutput.limit, scalars.count > ToolOutput.limit {
+      overflow[id] = (String(scalars.prefix(keep)), String(scalars.suffix(keep)), scalars.count - 2 * keep)
+      return
+    }
+    call.output = output
+    inProgress[index].content = .toolCall(call)
+    broadcast(.toolOutput(itemID: id, delta: delta))
+  }
+
+  /// A tool call's latest state with the output streamed so far, unless the
+  /// call brings output of its own.
+  private func withOutput(_ call: ToolCall, of id: String) -> ToolCall {
+    var call = call
+    if call.output?.isEmpty ?? true {
+      if let kept = overflow[id] {
+        call.output = ToolOutput.joined(head: kept.head, tail: kept.tail, omitted: kept.omitted)
+      } else if let item = inProgress.first(where: { $0.id == id }), case .toolCall(let previous) = item.content,
+                previous.output?.isEmpty == false {
+        call.output = previous.output
+      }
+    } else {
+      overflow[id] = nil
+    }
+    return call
+  }
+
+  /// Writes a finished item to the library, then announces it. A tool
+  /// call's input and output are capped first.
   private func finish(_ content: ItemContent, id: String, author: ItemAuthor? = nil) async throws {
+    var content = content
+    if case .toolCall(let call) = content { content = .toolCall(ToolOutput.capped(call)) }
+    overflow[id] = nil
     do {
       let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author)
       inProgress.removeAll { $0.id == id }
@@ -557,7 +640,9 @@ actor SessionHost {
     let open = toolItemIDs
     toolItemIDs.removeAll()
     for (_, id) in open {
-      guard let item = inProgress.first(where: { $0.id == id }), case .toolCall(var call) = item.content else { continue }
+      guard let item = inProgress.first(where: { $0.id == id }), case .toolCall(let open) = item.content else { continue }
+      var call = open
+      if let kept = overflow[id] { call.output = ToolOutput.joined(head: kept.head, tail: kept.tail, omitted: kept.omitted) }
       if call.output == nil && call.kind != .plan { call.failed = true }
       try await finish(.toolCall(call), id: id)
     }
@@ -566,6 +651,7 @@ actor SessionHost {
   private func dropOpenItems() {
     assistantItemID = nil
     toolItemIDs.removeAll()
+    overflow.removeAll()
     for item in inProgress { broadcast(.itemDropped(itemID: item.id)) }
     inProgress.removeAll()
   }

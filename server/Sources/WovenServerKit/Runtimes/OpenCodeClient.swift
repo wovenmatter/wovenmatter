@@ -3,6 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 import Synchronization
+import WovenProtocol
 
 /// An answer from OpenCode's API that was not a success.
 struct OpenCodeHTTPError: Error, CustomStringConvertible {
@@ -29,24 +30,24 @@ struct OpenCodeClient: Sendable {
 
   /// Calls one endpoint. `path` starts with `/api/`; segments are already encoded.
   @discardableResult
-  func call(_ method: String = "GET", _ path: String, query: [String: String] = [:], body: OpenCodeJSON? = nil) async throws
-    -> OpenCodeJSON
+  func call(_ method: String = "GET", _ path: String, query: [String: String] = [:], body: JSONValue? = nil) async throws
+    -> JSONValue
   {
     let request = try request(method, path, query: query, body: body)
     let (data, status) = try await perform(request)
     guard (200...299).contains(status) else {
-      let message = (try? OpenCodeJSON.decode(data))?["message"].string ?? String(decoding: data.prefix(500), as: UTF8.self)
+      let message = (try? OpenCodeSSEParser.decode(data))?["message"]?.string ?? String(decoding: data.prefix(500), as: UTF8.self)
       throw OpenCodeHTTPError(status: status, message: message)
     }
-    return data.isEmpty ? .null : try OpenCodeJSON.decode(data)
+    return data.isEmpty ? .null : try OpenCodeSSEParser.decode(data)
   }
 
   /// The event stream at `path`, until it ends or the task reading it is cancelled.
-  func events(_ path: String) throws -> AsyncThrowingStream<OpenCodeJSON, any Error> {
+  func events(_ path: String) throws -> AsyncThrowingStream<JSONValue, any Error> {
     var request = try request("GET", path)
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     request.timeoutInterval = 365 * 86_400
-    let (stream, continuation) = AsyncThrowingStream<OpenCodeJSON, any Error>.makeStream()
+    let (stream, continuation) = AsyncThrowingStream<JSONValue, any Error>.makeStream()
     let reader = OpenCodeEventReader(continuation: continuation)
     let configuration = URLSessionConfiguration.ephemeral
     configuration.timeoutIntervalForRequest = 365 * 86_400
@@ -65,7 +66,7 @@ struct OpenCodeClient: Sendable {
     value.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_"))) ?? value
   }
 
-  private func request(_ method: String, _ path: String, query: [String: String] = [:], body: OpenCodeJSON? = nil) throws
+  private func request(_ method: String, _ path: String, query: [String: String] = [:], body: JSONValue? = nil) throws
     -> URLRequest
   {
     guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
@@ -104,10 +105,10 @@ struct OpenCodeClient: Sendable {
 /// Feeds a streaming response through the SSE parser. Streams with a
 /// delegate because `URLSession.bytes(for:)` is not on Linux.
 private final class OpenCodeEventReader: NSObject, URLSessionDataDelegate, Sendable {
-  private let continuation: AsyncThrowingStream<OpenCodeJSON, any Error>.Continuation
+  private let continuation: AsyncThrowingStream<JSONValue, any Error>.Continuation
   private let parser = Mutex(OpenCodeSSEParser())
 
-  init(continuation: AsyncThrowingStream<OpenCodeJSON, any Error>.Continuation) {
+  init(continuation: AsyncThrowingStream<JSONValue, any Error>.Continuation) {
     self.continuation = continuation
   }
 
@@ -130,4 +131,41 @@ private final class OpenCodeEventReader: NSObject, URLSessionDataDelegate, Senda
   }
 
   private static func status(_ task: URLSessionTask) -> Int { (task.response as? HTTPURLResponse)?.statusCode ?? 0 }
+}
+
+/// Server-sent events, byte by byte. OpenCode sends each event as one
+/// `data:` line of JSON followed by a blank line.
+struct OpenCodeSSEParser: Sendable {
+  private var line = Data()
+  private var data = Data()
+  private var afterCarriageReturn = false
+
+  static func decode(_ data: Data) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: data) }
+
+  /// Takes more bytes and returns the events they complete. A frame that is
+  /// not JSON is skipped.
+  mutating func append(_ bytes: Data) -> [JSONValue] {
+    var events: [JSONValue] = []
+    for byte in bytes {
+      if afterCarriageReturn && byte == 10 {
+        afterCarriageReturn = false
+        continue
+      }
+      afterCarriageReturn = byte == 13
+      guard byte == 10 || byte == 13 else {
+        line.append(byte)
+        continue
+      }
+      if line.isEmpty {
+        if !data.isEmpty, let event = try? Self.decode(data) { events.append(event) }
+        data.removeAll(keepingCapacity: true)
+      } else if line.starts(with: Data("data:".utf8)) {
+        let payload = line.dropFirst(5)
+        if !data.isEmpty { data.append(10) }
+        data.append(payload.first == 32 ? payload.dropFirst() : payload)
+      }
+      line.removeAll(keepingCapacity: true)
+    }
+    return events
+  }
 }

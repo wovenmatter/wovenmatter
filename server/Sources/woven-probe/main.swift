@@ -139,6 +139,8 @@ func show(_ configuration: SessionConfiguration) {
     case .toolActivity(_, let call):
       endLine()
       out("… " + describe(.toolCall(call)))
+    case .toolOutput:
+      break
     case .itemFinished(let item):
       endLine()
       out("✓ saved #\(item.sequence) " + describe(item.content))

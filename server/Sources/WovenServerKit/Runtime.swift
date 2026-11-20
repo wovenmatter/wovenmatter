@@ -101,8 +101,11 @@ public enum RuntimeEvent: Sendable {
   case messageFinished
   /// A tool call's whole state now: the first report for `callID` starts it,
   /// later ones replace it, and `finished` ends it. Plans, to-do updates,
-  /// reasoning and child tasks are tool calls too (`ToolCall.kind`).
+  /// reasoning and child tasks are tool calls too (`ToolCall.kind`). A later
+  /// report without output keeps the output streamed so far.
   case tool(callID: String, call: ToolCall, finished: Bool)
+  /// More output of a tool call in progress, as it streams.
+  case toolOutput(callID: String, delta: String)
   /// The runtime waits for an answer to a question or approval.
   case prompt(Prompt)
   /// A prompt was answered or withdrawn.
@@ -115,6 +118,30 @@ public enum RuntimeEvent: Sendable {
   case nativeSessionGone
   /// The process ended. The next turn opens the session again.
   case exited
+}
+
+/// How much of one tool call's input or output is kept, in characters: the start and the
+/// end, with a plain line saying how much was left out between them.
+enum ToolOutput {
+  static let limit = 256 << 10
+
+  static func capped(_ text: String) -> String {
+    let scalars = text.unicodeScalars
+    guard text.utf8.count > limit, scalars.count > limit else { return text }
+    let keep = limit / 2
+    return joined(head: String(scalars.prefix(keep)), tail: String(scalars.suffix(keep)), omitted: scalars.count - 2 * keep)
+  }
+
+  static func joined(head: String, tail: String, omitted: Int) -> String {
+    head + "\n\n[\(omitted) characters left out]\n\n" + tail
+  }
+
+  static func capped(_ call: ToolCall) -> ToolCall {
+    var call = call
+    call.input = capped(call.input)
+    call.output = call.output.map(capped)
+    return call
+  }
 }
 
 public enum RuntimeError: Error, Sendable, CustomStringConvertible {

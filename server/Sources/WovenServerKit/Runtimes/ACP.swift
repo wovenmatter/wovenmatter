@@ -579,25 +579,34 @@ private actor ACPState {
         thinkingCount += 1
         id = "thinking-\(turnNumber)-\(thinkingCount)"
         thinkingID = id
-        tools[id] = ToolCall(name: "thinking", input: "", output: "", title: "Thinking", kind: .thinking)
+        let call = ToolCall(name: "thinking", input: "", output: "", title: "Thinking", kind: .thinking)
+        tools[id] = call
+        emit.yield(.tool(callID: id, call: call, finished: false))
       }
-      tools[id]?.output = (tools[id]?.output ?? "") + text
-      if let call = tools[id] { emit.yield(.tool(callID: id, call: call, finished: false)) }
+      // Only what is new travels; the server keeps the whole.
+      emit.yield(.toolOutput(callID: id, delta: text))
     case "tool_call", "tool_call_update":
       guard let callID = update["toolCallId"]?.string else { return }
       endActivity(planToo: false)
-      var call = tools[callID] ?? ToolCall(name: update["kind"]?.string ?? "tool", input: "")
-      Self.merge(update, into: &call)
+      let before = tools[callID]
+      var call = before ?? ToolCall(name: update["kind"]?.string ?? "tool", input: "")
+      let streamed = Self.merge(update, into: &call)
       let status = update["status"]?.string
       let finished = status == "completed" || status == "failed"
       if status == "failed" { call.failed = true }
+      // Streamed output travels as deltas, so a report that only adds output
+      // does not resend the call.
+      if call != before && (!finished || before == nil && streamed != nil) {
+        emit.yield(.tool(callID: callID, call: call, finished: false))
+      }
+      if let streamed { emit.yield(.toolOutput(callID: callID, delta: streamed)) }
       if finished {
         if call.output == nil { call.output = "" }
         tools[callID] = nil
+        emit.yield(.tool(callID: callID, call: call, finished: true))
       } else {
         tools[callID] = call
       }
-      emit.yield(.tool(callID: callID, call: call, finished: finished))
     case "plan":
       let entries = (update["entries"]?.array ?? []).compactMap { entry -> PlanEntry? in
         guard let text = entry["content"]?.string else { return nil }
@@ -675,7 +684,9 @@ private actor ACPState {
     return result
   }
 
-  private static func merge(_ update: JSONValue, into call: inout ToolCall) {
+  /// Takes what an update says about a tool call. Returns output streamed
+  /// a piece at a time, which is not added to the call.
+  private static func merge(_ update: JSONValue, into call: inout ToolCall) -> String? {
     if let title = update["title"]?.string { call.title = title }
     if let kind = update["kind"]?.string {
       call.name = kind
@@ -692,7 +703,7 @@ private actor ACPState {
       }
     }
     if update["_meta"]?["wovenKind"]?.string == "task" { call.kind = .task }
-    if let input = update["rawInput"], input != .null { call.input = text(input) }
+    if let input = update["rawInput"], input != .null { call.input = ToolOutput.capped(text(input)) }
     var parts: [String] = []
     for item in update["content"]?.array ?? [] {
       switch item["type"]?.string {
@@ -708,13 +719,16 @@ private actor ACPState {
     // Codex streams a command's output in metadata, a piece at a time.
     let streamed = update["_meta"]?["terminal_output_delta"]?["data"]?.string ?? update["_meta"]?["mcp_output_delta"]?["data"]?.string
     if !parts.isEmpty {
-      call.output = parts.joined(separator: "\n\n")
+      call.output = ToolOutput.capped(parts.joined(separator: "\n\n"))
     } else if let streamed {
-      call.output = (call.output ?? "") + streamed
+      return streamed
     } else if let output = update["rawOutput"], output != .null {
       let readable = ["formatted_output", "aggregated_output", "stdout", "output"].lazy.compactMap { output[$0]?.string }.first
-      if let readable { call.output = readable } else if call.output?.isEmpty ?? true { call.output = text(output) }
+      if let readable { call.output = ToolOutput.capped(readable) } else if call.output?.isEmpty ?? true {
+        call.output = ToolOutput.capped(text(output))
+      }
     }
+    return nil
   }
 
   private static func text(_ value: JSONValue) -> String {
@@ -760,26 +774,3 @@ private actor ACPState {
   }
 }
 
-extension JSONValue {
-  subscript(_ key: String) -> JSONValue? {
-    if case .object(let object) = self { object[key] } else { nil }
-  }
-
-  var string: String? { if case .string(let value) = self { value } else { nil } }
-  var bool: Bool? { if case .bool(let value) = self { value } else { nil } }
-  var array: [JSONValue]? { if case .array(let value) = self { value } else { nil } }
-  var int: Int? {
-    switch self {
-    case .integer(let value): Int(value)
-    case .double(let value): Int(value)
-    default: nil
-    }
-  }
-  var double: Double? {
-    switch self {
-    case .integer(let value): Double(value)
-    case .double(let value): value
-    default: nil
-    }
-  }
-}

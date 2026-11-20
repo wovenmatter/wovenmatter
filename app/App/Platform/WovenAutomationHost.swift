@@ -52,22 +52,22 @@ final class WovenAutomationHost {
     /// A result with a `content` array of MCP blocks keeps its blocks; any
     /// other JSON is one text block of that JSON.
     static func toolResult(_ value: JSONValue) -> ToolResult {
-        guard let object = value.objectValue, let blocks = object["content"]?.arrayValue else {
+        guard let object = value.objectValue, let blocks = object["content"]?.array else {
             return .text(json(value))
         }
         let content = blocks.map { block -> ToolContent in
             let fields = block.objectValue
-            switch fields?["type"]?.stringValue {
-            case "text": return .text(fields?["text"]?.stringValue ?? "")
+            switch fields?["type"]?.string {
+            case "text": return .text(fields?["text"]?.string ?? "")
             case "image":
-                if let data = fields?["data"]?.stringValue, let mimeType = fields?["mimeType"]?.stringValue {
+                if let data = fields?["data"]?.string, let mimeType = fields?["mimeType"]?.string {
                     return .image(data: data, mimeType: mimeType)
                 }
                 return .text(json(block))
             default: return .text(json(block))
             }
         }
-        return ToolResult(content: content, isError: object["isError"]?.boolValue ?? false)
+        return ToolResult(content: content, isError: object["isError"]?.bool ?? false)
     }
 
     private static func json(_ value: JSONValue) -> String {
@@ -75,7 +75,7 @@ final class WovenAutomationHost {
     }
 
     private func browser(_ input: JSONValue) async throws -> JSONValue {
-        guard let args = input.objectValue, let action = args["action"]?.stringValue else { throw WorkspaceToolError.invalid("Provide a browser action.") }
+        guard let args = input.objectValue, let action = args["action"]?.string else { throw WorkspaceToolError.invalid("Provide a browser action.") }
         let keys: Set<String> = ["action", "tabId", "frame", "url", "selector", "text", "key", "x", "y", "button", "clickCount", "destination", "code", "value", "checked", "accept", "name", "mimeType", "data", "id", "offset"]
         guard Set(args.keys).isSubset(of: keys) else { throw WorkspaceToolError.invalid("Unknown browser parameter.") }
         try Task.checkCancellation()
@@ -83,17 +83,17 @@ final class WovenAutomationHost {
         if !["tabs", "snapshot", "screenshot", "downloads", "read-download"].contains(action) { computer.revokeAll() }
         if action == "tabs" { return .array(assets.automationTabs) }
         if action == "open" {
-            let url = args["url"]?.stringValue ?? "about:blank"
+            let url = args["url"]?.string ?? "about:blank"
             guard let destination = BrowserAddress.destination(for: url) else { throw WorkspaceToolError.invalid("Use an HTTP(S) browser URL.") }
             guard let page = assets.openBrowser(url: destination.absoluteString), let id = assets.pages.first(where: { $0.value === page })?.key else { throw WorkspaceToolError.invalid(assets.notice ?? "The browser could not open a tab.") }
             return .object(["tabId": .string(id.uuidString.lowercased())])
         }
-        guard let raw = args["tabId"]?.stringValue, let id = UUID(uuidString: raw), let page = assets.pages[id], !page.closed else { throw WorkspaceToolError.invalid("Choose a current tabId from tabs or open.") }
+        guard let raw = args["tabId"]?.string, let id = UUID(uuidString: raw), let page = assets.pages[id], !page.closed else { throw WorkspaceToolError.invalid("Choose a current tabId from tabs or open.") }
         if action == "focus" { assets.focusAutomationBrowser(id); return .object(["focused": .bool(true)]) }
         if action == "close" { assets.close(.browser(id)); return .object(["closed": .bool(true)]) }
         if action == "downloads" { return try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: page.automationDownloads)) }
         if action == "read-download" {
-            guard let downloadID = args["id"]?.stringValue, let offset = (args["offset"] ?? .number(0)).intValue,
+            guard let downloadID = args["id"]?.string, let offset = (args["offset"] ?? .number(0)).int,
                 offset >= 0, let value = page.readAutomationDownload(downloadID, offset: UInt(offset)) else { throw WorkspaceToolError.invalid("Choose a completed download ID and valid byte offset.") }
             return try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: value))
         }
@@ -183,7 +183,7 @@ private final class WovenBrowserActionProcess {
     private func receive(_ packet: JSONValue) {
         guard !finished, let object = packet.objectValue else { return }
         if let result = object["result"] { finish(.success(result)); return }
-        if let error = object["error"]?.stringValue { finish(.failure(WorkspaceToolError.invalid(error))); return }
+        if let error = object["error"]?.string { finish(.failure(WorkspaceToolError.invalid(error))); return }
         if let cdp = object["cdp"] {
             do {
                 let json = String(decoding: try JSONEncoder().encode(cdp), as: UTF8.self)

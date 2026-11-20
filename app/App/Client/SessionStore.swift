@@ -125,20 +125,40 @@ final class SessionStore {
     }
     @ObservationIgnored private var hasReadSaved = false
 
-    /// Reads the finished items again.
+    /// The most finished items read in one page.
+    private static let pageSize = 200
+
+    /// Reads the newest finished items again.
     func refresh() async {
         guard let server else { return }
         do {
-            items = try await server.call(SessionItems(sessionID: sessionID))
+            items = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: .max, limit: Self.pageSize))
             project()
         } catch {
             self.error = error.localizedDescription
         }
     }
 
-    /// Pages in older messages. Returns whether any arrived.
+    /// Pages in older messages from this Mac's server. Returns whether any arrived.
     @discardableResult
-    func loadOlderMessages() async -> Bool { false }
+    func loadOlderMessages() async -> Bool {
+        guard let server, let oldest = items.map(\.sequence).min(), oldest > 1, !isLoadingOlderMessages else { return false }
+        isLoadingOlderMessages = true
+        defer { isLoadingOlderMessages = false }
+        do {
+            let older = try await server.call(SessionItems(sessionID: sessionID, beforeSequence: oldest, limit: Self.pageSize))
+            let known = Set(items.map(\.id))
+            items = older.filter { !known.contains($0.id) } + items
+            if older.isEmpty { noOlderItems = true }
+            project()
+            return !older.isEmpty
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+    /// A page back found nothing, though the sequence suggested more.
+    @ObservationIgnored private var noOlderItems = false
 
     /// Sends a turn to the owner. Attachments go into the owner's content store
     /// first, since the turn refers to them by digest.
@@ -334,8 +354,16 @@ final class SessionStore {
                case .assistantMessage(let text) = inProgress[index].content {
                 inProgress[index].content = .assistantMessage(text: text + delta)
             }
-        case .toolActivity(let itemID, let call):
-            if let index = inProgress.firstIndex(where: { $0.id == itemID }) { inProgress[index].content = .toolCall(call) }
+        case .toolActivity(let itemID, var call):
+            if let index = inProgress.firstIndex(where: { $0.id == itemID }) {
+                if call.output?.isEmpty ?? true, case .toolCall(let previous) = inProgress[index].content { call.output = previous.output }
+                inProgress[index].content = .toolCall(call)
+            }
+        case .toolOutput(let itemID, let delta):
+            if let index = inProgress.firstIndex(where: { $0.id == itemID }), case .toolCall(var call) = inProgress[index].content {
+                call.output = (call.output ?? "") + delta
+                inProgress[index].content = .toolCall(call)
+            }
         case .itemDropped(let itemID):
             inProgress.removeAll { $0.id == itemID }
         case .itemFinished(let item):
@@ -448,6 +476,8 @@ final class SessionStore {
             }
         }
         if goneNotice != goneNoticeID { goneNoticeID = goneNotice }
+        let older = !noOlderItems && (items.map(\.sequence).min() ?? 1) > 1
+        if older != hasOlderMessages { hasOlderMessages = older }
         self.messages = messages
         self.runs = runs
         runActivities = activities

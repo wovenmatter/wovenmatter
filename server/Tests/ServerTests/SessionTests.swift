@@ -60,6 +60,11 @@ private struct View {
       }
     case .toolActivity(let id, let call):
       if let index = inProgress.firstIndex(where: { $0.id == id }) { inProgress[index].content = .toolCall(call) }
+    case .toolOutput(let id, let delta):
+      if let index = inProgress.firstIndex(where: { $0.id == id }), case .toolCall(var call) = inProgress[index].content {
+        call.output = (call.output ?? "") + delta
+        inProgress[index].content = .toolCall(call)
+      }
     case .itemFinished(let item):
       inProgress.removeAll { $0.id == item.id }
       items.append(item)

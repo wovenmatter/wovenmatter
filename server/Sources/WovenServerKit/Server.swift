@@ -291,7 +291,8 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     return Done()
   }
   router.on(SessionItems.self) { request, _ in
-    try await library.items(sessionID: request.sessionID, afterSequence: request.afterSequence, limit: request.limit)
+    try await library.items(sessionID: request.sessionID, afterSequence: request.afterSequence,
+                            beforeSequence: request.beforeSequence, limit: request.limit)
   }
   router.subscription(SubscribeSession.self) { request, _ in
     try await sessions.host(for: request.sessionID).subscribe()
