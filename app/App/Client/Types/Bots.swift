@@ -12,6 +12,8 @@ enum BotsState: Equatable, Sendable {
     /// The home machine is offline, or its server does not answer.
     case unreachable
     case failed
+    /// They are moving to another machine.
+    case transferring
 }
 
 /// What the user can do about a failed reply.

@@ -219,6 +219,7 @@ struct BotsSidebarSection: View {
         case .off: "Bots are off"
         case .unreachable: "\(bots.displayName) is unavailable"
         case .failed: "Bots could not start"
+        case .transferring: "Moving bots…"
         }
     }
 

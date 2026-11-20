@@ -1,17 +1,20 @@
 import SwiftUI
+import WovenProtocol
 
-/// Settings → Bots: the one machine bots run on, what they may use, and a link to
-/// Settings → Updates when versions differ. The chosen machine opens its own page.
+/// Settings → Bots: the one machine bots run on, moving them to another, and a link to
+/// Settings → Updates when versions differ. The chosen machine opens its own page; what
+/// bots may do through Woven MCP lives in Settings → Woven MCP.
 struct SettingsBotsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var backTitle = "Settings"
     let onBack: () -> Void
     let onOpenMachine: (String) -> Void
+    var onOpenWovenMCP: () -> Void = {}
     var onOpenUpdates: () -> Void = {}
 
     private var bots: BotsStore { model.bots }
-    /// A chosen home machine, waiting for confirmation.
+    /// A chosen machine, waiting for confirmation.
     @State private var pendingHost: String?
     @State private var choosing = false
 
@@ -27,25 +30,28 @@ struct SettingsBotsView: View {
             whereSection
             if host != nil {
                 SettingsBotsYouAndForum(bots: bots)
-                SettingsBotsAccessSection(bots: bots)
+                SettingsSection {
+                    SettingsSummaryLink(title: "Woven MCP access", value: bots.toolsPaused ? "Off" : "On", action: onOpenWovenMCP)
+                }
             }
         }
         .task { await bots.refresh() }
         .confirmationDialog(confirmationTitle, isPresented: Binding(
             get: { pendingHost != nil }, set: { if !$0 { pendingHost = nil } }
         ), titleVisibility: .visible) {
-            Button("Run bots there") {
+            Button(host == nil ? "Run bots there" : "Move bots") {
                 let target = pendingHost
+                let moving = host != nil
                 pendingHost = nil
                 choosing = true
                 Task {
-                    if let target { await bots.chooseHome(target) }
+                    if let target { if moving { await bots.transfer(to: target) } else { await bots.chooseHome(target) } }
                     choosing = false
                 }
             }
             Button("Cancel", role: .cancel) { pendingHost = nil }
         } message: {
-            Text("Bots start there.")
+            Text(host == nil ? "Bots start there." : "Bots stop here and start there with their files and conversations.")
         }
     }
 
@@ -61,6 +67,18 @@ struct SettingsBotsView: View {
 
     private var whereSection: some View {
         SettingsSection(title: "Where bots run", detail: "Bots run on one machine.") {
+            // There is one set of bots: once they have a machine, choosing another moves them there.
+            SettingsRow(title: "Run bots on") {
+                if choosing || bots.transfer != nil { ProgressView().controlSize(.small) }
+                SettingsPicker("Run bots on", selection: Binding(
+                    get: { host?.id ?? "" },
+                    set: { if !$0.isEmpty, $0 != host?.id { pendingHost = $0 } }
+                ), options: (host == nil ? [""] : []) + candidates.map(\.id)) { id in
+                    id.isEmpty ? "Off" : candidates.first { $0.id == id }.map(label) ?? id
+                }
+                .disabled(choosing || bots.transfer != nil || (host != nil && bots.state == .unreachable))
+            }
+            if let transfer = bots.transfer { SettingsNote(BotMachineText.transfer(transfer, bots: bots, machines: candidates)) }
             if let host {
                 SettingsDestinationRow(
                     title: bots.displayName,
@@ -70,20 +88,8 @@ struct SettingsBotsView: View {
                     icon: { LucideIcon(glyph: host.platform == .linux ? .container : .monitor, size: 15) },
                     action: { onOpenMachine(host.id) }
                 )
-            } else {
-                // Only while no machine is chosen: there is one set of bots.
-                SettingsRow(title: "Run bots on") {
-                    if choosing { ProgressView().controlSize(.small) }
-                    SettingsPicker("Run bots on", selection: Binding(
-                        get: { "" },
-                        set: { if !$0.isEmpty { pendingHost = $0 } }
-                    ), options: [""] + candidates.map(\.id)) { id in
-                        id.isEmpty ? "Off" : candidates.first { $0.id == id }.map(label) ?? id
-                    }
-                    .disabled(choosing || bots.homeMachineID != nil)
-                }
             }
-            if let error = bots.loadError { SettingsError(error) }
+            if let error = bots.transferError ?? bots.loadError { SettingsError(error) }
         }
     }
 
@@ -94,7 +100,7 @@ struct SettingsBotsView: View {
     private var confirmationTitle: String {
         guard let pendingHost else { return "" }
         let name = candidates.first { $0.id == pendingHost }.map(label) ?? "this machine"
-        return "Run bots on \(name)?"
+        return host == nil ? "Run bots on \(name)?" : "Move bots to \(name)?"
     }
 }
 
@@ -194,34 +200,56 @@ struct SettingsBotsMachineView: View {
     }
 }
 
-// MARK: - Bot access
+// MARK: - Woven MCP for bots
 
-/// Settings → Bots → Bot access: which bots may use the Woven tools, and one switch that pauses
-/// them for every bot.
-struct SettingsBotsAccessSection: View {
+/// Settings → Woven MCP → Bots: whether bots reach Woven MCP, and each bot's own access.
+struct SettingsBotsMCPAccessSection: View {
     @Bindable var bots: BotsStore
     @State private var busy = false
     @State private var error: String?
+    @State private var revoking: PiBotSummary?
+
+    private var revoked: Int { bots.bots.filter { !bots.mayUseWovenTools($0.id) }.count }
 
     var body: some View {
-        SettingsSection(title: "Bot access") {
+        SettingsSection(title: "Bots", detail: "Each bot gets its own key, so its calls are attributed to it.") {
             SettingsToggleRow(
-                title: "Pause Woven tools for every bot",
-                isOn: Binding(get: { bots.toolsPaused }, set: { paused in perform { try await bots.setToolsPaused(paused) } })
+                title: "Give bots Woven MCP",
+                isOn: Binding(get: { !bots.toolsPaused }, set: { enabled in perform { try await bots.setToolsPaused(!enabled) } })
             )
             if !bots.bots.isEmpty {
-                let allowed = bots.bots.filter { bots.mayUseWovenTools($0.id) }.count
-                SettingsSummaryRow("May use Woven tools", value: "\(allowed) of \(bots.bots.count)") {
+                SettingsSummaryRow("Bot keys", value: revoked == 0 ? "\(bots.bots.count) active" : "\(revoked) revoked",
+                                   tone: revoked == 0 ? nil : .warning) {
                     ForEach(bots.bots) { bot in
-                        SettingsToggleRow(title: bot.name, isOn: Binding(get: { bots.mayUseWovenTools(bot.id) }, set: { allowed in
-                            perform { try await bots.setMayUseWovenTools(botID: bot.id, allowed) }
-                        }))
+                        SettingsRow(title: bot.name) {
+                            if bots.mayUseWovenTools(bot.id) {
+                                Button("Revoke") { revoking = bot }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                            } else {
+                                SettingsStatus("Revoked", tone: .warning)
+                                Button("Reinstate") { perform { try await bots.setMayUseWovenTools(botID: bot.id, true) } }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                            }
+                        }
                     }
                 }
             }
             if let error { SettingsError(error) }
         }
         .disabled(busy)
+        .task { await bots.refresh() }
+        .confirmationDialog(revoking.map { "Revoke \($0.name)'s Woven MCP key?" } ?? "", isPresented: Binding(
+            get: { revoking != nil }, set: { if !$0 { revoking = nil } }
+        ), titleVisibility: .visible) {
+            Button("Revoke", role: .destructive) {
+                let bot = revoking
+                revoking = nil
+                if let bot { perform { try await bots.setMayUseWovenTools(botID: bot.id, false) } }
+            }
+            Button("Cancel", role: .cancel) { revoking = nil }
+        } message: {
+            Text("Its calls stop at once. Reinstate it here to give it a new key.")
+        }
     }
 
     private func perform(_ work: @escaping @MainActor () async throws -> Void) {
@@ -246,13 +274,14 @@ enum BotMachineText {
         case .ready: "Running"
         case .unreachable: "Unavailable"
         case .failed: "Failed"
+        case .transferring: "Moving"
         }
     }
 
     static func tone(_ bots: BotsStore) -> SettingsStatusTone {
         switch bots.state {
         case .ready: .good
-        case .off, .starting: .neutral
+        case .off, .starting, .transferring: .neutral
         case .unreachable, .failed: .warning
         }
     }
@@ -265,6 +294,23 @@ enum BotMachineText {
             parts.append(bots.bots.count == 1 ? "1 bot" : "\(bots.bots.count) bots")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// Where a transfer is: the step, and how much is sent while copying.
+    static func transfer(_ transfer: BotsTransferProgress, bots: BotsStore, machines: [Machine]) -> String {
+        let name = machines.first { $0.id == transfer.targetMachineID }.map { $0.isThisMachine ? "this Mac" : $0.name } ?? "the other machine"
+        let step = switch transfer.phase {
+        case .stopping: "Stopping bots"
+        case .exporting: "Writing out bot files"
+        case .copying: "Copying to \(name)"
+        case .starting: "Starting bots on \(name)"
+        case .removing: "Removing bots from \(bots.displayName)"
+        }
+        guard transfer.phase == .copying, let sent = transfer.bytesSent, let total = transfer.bytesTotal, total > 0 else {
+            return step + "…"
+        }
+        let format = ByteCountFormatter()
+        return "\(step): \(format.string(fromByteCount: sent)) of \(format.string(fromByteCount: total))"
     }
 
     static func resources(_ bots: BotsStore) -> String {

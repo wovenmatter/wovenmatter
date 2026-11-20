@@ -1017,6 +1017,7 @@ struct BotsUnavailableView: View {
         case .ready: return "Connecting…"
         case .unreachable: return "\(name) is unavailable"
         case .failed: return "Bots could not start"
+        case .transferring: return "Moving bots…"
         }
     }
 

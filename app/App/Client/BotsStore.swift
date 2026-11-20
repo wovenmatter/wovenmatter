@@ -77,7 +77,25 @@ final class BotsStore {
         case .ready: return .ready
         case .unreachable: return .unreachable
         case .failed: return .failed
+        case .transferring: return .transferring
         case .off, .starting, nil: return .starting
+        }
+    }
+
+    /// A transfer to another machine, while one runs.
+    var transfer: BotsTransferProgress? { status?.transfer }
+    /// Why the last transfer failed.
+    private(set) var transferError: String?
+
+    /// Moves the bots to `machineID`: the home machine's server stops them, sends them, and
+    /// they start there. Returns once they run there or the transfer failed.
+    func transfer(to machineID: String) async {
+        transferError = nil
+        do {
+            guard let server else { throw ClientError.notConnected }
+            _ = try await server.call(TransferBots(targetMachineID: machineID))
+        } catch {
+            transferError = (error as? ProtocolError)?.message ?? error.localizedDescription
         }
     }
 

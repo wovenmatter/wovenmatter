@@ -154,6 +154,7 @@ struct SettingsView: View {
                     backTitle: backTitle(.bots),
                     onBack: { back(from: .bots) },
                     onOpenMachine: { route = .botsMachine($0) },
+                    onOpenWovenMCP: { open(.wovenMCP, .wovenMCP, from: .bots) },
                     onOpenUpdates: { open(.updates, .updates, from: .bots) }
                 )
             case .botsMachine(let machineID):
