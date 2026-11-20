@@ -224,9 +224,14 @@ actor SessionHost {
   private var subscribers: [UUID: AsyncThrowingStream<SessionEvent, any Error>.Continuation] = [:]
   private var busy = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
+  /// The lane sends take, before the session's own one.
+  private var sending = false
+  private var sendsWaiting: [CheckedContinuation<Void, Never>] = []
   /// The last turn was interrupted, so a goal does not continue it. Only the
   /// person's own message clears it.
   private var interrupted = false
+  /// Stops so far, so a steer can tell one came while the runtime answered.
+  private var stops = 0
   /// The turn running continues a goal, and whether it has said or done anything.
   private var goalTurn = false
   private var turnActed = false
@@ -281,6 +286,10 @@ actor SessionHost {
   /// it is refused as busy instead.
   func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil,
             steers: Bool = true) async throws {
+    // Sends go one at a time, through their saves, while a steer frees the
+    // lane for the runtime's reply.
+    await enterSending()
+    defer { leaveSending() }
     await enter()
     defer { leave() }
     let continuesGoal = author?.source == .goal
@@ -339,14 +348,27 @@ actor SessionHost {
   /// the reply so far, which is finished as its own item, and before what
   /// the turn says next. Nothing is saved unless the runtime took it.
   /// Returns false when the runtime's turn had already ended.
+  /// The lane is free while the runtime answers: the turn may meanwhile
+  /// need it for a Woven tool (`publish`, `goalMet`), Stop needs it, and its
+  /// output so far comes through and is saved first.
   private func steer(_ turn: Turn, saving text: String, attachments: [Attachment], author: ItemAuthor?) async throws -> Bool {
     guard let live else { return false }
+    let stopsBefore = stops
+    leave()
+    let reply: Result<Bool, any Error>
     do {
-      guard try await live.steer(turn) else { return false }
+      reply = .success(try await live.steer(turn))
     } catch {
-      throw ProtocolError(.failed, "The runtime did not take the message: \(error)")
+      reply = .failure(error)
     }
-    if author == nil {
+    await enter()
+    switch reply {
+    case .success(true): break
+    case .success(false): return false
+    case .failure(let error): throw ProtocolError(.failed, "The runtime did not take the message: \(error)")
+    }
+    // A stop that came while the runtime answered holds.
+    if author == nil && stops == stopsBefore {
       // The person's message makes the turn theirs, and a paused goal resumes.
       interrupted = false
       idleGoalTurns = 0
@@ -418,6 +440,7 @@ actor SessionHost {
     await enter()
     defer { leave() }
     interrupted = true
+    stops += 1
     clearPrompts()
     try await live?.interrupt()
   }
@@ -813,5 +836,18 @@ actor SessionHost {
 
   private func leave() {
     if waiting.isEmpty { busy = false } else { waiting.removeFirst().resume() }
+  }
+
+  /// Nothing that holds the session's lane waits for this one, so the two never wait on each other.
+  private func enterSending() async {
+    if !sending {
+      sending = true
+      return
+    }
+    await withCheckedContinuation { sendsWaiting.append($0) }
+  }
+
+  private func leaveSending() {
+    if sendsWaiting.isEmpty { sending = false } else { sendsWaiting.removeFirst().resume() }
   }
 }

@@ -154,6 +154,28 @@ func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throws {
+  let host = try await TestServer.start(runtime: StandInRuntime(gate: StandInRuntime.Gate()))
+  defer { host.server.stopLater() }
+  let client = try await host.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string("<title>Chart</title><p>bars</p>")])),
+                         as: UTF8.self)
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "woven render_html \(arguments)"))
+  // The page's tool call goes once this message is steered in, and the
+  // runtime answers the steer only when the call, which publishes the page
+  // in this session, has returned.
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "two"))
+  for try await event in subscription.events where event == .runState(.idle) { break }
+
+  let items = try await client.call(SessionItems(sessionID: session.id)).map(\.content)
+  let page = items.firstIndex { if case .htmlPage = $0 { true } else { false } }
+  let steered = items.indices.filter { items[$0] == .userMessage(text: "two") }
+  #expect(steered.count == 1 && page != nil && page! < steered[0])
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aTurnTheRuntimeStartsItselfRunsAndIsSavedWithoutAnotherMessage() async throws {
   let host = try await TestServer.start(runtime: StandInRuntime())
   defer { host.server.stopLater() }

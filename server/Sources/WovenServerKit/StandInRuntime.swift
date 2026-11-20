@@ -15,7 +15,9 @@ import WovenProtocol
 /// starts by itself, answering "On my own: <text>".
 /// A turn `woven NAME {arguments}` instead calls that Woven tool through the
 /// session's tool socket, as a runtime's MCP client would, and reports its
-/// result.
+/// result. With a gate, that call waits until a message is steered into the
+/// turn, and the steer is answered only once the call returns, as a runtime
+/// that takes mid-turn input at the end of a tool round would.
 public final class StandInRuntime: Runtime {
   public static let kind = RuntimeKind(rawValue: "standIn")
   public var kind: RuntimeKind { Self.kind }
@@ -107,6 +109,8 @@ private final class StandInSession: RuntimeSession {
   private let turn = Mutex<Task<Void, Never>?>(nil)
   /// Messages steered into the running turn, or nil when none runs.
   private let steered = Mutex<[String]?>(nil)
+  /// A `woven` turn's tool call while it is out.
+  private let toolRound = Mutex<Task<Void, Never>?>(nil)
   private let tools: ToolAccess?
 
   init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?) {
@@ -130,13 +134,19 @@ private final class StandInSession: RuntimeSession {
     let gate = gate
     if text.hasPrefix("woven ") {
       let tools = tools
+      let parts = text.dropFirst(6).split(separator: " ", maxSplits: 1)
+      let name = String(parts.first ?? "")
+      let arguments = parts.count > 1 ? String(parts[1]) : "{}"
+      let call = Task {
+        await gate?.wait()
+        return await Self.callTool(name, arguments: arguments, tools: tools)
+      }
+      toolRound.withLock { $0 = Task { _ = await call.value } }
       turn.withLock { $0 = Task {
-        let parts = text.dropFirst(6).split(separator: " ", maxSplits: 1)
-        let name = String(parts.first ?? "")
-        let arguments = parts.count > 1 ? String(parts[1]) : "{}"
-        let result = await Self.callTool(name, arguments: arguments, tools: tools)
+        let result = await call.value
         emit.yield(.tool(callID: "woven-\(number)", call: ToolCall(name: name, input: arguments, output: result.text,
                                                                   failed: result.failed), finished: true))
+        self.toolRound.withLock { $0 = nil }
         emit.yield(.turnFinished(failure: nil, usage: nil))
       } }
       return
@@ -162,7 +172,12 @@ private final class StandInSession: RuntimeSession {
   }
 
   func steer(_ input: Turn) async throws -> Bool {
-    steered.withLock { steered in
+    if let round = toolRound.withLock({ $0 }) {
+      await gate?.open()
+      await round.value
+      return true
+    }
+    return steered.withLock { steered in
       guard steered != nil else { return false }
       steered?.append(input.text)
       return true
