@@ -174,6 +174,9 @@ struct WorkspaceView: View {
         // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent.
         .debugCommand("chat:") { selectConversation($0) }
         .debugCommand("new:", startDebugChat)
+        // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
+        .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.homeMachineID ?? "", botID: $0)) }
+        .debugRequest("bots-settings") { openBotSettings() }
         .onChange(of: model.navigation.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
