@@ -245,7 +245,7 @@ struct CloudConversation: View {
             activities: run.map { activities[$0.id] ?? [] } ?? [],
             onOpenAttachment: openAttachment,
             resolveFile: { source in
-                try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: message.id, source: source))
+                try await model.library.fileURL(id: WorkspaceLibraryItem.identifier(messageID: message.libraryItemID, source: source))
             },
             layout: fragment.layout,
             displayedBody: presentation?.displayedBody,
@@ -618,7 +618,7 @@ struct CloudConversation: View {
         transcriptOwnsScroll = true
         scrollState.setNearBottom(false)
         await session.refresh()
-        while !Task.isCancelled, !session.messages.contains(where: { $0.id == item.messageID }) {
+        while !Task.isCancelled, !session.messages.contains(where: { $0.shows(item.messageID) }) {
             if session.isLoadingOlderMessages {
                 try? await Task.sleep(for: .milliseconds(25))
                 continue
@@ -630,18 +630,19 @@ struct CloudConversation: View {
         try? await Task.sleep(for: .milliseconds(100))
         guard !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id,
               conversation?.id == item.conversationID else { return }
-        guard session.messages.contains(where: { $0.id == item.messageID }) else {
+        // A run's reply shows several of its items.
+        guard let shownID = session.messages.first(where: { $0.shows(item.messageID) })?.id else {
             session.setError("This source message is no longer available.")
             model.navigation.libraryMessageTarget = nil
             return
         }
-        libraryHighlightID = item.messageID
+        libraryHighlightID = shownID
         scrollState.sourceMessagePositioned(in: item.conversationID)
         scrollPositionID = nil
-        scrollWithoutAnimation(proxy, to: item.messageID, anchor: .top)
+        scrollWithoutAnimation(proxy, to: shownID, anchor: .top)
         pendingBottomConversationID = nil
         try? await Task.sleep(for: .seconds(2))
-        if libraryHighlightID == item.messageID { libraryHighlightID = nil }
+        if libraryHighlightID == shownID { libraryHighlightID = nil }
         if !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id {
             model.navigation.libraryMessageTarget = nil
         }
@@ -766,7 +767,7 @@ struct MessageRow: View {
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
                         if !isStreaming {
-                            ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
+                            ConversationFilePreviews(content: assistantBody, messageID: message.libraryItemID, resolveFile: resolveFile)
                         }
                     }
                 }

@@ -49,6 +49,13 @@ struct WorkspaceMessageRecord: Identifiable, Hashable, Sendable {
     var senderSessionTitle: String?
     /// The runtime of the sending session, as `AgentRuntimeKind` raw value.
     var senderAgent: String?
+    /// The session items it shows: a run's reply joins the run's text items.
+    var itemIDs: [String] = []
+
+    /// The item whose library entries its shown text carries: a reply's latest text.
+    var libraryItemID: String { itemIDs.last ?? id }
+
+    func shows(_ itemID: String) -> Bool { id == itemID || itemIDs.contains(itemID) }
 }
 
 enum RunStatus: Hashable, Sendable {

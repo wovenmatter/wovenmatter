@@ -41,8 +41,10 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
-    /// Where the drawn part of each streaming reply ends, in UTF-8 bytes.
+    /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
+    /// Each text item in progress: the reply that shows it, and that reply's text before it.
+    @ObservationIgnored private var liveReplies: [String: (messageID: String, before: String)] = [:]
     @ObservationIgnored private var prompts: [Prompt] = []
     /// This Mac's server, which answers `SessionItems` from its synced library.
     @ObservationIgnored private weak var server: ServerConnection?
@@ -395,16 +397,18 @@ final class SessionStore {
     /// they update its message or activity where it is drawn, without
     /// rebuilding the transcript. Returns false when it is not drawn yet.
     /// A streaming reply is drawn a stable chunk at a time, so a delta that
-    /// completes no chunk changes nothing the transcript reads.
+    /// completes no chunk changes nothing the transcript reads, and streamed
+    /// thinking and tool output are bounded the same way.
     private func updateInPlace(_ event: SessionEvent) -> Bool {
         switch event {
         case .text(let itemID, let delta):
             guard let index = inProgress.firstIndex(where: { $0.id == itemID }),
                   case .assistantMessage(let earlier) = inProgress[index].content,
-                  let shown = messages.lastIndex(where: { $0.id == itemID }) else { return false }
+                  let reply = liveReplies[itemID],
+                  let shown = messages.lastIndex(where: { $0.id == reply.messageID }) else { return false }
             let text = earlier + delta
             inProgress[index].content = .assistantMessage(text: text)
-            if readyGrew(itemID, in: text) { messages[shown].content = text }
+            if readyGrew(itemID, in: text) { messages[shown].content = reply.before + text }
             return true
         case .toolOutput(let itemID, let delta):
             guard let index = inProgress.firstIndex(where: { $0.id == itemID }),
@@ -413,6 +417,11 @@ final class SessionStore {
             call.output = (call.output ?? "") + delta
             inProgress[index].content = .toolCall(call)
             let record = runActivities[shown]
+            // Thinking shows a ready chunk at a time and tool output a line at
+            // a time; the first words show at once.
+            let drawn = record.activity.kind == .thought ? record.activity.content : record.activity.rawOutputJSON
+            let grew = call.kind == .thinking ? readyGrew(itemID, in: call.output ?? "") : delta.contains(where: \.isNewline)
+            guard grew || drawn?.isEmpty != false else { return true }
             runActivities[shown] = WorkspaceRunActivityRecord(
                 id: record.id, runID: record.runID, conversationID: record.conversationID,
                 activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0),
@@ -445,6 +454,9 @@ final class SessionStore {
 
     private static let timestamps = ISO8601DateFormatter()
 
+    /// The one reply of a run.
+    private static func replyID(_ runID: String) -> String { "reply-" + runID }
+
     private func apply(_ configuration: SessionConfiguration) {
         func metadata(_ options: [SessionOption]) -> [String: SessionOptionMetadata] {
             Dictionary(options.map { ($0.id, SessionOptionMetadata(name: $0.name, description: $0.detail)) },
@@ -462,8 +474,13 @@ final class SessionStore {
 
     /// Rebuilds what the transcript draws: each user message starts a run, and
     /// the assistant messages and tool calls after it belong to that run.
+    /// A run has one reply, whose identity holds from before its first words
+    /// to its end: its text items join in order, and each finished one is also
+    /// commentary, which the work log shows in place once work follows it.
+    /// So text, tools and more text add to what is drawn and never move it.
     private func project() {
         var messages: [WorkspaceMessageRecord] = []
+        var liveReplies: [String: (messageID: String, before: String)] = [:]
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
         let entries = items.sorted { $0.sequence < $1.sequence }.map {
@@ -498,9 +515,27 @@ final class SessionStore {
                                                userMessageID: entry.id, startedAt: entry.date, completedAt: entry.date))
             case .assistantMessage(let text):
                 let run = currentRun(at: entry.date)
-                messages.append(WorkspaceMessageRecord(id: entry.id, conversationID: sessionID, role: .assistant, content: text,
-                                                       status: entry.live ? .streaming : .complete, createdAt: entry.date))
-                runs[run].assistantMessageID = entry.id
+                let id = Self.replyID(runs[run].id)
+                let shown: Int
+                if let index = messages.lastIndex(where: { $0.id == id }) {
+                    shown = index
+                } else {
+                    messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                                           status: .complete, createdAt: entry.date))
+                    shown = messages.count - 1
+                }
+                if entry.live { liveReplies[entry.id] = (id, messages[shown].content) }
+                messages[shown].content += text
+                messages[shown].itemIDs.append(entry.id)
+                messages[shown].status = entry.live ? .streaming : .complete
+                if !entry.live {
+                    activities.append(WorkspaceRunActivityRecord(
+                        id: entry.id, runID: runs[run].id, conversationID: sessionID,
+                        activity: AgentRunActivity(id: entry.id, kind: .assistant, content: text, assistantMessageID: id,
+                                                   position: position),
+                        createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
+                }
+                runs[run].assistantMessageID = id
                 runs[run].completedAt = entry.date
             case .toolCall(let call):
                 let run = currentRun(at: entry.date)
@@ -524,12 +559,13 @@ final class SessionStore {
             runs[last].completedAt = nil
             // Work before the first words of the reply shows under a reply that is still arriving.
             if runs[last].assistantMessageID == nil || messages.last?.role == .user {
-                let id = "reply-\(runs[last].id)"
+                let id = Self.replyID(runs[last].id)
                 messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
                                                        status: .streaming, createdAt: Date()))
                 runs[last].assistantMessageID = id
             }
         }
+        self.liveReplies = liveReplies
         if goneNotice != goneNoticeID { goneNoticeID = goneNotice }
         let older = !noOlderItems && (items.map(\.sequence).min() ?? 1) > 1
         if older != hasOlderMessages { hasOlderMessages = older }
