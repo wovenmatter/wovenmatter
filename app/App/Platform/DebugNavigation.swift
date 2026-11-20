@@ -39,7 +39,28 @@ struct DebugRequest: ViewModifier {
     }
 }
 
+/// Runs `action` with the rest of a debug request that starts with `prefix`.
+struct DebugCommand: ViewModifier {
+    let prefix: String
+    let action: (String) -> Void
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content.onReceive(NotificationCenter.default.publisher(for: DebugNavigationSignal.name)) { notification in
+            if let request = notification.object as? String, request.hasPrefix(prefix) { action(String(request.dropFirst(prefix.count))) }
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 extension View {
+    /// Debug builds: `PREFIX…` requests run `action` with what follows the prefix.
+    func debugCommand(_ prefix: String, _ action: @escaping (String) -> Void) -> some View {
+        modifier(DebugCommand(prefix: prefix, action: action))
+    }
+
     func debugRequest(_ request: String, _ action: @escaping () -> Void) -> some View {
         modifier(DebugRequest(request: request, action: action))
     }

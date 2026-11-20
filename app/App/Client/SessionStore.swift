@@ -134,6 +134,19 @@ final class SessionStore {
         await command { _ = try await $0.call(AnswerPrompt(sessionID: self.sessionID, promptID: interactionID, answer: answer)) }
     }
 
+    /// A child task as the transcript's subagent row shows it.
+    private static func child(_ call: ToolCall, id: String, live: Bool) -> AgentRunSubagent {
+        let task = (try? JSONDecoder().decode([String: JSONValue].self, from: Data(call.input.utf8)))
+            .flatMap { input -> String? in
+                if case .string(let text)? = input["prompt"] ?? input["description"] { text } else { nil }
+            }
+        return AgentRunSubagent(
+            id: id, name: call.title, task: task, modelID: nil, provider: nil, connectionID: nil, connectionLabel: nil,
+            accessKind: nil, thinking: nil, state: live ? "running" : call.failed ? "failed" : "completed",
+            executionStatus: nil, result: call.output, detail: nil, activity: nil, history: nil, sourceID: nil,
+            nativeSessionID: nil, nativeConversationID: nil)
+    }
+
     /// The one field of a question answered in free text.
     private static let freeTextField = "answer"
 
@@ -335,7 +348,8 @@ final class SessionStore {
                         title: call.title ?? call.name, status: entry.live ? "running" : call.failed ? "failed" : "completed",
                         toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
                         planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
-                        rawInputJSON: call.input, rawOutputJSON: call.output),
+                        rawInputJSON: call.input, rawOutputJSON: call.output,
+                        subagents: call.kind == .task ? [Self.child(call, id: entry.id, live: entry.live)] : nil),
                     createdAt: formatter.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }

@@ -258,6 +258,7 @@ struct CloudConversation: View {
                 .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .debugCommand("", debugCommand)
         .environment(\.conversationTranscriptState, session?.transcriptState)
         .environment(\.conversationTaskProgress, interaction == nil ? session?.taskProgress : nil)
         .onChange(of: interaction?.id) { _, _ in session?.transcriptState.tasksExpanded = false }
@@ -508,6 +509,37 @@ struct CloudConversation: View {
             set: { if !$0 { folderSelectionError = nil } }
         )) { Button("OK") { folderSelectionError = nil } } message: {
             Text(folderSelectionError ?? "")
+        }
+    }
+
+    /// Debug builds: `send:TEXT` types and sends, `answer:N` picks the open
+    /// prompt's Nth option (a form's first field: its Nth option, or N as text), `model:ID`,
+    /// `thinking:ID` and `permission:ID` choose in the composer, `stop` stops
+    /// the turn: what the controls do, without the mouse.
+    private func debugCommand(_ request: String) {
+        func value(_ prefix: String) -> String? { request.hasPrefix(prefix) ? String(request.dropFirst(prefix.count)) : nil }
+        if let text = value("send:") {
+            draft = text
+            DispatchQueue.main.async { onSend() }
+        } else if let index = value("answer:"), let session, let interaction {
+            let number = Int(index) ?? 0
+            let response: SessionInteractionResponse = switch interaction.request {
+            case .approval(_, let options): .option(options[min(number, options.count - 1)].id)
+            case .questions(_, let questions):
+                .answers([questions[0].id: .single(questions[0].options[min(number, questions[0].options.count - 1)].id)])
+            case .form(_, let fields) where fields[0].kind == .singleChoice:
+                .formValues([fields[0].id: .string(fields[0].options[min(number, fields[0].options.count - 1)].id)])
+            case .form(_, let fields): .formValues([fields[0].id: .string(index)])
+            }
+            Task { await session.answer(interaction.id, with: response) }
+        } else if let model = value("model:") {
+            updateSettings(SessionSettingsChange(model: model))
+        } else if let thinking = value("thinking:") {
+            updateSettings(SessionSettingsChange(thinking: thinking))
+        } else if let permission = value("permission:") {
+            updateSettings(SessionSettingsChange(permission: permission))
+        } else if request == "stop", let session {
+            Task { await session.stop() }
         }
     }
 

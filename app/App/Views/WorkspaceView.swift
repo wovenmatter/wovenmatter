@@ -171,6 +171,9 @@ struct WorkspaceView: View {
         }
         .debugNavigation(openNote: selectNote, show: { destination = $0 })
         .debugRequest("trash") { showsWorkspaceTrash = true }
+        // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent.
+        .debugCommand("chat:") { selectConversation($0) }
+        .debugCommand("new:", startDebugChat)
         .onChange(of: model.navigation.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
@@ -294,6 +297,12 @@ struct WorkspaceView: View {
         }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
+                model.workspace.markConversationRead(id: conversationID)
+            }
+        }
+        // A reply that arrives in the open chat is seen as it arrives.
+        .onChange(of: selectedConversation?.unread) { _, unread in
+            if unread == true, let conversationID = selectedConversationID {
                 model.workspace.markConversationRead(id: conversationID)
             }
         }
@@ -1044,6 +1053,12 @@ struct WorkspaceView: View {
                 showNotice(error.localizedDescription)
             }
         }
+    }
+
+    private func startDebugChat(_ runtime: String) {
+        let here = model.machines.thisMachine?.id
+        guard let agent = model.workspace.agents.first(where: { $0.runtimeKind.rawValue == runtime && $0.machineID == here }) else { return }
+        startChat(with: agent)
     }
 
     /// Starts a chat with the same runtime, machine and folder as one whose
