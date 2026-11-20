@@ -47,6 +47,7 @@ func aFreshDataFolderInstallsTheAdapterForAPresentCLIWithoutTouchingTheCLI() asy
     status = await runtime.status()
   }
   #expect(status.isReady && !status.installingAdapter, "\(status.detail ?? "")")
+  #expect(status.adapterVersion == "1.0.0")
   let ran = (try? String(contentsOf: calls, encoding: .utf8)) ?? ""
   #expect(!ran.contains("update"))
 }

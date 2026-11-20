@@ -147,6 +147,7 @@ func acpHarness(_ kind: RuntimeKind, dataFolder: URL, cliVariable: String, npm: 
                                  missing: cli == nil ? "\(harness.cliCommand ?? harness.command) is not installed."
                                    : adapterHere || installing ? nil : failure ?? "Its ACP adapter is not installed.")
     status.adapterInstalled = adapterHere
+    status.adapterVersion = adapterHere ? installedAdapterVersion(adapter) : nil
     status.installingAdapter = installing && !adapterHere
     return status
   }, installer: {
@@ -159,6 +160,18 @@ func acpHarness(_ kind: RuntimeKind, dataFolder: URL, cliVariable: String, npm: 
     await AdapterInstalls.shared.forget(key)
     try await installTask(cli).value
   })
+}
+
+/// The version `harnesses/install-adapter.mjs` verified for the adapter that
+/// `link` runs: its link points at `<generation>/node_modules/.bin/<command>`,
+/// beside that generation's `verification.json`.
+func installedAdapterVersion(_ link: URL) -> String? {
+  guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return nil }
+  let generation = URL(fileURLWithPath: target, relativeTo: link.deletingLastPathComponent())
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  guard let data = try? Data(contentsOf: generation.appendingPathComponent("verification.json")),
+        let record = try? JSONDecoder().decode([String: JSONValue].self, from: data) else { return nil }
+  return record["adapterVersion"]?.string
 }
 
 /// Adapter installs in progress, and the last one that failed, by adapter path.

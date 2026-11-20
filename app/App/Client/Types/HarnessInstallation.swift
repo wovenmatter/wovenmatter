@@ -58,8 +58,8 @@ struct HarnessInstallation: Identifiable, Hashable, Sendable {
 
     var summary: String {
         components.map { component in
-            let installed = component.isInstalled ? (component.installedVersion ?? "version unavailable") : "missing"
-            return "\(component.displayName) \(installed)" + (component.updateVersion.map { " → \($0)" } ?? "")
+            let installed = component.isInstalled ? component.installedVersion.map { " \($0)" } ?? "" : " missing"
+            return "\(component.displayName)\(installed)" + (component.updateVersion.map { " → \($0)" } ?? "")
         }.joined(separator: " · ")
     }
 }

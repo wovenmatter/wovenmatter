@@ -162,7 +162,7 @@ extension MachinesStore {
                 isSystemInstall: false)]
             if let adapter = status.adapterInstalled {
                 components.append(HarnessComponent(id: kind.rawValue + "-adapter", displayName: "\(status.name) ACP adapter",
-                                                   isInstalled: adapter, isSystemInstall: false))
+                                                   installedVersion: status.adapterVersion, isInstalled: adapter, isSystemInstall: false))
             }
             let state: HarnessInstallation.State = !status.installed ? (status.version == nil ? .notInstalled : .unavailable)
                 : !status.isReady ? .notInstalled

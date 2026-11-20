@@ -11,6 +11,8 @@ public struct RuntimeStatus: Codable, Sendable, Hashable {
   public var installed: Bool
   /// Whether its ACP adapter is here; nil for a runtime without one.
   public var adapterInstalled: Bool?
+  /// The installed adapter's version number.
+  public var adapterVersion: String?
   /// The server is installing its adapter now.
   public var installingAdapter: Bool
   /// The CLI's or SDK's version number, as it reports it.
@@ -26,12 +28,13 @@ public struct RuntimeStatus: Codable, Sendable, Hashable {
   public var latestVersion: String?
 
   public init(runtime: RuntimeKind, name: String, installed: Bool, adapterInstalled: Bool? = nil,
-              installingAdapter: Bool = false, version: String? = nil, signedIn: Bool? = nil,
+              adapterVersion: String? = nil, installingAdapter: Bool = false, version: String? = nil, signedIn: Bool? = nil,
               accounts: [RuntimeAccount] = [], detail: String? = nil, latestVersion: String? = nil) {
     self.runtime = runtime
     self.name = name
     self.installed = installed
     self.adapterInstalled = adapterInstalled
+    self.adapterVersion = adapterVersion
     self.installingAdapter = installingAdapter
     self.version = version
     self.signedIn = signedIn
