@@ -13,7 +13,7 @@ or **App**.
 - A **Page** is a flowing document of components: text, tasks, tables, nested
   sections, and embedded notes, sheets, apps or pages.
 - A **Sheet** is a table.
-- An **App** is a live HTML page, such as a dashboard or calculator. It keeps
+- An **App** is a live HTML document, such as a dashboard or calculator. It keeps
   what you type into its controls, and it can show data from a database.
 
 Artifacts, browser pages and document previews share one tab strip beside the

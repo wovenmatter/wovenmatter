@@ -2,13 +2,13 @@ import AppKit
 import WebKit
 import WovenProtocol
 
-/// Carries out the Woven MCP's `preview_html`: renders a page the way the chat
-/// shows a published one (the same wrapper, sandbox, theme variables and
+/// Carries out the Woven MCP's `preview_html`: renders HTML the way the chat
+/// shows a published visual reply (the same wrapper, sandbox, theme variables and
 /// nonpersistent storage) in a web view that no window ever holds, waits for
 /// it to load and settle, and captures it. Each preview has its own.
-@MainActor final class HTMLPagePreview {
+@MainActor final class VisualReplyPreview {
     static let loadLimit = Duration.seconds(15)
-    /// The tallest part of a page the screenshot covers.
+    /// The tallest part of a visual reply the screenshot covers.
     static let capturedHeightLimit = 2000
 
     private let coordinator = ConversationHTMLWebCoordinator()
@@ -19,7 +19,7 @@ import WovenProtocol
     func run(_ arguments: JSONValue) async -> ToolResult {
         guard let html = arguments["html"]?.string, let width = arguments["width"]?.int, (240...1600).contains(width),
               let appearance = arguments["appearance"]?.string, ["light", "dark"].contains(appearance) else {
-            return .error("Give the page, a width from 240 to 1600 and an appearance of light or dark.")
+            return .error("Give the HTML, a width from 240 to 1600 and an appearance of light or dark.")
         }
         let theme: WovenTheme = appearance == "dark" ? .dark : .green
         let view = coordinator.makeWebView()
@@ -38,7 +38,7 @@ import WovenProtocol
             coordinator.apply(html: html, theme: ConversationHTMLTheme.value(theme), to: view)
         }
         timer.cancel()
-        if let failure { return .error("The page could not be shown: \(failure.localizedDescription)") }
+        if let failure { return .error("The visual reply could not be shown: \(failure.localizedDescription)") }
         await settle()
 
         let captured = min(Self.capturedHeightLimit, max(80, Int(height.rounded(.up))))
@@ -48,7 +48,7 @@ import WovenProtocol
         configuration.rect = view.bounds
         configuration.snapshotWidth = NSNumber(value: width)
         guard let image = try? await view.takeSnapshot(configuration: configuration) else {
-            return .error("The page could not be captured.")
+            return .error("The visual reply could not be captured.")
         }
 
         var metadata: [String: JSONValue] = [
@@ -79,7 +79,7 @@ import WovenProtocol
         waiting?.resume(returning: ready)
     }
 
-    /// Waits until the page's height has held still for a moment, or a second.
+    /// Waits until its height has held still for a moment, or a second.
     private func settle() async {
         var last = height, still = 0
         for _ in 0..<10 where still < 2 {

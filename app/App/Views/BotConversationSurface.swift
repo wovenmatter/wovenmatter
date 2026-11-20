@@ -748,14 +748,14 @@ private struct BotMessageRow: View {
     @State private var copied = false
     @FocusState private var focusedAction: Action?
 
-    private var pageOnly: Bool { entry.text.isEmpty && !entry.pages.isEmpty && entry.error == nil }
+    private var visualReplyOnly: Bool { entry.text.isEmpty && !entry.visualReplies.isEmpty && entry.error == nil }
 
     var body: some View {
         HStack(spacing: 0) {
             if entry.isUser { Spacer(minLength: 72) }
             VStack(alignment: entry.isUser ? .trailing : .leading, spacing: 6) {
-                // A page on its own continues the reply above it.
-                if !entry.isUser && !pageOnly {
+                // A visual reply on its own continues the reply above it.
+                if !entry.isUser && !visualReplyOnly {
                     Text(botName)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(WovenPalette.foreground)
@@ -770,8 +770,8 @@ private struct BotMessageRow: View {
                             .padding(.vertical, 2)
                     }
                 }
-                ForEach(entry.pages, id: \.id) { page in
-                    ConversationHTMLRenderView(reference: page).padding(.horizontal, 4)
+                ForEach(entry.visualReplies, id: \.id) { reply in
+                    ConversationHTMLRenderView(reference: reply).padding(.horizontal, 4)
                 }
                 if entry.isStopped {
                     Text("Stopped")
@@ -787,7 +787,7 @@ private struct BotMessageRow: View {
                 if !replies.isEmpty {
                     BotThreadReplies(replies: replies, onOpen: onOpenThread)
                 }
-                if !pageOnly { actions }
+                if !visualReplyOnly { actions }
             }
             .frame(maxWidth: entry.isUser ? nil : .infinity, alignment: entry.isUser ? .trailing : .leading)
             if !entry.isUser { Spacer(minLength: 0) }

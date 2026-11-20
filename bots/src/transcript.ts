@@ -4,7 +4,7 @@ import type { EntryRecord } from "@earendil-works/pi-durable";
 import { type ErrorIssue, errorIssue } from "./issues.ts";
 import { stripFallbackNote } from "./limits.ts";
 import { stripContextNote } from "./message-context.ts";
-import type { PublishedPage } from "./protocol.ts";
+import type { VisualReply } from "./protocol.ts";
 
 /** What clients render for one durable entry. */
 export type DisplayEntry = {
@@ -18,15 +18,15 @@ export type DisplayEntry = {
   readonly issue?: ErrorIssue;
   /** An assistant reply the user stopped part-way (`conversation.abort`). */
   readonly stopped?: true;
-  /** Pages the bot published here with `render_html`, shown above the text. */
-  readonly pages?: readonly PublishedPage[];
+  /** Visual replies the bot published here with `render_html`, shown above the text. */
+  readonly visualReplies?: readonly VisualReply[];
 };
 
-/** The page a successful `render_html` call published, from its result's details. */
-export function publishedPage(message: ToolResultMessage | undefined): PublishedPage | undefined {
+/** The visual reply a successful `render_html` call published, from its result's details. */
+export function publishedVisualReply(message: ToolResultMessage | undefined): VisualReply | undefined {
   if (!message || message.isError) return undefined;
-  const page = (message.details as { wovenPage?: PublishedPage } | undefined)?.wovenPage;
-  return page && typeof page.digest === "string" ? page : undefined;
+  const reply = (message.details as { wovenVisualReply?: VisualReply } | undefined)?.wovenVisualReply;
+  return reply && typeof reply.digest === "string" ? reply : undefined;
 }
 
 /** The chat text of a user or assistant message (notes for the model removed). */
@@ -63,11 +63,11 @@ export function hiddenInput(entry: EntryRecord): boolean {
 
 export function displayEntry(entry: EntryRecord): DisplayEntry | undefined {
   if (hiddenInput(entry)) return undefined;
-  const pages = (entry.model ?? []).flatMap((message) => {
-    const page = message.role === "toolResult" ? publishedPage(message as ToolResultMessage) : undefined;
-    return page ? [page] : [];
+  const visualReplies = (entry.model ?? []).flatMap((message) => {
+    const reply = message.role === "toolResult" ? publishedVisualReply(message as ToolResultMessage) : undefined;
+    return reply ? [reply] : [];
   });
-  const shown = pages.length ? { pages } : {};
+  const shown = visualReplies.length ? { visualReplies } : {};
   for (const message of entry.model ?? []) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     const text = messageText(message);
@@ -89,8 +89,8 @@ export function displayEntry(entry: EntryRecord): DisplayEntry | undefined {
       ...shown,
     };
   }
-  return pages.length
-    ? { id: entry.id, conversationId: entry.conversationId, role: "assistant", text: "", pages }
+  return visualReplies.length
+    ? { id: entry.id, conversationId: entry.conversationId, role: "assistant", text: "", visualReplies }
     : undefined;
 }
 

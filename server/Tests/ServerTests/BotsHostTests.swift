@@ -500,7 +500,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
   // The Forum's visual reply is one small item on both, and its HTML came to the new home.
   let digest = Library.digest(of: TransferSetup.visualReplyHTML)
   let expected: [ItemContent] = [.assistantMessage(text: "Morning"),
-                                 .htmlPage(HTMLPage(title: "Build times", height: 320, digest: digest, size: 20))]
+                                 .visualReply(VisualReply(title: "Build times", height: 320, digest: digest, size: 20))]
   for client in [setup.onA, setup.onB] {
     let forum = try #require(try await client.call(ListSavedBots()).chats.first { $0.kind == .forum })
     var posts: [SessionItem] = []

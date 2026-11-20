@@ -1,7 +1,7 @@
 import Foundation
 import WovenProtocol
 
-/// Carries out the browser, computer and page-preview calls this Mac's server sends its UI,
+/// Carries out the browser, computer and visual-reply preview calls this Mac's server sends its UI,
 /// for as long as the app runs, and answers each one.
 @MainActor
 final class UIToolsStore {
@@ -20,7 +20,7 @@ final class UIToolsStore {
     private func carryOut(_ call: UIToolCall, server: ServerConnection) {
         Task { [host] in
             // A preview has its own web view, so it never waits on the browser or computer.
-            let result = call.tool == "preview_html" ? await HTMLPagePreview().run(call.arguments) : await host.handle(call)
+            let result = call.tool == "preview_html" ? await VisualReplyPreview().run(call.arguments) : await host.handle(call)
             _ = try? await server.call(AnswerUITool(id: call.id, result: result))
         }
     }

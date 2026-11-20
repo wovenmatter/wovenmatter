@@ -10,7 +10,7 @@ struct BotsHostInterface: Sendable {
   let library: Library
   let secrets: Secrets
   let tenure: BotsTenure
-  /// Where the pages of chats that came with the bots are fetched from.
+  /// Where the visual replies of chats that came with the bots are fetched from.
   let peers: PeerSync
   /// The Woven MCP, once the server has made it.
   let tools = ToolsLink()
@@ -72,7 +72,7 @@ struct BotsHostInterface: Sendable {
     case "mirror.bot":
       let push = try params.decode(MirrorBot.self)
       try await library.saveBotMirror(BotsMirrorMapping.bot(push, home: sessions))
-      fetchMissing(push.items.compactMap(\.page?.digest))
+      fetchMissing(push.items.compactMap(\.visualReply?.digest))
       return .object([:])
     case "mirror.forum":
       let push = try params.decode(MirrorForum.self)
@@ -185,8 +185,8 @@ struct MirrorBot: Decodable, Sendable {
     var kind: String
     var text: String?
     var tool: Tool?
-    /// A page the bot published with `render_html`.
-    var page: HTMLPage?
+    /// A visual reply the bot published with `render_html`.
+    var visualReply: VisualReply?
     var usage: Usage?
   }
 
@@ -222,7 +222,7 @@ struct MirrorForum: Decodable, Sendable {
     var name: String
     var text: String
     /// A visual reply the bot published in the room with `render_html`.
-    var visualReply: HTMLPage?
+    var visualReply: VisualReply?
     var createdAt: Double
   }
 
@@ -336,7 +336,7 @@ enum BotsMirrorMapping {
       }
       return BotMirror.Item(
         id: "\(session):\(post.id)", sessionID: session,
-        content: post.visualReply.map(ItemContent.htmlPage)
+        content: post.visualReply.map(ItemContent.visualReply)
           ?? (post.author == "bot" ? .assistantMessage(text: post.text) : .userMessage(text: post.text)),
         author: author, createdAt: Date(timeIntervalSince1970: post.createdAt / 1000))
     }
@@ -344,13 +344,13 @@ enum BotsMirrorMapping {
   }
 
   private static func content(_ item: MirrorBot.Item) -> ItemContent {
-    if item.kind == "page", let page = item.page { return .htmlPage(page) }
+    if item.kind == "visualReply", let reply = item.visualReply { return .visualReply(reply) }
     switch item.kind {
     case "user": return .userMessage(text: item.text ?? "")
     case "assistant": return .assistantMessage(text: item.text ?? "")
     case "tool":
       let tool = item.tool ?? MirrorBot.Item.Tool(name: "tool", input: "", output: nil, failed: false)
-      return .toolCall(HTMLPages.withoutPage(ToolCall(
+      return .toolCall(VisualReplies.withoutVisualReply(ToolCall(
         name: tool.name, input: tool.input, output: tool.output, failed: tool.failed,
         kind: tool.name.lowercased() == "bash" ? .execute : OpenCodeProjection.kind(tool.name))))
     case "stopped": return .notice(Notice(kind: .interrupted, text: "Stopped."))

@@ -7,7 +7,7 @@ import WovenProtocol
 // entries like these.
 
 func wovenToolCatalog() -> [WovenTool] {
-  sessionTools + pageTools + artifactTools + databaseTools + placeTools + botTools + uiTools + scheduleTools
+  sessionTools + visualReplyTools + artifactTools + databaseTools + placeTools + botTools + uiTools + scheduleTools
 }
 
 // MARK: Schema helpers
@@ -103,8 +103,8 @@ private let sessionTools: [WovenTool] = [
           result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : ""): \(output)")
         case .notice(let notice):
           result.append("#\(item.sequence) notice: \(notice.text)")
-        case .htmlPage(let page):
-          result.append("#\(item.sequence) page shown in the chat: \(page.title)")
+        case .visualReply(let reply):
+          result.append("#\(item.sequence) visual reply shown in the chat: \(reply.title)")
         }
       }
       return lines(result)
@@ -165,29 +165,30 @@ extension WovenTools {
   }
 }
 
-// MARK: Pages in the chat
+// MARK: Visual replies in the chat
 
 /// Always offered, whatever groups a session may use: it shows something in
 /// the caller's own chat and reaches nothing else.
-private let pageTools: [WovenTool] = [
+private let visualReplyTools: [WovenTool] = [
   WovenTool(
     name: "render_html",
     description: """
-      Show a chart, table, diagram or anything interactive in this chat: publish one whole self-contained HTML page \
-      (styles and scripts inline; libraries may load over HTTPS). It appears above your reply and stays in the chat. \
-      It fits its content; `height` is only where it starts, and `title` defaults to the page's own <title>. \
-      Absolute paths to local images in it are embedded; every one must be there. Heights in vh, vmin or vmax are \
-      refused, since the frame fits the page. It runs sandboxed, with no access to Woven Matter, your tools or this \
-      chat. For something the person wants to keep and change, make an app with `create_artifact` instead.
+      Show a chart, table, diagram or anything interactive in this chat as a visual reply: one whole self-contained \
+      HTML document (styles and scripts inline; libraries may load over HTTPS). It appears above your text and stays \
+      in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; \
+      `height` is only where it starts, and `title` defaults to the document's own <title>. Absolute paths to local \
+      images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
+      fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
+      the person wants to keep and change, make an app with `create_artifact` instead.
       """,
-    input: schema(["html": text("The whole self-contained page, at most 512,000 characters."),
-                   "title": text("A short title, at most 200 characters; default the page's <title>."),
+    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters."),
+                   "title": text("A short title, at most 200 characters; default the document's <title>."),
                    "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")],
                   required: ["html"]),
     run: { call in
       let html = try call.arguments.string("html")
       let given = call.arguments.optionalString("title")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-      let title = given.isEmpty ? HTMLPages.title(of: html) ?? "" : given
+      let title = given.isEmpty ? VisualReplies.title(of: html) ?? "" : given
       guard title.count <= 200 else { throw ToolFailure("Give a `title` of at most 200 characters.") }
       let height = call.arguments.int("height") ?? 320
       guard call.arguments["height"] == nil || call.arguments.int("height") != nil, (80...2000).contains(height) else {
@@ -195,26 +196,26 @@ private let pageTools: [WovenTool] = [
       }
       // A bot runs in its own machine: nothing on this one is read for it.
       let fromBot = call.caller.botID != nil
-      let page = try HTMLPages.prepare(html, readingDisk: !fromBot)
-      guard fromBot || page.missingImages.isEmpty else {
+      let prepared = try VisualReplies.prepare(html, readingDisk: !fromBot)
+      guard fromBot || prepared.missingImages.isEmpty else {
         throw ToolFailure("These local images are missing, unreadable or not images, so nothing was shown: "
-                          + page.missingImages.joined(separator: ", "))
+                          + prepared.missingImages.joined(separator: ", "))
       }
       guard call.caller.sessionID != nil || call.caller.botID != nil else {
-        throw ToolFailure("`render_html` shows a page in a Woven Matter chat, and this caller is not in one.")
+        throw ToolFailure("`render_html` shows a visual reply in a Woven Matter chat, and this caller is not in one.")
       }
       let tools = call.tools
-      let data = Data(page.html.utf8)
-      let published = HTMLPage(title: title, height: height, digest: try await tools.library.storeContent(data),
+      let data = Data(prepared.html.utf8)
+      let published = VisualReply(title: title, height: height, digest: try await tools.library.storeContent(data),
                                size: Int64(data.count))
       let place = call.caller.inForum == true ? "the Forum" : "the chat"
       let shown = title.isEmpty ? "Shown in \(place)." : "Shown in \(place): “\(title)”."
       // A bot's chat and Forum seat are its runtime's own; the visual reply reaches it with the
       // call's result, and from a seat the runtime posts it to the Forum.
       guard let sessionID = call.caller.sessionID else {
-        let note = page.missingImages.isEmpty ? "" : " Local files are not embedded from a bot, so these stay as written "
-          + "and will not show: \(page.missingImages.joined(separator: ", ")). Put images in the page as data URIs."
-        return ToolResult(content: [.text(shown + note)], meta: .object(["wovenPage": try JSONValue(encoding: published)]))
+        let note = prepared.missingImages.isEmpty ? "" : " Local files are not embedded from a bot, so these stay as written "
+          + "and will not show: \(prepared.missingImages.joined(separator: ", ")). Put images in the HTML as data URIs."
+        return ToolResult(content: [.text(shown + note)], meta: .object(["wovenVisualReply": try JSONValue(encoding: published)]))
       }
       try await tools.sessions.host(for: sessionID).publish(published)
       return .text(shown)
@@ -282,10 +283,10 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_artifact",
-    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML page). An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the page has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
+    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML document). An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the app has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
     input: schema(["kind": choice(["note", "page", "app"], "What to create."), "title": text("Its title."),
                    "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
-                   "html": text("An app's whole HTML page."), "folderID": text("File it in this folder."),
+                   "html": text("An app's whole HTML document."), "folderID": text("File it in this folder."),
                    "databaseID": text("An app's linked database."), "query": text("The SELECT whose rows an app reads.")],
                   required: ["kind", "title"]),
     groups: [.notes],
@@ -612,18 +613,18 @@ private let uiTools: [WovenTool] = [
   WovenTool(
     name: "preview_html",
     description: """
-      Check a page before publishing it with `render_html`. Returns a PNG of the page as the chat shows it, its \
+      Check a visual reply before publishing it with `render_html`. Returns a PNG of it as the chat shows it, its \
       console messages, its content height, and `missingImages`: local image paths it refers to that are missing, \
       unreadable or not images. Width defaults to 728 CSS pixels; use 390 for a phone. Appearance defaults to dark. \
       Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.
       """,
-    input: schema(["html": text("The whole self-contained page, at most 512,000 characters."),
+    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters."),
                    "width": integer("240 to 1600 CSS pixels; default 728."),
                    "appearance": choice(["light", "dark"], "Default dark.")], required: ["html"]),
     readOnly: true,
     run: { call in
       // A bot runs in its own machine: nothing on this one is read for it.
-      let page = try HTMLPages.prepare(call.arguments.optionalString("html") ?? "", readingDisk: call.caller.botID == nil)
+      let prepared = try VisualReplies.prepare(call.arguments.optionalString("html") ?? "", readingDisk: call.caller.botID == nil)
       let width = call.arguments.int("width") ?? 728
       guard call.arguments["width"] == nil || call.arguments.int("width") != nil, (240...1600).contains(width) else {
         throw ToolFailure("Give `width` from 240 to 1600.")
@@ -632,10 +633,10 @@ private let uiTools: [WovenTool] = [
       guard ["light", "dark"].contains(appearance) else { throw ToolFailure("Give `appearance` as light or dark.") }
       let result = await call.tools.ui.carryOut(
         "preview_html",
-        arguments: .object(["html": .string(page.html), "width": .integer(Int64(width)), "appearance": .string(appearance)]),
+        arguments: .object(["html": .string(prepared.html), "width": .integer(Int64(width)), "appearance": .string(appearance)]),
         sessionID: call.caller.sessionID,
         absent: "A preview needs the Woven Matter app open on this machine, and it is not. `render_html` still works without it.")
-      return adding(missingImages: page.missingImages, to: result)
+      return adding(missingImages: prepared.missingImages, to: result)
     }),
 ]
 

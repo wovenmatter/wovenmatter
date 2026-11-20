@@ -1,24 +1,26 @@
 import Foundation
 import WovenProtocol
 
-/// A page an agent wrote, made ready to show: its local images embedded.
-struct PreparedPage: Sendable, Hashable {
+/// A visual reply's HTML as an agent wrote it, made ready to show: its local
+/// images embedded.
+struct PreparedVisualReply: Sendable, Hashable {
   var html: String
-  /// Absolute local image paths the page refers to that were not embedded
+  /// Absolute local image paths the HTML refers to that were not embedded
   /// (missing, unreadable, too large, not images, or not read at all), each
   /// once, in the order met.
   var missingImages: [String]
 }
 
-/// The pages agents publish in a chat (`render_html`) and check first
-/// (`preview_html`), on the machine where the session runs.
-enum HTMLPages {
-  /// The most an authored page may be, in UTF-16 code units.
+/// The visual replies agents publish in a chat (`render_html`) and check
+/// first (`preview_html`), on the machine where the session runs. A visual
+/// reply is not a Page artifact.
+enum VisualReplies {
+  /// The most authored HTML may be, in UTF-16 code units.
   static let authoredLimit = 512_000
   /// The largest local image that is embedded.
   static let imageLimit = 10 << 20
-  /// The largest page once its images are embedded, in UTF-8 bytes.
-  static let pageLimit = 25 << 20
+  /// The largest HTML once its images are embedded, in UTF-8 bytes.
+  static let embeddedLimit = 25 << 20
 
   /// Absolute local image paths: in quotes (HTML attributes, CSS, JavaScript
   /// strings and backticks), or bare in CSS `url(...)`. A path that starts
@@ -27,25 +29,25 @@ enum HTMLPages {
     (["'`])(/(?!/)(?:(?!\1)[^\r\n]){0,2048}?\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico))\1|url\(\s*(/(?!/)[^\s"'`()]{0,2048}?\.(?:png|jpe?g|gif|webp|avif|svg|bmp|ico))\s*\)
     """#, options: [.caseInsensitive])
 
-  /// Lengths relative to the viewport's height. The frame takes the page's
-  /// height, so such a page would grow with its frame without end.
+  /// Lengths relative to the viewport's height. The frame takes the HTML's
+  /// height, so such HTML would grow with its frame without end.
   private static let viewportHeights = try! NSRegularExpression(
     pattern: #"(?<![\w.-])\d*\.?\d+\s*[sld]?(?:vh|vmin|vmax)\b"#, options: [.caseInsensitive])
 
-  /// Embeds each local image the page refers to as a data URI. A path read
-  /// once is embedded everywhere it appears. Fails when the page is empty or
-  /// too long, uses viewport-height lengths, or would be over `pageLimit`.
+  /// Embeds each local image the HTML refers to as a data URI. A path read
+  /// once is embedded everywhere it appears. Fails when the HTML is empty or
+  /// too long, uses viewport-height lengths, or would be over `embeddedLimit`.
   /// `readingDisk` false (a bot, whose files are in its own machine, not this
-  /// one) reads nothing: the page stays as authored and every local path is
+  /// one) reads nothing: the HTML stays as authored and every local path is
   /// in `missingImages`.
-  static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedPage {
+  static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedVisualReply {
     guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("Give `html`.") }
     guard html.utf16.count <= authoredLimit else {
-      throw ToolFailure("The page is longer than 512,000 characters.")
+      throw ToolFailure("The visual reply is longer than 512,000 characters.")
     }
     if let found = viewportHeights.firstMatch(in: html, range: NSRange(location: 0, length: (html as NSString).length)) {
-      throw ToolFailure("The page sizes something by the viewport (\((html as NSString).substring(with: found.range))). "
-                        + "The frame fits the page's height, so give heights in px or let the content set them.")
+      throw ToolFailure("The visual reply sizes something by the viewport (\((html as NSString).substring(with: found.range))). "
+                        + "The frame fits its content's height, so give heights in px or let the content set them.")
     }
     let source = html as NSString
     let matches = references.matches(in: html, range: NSRange(location: 0, length: source.length))
@@ -62,30 +64,30 @@ enum HTMLPages {
       }
       guard let uri = images[path] else { continue }
       size += uri.utf8.count - path.utf8.count
-      guard size <= pageLimit else { throw ToolFailure("The page would be over 25 MiB with its images embedded.") }
+      guard size <= embeddedLimit else { throw ToolFailure("The visual reply would be over 25 MiB with its images embedded.") }
       pieces.append(source.substring(with: NSRange(location: cursor, length: range.location - cursor)))
       pieces.append(uri)
       cursor = NSMaxRange(range)
     }
     pieces.append(source.substring(from: cursor))
-    return PreparedPage(html: pieces.joined(), missingImages: missing)
+    return PreparedVisualReply(html: pieces.joined(), missingImages: missing)
   }
 
-  /// The one rule that keeps a page from being saved twice. The page is
+  /// The one rule that keeps a visual reply from being saved twice. It is
   /// saved once, as its own item, when `render_html` runs; every runtime also
-  /// reports the call, and that report is kept without the page: each `html`
-  /// argument becomes its length, and the call is marked `.page` so the chat
-  /// shows the page, not the call. Every runtime's tool calls pass here
+  /// reports the call, and that report is kept without its HTML: each `html`
+  /// argument becomes its length, and the call is marked `.visualReply` so
+  /// the chat shows the visual reply, not the call. Every runtime's tool calls pass here
   /// (`SessionHost`, and the bots' mirror) before they are shown or saved.
-  static func withoutPage(_ call: ToolCall) -> ToolCall {
+  static func withoutVisualReply(_ call: ToolCall) -> ToolCall {
     guard publishes(call) else { return call }
     var call = call
-    call.kind = .page
+    call.kind = .visualReply
     if let input = try? JSONDecoder().decode(JSONValue.self, from: Data(call.input.utf8)), case .object = input {
       call.input = (try? String(decoding: Wire.encoder.encode(withoutHTML(input)), as: UTF8.self)) ?? ""
     } else if !call.input.isEmpty {
       // Cut short on the way, so no longer JSON.
-      call.input = #"{"html":"(the page, shown in the chat)"}"#
+      call.input = #"{"html":"(the visual reply, shown in the chat)"}"#
     }
     return call
   }
@@ -104,7 +106,7 @@ enum HTMLPages {
     }
   }
 
-  /// The page's own `<title>`, when it has a non-empty one, in one line.
+  /// The HTML's own `<title>`, when it has a non-empty one, in one line.
   static func title(of html: String) -> String? {
     guard let match = html.firstMatch(of: #/(?is)<title\b[^>]*>(.*?)</title\s*>/#) else { return nil }
     let text = String(match.1).split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -118,7 +120,7 @@ enum HTMLPages {
     case .object(let fields):
       .object(fields.mapValues(withoutHTML).merging(
         fields["html"]?.string.map { ["html": .string("(\($0.utf16.count) characters, shown in the chat)")] } ?? [:],
-        uniquingKeysWith: { _, page in page }))
+        uniquingKeysWith: { _, shown in shown }))
     case .array(let values): .array(values.map(withoutHTML))
     default: value
     }

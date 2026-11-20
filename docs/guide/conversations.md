@@ -35,18 +35,19 @@ Library, start or message other sessions on any of your machines, talk to
 your bots, schedule tasks and timers, and use the browser in the Woven Matter
 window. The computer tool lets an agent see and use other apps on your Mac once
 Accessibility and Screen Recording are allowed in **Settings → Permissions &
-Access**. Browser and computer tools, and an agent's preview of a page before
-it publishes it, need the app open.
+Access**. Browser and computer tools, and an agent's preview of a visual reply
+before it shows it, need the app open.
 
-## Charts and pages in the chat
+## Visual replies
 
 When you ask for a chart, a table, a diagram or something interactive, an
-agent can show it in the chat as a page of its own. The page appears above the
-reply, stays when the work above it folds, and is there when you reopen the
+agent can show it in the chat as a visual reply. It appears above the agent's
+text, stays when the work above it folds, and is there when you reopen the
 chat, on any of your machines. Use the buttons beside its title to zoom or
-expand it. A page runs on its own, with no access to Woven Matter, your files
-or the chat; a link in it asks before it opens in your browser. For something
-to keep and change later, ask for an app instead.
+expand it. A visual reply runs on its own, with no access to Woven Matter, your
+files or the chat; a link in it asks before it opens in your browser. It lives only in
+the chat: it is not a Page and is not in the Library. For something to keep and
+change later, ask for an app instead.
 
 ## Attachments
 

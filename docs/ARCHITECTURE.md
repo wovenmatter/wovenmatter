@@ -139,8 +139,8 @@ later for a deleted parent are refused. Settings and sealed secrets are the
 exception: they are keyed by name, so they are never deleted. Unsetting one
 writes an empty value, and the newest write wins as usual.
 
-Large content (attachments, images, database copies, the pages agents show in
-chats) is stored by content digest in a file store beside the library and
+Large content (attachments, images, database copies, the visual replies agents
+show in chats) is stored by content digest in a file store beside the library and
 fetched by digest when needed.
 
 ### What syncs how
@@ -197,18 +197,20 @@ behind one adapter interface in the server and are treated alike:
   turn is stopped, what was said so far is saved as the finished item.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
-- An agent shows a chart, a table or anything interactive with the Woven tool
-  `render_html`: one self-contained page, at most 512,000 characters, with its
-  absolute local image paths embedded (each a real image of at most 10 MiB, the
-  page at most 25 MiB) on the machine the session runs on. The page is stored
-  once, in the content store; the session gets one small item, `htmlPage`
-  (title, starting height, digest), saved when the tool is called, after the
-  reply so far. The runtime's own report of the call keeps only the page's
-  length, and the chat shows the page in its place. The chat shows it above the
-  reply in an opaque sandboxed frame, with no access to the app, its tools or
-  the session, and a machine that does not hold it fetches it by digest. The
-  frame takes the height of the page's content as it changes, so a page sized
-  by the viewport (vh, vmin, vmax) is refused.
+- An agent shows a chart, a table or anything interactive as a visual reply,
+  with the Woven tool `render_html`: one self-contained HTML document, at most
+  512,000 characters, with its absolute local image paths embedded (each a real
+  image of at most 10 MiB, the whole at most 25 MiB) on the machine the session
+  runs on. A visual reply is not a Page: it belongs to its chat only, is not in
+  the Library and is never edited. Its HTML is stored once, in the content
+  store; the session gets one small item, `visualReply` (title, starting
+  height, digest), saved when the tool is called, after the text so far. The
+  runtime's own report of the call keeps only the HTML's length, and the chat
+  shows the visual reply in its place. The chat shows it above the agent's text
+  in an opaque sandboxed frame, with no access to the app, its tools or the
+  session, and a machine that does not hold it fetches it by digest. The frame
+  takes the height of the visual reply's content as it changes, so one sized by
+  the viewport (vh, vmin, vmax) is refused.
 - A client that subscribes gets the newest 200 finished items, the item in
   progress if there is one, then live events. Older items are fetched a page
   at a time as the person scrolls back.
@@ -290,7 +292,7 @@ machine. A new folder is created by the machine that will own it.
 These are documents in the library. Any machine can edit them at any time
 through its own server, online or not. Conflicts follow the rule above.
 
-An app is a live HTML page an agent builds. It has saved state, which is part
+An app is a live HTML document an agent builds. It has saved state, which is part
 of the app's document, and it can read from databases.
 
 ## Databases
@@ -313,8 +315,8 @@ tool that concerns another machine (a database it owns, a session it runs) is
 forwarded to that machine's server. Browser and computer-use tools are carried
 out by the UI on that Mac, because macOS ties those permissions to the app
 window; the server asks a connected UI to do them. So is `preview_html`, which
-renders a page in the chat viewer's sandbox in a web view no window holds and
-returns a screenshot; it saves nothing.
+renders HTML as the chat would show it as a visual reply, in a web view no
+window holds, and returns a screenshot; it saves nothing.
 
 - A harness or Pi Durable starts a small local bridge, `harnesses/woven-mcp.mjs`,
   that speaks MCP over standard input and output and passes it to the server's
@@ -326,9 +328,9 @@ returns a screenshot; it saves nothing.
   use. A tool in no group (goals, places, `render_html`, `preview_html`) is
   always offered to sessions. Bots are offered only the tools meant for them,
   and a call to any other is refused. Bots are offered the browser, the
-  computer and page previews as sessions are, while **Give bots Woven MCP** is
-  on. Nothing on the host's disk is read for a bot's page, so it is previewed
-  and stored as written.
+  computer and `preview_html` as sessions are, while **Give bots Woven MCP** is
+  on. Nothing on the host's disk is read for a bot's visual reply, so it is
+  previewed and stored as written.
 - Agents outside Woven Matter on that machine can use the same bridge without a
   key, only while the person turns that on, and only with the groups chosen
   for them.
@@ -356,12 +358,12 @@ transfer.
   machine's server. A server forwards a bots call to the home machine only when
   an agent on its own machine makes one through the Woven MCP.
 - Bot chats and Forum posts are saved to the library like every other
-  transcript, so they can be read when the home machine is away. A page a bot
-  shows in its own chat is saved there as an `htmlPage` item in place of its
-  call. A visual reply it publishes during a Forum turn is a post of its own in
+  transcript, so they can be read when the home machine is away. A visual reply a
+  bot shows in its own chat is saved there as a `visualReply` item in place of
+  its call. A visual reply it publishes during a Forum turn is a post of its own in
   the room or thread it is answering in, in order with its words: the bots'
   database keeps a small reference beside the post, and the library one
-  `htmlPage` item. Its HTML is stored once, in the content store, and a new
+  `visualReply` item. Its HTML is stored once, in the content store, and a new
   home fetches by digest what it does not hold as the posts arrive.
 - A bot hears the Forum and each thread it is in through a seat: a
   conversation of its own, which is not saved to the library. Only its posts

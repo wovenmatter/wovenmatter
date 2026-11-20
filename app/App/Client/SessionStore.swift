@@ -550,16 +550,16 @@ final class SessionStore {
             case .toolCall(let call):
                 let run = currentRun(at: entry.date)
                 if !entry.live { runs[run].completedAt = entry.date }
-                // A page published shows as its own item; only a call that failed shows as a call.
-                if call.kind == .page && !call.failed { continue }
+                // A published visual reply shows as its own item; only a call that failed shows as a call.
+                if call.kind == .visualReply && !call.failed { continue }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
-            case .htmlPage(let page):
+            case .visualReply(let reply):
                 let run = currentRun(at: entry.date)
                 runs[run].completedAt = entry.date
-                // A page is a reply even before any words, so its run is drawn.
+                // A visual reply is a reply even before any words, so its run is drawn.
                 if runs[run].assistantMessageID == nil {
                     let id = Self.replyID(runs[run].id)
                     messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
@@ -569,9 +569,9 @@ final class SessionStore {
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: AgentRunActivity(
-                        id: entry.id, kind: .activity, title: page.title, status: "completed", position: position,
-                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: page.title, height: page.height,
-                                                                    digest: page.digest)),
+                        id: entry.id, kind: .activity, title: reply.title, status: "completed", position: position,
+                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height,
+                                                                    digest: reply.digest)),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }

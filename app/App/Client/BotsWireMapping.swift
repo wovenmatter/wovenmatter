@@ -81,9 +81,9 @@ extension PiBotDisplayEntry {
     init(_ entry: BotsWire.DisplayEntry) {
         self.init(id: entry.id, conversationId: entry.conversationId, isUser: entry.role == "user", text: entry.text,
                   error: entry.error, issue: BotReplyIssue(wire: entry.issue), isStopped: entry.stopped == true,
-                  pages: (entry.pages ?? []).enumerated().map { index, page in
-                      ConversationHTMLRenderReference(id: "\(entry.id):\(index)", title: page.title, height: page.height,
-                                                      digest: page.digest)
+                  visualReplies: (entry.visualReplies ?? []).enumerated().map { index, reply in
+                      ConversationHTMLRenderReference(id: "\(entry.id):\(index)", title: reply.title, height: reply.height,
+                                                      digest: reply.digest)
                   })
     }
 
@@ -99,10 +99,10 @@ extension PiBotDisplayEntry {
             case .userMessage(let text, _): entries.append(entry(item, isUser: true, text: text))
             case .assistantMessage(let text): entries.append(entry(item, isUser: false, text: text))
             case .toolCall: break
-            case .htmlPage(let page):
+            case .visualReply(let reply):
                 var shown = entry(item, isUser: false, text: "")
-                shown.pages = [ConversationHTMLRenderReference(id: item.id, title: page.title, height: page.height,
-                                                               digest: page.digest)]
+                shown.visualReplies = [ConversationHTMLRenderReference(id: item.id, title: reply.title, height: reply.height,
+                                                                       digest: reply.digest)]
                 entries.append(shown)
             case .notice(let notice) where notice.kind == .interrupted:
                 if let last = entries.last, !last.isUser {
@@ -193,11 +193,11 @@ extension PiBotForumPost {
             case .assistantMessage(let text):
                 PiBotForumPost(id: item.sequence, roomId: roomID, isUser: false, name: item.author?.name ?? "", text: text,
                                isScheduled: false, thread: nil, unanswered: [])
-            case .htmlPage(let page):
+            case .visualReply(let reply):
                 PiBotForumPost(id: item.sequence, roomId: roomID, isUser: false, name: item.author?.name ?? "", text: "",
                                isScheduled: false, thread: nil, unanswered: [],
-                               visualReply: ConversationHTMLRenderReference(id: item.id, title: page.title, height: page.height,
-                                                                            digest: page.digest))
+                               visualReply: ConversationHTMLRenderReference(id: item.id, title: reply.title, height: reply.height,
+                                                                            digest: reply.digest))
             case .toolCall, .notice: nil
             }
         }

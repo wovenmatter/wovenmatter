@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite";
-import type { PublishedPage } from "../protocol.ts";
+import type { VisualReply } from "../protocol.ts";
 
 /** The Forum's shared tables. Bot tables start with `bot_<32 hex>_`, so these never collide. */
 export const FORUM_ROOMS_TABLE = "bot_forum_rooms";
@@ -46,7 +46,7 @@ export type ForumPostRecord = {
   /** The bot conversation a bot's post was made from. */
   readonly origin?: number;
   /** A visual reply the bot published from its seat; the post has no text then. */
-  readonly visualReply?: PublishedPage;
+  readonly visualReply?: VisualReply;
   readonly createdAt: string;
 };
 

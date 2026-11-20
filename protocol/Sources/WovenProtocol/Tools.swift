@@ -41,8 +41,8 @@ public enum ToolContent: Codable, Sendable, Hashable {
 public struct ToolResult: Codable, Sendable, Hashable {
   public var content: [ToolContent]
   public var isError: Bool
-  /// MCP's `_meta`: what the agent is not shown. `render_html` gives the page
-  /// it published as `wovenPage` (an `HTMLPage`), for the bots runtime's chat.
+  /// MCP's `_meta`: what the agent is not shown. `render_html` gives the visual
+  /// reply it published as `wovenVisualReply` (a `VisualReply`), for the bots runtime's chat.
   public var meta: JSONValue?
 
   private enum CodingKeys: String, CodingKey {
@@ -121,7 +121,7 @@ public struct CallTool: Request {
 }
 
 /// For the UI on the server's own Mac: delivers each browser, computer-use or
-/// page-preview call the server wants carried out. The UI answers each with `AnswerUITool`.
+/// visual-reply preview call the server wants carried out. The UI answers each with `AnswerUITool`.
 public struct SubscribeUITools: Subscription {
   public static let method = "tools.ui.subscribe"
   public typealias Reply = Done

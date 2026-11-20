@@ -3,15 +3,15 @@ import WovenProtocol
 import WebKit
 import AppKit
 
-/// Published pages are independent of the work disclosure and load their
-/// content only when their row is mounted, by digest through this Mac's
+/// Published visual replies are independent of the work disclosure and load
+/// their content only when their row is mounted, by digest through this Mac's
 /// server, which fetches it from another machine when it is not here. Theme
-/// and zoom updates preserve page state.
+/// and zoom updates preserve their state.
 struct ConversationHTMLRenderView: View {
     let reference: ConversationHTMLRenderReference
     @Environment(\.workspaceApplicationModel) private var model
     @Environment(\.wovenTheme) private var theme
-    @State private var page: ConversationHTMLPage?
+    @State private var reply: ConversationVisualReply?
     @State private var failure: String?
     @State private var height: CGFloat
     @State private var expanded = false
@@ -36,14 +36,14 @@ struct ConversationHTMLRenderView: View {
                 }
                 .help("Expand visual reply")
                 .accessibilityLabel("Expand visual reply")
-                .disabled(page == nil)
+                .disabled(reply == nil)
             }
             .font(.system(size: 11.5, weight: .medium))
             .foregroundStyle(WovenPalette.mutedForeground)
             .buttonStyle(.plain)
             .padding(.vertical, 8)
-            if let page {
-                web(page).frame(height: min(20_000, max(80, height * zoom)))
+            if let reply {
+                web(reply).frame(height: min(20_000, max(80, height * zoom)))
             } else if let failure {
                 Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.vertical, 16)
@@ -67,7 +67,7 @@ struct ConversationHTMLRenderView: View {
                     Button("Done") { expanded = false }.keyboardShortcut(.cancelAction)
                 }.padding(16)
                 Divider()
-                if let page { web(page, fitsHeight: false) }
+                if let reply { web(reply, fitsHeight: false) }
             }
             .frame(minWidth: expandedMinimumWidth, minHeight: 440)
             .environment(\.wovenTheme, theme)
@@ -98,19 +98,19 @@ struct ConversationHTMLRenderView: View {
         }.buttonStyle(.plain)
     }
 
-    private func web(_ page: ConversationHTMLPage, fitsHeight: Bool = true) -> some View {
-        ConversationHTMLWebView(html: page.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
+    private func web(_ reply: ConversationVisualReply, fitsHeight: Bool = true) -> some View {
+        ConversationHTMLWebView(html: reply.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
             forwardsConversationScroll: fitsHeight,
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
             }, onLink: { pendingLink = $0 }, onFailure: { error in
-                failure = error.localizedDescription; self.page = nil
+                failure = error.localizedDescription; self.reply = nil
             })
     }
 
     @MainActor private func load() async {
-        guard page == nil else { return }
+        guard reply == nil else { return }
         let unavailable = "This page is unavailable. Reconnect to its workspace and try again."
         guard let server = model?.server else { failure = unavailable; return }
         do {
@@ -121,7 +121,7 @@ struct ConversationHTMLRenderView: View {
                 if Int64(data.count) >= chunk.size || chunk.data.isEmpty { break }
             }
             try Task.checkCancellation()
-            page = ConversationHTMLPage(html: String(decoding: data, as: UTF8.self), title: reference.title,
+            reply = ConversationVisualReply(html: String(decoding: data, as: UTF8.self), title: reference.title,
                                         height: reference.height)
             failure = nil
         } catch is CancellationError {
@@ -270,12 +270,12 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { onFailure(error) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { onFailure(error) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        onFailure(NSError(domain: "WovenHTML", code: 1, userInfo: [NSLocalizedDescriptionKey: "The page stopped. Retry the preview."]))
+        onFailure(NSError(domain: "WovenHTML", code: 1, userInfo: [NSLocalizedDescriptionKey: "The visual reply stopped. Retry the preview."]))
     }
 }
 
-/// An inline page fits its content, so ordinary vertical scrolling belongs to
-/// the conversation. Expanded pages and modified/horizontal chart gestures
+/// An inline visual reply fits its content, so ordinary vertical scrolling
+/// belongs to the conversation. Expanded ones and modified/horizontal chart gestures
 /// retain WebKit's normal handling; links, selection and magnification do too.
 final class ConversationHTMLNativeWebView: WKWebView {
     var forwardsConversationScroll = false

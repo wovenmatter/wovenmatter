@@ -277,8 +277,8 @@ public enum BotsWire {
     /// "signIn" or "limit".
     public var issue: String?
     public var stopped: Bool?
-    /// Pages the bot published here with `render_html`.
-    public var pages: [HTMLPage]?
+    /// Visual replies the bot published here with `render_html`.
+    public var visualReplies: [VisualReply]?
   }
 
   public struct ConversationSnapshot: Codable, Sendable, Hashable {
@@ -363,7 +363,7 @@ public enum BotsWire {
     public var name: String
     public var text: String
     /// A visual reply the bot published here with `render_html`; the post has no text then.
-    public var visualReply: HTMLPage?
+    public var visualReply: VisualReply?
     public var mentions: [String]?
     public var scheduled: Bool?
     public var auto: Bool?

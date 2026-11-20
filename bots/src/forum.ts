@@ -17,7 +17,7 @@ import type {
   ForumScheduleSummary,
   ForumState,
   ForumThreadSummary,
-  PublishedPage,
+  VisualReply,
 } from "./protocol.ts";
 import {
   AWAY,
@@ -651,7 +651,7 @@ export class Forum {
   async postVisualReply(
     botId: string,
     conversationId: number,
-    visualReply: PublishedPage,
+    visualReply: VisualReply,
   ): Promise<ForumPostRecord> {
     const record = await this.#poster(botId);
     const seat = await this.store.seatOfConversation(botId, conversationId);

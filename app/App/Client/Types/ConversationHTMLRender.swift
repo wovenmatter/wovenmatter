@@ -1,7 +1,7 @@
 import Foundation
 
-/// A page an agent published in the chat: its item's identifier, title and
-/// starting height. The page itself is in the content store, by `digest`.
+/// A visual reply an agent published in the chat: its item's identifier,
+/// title and starting height. Its HTML is in the content store, by `digest`.
 public struct ConversationHTMLRenderReference: Codable, Equatable, Sendable {
   public let id: String
   public let title: String
@@ -13,7 +13,7 @@ public struct ConversationHTMLRenderReference: Codable, Equatable, Sendable {
 }
 
 /// A visual reply an agent rendered, once its content has arrived.
-public struct ConversationHTMLPage: Equatable, Sendable {
+public struct ConversationVisualReply: Equatable, Sendable {
   public let html: String
   public let title: String
   public let height: Int

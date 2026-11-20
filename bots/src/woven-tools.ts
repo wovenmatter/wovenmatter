@@ -1,7 +1,7 @@
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { HostChannel } from "./host/channel.ts";
-import type { PublishedPage } from "./protocol.ts";
+import type { VisualReply } from "./protocol.ts";
 
 /** One Woven tool as the server's catalog describes it (MCP's `tools/list` shape). */
 type CatalogTool = {
@@ -25,7 +25,7 @@ export type WovenForumSeats = {
   /** Whether a conversation of the bot is one of its Forum seats. */
   seated(conversationId: number): Promise<boolean>;
   /** A visual reply published from a seat becomes a post in that seat's room. */
-  publish(conversationId: number, visualReply: PublishedPage): Promise<void>;
+  publish(conversationId: number, visualReply: VisualReply): Promise<void>;
 };
 
 /**
@@ -55,7 +55,7 @@ export function wovenTools(
 
 /**
  * A call says when it comes from the bot's Forum seat (`forum`), and its result's `_meta` becomes the
- * result's details: a visual reply `render_html` published (`wovenPage`), which the chat and the
+ * result's details: a visual reply `render_html` published (`wovenVisualReply`), which the chat and the
  * library copy show in its place. One published from a seat is posted to the seat's room.
  */
 function extension(
@@ -84,7 +84,7 @@ function extension(
               arguments: args ?? {},
               ...(forum ? { forum } : {}),
             });
-            const visualReply = result.isError ? undefined : result._meta?.wovenPage;
+            const visualReply = result.isError ? undefined : result._meta?.wovenVisualReply;
             if (forum && visualReply) await seats.publish(conversationId, visualReply);
             return {
               output: result.content.map((block) =>

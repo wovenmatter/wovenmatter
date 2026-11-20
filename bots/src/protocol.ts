@@ -406,7 +406,7 @@ export type ForumPost = {
   name: string;
   text: string;
   /** A visual reply the bot published with `render_html` in this room; the post has no text then. */
-  visualReply?: PublishedPage;
+  visualReply?: VisualReply;
   /** Bots the user asked for a reply. */
   mentions?: string[];
   /** Posted by the runtime at a time the user set. */
@@ -724,8 +724,8 @@ export type MirrorConversation = {
   createdAt: string;
 };
 
-/** A page a bot published in its chat with `render_html`; the page itself is in the server's content store. */
-export type PublishedPage = { title: string; height: number; digest: string; size: number };
+/** A visual reply a bot published with `render_html` (not a Page artifact); its HTML is in the server's content store. */
+export type VisualReply = { title: string; height: number; digest: string; size: number };
 
 export type MirrorItem = {
   /** Stable forever, unique within the bot: `<entryId>` or `<entryId>.<n>`. */
@@ -733,12 +733,12 @@ export type MirrorItem = {
   conversationId: number;
   /** Epoch ms. */
   createdAt: number;
-  kind: "user" | "assistant" | "tool" | "page" | "error" | "stopped";
+  kind: "user" | "assistant" | "tool" | "visualReply" | "error" | "stopped";
   /** user, assistant, error. */
   text?: string;
   tool?: { name: string; input: string; output?: string; failed: boolean };
-  /** page: shown in place of the `render_html` call that published it. */
-  page?: PublishedPage;
+  /** visualReply: shown in place of the `render_html` call that published it. */
+  visualReply?: VisualReply;
   /** One model turn's usage, on the first item of that turn (its text when it has any). */
   usage?: {
     /** `provider/model`. */
@@ -789,7 +789,7 @@ export type MirrorForum = {
     name: string;
     text: string;
     /** A visual reply the bot published here, saved as a reference to the server's content. */
-    visualReply?: PublishedPage;
+    visualReply?: VisualReply;
     /** Epoch ms. */
     createdAt: number;
   }[];
@@ -838,8 +838,8 @@ export type HostMethods = {
     data: {
       content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
       isError: boolean;
-      /** What the bot is not shown: the page `render_html` published. */
-      _meta?: { wovenPage?: PublishedPage };
+      /** What the bot is not shown: the visual reply `render_html` published. */
+      _meta?: { wovenVisualReply?: VisualReply };
     };
   };
   "mirror.checkpoints": { params: Empty; data: MirrorCheckpoints };

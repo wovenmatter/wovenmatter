@@ -5,8 +5,8 @@ import WovenProtocol
 @testable import WovenServerKit
 
 @Test
-func aPagesLocalImagesAreEmbeddedOnceAndAMissingOneIsNamed() throws {
-  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-page-\(UUID().uuidString)")
+func localImagesInAVisualReplyAreEmbeddedOnceAndAMissingOneIsNamed() throws {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-visual-reply-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: folder) }
   let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data(repeating: 7, count: 24)
@@ -15,48 +15,48 @@ func aPagesLocalImagesAreEmbeddedOnceAndAMissingOneIsNamed() throws {
   let text = folder.appendingPathComponent("notes.png").path
   try Data("not an image".utf8).write(to: URL(fileURLWithPath: text))
   let large = folder.appendingPathComponent("large.png").path
-  try (png + Data(count: HTMLPages.imageLimit)).write(to: URL(fileURLWithPath: large))
+  try (png + Data(count: VisualReplies.imageLimit)).write(to: URL(fileURLWithPath: large))
   let gone = folder.appendingPathComponent("gone.png").path
 
-  let page = try HTMLPages.prepare("""
+  let reply = try VisualReplies.prepare("""
     <img src="\(image)"><div style='background:url(\(image))'></div><script>const a = `\(image)`</script>
     <img src="//cdn.example.com/a.png"><img src="https://example.com/b.png">
     <img src="\(text)"><img src="\(large)"><img src="\(gone)"><img src="\(gone)">
     """)
   let uri = "data:image/png;base64," + png.base64EncodedString()
-  #expect(page.html.components(separatedBy: uri).count == 4)
-  #expect(page.html.contains("\"//cdn.example.com/a.png\"") && page.html.contains("\"https://example.com/b.png\""))
-  #expect(page.missingImages == [text, large, gone])
+  #expect(reply.html.components(separatedBy: uri).count == 4)
+  #expect(reply.html.contains("\"//cdn.example.com/a.png\"") && reply.html.contains("\"https://example.com/b.png\""))
+  #expect(reply.missingImages == [text, large, gone])
 
-  #expect(throws: ToolFailure.self) { try HTMLPages.prepare(String(repeating: "a", count: HTMLPages.authoredLimit + 1)) }
-  // Three references to a 10 MiB image make a page over 25 MiB.
+  #expect(throws: ToolFailure.self) { try VisualReplies.prepare(String(repeating: "a", count: VisualReplies.authoredLimit + 1)) }
+  // Three references to a 10 MiB image make a visual reply over 25 MiB.
   let full = folder.appendingPathComponent("full.png").path
-  try (png + Data(count: HTMLPages.imageLimit - png.count)).write(to: URL(fileURLWithPath: full))
-  #expect(throws: ToolFailure.self) { try HTMLPages.prepare("<img src='\(full)'><img src='\(full)'><img src='\(full)'>") }
-  // A page sized by the viewport would grow with its frame.
-  #expect(throws: ToolFailure.self) { try HTMLPages.prepare("<div style='min-height: 100vh'></div>") }
-  #expect(throws: ToolFailure.self) { try HTMLPages.prepare("<style>main{height:calc(50dvh - 2px)}</style>") }
+  try (png + Data(count: VisualReplies.imageLimit - png.count)).write(to: URL(fileURLWithPath: full))
+  #expect(throws: ToolFailure.self) { try VisualReplies.prepare("<img src='\(full)'><img src='\(full)'><img src='\(full)'>") }
+  // A visual reply sized by the viewport would grow with its frame.
+  #expect(throws: ToolFailure.self) { try VisualReplies.prepare("<div style='min-height: 100vh'></div>") }
+  #expect(throws: ToolFailure.self) { try VisualReplies.prepare("<style>main{height:calc(50dvh - 2px)}</style>") }
 }
 
 @Test
-func everyRuntimesReportOfTheCallIsKeptWithoutThePage() {
+func everyRuntimesReportOfTheCallIsKeptWithoutTheVisualReply() {
   let input = #"{"html":"<h1>Sales</h1>","title":"Sales"}"#
   let forms: [(name: String, title: String?)] = [
     ("mcp__woven__render_html", nil), ("other", "mcp__woven__render_html"), ("other", "mcp.woven.render_html"),
     ("woven_render_html", nil), ("render_html", nil), ("other", "Tool: woven/render_html"), ("other", "woven: render_html"),
   ]
   for form in forms {
-    let call = HTMLPages.withoutPage(ToolCall(name: form.name, input: input, title: form.title))
-    #expect(call.kind == .page && !call.input.contains("<h1>"), "\(form)")
+    let call = VisualReplies.withoutVisualReply(ToolCall(name: form.name, input: input, title: form.title))
+    #expect(call.kind == .visualReply && !call.input.contains("<h1>"), "\(form)")
   }
   for name in ["mcp__charts__render_html", "render_html_preview", "preview_html", "rewoven_render_html"] {
-    #expect(HTMLPages.withoutPage(ToolCall(name: name, input: input)).input == input, "\(name)")
+    #expect(VisualReplies.withoutVisualReply(ToolCall(name: name, input: input)).input == input, "\(name)")
   }
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsPage() async throws {
-  let host = try await PageServer.start(tailnet: StandInTailnet())
+func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsVisualReply() async throws {
+  let host = try await VisualReplyServer.start(tailnet: StandInTailnet())
   defer { host.server.stopLater() }
   let tools = try #require(await host.server.bots.toolsForTests)
   let offered = tools.listing(forBots: true).compactMap { $0["name"]?.string }
@@ -86,22 +86,22 @@ func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsPage() async throw
 
   let result = await tools.call("render_html", arguments: .object(["html": .string(html)]), caller: bot)
   #expect(!result.isError)
-  let digest = try #require(result.meta?["wovenPage"]?["digest"]?.string)
+  let digest = try #require(result.meta?["wovenVisualReply"]?["digest"]?.string)
   #expect(try await host.server.library.content(digest)?.data == Data(html.utf8))
 }
 
-private struct PageServer {
+private struct VisualReplyServer {
   let server: WovenServer
   let socket: String
 
-  static func start(tailnet: StandInTailnet) async throws -> PageServer {
+  static func start(tailnet: StandInTailnet) async throws -> VisualReplyServer {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
     let socket = "/tmp/wvt-\(UUID().uuidString.prefix(8)).sock"
     var options = WovenServer.Options(
       dataFolder: folder, socketPath: socket, listen: ("127.0.0.1", 0), appVersion: "test", machineName: "test",
       tailnet: tailnet, runtimes: [StandInRuntime()], discoveryInterval: .seconds(3600))
     options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
-    return PageServer(server: try await WovenServer.start(options), socket: socket)
+    return VisualReplyServer(server: try await WovenServer.start(options), socket: socket)
   }
 
   func connect() async throws -> Client {
@@ -112,9 +112,9 @@ private struct PageServer {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aPublishedPageIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async throws {
+func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
-  let a = try await PageServer.start(tailnet: tailnetA), b = try await PageServer.start(tailnet: tailnetB)
+  let a = try await VisualReplyServer.start(tailnet: tailnetA), b = try await VisualReplyServer.start(tailnet: tailnetB)
   defer { a.server.stopLater(); b.server.stopLater() }
   tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
@@ -126,7 +126,7 @@ func aPublishedPageIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async throws
   _ = try await onA.call(UpdateSession(sessionID: session.id, tools: []))
 
   // The stand-in calls the tool over its tool socket and then reports the call, as a runtime does.
-  // Only the page: its title is its own <title>, and it starts at the default height.
+  // Only the visual reply: its title is its own <title>, and it starts at the default height.
   let html = "<title>Sales by quarter</title><h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 5000)
   let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(html)])), as: UTF8.self)
   let subscription = try await onA.subscribe(SubscribeSession(sessionID: session.id))
@@ -140,23 +140,23 @@ func aPublishedPageIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async throws
   let items = try await onA.call(SessionItems(sessionID: session.id))
   #expect(items == live)
   #expect(items.count == 3)
-  guard items.count == 3, case .htmlPage(let page) = items[1].content, case .toolCall(let call) = items[2].content else {
-    Issue.record("Expected the message, the page, then the call: \(items.map(\.content))")
+  guard items.count == 3, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
+    Issue.record("Expected the message, the visual reply, then the call: \(items.map(\.content))")
     return
   }
-  #expect(page == HTMLPage(title: "Sales by quarter", height: 320, digest: Library.digest(of: Data(html.utf8)),
+  #expect(reply == VisualReply(title: "Sales by quarter", height: 320, digest: Library.digest(of: Data(html.utf8)),
                            size: Int64(html.utf8.count)))
-  #expect(!call.failed && call.kind == .page)
+  #expect(!call.failed && call.kind == .visualReply)
   #expect(!call.input.contains("Quarterly sales") && call.input.contains("characters, shown in the chat"))
-  #expect(try await a.server.library.content(page.digest)?.data == Data(html.utf8))
+  #expect(try await a.server.library.content(reply.digest)?.data == Data(html.utf8))
 
-  // B has the small item by sync, and its UI fetches the page through B.
+  // B has the small item by sync, and its UI fetches the visual reply through B.
   var copied: [SessionItem] = []
   for _ in 0..<200 where copied != items {
     copied = try await onB.call(SessionItems(sessionID: session.id))
     try await Task.sleep(for: .milliseconds(25))
   }
   #expect(copied == items)
-  #expect(try await b.server.library.hasContent(page.digest) == false)
-  #expect(try await onB.call(FetchContent(digest: page.digest)).data == Data(html.utf8))
+  #expect(try await b.server.library.hasContent(reply.digest) == false)
+  #expect(try await onB.call(FetchContent(digest: reply.digest)).data == Data(html.utf8))
 }

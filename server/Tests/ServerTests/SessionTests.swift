@@ -163,16 +163,16 @@ func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throw
   let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string("<title>Chart</title><p>bars</p>")])),
                          as: UTF8.self)
   _ = try await client.call(SendTurn(sessionID: session.id, text: "woven render_html \(arguments)"))
-  // The page's tool call goes once this message is steered in, and the
-  // runtime answers the steer only when the call, which publishes the page
+  // The visual reply's tool call goes once this message is steered in, and the
+  // runtime answers the steer only when the call, which publishes the visual reply
   // in this session, has returned.
   _ = try await client.call(SendTurn(sessionID: session.id, text: "two"))
   for try await event in subscription.events where event == .runState(.idle) { break }
 
   let items = try await client.call(SessionItems(sessionID: session.id)).map(\.content)
-  let page = items.firstIndex { if case .htmlPage = $0 { true } else { false } }
+  let reply = items.firstIndex { if case .visualReply = $0 { true } else { false } }
   let steered = items.indices.filter { items[$0] == .userMessage(text: "two") }
-  #expect(steered.count == 1 && page != nil && page! < steered[0])
+  #expect(steered.count == 1 && reply != nil && reply! < steered[0])
 }
 
 @Test(.timeLimit(.minutes(1)))

@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 import WovenProtocol
 
-/// Hands browser, computer-use and page-preview calls to the UI on this Mac
+/// Hands browser, computer-use and visual-reply preview calls to the UI on this Mac
 /// and waits for its answer. macOS ties those permissions to the app, and only
 /// the app has the chat's web view, so the server never carries them out
 /// itself. The newest connected UI takes each call.

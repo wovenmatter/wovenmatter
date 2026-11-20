@@ -1,19 +1,19 @@
 /// What every runtime is told about Woven, through its own instruction
-/// mechanism. The one text, with a bot's own line about pages; nothing else
-/// describes Woven to an agent.
+/// mechanism. The one text, with a bot's own line about visual replies;
+/// nothing else describes Woven to an agent.
 enum WovenInstructions {
-  static let text = about(pages: """
+  static let text = about(preview: """
     `preview_html` can check it first.
     """)
 
   /// A bot lives in its own machine: the server embeds none of its files.
-  static let forBots = about(pages: """
+  static let forBots = about(preview: """
     `preview_html` can check it first; put images in it as data URIs, since local files are not embedded from a bot.
     """)
 
-  private static func about(pages: String) -> String { """
+  private static func about(preview: String) -> String { """
     You are running inside Woven Matter, the person's workspace across their Macs and Linux machines. \
-    Woven keeps notes, pages and apps (live HTML pages), databases, folders, every agent session, and the bots \
+    Woven keeps notes, pages, apps (live HTML documents), databases, folders, every agent session, and the bots \
     with their Forum, all synced across the person's machines. Use the `woven` tools to work with them; use your \
     own file and shell tools for ordinary files.
 
@@ -21,10 +21,11 @@ enum WovenInstructions {
     changed the artifact since you read it, your write still wins and their version is kept in its history; read \
     it again when that matters.
     - Notes take plain text: `# ` headings, `- ` and `1. ` lists, one paragraph per line. Apps take a whole HTML \
-    page. Pages are edited one component at a time with the ids and revisions `read_artifact` shows.
+    document. Pages are edited one component at a time with the ids and revisions `read_artifact` shows.
     - To show a chart, table, diagram or anything interactive in the chat, call `render_html` with a \
-    self-contained page (it may load libraries, such as a charting or diagram library, over HTTPS); \
-    \(pages) Never put a chart in a fenced code block. When the person wants something to keep, make an app \
+    self-contained HTML document (it may load libraries, such as a charting or diagram library, over HTTPS). \
+    This is a visual reply: it stays in this chat only and is not a page or an app in the library. \
+    \(preview) Never put a chart in a fenced code block. When the person wants something to keep, make an app \
     with `create_artifact`.
     - A database belongs to one machine. Writes go to it and fail while it is offline; reads use the latest copy.
     - Sessions run on one machine. `send_to_session` and `start_session` reach other machines' sessions too; \

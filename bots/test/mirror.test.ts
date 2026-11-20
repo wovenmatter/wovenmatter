@@ -172,7 +172,7 @@ describe("a Forum turn", () => {
         instructions: "",
         tools: [{ name: "render_html", description: "Publish a visual reply.", inputSchema: { type: "object", properties: { html: { type: "string" } } } }],
       }),
-      "tools.call": () => ({ content: [{ type: "text", text: "Shown." }], isError: false, _meta: { wovenPage: visualReply } }),
+      "tools.call": () => ({ content: [{ type: "text", text: "Shown." }], isError: false, _meta: { wovenVisualReply: visualReply } }),
     });
     const { bot } = await server.request<{ bot: BotSummary }>("bots.create", { name: "Ada" });
     await server.until(() => server.calls("tools.list").some((call) => call.botId === bot.id));
@@ -273,8 +273,8 @@ describe("library items", () => {
     expect(orphan?.item.tool).toEqual({ name: "bash", input: '{"command":"ls"}', failed: true });
   });
 
-  it("shows a published page in place of its render_html call, in the copy and in the chat", () => {
-    const page = { title: "Sales", height: 320, digest: "a".repeat(64), size: 1200 };
+  it("shows a published visual reply in place of its render_html call, in the copy and in the chat", () => {
+    const visualReply = { title: "Sales", height: 320, digest: "a".repeat(64), size: 1200 };
     const call = entry(2, [
       assistant([
         { type: "text", text: "Here it is." },
@@ -282,10 +282,10 @@ describe("library items", () => {
       ]),
     ]);
     const result = entry(3, [
-      { role: "toolResult", toolCallId: "p1", toolName: "woven_render_html", content: [{ type: "text", text: "Shown." }], details: { wovenPage: page }, isError: false, timestamp: 2500 },
+      { role: "toolResult", toolCallId: "p1", toolName: "woven_render_html", content: [{ type: "text", text: "Shown." }], details: { wovenVisualReply: visualReply }, isError: false, timestamp: 2500 },
     ]);
-    expect(mirrorItems([call, result]).items.map((built) => built.item.kind)).toEqual(["assistant", "page"]);
-    expect(mirrorItems([call, result]).items[1]?.item.page).toEqual(page);
-    expect(displayEntry(result)).toEqual({ id: 3, conversationId: 1, role: "assistant", text: "", pages: [page] });
+    expect(mirrorItems([call, result]).items.map((built) => built.item.kind)).toEqual(["assistant", "visualReply"]);
+    expect(mirrorItems([call, result]).items[1]?.item.visualReply).toEqual(visualReply);
+    expect(displayEntry(result)).toEqual({ id: 3, conversationId: 1, role: "assistant", text: "", visualReplies: [visualReply] });
   });
 });

@@ -123,9 +123,9 @@ page:
 **Woven MCP access** on the main Bots page opens **Settings → Woven MCP**.
 There **Give bots Woven MCP** turns the Woven tools on or off for every bot,
 and **Bot keys** revokes or reinstates one bot's access. With the Woven tools,
-a bot can show a chart or another page in its own chats and preview it first,
-as agents do, with any images inside the page itself, since nothing on the
-host's disk is read for a bot's page. In the Forum, a visual reply is a post of
+a bot can show a chart or something else interactive as a visual reply in its
+own chats and preview it first, as agents do, with any images inside the visual
+reply itself, since nothing on the host's disk is read for a bot's visual reply. In the Forum, a visual reply is a post of
 its own, between the bot's messages. A bot
 can also use the browser in the Woven Matter window and, when you have allowed
 it, your Mac's apps, as agents do.

@@ -457,7 +457,7 @@ extension ItemContent {
     case .assistantMessage: "assistantMessage"
     case .toolCall: "toolCall"
     case .notice: "notice"
-    case .htmlPage: "htmlPage"
+    case .visualReply: "visualReply"
     }
   }
 }
