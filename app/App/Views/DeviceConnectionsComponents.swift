@@ -1,74 +1,14 @@
-import AppKit
-import CoreImage.CIFilterBuiltins
 import SwiftUI
-import WovenMatterShared
 
 struct DeviceConnectionIcon: View {
-    let kind: DeviceKind
+    let platform: Machine.Platform
     var size: CGFloat = 20
     var body: some View {
         Group {
-            switch kind {
+            switch platform {
             case .mac: LucideIcon(glyph: .monitor, size: size)
-            case .iPhone: LucideIcon(glyph: .smartphone, size: size)
-            case .iPad: LucideIcon(glyph: .tablet, size: size)
-            case .unknown: LucideIcon(glyph: .panelsTopLeft, size: size)
+            case .linux: LucideIcon(glyph: .container, size: size)
             }
         }.frame(width: size + 4, height: size + 4).foregroundStyle(WovenPalette.foreground)
-    }
-    static func label(_ kind: DeviceKind) -> String {
-        switch kind { case .mac: "Mac"; case .iPhone: "iPhone"; case .iPad: "iPad"; case .unknown: "Device" }
-    }
-}
-
-/// Discovery and pairing go through this Mac's library host (forwarded to the
-/// background server from a window), whose errors the pairing section shows.
-struct DevicePairingDiscoveryCard: View {
-    @Bindable var host: LibraryHostController
-    @State private var devices = MacDeviceSetupModel()
-    var body: some View {
-        SettingsSummaryRow("Find on your network") {
-            SettingsNote("Find other Macs on your Tailscale network, even when Woven Matter is closed.")
-            MacTailnetDiscoveryView(devices: devices, host: host)
-        }
-    }
-}
-
-struct DevicePairingCodeCard: View {
-    @Bindable var host: LibraryHostController
-    var body: some View {
-        SettingsSummaryRow("Show a QR code or link") {
-            SettingsNote("Scan the QR code or paste its link on another device.")
-            if let payload = host.pairingPayload {
-                HStack(alignment: .center, spacing: 24) {
-                    if let qr = qrImage(payload.encodedURL.absoluteString) {
-                        Image(nsImage: qr).interpolation(.none).resizable().frame(width: 160, height: 160)
-                            .padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 8))
-                            .accessibilityLabel("One-time device pairing QR code")
-                    }
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let expiry = host.pairingExpiresAt {
-                            Text("Expires at \(expiry.formatted(date: .omitted, time: .shortened))")
-                                .font(.settingsBody).foregroundStyle(WovenPalette.mutedForeground)
-                        }
-                        Button("Copy pairing link") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(payload.encodedURL.absoluteString, forType: .string)
-                        }.buttonStyle(SettingsQuietButtonStyle())
-                        Button("New code") { Task { await host.createPairingCode() } }.buttonStyle(SettingsQuietButtonStyle())
-                    }
-                }.accessibilityIdentifier("devices.pairing-code")
-            } else {
-                Button("Create QR code or link") { Task { await host.createPairingCode() } }
-                    .buttonStyle(SettingsQuietButtonStyle()).disabled(host.endpoint == nil || host.isStarting)
-                    .accessibilityIdentifier("devices.create-code")
-            }
-        }
-    }
-    private func qrImage(_ value: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator(); filter.message = Data(value.utf8); filter.correctionLevel = "M"
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 6, y: 6)),
-              let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }

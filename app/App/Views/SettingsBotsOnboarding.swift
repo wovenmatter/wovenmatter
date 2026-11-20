@@ -1,11 +1,10 @@
 import SwiftUI
-import WovenMatterClient
 
-/// First run on a machine: bots use the accounts in Woven's settings, so setup is
+/// First run: bots use the accounts in Woven's settings, so setup is
 /// signing in there, then choosing Admin Bot's model, which becomes the default for
 /// new bots. Every model of every signed-in provider is listed, newest first.
 struct BotOnboardingView: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     let onOpenConnections: () -> Void
     @State private var state: BotSettingsState
     @State private var catalog: PiBotModelCatalog?
@@ -14,7 +13,7 @@ struct BotOnboardingView: View {
     /// Open provider sections; nil until the user toggles one (the selected model's is open).
     @State private var expanded: Set<String>?
 
-    init(bots: BotMachineSession, onOpenConnections: @escaping () -> Void) {
+    init(bots: BotsStore, onOpenConnections: @escaping () -> Void) {
         self.bots = bots; self.onOpenConnections = onOpenConnections
         _state = State(initialValue: BotSettingsState(bots: bots))
     }
@@ -31,17 +30,9 @@ struct BotOnboardingView: View {
         .buttonStyle(SettingsQuietButtonStyle())
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .modifier(BotSettingsConfirmationPresenter(state: state))
-        .task(id: "\(bots.connection.rawValue):\(bots.onboarding?.signedIn == true)") {
+        .task(id: "\(bots.isConnected):\(bots.onboarding?.signedIn == true)") {
             guard bots.isConnected, bots.onboarding?.signedIn == true else { return }
-            await state.load { catalog = try await $0.modelCatalog() }
-        }
-        // The runtime doesn't announce new connections, and another client can finish this first.
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
-                guard !Task.isCancelled else { return }
-                await bots.refreshOnboarding()
-            }
+            await state.load { catalog = try await bots.modelCatalog() }
         }
     }
 
@@ -121,8 +112,8 @@ struct BotOnboardingView: View {
                     }
                     Button("Use this model") {
                         Task {
-                            await state.run { client in
-                                try await client.setOnboardingMainModel(selectedModel(catalog))
+                            await state.run {
+                                try await bots.setOnboardingMainModel(selectedModel(catalog))
                                 await refreshStatus()
                                 selection = nil
                             }
@@ -138,7 +129,7 @@ struct BotOnboardingView: View {
         }.disabled(state.disabled)
     }
 
-    /// Each provider's models in the runtime's order (newest first), narrowed by the search.
+    /// Each provider's models in the server's order (newest first), narrowed by the search.
     private func listed(_ catalog: PiBotModelCatalog) -> [PiBotProviderModels] {
         let terms = search.lowercased().split(separator: " ").map(String.init)
         return catalog.providers.compactMap { provider in
@@ -146,7 +137,7 @@ struct BotOnboardingView: View {
                 terms.allSatisfy { model.name.lowercased().contains($0) || model.id.lowercased().contains($0) }
             }
             return models.isEmpty ? nil : PiBotProviderModels(id: provider.id, name: provider.name,
-                                                               access: provider.access, models: models)
+                                                               accessLabel: provider.accessLabel, models: models)
         }
     }
 

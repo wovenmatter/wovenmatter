@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
 
 struct BotSettingsActionLabel: View {
     let title: String

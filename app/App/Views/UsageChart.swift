@@ -1,6 +1,5 @@
 import Charts
 import SwiftUI
-import WovenMatterCore
 
 enum UsageChartStyle: String, CaseIterable, Identifiable {
     case lines

@@ -1,5 +1,4 @@
 import Foundation
-import WovenMatterCore
 
 /// The WebKit document sees a value projection, never host persistence objects.
 struct DesktopArtifactStateSnapshot: Encodable, Equatable {
@@ -47,7 +46,7 @@ enum ArtifactInputError: LocalizedError {
         switch self {
         case .invalidMessage: "This App sent an invalid input-state request."
         case .unavailable: "This App is no longer available for editing."
-        case .saveFailed: "App inputs could not be saved. Keep this view open and retry, or recover the document draft."
+        case .saveFailed: "App inputs could not be saved. Keep this view open and retry."
         }
     }
 }

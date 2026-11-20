@@ -1,7 +1,5 @@
 import SwiftUI
 import AppKit
-import WovenMatterClient
-import WovenMatterCore
 
 enum ConnectionSettingsFocus {
     case providers, webSearch
@@ -23,9 +21,8 @@ enum ConnectionSettingsFocus {
 
 struct SettingsConnectionsView: View {
     @Bindable var model: ApplicationModel
-    /// The model whose device the rows act on: Subscriptions & API Keys passes its
-    /// own (`signInConnections`); elsewhere this Mac's `connections`.
-    var connections: DefaultAgentSettingsModel? = nil
+    /// The machine whose accounts the rows show and act on; nil is this Mac.
+    var machineID: String? = nil
     var initialScope = "global"
     var focus: ConnectionSettingsFocus = .providers
     var embedded = false
@@ -35,15 +32,19 @@ struct SettingsConnectionsView: View {
     @State private var expandedKeyFolds: [String: Bool] = [:]
     @State private var answer = ""
     @Environment(\.wovenTheme) private var theme
-    /// Every account action runs on the selected device (`DefaultAgentSettingsModel.device`).
-    private var agent: DefaultAgentSettingsModel { connections ?? model.connections }
+    private var agent: AgentSettingsStore { model.connections }
+    private var target: String? { machineID ?? model.thisMachineID }
+    private var connections: MachineProviderConnections { agent.connections(on: target) }
+    /// A sign-in in progress on this page's machine.
+    private var signInProvider: String? { agent.signInMachineID == target ? agent.signInProvider : nil }
+
     var body: some View {
         focusedContent(focus)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .task { if !embedded { agent.changeScope(initialScope) }; agent.loadAccounts() }
+        .task(id: target) { if !embedded { agent.changeScope(initialScope) }; agent.loadAccounts(on: target) }
         .onDisappear { if !embedded { agent.cancel() } }
-        // A key, label or answer typed for one device is never saved to another.
-        .onChange(of: agent.device) { _, _ in keyDrafts = [:]; keyLabels = [:]; expandedKeyFolds = [:]; answer = "" }
+        // A key, label or answer typed for one machine is never saved to another.
+        .onChange(of: target) { _, _ in keyDrafts = [:]; keyLabels = [:]; expandedKeyFolds = [:]; answer = "" }
         .onChange(of: agent.signInOutcome) { _, outcome in
             guard focus == .providers, let outcome, outcome.error == nil,
                   outcome.notice?.hasPrefix("Connected.") == true else { return }
@@ -63,9 +64,9 @@ struct SettingsConnectionsView: View {
                     .background(theme.palette.themeWhisper)
                     .clipShape(DesktopShapes.card)
             }
-            if agent.signInProvider == nil, let notice = agent.notice { SettingsNote(notice) }
-            if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
-            if agent.busy && agent.signInProvider == nil {
+            if signInProvider == nil, let notice = agent.notice { SettingsNote(notice) }
+            if signInProvider == nil, let error = agent.error { SettingsError(error) }
+            if agent.busy && signInProvider == nil {
                 ProgressView().controlSize(.small)
             }
         }
@@ -99,9 +100,9 @@ struct SettingsConnectionsView: View {
     }
 
     private func providerRow<Content: View>(_ title: String, ids: [String], @ViewBuilder content: () -> Content) -> some View {
-        let accounts = ids.flatMap { agent.accounts[$0] ?? [] }
+        let accounts = ids.flatMap { connections.accounts[$0] ?? [] }
         // A saved label is not proof of access: a Claude profile still needs its native sign-in.
-        let usable = ids.contains { agent.availableModelProviderIDs.contains($0) }
+        let usable = ids.contains { connections.availableModelProviderIDs.contains($0) }
         return SettingsSummaryRow(
             title,
             value: accounts.isEmpty ? "Not connected" : accounts.map(\.label).joined(separator: " · "),
@@ -112,7 +113,7 @@ struct SettingsConnectionsView: View {
 
     /// The selected provider is chosen on its own row, next to its key.
     private func searchRow(_ provider: ProviderConnectionID) -> some View {
-        let hasKey = !(agent.accounts[provider.id] ?? []).isEmpty
+        let hasKey = !(connections.accounts[provider.id] ?? []).isEmpty
         let selected = agent.configuration.searchProvider == provider.id
         return HStack(alignment: .top, spacing: 12) {
             if embedded {
@@ -144,7 +145,7 @@ struct SettingsConnectionsView: View {
 
     private func apiKeyFold(_ id: String, title: String) -> some View {
         DisclosureGroup(isExpanded: Binding(
-            get: { expandedKeyFolds[id] ?? !(agent.accounts[id] ?? []).isEmpty },
+            get: { expandedKeyFolds[id] ?? !(connections.accounts[id] ?? []).isEmpty },
             set: { expandedKeyFolds[id] = $0 }
         )) {
             apiKeyContent(id).padding(.top, 4)
@@ -154,19 +155,19 @@ struct SettingsConnectionsView: View {
     }
 
     private func subscriptionContent(_ id: String, title: String) -> some View {
-        let stored = agent.accounts[id] ?? []
+        let stored = connections.accounts[id] ?? []
         let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
         return VStack(alignment: .leading, spacing: 6) {
-            SettingsRow(title: title, detail: agent.connectionLabel(id)) {
+            SettingsRow(title: title, detail: connections.connectionLabel(id)) {
                 if accounts.isEmpty {
-                    Button(id == "claude-subscription" ? "Sign in with Claude" : "Sign in") { agent.signIn(id) }
+                    Button(id == "claude-subscription" ? "Sign in with Claude" : "Sign in") { agent.signIn(id, on: target) }
                         .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                 }
             }
             ForEach(accounts) { account in
                 SettingsRow(title: account.label) {
-                    Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: nil) } }
-                    Button("Remove") { Task { await agent.removeAccount(account.id, provider: id) } }
+                    Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, on: target) } }
+                    Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, on: target) } }
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
             }
             if id == "claude-subscription" {
@@ -178,7 +179,7 @@ struct SettingsConnectionsView: View {
     }
 
     private func apiKeyContent(_ id: String) -> some View {
-        let stored = agent.accounts[id] ?? []
+        let stored = connections.accounts[id] ?? []
         let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
@@ -187,11 +188,11 @@ struct SettingsConnectionsView: View {
                         Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
                             .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                         HStack {
-                            Button("Use first") { Task { await agent.selectAccount(account.id, provider: id) } }.disabled(account.isSelected)
-                            Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
-                            Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
+                            Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, on: target) } }.disabled(account.isSelected)
+                            Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1, on: target) } }.disabled(account.isSelected || index <= 1)
+                            Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1, on: target) } }.disabled(account.isSelected || index == accounts.count - 1)
                             Spacer()
-                            Button("Remove") { Task { await agent.removeAccount(account.id, provider: id) } }
+                            Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, on: target) } }
                         }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                     }
                 } label: {
@@ -203,7 +204,7 @@ struct SettingsConnectionsView: View {
                     }
                 }
             }
-            if accounts.count < ProviderConnectionAccounts.limit {
+            if accounts.count < ProviderAccount.limit {
                 keyEntry(id)
             } else {
                 Text("Four connections maximum. Remove one to add another.").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
@@ -214,7 +215,7 @@ struct SettingsConnectionsView: View {
     }
 
     @ViewBuilder private func signInStatus(_ id: String) -> some View {
-        if agent.signInProvider == id { signInSection }
+        if signInProvider == id { signInSection }
         else { completedSignInSection(for: id) }
     }
 
@@ -227,11 +228,12 @@ struct SettingsConnectionsView: View {
                 .wovenInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in
-                    guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
+                    guard await agent.saveKey(keyDrafts[id] ?? "", provider: id,
+                                              label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id], on: target) else { return }
                     keyDrafts[id] = nil
                     keyLabels[id] = nil
                     if let onConnected, ProviderConnectionID(rawValue: id)?.isSearchProvider != true { onConnected(id) }
-                    else { agent.refresh() }
+                    else { agent.loadAccounts(on: target) }
                 }
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
@@ -244,7 +246,7 @@ struct SettingsConnectionsView: View {
                 if agent.promptOptions.isEmpty {
                     HStack { TextField("Authorization code or redirect URL", text: $answer).wovenInput(); Button("Continue") { agent.respond(answer); answer = "" } }
                 } else {
-                    HStack { ForEach(agent.promptOptions, id: \.id) { option in Button(option.label) { agent.respond(option.id) } } }
+                    HStack { ForEach(agent.promptOptions) { option in Button(option.label) { agent.respond(option.id) } } }
                 }
             }
             if agent.error == nil, let notice = agent.notice { SettingsNote(notice) }

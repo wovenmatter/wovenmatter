@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 /// Tools for every agent, in one place: defaults for new chats, connected apps, bots, and
 /// access for agents outside Woven Matter. Each agent page can override the defaults.
@@ -18,16 +17,10 @@ struct SettingsWovenMCPView: View {
             backTitle: backTitle,
             onBack: onBack
         ) {
-            if let tools = model.agentTools {
-                WorkspaceToolDefaultsCard(tools: tools, onOpenPermissions: onOpenPermissions)
-            } else {
-                SettingsEmpty("Tool settings are unavailable until the workspace finishes opening.")
-            }
+            WorkspaceToolDefaultsCard(tools: model.agentTools, onOpenPermissions: onOpenPermissions)
             SettingsBotsMCPAccessSection(model: model)
-            SettingsMCPAccessSection(model: model)
-            if let tools = model.agentTools {
-                ExecutorConnectionsCard(model: model, tools: tools)
-            }
+            SettingsMCPAccessSection(settings: model.settings)
+            ExecutorConnectionsCard(model: model, tools: model.agentTools)
         }
     }
 }

@@ -1,13 +1,13 @@
 import SwiftUI
-import WovenMatterCore
 
-struct WorkspaceNoteRecovery: View {
+/// A note's retained versions, including the side that lost when two machines
+/// edited it apart.
+struct NoteVersionHistory: View {
     @Bindable var model: ApplicationModel
     let noteID: String
     @Environment(\.dismiss) private var dismiss
-    @State private var versions: [NoteAssetVersion] = []
+    @State private var versions: [NoteVersion] = []
     @State private var selection: String?
-    @State private var expectedRevision: String?
     @State private var error: String?
     @State private var restores = false
     @State private var confirmsRestore = false
@@ -16,7 +16,7 @@ struct WorkspaceNoteRecovery: View {
     @State private var refreshTask: Task<Void, Never>?
     @State private var restoreTask: Task<Void, Never>?
 
-    private var selected: NoteAssetVersion? { versions.first { $0.id == selection } }
+    private var selected: NoteVersion? { versions.first { $0.id == selection } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -35,8 +35,8 @@ struct WorkspaceNoteRecovery: View {
                             Button { selection = version.id } label: {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(version.title).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
-                                    Text(dateLabel(version.createdAt)).font(.system(size: 11))
-                                    Text(sourceLabel(version.source)).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
+                                    Text(version.savedAt.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 11))
+                                    Text(version.source.displayName).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                                 }.padding(9).frame(maxWidth: .infinity, alignment: .leading)
                                     .background(selection == version.id ? WovenPalette.foreground.opacity(0.07) : .clear,
                                         in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius))
@@ -71,7 +71,7 @@ struct WorkspaceNoteRecovery: View {
                 Spacer()
                 Button("Restore version") { confirmsRestore = true }
                     .buttonStyle(WovenPrimaryButtonStyle())
-                    .disabled(selected == nil || expectedRevision == nil || loading || restores)
+                    .disabled(selected == nil || loading || restores)
             }
         }.padding(24).frame(width: 710)
         .foregroundStyle(WovenPalette.foreground)
@@ -103,23 +103,11 @@ struct WorkspaceNoteRecovery: View {
         let requestID = UUID()
         loadGeneration = requestID
         loading = true
-        expectedRevision = nil
         defer { if loadGeneration == requestID { loading = false } }
         do {
-            guard await model.flushNoteDrafts(), let database = model.libraryStore?.database else {
-                throw ApplicationModelError.noteDraftSaveFailed
-            }
+            let fetched = try await model.documents.versions(noteID: noteID)
             try Task.checkCancellation()
             guard loadGeneration == requestID else { return }
-            try await model.checkpointNoteForHistory(id: noteID)
-            try Task.checkCancellation()
-            let revision = try await database.readNoteForEditing(id: noteID).revision
-            let fetched = try await database.noteAssetVersions(id: noteID)
-            try Task.checkCancellation()
-            guard loadGeneration == requestID else { return }
-            // Publish the revision and matching list together; a partial or old
-            // request must not re-enable restoration with stale evidence.
-            expectedRevision = revision
             versions = fetched
             if !versions.contains(where: { $0.id == selection }) { selection = versions.first?.id }
             error = nil
@@ -128,7 +116,7 @@ struct WorkspaceNoteRecovery: View {
     }
 
     private func restore() {
-        guard !loading, !restores, let selected, let expectedRevision else { return }
+        guard !loading, !restores, let selected else { return }
         let requestID = UUID()
         loadGeneration = requestID
         refreshTask?.cancel()
@@ -136,13 +124,7 @@ struct WorkspaceNoteRecovery: View {
         restoreTask = Task { @MainActor in
             defer { if loadGeneration == requestID { restores = false } }
             do {
-                guard await model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
-                try Task.checkCancellation()
-                guard loadGeneration == requestID else { return }
-                let result = try await model.restoreRetainedNote(id: noteID, versionID: selected.id, expectedRevision: expectedRevision)
-                // A started write returns its definitive result even when the
-                // sheet disappears. Refresh app state, then fence sheet state.
-                await Task { @MainActor in await model.adoptNoteEditingResponse(result) }.value
+                try await model.documents.restoreVersion(noteID: noteID, versionID: selected.id)
                 guard !Task.isCancelled, loadGeneration == requestID else { return }
                 restores = false
                 await load()
@@ -151,24 +133,6 @@ struct WorkspaceNoteRecovery: View {
                 guard loadGeneration == requestID else { return }
                 self.error = error.localizedDescription + " Refresh to review the current document before trying again."
             }
-        }
-    }
-
-    private func dateLabel(_ value: String) -> String {
-        (try? WorkspaceAgentToolsModel.date(value))?.formatted(date: .abbreviated, time: .shortened) ?? value
-    }
-    private func sourceLabel(_ value: String) -> String {
-        switch value {
-        case "created": "Created"
-        case "editor", "editor-checkpoint": "Editor checkpoint"
-        case "agent": "Agent edit"
-        case "before-agent-edit": "Before agent edit"
-        case "restore": "Restored version"
-        case "before-restore": "Before restoration"
-        case "device": "Edit from another device"
-        case "before-device-edit": "Before edit from another device"
-        case "before-device-delete": "Before deletion from another device"
-        default: value
         }
     }
 }

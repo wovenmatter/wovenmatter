@@ -1,31 +1,22 @@
 import SwiftUI
-#if os(macOS)
-import WovenMatterClient
-import WovenMatterCore
-#endif
 
 private struct ConversationArchiveConversationKey: EnvironmentKey {
     static let defaultValue = ""
 }
 
-#if os(macOS)
 private struct ConversationSubagentHistoryKey: EnvironmentKey {
-    static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? = nil
+    static let defaultValue: (@MainActor (SubagentArchiveRequest) async throws -> SubagentArchivePage)? = nil
 }
-
-#endif
 
 extension EnvironmentValues {
     var conversationArchiveConversationID: String {
         get { self[ConversationArchiveConversationKey.self] }
         set { self[ConversationArchiveConversationKey.self] = newValue }
     }
-    #if os(macOS)
-    var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? {
+    var conversationSubagentHistory: (@MainActor (SubagentArchiveRequest) async throws -> SubagentArchivePage)? {
         get { self[ConversationSubagentHistoryKey.self] }
         set { self[ConversationSubagentHistoryKey.self] = newValue }
     }
-    #endif
 }
 
 struct ConversationSubagentRow: View {
@@ -48,14 +39,12 @@ struct ConversationSubagentRow: View {
                 if let result = child.result?.nonempty { textBlock("Result", result) }
                 if let activity = child.activity, !activity.isEmpty { entries("Activity", activity) }
                 if let history = child.history, !history.isEmpty { entries("Recent Messages", history) }
-                #if os(macOS)
                 if let sourceID = child.sourceID,
                    let nativeSessionID = child.nativeSessionID,
                    let nativeConversationID = child.nativeConversationID {
                     ConversationSubagentHistory(sourceID: sourceID, nativeSessionID: nativeSessionID,
                         nativeConversationID: nativeConversationID)
                 }
-                #endif
             }
             .padding(.top, 6)
             .padding(.leading, 4)
@@ -120,7 +109,6 @@ struct ConversationSubagentRow: View {
     }
 }
 
-#if os(macOS)
 private struct ConversationSubagentHistory: View {
     let sourceID: String
     let nativeSessionID: String
@@ -128,7 +116,7 @@ private struct ConversationSubagentHistory: View {
     @Environment(\.conversationArchiveConversationID) private var conversationID
     @Environment(\.conversationSubagentHistory) private var loadHistory
     @State private var expanded = false
-    @State private var rows: [JSONValue] = []
+    @State private var rows: [SubagentArchiveRecord] = []
     @State private var cursor: Int64 = 0
     @State private var hasMore = true
     @State private var busy = false
@@ -139,10 +127,8 @@ private struct ConversationSubagentHistory: View {
             DisclosureGroup("History", isExpanded: $expanded) {
                 if expanded {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                            if let fields = row.objectValue, let eventID = fields["id"]?.stringValue {
-                                ConversationSubagentArchiveEvent(request: request(eventID: eventID), fields: fields)
-                            }
+                        ForEach(rows) { row in
+                            ConversationSubagentArchiveEvent(request: request(eventID: row.id), record: row)
                         }
                         if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
                         if hasMore {
@@ -159,7 +145,7 @@ private struct ConversationSubagentHistory: View {
         }
     }
 
-    private func request(eventID: String? = nil) -> BuiltInSubagentArchiveRequest {
+    private func request(eventID: String? = nil) -> SubagentArchiveRequest {
         .init(conversationID: conversationID, sourceID: sourceID,
             nativeSessionID: nativeSessionID, nativeConversationID: nativeConversationID,
             after: cursor, eventID: eventID)
@@ -171,16 +157,16 @@ private struct ConversationSubagentHistory: View {
         defer { busy = false }
         do {
             let page = try await loadHistory(request())
-            rows.append(contentsOf: page.objectValue?["rows"]?.arrayValue ?? [])
-            hasMore = page.objectValue?["hasMore"]?.boolValue ?? false
-            cursor = Int64(page.objectValue?["nextCursor"]?.intValue ?? Int(cursor))
+            rows.append(contentsOf: page.records)
+            hasMore = page.hasMore
+            cursor = page.nextCursor
         } catch { self.error = error.localizedDescription }
     }
 }
 
 private struct ConversationSubagentArchiveEvent: View {
-    let request: BuiltInSubagentArchiveRequest
-    let fields: [String: JSONValue]
+    let request: SubagentArchiveRequest
+    let record: SubagentArchiveRecord
     @Environment(\.conversationSubagentHistory) private var loadHistory
     @State private var chunks: [String] = []
     @State private var offset = 0
@@ -189,9 +175,9 @@ private struct ConversationSubagentArchiveEvent: View {
     @State private var error: String?
 
     var body: some View {
-        DisclosureGroup(fields["kind"]?.stringValue ?? "Native record") {
+        DisclosureGroup(record.kind ?? "Native record") {
             VStack(alignment: .leading, spacing: 6) {
-                if let text = fields["text_content"]?.stringValue, !text.isEmpty {
+                if let text = record.text, !text.isEmpty {
                     Text(text).font(.system(size: 12.5)).textSelection(.enabled)
                 }
                 ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
@@ -216,14 +202,12 @@ private struct ConversationSubagentArchiveEvent: View {
         do {
             var next = request; next.offset = offset
             let page = try await loadHistory(next)
-            guard let row = page.objectValue?["rows"]?.arrayValue?.first?.objectValue else {
-                throw BackendRPCError.remote("The native record is unavailable.")
+            guard let row = page.records.first else {
+                throw WorkspaceToolError.notFound("The native record is unavailable.")
             }
-            chunks.append(row["payload"]?.stringValue ?? "")
-            hasMore = (row["payload_has_more"]?.intValue ?? 0) != 0
+            chunks.append(row.payload ?? "")
+            hasMore = row.payloadHasMore
             offset += 65536
         } catch { self.error = error.localizedDescription }
     }
 }
-
-#endif

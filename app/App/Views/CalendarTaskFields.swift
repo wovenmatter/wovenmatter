@@ -1,35 +1,36 @@
 import SwiftUI
-import WovenMatterCore
-import WovenMatterClient
 
 struct CalendarTaskFields: View {
     @Bindable var model: ApplicationModel
-    @Binding var task: WorkspaceCalendarTask
+    @Binding var task: CalendarTask
+    /// The machine that runs the task. Nil means this Mac.
+    @Binding var machineID: String?
     let recurring: Bool
-    @State private var metadata: LocalACPSessionMetadata?
+    @State private var metadata: SessionSettings?
     @State private var loading = false
     @State private var refreshID = 0
     @State private var error: String?
 
-    private var catalogKey: String {
-        [task.configuration.runtimeKind.rawValue, task.configuration.workspaceID?.uuidString ?? "local",
-         task.configuration.nativeWorkingDirectory ?? "", task.configuration.model ?? ""].joined(separator: "|")
+    static func machineName(_ id: String?, in model: ApplicationModel) -> String {
+        guard let id = id ?? model.thisMachineID else { return "This Mac" }
+        return model.machines.machine(id: id)?.name ?? "Unavailable machine"
     }
-    private func choice(_ key: WritableKeyPath<WorkspaceSessionCreationConfiguration, String?>) -> Binding<String> {
+
+    private var catalogKey: String {
+        [task.configuration.runtimeKind.rawValue, machineID ?? "",
+         task.configuration.workingDirectory ?? "", task.configuration.model ?? ""].joined(separator: "|")
+    }
+    private func choice(_ key: WritableKeyPath<CalendarTaskConfiguration, String?>) -> Binding<String> {
         Binding(get: { task.configuration[keyPath: key] ?? "" }, set: { value in
             task.configuration[keyPath: key] = value.isEmpty ? nil : value
             if key == \.model { task.configuration.thinking = nil }
-            if key == \.permission { task.configuration.usesProductPermissionDefault = false }
-            if key == \.nativeWorkingDirectory {
-                task.configuration.nativeWorkspaceID = nil
-                task.configuration.selectionWorkspace = task.configuration.workspaceID.map { ApplicationModel.remoteDatabaseSourceID($0) }
-                    ?? "local:" + URL(fileURLWithPath: value).standardizedFileURL.path
-            }
         })
     }
-    private var workspace: Binding<String> {
-        Binding(get: { task.configuration.workspaceID?.uuidString ?? "local" }, set: { raw in
-            changeAgent(task.configuration.runtimeKind, workspaceID: raw == "local" ? nil : UUID(uuidString: raw))
+    private var machine: Binding<String> {
+        Binding(get: { machineID ?? model.thisMachineID ?? "" }, set: { id in
+            machineID = id.isEmpty ? nil : id
+            changeAgent(task.configuration.runtimeKind)
+            task.configuration.folderID = nil
         })
     }
 
@@ -37,22 +38,20 @@ struct CalendarTaskFields: View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Session").font(.system(size: 14, weight: .semibold))
             CalendarField("Work location") {
-                CalendarMenuPicker(title: "Work location", selection: workspace, options: workspaceOptions) { id in
-                    id == "local" ? "Local workspace" : model.remoteWorkspaces.workspaces.first { $0.id.uuidString == id }?.name ?? "Unavailable workspace"
+                CalendarMenuPicker(title: "Work location", selection: machine, options: machineOptions) { id in
+                    Self.machineName(id.isEmpty ? nil : id, in: model)
                 }
             }
             CalendarField("Agent") {
                 CalendarMenuPicker(title: "Agent", selection: Binding(get: { task.configuration.runtimeKind }, set: {
-                    changeAgent($0, workspaceID: task.configuration.workspaceID)
+                    changeAgent($0)
                 }), options: AgentRuntimeKind.presentationOrder, label: { $0.displayName })
             }
             CalendarField("Session folder") {
-                CalendarMenuPicker(title: "Session folder", selection: choice(\.folderID), options: folderOptions) { id in
-                    id.isEmpty ? "All Workspace" : model.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder"
-                }
+                CalendarMenuPicker(title: "Session folder", selection: choice(\.folderID), options: folderOptions, label: folderName)
             }
             CalendarField("Working directory") {
-                TextField("Working directory", text: choice(\.nativeWorkingDirectory))
+                TextField("Working directory", text: choice(\.workingDirectory))
                     .modifier(CalendarInputStyle())
             }
             HStack {
@@ -68,8 +67,8 @@ struct CalendarTaskFields: View {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 9) {
                     ForEach(WorkspaceToolGroup.configurableCases) { group in
-                        Toggle(group.title, isOn: Binding(get: { task.configuration.tools.enabled.contains(group) }, set: {
-                            if $0 { task.configuration.tools.enabled.insert(group) } else { task.configuration.tools.enabled.remove(group) }
+                        Toggle(group.title, isOn: Binding(get: { task.configuration.tools.contains(group) }, set: {
+                            if $0 { task.configuration.tools.insert(group) } else { task.configuration.tools.remove(group) }
                         })).toggleStyle(CompactSwitchToggleStyle())
                     }
                 }
@@ -82,7 +81,7 @@ struct CalendarTaskFields: View {
             if recurring {
                 CalendarField("Send each occurrence to") {
                     CalendarMenuPicker(title: "Send each occurrence to", selection: $task.sessionMode,
-                        options: WorkspaceCalendarTask.SessionMode.allCases, label: { $0.title })
+                        options: CalendarTask.SessionMode.allCases, label: { $0.title })
                 }
             }
             CalendarField("Prompt") {
@@ -97,14 +96,23 @@ struct CalendarTaskFields: View {
         .task(id: catalogKey + "|" + String(refreshID)) { await loadMetadata() }
     }
 
-    private var workspaceOptions: [String] {
-        var options = ["local"] + model.remoteWorkspaces.workspaces.map { $0.id.uuidString }
-        if !options.contains(workspace.wrappedValue) { options.append(workspace.wrappedValue) }
+    private func folderName(_ id: String) -> String {
+        guard !id.isEmpty else { return "All Workspace" }
+        let folder = model.workspace.workspaceOverview?.folders.first { $0.id == id }
+        return folder?.name ?? "Unavailable folder"
+    }
+
+    private var machineOptions: [String] {
+        var options = model.machines.machines.map(\.id)
+        if !options.contains(machine.wrappedValue) { options.append(machine.wrappedValue) }
         return options
     }
 
+    /// Folders belong to one machine, so only the running machine's folders are offered.
     private var folderOptions: [String] {
-        var options = [""] + (model.workspaceOverview?.folders.map(\.id) ?? [])
+        let runningMachine = machineID ?? model.thisMachineID
+        let folders = model.workspace.workspaceOverview?.folders.filter { $0.machineID == runningMachine } ?? []
+        var options = [""] + folders.map(\.id)
         if let id = task.configuration.folderID, !options.contains(id) { options.append(id) }
         return options
     }
@@ -118,9 +126,9 @@ struct CalendarTaskFields: View {
         }.disabled(loading)
     }
 
-    private func changeAgent(_ runtime: AgentRuntimeKind, workspaceID: UUID?) {
+    private func changeAgent(_ runtime: AgentRuntimeKind) {
         let current = task
-        task = model.calendarTaskDefaults(runtime: runtime, workspaceID: workspaceID, title: current.configuration.title)
+        task = model.calendar.taskDefaults(runtime: runtime, title: current.configuration.title)
         task.prompt = current.prompt; task.sessionMode = current.sessionMode
         task.configuration.folderID = current.configuration.folderID
         metadata = nil; error = nil
@@ -132,7 +140,7 @@ struct CalendarTaskFields: View {
         defer { if !Task.isCancelled, key == catalogKey { loading = false } }
         do {
             try await Task.sleep(for: .milliseconds(400))
-            let value = try await model.calendarTaskMetadata(task)
+            let value = try await model.calendar.taskOptions(for: task, machineID: machineID)
             guard !Task.isCancelled, key == catalogKey else { return }
             metadata = value
         } catch is CancellationError { }

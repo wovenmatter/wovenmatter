@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 /// A Page is a document. Rich text stays in ordinary contiguous Notes editors;
 /// sections, tasks, images and embedded artifacts provide the boundaries between those flows.
@@ -56,7 +55,6 @@ struct PageEditor: View {
                                     .padding(.leading, CGFloat(segment.depth) * 20)
                                     .id(segment.id)
                             }
-                            legacyConnections
                             // The rest of the Page is part of its last line: clicking puts
                             // the cursor there, and right-clicking adds a component.
                             Color.clear.frame(maxWidth: .infinity, minHeight: 240).contentShape(Rectangle())
@@ -90,8 +88,8 @@ struct PageEditor: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
                         // A Page holds Notes, Sheets and Apps; never another Page.
-                        ForEach((model.workspaceOverview?.notes ?? []).filter {
-                            $0.id != noteID && NoteDocument.decode($0.content).kind != .canvas
+                        ForEach((model.workspace.workspaceOverview?.notes ?? []).filter {
+                            $0.id != noteID && $0.kind != .canvas
                         }, id: \.id) { asset in
                             Button {
                                 let position = viewState.assetPickerPosition ?? .init()
@@ -101,7 +99,7 @@ struct PageEditor: View {
                                 HStack {
                                     Text(asset.title.isEmpty ? "Untitled artifact" : asset.title)
                                     Spacer()
-                                    Text(NoteDocument.decode(asset.content).kind.displayName).foregroundStyle(.secondary)
+                                    Text(asset.kind.displayName).foregroundStyle(.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(WovenQuietButtonStyle())
                         }
@@ -148,7 +146,7 @@ struct PageEditor: View {
             }
         case let .task(id, _, _):
             PageTaskRow(model: model, document: $document, viewState: $viewState, componentID: id,
-                        pageFolderID: folderID, onOpenSession: onOpenSession)
+                        pageID: noteID, pageFolderID: folderID, onOpenSession: onOpenSession)
                 .simultaneousGesture(TapGesture().onEnded { viewState.selected = [id]; onSectionFocus?() })
                 .contextMenu { componentContextMenu(id) }
         case let .image(id, _, _):
@@ -208,16 +206,6 @@ struct PageEditor: View {
     private func segmentContains(_ segment: PageSegment, id: String) -> Bool {
         if case .flow(_, _, _, _, let ids) = segment { return ids.contains(id) }
         return segment.id == id
-    }
-    @ViewBuilder private var legacyConnections: some View {
-        if let connections = page.canvasConnections, !connections.isEmpty {
-            DisclosureGroup("Retained connections") {
-                ForEach(connections) { connection in
-                    Text("\(projection.blocks[connection.from]?.plainText.prefix(60) ?? "Component") → \(projection.blocks[connection.to]?.plainText.prefix(60) ?? "Component"): \(connection.label)")
-                        .font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-            }.padding(.top, 20)
-        }
     }
 }
 

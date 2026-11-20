@@ -1,7 +1,6 @@
 import SwiftUI
 import WebKit
 import AppKit
-import WovenMatterCore
 
 struct ExecutorAppsList: View {
     let targets: [ExecutorAppTarget]
@@ -40,12 +39,11 @@ struct ExecutorAppsList: View {
 
 struct ExecutorConnectionsCard: View {
     @Bindable var model: ApplicationModel
-    @Bindable var tools: WorkspaceAgentToolsModel
+    @Bindable var tools: AgentToolsStore
     @State private var draft = ExecutorConfiguration()
     @State private var error: String?
     @State private var dashboard = false
     @State private var editing = false
-    @State private var preparation: ExecutorConfiguration?
 
     private var preparing: Bool { tools.executorBusy || tools.settings.executorSetup?.running == true }
     private func perform(_ control: ExecutorControl) {
@@ -69,41 +67,23 @@ struct ExecutorConnectionsCard: View {
                 }
                 if draft.location == .remote {
                     HStack {
-                        Menu("Choose a machine") {
-                            ForEach(model.remoteWorkspaces.machineCandidates) { machine in
-                                Button(machine.displayName) {
-                                    draft.host = machine.hostName
-                                    draft.origin = "https://\(machine.dnsName ?? machine.hostName):8443"
-                                }
-                            }
-                            ForEach(model.remoteWorkspaces.workspaces) { workspace in
-                                Button(workspace.name) {
-                                    draft.host = workspace.hostName; draft.user = workspace.userName ?? ""
-                                    let machine = model.remoteWorkspaces.machineCandidates.first { $0.hostName == workspace.hostName || $0.dnsName == workspace.hostName }
-                                    draft.origin = "https://\(machine?.dnsName ?? workspace.hostName):8443"
+                        Menu(draft.host.isEmpty ? "Choose a machine" : draft.host) {
+                            ForEach(model.machines.machines.filter { $0.platform == .linux }) { machine in
+                                Button(machine.name) {
+                                    draft.machineID = machine.id
+                                    draft.host = machine.name
                                 }
                             }
                         }
-                        Button("Refresh machines") { model.remoteWorkspaces.discoverMachines() }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                    SettingsField("Tailscale machine") { TextField("machine.tailnet.ts.net", text: $draft.host).wovenInput() }
-                    SettingsField("SSH username") { TextField("From SSH config", text: $draft.user).wovenInput() }
-                    SettingsField("Private HTTPS origin") { TextField("https://machine.tailnet.ts.net:8443", text: $draft.origin).wovenInput() }
-                    HStack {
-                        Button("Inspect host") { model.remoteWorkspaces.checkHost(hostName: draft.host, userName: draft.user) }
-                        if model.remoteWorkspaces.isCheckingHost { ProgressView().controlSize(.small) }
-                    }.buttonStyle(SettingsQuietButtonStyle())
-                    SettingsNote("Uses Woven’s SSH inspection and Docker deployment. Prepare an unready host in Settings → Workspaces. Deployment adds one standalone container and a private Tailscale HTTPS route on port 8443.")
                 }
                 HStack {
                     Button(draft.location == .local ? "Install and start Executor" : "Deploy Executor") { var value = draft
-                        if let previous = tools.settings.executor, previous.location != draft.location || previous.origin != draft.origin {
+                        if let previous = tools.settings.executor, previous.location != draft.location || previous.machineID != draft.machineID {
                             value.id = UUID().uuidString.lowercased(); value.apps = []; value.defaultProfiles = []
                         }
-                        if value.location == .remote, model.remoteWorkspaces.preflight(hostName: value.host, userName: value.user)?.preparationRequired == true {
-                            preparation = value
-                        } else { perform(.setup(value)) } }
-                        .disabled(preparing)
+                        perform(.setup(value)) }
+                        .disabled(preparing || (draft.location == .remote && draft.machineID == nil))
                     if editing { Button("Cancel") { editing = false } }
                 }.buttonStyle(SettingsQuietButtonStyle())
             } else if let config = tools.settings.executor {
@@ -131,16 +111,7 @@ struct ExecutorConnectionsCard: View {
                     .foregroundStyle(WovenPalette.mutedForeground)
             }
         }
-        .task { if let config = tools.settings.executorSetup?.configuration ?? tools.settings.executor { draft = config }; model.remoteWorkspaces.discoverMachines() }
-        .confirmationDialog("Prepare this Linux host for Executor?", isPresented: Binding(get: { preparation != nil }, set: { if !$0 { preparation = nil } }), titleVisibility: .visible) {
-            Button("Authorize preparation and deploy") {
-                if let configuration = preparation { perform(.setup(configuration, prepareHost: true)) }
-                preparation = nil
-            }
-            Button("Cancel", role: .cancel) { preparation = nil }
-        } message: {
-            Text("Uses Woven’s existing host preparation to install Docker when needed, then deploys one Executor container. No agent workspace is created. Existing services and storage are kept.")
-        }
+        .task { if let config = tools.settings.executorSetup?.configuration ?? tools.settings.executor { draft = config } }
         .sheet(isPresented: $dashboard, onDismiss: { perform(.refresh) }) {
             if let url = tools.executorDashboardURL { ExecutorDashboard(url: url) {
                 Task { do { try await tools.controlExecutor(.dashboard); if let fresh = tools.executorDashboardURL { NSWorkspace.shared.open(fresh) } }
@@ -151,7 +122,7 @@ struct ExecutorConnectionsCard: View {
 }
 
 struct ExecutorConversationApps: View {
-    @Bindable var tools: WorkspaceAgentToolsModel
+    @Bindable var tools: AgentToolsStore
     let sessionID: String
     let back: () -> Void
     @State private var error: String?

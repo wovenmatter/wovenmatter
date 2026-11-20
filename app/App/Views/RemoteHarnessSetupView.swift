@@ -1,40 +1,34 @@
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 /// Reuses the harness settings account controls and the reviewed remote
 /// installer. Selecting a harness never initiates an authentication flow.
 struct RemoteHarnessSetupView: View {
     @Bindable var application: ApplicationModel
-    let workspace: RemoteWorkspaceConfiguration
+    let machine: Machine
     let onClose: () -> Void
     @AppStorage private var savedSelection: String
     @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
-    @State private var selection = RemoteHarnessSetupSelection()
+    @State private var selection = HarnessSetupSelection()
     @State private var step = 0
     @State private var expanded: Set<AgentRuntimeKind> = [.defaultAgent]
     @State private var showsPiSettings = false
-    @State private var installQueue: [AgentRuntimeKind] = []
-    @State private var requestedStage: String?
-    @State private var notice: String?
-    @State private var startingInstall = false
-    private var model: RemoteWorkspacesModel { application.remoteWorkspaces }
+    private var model: MachinesStore { application.machines }
     private var theme: WovenTheme { WovenTheme(rawValue: themeRawValue) ?? .green }
-    private var busy: Bool { model.busyWorkspaceIDs.contains(workspace.id) || installing }
-    /// An install or check is running, or a change that isn't a sign-in holds the workspace.
-    /// The queue moves on when this clears; a person signing in doesn't hold it up.
+    private var busy: Bool { model.isBusy(machine.id) || installing }
+    /// An install or check is running there. A person signing in doesn't hold it up.
     private var installing: Bool {
-        model.maintainingHarnesses[workspace.id]?.isEmpty == false
-            || model.checkingRuntimeIDs[workspace.id]?.isEmpty == false
-            || (model.busyWorkspaceIDs.contains(workspace.id) && model.signingInHarnesses[workspace.id] == nil)
+        model.isMaintainingHarnesses(on: machine.id) || model.isCheckingHarnesses(on: machine.id)
+    }
+    private var installingKind: AgentRuntimeKind? {
+        selection.ordered.first { model.operation($0, on: machine.id) == .install }
     }
 
-    init(application: ApplicationModel, workspace: RemoteWorkspaceConfiguration, onClose: @escaping () -> Void) {
+    init(application: ApplicationModel, machine: Machine, onClose: @escaping () -> Void) {
         self.application = application
-        self.workspace = workspace
+        self.machine = machine
         self.onClose = onClose
         _savedSelection = AppStorage(wrappedValue: AgentRuntimeKind.defaultAgent.rawValue,
-            "wovenmatter.remote-harness-selection.\(workspace.id.uuidString)")
+            "wovenmatter.remote-harness-selection.\(machine.id)")
     }
 
     var body: some View {
@@ -42,28 +36,27 @@ struct RemoteHarnessSetupView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Set up harnesses").font(.system(size: 22, weight: .semibold))
-                    Text(workspace.name).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
+                    Text(machine.name).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer()
                 Button("Set up later", action: finish).buttonStyle(SettingsQuietButtonStyle())
             }.padding(24)
             if showsPiSettings {
-                SettingsDefaultAgentView(model: application, initialScope: workspace.id.uuidString.lowercased(),
+                SettingsDefaultAgentView(model: application, initialScope: machine.id,
                     onBack: { showsPiSettings = false })
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if step == 0 { choices } else { accounts }
-                        if let notice { SettingsNote(notice) }
                         if let error = model.errorMessage { SettingsError(error) }
                     }.padding(.horizontal, 24).padding(.bottom, 16)
                 }.scrollIndicators(.never)
                 HStack {
                     if step == 1 {
-                        Button("Back") { installQueue = []; requestedStage = nil; step = 0 }
+                        Button("Back") { step = 0 }
                             .buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
                         Button("Retry selected installs", action: beginInstalls)
-                            .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || !installQueue.isEmpty)
+                            .buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
                     }
                     Spacer()
                     if step == 0 {
@@ -71,7 +64,7 @@ struct RemoteHarnessSetupView: View {
                             step = 1
                             expanded = selection.selected
                             beginInstalls()
-                        }.buttonStyle(WovenPrimaryButtonStyle()).disabled(busy || model.isCreating)
+                        }.buttonStyle(WovenPrimaryButtonStyle()).disabled(busy)
                     } else {
                         Button("Done", action: finish).buttonStyle(WovenPrimaryButtonStyle())
                     }
@@ -84,15 +77,13 @@ struct RemoteHarnessSetupView: View {
         .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .modifier(RemoteHarnessInstallerConfirmation(model: model, workspaceID: workspace.id,
-            onCancel: { installQueue = []; requestedStage = nil }))
+        .modifier(HarnessInstallerConfirmation(model: model, machineID: machine.id))
         .task {
             selection.selected = Set(savedSelection.split(separator: ",").compactMap { AgentRuntimeKind(rawValue: String($0)) })
                 .union([.defaultAgent])
-            model.refresh(workspace)
+            model.refreshHarnesses(on: machine.id)
         }
         .onChange(of: selection.selected) { _, _ in savedSelection = selection.ordered.map(\.rawValue).joined(separator: ",") }
-        .onChange(of: installing) { _, installing in if !installing { advanceInstall() } }
     }
 
     private var choices: some View {
@@ -104,7 +95,7 @@ struct RemoteHarnessSetupView: View {
                         HarnessLogoIcon(logo: HarnessLogo(runtimeKind: kind), size: 24)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(kind.displayName).font(.system(size: 13, weight: .medium))
-                            Text(kind == .defaultAgent ? "Included" : model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == kind })?.installed == true ? "Installed" : "Install in this workspace")
+                            Text(kind == .defaultAgent ? "Included" : model.harness(kind, on: machine.id)?.isInstalled == true ? "Installed" : "Install in this workspace")
                                 .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                         }
                         Spacer()
@@ -123,15 +114,15 @@ struct RemoteHarnessSetupView: View {
 
     private var accounts: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if !installQueue.isEmpty { SettingsNote("Installing \(installQueue[0].displayName)…") }
+            if let installingKind { SettingsNote("Installing \(installingKind.displayName)…") }
             ForEach(selection.ordered, id: \.self) { kind in
                 DisclosureGroup(isExpanded: Binding(get: { expanded.contains(kind) }, set: { if $0 { expanded.insert(kind) } else { expanded.remove(kind) } })) {
                     if kind == .defaultAgent {
                         Button("Open Pi Durable settings") { showsPiSettings = true }
                             .buttonStyle(SettingsQuietButtonStyle())
                     } else {
-                        SettingsRemoteHarnessAccountView(model: model, runtimeKind: kind, workspace: workspace)
-                        SettingsRemoteHarnessSoftware(model: model, runtimeKind: kind, workspace: workspace)
+                        SettingsRemoteHarnessAccountView(model: model, runtimeKind: kind, machine: machine)
+                        SettingsRemoteHarnessSoftware(model: model, runtimeKind: kind, machine: machine)
                     }
                 } label: {
                     HStack(spacing: 10) {
@@ -143,47 +134,15 @@ struct RemoteHarnessSetupView: View {
         }
     }
 
+    /// The machine's server installs the selected harnesses in order.
     private func beginInstalls() {
-        notice = nil
-        requestedStage = nil
-        installQueue = selection.ordered.filter { $0 != .defaultAgent }
-        advanceInstall()
-    }
-
-    private func advanceInstall() {
-        guard !installing, !startingInstall, model.preparedHarnessAction == nil, let kind = installQueue.first else { return }
-        guard let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == kind }),
-              let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == kind }) else {
-            notice = "Connect the workspace and retry to install the selected harnesses."
-            installQueue = []; requestedStage = nil
-            return
-        }
-        if runtime.installed {
-            installQueue.removeFirst(); requestedStage = nil; advanceInstall()
-        } else if requestedStage == nil {
-            requestedStage = "install"
-            startingInstall = true
-            Task {
-                let refused = await model.startHarnessMaintenance("install", harness: harness, configuration: workspace)
-                startingInstall = false
-                guard installQueue.first == kind, requestedStage == "install" else { return }
-                if let refused {
-                    notice = "\(kind.displayName) didn't start installing. \(refused)"
-                    installQueue = []; requestedStage = nil
-                } else if !installing {
-                    advanceInstall()
-                }
-            }
-        } else {
-            notice = "\(kind.displayName) could not finish setup. Review its status below, then retry."
-            installQueue = []; requestedStage = nil
-        }
+        let kinds = selection.ordered.filter { $0 != .defaultAgent && model.harness($0, on: machine.id)?.isInstalled != true }
+        guard !kinds.isEmpty else { return }
+        model.installHarnesses(kinds, on: machine.id)
     }
 
     private func finish() {
-        installQueue = []
-        requestedStage = nil
-        model.cancelPreparedHarnessAction(workspaceID: workspace.id, action: "install")
+        if model.pendingHarnessInstall?.machineID == machine.id { model.cancelPendingHarnessInstall() }
         onClose()
     }
 }

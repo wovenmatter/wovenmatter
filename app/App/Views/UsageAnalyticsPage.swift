@@ -1,42 +1,41 @@
 import SwiftUI
-import WovenMatterCore
 
 /// Everything the Usage analytics filter column can narrow by.
 struct UsageAnalyticsFilters: Equatable {
     static let reasoningNotReported = "Not reported"
 
     var hiddenProviders: Set<ProviderKind> = []
-    var hiddenDevices: Set<String> = []
+    var hiddenMachines: Set<String> = []
     var model: String?
     var harness: String?
     var reasoning: String?
     var search = ""
 
     var isActive: Bool {
-        !hiddenProviders.isEmpty || !hiddenDevices.isEmpty || model != nil
+        !hiddenProviders.isEmpty || !hiddenMachines.isEmpty || model != nil
             || harness != nil || reasoning != nil || !search.isEmpty
     }
 
     mutating func clear() { self = UsageAnalyticsFilters() }
 
     /// Provider and device rows ignore their own filter so a hidden one still shows its total.
-    func matches(_ sample: UsageSample, ignoringProviders: Bool = false, ignoringDevices: Bool = false) -> Bool {
-        matches(sample, query: searchQuery, ignoringProviders: ignoringProviders, ignoringDevices: ignoringDevices)
+    func matches(_ sample: UsageSample, ignoringProviders: Bool = false, ignoringMachines: Bool = false) -> Bool {
+        matches(sample, query: searchQuery, ignoringProviders: ignoringProviders, ignoringMachines: ignoringMachines)
     }
 
     /// The matching samples, normalizing the search once rather than once per sample.
-    func filter(_ samples: [UsageSample], ignoringProviders: Bool = false, ignoringDevices: Bool = false) -> [UsageSample] {
+    func filter(_ samples: [UsageSample], ignoringProviders: Bool = false, ignoringMachines: Bool = false) -> [UsageSample] {
         let query = searchQuery
         return samples.filter {
-            matches($0, query: query, ignoringProviders: ignoringProviders, ignoringDevices: ignoringDevices)
+            matches($0, query: query, ignoringProviders: ignoringProviders, ignoringMachines: ignoringMachines)
         }
     }
 
     private var searchQuery: String { search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-    private func matches(_ sample: UsageSample, query: String, ignoringProviders: Bool, ignoringDevices: Bool) -> Bool {
+    private func matches(_ sample: UsageSample, query: String, ignoringProviders: Bool, ignoringMachines: Bool) -> Bool {
         (ignoringProviders || !hiddenProviders.contains(sample.provider))
-            && (ignoringDevices || !hiddenDevices.contains(sample.usageDeviceID))
+            && (ignoringMachines || !hiddenMachines.contains(sample.machineID))
             && (model == nil || sample.modelFamily == model)
             && (harness == nil || sample.harness == harness)
             && (reasoning == nil || (sample.reasoningLevel ?? Self.reasoningNotReported) == reasoning)
@@ -111,7 +110,7 @@ struct UsageSessionRow: Identifiable {
         return parts.joined(separator: " · ")
     }
 
-    static func rows(from samples: [UsageSample], deviceNames: [String: String] = [:]) -> [UsageSessionRow] {
+    static func rows(from samples: [UsageSample], machineNames: [String: String] = [:]) -> [UsageSessionRow] {
         Dictionary(
             grouping: samples,
             by: { "\($0.sourceID):\($0.sessionID):\($0.modelFamily):\($0.billingRoute)" }
@@ -126,7 +125,7 @@ struct UsageSessionRow: Identifiable {
                 reasoningLevel: latest.reasoningLevel,
                 harness: latest.harness,
                 application: latest.application,
-                deviceName: deviceNames[latest.usageDeviceID],
+                deviceName: machineNames[latest.machineID],
                 latest: latest.timestamp,
                 tokens: values.reduce(.zero) { $0 + $1.tokens },
                 directCostUSD: costs.isEmpty ? nil : costs.reduce(0, +),
@@ -144,7 +143,7 @@ struct UsageAnalyticsPage: View {
     @Binding var range: UsageTimeRange
     @Binding var chartStyle: UsageChartStyle
     @Binding var chartMetric: UsageChartMetric
-    let devices: [UsageDeviceSummary]
+    let machines: [UsageMachineSummary]
     let prices: UsagePriceState
     let isRefreshing: Bool
     let historyImport: UsageHistoryImportProgress?
@@ -165,8 +164,8 @@ struct UsageAnalyticsPage: View {
             UsageFilterColumn(
                 allSamples: snapshot.samples,
                 providerRollups: UsageProviderRollup.rollups(unhidden, table: table),
-                devices: devices,
-                deviceTotals: Self.deviceTotals(snapshot.samples, filters: filters, table: table),
+                machines: machines,
+                machineTotals: Self.machineTotals(snapshot.samples, filters: filters, table: table),
                 metric: table == nil ? .tokens : .apiEstimate,
                 isAwaitingData: isAwaitingData,
                 filters: $filters,
@@ -176,8 +175,8 @@ struct UsageAnalyticsPage: View {
                 UsageAnalyticsReport(
                     snapshot: snapshot,
                     samples: samples,
-                    deviceNames: Dictionary(
-                        devices.filter { $0.state != .thisDevice }.map { ($0.id, $0.identity.name) },
+                    machineNames: Dictionary(
+                        machines.filter { $0.state != .thisMachine }.map { ($0.id, $0.name) },
                         uniquingKeysWith: { first, _ in first }
                     ),
                     table: table,
@@ -200,12 +199,12 @@ struct UsageAnalyticsPage: View {
 
 private extension UsageAnalyticsPage {
     /// Each device's total under every other filter, so a hidden device still shows its total.
-    static func deviceTotals(
+    static func machineTotals(
         _ samples: [UsageSample],
         filters: UsageAnalyticsFilters,
         table: UsageRateTable?
     ) -> [String: String] {
-        Dictionary(grouping: filters.filter(samples, ignoringDevices: true), by: \.usageDeviceID)
+        Dictionary(grouping: filters.filter(samples, ignoringMachines: true), by: \.machineID)
             .mapValues { group in
                 if let table {
                     let estimate = table.estimate(group)
@@ -223,8 +222,8 @@ private struct UsageFilterColumn: View {
 
     let allSamples: [UsageSample]
     let providerRollups: [UsageProviderRollup]
-    let devices: [UsageDeviceSummary]
-    let deviceTotals: [String: String]
+    let machines: [UsageMachineSummary]
+    let machineTotals: [String: String]
     let metric: UsageChartMetric
     let isAwaitingData: Bool
     @Binding var filters: UsageAnalyticsFilters
@@ -251,17 +250,17 @@ private struct UsageFilterColumn: View {
                 }
                 group("Devices") {
                     VStack(spacing: 1) {
-                        ForEach(devices) { device in
+                        ForEach(machines) { device in
                             UsageFilterToggleRow(
-                                title: device.identity.name,
+                                title: device.name,
                                 color: WovenPalette.foreground,
-                                value: deviceTotals[device.id].flatMap { $0.isEmpty ? nil : $0 },
+                                value: machineTotals[device.id].flatMap { $0.isEmpty ? nil : $0 },
                                 detail: device.state.rowDetail,
                                 help: device.helpText,
-                                isOn: !filters.hiddenDevices.contains(device.id)
+                                isOn: !filters.hiddenMachines.contains(device.id)
                             ) {
-                                if filters.hiddenDevices.remove(device.id) == nil {
-                                    filters.hiddenDevices.insert(device.id)
+                                if filters.hiddenMachines.remove(device.id) == nil {
+                                    filters.hiddenMachines.insert(device.id)
                                 }
                             }
                         }
@@ -415,11 +414,11 @@ private struct UsageFilterToggleRow: View {
     }
 }
 
-private extension UsageDeviceSyncState {
+private extension UsageMachineSyncState {
     /// Shown only when this device's usage may be missing or old.
     var rowDetail: String? {
         switch self {
-        case .thisDevice, .synced: nil
+        case .thisMachine, .synced: nil
         case .scanning: "Reading history"
         case .waiting: "Waiting to connect"
         case .updateRequired: "Needs an update"
@@ -428,24 +427,21 @@ private extension UsageDeviceSyncState {
     }
 }
 
-private extension UsageDeviceSummary {
+private extension UsageMachineSummary {
     var helpText: String {
         // Long device names can truncate in the row, so the full name is always here.
-        var parts = [identity.name + "."]
+        var parts = [name + "."]
         switch state {
-        case .thisDevice: parts.append("Usage from this Mac.")
+        case .thisMachine: parts.append("Usage from this Mac.")
         case .synced: break
         case .scanning: parts.append("This device is still reading its usage history.")
         case .waiting: parts.append("Usage from this device hasn't arrived yet.")
-        case .updateRequired:
-            parts.append(identity.kind == .linux
-                ? "Update this workspace's service in Settings to include its usage."
-                : "Update Woven Matter on this device to include its usage.")
+        case .updateRequired: parts.append("Update Woven Matter on this device to include its usage.")
         case .unavailable: parts.append(detail ?? "This device couldn't be reached.")
         }
         if let syncedAt {
             parts.append("Last updated \(syncedAt.formatted(.relative(presentation: .named))).")
-        } else if state != .thisDevice {
+        } else if state != .thisMachine {
             parts.append("No usage has arrived yet, which doesn't mean there isn't any.")
         }
         return parts.joined(separator: " ")
@@ -555,7 +551,7 @@ private struct UsageFilterSelector: View {
 private struct UsageAnalyticsReport: View {
     let snapshot: UsageAnalyticsSnapshot
     let samples: [UsageSample]
-    let deviceNames: [String: String]
+    let machineNames: [String: String]
     let table: UsageRateTable?
     let prices: UsagePriceState
     let isAwaitingData: Bool
@@ -620,7 +616,7 @@ private struct UsageAnalyticsReport: View {
                 )
                 UsageModelList(samples: samples, table: table, metric: metric)
                 UsageSessionList(
-                    rows: UsageSessionRow.rows(from: samples, deviceNames: deviceNames),
+                    rows: UsageSessionRow.rows(from: samples, machineNames: machineNames),
                     table: table
                 )
             }

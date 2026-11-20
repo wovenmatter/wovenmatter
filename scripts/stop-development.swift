@@ -7,20 +7,7 @@ let target = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL.
 func isFrontend(_ application: NSRunningApplication) -> Bool {
     guard !application.isTerminated, application.activationPolicy != .prohibited,
           application.executableURL?.standardizedFileURL.resolvingSymlinksInPath() == target else { return false }
-    // A new headless process can briefly appear regular before AppKit applies
-    // its activation policy. Check its role before counting or terminating it.
-    let process = Process(), output = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/bin/ps")
-    process.arguments = ["-p", String(application.processIdentifier), "-o", "args="]
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    do { try process.run() } catch { return false }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0, let command = String(data: data, encoding: .utf8) else { return false }
-    let arguments = command.split(whereSeparator: \.isWhitespace)
-    // `--tailscale-serve-supervisor` is TailscaleServeSupervisor.argument.
-    return !arguments.contains("--backend") && !arguments.contains("--tailscale-serve-supervisor")
+    return true
 }
 if CommandLine.arguments.contains("--wait") {
     let deadline = Date().addingTimeInterval(20)
@@ -39,7 +26,6 @@ if CommandLine.arguments.contains("--wait") {
     fputs("The development app did not stay open at the expected executable path.\n", stderr)
     exit(1)
 }
-// The headless server shares this executable but has its own lifetime.
 let applications = NSWorkspace.shared.runningApplications.filter(isFrontend)
 if CommandLine.arguments.contains("--check") { exit(applications.isEmpty ? 1 : 0) }
 for application in applications {

@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterCore
 
 /// One entry in a Page menu, rendered by SwiftUI menus and AppKit context menus alike.
 indirect enum PageMenuEntry {
@@ -203,7 +202,7 @@ struct PageComponentMenu: View {
 
     private func createAsset(_ kind: NoteArtifactKind, position: PagePosition) {
         Task {
-            guard let id = await model.createNote(folderID: folderID, kind: kind) else { return }
+            guard let id = await model.workspace.createNote(folderID: folderID, kind: kind) else { return }
             add(kind: .asset, assetID: id, position: position)
         }
     }

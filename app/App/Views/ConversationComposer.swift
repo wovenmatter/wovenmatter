@@ -1,7 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 struct PanelControlButton: View {
     static let size: CGFloat = 36
@@ -68,7 +66,7 @@ struct ComposerMention: Equatable {
 /// One row of the list that typing "/" or "@" opens above the composer's controls.
 private struct ComposerCompletion: Identifiable {
     enum Kind {
-        case slash(LocalACPSlashCommand)
+        case slash(SessionSlashCommand)
         case mention(ComposerMention)
     }
     let id: String
@@ -86,13 +84,13 @@ struct ConversationComposer: View {
     @Binding var draft: String
     let attachedNoteTitle: String?
     let attachments: [AgentMessageAttachmentDraft]
-    let agentTools: WorkspaceAgentToolsModel?
+    let agentTools: AgentToolsStore?
     let sessionID: String?
     let supportsGoals: Bool
     let showsSessionControls: Bool
     let showsPermissionControl: Bool
     let sessionMetadataLoading: Bool
-    let sessionMetadata: LocalACPSessionMetadata?
+    let sessionMetadata: SessionSettings?
     let sessionControlsDisabled: Bool
     let sendDisabled: Bool
     let startsCollapsed: Bool
@@ -112,7 +110,7 @@ struct ConversationComposer: View {
     var folderLabel: String? = nil
     var availableFolders: [WorkspaceFolderRecord] = []
     var selectedFolderID: String? = nil
-    var folderWorkspaceID: String? = nil
+    var folderMachineID: String? = nil
     var folderSelectionDisabled = true
     var onSelectFolder: ((String?) -> Void)? = nil
     /// When set, the add button goes straight to the upload action under this label.
@@ -153,7 +151,7 @@ struct ConversationComposer: View {
                         ForEach(availableFolders) { folder in
                             Button(folder.name) { onSelectFolder?(folder.id) }
                                 .disabled(selectedFolderID == folder.id
-                                    || (folder.executionWorkspaceID == nil || folder.executionWorkspaceID != folderWorkspaceID))
+                                    || folder.machineID != folderMachineID)
                         }
                     } label: {
                         Label(folderLabel, systemImage: "folder")
@@ -362,10 +360,10 @@ struct ConversationComposer: View {
         return String(draft.dropFirst())
     }
 
-    private var matchingSlashCommands: [LocalACPSlashCommand] {
+    private var matchingSlashCommands: [SessionSlashCommand] {
         guard let query = slashQuery else { return [] }
         let goalCommands = supportsGoals
-            ? [LocalACPSlashCommand(name: "goal", detail: "Ask the agent to pursue a goal", argumentHint: "objective")] : []
+            ? [SessionSlashCommand(name: "goal", detail: "Ask the agent to pursue a goal", argumentHint: "objective")] : []
         let commands = goalCommands + (sessionMetadata?.slashCommands ?? []).filter {
             !supportsGoals || $0.name.lowercased() != "goal"
         }
@@ -539,7 +537,7 @@ struct ConversationComposer: View {
                 sessionMenu(
                     kind: .model,
                     icon: .cpu,
-                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata[$0]) } ?? "Model",
                     menuTitle: "Model",
                     accessibilityLabel: "Choose session model",
                     options: sessionMetadata?.selectableModels ?? [],
@@ -550,7 +548,7 @@ struct ConversationComposer: View {
                 sessionMenu(
                     kind: .thinking,
                     icon: .brain,
-                    title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
+                    title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
                     menuTitle: "Thinking Level",
                     accessibilityLabel: "Choose thinking level",
                     options: sessionMetadata?.selectableThinkingLevels ?? [],
@@ -585,7 +583,7 @@ struct ConversationComposer: View {
                     compactSessionMenu(
                         kind: .model,
                         icon: .cpu,
-                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata[$0]) } ?? "Model",
                         menuTitle: "Model",
                         accessibilityLabel: "Choose session model",
                         options: sessionMetadata?.selectableModels ?? [],
@@ -596,7 +594,7 @@ struct ConversationComposer: View {
                     compactSessionMenu(
                         kind: .thinking,
                         icon: .brain,
-                        title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
+                        title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
                         menuTitle: "Thinking Level",
                         accessibilityLabel: "Choose thinking level",
                         options: sessionMetadata?.selectableThinkingLevels ?? [],
@@ -722,7 +720,7 @@ struct ConversationComposer: View {
     private var permissionTitle: String {
         if sessionMetadataLoading { return "Loading permissions…" }
         return sessionMetadata?.permission.map {
-            sessionMetadata?.permissionOptionMetadata?[$0]?.name ?? $0
+            sessionMetadata?.permissionOptionMetadata[$0]?.name ?? $0
         } ?? "Permissions"
     }
 
@@ -1165,7 +1163,7 @@ struct AttachmentPicker: View {
                             pickerRow(
                                 icon: "note.text",
                                 title: note.title,
-                                detail: note.content
+                                detail: note.kind.displayName
                             )
                         }
                         .buttonStyle(.plain)
@@ -1176,7 +1174,7 @@ struct AttachmentPicker: View {
                             pickerRow(
                                 icon: "bubble.left.and.bubble.right",
                                 title: conversation.title,
-                                detail: conversation.agentCodename ?? "Conversation"
+                                detail: conversation.runtimeKind?.displayName ?? "Conversation"
                             )
                         }
                         .buttonStyle(.plain)
@@ -1205,7 +1203,7 @@ struct AttachmentPicker: View {
         guard !query.isEmpty else { return notes }
         return notes.filter {
             $0.title.localizedCaseInsensitiveContains(query)
-                || $0.content.localizedCaseInsensitiveContains(query)
+
         }
     }
 
@@ -1213,7 +1211,7 @@ struct AttachmentPicker: View {
         guard !query.isEmpty else { return conversations }
         return conversations.filter {
             $0.title.localizedCaseInsensitiveContains(query)
-                || ($0.agentCodename?.localizedCaseInsensitiveContains(query) ?? false)
+                || ($0.runtimeKind?.displayName.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
 

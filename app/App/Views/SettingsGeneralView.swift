@@ -1,7 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
@@ -9,7 +7,7 @@ struct SettingsGeneralView: View {
     var onBack: () -> Void
     var onOpenCodex: () -> Void = {}
     var onOpenUpdates: () -> Void = {}
-    @State private var updates = FleetUpdatesModel.shared
+    private var updates: UpdatesStore { model.updates }
 
     @AppStorage(WovenTheme.storageKey) private var storedTheme = WovenTheme.green.rawValue
     @AppStorage(SidebarStyle.storageKey) private var storedSidebarStyle = SidebarStyle.defaultStyle.rawValue
@@ -46,13 +44,13 @@ struct SettingsGeneralView: View {
             versionSection
             appearanceSection
             SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
-            ProductAnalyticsSettingsSection(analytics: model.analytics)
+            ProductAnalyticsSettingsSection(settings: model.settings)
         }
         .onChange(of: storedTheme) { _, _ in
-            model.persistMacSurfaceProfileFromUserDefaults()
+            model.settings.persistMacSurfaceProfileFromUserDefaults()
         }
         .onChange(of: storedSidebarStyle) { _, _ in
-            model.persistMacSurfaceProfileFromUserDefaults()
+            model.settings.persistMacSurfaceProfileFromUserDefaults()
         }
     }
 
@@ -101,7 +99,7 @@ struct SettingsGeneralView: View {
     private var versionSection: some View {
         SettingsSection {
             SettingsDestinationRow(
-                title: updates.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(updates.thisMacVersion ?? "")",
+                title: Self.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(Self.appVersion)",
                 detail: "Open Updates to update this Mac, your other devices, and their harnesses.",
                 status: updates.running ? "Updating…" : updates.availableCount > 0 ? "Update available" : nil,
                 statusTone: updates.running ? .neutral : .warning,
@@ -111,6 +109,14 @@ struct SettingsGeneralView: View {
         }
         .task { updates.loadIfNeeded() }
     }
+
+    private static let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+
+    #if DEBUG
+    private static let isDevelopmentBuild = true
+    #else
+    private static let isDevelopmentBuild = false
+    #endif
 }
 
 /// Conversation titles use the Codex account on this Mac, so the section shows that
@@ -119,22 +125,24 @@ private struct SettingsConversationTitlesSection: View {
     @Bindable var model: ApplicationModel
     let onOpenCodex: () -> Void
 
-    private var settings: ConversationTitleGenerationSettings { model.titleGenerationSettings }
-    private var codex: AgentSignInStatus? { model.harnessSignIn.statuses[.codex] }
-    private var signedIn: Bool { ["verified", "credentials_present"].contains(codex?.state ?? "") }
+    private var store: SettingsStore { model.settings }
+    private var settings: ConversationTitleGenerationSettings { store.titleGenerationSettings }
+    private var codex: AgentSignInStatus? { model.thisMachineID.flatMap { model.machines.signInStatus(.codex, on: $0) } }
+    private var signedIn: Bool { codex?.hasCredentials == true }
+    private var checking: Bool { model.thisMachineID.map { model.machines.isCheckingSignIn(.codex, on: $0) } ?? false }
 
     private var accountValue: String {
-        if signedIn { return codex?.accounts?.first?.name ?? "Signed in" }
-        if codex == nil || model.harnessSignIn.checking.contains(.codex) { return "Checking…" }
-        return codex?.state == "not_installed" ? "Codex isn't installed" : "Not signed in"
+        if signedIn { return codex?.accounts.first?.name ?? "Signed in" }
+        if codex == nil || checking { return "Checking…" }
+        return codex?.state == .notInstalled ? "Codex isn't installed" : "Not signed in"
     }
 
     var body: some View {
         SettingsSection(title: "Conversation titles", detail: "Names new chats from their first message using your Codex account on this Mac.") {
             SettingsToggleRow(
                 title: "Generate titles",
-                detail: settings.isEnabled ? model.titleGenerationStatus : nil,
-                isOn: Binding(get: { settings.isEnabled }, set: { model.setTitleGenerationEnabled($0) })
+                detail: settings.isEnabled ? store.titleGenerationStatus : nil,
+                isOn: Binding(get: { settings.isEnabled }, set: { store.setTitleGenerationEnabled($0) })
             )
             SettingsSummaryLink(title: "Codex account", value: accountValue,
                                 tone: codex == nil ? nil : signedIn ? .good : .warning, action: onOpenCodex)
@@ -143,28 +151,31 @@ private struct SettingsConversationTitlesSection: View {
                     SettingsRow(title: "Model") {
                         SettingsPicker(
                             "Title model",
-                            selection: Binding(get: { settings.model }, set: { model.setTitleGenerationModel($0) }),
-                            options: options(model.titleGenerationCapabilities?.models, selected: settings.model)
+                            selection: Binding(get: { settings.model }, set: { store.setTitleGenerationModel($0) }),
+                            options: options(store.titleGenerationCapabilities?.models, selected: settings.model)
                         ) { $0 }
                     }
                     SettingsRow(title: "Thinking level") {
                         SettingsPicker(
                             "Title thinking level",
-                            selection: Binding(get: { settings.thinking }, set: { model.setTitleGenerationThinking($0) }),
-                            options: options(model.titleGenerationCapabilities?.thinkingLevels, selected: settings.thinking)
+                            selection: Binding(get: { settings.thinking }, set: { store.setTitleGenerationThinking($0) }),
+                            options: options(store.titleGenerationCapabilities?.thinkingLevels, selected: settings.thinking)
                         ) { $0.capitalized }
                     }
-                    Button(model.isRefreshingTitleGenerationCapabilities ? "Checking…" : "Refresh options") {
-                        model.refreshTitleGenerationCapabilitiesNow()
+                    Button(store.isRefreshingTitleGenerationCapabilities ? "Checking…" : "Refresh options") {
+                        store.refreshTitleGenerationCapabilities()
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isRefreshingTitleGenerationCapabilities)
+                    .disabled(store.isRefreshingTitleGenerationCapabilities)
                 } else {
                     SettingsNote("Sign in to Codex to choose a model and thinking level.")
                 }
             }
         }
-        .task { await model.refreshHarnessSignIn(.codex) }
+        .task {
+            guard let thisMachineID = model.thisMachineID else { return }
+            await model.machines.refreshSignIn(.codex, on: thisMachineID)
+        }
     }
 
     private func options(_ available: [String]?, selected: String) -> [String] {

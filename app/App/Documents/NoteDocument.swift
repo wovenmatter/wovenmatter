@@ -1,0 +1,469 @@
+import Foundation
+
+public struct NoteDocument: Codable, Equatable, Sendable {
+  public var kind: NoteArtifactKind
+  public var blocks: [NoteBlock]
+  public var canvas: [String: CanvasCardPlacement]?
+  public var canvasSections: [CanvasSection]?
+  public var canvasConnections: [CanvasConnection]?
+  public var html: String
+  public var databaseLink: DatabaseArtifactLink?
+  /// What a Board is for. Project text read as data, never as authorization.
+  public var boardPurpose: String?
+  /// Collaboration metadata keyed by stable card (block) ID.
+  public var boardItems: [String: BoardItem]?
+  /// The nesting of a Page's blocks. `nil` is a Board from before Pages flowed.
+  public var pageNodes: [String: PageNode]?
+  /// Saved inputs and app state of an Artifact, keyed by `app:` or `form:` names.
+  public var artifactState: [String: ArtifactStateEntry]?
+
+  public init(
+    kind: NoteArtifactKind = .note,
+    blocks: [NoteBlock] = [],
+    html: String = "",
+    canvas: [String: CanvasCardPlacement]? = nil,
+    canvasSections: [CanvasSection]? = nil,
+    canvasConnections: [CanvasConnection]? = nil,
+    databaseLink: DatabaseArtifactLink? = nil,
+    boardPurpose: String? = nil,
+    boardItems: [String: BoardItem]? = nil,
+    pageNodes: [String: PageNode]? = nil,
+    artifactState: [String: ArtifactStateEntry]? = nil
+  ) {
+    self.kind = kind
+    self.blocks = if blocks.isEmpty && kind != .canvas {
+      kind == .spreadsheet
+        ? [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
+        : [.richText(NoteRichTextBlock())]
+    } else {
+      blocks
+    }
+    self.canvas = canvas
+    self.canvasSections = canvasSections
+    self.canvasConnections = canvasConnections
+    self.html = html
+    self.databaseLink = databaseLink
+    self.boardPurpose = boardPurpose
+    self.boardItems = boardItems
+    self.pageNodes = pageNodes
+    self.artifactState = artifactState
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
+    case pageNodes, artifactState
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    kind = try values.decodeIfPresent(NoteArtifactKind.self, forKey: .kind) ?? .note
+    blocks = try values.decodeIfPresent([NoteBlock].self, forKey: .blocks) ?? []
+    canvasSections = try values.decodeIfPresent([CanvasSection].self, forKey: .canvasSections)
+    canvasConnections = try values.decodeIfPresent([CanvasConnection].self, forKey: .canvasConnections)
+    canvas = try values.decodeIfPresent([String: CanvasCardPlacement].self, forKey: .canvas)
+    html = try values.decodeIfPresent(String.self, forKey: .html) ?? ""
+    databaseLink = try values.decodeIfPresent(
+      DatabaseArtifactLink.self,
+      forKey: .databaseLink
+    )
+    boardPurpose = try values.decodeIfPresent(String.self, forKey: .boardPurpose)
+    boardItems = try values.decodeIfPresent([String: BoardItem].self, forKey: .boardItems)
+    pageNodes = try values.decodeIfPresent([String: PageNode].self, forKey: .pageNodes)
+    artifactState = try values.decodeIfPresent([String: ArtifactStateEntry].self, forKey: .artifactState)
+  }
+
+  public static func decode(_ content: String) -> NoteDocument {
+    guard let data = content.data(using: .utf8),
+          let document = try? JSONDecoder().decode(NoteDocument.self, from: data),
+          (try? document.validateEditableShape()) != nil else {
+      return NoteDocument()
+    }
+    return document.normalized()
+  }
+
+  public func encoded() throws -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    let data = try encoder.encode(normalized())
+    guard let value = String(data: data, encoding: .utf8) else {
+      throw NoteDocumentError.invalidEncoding
+    }
+    return value
+  }
+
+  public var plainText: String {
+    kind == .html ? html : blocks.map(\.plainText).joined(separator: "\n")
+  }
+
+  public func normalized() -> NoteDocument {
+    NoteDocument(
+      kind: kind,
+      blocks: blocks.map(\.normalized),
+      html: html,
+      canvas: canvas,
+      canvasSections: canvasSections,
+      canvasConnections: canvasConnections,
+      databaseLink: databaseLink,
+      boardPurpose: boardPurpose,
+      boardItems: boardItems,
+      pageNodes: pageNodes,
+      artifactState: artifactState
+    )
+  }
+}
+
+public enum NoteBlock: Equatable, Sendable {
+  case richText(NoteRichTextBlock)
+  case table(NoteTableBlock)
+
+  public var id: String {
+    switch self {
+    case .richText(let block): block.id
+    case .table(let block): block.id
+    }
+  }
+
+  public var plainText: String {
+    switch self {
+    case .richText(let block): block.plainText
+    case .table(let block): block.plainText
+    }
+  }
+
+  public var normalized: NoteBlock {
+    switch self {
+    case .richText(let block): .richText(block.normalized())
+    case .table(let block): .table(block.normalized())
+    }
+  }
+}
+
+extension NoteBlock: Codable {
+  private enum CodingKeys: String, CodingKey { case type, value }
+  private enum BlockType: String, Codable { case richText, table }
+
+  public init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    switch try values.decode(BlockType.self, forKey: .type) {
+    case .richText:
+      self = .richText(try values.decode(NoteRichTextBlock.self, forKey: .value))
+    case .table:
+      self = .table(try values.decode(NoteTableBlock.self, forKey: .value))
+    }
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var values = encoder.container(keyedBy: CodingKeys.self)
+    switch self {
+    case .richText(let block):
+      try values.encode(BlockType.richText, forKey: .type)
+      try values.encode(block, forKey: .value)
+    case .table(let block):
+      try values.encode(BlockType.table, forKey: .type)
+      try values.encode(block, forKey: .value)
+    }
+  }
+}
+
+public struct NoteRichTextBlock: Codable, Equatable, Identifiable, Sendable {
+  public var id: String
+  public var style: NoteParagraphStyle
+  public var runs: [NoteTextRun]
+  public var list: NoteListFormatting?
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    style: NoteParagraphStyle = .paragraph,
+    runs: [NoteTextRun] = [],
+    list: NoteListFormatting? = nil
+  ) {
+    self.id = id
+    self.style = style
+    self.runs = runs
+    self.list = list
+  }
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    style: NoteParagraphStyle = .paragraph,
+    text: String,
+    list: NoteListFormatting? = nil
+  ) {
+    self.init(id: id, style: style, runs: text.isEmpty ? [] : [NoteTextRun(text: text)], list: list)
+  }
+
+  public var plainText: String { runs.map(\.text).joined() }
+
+  public func normalized() -> NoteRichTextBlock {
+    var copy = self
+    copy.runs = NoteTextRun.mergingAdjacent(runs.filter {
+      !$0.text.isEmpty || $0.databaseLink != nil
+    }.map { $0.normalized() })
+    if style != .numberedList && style != .bulletedList { copy.list = nil }
+    return copy
+  }
+}
+
+extension NoteRichTextBlock {
+  /// Apply a scalar only while the original linked fragments are still unchanged.
+  /// Native formatting can split one value into several runs sharing its identity.
+  public mutating func refreshDatabaseValue(
+    id: String,
+    expectedRuns: [NoteTextRun],
+    value: String
+  ) -> Bool {
+    let indices = runs.indices.filter { runs[$0].databaseValueID == id }
+    guard !indices.isEmpty, indices.map({ runs[$0] }) == expectedRuns else { return false }
+    var remainder = value[...]
+    for (position, index) in indices.enumerated() {
+      let length = position == indices.count - 1 ? remainder.count
+        : min(runs[index].text.count, remainder.count)
+      let end = remainder.index(remainder.startIndex, offsetBy: length)
+      runs[index].text = String(remainder[..<end])
+      remainder = remainder[end...]
+    }
+    return true
+  }
+}
+
+/// Native list structure; a list without it renders flat.
+public struct NoteListFormatting: Codable, Equatable, Sendable {
+  public var levels: [NoteTextList]
+  public var headIndent: Double
+  public var firstLineHeadIndent: Double
+  public var tabStops: [NoteListTabStop]
+  public var defaultTabInterval: Double
+
+  public init(levels: [NoteTextList], headIndent: Double, firstLineHeadIndent: Double,
+              tabStops: [NoteListTabStop] = [], defaultTabInterval: Double = 0) {
+    self.levels = levels
+    self.headIndent = headIndent
+    self.firstLineHeadIndent = firstLineHeadIndent
+    self.tabStops = tabStops
+    self.defaultTabInterval = defaultTabInterval
+  }
+}
+
+public struct NoteTextList: Codable, Equatable, Hashable, Sendable {
+  /// Paragraphs sharing a native list keep its identity, including across child lists.
+  public var id: String
+  public var markerFormat: String
+  public var options: UInt
+  public var startingItemNumber: Int
+
+  public init(id: String = UUID().uuidString.lowercased(), markerFormat: String,
+              options: UInt = 0, startingItemNumber: Int = 1) {
+    self.id = id
+    self.markerFormat = markerFormat
+    self.options = options
+    self.startingItemNumber = startingItemNumber
+  }
+}
+
+public struct NoteListTabStop: Codable, Equatable, Sendable {
+  public var alignment: Int
+  public var location: Double
+
+  public init(alignment: Int, location: Double) {
+    self.alignment = alignment
+    self.location = location
+  }
+}
+
+public enum NoteParagraphStyle: String, Codable, CaseIterable, Sendable {
+  case paragraph
+  case heading1
+  case heading2
+  case heading3
+  case heading4
+  case heading5
+  case heading6
+  case bulletedList
+  case numberedList
+}
+
+public struct NoteTextRun: Codable, Equatable, Sendable {
+  public var text: String
+  public var fontFamily: String?
+  public var fontSize: Double?
+  public var bold: Bool
+  public var italic: Bool
+  public var underline: Bool
+  public var foregroundHex: String?
+  public var highlightHex: String?
+  public var link: String?
+  /// A scalar query renders in place; its retained text remains readable offline.
+  public var databaseLink: DatabaseArtifactLink?
+  /// Shared by attributed fragments of one inline value, independent of formatting.
+  public var databaseValueID: String?
+
+  public init(
+    text: String,
+    fontFamily: String? = nil,
+    fontSize: Double? = nil,
+    bold: Bool = false,
+    italic: Bool = false,
+    underline: Bool = false,
+    foregroundHex: String? = nil,
+    highlightHex: String? = nil,
+    link: String? = nil,
+    databaseLink: DatabaseArtifactLink? = nil,
+    databaseValueID: String? = nil
+  ) {
+    self.text = text
+    self.fontFamily = fontFamily
+    self.fontSize = fontSize
+    self.bold = bold
+    self.italic = italic
+    self.underline = underline
+    self.foregroundHex = foregroundHex
+    self.highlightHex = highlightHex
+    self.link = link
+    self.databaseLink = databaseLink
+    self.databaseValueID = databaseLink == nil ? nil
+      : databaseValueID ?? UUID().uuidString.lowercased()
+  }
+
+  fileprivate func normalized() -> Self {
+    var copy = self
+    if databaseLink == nil {
+      copy.databaseValueID = nil
+    } else if databaseValueID?.isEmpty != false {
+      copy.databaseValueID = UUID().uuidString.lowercased()
+    }
+    return copy
+  }
+
+  fileprivate static func mergingAdjacent(_ runs: [NoteTextRun]) -> [NoteTextRun] {
+    runs.reduce(into: []) { result, run in
+      guard var previous = result.last, previous.attributesEqual(to: run) else {
+        result.append(run)
+        return
+      }
+      previous.text += run.text
+      result[result.count - 1] = previous
+    }
+  }
+
+  private func attributesEqual(to other: NoteTextRun) -> Bool {
+    var lhs = self
+    var rhs = other
+    lhs.text = ""
+    rhs.text = ""
+    return lhs == rhs
+  }
+}
+
+public struct NoteTableBlock: Codable, Equatable, Identifiable, Sendable {
+  public var id: String
+  public var columns: [NoteTableColumn]
+  public var rows: [NoteTableRow]
+  public var headerRowCount: Int
+  public var databaseLink: DatabaseArtifactLink?
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    columns: [NoteTableColumn],
+    rows: [NoteTableRow],
+    headerRowCount: Int = 0,
+    databaseLink: DatabaseArtifactLink? = nil
+  ) {
+    self.id = id
+    self.columns = columns
+    self.rows = rows
+    self.headerRowCount = headerRowCount
+    self.databaseLink = databaseLink
+  }
+
+  public init(rows: Int, columns: Int, headerRow: Bool = false) {
+    let columnCount = max(1, columns)
+    let rowCount = max(1, rows)
+    self.init(
+      columns: (0..<columnCount).map { _ in NoteTableColumn() },
+      rows: (0..<rowCount).map { _ in NoteTableRow(cellCount: columnCount) },
+      headerRowCount: headerRow ? 1 : 0
+    )
+  }
+
+  public var plainText: String {
+    rows.map { $0.cells.map(\.plainText).joined(separator: "\t") }.joined(separator: "\n")
+  }
+
+  public func normalized() -> NoteTableBlock {
+    var copy = self
+    if copy.columns.isEmpty { copy.columns = [NoteTableColumn()] }
+    let cellCount = copy.columns.count
+    if copy.rows.isEmpty { copy.rows = [NoteTableRow(cellCount: cellCount)] }
+    copy.rows = copy.rows.map { $0.normalized(cellCount: cellCount) }
+    copy.headerRowCount = min(max(0, copy.headerRowCount), copy.rows.count)
+    return copy
+  }
+}
+
+public struct NoteTableColumn: Codable, Equatable, Identifiable, Sendable {
+  public var id: String
+  public var width: Double?
+
+  public init(id: String = UUID().uuidString.lowercased(), width: Double? = nil) {
+    self.id = id
+    self.width = width
+  }
+}
+
+public struct NoteTableRow: Codable, Equatable, Identifiable, Sendable {
+  public var id: String
+  public var cells: [NoteTableCell]
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    cells: [NoteTableCell]
+  ) {
+    self.id = id
+    self.cells = cells
+  }
+
+  public init(id: String = UUID().uuidString.lowercased(), cellCount: Int) {
+    self.init(id: id, cells: (0..<max(1, cellCount)).map { _ in NoteTableCell() })
+  }
+
+  fileprivate func normalized(cellCount: Int) -> NoteTableRow {
+    var copy = self
+    copy.cells = Array(copy.cells.prefix(cellCount))
+    while copy.cells.count < cellCount { copy.cells.append(NoteTableCell()) }
+    return copy
+  }
+}
+
+public struct NoteTableCell: Codable, Equatable, Identifiable, Sendable {
+  public var id: String
+  public var runs: [NoteTextRun]
+  public var backgroundHex: String?
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    runs: [NoteTextRun] = [],
+    backgroundHex: String? = nil
+  ) {
+    self.id = id
+    self.runs = runs
+    self.backgroundHex = backgroundHex
+  }
+
+  public init(
+    id: String = UUID().uuidString.lowercased(),
+    text: String,
+    backgroundHex: String? = nil
+  ) {
+    self.init(
+      id: id,
+      runs: text.isEmpty ? [] : [NoteTextRun(text: text)],
+      backgroundHex: backgroundHex
+    )
+  }
+
+  public var plainText: String { runs.map(\.text).joined() }
+}
+
+public enum NoteDocumentError: Error {
+  case invalidEncoding
+}

@@ -1,10 +1,8 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
-/// Settings → Permissions & Access: Keychain and every macOS permission Woven Matter
-/// uses, in one section: what each one is for, its own Allow button, and "Allow all".
+/// Settings → Permissions & Access: every macOS permission Woven Matter uses, in one
+/// section: what each one is for, its own Allow button, and "Allow all".
 struct SettingsPermissionsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
@@ -12,7 +10,6 @@ struct SettingsPermissionsView: View {
     var onBack: () -> Void
 
     @State private var macAccess = MacAccessSetupModel.shared
-    @State private var showsCredentialDisclosure = false
 
     static let lead = "Give agents the access they need on this Mac. You only need to allow each one once."
 
@@ -31,7 +28,7 @@ struct SettingsPermissionsView: View {
                     if !macAccess.remaining.isEmpty {
                         Button(macAccess.allowingAll ? "Allowing\u{2026}" : "Allow all") { macAccess.allowAll() }
                             .buttonStyle(WovenPrimaryButtonStyle())
-                            .disabled(macAccess.allowingAll || macAccess.settingUp != nil || model.isReconnectingSavedCredentials
+                            .disabled(macAccess.allowingAll || macAccess.settingUp != nil
                                       || macAccess.remaining.allSatisfy { macAccess.access($0) == .needsReopen })
                     }
                 }
@@ -41,49 +38,12 @@ struct SettingsPermissionsView: View {
                 }
             }
         }
-        .onAppear {
-            macAccess.keychainRequest = { [model] in
-                if model.hasAcknowledgedCredentialAccessDisclosure {
-                    Task { await model.reconnectSavedCredentials() }
-                } else {
-                    showsCredentialDisclosure = true
-                }
-            }
-        }
-        .task { await model.checkSavedCredentialAccess() }
         .task {
             while !Task.isCancelled {
-                macAccess.refresh(keychainReady: model.keychainAccessReady)
+                macAccess.refresh()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
-        .onChange(of: model.keychainAccessReady) { _, ready in macAccess.recordKeychain(ready: ready) }
-        .onChange(of: model.isReconnectingSavedCredentials) { _, checking in
-            if !checking { macAccess.keychainRequestEnded() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
-            model.keychainAccessNeedsAttention()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if !model.isReconnectingSavedCredentials { Task { await model.checkSavedCredentialAccess() } }
-        }
-        .sheet(isPresented: $showsCredentialDisclosure) {
-            CredentialAccessDisclosureView(
-                purpose: "Use saved credentials across the Woven Matter features you enable, including website sessions and passwords.",
-                onEnable: {
-                    showsCredentialDisclosure = false
-                    Task { await model.reconnectSavedCredentials() }
-                },
-                onCancel: {
-                    showsCredentialDisclosure = false
-                    macAccess.keychainRequestEnded()
-                }
-            )
-        }
-    }
-
-    private func isChecking(_ item: MacAccessSetupModel.Item) -> Bool {
-        item == .keychain && model.isReconnectingSavedCredentials
     }
 
     private var summaryTitle: String {
@@ -98,14 +58,12 @@ struct SettingsPermissionsView: View {
         SettingsRow(title: item.permissionTitle, detail: item.permissionDetail) {
             if access == .allowed {
                 MacPermissionStatusLabel(access: access)
-            } else if isChecking(item) {
-                Text("Checking\u{2026}").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             } else if access == .needsReopen {
                 Button("Reopen") { macAccess.reopenApp() }.buttonStyle(SettingsQuietButtonStyle())
             } else {
                 Button(macAccess.settingUp == item ? "Opening\u{2026}" : "Allow") { Task { await macAccess.setUp(item) } }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(macAccess.allowingAll || macAccess.settingUp != nil || model.isAuthorizingUsageCredential)
+                    .disabled(macAccess.allowingAll || macAccess.settingUp != nil)
             }
         }
     }
@@ -163,20 +121,17 @@ struct MacPermissionStatusLink: View {
         }
         .font(.settingsSecondary)
         .foregroundStyle(WovenPalette.mutedForeground)
-        .task { macAccess.refresh(keychainReady: nil) }
+        .task { macAccess.refresh() }
     }
 }
 
 extension MacAccessStatus.Item {
     /// The name System Settings uses, so people can find it there.
-    var permissionTitle: String {
-        self == .keychain ? "Keychain" : displayName
-    }
+    var permissionTitle: String { displayName }
 
     /// What the permission does, in one line.
     var permissionDetail: String {
         switch self {
-        case .keychain: "Stores your credentials, API keys, and website passwords in your Mac's Keychain."
         case .microphone: "Uses this Mac's microphone and its built-in dictation model for dictation."
         case .automation: "Lets agents control Finder, System Events, and other apps on this Mac."
         case .fullDiskAccess: "Lets agents open and edit files anywhere on this Mac, including Desktop, Documents, and Downloads."
@@ -186,5 +141,5 @@ extension MacAccessStatus.Item {
     }
 
     /// Items macOS asks about in a dialog; the rest are switched on in System Settings.
-    var asksInApp: Bool { [.keychain, .automation, .microphone].contains(self) }
+    var asksInApp: Bool { [.automation, .microphone].contains(self) }
 }

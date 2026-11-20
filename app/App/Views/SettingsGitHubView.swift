@@ -1,11 +1,8 @@
 import SwiftUI
-import WovenMatterClient
 
 /// Settings → GitHub: one SSH key and commit identity for git everywhere Woven works.
 struct SettingsGitHubView: View {
-    @Bindable var model: GitHubSettingsModel
-    /// The machines and their bots, as Settings → Bots knows them.
-    var bots: BotsModel
+    @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var onBack: () -> Void
     @Environment(\.wovenTheme) private var theme
@@ -28,6 +25,8 @@ struct SettingsGitHubView: View {
         var action: String { self == .replace ? "Replace" : "Remove key" }
     }
 
+    private var store: SettingsStore { model.settings }
+
     var body: some View {
         SettingsPage(
             title: "GitHub",
@@ -35,25 +34,25 @@ struct SettingsGitHubView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            if let snapshot = model.snapshot {
+            if let snapshot = store.github {
                 keySection(snapshot)
                 identitySection(snapshot)
                 if snapshot.key != nil { accessSection(snapshot) }
-                if let error = model.error { SettingsError(error) }
-            } else if let error = model.error {
+                if let error = store.githubError { SettingsError(error) }
+            } else if let error = store.githubError {
                 SettingsError(error)
             } else {
                 SettingsEmpty("Loading…")
             }
         }
-        .task { await model.load() }
+        .task { await store.loadGitHub() }
         .onDisappear { privateKey = ""; pasting = false }
         .confirmationDialog(confirmation?.title ?? "", isPresented: Binding(
             get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }
         ), titleVisibility: .visible, presenting: confirmation) { item in
             Button(item.action, role: .destructive) {
                 confirmation = nil
-                Task { await model.run(.init(action: item == .replace ? .generate : .removeKey)) }
+                Task { await store.runGitHub(item == .replace ? .generate : .removeKey) }
             }
             Button("Cancel", role: .cancel) { confirmation = nil }
         } message: { item in
@@ -63,7 +62,7 @@ struct SettingsGitHubView: View {
 
     // MARK: SSH key
 
-    private func keySection(_ snapshot: GitHubSettingsSnapshot) -> some View {
+    private func keySection(_ snapshot: GitHubSettings) -> some View {
         SettingsSection(title: "SSH key", detail: "Used to clone, pull, and push GitHub repositories.") {
             if let key = snapshot.key {
                 SettingsRow(title: key.comment ?? key.type, detail: key.fingerprint) {
@@ -85,9 +84,6 @@ struct SettingsGitHubView: View {
             } else {
                 SettingsEmpty("No SSH key yet.")
             }
-            if snapshot.waitingForAnotherMac {
-                SettingsNote("Another Mac changed this key. It arrives here the next time that Mac is online.")
-            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { generateActions(snapshot) }
                 VStack(alignment: .leading, spacing: 8) { generateActions(snapshot) }
@@ -95,7 +91,7 @@ struct SettingsGitHubView: View {
             .padding(.top, 4)
             if pasting { pasteForm }
         }
-        .disabled(model.busy)
+        .disabled(store.githubBusy)
     }
 
     @ViewBuilder private func keyActions(_ key: GitHubPublicKey) -> some View {
@@ -105,10 +101,10 @@ struct SettingsGitHubView: View {
             .buttonStyle(SettingsQuietButtonStyle())
     }
 
-    @ViewBuilder private func generateActions(_ snapshot: GitHubSettingsSnapshot) -> some View {
+    @ViewBuilder private func generateActions(_ snapshot: GitHubSettings) -> some View {
         Button {
             if snapshot.key != nil { confirmation = .replace }
-            else { Task { await model.run(.init(action: .generate)) } }
+            else { Task { await store.runGitHub(.generate) } }
         } label: {
             BotSettingsActionLabel(title: snapshot.key == nil ? "Generate a key" : "Replace with a new key", glyph: .keyRound)
         }
@@ -128,14 +124,14 @@ struct SettingsGitHubView: View {
             HStack(spacing: 8) {
                 Button("Save private key") {
                     Task {
-                        if await model.run(.init(action: .importKey, privateKey: privateKey)) {
+                        if await store.runGitHub(.importKey(privateKey: privateKey)) {
                             privateKey = ""; pasting = false
                         }
                     }
                 }
                 .buttonStyle(WovenPrimaryButtonStyle())
                 .disabled(privateKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Cancel") { privateKey = ""; pasting = false; model.error = nil }
+                Button("Cancel") { privateKey = ""; pasting = false; store.githubError = nil }
                     .buttonStyle(SettingsQuietButtonStyle())
             }
         }
@@ -144,7 +140,7 @@ struct SettingsGitHubView: View {
 
     // MARK: Identity
 
-    private func identitySection(_ snapshot: GitHubSettingsSnapshot) -> some View {
+    private func identitySection(_ snapshot: GitHubSettings) -> some View {
         let currentName = name ?? snapshot.identity.name
         let currentEmail = email ?? snapshot.identity.email
         let trimmed = { (value: String) in value.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -165,13 +161,13 @@ struct SettingsGitHubView: View {
                 }
                 Button("Save identity") {
                     Task {
-                        if await model.run(.init(action: .saveIdentity, identity: .init(name: currentName, email: currentEmail))) {
+                        if await store.runGitHub(.saveIdentity(GitHubGitIdentity(name: currentName, email: currentEmail))) {
                             name = nil; email = nil
                         }
                     }
                 }
                 .buttonStyle(WovenPrimaryButtonStyle())
-                .disabled(!changed || model.busy)
+                .disabled(!changed || store.githubBusy)
             }
             .padding(.top, 4)
         }
@@ -179,73 +175,55 @@ struct SettingsGitHubView: View {
 
     // MARK: Where the key goes
 
-    private func accessSection(_ snapshot: GitHubSettingsSnapshot) -> some View {
-        let places = GitHubPlace.list(bots, thisDeviceID: snapshot.thisDeviceID)
-        let listed = places.flatMap { [$0.id] + $0.bots.map(\.id) }.filter { !$0.hasPrefix("linux:") && !$0.hasPrefix("member:") }
+    private func accessSection(_ snapshot: GitHubSettings) -> some View {
+        let places = GitHubPlace.list(model.machines.machines, bots: model.bots)
+        let listed = places.flatMap { [$0.id] + $0.bots.map(\.id) }
         return SettingsSection(title: "Where the key goes",
                                detail: "Agents and bots use the key only where it's on. Your name and email apply everywhere.") {
             SettingsToggleRow(title: "New places get the key", detail: "Macs, workspaces, and bots you add later.",
                               isOn: Binding(get: { snapshot.access.newPlaces }, set: { value in
-                                  Task { await model.run(.init(action: .setNewPlaces, allowed: value, listed: listed)) }
+                                  Task { await store.runGitHub(.setNewPlaces(value, listed: listed)) }
                               }))
             ForEach(places) { place in
                 let machineOn = snapshot.access.allows(place.id)
                 GitHubPlaceRow(glyph: place.glyph, title: place.name, detail: place.detail,
                                isOn: Binding(get: { machineOn }, set: { value in
-                                   Task { await model.run(.init(action: .setPlace, place: place.id, allowed: value)) }
+                                   Task { await store.runGitHub(.setPlace(place.id, allowed: value)) }
                                }))
-                    .disabled(!place.canChoose)
                 ForEach(place.bots) { bot in
                     GitHubPlaceRow(glyph: .bot, title: bot.name, detail: "Bot on " + place.name,
                                    isOn: Binding(get: { machineOn && snapshot.access.allows(bot.id) }, set: { value in
-                                       Task { await model.run(.init(action: .setPlace, place: bot.id, allowed: value)) }
+                                       Task { await store.runGitHub(.setPlace(bot.id, allowed: value)) }
                                    }))
-                        .disabled(!machineOn || !place.canChoose)
+                        .disabled(!machineOn)
                         .padding(.leading, 26)
                 }
             }
             SettingsNote("Turning a place off stops it at its next git command; a place that's offline stops when it's next online.")
         }
-        .disabled(model.busy)
+        .disabled(store.githubBusy)
     }
 }
 
-/// A Mac or Linux machine on the GitHub page, with its bots nested under it.
+/// A Mac or Linux machine on the GitHub page, with the bots nested under their home machine.
 private struct GitHubPlace: Identifiable {
     struct Bot: Identifiable { let id: String; let name: String }
     let id: String
     let name: String
     let detail: String
     let glyph: LucideGlyph
-    let isThisMac: Bool
-    /// An offline machine never reached yet has no device ID to choose by.
-    let canChoose: Bool
     let bots: [Bot]
 
-    @MainActor static func list(_ model: BotsModel, thisDeviceID: String?) -> [GitHubPlace] {
-        let order: [BotMachine.Kind: Int] = [.thisMac: 0, .mac: 1, .linux: 2]
-        // Before Bots has answered, This Mac is still listed.
-        let machines = model.machines.contains { $0.kind == .thisMac } || thisDeviceID == nil ? model.machines
-            : [BotMachine(id: thisDeviceID ?? "", name: "This Mac", kind: .thisMac, state: .off)] + model.machines
-        return machines
-            .sorted { (order[$0.kind] ?? 3, $0.displayName.lowercased()) < (order[$1.kind] ?? 3, $1.displayName.lowercased()) }
-            .map { machine in
-                let isThisMac = machine.kind == .thisMac
-                let id = isThisMac ? (thisDeviceID ?? machine.id) : machine.id
-                let canChoose = !id.hasPrefix("linux:") && !id.hasPrefix("member:")
-                let detail: String
-                switch machine.kind {
-                case .thisMac: detail = "Mac you're using"
-                case .mac: detail = canChoose ? "Mac" : "Mac · connect it once to choose"
-                case .linux: detail = canChoose ? "Linux workspace" : "Linux workspace · connect it once to choose"
-                }
-                let bots = (model.session(for: machine.id)?.bots ?? [])
-                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    @MainActor static func list(_ machines: [Machine], bots: BotsStore) -> [GitHubPlace] {
+        machines.map { machine in
+            let detail = machine.isThisMachine ? "Mac you're using" : machine.platform == .mac ? "Mac" : "Linux workspace"
+            let botsHere = machine.id == bots.homeMachineID
+                ? bots.bots.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                     .map { Bot(id: $0.id, name: $0.name) }
-                return GitHubPlace(id: id, name: machine.displayName, detail: detail,
-                                   glyph: machine.kind == .linux ? .terminal : .monitor,
-                                   isThisMac: isThisMac, canChoose: canChoose, bots: bots)
-            }
+                : []
+            return GitHubPlace(id: machine.id, name: machine.name, detail: detail,
+                               glyph: machine.platform == .linux ? .terminal : .monitor, bots: botsHere)
+        }
     }
 }
 

@@ -1,8 +1,7 @@
 import SwiftUI
-import WovenMatterCore
 
 struct WorkspaceToolDefaultsCard: View {
-    @Bindable var tools: WorkspaceAgentToolsModel
+    @Bindable var tools: AgentToolsStore
     var onOpenPermissions: () -> Void = MacAccessSetupModel.openSettings
 
     private func setting<Value>(_ key: WritableKeyPath<WorkspaceToolSettings, Value>) -> Binding<Value> {
@@ -59,7 +58,7 @@ struct WorkspaceToolDefaultsCard: View {
 }
 
 struct WorkspaceSessionToolsMenu: View {
-    @Bindable var tools: WorkspaceAgentToolsModel
+    @Bindable var tools: AgentToolsStore
     let sessionID: String
     @State private var showsExecutorApps = false
     @State private var confirmsTimerPause = false

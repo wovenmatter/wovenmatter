@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterCore
 
 enum ConversationMenuAction {
     case setPinned(Bool)
@@ -228,8 +227,8 @@ struct WorkspaceTrashSheet: View {
         let generation = reloadGeneration
         loading = true
         do {
-            async let conversationsRequest = model.trashedConversations()
-            async let notesRequest = model.trashedNotes()
+            async let conversationsRequest = model.workspace.trashedConversations()
+            async let notesRequest = model.workspace.trashedNotes()
             let snapshot = try await (conversationsRequest, notesRequest)
             guard generation == reloadGeneration, !Task.isCancelled else { return }
             conversations = snapshot.0
@@ -248,7 +247,7 @@ struct WorkspaceTrashSheet: View {
         Task {
             defer { restoringConversationIDs.remove(conversation.id) }
             do {
-                try await model.mutateConversation(id: conversation.id, mutation: .restore)
+                try await model.workspace.mutateConversation(id: conversation.id, mutation: .restore)
                 await reload()
             } catch { self.error = error.localizedDescription }
         }
@@ -260,7 +259,7 @@ struct WorkspaceTrashSheet: View {
         Task {
             defer { restoringNoteIDs.remove(note.id) }
             do {
-                try await model.mutateNote(id: note.id, mutation: .restore)
+                try await model.workspace.mutateNote(id: note.id, mutation: .restore)
                 await reload()
             } catch { self.error = error.localizedDescription }
         }
@@ -310,9 +309,7 @@ enum StagedExport {
         defer { if accessing { destination.stopAccessingSecurityScopedResource() } }
         // Atomic replacement preserves any existing destination on failure. Never
         // delete the user's destination during error or cancellation cleanup.
-        try await WorkspaceExportFileIO.perform {
-            try Data(contentsOf: stagedURL, options: .mappedIfSafe).write(to: destination, options: .atomic)
-        }
+        try Data(contentsOf: stagedURL, options: .mappedIfSafe).write(to: destination, options: .atomic)
         return true
     }
 }

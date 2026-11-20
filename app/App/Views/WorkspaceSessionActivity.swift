@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 extension EnvironmentValues {
     @Entry var workspaceApplicationModel: ApplicationModel? = nil
@@ -11,11 +10,11 @@ struct WorkspaceSessionIndicators: View {
     let sessionID: String
     var body: some View {
         HStack(spacing: 5) {
-            if model?.agentTools?.relationships[sessionID]?.coordinatorID != nil {
+            if model?.agentTools.relationships[sessionID]?.coordinatorID != nil {
                 Circle().fill(WovenPalette.foreground).frame(width: 5, height: 5)
                     .help("Actively coordinated by another session").accessibilityLabel("Actively coordinated")
             }
-            if model?.agentTools?.timers.contains(where: { $0.sessionID == sessionID && !$0.isPaused }) == true {
+            if model?.agentTools.timers.contains(where: { $0.sessionID == sessionID && !$0.isPaused }) == true {
                 Image(systemName: "timer").font(.system(size: 10)).foregroundStyle(WovenPalette.foreground)
                     .help("Active timer").accessibilityLabel("Active timer")
             }
@@ -42,7 +41,7 @@ struct WorkspaceSessionProvenance: View {
         }
     }
     private func link(_ prefix: String, sessionID: String) -> some View {
-        let title = model?.workspaceOverview?.conversations.first { $0.id == sessionID }?.title
+        let title = model?.workspace.workspaceOverview?.conversations.first { $0.id == sessionID }?.title
         return Button { open(sessionID) } label: {
             HStack(alignment: .top, spacing: 7) {
                 Image(systemName: "arrow.up.right").font(.system(size: 10))
@@ -58,7 +57,7 @@ struct WorkspaceIncomingAgentHeader: View {
     let message: WorkspaceMessageRecord
     var body: some View {
         if let source = message.senderSessionID {
-            let receipt = model?.agentTools?.receipts[message.conversationID]?.first { $0.messageID == message.id }
+            let receipt = model?.agentTools.receipts[message.conversationID]?.first { $0.messageID == message.id }
             let kind = message.senderKind ?? receipt?.kind
             if kind == .goal {
                 HStack(spacing: 5) { LucideIcon(glyph: .compass, size: 12); Text("Goal continuation") }
@@ -92,35 +91,29 @@ struct WorkspaceOutgoingReceipt: View {
     @State private var expanded = false
 
     private var destination: WorkspaceConversationRecord? {
-        model?.workspaceOverview?.conversations.first { $0.id == receipt.targetID }
+        model?.workspace.workspaceOverview?.conversations.first { $0.id == receipt.targetID }
     }
     private var modelName: String? {
-        model?.openCodeModel(for: receipt.targetID)?.metadata(receipt.targetID)?.model
-            ?? model?.localACPSessionMetadata[receipt.targetID]?.model ?? receipt.targetModel
+        model?.sessions.conversationState(for: receipt.targetID)?.settings?.model ?? receipt.targetModel
     }
     private var sessionStatus: String {
-        guard let model else { return "Unavailable" }
-        let snapshot = model.openCodeModel(for: receipt.targetID)?.snapshots[receipt.targetID]
-        if model.pendingLocalACPPermissions.contains(where: { $0.conversationID == receipt.targetID })
-            || model.pendingLocalACPInteractions.contains(where: { $0.conversationID == receipt.targetID })
-            || snapshot.map({ !$0.permissions.isEmpty || !$0.forms.isEmpty }) == true { return "Blocked" }
-        if model.runningToolSessionIDs.contains(receipt.targetID) {
-            return destination?.programStatus?.status?.state == .blocked ? "Blocked" : "Working"
+        guard let destination else { return "Unavailable" }
+        if model?.sessions.conversationState(for: receipt.targetID)?.error != nil { return "Error" }
+        switch destination.activity {
+        case .blocked: return "Blocked"
+        case .working: return "Working"
+        case .failed: return "Error"
+        case .idle: return "Idle"
         }
-        if model.conversationState(for: receipt.targetID)?.error != nil { return "Error" }
-        if let status = destination?.programStatus?.status { return status.label }
-        return destination == nil ? "Unavailable" : "Idle"
     }
 
     private var deliveryStatus: String {
         switch receipt.status {
-        case "accepted": "Sent"
-        case "sending": "Sending"
-        case "queued": "Queued"
-        case "cancelled": "Not sent"
-        case "failed": "Failed"
-        case "uncertain": "Delivery unconfirmed"
-        default: receipt.status.capitalized
+        case .accepted: "Sent"
+        case .sending: "Sending"
+        case .queued: "Queued"
+        case .cancelled: "Not sent"
+        case .failed: "Failed"
         }
     }
 
@@ -146,7 +139,7 @@ struct WorkspaceOutgoingReceipt: View {
             }.font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
             if receipt.kind == .created, let purpose = receipt.purpose, !purpose.isEmpty {
                 Text(purpose).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                if model?.agentTools?.relationships[receipt.targetID]?.coordinatorID == receipt.sourceID {
+                if model?.agentTools.relationships[receipt.targetID]?.coordinatorID == receipt.sourceID {
                     Text("Coordinated from this session").font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                 }
             }
@@ -179,11 +172,10 @@ struct WorkspaceIncomingCommandReceipt: View {
 
     private var outcome: String {
         switch receipt.status {
-        case "accepted": "Command sent"
-        case "uncertain": "Command delivery unconfirmed"
-        case "failed", "cancelled": "Command not sent"
-        case "queued": "Command queued"
-        default: "Sending command"
+        case .accepted: "Command sent"
+        case .failed, .cancelled: "Command not sent"
+        case .queued: "Command queued"
+        case .sending: "Sending command"
         }
     }
 

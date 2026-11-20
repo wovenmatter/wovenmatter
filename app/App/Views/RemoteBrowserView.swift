@@ -1,30 +1,21 @@
 import SwiftUI
-import WovenMatterClient
 
 struct RemoteBrowserView: View {
-    let workspaces: RemoteWorkspacesModel
-    let configuration: RemoteWorkspaceConfiguration
+    @Bindable var model: ApplicationModel
+    let machineID: String
     @State private var viewer: RemoteBrowserViewerModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(workspaces: RemoteWorkspacesModel, configuration: RemoteWorkspaceConfiguration) {
-        self.workspaces = workspaces; self.configuration = configuration
-        _viewer = State(initialValue: RemoteBrowserViewerModel(
-            loadTabs: { try await workspaces.browserTabs(for: configuration) },
-            loadFrame: { try await workspaces.browserFrame(tabID: $0, previousFrameID: $1, for: configuration) },
-            sendBatch: { try await workspaces.browserActions($0, for: configuration) },
-            sendAction: { try await workspaces.browserAction($0, for: configuration) },
-            loadProfileTabs: { try await workspaces.browserTabs(for: configuration, profile: $0) },
-            loadProfileFrame: { try await workspaces.browserFrame(tabID: $0, previousFrameID: $1, for: configuration, profile: $2) },
-            sendProfileBatch: { try await workspaces.browserActions($0, for: configuration, profile: $1) },
-            sendProfileAction: { try await workspaces.browserAction($0, for: configuration, profile: $1) }))
+    init(model: ApplicationModel, machineID: String) {
+        self.model = model; self.machineID = machineID
+        _viewer = State(initialValue: RemoteBrowserViewerModel(documents: model.documents, machineID: machineID))
     }
 
     var body: some View {
-        RemoteBrowserContent(viewer: viewer, workspaceName: configuration.name, onClose: { dismiss() })
-            .task(id: BrowserViewerLifecycle(identity: workspaces.browserIdentity(for: configuration), active: scenePhase == .active, reduceMotion: reduceMotion)) {
+        RemoteBrowserContent(viewer: viewer, workspaceName: model.machines.machine(id: machineID)?.name ?? "", onClose: { dismiss() })
+            .task(id: BrowserViewerLifecycle(machineID: machineID, active: scenePhase == .active, reduceMotion: reduceMotion)) {
                 viewer.clear()
                 let catalogs = Task { @MainActor in
                     while !Task.isCancelled {
@@ -142,7 +133,7 @@ struct RemoteBrowserContent: View {
 }
 
 private struct BrowserViewerLifecycle: Equatable {
-    let identity: RemoteWorkspaceRequestIdentity?
+    let machineID: String
     let active: Bool
     let reduceMotion: Bool
 }

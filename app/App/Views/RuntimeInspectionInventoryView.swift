@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 /// Show services people use first. Technical processes stay in flat disclosures.
 struct RuntimeInspectionInventoryView: View {
@@ -32,14 +31,6 @@ struct RuntimeInspectionInventoryView: View {
                             }
                         }
                     }
-                }
-            }
-            if !inventory.connections.isEmpty {
-                section("Device connection") {
-                    let transport = inventory.connections.first { $0.kind == "connectionProcess" }
-                    row(.init(id: "device-connection", kind: "connection", title: "Paired devices",
-                              state: transport?.state ?? "unknown", detail: "Tailscale sharing for this server"))
-                    processDetails(inventory.connections, title: "Process details")
                 }
             }
             if inventory.servers.isEmpty, !inventory.otherProcesses.isEmpty {
@@ -78,7 +69,7 @@ struct RuntimeInspectionInventoryView: View {
 
     private func row(_ item: RuntimeInspection.Item) -> some View {
         HStack(alignment: .top, spacing: 9) {
-            Image(systemName: icon(item.kind)).font(.settingsText)
+            Image(systemName: item.kind.systemImage).font(.settingsText)
                 .foregroundStyle(WovenPalette.mutedForeground).frame(width: 16, height: 18).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -88,15 +79,13 @@ struct RuntimeInspectionInventoryView: View {
                     Text(connected ? item.state.capitalized : "Last: \(item.state)")
                         .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                 }
-                if item.kind != "connection" {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) {
-                            identity(item)
-                            resources(item)
-                        }
-                        VStack(alignment: .leading, spacing: 3) { identity(item); resources(item) }
-                    }.font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground).monospacedDigit()
-                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        identity(item)
+                        resources(item)
+                    }
+                    VStack(alignment: .leading, spacing: 3) { identity(item); resources(item) }
+                }.font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground).monospacedDigit()
                 if let detail = item.detail, !detail.isEmpty {
                     Text(detail).font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground).lineLimit(3).textSelection(.enabled)
                 }
@@ -106,7 +95,7 @@ struct RuntimeInspectionInventoryView: View {
 
     private func identity(_ item: RuntimeInspection.Item) -> some View {
         HStack(spacing: 10) {
-            Text(item.kind == "connectionSupervisor" ? "Helper" : item.kind == "connectionProcess" ? "Transport" : item.kind.capitalized)
+            Text(item.kind.displayName)
             if let pid = item.processID { Text("PID \(pid)") }
         }
     }
@@ -114,17 +103,6 @@ struct RuntimeInspectionInventoryView: View {
         HStack(spacing: 10) {
             if let memory = item.residentBytes { Text(ByteCountFormatter.string(fromByteCount: memory, countStyle: .memory)) }
             if let cpu = item.cpuPercent { Text(String(format: "%.1f%% CPU", cpu)) }
-        }
-    }
-    private func icon(_ kind: String) -> String {
-        switch kind {
-        case "service": "server.rack"
-        case "connection", "connectionSupervisor", "connectionProcess": "network"
-        case "conversation": "bubble.left"
-        case "subagent": "person.2"
-        case "tool": "wrench"
-        case "scheduler": "clock"
-        default: "terminal"
         }
     }
 }

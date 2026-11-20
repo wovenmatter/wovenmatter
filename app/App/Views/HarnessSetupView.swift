@@ -1,18 +1,27 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 struct HarnessSetupView: View {
-    @State private var setup: HarnessSetupModel
+    @Bindable var model: ApplicationModel
+    @State private var selected: Set<AgentRuntimeKind> = []
     @State private var step = 0
     @State private var connectionFocus: ConnectionSettingsFocus?
     @Environment(\.dismissWindow) private var dismissWindow
     @AppStorage(WovenTheme.storageKey) private var themeRawValue = WovenTheme.green.rawValue
 
-    init(model: ApplicationModel) { _setup = State(initialValue: HarnessSetupModel(application: model)) }
-    private var model: ApplicationModel { setup.application }
     private var theme: WovenTheme { WovenTheme(rawValue: themeRawValue) ?? .green }
+    private var machines: MachinesStore { model.machines }
+    /// Setup covers this Mac; its server installs and signs in.
+    private var machineID: String { machines.thisMachine?.id ?? model.thisMachineID ?? "" }
+    private var checking: Bool { machines.isCheckingHarnesses(on: machineID) }
+    private var activeInstall: AgentRuntimeKind? {
+        HarnessSetupPresentation.runtimes.first { machines.operation($0, on: machineID) == .install }
+    }
+    private var busy: Bool { checking || activeInstall != nil }
+    private var maintenanceBusy: Bool {
+        machines.isMaintainingHarnesses(on: machineID) || machines.pendingHarnessInstall?.machineID == machineID
+    }
+    private var hasActiveChats: Bool { machines.hasActiveChats(on: machineID) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,8 +30,8 @@ struct HarnessSetupView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let connectionFocus {
                         SettingsConnectionsView(model: model, focus: connectionFocus, onConnected: { provider in
-                            model.pendingDefaultAgentModelProvider = provider
-                            model.pendingDefaultAgentSettingsScope = "global"
+                            model.navigation.pendingDefaultAgentModelProvider = provider
+                            model.navigation.pendingDefaultAgentSettingsScope = "global"
                             finish()
                         })
                     } else if step == 0 {
@@ -43,8 +52,11 @@ struct HarnessSetupView: View {
         .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .toggleStyle(CompactSwitchToggleStyle())
-        .task { step = 0; connectionFocus = nil; setup.open() }
-        .onDisappear { setup.close() }
+        .task { step = 0; connectionFocus = nil; refresh() }
+        .onDisappear { close() }
+        .onChange(of: machines.harnesses(on: machineID).filter(\.isInstalled).map(\.runtimeKind)) { _, installed in
+            selected.subtract(installed)
+        }
     }
 
     private var header: some View {
@@ -70,21 +82,20 @@ struct HarnessSetupView: View {
             HStack {
                 Text("On this Mac").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                if setup.checking { ProgressView().controlSize(.small) }
-                Button(setup.checking ? "Checking…" : "Check again") { setup.refresh() }
+                if checking { ProgressView().controlSize(.small) }
+                Button(checking ? "Checking…" : "Check again") { refresh() }
                     .buttonStyle(SettingsQuietButtonStyle(minimumHeight: 28))
-                    .disabled(setup.busy || setup.maintenanceBusy)
+                    .disabled(busy || maintenanceBusy)
             }
             VStack(spacing: 0) {
-                ForEach(Array(HarnessOnboarding.runtimes.enumerated()), id: \.element) { index, kind in
+                ForEach(Array(HarnessSetupPresentation.runtimes.enumerated()), id: \.element) { index, kind in
                     if index > 0 { Rectangle().fill(theme.palette.border).frame(height: 1).padding(.horizontal, 16) }
                     harnessRow(kind)
                 }
             }
             .background(theme.palette.themeWhisper)
             .clipShape(DesktopShapes.card)
-            if let notice = setup.notice { SettingsNote(notice) }
-            if model.localRuntimeMaintenanceHasActiveConversation {
+            if hasActiveChats {
                 SettingsNote("Finish active local chats before installing or updating harnesses.")
             }
             SettingsNote("Installed harnesses appear in your sidebar automatically. Sign in opens the harness’s own flow in Terminal; return here when you’re done.")
@@ -92,65 +103,64 @@ struct HarnessSetupView: View {
     }
 
     private func harnessRow(_ kind: AgentRuntimeKind) -> some View {
-        let inventory = model.runtimeInventories[kind]
+        let inventory = machines.harness(kind, on: machineID)
         let installed = inventory?.isInstalled == true
-        let busy = model.runtimeMaintenanceBusy(kind) || setup.activeInstall == kind
+        let operation = machines.operation(kind, on: machineID)
+        let busy = operation != nil
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 HarnessLogoIcon(logo: HarnessLogo(runtimeKind: kind), size: 24)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(kind.displayName).font(.system(size: 13, weight: .medium))
-                    Text(busy ? (model.updatingRuntimeKinds.contains(kind) ? "Updating…" : "Installing…") : installationLabel(inventory))
+                    Text(busy ? (operation == .update ? "Updating…" : "Installing…") : installationLabel(inventory))
                         .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                 }
                 Spacer(minLength: 8)
                 if busy {
                     ProgressView().controlSize(.small).frame(width: 28)
                 } else if installed {
-                    if inventory?.updateAvailable == true || model.failedRuntimeUpdateKinds.contains(kind) {
-                        SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: kind)
+                    if inventory?.updateAvailable == true || (inventory?.failureCount ?? 0) > 0 {
+                        SettingsHarnessUpdateButton(model: machines, runtimeKind: kind, machineID: machineID)
                     }
                     SettingsHarnessSignInControl(model: model, runtimeKind: kind, compact: true)
                         .frame(minWidth: 72, alignment: .trailing)
                 } else {
                     Toggle("Install", isOn: Binding(
-                        get: { setup.selected.contains(kind) },
-                        set: { if $0 { setup.selected.insert(kind) } else { setup.selected.remove(kind) } }
+                        get: { selected.contains(kind) },
+                        set: { if $0 { selected.insert(kind) } else { selected.remove(kind) } }
                     ))
                     .font(.system(size: 12.5))
                     .accessibilityLabel("Install \(kind.displayName)")
-                    .disabled(setup.activeInstall != nil || inventory == nil)
+                    .disabled(activeInstall != nil || inventory == nil)
                 }
             }
             .frame(minHeight: 44)
             SettingsHarnessSignInPanel(model: model, runtimeKind: kind)
-            if let message = model.harnessSignIn.messages[kind] { SettingsNote(message) }
-            if let error = setup.errors[kind] ?? model.runtimeFailureDetails[kind] { SettingsError(error) }
-            if setup.activeInstall == kind, let pending = model.pendingRuntimeInstall, pending.runtimeKind == kind {
+            if let message = machines.signInMessage(kind, on: machineID) { SettingsNote(message) }
+            if let error = machines.harnessError(kind, on: machineID) { SettingsError(error) }
+            if let pending = machines.pendingHarnessInstall, pending.machineID == machineID, pending.runtimeKind == kind {
                 VStack(alignment: .leading, spacing: 8) {
-                    SettingsNote(OpenCodeServiceLauncher.replacementNotice(replacing: pending.replacingVersion))
+                    SettingsNote(pending.notice(on: "this Mac"))
                     HStack {
-                        Button("Skip this harness") { setup.resolveInstaller(install: false) }
+                        Button("Skip this harness") { machines.cancelPendingHarnessInstall(); selected.remove(kind) }
                             .buttonStyle(SettingsQuietButtonStyle())
                         Spacer()
-                        Button("Install OpenCode 2") { setup.resolveInstaller(install: true) }
+                        Button("Install OpenCode 2") { machines.confirmPendingHarnessInstall() }
                             .buttonStyle(WovenPrimaryButtonStyle())
-                    }.disabled(setup.resolvingInstaller)
+                    }
                 }
             }
         }.padding(.horizontal, 16).padding(.vertical, 12)
     }
 
-    private func installationLabel(_ inventory: RuntimeInventory?) -> String {
+    private func installationLabel(_ inventory: HarnessInstallation?) -> String {
         guard let inventory else { return "Checking installation…" }
         if inventory.isInstalled {
-            let version = inventory.components.first(where: { $0.name.hasSuffix(" CLI") })?.installed
-                ?? inventory.components.first?.installed
             let suffix = inventory.updateAvailable ? " · Update available" : ""
-            return (version.map { "Installed · \($0)" } ?? "Installed") + suffix
+            return (inventory.installedVersion.map { "Installed · \($0)" } ?? "Installed") + suffix
         }
-        return inventory.components.contains(where: \.present) ? "Finish installation" : "Not installed"
+        return inventory.components.contains(where: \.isInstalled) ? "Finish installation" : "Not installed"
     }
 
     private var piDurable: some View {
@@ -199,12 +209,12 @@ struct HarnessSetupView: View {
                 .buttonStyle(SettingsQuietButtonStyle()).keyboardShortcut(.cancelAction)
             Spacer()
             if step == 0 {
-                if !setup.selected.isEmpty {
-                    Button("Install selected (\(setup.selected.count))") { setup.installSelected() }
+                if !selected.isEmpty {
+                    Button("Install selected (\(selected.count))") { installSelected() }
                         .buttonStyle(WovenPrimaryButtonStyle())
-                        .disabled(setup.busy || setup.maintenanceBusy || model.localRuntimeMaintenanceHasActiveConversation)
+                        .disabled(busy || maintenanceBusy || hasActiveChats)
                     Button("Continue") { step = 1 }.buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(setup.activeInstall != nil)
+                        .disabled(activeInstall != nil)
                 } else {
                     Button("Continue") { step = 1 }.buttonStyle(WovenPrimaryButtonStyle())
                         .keyboardShortcut(.defaultAction)
@@ -220,5 +230,24 @@ struct HarnessSetupView: View {
         }.padding(.horizontal, 24).padding(.vertical, 16)
     }
 
-    private func finish() { setup.close(); dismissWindow(id: HarnessSetupPresentation.windowID) }
+    private func refresh() {
+        guard !busy, !maintenanceBusy else { return }
+        machines.refreshHarnesses(on: machineID)
+        Task { for kind in HarnessSetupPresentation.runtimes { await machines.refreshSignIn(kind, on: machineID) } }
+    }
+
+    /// This Mac's server installs them in order; installed ones leave the selection.
+    private func installSelected() {
+        let kinds = HarnessSetupPresentation.runtimes.filter { selected.contains($0) }
+        guard !kinds.isEmpty, !busy, !maintenanceBusy, !hasActiveChats else { return }
+        machines.installHarnesses(kinds, on: machineID)
+    }
+
+    /// An install already running finishes; a pending OpenCode question does not wait.
+    private func close() {
+        if machines.pendingHarnessInstall?.machineID == machineID { machines.cancelPendingHarnessInstall() }
+        HarnessSetupPresentation.shared.dismiss()
+    }
+
+    private func finish() { close(); dismissWindow(id: HarnessSetupPresentation.windowID) }
 }

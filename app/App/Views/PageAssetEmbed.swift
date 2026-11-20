@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 struct PageAssetEmbed: View {
     @Bindable var model: ApplicationModel
@@ -12,10 +11,10 @@ struct PageAssetEmbed: View {
     var onFocus: ((NoteEditorController) -> Void)?
     var onNonTextFocus: (() -> Void)?
     @State private var documentCache = NoteDocumentCache()
-    private var asset: WorkspaceNoteRecord? { model.workspaceOverview?.notes.first { $0.id == assetID } }
+    private var asset: WorkspaceNoteRecord? { model.workspace.workspaceOverview?.notes.first { $0.id == assetID } }
     private var sourceDocument: NoteDocument? {
         guard let asset else { return nil }
-        let source = model.noteDraft(for: asset).content
+        let source = model.documents.content(of: asset)
         guard documentCache.isEditable(noteID: asset.id, source: source) else { return nil }
         return documentCache.value(noteID: asset.id, source: source)
     }

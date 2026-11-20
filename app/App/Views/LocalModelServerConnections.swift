@@ -1,10 +1,12 @@
 import SwiftUI
-import WovenMatterCore
-import WovenMatterClient
 
 struct LocalModelServerConnections: View {
-    @Bindable var agent: DefaultAgentSettingsModel
-    private var servers: [LocalModelServer] { agent.localServers }
+    @Bindable var agent: AgentSettingsStore
+    /// The machine whose servers these are.
+    let machineID: String?
+    /// At most this many servers per machine.
+    static let maximumServers = 12
+    private var servers: [LocalModelServer] { agent.connections(on: machineID).localServers }
     @State private var error: String?
     @State private var adding = false
     var body: some View {
@@ -12,12 +14,12 @@ struct LocalModelServerConnections: View {
             SettingsNote("OpenAI Responses-compatible servers on this Mac or your Tailscale network.")
             ForEach(servers) { server in
                 SettingsSummaryRow(server.name, value: server.models.count == 1 ? "1 model" : "\(server.models.count) models") {
-                    LocalModelServerConnectionRow(agent: agent, server: server, changed: reload)
+                    LocalModelServerConnectionRow(agent: agent, machineID: machineID, server: server, changed: reload)
                 }
             }
             if adding {
-                LocalModelServerConnectionRow(agent: agent, server: nil) { adding = false; reload() }
-            } else if servers.count < LocalModelServerStore.maximumServers {
+                LocalModelServerConnectionRow(agent: agent, machineID: machineID, server: nil) { adding = false; reload() }
+            } else if servers.count < Self.maximumServers {
                 Button("Add model server") { adding = true }.buttonStyle(SettingsQuietButtonStyle())
             }
             if let error { SettingsError(error) }
@@ -25,12 +27,13 @@ struct LocalModelServerConnections: View {
         .task { reload() }
     }
     private func reload() {
-        Task { do { try await agent.reloadLocalServers(); error = nil } catch { self.error = error.localizedDescription } }
+        Task { do { try await agent.reloadLocalServers(on: machineID); error = nil } catch { self.error = error.localizedDescription } }
     }
 }
 
 private struct LocalModelServerConnectionRow: View {
-    @Bindable var agent: DefaultAgentSettingsModel
+    @Bindable var agent: AgentSettingsStore
+    let machineID: String?
     let server: LocalModelServer?
     let changed: () -> Void
     @State private var url = ""
@@ -59,7 +62,7 @@ private struct LocalModelServerConnectionRow: View {
                         Task {
                             busy = true
                             defer { busy = false }
-                            do { try await agent.removeLocalServer(server); changed() }
+                            do { try await agent.removeLocalServer(server, on: machineID); changed() }
                             catch { self.error = error.localizedDescription }
                         }
                     }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
@@ -76,7 +79,7 @@ private struct LocalModelServerConnectionRow: View {
         Task {
             defer { busy = false }
             do {
-                try await agent.connectLocalServer(url: enteredURL, key: enteredKey, replacing: server)
+                try await agent.connectLocalServer(url: enteredURL, key: enteredKey, replacing: server, on: machineID)
                 key = ""; verified = true; changed()
             } catch { self.error = error.localizedDescription }
         }

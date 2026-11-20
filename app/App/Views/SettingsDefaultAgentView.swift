@@ -1,15 +1,14 @@
 import SwiftUI
-import WovenMatterCore
-import WovenMatterClient
 
 struct SettingsDefaultAgentView: View {
     @Bindable var model: ApplicationModel
+    /// "global" or a machine ID.
     var initialScope = "global"
     var reservesRailControlSpace = false
     var backTitle = "Settings"
     let onBack: () -> Void
     var onOpenAccounts: (String) -> Void = { _ in }
-    private var agent: DefaultAgentSettingsModel { model.connections }
+    private var agent: AgentSettingsStore { model.connections }
     @State private var settingsScope = "global"
     @State private var syncError: String?
     @State private var browsingAllModels = false
@@ -17,14 +16,15 @@ struct SettingsDefaultAgentView: View {
     @State private var setupRequest = UUID()
     @State private var savingScope = false
 
-    private var workspaces: [RemoteWorkspaceConfiguration] { model.remoteWorkspaces.workspaces }
-    private var remote: RemoteWorkspaceConfiguration? {
-        workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
-    }
+    private var machines: [Machine] { model.machines.machines }
     private var editable: Bool { !agent.inherits }
-    /// With no remote workspace there is nothing to choose, unless this Mac keeps its own settings.
+    /// The machine whose accounts and software the page shows: this Mac for every machine.
+    private var scopeMachineID: String? { agent.scope == "global" ? model.thisMachineID : agent.scope }
+    private var connections: MachineProviderConnections { agent.connections(on: scopeMachineID) }
+    /// With one machine there is nothing to choose, unless it keeps its own settings.
     private var showsWorkspacePicker: Bool {
-        !workspaces.isEmpty || settingsScope != "global" || agent.settings.workspaces["local"] != nil
+        machines.count > 1 || settingsScope != "global"
+            || model.thisMachineID.map { agent.settings.machines[$0] != nil } == true
     }
 
     var body: some View {
@@ -32,9 +32,8 @@ struct SettingsDefaultAgentView: View {
             .task {
                 settingsScope = initialScope
                 selectScope(initialScope)
-                requestSDKStatus()
-                if let provider = model.pendingDefaultAgentModelProvider {
-                    model.pendingDefaultAgentModelProvider = nil
+                if let provider = model.navigation.pendingDefaultAgentModelProvider {
+                    model.navigation.pendingDefaultAgentModelProvider = nil
                     connected(provider)
                 }
             }
@@ -53,11 +52,11 @@ struct SettingsDefaultAgentView: View {
             SettingsSection {
                 SettingsSummaryLink(title: "Subscriptions & API Keys",
                     detail: "Sign in to the providers whose models Pi Durable uses.", value: accountsSummary,
-                    tone: agent.availableModelProviderIDs.isEmpty ? .warning : .good) {
+                    tone: connections.availableModelProviderIDs.isEmpty ? .warning : .good) {
                     onOpenAccounts(agent.scope)
                 }
             }
-            SettingsAgentModelsView(agent: agent, editable: editable,
+            SettingsAgentModelsView(agent: agent, connections: connections, editable: editable,
                 browsingAllModels: browsingAllModels, setupProvider: setupProvider, setupRequest: setupRequest,
                 setBrowsingAllModels: { showCatalog($0) },
                 selectDefault: selectDefault)
@@ -69,7 +68,7 @@ struct SettingsDefaultAgentView: View {
     }
 
     private var accountsSummary: String {
-        let count = agent.availableModelProviderIDs.count
+        let count = connections.availableModelProviderIDs.count
         return count == 0 ? "None connected" : "\(count) connected"
     }
 
@@ -98,37 +97,31 @@ struct SettingsDefaultAgentView: View {
                 }
             }
             SettingsSummaryRow("Software", value: softwareSummary) {
-                SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
-            }
-            SettingsSummaryRow("Synchronization", value: syncError == nil ? "Automatic" : "Needs attention",
-                tone: syncError == nil ? nil : .warning) {
-                SettingsRow(title: "Shared settings", detail: "Offline workspaces receive changes when they reconnect.") {
-                    Button("Retry synchronization") { synchronize() }.buttonStyle(SettingsQuietButtonStyle())
-                }
+                SettingsDefaultAgentSDKView(connections: agent, machines: machines)
             }
         }
     }
 
     private var softwareSummary: String {
-        let state = agent.sdks.state(for: agent.scope == "global" ? "local" : agent.scope)
+        guard let scopeMachineID else { return "Not checked" }
+        let state = agent.sdkState(on: scopeMachineID)
         if state.busy { return "Checking" }
         guard let sdks = state.status?.sdks else { return "Not checked" }
         return sdks.contains { $0.updateAvailable || $0.consistent == false } ? "Update available" : "Up to date"
     }
 
     private func requestSDKStatus() {
-        let target = agent.scope == "global" ? "local" : agent.scope
-        let state = agent.sdks.state(for: target)
+        guard let scopeMachineID else { return }
+        let state = agent.sdkState(on: scopeMachineID)
         guard state.status == nil, !state.busy else { return }
-        agent.sdks.request(.init(workspaceID: UUID(uuidString: target), request: .init(action: .status)),
-                           connections: agent, remoteWorkspaces: model.remoteWorkspaces)
+        agent.requestSDK(.status, on: scopeMachineID)
     }
 
     private var scopeSection: some View {
         SettingsSection {
             SettingsWorkspacePicker(title: "Applies to",
                 scope: Binding(get: { settingsScope }, set: { settingsScope = $0; selectScope($0) }),
-                workspaces: workspaces)
+                machines: machines)
             if settingsScope != "global" {
                 SettingsToggleRow(
                     title: "Use shared chat settings",
@@ -144,18 +137,15 @@ struct SettingsDefaultAgentView: View {
 
     private func setSharing(_ shared: Bool) {
         let scope = agent.scope
-        let workspace = scope == "local"
-            ? model.localACPWorkspaceLaunchConfiguration.map { "local:" + $0.rootURL.standardizedFileURL.path }
-            : "remote:" + scope
-        guard scope != "global", let workspace else { return }
+        guard scope != "global" else { return }
         savingScope = true; syncError = nil
         Task { @MainActor in
             defer { savingScope = false }
             do {
-                _ = try await model.setAgentDefaultsSharing(runtime: .defaultAgent, workspace: workspace, shared: shared)
+                _ = try await model.settings.setAgentDefaultsSharing(runtime: .defaultAgent, machineID: scope, shared: shared)
                 guard agent.scope == scope else { return }
                 agent.setInherits(shared)
-                agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
+                agent.loadCatalog(includeAllModels: browsingAllModels)
             } catch { syncError = error.localizedDescription }
         }
     }
@@ -165,19 +155,17 @@ struct SettingsDefaultAgentView: View {
         if agent.scope != settingsScope { agent.changeScope(settingsScope) }
         setupProvider = nil
         browsingAllModels = true
-        agent.loadCatalog(remote: remote, includeAllModels: true, provider: provider)
+        agent.loadCatalog(includeAllModels: true, provider: provider)
         setupProvider = provider
         setupRequest = UUID()
     }
 
     private func selectDefault(_ id: String?) {
         let targetScope = agent.scope
-        let workspace = targetScope == "global" ? nil : targetScope == "local"
-            ? model.localACPWorkspaceLaunchConfiguration.map { "local:" + $0.rootURL.standardizedFileURL.path }
-            : "remote:" + targetScope
         Task {
             do {
-                _ = try await model.saveAgentSelectionDefault(runtime: .defaultAgent, workspace: workspace,
+                _ = try await model.settings.saveAgentSelectionDefault(runtime: .defaultAgent,
+                    machineID: targetScope == "global" ? nil : targetScope,
                     field: .model, selections: SessionSelections(model: id))
                 guard agent.scope == targetScope else { return }
                 var config = agent.configuration
@@ -192,26 +180,15 @@ struct SettingsDefaultAgentView: View {
         browsingAllModels = false
         setupProvider = nil
         agent.changeScope(scope)
-        agent.loadAccounts()
-        agent.loadCatalog(remote: remote, includeAllModels: false)
+        agent.loadAccounts(on: scopeMachineID)
+        agent.loadCatalog(includeAllModels: false)
         requestSDKStatus()
     }
 
     private func showCatalog(_ includeAllModels: Bool) {
         browsingAllModels = includeAllModels
         if !includeAllModels { setupProvider = nil }
-        agent.loadCatalog(remote: remote, includeAllModels: includeAllModels)
-    }
-
-    private func synchronize() {
-        syncError = nil
-        model.refreshLocalACPRuntimesNow()
-        Task {
-            for workspace in model.remoteWorkspaces.workspaces {
-                do { try await model.remoteWorkspaces.synchronizeDefaultAgent(workspace) }
-                catch { syncError = "\(workspace.name): \(error.localizedDescription)" }
-            }
-        }
+        agent.loadCatalog(includeAllModels: includeAllModels)
     }
 }
 
@@ -225,7 +202,7 @@ private struct SettingsAgentCatalogIndex {
     @MainActor private static var latest: SettingsAgentCatalogIndex?
 
     struct Entry: Identifiable {
-        let model: DefaultAgentSettingsModel.Model
+        let model: PiDurableModel
         let lab: String
         var id: String { model.id }
         func matches(_ query: String) -> Bool {
@@ -234,13 +211,13 @@ private struct SettingsAgentCatalogIndex {
                 || id.localizedCaseInsensitiveContains(query)
         }
     }
-    private(set) var source: [DefaultAgentSettingsModel.Model] = []
+    private(set) var source: [PiDurableModel] = []
     private(set) var entries: [Entry] = []
     private(set) var byID: [String: Entry] = [:]
     private(set) var providers: [String] = []
     private(set) var labs: [String] = []
 
-    @MainActor mutating func update(_ models: [DefaultAgentSettingsModel.Model]) {
+    @MainActor mutating func update(_ models: [PiDurableModel]) {
         guard source != models else { return }
         if let cached = Self.latest, cached.source == models {
             self = cached
@@ -261,7 +238,8 @@ private struct SettingsAgentCatalogIndex {
 /// The default model, the models offered in the composer, and fallbacks. The full provider
 /// catalog loads only when the person opens Add models.
 private struct SettingsAgentModelsView: View {
-    let agent: DefaultAgentSettingsModel
+    let agent: AgentSettingsStore
+    let connections: MachineProviderConnections
     let editable: Bool
     let browsingAllModels: Bool
     let setupProvider: String?
@@ -283,7 +261,7 @@ private struct SettingsAgentModelsView: View {
 
     private struct Inputs: Equatable {
         let scope: String
-        let catalog: [DefaultAgentSettingsModel.Model]
+        let catalog: [PiDurableModel]
         let configuration: DefaultAgentSettings
         let effectiveDefaultModel: String?
     }
@@ -345,7 +323,7 @@ private struct SettingsAgentModelsView: View {
                 .accessibilityLabel("Choose default model")
                 .accessibilityValue(defaultLabel)
                 .popover(isPresented: $choosingDefault, arrowEdge: .bottom) {
-                    SettingsAgentDefaultModelChooser(agent: agent,
+                    SettingsAgentDefaultModelChooser(agent: agent, connections: connections,
                         index: index, selection: agent.configuration.defaultModel,
                         browsingAllModels: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                         loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels
@@ -459,7 +437,7 @@ private struct SettingsAgentModelsView: View {
             if let provider = setupProvider {
                 SettingsNote("Connected. Choose models for chat from \(ProviderConnectionID(rawValue: provider)?.name ?? provider).")
             }
-            SettingsAgentCatalogBrowseControls(agent: agent,
+            SettingsAgentCatalogBrowseControls(agent: agent, connections: connections,
                 requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                 loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
             if showingAllModels {
@@ -568,7 +546,7 @@ private struct SettingsAgentModelsView: View {
         case "xai-api": "xAI API key"
         case "openrouter": "OpenRouter"
         case "opencode-go": "OpenCode Go"
-        default: agent.localServers.first { $0.id == provider }.map { "Local · \($0.name)" } ?? provider
+        default: connections.localServers.first { $0.id == provider }.map { "Local · \($0.name)" } ?? provider
         }
     }
 }
@@ -576,7 +554,8 @@ private struct SettingsAgentModelsView: View {
 /// Loading the full inventory is always an explicit user action, including when
 /// the default chooser is open. Existing enabled model controls remain usable.
 private struct SettingsAgentCatalogBrowseControls: View {
-    @Bindable var agent: DefaultAgentSettingsModel
+    @Bindable var agent: AgentSettingsStore
+    let connections: MachineProviderConnections
     let requested: Bool
     let includesAllModels: Bool
     let loading: Bool
@@ -586,7 +565,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
 
     private var availableProviders: [String] {
         agent.configuration.providers.filter { provider in
-            agent.availableModelProviderIDs.contains(provider) || agent.localServers.contains { $0.id == provider }
+            connections.availableModelProviderIDs.contains(provider) || connections.localServers.contains { $0.id == provider }
         }
     }
 
@@ -645,7 +624,8 @@ private struct SettingsAgentCatalogPageControls: View {
 /// Created only when the user opens the selector. Search covers the entire index,
 /// but the native list receives one bounded page and retains keyboard selection.
 private struct SettingsAgentDefaultModelChooser: View {
-    @Bindable var agent: DefaultAgentSettingsModel
+    @Bindable var agent: AgentSettingsStore
+    let connections: MachineProviderConnections
     @Environment(\.dismiss) private var dismiss
     let index: SettingsAgentCatalogIndex
     let selection: String?
@@ -666,7 +646,7 @@ private struct SettingsAgentDefaultModelChooser: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Default model").font(.settingsSection)
             Button("Use first available model") { select(nil) }.buttonStyle(SettingsQuietButtonStyle())
-            SettingsAgentCatalogBrowseControls(agent: agent,
+            SettingsAgentCatalogBrowseControls(agent: agent, connections: connections,
                 requested: browsingAllModels, includesAllModels: includesAllModels,
                 loading: loading, error: error, offersEnabledModels: true, setBrowsingAllModels: setBrowsingAllModels)
             if browsingAllModels && includesAllModels {

@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 struct AssetPane: View {
     @Bindable var model: ApplicationModel
@@ -15,7 +14,7 @@ struct AssetPane: View {
     var onOpenSession: ((String) -> Void)?
     @Environment(\.wovenTheme) private var theme
 
-    private var notes: [WorkspaceNoteRecord] { model.workspaceOverview?.notes ?? [] }
+    private var notes: [WorkspaceNoteRecord] { model.workspace.workspaceOverview?.notes ?? [] }
     var body: some View {
         let _ = assets.pageRevision
         VStack(spacing: 0) {
@@ -112,11 +111,7 @@ struct AssetPane: View {
         case .document: "doc.richtext"
         }
     }
-    private func close(_ tab: WorkspaceAssetTabs.Tab) {
-        if case .note = tab {
-            Task { if await model.flushNoteDrafts() { assets.close(tab) } }
-        } else { assets.close(tab) }
-    }
+    private func close(_ tab: WorkspaceAssetTabs.Tab) { assets.close(tab) }
     private func control(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 12))

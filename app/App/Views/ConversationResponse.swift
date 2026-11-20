@@ -1,13 +1,7 @@
-#if os(macOS)
 import AppKit
 private typealias ResponseFont = NSFont
 private let responseAbsolute = NSTextBlock.ValueType.absoluteValueType
 private let responsePercentage = NSTextBlock.ValueType.percentageValueType
-#else
-import UIKit
-import CoreText
-private typealias ResponseFont = UIFont
-#endif
 import SwiftUI
 
 /// One selectable text surface and one copy action for the complete response.
@@ -35,13 +29,8 @@ struct ConversationResponse: View {
 
             if showsCopyButton && !isStreaming {
                 Button {
-                    #if os(macOS)
                     NSPasteboard.general.clearContents()
                     copied = NSPasteboard.general.setString(content, forType: .string)
-                    #else
-                    UIPasteboard.general.string = content
-                    copied = true
-                    #endif
                 } label: {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 11.5, weight: .medium))
@@ -62,26 +51,17 @@ struct ConversationResponse: View {
             Button("Cancel", role: .cancel) { pendingExternalURL = nil }
             Button("Open") {
                 pendingExternalURL = nil
-                #if os(macOS)
                 NSWorkspace.shared.open(url)
-                #else
-                UIApplication.shared.open(url)
-                #endif
             }
         } message: { url in
             Text(url.absoluteString)
         }
     }
     private var copyTargetSize: CGFloat {
-        #if os(macOS)
         28
-        #else
-        44
-        #endif
     }
 }
 
-#if os(macOS)
 private struct ConversationResponseText: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let content: String
@@ -283,254 +263,6 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     }
 }
 
-#else
-/// UIKit uses the same parser and attributed block renderer as the Mac. One
-/// selectable surface spans the whole response, without a nested scrolling area.
-private struct ConversationResponseText: UIViewRepresentable {
-    let content: String
-    let document: ConversationMarkdownDocument?
-    let isStreaming: Bool
-    let onOpenLink: (URL) -> Void
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.colorScheme) private var colorScheme
-
-    func makeUIView(context: Context) -> ConversationResponseNativeTextView {
-        ConversationResponseNativeTextView()
-    }
-    func updateUIView(_ view: ConversationResponseNativeTextView, context: Context) {
-        view.onOpenLink = onOpenLink
-        view.apply(content: content, document: document, isStreaming: isStreaming,
-                   typeSize: dynamicTypeSize, colorScheme: colorScheme)
-    }
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationResponseNativeTextView,
-                     context: Context) -> CGSize? {
-        uiView.fittingSize(width: proposal.width ?? 680)
-    }
-}
-
-final class ConversationResponseNativeTextView: UITextView, UITextViewDelegate {
-    var onOpenLink: ((URL) -> Void)?
-    private var appliedContent: String?
-    private var appliedStreaming: Bool?
-    private var appliedTypeSize: DynamicTypeSize?
-    private var appliedColorScheme: ColorScheme?
-    private var appliedDocument: ConversationMarkdownDocument?
-    private var renderedWidth: CGFloat = 680
-
-    init() {
-        let storage = NSTextStorage()
-        let manager = ConversationResponseLayoutManager()
-        let container = NSTextContainer(size: CGSize(width: 680, height: CGFloat.greatestFiniteMagnitude))
-        storage.addLayoutManager(manager)
-        manager.addTextContainer(container)
-        super.init(frame: .zero, textContainer: container)
-        isEditable = false
-        isSelectable = true
-        isScrollEnabled = false
-        backgroundColor = .clear
-        textContainerInset = .zero
-        textContainer.lineFragmentPadding = 0
-        textContainer.widthTracksTextView = false
-        showsVerticalScrollIndicator = false
-        showsHorizontalScrollIndicator = false
-        contentInset = .zero
-        delegate = self
-        linkTextAttributes = [.foregroundColor: WovenColors.success, .underlineStyle: 0]
-        accessibilityLabel = "Agent response"
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool,
-               typeSize: DynamicTypeSize, colorScheme: ColorScheme = .light) {
-        guard appliedContent != content || appliedStreaming != isStreaming || appliedTypeSize != typeSize
-            || appliedColorScheme != colorScheme else { return }
-        overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
-        appliedColorScheme = colorScheme
-        appliedContent = content; appliedStreaming = isStreaming; appliedTypeSize = typeSize
-        appliedDocument = document ?? ConversationMarkdownDocument(content)
-        renderAtCurrentWidth()
-    }
-    private func renderAtCurrentWidth() {
-        guard let document = appliedDocument else { return }
-        let selection = selectedRange
-        let previous = textStorage.string as NSString
-        let traits = UITraitCollection(preferredContentSizeCategory: contentSizeCategory)
-        let rendered = ConversationResponseAttributedText.render(document, isStreaming: appliedStreaming ?? false,
-            width: renderedWidth, scaleFont: { UIFontMetrics.default.scaledFont(for: $0, compatibleWith: traits) })
-        textStorage.setAttributedString(rendered)
-        let end = NSMaxRange(selection)
-        let unchanged = selection.length > 0 && end <= previous.length && end <= rendered.length
-            && previous.substring(to: end) == (rendered.string as NSString).substring(to: end)
-        selectedRange = unchanged ? selection : NSRange(location: 0, length: 0)
-        invalidateIntrinsicContentSize()
-    }
-    /// Use the actual SwiftUI size environment, including per-view overrides;
-    /// UIKit's global preferred category need not match this response's size.
-    private var contentSizeCategory: UIContentSizeCategory {
-        switch appliedTypeSize ?? .large {
-        case .xSmall: .extraSmall
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        case .xLarge: .extraLarge
-        case .xxLarge: .extraExtraLarge
-        case .xxxLarge: .extraExtraExtraLarge
-        case .accessibility1: .accessibilityMedium
-        case .accessibility2: .accessibilityLarge
-        case .accessibility3: .accessibilityExtraLarge
-        case .accessibility4: .accessibilityExtraExtraLarge
-        case .accessibility5: .accessibilityExtraExtraExtraLarge
-        @unknown default: .large
-        }
-    }
-    func fittingSize(width: CGFloat) -> CGSize {
-        let width = max(1, width)
-        if renderedWidth != width {
-            renderedWidth = width
-            renderAtCurrentWidth()
-        }
-        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
-        layoutManager.ensureLayout(for: textContainer)
-        var height = max(layoutManager.usedRect(for: textContainer).maxY, layoutManager.extraLineFragmentRect.maxY)
-        if textStorage.length > 0, textStorage.attribute(.responseCode, at: textStorage.length - 1, effectiveRange: nil) != nil { height += 6 }
-        return CGSize(width: width, height: max(1, ceil(height)))
-    }
-    func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange,
-                  interaction: UITextItemInteraction) -> Bool {
-        if ConversationMarkdownDocument.isLiveLink(URL) { onOpenLink?(URL) }
-        return false
-    }
-}
-
-private final class ConversationResponseLayoutManager: NSLayoutManager {
-    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
-        guard let storage = textStorage, let container = textContainers.first else { return }
-        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
-        for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider] {
-            storage.enumerateAttribute(key, in: characters) { value, range, _ in
-                guard value != nil else { return }
-                var full = NSRange()
-                _ = storage.attribute(key, at: range.location, longestEffectiveRange: &full,
-                                      in: NSRange(location: 0, length: storage.length))
-                let glyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
-                let rect = self.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
-                if key == .responseCode {
-                    WovenColors.primary.withAlphaComponent(0.05).setFill()
-                    UIBezierPath(roundedRect: CGRect(x: origin.x, y: rect.minY - 6,
-                        width: container.size.width, height: rect.height + 12), cornerRadius: 12).fill()
-                } else {
-                    WovenColors.foreground.withAlphaComponent(0.16).setFill()
-                    let mark = key == .responseQuote
-                        ? CGRect(x: max(origin.x, rect.minX - 14), y: rect.minY, width: 2, height: rect.height)
-                        : CGRect(x: origin.x, y: rect.midY, width: container.size.width, height: 1)
-                    UIBezierPath(rect: mark).fill()
-                }
-            }
-        }
-        storage.enumerateAttribute(.responseTableRow, in: characters) { value, range, _ in
-            guard let row = value as? [String: Any], let columns = row["columns"] as? Int, columns > 0 else { return }
-            var full = NSRange()
-            _ = storage.attribute(.responseTableRow, at: range.location, longestEffectiveRange: &full,
-                                  in: NSRange(location: 0, length: storage.length))
-            let rowGlyphs = self.glyphRange(forCharacterRange: full, actualCharacterRange: nil)
-            let used = self.boundingRect(forGlyphRange: rowGlyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
-            let rect = CGRect(x: origin.x, y: used.minY - 9, width: container.size.width, height: used.height + 18)
-            WovenColors.primary.withAlphaComponent(0.032).setFill()
-            UIBezierPath(rect: rect).fill()
-            WovenColors.foreground.withAlphaComponent(0.09).setStroke()
-            let border = UIBezierPath(rect: rect)
-            for column in 1..<columns {
-                let x = rect.minX + rect.width * CGFloat(column) / CGFloat(columns)
-                border.move(to: CGPoint(x: x, y: rect.minY))
-                border.addLine(to: CGPoint(x: x, y: rect.maxY))
-            }
-            border.lineWidth = 0.5
-            border.stroke()
-        }
-        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
-    }
-}
-
-/// UIKit SDKs before 27 do not expose NSTextTable or paragraph textBlocks.
-/// Keep table text in the same selectable surface, wrapping each real attributed
-/// cell to its column width and drawing the grid behind those native glyphs.
-@MainActor
-private enum ConversationResponseTableFallback {
-    static func render(_ table: ConversationMarkdownDocument.Table, width: CGFloat,
-                       foreground: UIColor, scaleFont: (UIFont) -> UIFont,
-                       inline: (ConversationMarkdownDocument.InlineText, UIFont) -> NSMutableAttributedString) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: "")
-        let columns = table.header.count
-        guard columns > 0 else { return result }
-        let cellWidth = max(1, width / CGFloat(columns))
-        let padding = min(9, cellWidth / 4)
-        let textWidth = max(1, cellWidth - padding * 2)
-        let font = scaleFont(.systemFont(ofSize: 13))
-        let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground, .responseScaledFont: true]
-        for (rowIndex, cells) in ([table.header] + table.rows).enumerated() {
-            let start = result.length
-            let wrapped = table.header.indices.map { column -> [NSAttributedString] in
-                let source = cells.indices.contains(column) ? cells[column] : .init("")
-                let text = inline(source, .systemFont(ofSize: 13, weight: rowIndex == 0 ? .semibold : .regular))
-                text.enumerateAttribute(.font, in: NSRange(location: 0, length: text.length)) { value, range, _ in
-                    if let font = value as? UIFont { text.addAttribute(.font, value: scaleFont(font), range: range) }
-                }
-                text.addAttribute(.responseScaledFont, value: true, range: NSRange(location: 0, length: text.length))
-                return lines(text, width: textWidth)
-            }
-            let count = max(1, wrapped.map(\.count).max() ?? 1)
-            for line in 0..<count {
-                let paragraph = NSMutableAttributedString(string: "", attributes: base)
-                let style = NSMutableParagraphStyle()
-                style.lineSpacing = 5
-                style.paragraphSpacingBefore = line == 0 ? 9 : 0
-                style.paragraphSpacing = line == count - 1 ? (rowIndex == table.rows.count ? 23 : 9) : 0
-                style.defaultTabInterval = max(width + 1, 1)
-                style.tabStops = table.header.indices.map { column in
-                    let alignment = table.alignments.indices.contains(column) ? table.alignments[column] : .leading
-                    let left = CGFloat(column) * cellWidth
-                    switch alignment {
-                    case .leading: return NSTextTab(textAlignment: .left, location: left + padding)
-                    case .center: return NSTextTab(textAlignment: .center, location: left + cellWidth / 2)
-                    case .trailing: return NSTextTab(textAlignment: .right, location: left + cellWidth - padding)
-                    }
-                }
-                for column in table.header.indices {
-                    paragraph.append(NSAttributedString(string: "\t", attributes: base))
-                    if wrapped[column].indices.contains(line) { paragraph.append(wrapped[column][line]) }
-                }
-                paragraph.append(NSAttributedString(string: "\n", attributes: base))
-                paragraph.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: paragraph.length))
-                result.append(paragraph)
-            }
-            result.addAttribute(.responseTableRow, value: ["id": UUID().uuidString, "columns": columns],
-                range: NSRange(location: start, length: result.length - start))
-        }
-        return result
-    }
-
-    private static func lines(_ text: NSAttributedString, width: CGFloat) -> [NSAttributedString] {
-        guard text.length > 0 else { return [text] }
-        let typesetter = CTTypesetterCreateWithAttributedString(text)
-        let source = text.string as NSString
-        var offset = 0
-        var result: [NSAttributedString] = []
-        while offset < text.length {
-            let suggested = CTTypesetterSuggestLineBreak(typesetter, offset, Double(width))
-            // A single wide grapheme must still make progress without splitting
-            // an emoji/surrogate pair. No cell text is truncated or discarded.
-            let length = suggested > 0 ? suggested : source.rangeOfComposedCharacterSequence(at: offset).length
-            var range = NSRange(location: offset, length: min(length, text.length - offset))
-            if range.length > 0, source.substring(with: NSRange(location: NSMaxRange(range) - 1, length: 1)) == "\n" { range.length -= 1 }
-            result.append(text.attributedSubstring(from: range))
-            offset += length
-        }
-        return result
-    }
-}
-
-#endif
 
 private extension NSAttributedString.Key {
     static let responseCode = Self("WovenMatterResponseCode")
@@ -564,17 +296,8 @@ private enum ConversationResponseAttributedText {
             for run in text.rendered.runs {
                 let intent = run.inlinePresentationIntent ?? []
                 var runFont = intent.contains(.code) ? ResponseFont.monospacedSystemFont(ofSize: 13.5, weight: .regular) : font
-                #if os(macOS)
                 if intent.contains(.stronglyEmphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .boldFontMask) }
                 if intent.contains(.emphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .italicFontMask) }
-                #else
-                var traits = runFont.fontDescriptor.symbolicTraits
-                if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
-                if intent.contains(.emphasized) { traits.insert(.traitItalic) }
-                if let descriptor = runFont.fontDescriptor.withSymbolicTraits(traits) {
-                    runFont = UIFont(descriptor: descriptor, size: runFont.pointSize)
-                }
-                #endif
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
                 if intent.contains(.code) { attributes[.backgroundColor] = WovenColors.primary.withAlphaComponent(0.075) }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
@@ -651,7 +374,6 @@ private enum ConversationResponseAttributedText {
                         range: NSRange(location: start, length: output.length - start))
                 case .table(let table):
                     guard !table.header.isEmpty else { continue }
-                    #if os(macOS)
                     let nativeTable = NSTextTable()
                     nativeTable.numberOfColumns = table.header.count
                     nativeTable.collapsesBorders = true
@@ -674,22 +396,12 @@ private enum ConversationResponseAttributedText {
                             append(inline(cells.indices.contains(column) ? cells[column] : .init(""), font: .systemFont(ofSize: 13, weight: rowIndex == 0 ? .semibold : .regular)), style: cellStyle)
                         }
                     }
-                    #else
-                    output.append(ConversationResponseTableFallback.render(table, width: width, foreground: foreground, scaleFont: scaleFont, inline: inline))
-                    #endif
                 case .divider:
                     append(NSAttributedString(string: " ", attributes: [.font: ResponseFont.systemFont(ofSize: 15), .responseDivider: true]), style: style)
                 }
             }
         }
         blocks(document.blocks)
-        #if os(iOS)
-        output.enumerateAttribute(.font, in: NSRange(location: 0, length: output.length)) { value, range, _ in
-            if let font = value as? UIFont, output.attribute(.responseScaledFont, at: range.location, effectiveRange: nil) == nil {
-                output.addAttribute(.font, value: scaleFont(font), range: range)
-            }
-        }
-        #endif
         // A terminal newline creates an extra empty line between text and Copy.
         // Native tables retain their cell-ending paragraph delimiter.
         if output.length > 0, case .table = document.blocks.last {

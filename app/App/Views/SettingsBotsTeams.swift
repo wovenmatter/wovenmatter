@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterClient
 
 struct BotSettingsBots: View {
     let state: BotSettingsState
@@ -20,31 +19,32 @@ struct BotSettingsBots: View {
                 if let deleted, !deleted.isEmpty { deletedSection(deleted) }
             } else { SettingsEmpty("Loading…") }
         }
-        .task(id: "\(state.bots.connection.rawValue):\(state.bots.settingsRevision)") {
+        .task(id: "\(state.bots.isConnected):\(state.bots.settingsRevision)") {
             guard state.bots.isConnected else { return }
-            await state.load { try await refresh($0) }
+            await state.load { try await refresh() }
         }
     }
 
-    private func refresh(_ client: PiBotClient) async throws {
+    private var bots: BotsStore { state.bots }
+
+    private func refresh() async throws {
         refreshes += 1
         let current = refreshes
-        async let active = client.bots()
-        async let listed = client.profiles()
-        async let removed = client.deletedBots()
-        let result = try await (active, listed, removed)
+        async let listed = bots.profiles()
+        async let removed = bots.deletedBots()
+        let result = try await (listed, removed)
         // An older read that finishes late must not undo a newer change.
         guard current == refreshes else { return }
-        live = result.0; profiles = result.1.profiles; deleted = result.2
-        await state.bots.refreshOnboarding(onError: { state.error = $0 })
+        live = bots.bots; profiles = result.0; deleted = result.1
+        await bots.refreshOnboarding(onError: { state.error = $0 })
     }
 
-    private func act(_ work: @escaping @MainActor (PiBotClient) async throws -> Void) {
+    private func act(_ work: @escaping @MainActor () async throws -> Void) {
         Task {
-            await state.run { client in
-                try await work(client)
-                try await refresh(client)
-                await state.bots.reload()
+            await state.run {
+                try await work()
+                try await refresh()
+                await bots.refresh()
             }
         }
     }
@@ -55,7 +55,7 @@ struct BotSettingsBots: View {
             SettingsRow(title: "Orchestrator", detail: "Optional. Oversees every bot and team; Admin Bot stays apart.") {
                 BotSettingsReferencePicker(selection: live.first(where: \.orchestrator)?.id ?? "",
                     options: [.init("", "None")] + live.filter { !$0.isAdmin }.map { .init($0.id, $0.name) },
-                    label: "Orchestrator") { id in act { try await $0.setOrchestrator(botID: id.isEmpty ? nil : id) } }
+                    label: "Orchestrator") { id in act { try await bots.setOrchestrator(botID: id.isEmpty ? nil : id) } }
             }
             ForEach(layout.rows) { row in
                 botRow(row.bot, all: live, profiles: profiles).padding(.leading, row.isMember ? 16 : 0)
@@ -84,7 +84,7 @@ struct BotSettingsBots: View {
     }
 
     private func botSummary(_ bot: PiBotSummary, all: [PiBotSummary], profiles: [PiBotProfile]) -> String {
-        let profile = bot.defaultProfile == true ? "Default profile"
+        let profile = bot.defaultProfile ? "Default profile"
             : profiles.first { $0.id == bot.profileId }?.name ?? "Default profile"
         var parts = [bot.role, profile]
         if bot.orchestrator { parts.append("Orchestrator") }
@@ -95,7 +95,7 @@ struct BotSettingsBots: View {
 
     private func name(_ bot: PiBotSummary, all: [PiBotSummary]) -> some View {
         BotSettingsBotName(bot: bot, members: all.filter { $0.managerId == bot.id }) { name in
-            act { try await $0.renameBot(id: bot.id, name: name) }
+            act { try await bots.renameBot(id: bot.id, name: name) }
         }
     }
 
@@ -105,17 +105,17 @@ struct BotSettingsBots: View {
             SettingsRow(title: "Hand team to") {
                 BotSettingsReferencePicker(selection: "", options: [.init("", "Choose a member…")] + members.map { .init($0.id, $0.name) },
                     label: "Hand \(bot.name)'s team to") { id in
-                    if !id.isEmpty { act { try await $0.replaceManager(managerID: bot.id, newManagerID: id) } }
+                    if !id.isEmpty { act { try await bots.replaceManager(managerID: bot.id, newManagerID: id) } }
                 }
             }
         }
     }
 
     private func profilePicker(_ bot: PiBotSummary, profiles: [PiBotProfile]) -> some View {
-        BotSettingsReferencePicker(selection: bot.defaultProfile == true ? "" : bot.profileId ?? "",
+        BotSettingsReferencePicker(selection: bot.defaultProfile ? "" : bot.profileId ?? "",
             options: [.init("", "Default (\(profiles.first(where: \.isDefault)?.name ?? "none"))")]
                 + profiles.map { .init($0.id, $0.name) }, label: "Profile for \(bot.name)") { id in
-            act { try await $0.setProfile(botID: bot.id, profileID: id.isEmpty ? nil : id) }
+            act { try await bots.setProfile(botID: bot.id, profileID: id.isEmpty ? nil : id) }
         }
     }
 
@@ -128,11 +128,11 @@ struct BotSettingsBots: View {
 
     private func place(_ bot: PiBotSummary, placement: String) {
         let work: @MainActor () -> Void = {
-            act { client in
-                if placement == "manager" { try await client.setManager(botID: bot.id, manager: true); return }
-                if bot.manager { try await client.setManager(botID: bot.id, manager: false) }
-                if placement != "none" { try await client.setTeam(botID: bot.id, managerID: placement) }
-                else if bot.managerId != nil { try await client.setTeam(botID: bot.id, managerID: nil) }
+            act {
+                if placement == "manager" { try await bots.setManager(botID: bot.id, manager: true); return }
+                if bot.manager { try await bots.setManager(botID: bot.id, manager: false) }
+                if placement != "none" { try await bots.setTeam(botID: bot.id, managerID: placement) }
+                else if bot.managerId != nil { try await bots.setTeam(botID: bot.id, managerID: nil) }
             }
         }
         if placement != "manager", bot.manager, live?.contains(where: { $0.managerId == bot.id }) == true {
@@ -146,8 +146,8 @@ struct BotSettingsBots: View {
         SettingsSection(title: "Containers", detail: "A stopped bot starts again on its next tool call.") {
             ForEach(live.filter { !$0.isAdmin }) { bot in
                 SettingsRow(title: bot.name, detail: environments[bot.id]?.stateText) {
-                    if environments[bot.id]?.state == "running" {
-                        Button { act { try await $0.stopBot(id: bot.id) } } label: { BotSettingsActionLabel(title: "Stop", glyph: .close) }
+                    if environments[bot.id]?.state == .running {
+                        Button { act { try await bots.stopBot(id: bot.id) } } label: { BotSettingsActionLabel(title: "Stop", glyph: .close) }
                             .accessibilityLabel("Stop \(bot.name)")
                     }
                     Button { rebuild(bot) } label: { BotSettingsActionLabel(title: "Rebuild", glyph: .rotate) }
@@ -155,7 +155,7 @@ struct BotSettingsBots: View {
                 }
                 ForEach(environments[bot.id]?.previews ?? [], id: \.port) { preview in
                     SettingsRow(title: "Port \(preview.port)", detail: preview.url) {
-                        Button("Stop sharing") { act { try await $0.stopPreview(botID: bot.id, port: preview.port) } }
+                        Button("Stop sharing") { act { try await bots.stopPreview(botID: bot.id, port: preview.port) } }
                     }
                     .padding(.leading, 16)
                 }
@@ -164,17 +164,17 @@ struct BotSettingsBots: View {
                 SettingsNote("Rebuild recreates a bot's container from a clean image. Its files, home folder, restart list, browser profile, memory, and conversations stay, and the packages it installed are reinstalled.")
             }
         }
-        .task(id: "\(state.bots.connection.rawValue):\(state.bots.environmentRevision):\(refreshes)") {
+        .task(id: "\(state.bots.isConnected):\(state.bots.environmentRevision):\(refreshes)") {
             guard state.bots.isConnected else { return }
             for bot in live where !bot.isAdmin {
-                await state.load { environments[bot.id] = try await $0.environment(botID: bot.id) }
+                await state.load { environments[bot.id] = try await bots.environment(botID: bot.id) }
             }
         }
     }
 
     private func rebuild(_ bot: PiBotSummary) {
         state.confirm("Rebuild \(bot.name) from a clean image?\n\nRunning work stops. Its files, home folder, and sign-ins stay, and the packages it installed are reinstalled.", action: "Rebuild", destructive: false) {
-            act { client in try await client.rebuildBot(id: bot.id) }
+            act { try await bots.rebuildBot(id: bot.id) }
         }
     }
 
@@ -193,21 +193,18 @@ struct BotSettingsBots: View {
         }
     }
 
-    private func deletedDate(_ iso: String) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = parser.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
-        return date?.formatted(date: .abbreviated, time: .shortened) ?? iso
+    private func deletedDate(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .shortened)
     }
 
     private func restore(_ bot: PiBotDeletedBot) {
         restoring = bot.id
         Task {
             defer { restoring = nil }
-            await state.run { client in
-                _ = try await client.restoreBot(id: bot.id)
-                try await refresh(client)
-                await state.bots.reload()
+            await state.run {
+                try await bots.restoreBot(id: bot.id)
+                try await refresh()
+                await bots.refresh()
             }
         }
     }
@@ -217,12 +214,12 @@ struct BotSettingsBots: View {
             purging = bot.id
             Task {
                 defer { purging = nil }
-                await state.run { client in
-                    let result = try await client.purgeBot(id: bot.id)
-                    if let environment = result.environment, !environment.removed {
-                        state.error = "\(bot.name) was deleted permanently, but its workspace was not removed: \(environment.error ?? "unknown error")"
+                await state.run {
+                    let result = try await bots.purgeBot(id: bot.id)
+                    if let error = result.environmentError {
+                        state.error = "\(bot.name) was deleted permanently, but its workspace was not removed: \(error)"
                     }
-                    try await refresh(client)
+                    try await refresh()
                 }
             }
         }

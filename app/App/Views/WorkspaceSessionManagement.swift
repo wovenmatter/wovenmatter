@@ -1,8 +1,7 @@
 import SwiftUI
-import WovenMatterCore
 
 struct WorkspaceSessionManagementControls: View {
-    @Bindable var tools: WorkspaceAgentToolsModel
+    @Bindable var tools: AgentToolsStore
     @Environment(\.workspaceApplicationModel) private var model
     @Environment(\.openWorkspaceConversation) private var open
     let sessionID: String
@@ -65,18 +64,18 @@ struct WorkspaceSessionManagementControls: View {
         }
     }
     private func title(_ id: String) -> String {
-        model?.workspaceOverview?.conversations.first { $0.id == id }?.title ?? "Unavailable session"
+        model?.workspace.workspaceOverview?.conversations.first { $0.id == id }?.title ?? "Unavailable session"
     }
 }
 
 private struct WorkspaceTimerEditor: View {
-    @Bindable var tools: WorkspaceAgentToolsModel
+    @Bindable var tools: AgentToolsStore
     let initial: WorkspaceSessionTimer
     @Environment(\.dismiss) private var dismiss
     @State private var draft: WorkspaceSessionTimerDraft
     @State private var error: String?
 
-    init(tools: WorkspaceAgentToolsModel, initial: WorkspaceSessionTimer) {
+    init(tools: AgentToolsStore, initial: WorkspaceSessionTimer) {
         self.tools = tools
         self.initial = initial
         _draft = State(initialValue: WorkspaceSessionTimerDraft(initial))

@@ -1,6 +1,5 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterCore
 
 enum NoteMenuAction {
     case setPinned(Bool)
@@ -16,7 +15,7 @@ struct NoteContextMenu: ViewModifier {
     let folders: [WorkspaceFolderRecord]
     let onAction: (WorkspaceNoteRecord, NoteMenuAction) -> Void
 
-    private var isBusy: Bool { model?.noteActionIDs.contains(note.id) == true }
+    private var isBusy: Bool { model?.workspace.noteActionIDs.contains(note.id) == true }
 
     func body(content: Content) -> some View {
         content

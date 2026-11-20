@@ -1,17 +1,11 @@
 import SwiftUI
-#if os(macOS)
 import AppKit
-import WovenMatterCore
-import WovenMatterLibraryStore
-#else
-import WovenMatterShared
-#endif
 
 /// Display-only run values shared by the desktop and the device-owned runtime.
 struct ConversationWorkRun {
     let id: String
     let conversationID: String
-    let status: String
+    let status: RunStatus
     var error: String? = nil
 }
 
@@ -75,7 +69,6 @@ struct ConversationWorkTranscript: View {
         self.timeline = timeline
     }
 
-    #if os(macOS)
     init(
         run: WorkspaceRunRecord,
         presentation: RunPresentation?,
@@ -90,7 +83,6 @@ struct ConversationWorkTranscript: View {
                   hasFollowingResponse: hasFollowingResponse, timeline: timeline)
     }
 
-    #endif
 
     var body: some View {
         let timeline = self.timeline ?? ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs)
@@ -99,21 +91,7 @@ struct ConversationWorkTranscript: View {
             runError: run.error,
             hasVisibleActivities: timeline.hasVisibleActivities
         )
-        let isRunning = run.status == "running"
-        // Lost receipts can have no assistant output or tool activity at all.
-        // Keep the recovery state visible independently of the work disclosure.
-        if run.status == "uncertain" {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Waiting to confirm the remote outcome")
-                    .font(.system(size: 13, weight: .medium))
-                Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: run.error
-                    ?? "Reconnect this conversation to recover its result."))
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-            }
-            .foregroundStyle(WovenPalette.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+        let isRunning = run.status == .running
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
                 if content.failureMessage != nil {
@@ -130,7 +108,7 @@ struct ConversationWorkTranscript: View {
                 // Failure belongs to the run, not to its optional work history.
                 // Keep it visible even when no tool or thinking event was supplied.
                 if let failureMessage = content.failureMessage {
-                    Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: failureMessage))
+                    Text(failureMessage)
                         .font(.system(size: 13))
                         .foregroundStyle(WovenPalette.danger)
                         .textSelection(.enabled)
@@ -151,7 +129,7 @@ struct ConversationWorkTranscript: View {
                                 switch entry.content {
                                 case .commentary(let activity):
                                     ConversationResponse(
-                                        content: RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? ""),
+                                        content: activity.content ?? "",
                                         isStreaming: false,
                                         showsCopyButton: false
                                     )
@@ -205,23 +183,24 @@ struct ConversationWorkTranscript: View {
 
     @ViewBuilder
     private var elapsedLabel: some View {
-        if run.status == "running", let startedAt = presentation?.startedAt {
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                Text("Working for \(Self.elapsed(context.date.timeIntervalSince(startedAt)))")
-                    .monospacedDigit()
+        switch run.status {
+        case .running:
+            if let startedAt = presentation?.startedAt {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text("Working for \(Self.elapsed(context.date.timeIntervalSince(startedAt)))")
+                        .monospacedDigit()
+                }
+            } else {
+                Text("Working")
             }
-        } else if run.status == "running" {
-            Text("Working")
-        } else if run.status == "completed" {
+        case .queued:
+            Text("Queued")
+        case .completed:
             Text("Done after \(presentation?.completedDuration ?? "a moment")")
-        } else if run.status == "failed" {
+        case .failed:
             Text("Error\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
-        } else if run.status == "cancelled" {
+        case .cancelled:
             Text("Idle (cancelled)\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
-        } else if run.status == "uncertain" {
-            Text("Waiting to confirm the remote outcome")
-        } else {
-            Text(run.status.capitalized)
         }
     }
 
@@ -230,7 +209,6 @@ struct ConversationWorkTranscript: View {
         interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval)
     }
 
-    #if os(macOS)
     static func hasVisibleContent(run: WorkspaceRunRecord, timeline: ConversationWorkTimeline) -> Bool {
         ConversationWorkTranscriptPresentation(
             runStatus: run.status,
@@ -238,7 +216,6 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         ).isVisible
     }
-    #endif
 }
 
 private struct ConversationElapsedButtonStyle: ButtonStyle {
@@ -299,7 +276,7 @@ private struct ConversationThinkingBlock: View {
                 .foregroundStyle(WovenPalette.mutedForeground)
             ConversationBoundedWorkList(
                 group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
-                runID: runID, runStatus: isLive ? "running" : "completed", followsAppends: isLive,
+                runID: runID, runStatus: isLive ? .running : .completed, followsAppends: isLive,
                 initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
                 saveScrollSnapshot: { snapshot in
                     if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
@@ -319,7 +296,7 @@ private struct ConversationThinkingBlock: View {
 private struct ConversationWorkGroupRow: View {
     let group: ConversationWorkGroup
     let runID: String
-    let runStatus: String
+    let runStatus: RunStatus
     let isTail: Bool
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
@@ -327,7 +304,7 @@ private struct ConversationWorkGroupRow: View {
     @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
 
     var body: some View {
-        let runIsActive = runStatus == "running"
+        let runIsActive = runStatus == .running
         let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
         if runIsActive && isTail {
             VStack(alignment: .leading, spacing: 8) {
@@ -393,7 +370,7 @@ private struct ConversationBoundedWorkList: View {
 
     let group: ConversationWorkGroup
     let runID: String
-    let runStatus: String
+    let runStatus: RunStatus
     let followsAppends: Bool
     let initialScrollSnapshot: ConversationWorkScrollSnapshot
     let saveScrollSnapshot: (ConversationWorkScrollSnapshot) -> Void
@@ -507,7 +484,7 @@ private struct ConversationBoundedWorkList: View {
                         // reasoning-only groups need no second row disclosure.
                         ConversationActivityDetails(
                             activity: activity, runID: runID,
-                            isLive: runStatus == "running" && group.showsProgress(activity),
+                            isLive: runStatus == .running && group.showsProgress(activity),
                             summary: nil, indentation: 0)
                     } else {
                         ConversationActivityRow(
@@ -525,7 +502,7 @@ private struct ConversationBoundedWorkList: View {
 private struct ConversationActivityRow: View {
     let activity: AgentRunActivity
     let runID: String
-    let runStatus: String
+    let runStatus: RunStatus
     /// The activity is unsettled, as its timeline decides; the run gates it.
     let showsProgress: Bool
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
@@ -657,7 +634,7 @@ private struct ConversationActivityRow: View {
 
     private var isFailure: Bool { activity.workTimelineIsFailure }
 
-    private var isLive: Bool { runStatus == "running" && showsProgress }
+    private var isLive: Bool { runStatus == .running && showsProgress }
 
     /// Expandable when anything is not already fully shown in the label.
     private var isExpandable: Bool {
@@ -709,7 +686,7 @@ private enum ConversationActivityDetailCache {
     }()
 
     static func key(runID: String, activity: AgentRunActivity) -> NSString {
-        "\(runID)\u{1F}\(activity.id)\u{1F}\(activity.detailVersion.map(String.init) ?? "")" as NSString
+        "\(runID)\u{1F}\(activity.id)\u{1F}\(activity.detailStamp.map(String.init) ?? "")" as NSString
     }
 
     static subscript(key: NSString) -> AgentRunActivity? {
@@ -827,7 +804,7 @@ private struct ConversationActivityDetails: View {
 
     /// Per-token revisions do not restart the visible detail task.
     private var loadKey: LoadKey {
-        LoadKey(visible: isVisible, settled: !isLive, version: isLive ? nil : activity.detailVersion, attempt: attempt)
+        LoadKey(visible: isVisible, settled: !isLive, version: isLive ? nil : activity.detailStamp, attempt: attempt)
     }
 
     private var cacheKey: NSString { ConversationActivityDetailCache.key(runID: runID, activity: activity) }
@@ -873,10 +850,6 @@ private struct ConversationActivityDetails: View {
             if key.settled { ConversationActivityDetailCache[cacheKey] = value }
             if value == nil { error = "Details for this activity are no longer available." }
         } catch is CancellationError {
-        } catch let error as LibraryAPIError where error.code == "incomplete_activity_details" {
-            guard !Task.isCancelled else { return }
-            waitingForDetails = true
-            self.error = nil
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -924,10 +897,7 @@ private struct ConversationReasoningText: View {
     }
 
     private var committedText: String {
-        // Find stream boundaries and redact whole envelopes before slicing a
-        // page; a page beginning inside an envelope must not expose its tail.
-        RemoteNoteEditEnvelope.redactingEnvelopes(in:
-            isLive ? AssistantStreamingText.readyPrefix(of: text) : text)
+        isLive ? AssistantStreamingText.readyPrefix(of: text) : text
     }
 
     var body: some View {
@@ -1173,11 +1143,7 @@ private struct ConversationProposedPlan: View {
                     .foregroundStyle(WovenPalette.foreground.opacity(0.72))
             }
             if let content = activity.content?.nonempty {
-                #if os(macOS)
                 ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
-                #else
-                ConversationResponse(content: content, isStreaming: false, showsCopyButton: false)
-                #endif
             } else {
                 ForEach(activity.planEntries.indices, id: \.self) { index in
                     Text("• \(activity.planEntries[index].content)")
@@ -1314,7 +1280,7 @@ struct ConversationChangedFilesCard: View {
             for change in record.activity.changes {
                 result[change.path] = ConversationChangedFile(
                     path: change.path, runID: record.runID, activityID: record.activity.id,
-                    version: record.activity.detailVersion,
+                    version: record.activity.detailStamp,
                     additions: change.additionCount ?? 0, deletions: change.deletionCount ?? 0
                 )
             }
@@ -1471,11 +1437,7 @@ private struct ConversationDiffSheet: View {
                 }
             }
         }
-        #if os(macOS)
         .frame(minWidth: 780, idealWidth: 1040, minHeight: 520, idealHeight: 700)
-        #else
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        #endif
         .task(id: loadKey) { await load(loadKey) }
         .onDisappear {
             loadToken = nil

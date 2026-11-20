@@ -1,19 +1,18 @@
 import SwiftUI
-import WovenMatterCore
 
 struct ProductAnalyticsSettingsSection: View {
-    @Bindable var analytics: ProductAnalyticsModel
+    @Bindable var settings: SettingsStore
     var body: some View {
         SettingsSection(title: "Privacy") {
             SettingsToggleRow(
                 title: "Share product analytics",
                 detail: "Limited usage statistics. No content is sent.",
                 isOn: Binding(
-                    get: { analytics.enabled },
-                    set: { value in Task { await analytics.setEnabled(value) } })
+                    get: { settings.analyticsEnabled },
+                    set: { value in Task { await settings.setAnalyticsEnabled(value) } })
             )
-            .disabled(analytics.preference == nil)
-            if let error = analytics.errorMessage {
+            .disabled(settings.analyticsPreference == nil)
+            if let error = settings.analyticsError {
                 SettingsError(error)
             }
             SettingsHelp {
@@ -22,6 +21,6 @@ struct ProductAnalyticsSettingsSection: View {
                     .font(.settingsBody.weight(.medium))
                     .foregroundStyle(WovenPalette.success)
             }
-        }.task { await analytics.refresh() }
+        }.task { await settings.refreshAnalytics() }
     }
 }

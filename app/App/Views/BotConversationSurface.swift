@@ -1,8 +1,6 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterClient
-import WovenMatterCore
 
 /// Where a failed reply's fix lives: provider sign-ins and keys, or the bot's model settings.
 struct BotIssueActions {
@@ -39,10 +37,9 @@ struct BotIssueButtons: View {
     }
 }
 
-/// A bot's channel or thread in a chat panel. The bot's runtime owns the conversation; this
-/// is Woven's own chat UI over its protocol, with Pi Bot's thread behavior.
+/// A bot's channel or thread in a chat panel, from the bots' home machine.
 struct BotConversationSurface: View {
-    @Bindable var bots: BotsModel
+    @Bindable var bots: BotsStore
     let panelID: ChatPanelID
     let target: BotTarget
     let context: String?
@@ -62,13 +59,14 @@ struct BotConversationSurface: View {
     /// This machine's Profiles page, where a bot's model changes; Bot settings when unset.
     var onOpenProfiles: (() -> Void)?
 
-    private var session: BotMachineSession? { bots.session(for: target.machineID) }
-    private var bot: PiBotSummary? { session?.bots.first { $0.id == target.botID } }
+    /// The target belongs to the bots' home machine; one left from a former home does not.
+    private var isHome: Bool { bots.homeMachineID == target.machineID }
+    private var bot: PiBotSummary? { isHome ? bots.bots.first { $0.id == target.botID } : nil }
 
     var body: some View {
         Group {
-            if let session, session.isAvailable {
-                content(session)
+            if isHome, bots.isAvailable {
+                content
             } else {
                 unavailable
             }
@@ -77,20 +75,20 @@ struct BotConversationSurface: View {
         .environment(\.botIssueActions, BotIssueActions(openConnections: onOpenConnections,
                                                         openSettings: onOpenProfiles ?? onOpenSettings))
         // A provider connected in Settings, or by another client, ends first-run setup here.
-        .task(id: target.botID) { await session?.refreshOnboarding() }
+        .task(id: target.botID) { await bots.refreshOnboarding() }
     }
 
-    @ViewBuilder private func content(_ session: BotMachineSession) -> some View {
-            if session.onboarding?.needed == true {
+    @ViewBuilder private var content: some View {
+            if bots.onboarding?.needed == true {
                 ZStack {
-                    BotOnboardingView(bots: session, onOpenConnections: onOpenConnections)
+                    BotOnboardingView(bots: bots, onOpenConnections: onOpenConnections)
                     controls
                 }
             } else if target.isForum {
-                forum(session)
+                forum
             } else if let bot {
                 BotConversationWorkspace(
-                    bots: session,
+                    bots: bots,
                     bot: bot,
                     target: target,
                     context: context,
@@ -106,7 +104,7 @@ struct BotConversationSurface: View {
                     onRoute: onRoute,
                     onOpenLink: onOpenLink
                 )
-            } else if session.hasLoadedBots {
+            } else if bots.hasLoadedBots {
                 ZStack {
                     ConversationEmptyState(icon: .bot, title: "This bot was deleted",
                         detail: "Restore it from Settings → Bots, or choose another bot.")
@@ -117,11 +115,10 @@ struct BotConversationSurface: View {
             }
     }
 
-    /// The Forum takes a bot's place in the panel. A runtime from before the Forum has none.
-    @ViewBuilder private func forum(_ session: BotMachineSession) -> some View {
-        if session.supportsForum {
+    /// The Forum takes a bot's place in the panel.
+    private var forum: some View {
             ForumWorkspace(
-                bots: session,
+                bots: bots,
                 target: target,
                 headerInsets: headerInsets,
                 focusGeneration: focusGeneration,
@@ -135,21 +132,11 @@ struct BotConversationSurface: View {
                 onRoute: onRoute,
                 onOpenLink: onOpenLink
             )
-        } else if session.health != nil {
-            ZStack {
-                ConversationEmptyState(icon: .messageSquareReply, title: "The Forum needs an update",
-                    detail: "Update \(session.displayName) in Settings → Updates to use the Forum.")
-                controls
-            }
-        } else {
-            unavailable
-        }
     }
 
     private var unavailable: some View {
         ZStack {
-            BotsUnavailableView(machine: session?.machine ?? bots.machines.first { $0.id == target.machineID },
-                                onOpenSettings: onOpenSettings)
+            BotsUnavailableView(bots: isHome ? bots : nil, onOpenSettings: onOpenSettings)
             controls
         }
     }
@@ -221,7 +208,7 @@ struct BotThreadResizer: View {
 
 /// The main channel and, on wide panels, a thread beside it. Narrow panels show one at a time.
 private struct BotConversationWorkspace: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     let bot: PiBotSummary
     let target: BotTarget
     let context: String?
@@ -275,10 +262,10 @@ private struct BotConversationWorkspace: View {
             onActivate: onActivate,
             onClosePanel: onClosePanel,
             onAddPanel: onAddPanel,
-            onOpenThread: { onRoute(BotTarget(machineID: bots.machineID, botID: bot.id, conversationID: $0, showsThreadBesideMain: true)) },
+            onOpenThread: { onRoute(BotTarget(machineID: target.machineID, botID: bot.id, conversationID: $0, showsThreadBesideMain: true)) },
             onOpenLink: onOpenLink
         )
-        .id(BotConversationKey(machineID: bots.machineID, botID: bot.id, conversationID: conversationID))
+        .id(BotConversationKey(machineID: target.machineID, botID: bot.id, conversationID: conversationID))
     }
 
     private func threadPane(wide: Bool, split: Bool, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool) -> some View {
@@ -287,11 +274,11 @@ private struct BotConversationWorkspace: View {
         if wide {
             actions.append(BotPaneAction(glyph: split ? .maximize : .columns,
                 title: split ? "Expand thread" : "Show beside Main") {
-                onRoute(BotTarget(machineID: bots.machineID, botID: bot.id, conversationID: conversationID, showsThreadBesideMain: !split))
+                onRoute(BotTarget(machineID: target.machineID, botID: bot.id, conversationID: conversationID, showsThreadBesideMain: !split))
             })
         }
         actions.append(BotPaneAction(glyph: .close, title: "Back to Main") {
-            onRoute(BotTarget(machineID: bots.machineID, botID: bot.id))
+            onRoute(BotTarget(machineID: target.machineID, botID: bot.id))
         })
         return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split, actions: actions)
     }
@@ -315,9 +302,9 @@ private struct BotConversationPane: View {
     private static let messagePage = 60
     private static let endID = "bot-chat-end"
 
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     let bot: PiBotSummary
-    let controller: BotConversationController
+    let controller: BotChatStore
     let context: String?
     let headerInsets: BotHeaderInsets
     let headerActions: [BotPaneAction]
@@ -334,7 +321,7 @@ private struct BotConversationPane: View {
 
     @Environment(\.wovenTheme) private var theme
     @Environment(\.workspaceApplicationModel) private var appModel
-    @State private var attached: BotConversationController?
+    @State private var attached: BotChatStore?
     @State private var following = true
     @State private var isUserScrolling = false
     @State private var shownMessages = BotConversationPane.messagePage
@@ -369,7 +356,7 @@ private struct BotConversationPane: View {
             header
             if let status = bot.modelStatus, let statusKey = statusKey(status), statusKey != dismissedStatus {
                 BotModelStatusBanner(text: PiBotModelStatusText(status: status, botName: bot.name),
-                                     showsFixes: status.kind == "paused" || status.kind == "fallback") { dismissedStatus = statusKey }
+                                     showsFixes: status.kind == .paused || status.kind == .fallback) { dismissedStatus = statusKey }
                     .frame(maxWidth: 768)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
@@ -419,7 +406,7 @@ private struct BotConversationPane: View {
                     .help("Profile")
             }
             if !isThread, let tools = appModel?.agentTools {
-                let timers = tools.timers(forBot: bot.id, on: bots.machineID)
+                let timers = tools.timers(forBot: bot.id, on: key.machineID)
                 if !timers.isEmpty { BotTimersButton(botName: bot.name, timers: timers, tools: tools) }
             }
             ForEach(headerActions) { item in
@@ -753,11 +740,11 @@ private struct BotConversationPane: View {
 }
 
 /// The bot's own Woven timers (its schedule), labelled with its name. Each one
-/// reaches the bot as a message when it fires; this Mac keeps and fires them.
+/// reaches the bot as a message when it fires.
 private struct BotTimersButton: View {
     let botName: String
     let timers: [WorkspaceSessionTimer]
-    let tools: WorkspaceAgentToolsModel
+    let tools: AgentToolsStore
     @State private var shown = false
 
     private var title: String { "\(botName)’s timers" }
@@ -1070,12 +1057,13 @@ struct BotDismissibleError: View {
 }
 
 struct BotsUnavailableView: View {
-    let machine: BotMachine?
+    /// The bots, when the chat belongs to their home machine.
+    let bots: BotsStore?
     let onOpenSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            if machine?.state == .starting || machine?.state == .ready {
+            if bots?.state == .starting || bots?.state == .ready {
                 ProgressView().controlSize(.small)
             } else {
                 LucideIcon(glyph: .bot, size: 20)
@@ -1091,11 +1079,11 @@ struct BotsUnavailableView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var name: String { machine?.displayName ?? "that machine" }
+    private var name: String { bots?.displayName ?? "that machine" }
 
     private var title: String {
-        guard let machine else { return "This bot's machine isn't connected" }
-        switch machine.state {
+        guard let bots, bots.homeMachine != nil else { return "This bot's machine isn't connected" }
+        switch bots.state {
         case .off: return "Bots are off"
         case .starting: return "Starting bots…"
         case .ready: return "Connecting…"
@@ -1106,8 +1094,8 @@ struct BotsUnavailableView: View {
     }
 
     private var detail: String? {
-        guard let machine else { return "Connect it in Settings → Apple Devices or Settings → Workspaces, then try again." }
-        if machine.state == .off { return "Turn them on in Settings → Bots." }
-        return machine.message
+        guard let bots, bots.homeMachine != nil else { return "Choose where bots run in Settings → Bots, then try again." }
+        if bots.state == .off { return "Turn them on in Settings → Bots." }
+        return bots.message
     }
 }

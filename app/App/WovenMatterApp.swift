@@ -1,358 +1,30 @@
 import AppKit
-import Darwin
 import Foundation
 import SwiftUI
-import WovenMatterLibraryStore
-import WovenMatterClient
-import WovenMatterCore
 
-/// Client/snapshot variants are isolated; an explicit live host uses production's lease.
-/// Release builds always use the established workspace directory.
-enum WovenMatterWorkspacePaths {
-    static var folderName: String {
-        if let mode = DevelopmentLaunch.mode, let instance = DevelopmentLaunch.instance {
-            return mode.workspaceFolder(instance: instance)
-        }
-        #if DEBUG
-        let prefix = "wovenmatter.desktop.dev."
-        if let identifier = Bundle.main.bundleIdentifier, identifier.hasPrefix(prefix) {
-            let variant = String(identifier.dropFirst(prefix.count))
-            if !variant.isEmpty, variant.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) {
-                return "Woven Matter Dev/" + variant
-            }
-        }
-        #endif
-        return "Woven Matter"
+/// This app's own data folder: Application Support, named by the bundle
+/// identifier. A dev build has its own identifier per instance, so it never
+/// shares a folder with the installed app.
+enum AppDataFolder {
+    static var url: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support", directoryHint: .isDirectory)
+        return support.appending(path: Bundle.main.bundleIdentifier ?? "wovenmatter.desktop", directoryHint: .isDirectory)
+    }
+
+    /// The dev instance name `scripts/build_and_run.sh --instance` writes into
+    /// Info.plist; nil in a release build.
+    static var developmentInstance: String? {
+        Bundle.main.object(forInfoDictionaryKey: "WovenMatterDevelopmentInstance") as? String
     }
 }
 
-struct WorkspaceProcessLeaseOwner: Equatable, Sendable {
-    let processIdentifier: Int32
-    let bundleIdentifier: String
-    let bundlePath: String
-
-    init(
-        processIdentifier: Int32,
-        bundleIdentifier: String,
-        bundlePath: String
-    ) {
-        self.processIdentifier = processIdentifier
-        self.bundleIdentifier = bundleIdentifier
-        self.bundlePath = bundlePath
-    }
-
-    init?(line: String) {
-        let fields = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\t", omittingEmptySubsequences: false)
-        guard fields.count == 3,
-              let processIdentifier = Int32(fields[0]),
-              processIdentifier > 0,
-              !fields[1].isEmpty,
-              !fields[2].isEmpty else {
-            return nil
-        }
-        self.processIdentifier = processIdentifier
-        bundleIdentifier = String(fields[1])
-        bundlePath = String(fields[2])
-    }
-
-    var line: String {
-        "\(processIdentifier)\t\(bundleIdentifier)\t\(bundlePath)\n"
-    }
-}
-
-enum WorkspaceProcessLeaseError: Error {
-    case occupied(WorkspaceProcessLeaseOwner?)
-}
-
-enum WorkspaceProcessLeaseHandoffResult: Equatable {
-    case activated(WorkspaceProcessLeaseOwner)
-    case unavailable
-}
-
-struct WorkspaceProcessLeaseActivationCandidate {
-    let owner: WorkspaceProcessLeaseOwner
-    let isTerminated: () -> Bool
-    let activate: () -> Bool
-}
-
-enum WorkspaceProcessLeaseStartupResult {
-    case acquired(WorkspaceProcessLease)
-    case handedOff(WorkspaceProcessLeaseOwner)
-}
-
-enum WorkspaceProcessLeaseStartupError: Error, Equatable, LocalizedError {
-    case occupiedWithoutVerifiedIncumbent(
-        attempts: Int,
-        lastRecordedOwner: WorkspaceProcessLeaseOwner?
-    )
-
-    var errorDescription: String? {
-        switch self {
-        case .occupiedWithoutVerifiedIncumbent(let attempts, let owner):
-            let ownerDescription = owner.map {
-                "pid=\($0.processIdentifier) bundle=\($0.bundleIdentifier) path=\($0.bundlePath)"
-            } ?? "unidentified owner"
-            return "The workspace lease remained occupied after \(attempts) attempts, "
-                + "and no live incumbent could be activated (\(ownerDescription))."
-        }
-    }
-}
-
-final class WorkspaceProcessLease {
-    private static let appBundleIdentifiers = [
-        "wovenmatter.desktop",
-        "wovenmatter.desktop.dev",
-    ]
-
-    private let descriptor: Int32
-
-    init(fileURL: URL = WorkspaceProcessLease.defaultFileURL()) throws {
-        let owner = Self.currentOwner()
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let descriptor = fileURL.path.withCString {
-            Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-        }
-        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
-        guard Darwin.fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
-            let chmodError = errno
-            Darwin.close(descriptor)
-            throw POSIXError(POSIXErrorCode(rawValue: chmodError) ?? .EIO)
-        }
-        guard Darwin.lockf(descriptor, F_TLOCK, 0) == 0 else {
-            let lockError = errno
-            Darwin.close(descriptor)
-            if lockError == EACCES || lockError == EAGAIN {
-                let incumbent = (try? String(contentsOf: fileURL, encoding: .utf8))
-                    .flatMap(WorkspaceProcessLeaseOwner.init(line:))
-                throw WorkspaceProcessLeaseError.occupied(incumbent)
-            }
-            throw POSIXError(POSIXErrorCode(rawValue: lockError) ?? .EIO)
-        }
-
-        do {
-            try Self.write(owner.line, to: descriptor)
-        } catch {
-            _ = Darwin.lseek(descriptor, 0, SEEK_SET)
-            _ = Darwin.lockf(descriptor, F_ULOCK, 0)
-            Darwin.close(descriptor)
-            throw error
-        }
-        self.descriptor = descriptor
-    }
-
-    deinit {
-        _ = Darwin.lseek(descriptor, 0, SEEK_SET)
-        _ = Darwin.lockf(descriptor, F_ULOCK, 0)
-        Darwin.close(descriptor)
-    }
-
-    static func defaultFileURL(
-        applicationSupportDirectory: URL? = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first,
-        isolatedDirectory: URL? = IsolatedTestWorkspace.supportDirectory,
-        role: LocalExecutionRole = .current
-    ) -> URL {
-        if let isolated = isolatedDirectory {
-            return isolated.appending(path: role.leaseFileName)
-        }
-        let supportDirectory = applicationSupportDirectory
-            ?? FileManager.default.homeDirectoryForCurrentUser.appending(
-                path: "Library/Application Support",
-                directoryHint: .isDirectory
-            )
-        return supportDirectory.appending(
-            path: WovenMatterWorkspacePaths.folderName + "/" + role.leaseFileName,
-            directoryHint: .notDirectory
-        )
-    }
-
-    static func resolveStartup() throws -> WorkspaceProcessLeaseStartupResult {
-        let maximumAcquisitionAttempts = 11
-        let retryDelayMicroseconds: useconds_t = 50_000
-        var lastRecordedOwner: WorkspaceProcessLeaseOwner?
-
-        for attempt in 1...maximumAcquisitionAttempts {
-            do {
-                return .acquired(try WorkspaceProcessLease())
-            } catch WorkspaceProcessLeaseError.occupied(let owner) {
-                lastRecordedOwner = owner
-                switch activateIncumbent(owner) {
-                case .activated(let incumbent):
-                    return .handedOff(incumbent)
-                case .unavailable:
-                    guard attempt < maximumAcquisitionAttempts else {
-                        throw WorkspaceProcessLeaseStartupError
-                            .occupiedWithoutVerifiedIncumbent(
-                                attempts: maximumAcquisitionAttempts,
-                                lastRecordedOwner: lastRecordedOwner
-                            )
-                    }
-                    _ = Darwin.usleep(retryDelayMicroseconds)
-                }
-            }
-        }
-
-        // The loop bounds make this unreachable.
-        throw WorkspaceProcessLeaseStartupError.occupiedWithoutVerifiedIncumbent(
-            attempts: maximumAcquisitionAttempts,
-            lastRecordedOwner: lastRecordedOwner
-        )
-    }
-
-    static func acquireOrExit() -> WorkspaceProcessLease {
-        do {
-            // A service must never use GUI activation as proof of execution
-            // ownership. In particular, the frontend has a different lease.
-            if LocalExecutionRole.current == .backend {
-                do { return try WorkspaceProcessLease() }
-                catch WorkspaceProcessLeaseError.occupied {
-                    NSLog("Woven Matter backend already has an execution owner")
-                    Darwin.exit(EXIT_SUCCESS)
-                }
-            }
-            switch try resolveStartup() {
-            case .acquired(let lease):
-                let owner = currentOwner()
-                NSLog(
-                    "Woven Matter workspace lease acquired: pid=%d bundle=%@ path=%@",
-                    owner.processIdentifier,
-                    owner.bundleIdentifier,
-                    owner.bundlePath
-                )
-                return lease
-            case .handedOff(let incumbent):
-                NSLog(
-                    "Woven Matter handed off to workspace owner: pid=%d bundle=%@ path=%@",
-                    incumbent.processIdentifier,
-                    incumbent.bundleIdentifier,
-                    incumbent.bundlePath
-                )
-                Darwin.exit(EXIT_SUCCESS)
-            }
-        } catch {
-            NSLog(
-                "Woven Matter could not acquire its workspace lease: %@",
-                error.localizedDescription
-            )
-            Darwin.exit(EXIT_FAILURE)
-        }
-    }
-
-    private static func currentOwner() -> WorkspaceProcessLeaseOwner {
-        WorkspaceProcessLeaseOwner(
-            processIdentifier: ProcessInfo.processInfo.processIdentifier,
-            bundleIdentifier: Bundle.main.bundleIdentifier ?? "unknown",
-            bundlePath: Bundle.main.bundleURL.standardizedFileURL.path
-        )
-    }
-
-    private static func activateIncumbent(
-        _ owner: WorkspaceProcessLeaseOwner?
-    ) -> WorkspaceProcessLeaseHandoffResult {
-        verifyIncumbentHandoff(
-            owner,
-            currentProcessIdentifier: ProcessInfo.processInfo.processIdentifier,
-            candidateForProcessIdentifier: { processIdentifier in
-                NSRunningApplication(processIdentifier: processIdentifier)
-                    .flatMap { activationCandidate(for: $0) }
-            },
-            candidatesForBundleIdentifier: { bundleIdentifier in
-                NSRunningApplication.runningApplications(
-                    withBundleIdentifier: bundleIdentifier
-                ).compactMap { activationCandidate(for: $0) }
-            }
-        )
-    }
-
-    static func verifyIncumbentHandoff(
-        _ owner: WorkspaceProcessLeaseOwner?,
-        currentProcessIdentifier: Int32,
-        currentBundleIdentifier: String? = Bundle.main.bundleIdentifier,
-        candidateForProcessIdentifier: (Int32) -> WorkspaceProcessLeaseActivationCandidate?,
-        candidatesForBundleIdentifier: (String) -> [WorkspaceProcessLeaseActivationCandidate]
-    ) -> WorkspaceProcessLeaseHandoffResult {
-        let identifiers: [String]
-        if let currentBundleIdentifier, currentBundleIdentifier.hasPrefix("wovenmatter.desktop.dev.") {
-            identifiers = [currentBundleIdentifier]
-        } else { identifiers = appBundleIdentifiers }
-        if let owner,
-           identifiers.contains(owner.bundleIdentifier),
-           owner.processIdentifier != currentProcessIdentifier,
-           let candidate = candidateForProcessIdentifier(owner.processIdentifier),
-           candidate.owner == owner,
-           !candidate.isTerminated(),
-           candidate.activate(),
-           !candidate.isTerminated() {
-            return .activated(owner)
-        }
-        for bundleIdentifier in identifiers {
-            for candidate in candidatesForBundleIdentifier(bundleIdentifier) {
-                guard candidate.owner.bundleIdentifier == bundleIdentifier,
-                      candidate.owner.processIdentifier != currentProcessIdentifier,
-                      !candidate.isTerminated(),
-                      candidate.activate(),
-                      !candidate.isTerminated() else {
-                    continue
-                }
-                return .activated(candidate.owner)
-            }
-        }
-        return .unavailable
-    }
-
-    private static func activationCandidate(
-        for application: NSRunningApplication
-    ) -> WorkspaceProcessLeaseActivationCandidate? {
-        guard let bundleIdentifier = application.bundleIdentifier,
-              let bundlePath = application.bundleURL?.standardizedFileURL.path,
-              application.activationPolicy == .regular else {
-            return nil
-        }
-        return WorkspaceProcessLeaseActivationCandidate(
-            owner: WorkspaceProcessLeaseOwner(
-                processIdentifier: application.processIdentifier,
-                bundleIdentifier: bundleIdentifier,
-                bundlePath: bundlePath
-            ),
-            isTerminated: { application.isTerminated },
-            activate: { application.activate(options: [.activateAllWindows]) }
-        )
-    }
-
-    private static func write(_ string: String, to descriptor: Int32) throws {
-        guard Darwin.ftruncate(descriptor, 0) == 0,
-              Darwin.lseek(descriptor, 0, SEEK_SET) == 0 else {
-            throw currentPOSIXError()
-        }
-        let data = Data(string.utf8)
-        try data.withUnsafeBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress else { return }
-            var written = 0
-            while written < rawBuffer.count {
-                let result = Darwin.write(
-                    descriptor,
-                    baseAddress.advanced(by: written),
-                    rawBuffer.count - written
-                )
-                guard result > 0 else { throw currentPOSIXError() }
-                written += result
-            }
-        }
-        guard Darwin.fsync(descriptor) == 0,
-              Darwin.lseek(descriptor, 0, SEEK_SET) == 0 else {
-            throw currentPOSIXError()
-        }
-    }
-
-    private static func currentPOSIXError() -> POSIXError {
-        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-    }
+/// The one place the app starts this Mac's background server from its own
+/// signed program and connects the client layer to it. Not done yet: the
+/// window opens with empty stores.
+@MainActor
+enum ThisMachineServer {
+    static func startAndConnect(_ model: ApplicationModel) async {}
 }
 
 /// Actions belong to the active workspace window. Settings and setup windows
@@ -375,68 +47,13 @@ extension FocusedValues {
     }
 }
 
-#if !APP_FACADE_TESTS
 @main
 enum WovenMatterEntryPoint {
     @MainActor static func main() {
-        // First: the window, the background server, and the Serve helper all
-        // start Tailscale, directly or through ssh and the agent runtimes.
-        RemoteWorkspaceTailnet.selectCommandLineInterface()
-        // Service helpers must never initialize AppKit, SwiftUI, or a workspace.
-        if let status = TailscaleServeSupervisor.dispatch(arguments: CommandLine.arguments) {
-            Darwin.exit(status)
-        }
-        WindowPreferenceUpgrade.moveRenamedKeys(in: .standard)
-        // Dispatch before App.main and its delegate adaptor can initialize
-        // NSApplication. A service is not a second instance of the GUI app:
-        // LaunchServices and Sparkle must only see the frontend.
-        if LocalExecutionRole.current == .backend {
-            runBackend()
-        }
         // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
         // Install CEF's required AppKit subclass first, without loading Chromium.
-        if LocalExecutionRole.current != .backend {
-            WMBrowserRuntime.prepareApplication()
-        }
+        WMBrowserRuntime.prepareApplication()
         WovenMatterApp.main()
-    }
-
-    @MainActor private static func runBackend() -> Never {
-        do {
-            try DevelopmentLaunch.validate()
-            KeychainAccess.disableUnrequestedPrompts()
-            let lease = WorkspaceProcessLease.acquireOrExit()
-            try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
-                LocalExecutionRole.backendSocketURL(workspaceDirectory:
-                    WorkspaceProcessLease.defaultFileURL().deletingLastPathComponent()))
-            let model = ApplicationModel(startsAutomatically: false)
-            model.backgroundServerTermination = { [weak model] in
-                Task { @MainActor in
-                    await model?.finishBackendShutdown()
-                    WovenMatterBackendProcess.stop()
-                }
-            }
-            WovenMatterBackendProcess.run(start: {
-                Task {
-                    await model.startBackendService()
-                    if case .failed = model.state {
-                        // No usable endpoint: allow launchd to retry this failure.
-                        Darwin.exit(EXIT_FAILURE)
-                    }
-                    model.retry()
-                }
-            }, terminate: {
-                let response = await model.handleBackendRequest(.init(method: "server.stop",
-                    payload: (try? JSONEncoder().encode(BackgroundServerStopRequest(confirmed: true))) ?? Data()))
-                if let error = response.error { NSLog("Background shutdown deferred: %@", error) }
-                return response.error == nil
-            })
-            withExtendedLifetime((model, lease)) {}
-            Darwin.exit(EXIT_SUCCESS)
-        } catch {
-            NSLog("Woven Matter backend startup failed: %@", error.localizedDescription)
-            Darwin.exit(EXIT_FAILURE)
-        }
     }
 }
 
@@ -490,59 +107,23 @@ struct WorkspaceMenuCommands: Commands {
 
 struct WovenMatterApp: App {
     @NSApplicationDelegateAdaptor(WovenMatterLifecycleDelegate.self) private var lifecycleDelegate
-    private let workspaceProcessLease: WorkspaceProcessLease?
-    @State private var applicationModel: ApplicationModel
+    @State private var applicationModel = ApplicationModel()
 
     init() {
-        let isRunningUnitTests = ApplicationModel.isRunningUnitTests
-        if !isRunningUnitTests, IsolatedTestWorkspace.supportDirectory == nil {
-            do { try DevelopmentLaunch.validate() }
-            catch {
-                NSLog("Development launch refused: %@", error.localizedDescription)
-                Darwin.exit(EXIT_FAILURE)
-            }
-        }
-        if !isRunningUnitTests, LocalExecutionRole.current != .backend {
-            HarnessSetupPresentation.shared.prepareForLaunch()
-        }
-        if !isRunningUnitTests { KeychainAccess.disableUnrequestedPrompts() }
-        workspaceProcessLease = isRunningUnitTests
-            ? nil
-            : WorkspaceProcessLease.acquireOrExit()
-        _applicationModel = State(initialValue: ApplicationModel())
-        if !isRunningUnitTests {
-            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-               let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") {
-                ProductAnalyticsModel.markUpdateLaunched(version: version, build: build)
-            }
-        }
+        HarnessSetupPresentation.shared.prepareForLaunch()
     }
 
     var body: some Scene {
         WindowGroup {
             RootView(model: applicationModel)
                 .onAppear {
-                    applicationModel.configureDictationHistory()
-                    lifecycleDelegate.model = applicationModel
-                    DesktopUpdater.shared.start(model: applicationModel)
-                    FleetUpdatesModel.shared.attach(applicationModel)
+                    applicationModel.settings.configureDictationHistory()
+                    DesktopUpdater.shared.start()
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
                 .frame(minWidth: WovenMetrics.windowMinimumWidth, minHeight: 640)
-                .task {
-                    while !Task.isCancelled {
-                        await RemoteDeviceSetup.handle(model: applicationModel)
-                        do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                    }
-                }
+                .task { await ThisMachineServer.startAndConnect(applicationModel) }
                 .scrollIndicators(.never)
-                .onReceive(
-                    NotificationCenter.default.publisher(
-                        for: NSApplication.didResignActiveNotification
-                    )
-                ) { _ in
-                    Task { await applicationModel.flushNoteDrafts() }
-                }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUpdateNotification)) { _ in
                     // AppKit focus is not observable. Publish changes after its
                     // event cycle so the dictation command's enabled state follows it.
@@ -572,4 +153,3 @@ struct WovenMatterApp: App {
         }
     }
 }
-#endif

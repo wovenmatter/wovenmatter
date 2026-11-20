@@ -1,24 +1,12 @@
 import SwiftUI
-import WovenMatterCore
 
 struct ConversationGoalControls: View {
     @Environment(\.wovenTheme) private var theme
-    private let currentGoal: () -> WorkspaceGoal?
-    let sessionID: String
-    let update: (WorkspaceGoalMutation) async throws -> Void
-
-    init(tools: WorkspaceAgentToolsModel, sessionID: String) {
-        self.sessionID = sessionID
-        currentGoal = { tools.goals[sessionID] }
-        update = { try await tools.mutateGoalFromUI(sessionID: sessionID, mutation: $0) }
-    }
-    init(goal: WorkspaceGoal?, sessionID: String, update: @escaping (WorkspaceGoalMutation) async throws -> Void) {
-        self.sessionID = sessionID; currentGoal = { goal }; self.update = update
-    }
+    let session: SessionStore
     @State private var showingDetails = false
     @State private var error: String?
     @State private var busy = false
-    private var goal: WorkspaceGoal? { currentGoal() }
+    private var goal: WorkspaceGoal? { session.goal }
 
     var body: some View {
         if let goal {
@@ -89,7 +77,7 @@ struct ConversationGoalControls: View {
         Task {
             defer { busy = false }
             do {
-                try await update(mutation)
+                try await session.updateGoal(mutation)
                 showingDetails = false
             } catch { self.error = error.localizedDescription }
         }

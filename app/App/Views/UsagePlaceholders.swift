@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 /// Fades placeholders gently while data is on its way, and holds still under Reduce Motion.
 private struct UsagePlaceholderPulse: ViewModifier {

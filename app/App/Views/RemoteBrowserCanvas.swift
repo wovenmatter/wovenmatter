@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
 
 /// SwiftUI owns the session; this small AppKit surface owns native input and IME composition.
 struct RemoteBrowserCanvas: NSViewRepresentable {

@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 /// Reused by standalone Artifacts and Page embeds. The host callback is always
 /// bound to the original asset, including when it is embedded in another Page.

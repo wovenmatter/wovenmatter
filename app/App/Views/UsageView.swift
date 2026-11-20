@@ -1,6 +1,4 @@
 import SwiftUI
-import WovenMatterCore
-import WovenMatterLibraryStore
 
 enum UsagePage: String, CaseIterable, Identifiable {
     case analytics
@@ -32,7 +30,7 @@ struct UsageView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let error = model.localUsageError {
+            if let error = model.usage.error {
                 UsageErrorBanner(text: error)
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -41,27 +39,27 @@ struct UsageView: View {
             case .analytics:
                 // Before the first snapshot arrives, the full layout shows with placeholders.
                 UsageAnalyticsPage(
-                    snapshot: model.localUsage?.analytics
+                    snapshot: model.usage.snapshot?.analytics
                         ?? UsageAnalyticsSnapshot(range: range, generatedAt: Date(), samples: [], sources: []),
                     filters: $filters,
                     range: rangeSelectionBinding,
                     chartStyle: $chartStyle,
                     chartMetric: $chartMetric,
-                    devices: model.usageDevices,
-                    prices: model.usagePrices,
-                    isRefreshing: model.isRefreshingLocalUsage || model.localUsage == nil,
-                    historyImport: model.usageHistoryImport,
-                    retryPrices: { Task { await model.loadUsagePrices(force: true) } }
+                    machines: model.usage.machines,
+                    prices: model.usage.prices,
+                    isRefreshing: model.usage.isRefreshing || model.usage.snapshot == nil,
+                    historyImport: model.usage.historyImport,
+                    retryPrices: { Task { await model.usage.loadPrices(force: true) } }
                 )
             case .limits:
                 ScrollView {
                     Group {
-                        if let snapshot = model.localUsage {
+                        if let snapshot = model.usage.snapshot {
                             UsageLimitsPage(
                                 accounts: UsageLimitsPage.accounts(
                                     from: snapshot,
-                                    isRefreshingLimits: model.isRefreshingUsageLimits,
-                                    error: model.localUsageError
+                                    isRefreshingLimits: model.usage.isRefreshingLimits,
+                                    error: model.usage.error
                                 )
                             )
                         } else {
@@ -79,11 +77,11 @@ struct UsageView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(theme.palette.workspace)
         .task {
-            await model.usageDestinationAppeared(range: range)
+            await model.usage.destinationAppeared(range: range)
         }
         // Prices download only after the person chooses API estimates.
         .task(id: chartMetric) {
-            if chartMetric == .apiEstimate { await model.loadUsagePrices() }
+            if chartMetric == .apiEstimate { await model.usage.loadPrices() }
         }
     }
 
@@ -100,7 +98,7 @@ struct UsageView: View {
             Spacer(minLength: 8)
             if page == .limits {
                 ManageAccountsLink()
-            } else if let analytics = model.localUsage?.analytics, !analytics.sources.isEmpty {
+            } else if let analytics = model.usage.snapshot?.analytics, !analytics.sources.isEmpty {
                 // An empty placeholder has no sources, and hasn't really been updated.
                 Text("Updated \(analytics.generatedAt, format: .relative(presentation: .named))")
                     .font(.system(size: 11))
@@ -109,19 +107,18 @@ struct UsageView: View {
             }
             Button {
                 Task {
-                    async let usage: Void = model.refreshLocalUsage(
+                    async let usage: Void = model.usage.refresh(
                         range: range,
-                        refreshLimits: page == .limits,
-                        reason: .manual
+                        refreshLimits: page == .limits
                     )
                     if page == .analytics, chartMetric == .apiEstimate {
-                        await model.loadUsagePrices(force: true)
+                        await model.usage.loadPrices(force: true)
                     }
                     await usage
                 }
             } label: {
                 Group {
-                    if model.isRefreshingLocalUsage {
+                    if model.usage.isRefreshing {
                         ProgressView().controlSize(.small)
                     } else {
                         LucideIcon(glyph: .rotate, size: 14)
@@ -131,9 +128,9 @@ struct UsageView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(WovenIconButtonStyle())
-            .disabled(model.isRefreshingLocalUsage)
+            .disabled(model.usage.isRefreshing)
             .help("Refresh")
-            .accessibilityLabel(model.isRefreshingLocalUsage ? "Refreshing" : "Refresh")
+            .accessibilityLabel(model.usage.isRefreshing ? "Refreshing" : "Refresh")
         }
         // The reveal-rail buttons float over this corner when a sidebar is hidden.
         .padding(.horizontal, reservesRailControlSpace ? 60 : 20)
@@ -146,7 +143,7 @@ struct UsageView: View {
             set: { value in
                 page = value
                 if value == .analytics {
-                    Task { await model.usageAnalyticsSelected(range: range) }
+                    Task { await model.usage.analyticsSelected(range: range) }
                 }
             }
         )
@@ -160,7 +157,7 @@ struct UsageView: View {
                 range = value
                 UserDefaults.standard.set(value.rawValue, forKey: "wovenmatter.usage.range")
                 Task {
-                    await model.refreshLocalUsage(range: value, reason: .rangeChanged)
+                    await model.usage.refresh(range: value)
                 }
             }
         )

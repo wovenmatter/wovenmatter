@@ -6,18 +6,6 @@ enum CalendarColor: String, CaseIterable {
     case green = "lime"
     case blue, purple, red, pink, orange, yellow, black
 
-    init?(rawValue: String) {
-        // Carry existing selections into the renamed palette.
-        switch rawValue {
-        case "amber": self = .cognac
-        case "teal": self = .green
-        case "gray": self = .black
-        default:
-            guard let color = Self.allCases.first(where: { $0.rawValue == rawValue }) else { return nil }
-            self = color
-        }
-    }
-
     var title: String {
         switch self {
         case .britishRacingGreen: "British Racing Green"

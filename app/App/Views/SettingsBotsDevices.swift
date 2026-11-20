@@ -1,12 +1,10 @@
 import Observation
 import SwiftUI
-import WovenMatterClient
-import WovenMatterLibraryStore
 
 /// Install bots on another device: online Linux and macOS tailnet peers and what each
 /// needs before it can run bots. Closed on the Bots page until needed.
 struct BotsDiscoverDevicesRow: View {
-    @Bindable var bots: BotsModel
+    @Bindable var bots: BotsStore
     @State private var searching = false
     /// The install request being sent; the install itself runs in the background server
     /// and reports through the device's state.
@@ -54,7 +52,7 @@ struct BotsDiscoverDevicesRow: View {
             Button("Install") { install(device) }
             Button("Cancel", role: .cancel) { confirming = nil }
         } message: { _ in
-            Text("This installs the Woven server with bots over Tailscale SSH. It uses the SSH account's passwordless sudo to prepare the machine and set up its own container engine. You can add a workspace to it later.")
+            Text("This installs the Woven server over Tailscale SSH. It uses the SSH account's passwordless sudo to prepare the machine and set up its own container engine.")
         }
     }
 
@@ -76,7 +74,7 @@ struct BotsDiscoverDevicesRow: View {
             case .failed(let message):
                 SettingsError(message)
                 // A Linux machine can be tried again once the cause is fixed.
-                if device.system == .linux { HStack(spacing: 8) { installControls(device) } }
+                if device.platform == .linux { HStack(spacing: 8) { installControls(device) } }
             case .installBots, .ready: EmptyView()
             }
         }
@@ -91,7 +89,7 @@ struct BotsDiscoverDevicesRow: View {
     }
 
     private func summary(_ device: BotDiscoveredDevice) -> String {
-        let system = device.system == .linux ? "Linux" : "Mac"
+        let system = device.platform.displayName
         switch device.state {
         case .ready: return system + " · Ready"
         case .installBots: return system + " · No Woven server yet"
@@ -106,7 +104,7 @@ struct BotsDiscoverDevicesRow: View {
         error = nil
         Task {
             defer { searching = false }
-            do { try await bots.send(.discoverDevices) }
+            do { try await bots.discoverDevices() }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -119,7 +117,7 @@ struct BotsDiscoverDevicesRow: View {
         error = nil
         Task {
             defer { starting = nil }
-            do { try await bots.send(.installBots(hostName: device.hostName, userName: users[device.id]?.nilIfBlank)) }
+            do { try await bots.installServer(hostName: device.hostName, userName: users[device.id]?.nilIfBlank) }
             catch { self.error = "\(device.displayName): " + error.localizedDescription }
         }
     }

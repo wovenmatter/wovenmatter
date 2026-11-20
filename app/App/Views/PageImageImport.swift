@@ -3,8 +3,6 @@ import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterCore
-import WovenMatterLibraryStore
 
 /// Images on a Page are stored in the Page itself, made small enough to fit
 /// beside its writing. They come from the library's saved images, from Files,
@@ -32,7 +30,7 @@ import WovenMatterLibraryStore
     }
 
     static func libraryImages(_ model: ApplicationModel) -> [SavedArtifactLibraryItem] {
-        model.library.savedArtifacts.items.filter { PageImage.mediaTypes.contains($0.manifest.mediaType) || $0.manifest.mediaType == "image/heic" }
+        model.library.savedArtifacts.items.filter { PageImage.mediaTypes.contains($0.mediaType) || $0.mediaType == "image/heic" }
     }
 
     static var photosLibraryExists: Bool {
@@ -56,7 +54,7 @@ import WovenMatterLibraryStore
 
     static func image(from library: SavedArtifactLibraryItem, model: ApplicationModel) async throws -> PageImage? {
         guard let url = await model.library.savedArtifacts.prepare(library) else { return nil }
-        return try image(from: Data(contentsOf: url), name: library.manifest.title)
+        return try image(from: Data(contentsOf: url), name: library.title)
     }
 
     /// Keeps a small PNG, JPEG or GIF as it is. Anything larger is scaled down
@@ -174,9 +172,9 @@ struct PageImagePickers: ViewModifier {
                                 } label: {
                                     HStack {
                                         Image(systemName: "photo")
-                                        Text(item.manifest.title.isEmpty ? "Untitled image" : item.manifest.title)
+                                        Text(item.title.isEmpty ? "Untitled image" : item.title)
                                         Spacer()
-                                        Text(item.workspaceName).foregroundStyle(.secondary)
+                                        Text(item.machineName).foregroundStyle(.secondary)
                                     }.frame(maxWidth: .infinity, alignment: .leading)
                                 }.buttonStyle(WovenQuietButtonStyle())
                             }
