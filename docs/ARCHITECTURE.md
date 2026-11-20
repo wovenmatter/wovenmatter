@@ -334,6 +334,15 @@ separate code in `server/` and a separate process, is started from the app's
 own signed program. The person grants each permission once. See
 [Mac access](MAC_ACCESS.md).
 
+The app runs that program with `--server` as a per-user launchd agent, which
+it loads with `launchctl bootstrap` and starts with `kickstart`. Quitting the
+app leaves the server and its sessions running. macOS credits the agent's
+background activity to the app that loaded it, so after a quit the Dock shows
+Woven Matter as running in the background. Choosing **Stop Running in
+Background** there, or turning the app off under Background App Activity in
+System Settings, stops the server and whatever it is running. Opening the app
+starts it again.
+
 ## Development
 
 `scripts/build_and_run.sh --instance NAME` builds the app and starts it with

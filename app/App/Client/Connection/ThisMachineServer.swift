@@ -4,7 +4,9 @@ import WovenProtocol
 /// This Mac's background server: the app's own signed program run with
 /// `--server`, as a per-user launchd agent so it outlives the window. Closing
 /// or quitting the UI leaves it and its sessions running; launchd restarts it
-/// after a crash; any exit it chose stays stopped.
+/// after a crash; any exit it chose stays stopped. macOS credits the job to
+/// the app that bootstraps it, so the Dock's "Stop Running in Background" for
+/// the quit app removes it; the next start loads it again.
 ///
 /// The installed app's agent is a login item in ~/Library/LaunchAgents. A dev
 /// instance has its own label, data folder and socket (its bundle identifier

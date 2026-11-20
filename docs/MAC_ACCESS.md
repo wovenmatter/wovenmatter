@@ -47,6 +47,15 @@ the same reason. Exceptions:
 - Each development instance has its own bundle identifier and needs its own
   grants.
 
+macOS credits the agent's background activity to the app as well. The app
+loads the agent itself (`launchctl bootstrap`, then `kickstart`), so launchd
+attributes the job to the app. After the app quits, the Dock shows it as
+running in the background. Its **Stop Running in Background** item, or turning
+the app off under General → Login Items & Extensions → Background App
+Activity, stops the server. Quitting the app normally, or the app exiting on a
+signal, leaves the server running. Opening the app loads and starts the
+server again.
+
 ## Keychain
 
 On a Mac the server keeps this machine's private key and its subscription
