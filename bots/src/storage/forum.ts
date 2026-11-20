@@ -10,8 +10,8 @@ export const FORUM_SEATS_TABLE = "bot_forum_seats";
 export const FORUM_OWED_TABLE = "bot_forum_owed";
 export const FORUM_UNANSWERED_TABLE = "bot_forum_unanswered";
 export const FORUM_SCHEDULES_TABLE = "bot_forum_schedules";
-/** The visual reply a bot's post carries (`render_html` from its seat): a reference, the HTML is the server's. */
-export const FORUM_VISUAL_REPLIES_TABLE = "bot_forum_visual_replies";
+/** Every conversation a bot has heard a room through, kept after its seat goes, for the library copy. */
+export const FORUM_SEAT_CONVERSATIONS_TABLE = "bot_forum_seat_conversations";
 
 /** The entry kind of a seat's inputs; its data says how far the input takes the seat. */
 export const DELIVERY_KIND = "forum.delivery";
@@ -32,8 +32,7 @@ export type ForumRoom = {
 export type ForumPostRecord = {
   readonly id: number;
   readonly roomId: number;
-  /** `agent`: an agent session posted for the user through the Woven tools; `name` is its name. */
-  readonly author: "user" | "bot" | "agent";
+  readonly author: "user" | "bot";
   readonly botId?: string;
   /** The author's name when it posted, so a renamed or deleted bot's posts keep theirs. */
   readonly name: string;
@@ -45,6 +44,8 @@ export type ForumPostRecord = {
   readonly auto: boolean;
   /** The bot conversation a bot's post was made from. */
   readonly origin?: number;
+  /** The person's open notes when they posted: told to the bots that hear it, never shown. */
+  readonly context?: string;
   /** A visual reply the bot published from its seat; the post has no text then. */
   readonly visualReply?: VisualReply;
   readonly createdAt: string;
@@ -108,10 +109,9 @@ type PostRow = {
   is_auto: number;
   origin_conversation: number | null;
   created_at: string;
-  reply_title: string | null;
-  reply_height: number | null;
-  reply_digest: string | null;
-  reply_size: number | null;
+  /** JSON: the visual reply's reference; the HTML is in the server's content store. */
+  visual_reply: string | null;
+  context: string | null;
 };
 type SeatRow = {
   room_id: number;
@@ -134,10 +134,8 @@ type ScheduleRow = {
   created_at: string;
 };
 
-/** A post's columns with its visual reply's, from `FROM ${POSTS}`. */
-const POSTS = `${FORUM_POSTS_TABLE} LEFT JOIN ${FORUM_VISUAL_REPLIES_TABLE} ON post_id = id`;
 const POST_COLUMNS =
-  "id, room_id, author, bot_id, name, text, mentions, is_scheduled, is_auto, origin_conversation, created_at, reply_title, reply_height, reply_digest, reply_size";
+  "id, room_id, author, bot_id, name, text, mentions, is_scheduled, is_auto, origin_conversation, created_at, visual_reply, context";
 
 function stringList(json: string): string[] {
   try {
@@ -158,10 +156,22 @@ const toRoom = (row: RoomRow): ForumRoom => ({
   pinned: row.is_pinned === 1,
 });
 
+function visualReplyOf(json: string | null): VisualReply | undefined {
+  if (json === null) return undefined;
+  try {
+    const value = JSON.parse(json) as Partial<VisualReply>;
+    return typeof value.digest === "string"
+      ? { title: String(value.title ?? ""), height: Number(value.height) || 0, digest: value.digest, size: Number(value.size) || 0 }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const toPost = (row: PostRow): ForumPostRecord => ({
   id: row.id,
   roomId: row.room_id,
-  author: row.author === "bot" || row.author === "agent" ? row.author : "user",
+  author: row.author === "bot" ? "bot" : "user",
   ...(row.bot_id ? { botId: row.bot_id } : {}),
   name: row.name,
   text: row.text,
@@ -169,16 +179,8 @@ const toPost = (row: PostRow): ForumPostRecord => ({
   scheduled: row.is_scheduled === 1,
   auto: row.is_auto === 1,
   ...(row.origin_conversation === null ? {} : { origin: row.origin_conversation }),
-  ...(row.reply_digest === null
-    ? {}
-    : {
-        visualReply: {
-          title: row.reply_title ?? "",
-          height: row.reply_height ?? 0,
-          digest: row.reply_digest,
-          size: row.reply_size ?? 0,
-        },
-      }),
+  ...(row.context ? { context: row.context } : {}),
+  ...(visualReplyOf(row.visual_reply) ? { visualReply: visualReplyOf(row.visual_reply) as VisualReply } : {}),
   createdAt: row.created_at,
 });
 
@@ -226,7 +228,7 @@ export class ForumStore {
           id INTEGER PRIMARY KEY AUTOINCREMENT, room_id INTEGER NOT NULL, author TEXT NOT NULL,
           bot_id TEXT, name TEXT NOT NULL, text TEXT NOT NULL, mentions TEXT NOT NULL DEFAULT '[]',
           is_scheduled INTEGER NOT NULL DEFAULT 0, is_auto INTEGER NOT NULL DEFAULT 0,
-          origin_conversation INTEGER, created_at TEXT NOT NULL
+          origin_conversation INTEGER, created_at TEXT NOT NULL, visual_reply TEXT, context TEXT
         ) STRICT;
         CREATE INDEX IF NOT EXISTS ${FORUM_POSTS_TABLE}_room ON ${FORUM_POSTS_TABLE} (room_id, id);
         CREATE TABLE IF NOT EXISTS ${FORUM_BOTS_TABLE} (
@@ -236,6 +238,10 @@ export class ForumStore {
           room_id INTEGER NOT NULL, bot_id TEXT NOT NULL, conversation_id INTEGER,
           baseline INTEGER NOT NULL DEFAULT 0, cursor INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY (room_id, bot_id)
+        ) STRICT;
+        CREATE TABLE IF NOT EXISTS ${FORUM_SEAT_CONVERSATIONS_TABLE} (
+          conversation_id INTEGER NOT NULL, bot_id TEXT NOT NULL, room_id INTEGER NOT NULL,
+          PRIMARY KEY (bot_id, conversation_id)
         ) STRICT;
         CREATE TABLE IF NOT EXISTS ${FORUM_OWED_TABLE} (
           room_id INTEGER NOT NULL, bot_id TEXT NOT NULL, post_id INTEGER NOT NULL,
@@ -249,10 +255,6 @@ export class ForumStore {
           id TEXT PRIMARY KEY, text TEXT NOT NULL, mentions TEXT NOT NULL DEFAULT '[]',
           everyone INTEGER NOT NULL DEFAULT 0, repeat TEXT NOT NULL, time TEXT, weekday INTEGER,
           at INTEGER, time_zone TEXT NOT NULL, last_run TEXT, created_at TEXT NOT NULL
-        ) STRICT;
-        CREATE TABLE IF NOT EXISTS ${FORUM_VISUAL_REPLIES_TABLE} (
-          post_id INTEGER PRIMARY KEY, reply_title TEXT NOT NULL, reply_height INTEGER NOT NULL,
-          reply_digest TEXT NOT NULL, reply_size INTEGER NOT NULL
         ) STRICT;
       `);
       await tx.run(
@@ -353,10 +355,6 @@ export class ForumStore {
         `DELETE FROM ${FORUM_UNANSWERED_TABLE} WHERE post_id IN (SELECT id FROM ${FORUM_POSTS_TABLE} WHERE room_id = ?)`,
         roomId,
       );
-      await tx.run(
-        `DELETE FROM ${FORUM_VISUAL_REPLIES_TABLE} WHERE post_id IN (SELECT id FROM ${FORUM_POSTS_TABLE} WHERE room_id = ?)`,
-        roomId,
-      );
       await tx.run(`DELETE FROM ${FORUM_OWED_TABLE} WHERE room_id = ?`, roomId);
       await tx.run(`DELETE FROM ${FORUM_SEATS_TABLE} WHERE room_id = ?`, roomId);
       await tx.run(`DELETE FROM ${FORUM_POSTS_TABLE} WHERE room_id = ?`, roomId);
@@ -375,7 +373,7 @@ export class ForumStore {
     const createdAt = post.createdAt ?? new Date().toISOString();
     return this.#db.transaction(async (tx) => {
       const row = await tx.get<{ id: number }>(
-        `INSERT INTO ${FORUM_POSTS_TABLE} (room_id, author, bot_id, name, text, mentions, is_scheduled, is_auto, origin_conversation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO ${FORUM_POSTS_TABLE} (room_id, author, bot_id, name, text, mentions, is_scheduled, is_auto, origin_conversation, created_at, visual_reply, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
         post.roomId,
         post.author,
         post.botId ?? null,
@@ -386,19 +384,10 @@ export class ForumStore {
         post.auto ? 1 : 0,
         post.origin ?? null,
         createdAt,
+        post.visualReply ? JSON.stringify(post.visualReply) : null,
+        post.context ?? null,
       );
       if (!row) throw new Error("the post was not stored");
-      const reply = post.visualReply;
-      if (reply) {
-        await tx.run(
-          `INSERT INTO ${FORUM_VISUAL_REPLIES_TABLE} (post_id, reply_title, reply_height, reply_digest, reply_size) VALUES (?, ?, ?, ?, ?)`,
-          row.id,
-          reply.title,
-          reply.height,
-          reply.digest,
-          reply.size,
-        );
-      }
       for (const botId of options.join ?? []) {
         await tx.run(
           `INSERT OR IGNORE INTO ${FORUM_SEATS_TABLE} (room_id, bot_id) VALUES (?, ?)`,
@@ -420,7 +409,7 @@ export class ForumStore {
 
   async post(id: number): Promise<ForumPostRecord | undefined> {
     const row = await this.#db.get<PostRow>(
-      `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE id = ?`,
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE id = ?`,
       id,
     );
     return row ? toPost(row) : undefined;
@@ -429,7 +418,7 @@ export class ForumStore {
   /** A room's posts after post `after`, oldest first. */
   async postsAfter(roomId: number, after: number): Promise<ForumPostRecord[]> {
     const rows = await this.#db.all<PostRow>(
-      `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE room_id = ? AND id > ? ORDER BY id`,
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE room_id = ? AND id > ? ORDER BY id`,
       roomId,
       after,
     );
@@ -439,7 +428,7 @@ export class ForumStore {
   /** Up to `limit` posts of every room after post `after`, oldest first. */
   async postsAbove(after: number, limit: number): Promise<ForumPostRecord[]> {
     const rows = await this.#db.all<PostRow>(
-      `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE id > ? ORDER BY id LIMIT ?`,
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE id > ? ORDER BY id LIMIT ?`,
       after,
       limit,
     );
@@ -453,7 +442,7 @@ export class ForumStore {
     limit: number,
   ): Promise<ForumPostRecord[]> {
     const rows = await this.#db.all<PostRow>(
-      `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?`,
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE room_id = ? AND id < ? ORDER BY id DESC LIMIT ?`,
       roomId,
       before ?? Number.MAX_SAFE_INTEGER,
       limit,
@@ -477,7 +466,7 @@ export class ForumStore {
 
   async firstPost(roomId: number): Promise<ForumPostRecord | undefined> {
     const row = await this.#db.get<PostRow>(
-      `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE room_id = ? ORDER BY id LIMIT 1`,
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE room_id = ? ORDER BY id LIMIT 1`,
       roomId,
     );
     return row ? toPost(row) : undefined;
@@ -486,7 +475,7 @@ export class ForumStore {
   /** Each room's first post. */
   async firstPosts(): Promise<Map<number, ForumPostRecord>> {
     const rows = await this.#db.all<PostRow>(
-      `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE id IN (SELECT MIN(id) FROM ${FORUM_POSTS_TABLE} GROUP BY room_id)`,
+      `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE id IN (SELECT MIN(id) FROM ${FORUM_POSTS_TABLE} GROUP BY room_id)`,
     );
     return new Map(rows.map((row) => [row.room_id, toPost(row)]));
   }
@@ -496,7 +485,7 @@ export class ForumStore {
     for (let start = 0; start < ids.length; start += 400) {
       const slice = ids.slice(start, start + 400);
       const rows = await this.#db.all<PostRow>(
-        `SELECT ${POST_COLUMNS} FROM ${POSTS} WHERE id IN (${slice.map(() => "?").join(", ")})`,
+        `SELECT ${POST_COLUMNS} FROM ${FORUM_POSTS_TABLE} WHERE id IN (${slice.map(() => "?").join(", ")})`,
         ...slice,
       );
       for (const row of rows) found.set(row.id, toPost(row));
@@ -589,12 +578,29 @@ export class ForumStore {
   }
 
   async setSeatConversation(roomId: number, botId: string, conversationId: number): Promise<void> {
-    await this.#db.run(
-      `UPDATE ${FORUM_SEATS_TABLE} SET conversation_id = ? WHERE room_id = ? AND bot_id = ?`,
-      conversationId,
-      roomId,
+    await this.#db.transaction(async (tx) => {
+      await tx.run(
+        `UPDATE ${FORUM_SEATS_TABLE} SET conversation_id = ? WHERE room_id = ? AND bot_id = ?`,
+        conversationId,
+        roomId,
+        botId,
+      );
+      await tx.run(
+        `INSERT OR IGNORE INTO ${FORUM_SEAT_CONVERSATIONS_TABLE} (conversation_id, bot_id, room_id) VALUES (?, ?, ?)`,
+        conversationId,
+        botId,
+        roomId,
+      );
+    });
+  }
+
+  /** Every conversation the bot has heard a room through, its seat there gone or not. */
+  async seatConversations(botId: string): Promise<{ conversationId: number; roomId: number }[]> {
+    const rows = await this.#db.all<{ conversation_id: number; room_id: number }>(
+      `SELECT conversation_id, room_id FROM ${FORUM_SEAT_CONVERSATIONS_TABLE} WHERE bot_id = ? ORDER BY conversation_id`,
       botId,
     );
+    return rows.map((row) => ({ conversationId: row.conversation_id, roomId: row.room_id }));
   }
 
   async setSeatCursor(roomId: number, botId: string, cursor: number): Promise<void> {
@@ -666,7 +672,7 @@ export class ForumStore {
     botId: string,
     upTo: number,
     outcome:
-      | { readonly post: Omit<ForumPostRecord, "id" | "createdAt"> }
+      | { readonly post: Omit<ForumPostRecord, "id" | "createdAt" | "visualReply"> }
       | { readonly unanswered: Omit<ForumUnanswered, "postId" | "botId"> },
     at = new Date().toISOString(),
   ): Promise<{ readonly post?: ForumPostRecord; readonly noted: number[] }> {
@@ -767,6 +773,7 @@ export class ForumStore {
   async forgetBot(botId: string): Promise<void> {
     await this.#db.transaction(async (tx) => {
       await tx.run(`DELETE FROM ${FORUM_BOTS_TABLE} WHERE bot_id = ?`, botId);
+      await tx.run(`DELETE FROM ${FORUM_SEAT_CONVERSATIONS_TABLE} WHERE bot_id = ?`, botId);
       await tx.run(`DELETE FROM ${FORUM_SEATS_TABLE} WHERE bot_id = ?`, botId);
       await tx.run(`DELETE FROM ${FORUM_OWED_TABLE} WHERE bot_id = ?`, botId);
     });

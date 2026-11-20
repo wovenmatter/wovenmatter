@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_EDITED_FACT_CHARS } from "./memory.ts";
+import { MAX_CONTEXT_LENGTH } from "./message-context.ts";
 import type { DisplayEntry } from "./transcript.ts";
 
 const botId = z.string().uuid();
@@ -174,7 +175,11 @@ export const requestSchema = z.discriminatedUnion("type", [
     /** Starts a new thread for this message instead of using `conversationId`. */
     newThread: z.literal(true).optional(),
     text: z.string().min(1).max(100_000),
-    context: z.string().max(4000).optional(),
+    context: z.string().max(MAX_CONTEXT_LENGTH).optional(),
+    /** Set by the server: an agent session sent this (`message_bot`), saved as from it. */
+    from: z
+      .strictObject({ name: z.string().trim().min(1).max(200), sessionId: z.string().min(1).max(200) })
+      .optional(),
     /** Set by the server: a retry with the same id is accepted without submitting again. */
     deliveryId: z.string().min(1).max(128).optional(),
   }),
@@ -236,6 +241,8 @@ export const requestSchema = z.discriminatedUnion("type", [
   // The Forum: one group chat of the user and every bot, with threads (`forum.ts`).
   z.strictObject({ id: requestId, type: z.literal("forum.get") }),
   z.strictObject({ id: requestId, type: z.literal("forum.open"), roomId: roomId.optional() }),
+  // Stop the turns bots are running in one room, as a chat's Stop does (not Pause).
+  z.strictObject({ id: requestId, type: z.literal("forum.abort"), roomId }),
   z.strictObject({
     id: requestId,
     type: z.literal("forum.close"),
@@ -259,8 +266,8 @@ export const requestSchema = z.discriminatedUnion("type", [
     mentions: z.array(botId).max(1000).optional(),
     /** Ask every bot in the room. */
     everyone: z.boolean().optional(),
-    /** Set by the server: an agent session posts for the user, by its name. */
-    agent: z.string().trim().min(1).max(200).optional(),
+    /** The person's open notes when they posted, for the bots in the room, as a chat message's. */
+    context: z.string().max(MAX_CONTEXT_LENGTH).optional(),
     deliveryId: z.string().min(1).max(128).optional(),
   }),
   z.strictObject({ id: requestId, type: z.literal("forum.thread.create"), postId }),
@@ -399,10 +406,9 @@ export type ForumPost = {
   /** Grows across every room; a post never changes its id or text. */
   id: number;
   roomId: number;
-  /** `agent`: an agent session posted for the user through the Woven tools. */
-  author: "user" | "bot" | "agent";
+  author: "user" | "bot";
   botId?: string;
-  /** The author's name when it posted ("" for a user without one); an agent session's name. */
+  /** The author's name when it posted ("" for a user without one). */
   name: string;
   text: string;
   /** A visual reply the bot published with `render_html` in this room; the post has no text then. */
@@ -679,6 +685,7 @@ export type Replies = {
   "forum.get": ForumState;
   "forum.open": ForumRoomSnapshot;
   "forum.close": { closed: boolean };
+  "forum.abort": { roomId: number; stopped: string[] };
   "forum.posts": { posts: ForumPost[]; hasEarlier: boolean };
   "forum.post": { post: ForumPost } | { duplicate: true };
   "forum.thread.create": { thread: ForumThreadSummary };
@@ -733,12 +740,14 @@ export type MirrorItem = {
   conversationId: number;
   /** Epoch ms. */
   createdAt: number;
-  kind: "user" | "assistant" | "tool" | "visualReply" | "error" | "stopped";
-  /** user, assistant, error. */
+  kind: "user" | "assistant" | "thinking" | "tool" | "visualReply" | "error" | "stopped";
+  /** user, assistant, thinking (the model's reasoning, as sessions save it), error. */
   text?: string;
   tool?: { name: string; input: string; output?: string; failed: boolean };
   /** visualReply: shown in place of the `render_html` call that published it. */
   visualReply?: VisualReply;
+  /** user: an agent session that sent it (`message_bot`), not the person. */
+  from?: { name: string; sessionId: string };
   /** One model turn's usage, on the first item of that turn (its text when it has any). */
   usage?: {
     /** `provider/model`. */
@@ -765,17 +774,21 @@ export type MirrorBot = {
     /** ISO 8601. */
     createdAt: string;
   };
-  /** The main channel and every thread (Forum seats and subagents are never mirrored). */
+  /** The main channel and every thread (Forum seats go with the Forum; subagents are never mirrored). */
   conversations: MirrorConversation[];
   /** Sorted by entry, then n. At most 200. */
   items: MirrorItem[];
-  /**
-   * The usage of the bot's model turns in its Forum seats, whose conversations are not mirrored:
-   * one per assistant message, keyed like items (`<entryId>` or `<entryId>.<n>`).
-   */
-  forumUsage?: { key: string; roomId: number; createdAt: number; usage: NonNullable<MirrorItem["usage"]> }[];
   /** Entries through this id are covered. */
   upTo: number;
+};
+
+/** One model turn's usage in a bot's Forum seat, keyed like items (`<entryId>` or `<entryId>.<n>`). */
+export type MirrorSeatUsage = {
+  botId: string;
+  key: string;
+  roomId: number;
+  createdAt: number;
+  usage: NonNullable<MirrorItem["usage"]>;
 };
 
 export type MirrorForum = {
@@ -784,7 +797,7 @@ export type MirrorForum = {
   posts: {
     id: number;
     roomId: number;
-    author: "user" | "bot" | "agent";
+    author: "user" | "bot";
     botId?: string;
     name: string;
     text: string;
@@ -793,12 +806,22 @@ export type MirrorForum = {
     /** Epoch ms. */
     createdAt: number;
   }[];
+  /**
+   * What bots did in their seats for these rooms: their tool calls and thinking (not their private
+   * words, nor the posts and visual replies they made, which are posts), saved in the room in time
+   * order with the posts, under the bot's name. `conversationId` is the seat's room.
+   */
+  seatItems?: { botId: string; name: string; item: MirrorItem }[];
+  /** Every model turn of the bots' seats, whatever it said. */
+  seatUsage?: MirrorSeatUsage[];
+  /** Each bot's seat entries through this id are covered. */
+  seats?: Record<string, number>;
   /** Posts through this id are covered. */
   upTo: number;
 };
 
-/** The server's checkpoints: what it already holds of each bot and of the Forum. */
-export type MirrorCheckpoints = { bots: Record<string, number>; forum: number };
+/** The server's checkpoints: what it already holds of each bot, of the Forum and of each bot's seats. */
+export type MirrorCheckpoints = { bots: Record<string, number>; forum: number; seats?: Record<string, number> };
 
 type Empty = Record<string, never>;
 

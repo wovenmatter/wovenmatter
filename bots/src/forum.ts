@@ -11,6 +11,7 @@ import {
 import { type Bot, type BotManager, NO_MODEL_MESSAGE, NotFoundError } from "./bots.ts";
 import { conversationId as toConversationId, entryId as toEntryId } from "./ids.ts";
 import { errorIssue } from "./issues.ts";
+import { contextNote } from "./message-context.ts";
 import type {
   ForumPost,
   ForumRoomSnapshot,
@@ -552,8 +553,8 @@ export class Forum {
     readonly mentions?: readonly string[];
     readonly everyone?: boolean;
     readonly scheduled?: boolean;
-    /** An agent session that posts for the user, by its name. */
-    readonly agent?: string;
+    /** The person's open notes, for the bots that hear the post (`contextNote`). */
+    readonly context?: string;
   }): Promise<ForumPost> {
     if (!input.text.trim()) throw new ForumError("a post needs some text");
     if (input.text.length > MAX_POST_CHARS) throw new ForumError("that post is too long");
@@ -571,12 +572,13 @@ export class Forum {
     const record = await this.store.addPost(
       {
         roomId: room.id,
-        author: input.agent ? "agent" : "user",
-        name: input.agent ?? (await this.userName()) ?? "",
+        author: "user",
+        name: (await this.userName()) ?? "",
         text: input.text,
         mentions,
         scheduled: input.scheduled === true,
         auto: false,
+        ...(input.context ? { context: input.context } : {}),
       },
       { join },
     );
@@ -644,6 +646,21 @@ export class Forum {
   }
 
   /**
+   * Where a visual reply from the bot's seat (`conversationId`) would be posted, checked before it
+   * is published so a refused one is never stored: the bot is in the Forum, it is not paused, and
+   * the conversation is a seat.
+   */
+  async visualReplyRoom(
+    botId: string,
+    conversationId: number,
+  ): Promise<{ readonly record: BotRecord; readonly room: ForumRoom }> {
+    const record = await this.#poster(botId);
+    const seat = await this.store.seatOfConversation(botId, conversationId);
+    if (!seat) throw new ForumError("This conversation is not one of your Forum seats.");
+    return { record, room: await this.#room(seat.roomId) };
+  }
+
+  /**
    * A visual reply the bot published with `render_html` from its seat (`conversationId`): a post of
    * its own in that seat's room, in order with what it posts. It answers no mention: the reply the
    * bot owes is still its words.
@@ -653,10 +670,7 @@ export class Forum {
     conversationId: number,
     visualReply: VisualReply,
   ): Promise<ForumPostRecord> {
-    const record = await this.#poster(botId);
-    const seat = await this.store.seatOfConversation(botId, conversationId);
-    if (!seat) throw new ForumError("This conversation is not one of your Forum seats.");
-    const room = await this.#room(seat.roomId);
+    const { record, room } = await this.visualReplyRoom(botId, conversationId);
     const post = await this.store.addPost({
       roomId: room.id,
       author: "bot",
@@ -714,7 +728,6 @@ export class Forum {
 
   #author(post: ForumPostRecord, readerId: string, user: string): string {
     if (post.author === "user") return post.scheduled ? `${user} (scheduled post)` : user;
-    if (post.author === "agent") return `${post.name} (an agent session of ${user}'s)`;
     return post.botId === readerId ? "You" : post.name;
   }
 
@@ -865,6 +878,24 @@ export class Forum {
       this.#events.changed?.();
     }
     return this.state();
+  }
+
+  /**
+   * The person's Stop in a room: every bot working there has its turn stopped, as a chat's Stop
+   * stops its bot; other rooms go on, and the Forum is not paused. A mention a stopped bot owed
+   * gets its note. Returns the bots that were working.
+   */
+  async stopRoom(roomId: number): Promise<string[]> {
+    const room = await this.#room(roomId);
+    const stopped: string[] = [];
+    await Promise.all(
+      (await this.store.seats(room.id)).map((seat) =>
+        this.#enqueue(seat.roomId, seat.botId, async () => {
+          if (await this.#stop(seat)) stopped.push(seat.botId);
+        }),
+      ),
+    );
+    return stopped.sort();
   }
 
   /**
@@ -1192,6 +1223,9 @@ export class Forum {
         lead(`You have not replied to ${user}'s mention in ${where} yet: reply with forum_post.`),
       );
     }
+    // The person's open notes when they last posted, said first, as a chat message carries them.
+    const context = unseen.findLast((post) => post.author === "user" && post.context)?.context;
+    if (context) parts.unshift(contextNote(context));
     return parts.join("\n\n");
   }
 

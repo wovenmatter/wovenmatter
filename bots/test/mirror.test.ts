@@ -1,6 +1,6 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mirrorItems } from "../src/mirror.ts";
 import { displayEntry } from "../src/transcript.ts";
@@ -135,71 +135,138 @@ describe("the library copy", () => {
   });
 });
 
-describe("a Forum turn", () => {
+describe("a bot's turns in the library", () => {
   let dir: Awaited<ReturnType<typeof tempDir>>;
   let app: TestRuntime;
   let server: FakeServer;
+  let library: Library;
+  const visualReply = { title: "Sales", height: 320, digest: "b".repeat(64), size: 14 };
   afterEach(async () => {
     await server.close();
     await app.close();
     await dir.cleanup();
   });
 
-  it("posts a visual reply in order with the bot's words, saves it once as a reference, and records each model turn's usage once", async () => {
+  /**
+   * A bot that looks something up with a Woven tool (thinking first), then answers: in the Forum
+   * it publishes a visual reply before its words. The server's Woven tools answer from here.
+   */
+  const start = async (debounceMs = 10) => {
     dir = await tempDir();
-    // The bot answers a Forum mention with a visual reply, then words; anything else gets "ok".
     const faux = fauxProvider({ tokensPerSecond: 5000 });
-    type Context = { messages?: { role: string; content: unknown }[] };
+    type Context = { messages?: { role: string; content: unknown; toolName?: string }[] };
     const step = (context: unknown) => {
       const messages = (context as Context).messages ?? [];
       const last = messages.at(-1);
-      if (last?.role === "toolResult") return fauxAssistantMessage([fauxText("Here it is.")]);
-      if (JSON.stringify(last?.content ?? "").includes("[Forum]")) {
+      const forum = messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes("[Forum"));
+      if (last?.role === "toolResult" && last.toolName === "woven_list_places" && forum) {
         return fauxAssistantMessage([fauxToolCall("woven_render_html", { html: "<h1>Sales</h1>" })], { stopReason: "toolUse" });
+      }
+      if (last?.role === "toolResult") return fauxAssistantMessage([fauxText("Here it is.")]);
+      if (last?.role === "user" && (forum || JSON.stringify(last.content).includes("look it up"))) {
+        return fauxAssistantMessage([fauxThinking("Ask Woven first."), fauxToolCall("woven_list_places", {})], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage([fauxText("ok")]);
     };
-    faux.setResponses(Array.from({ length: 50 }, () => step));
+    faux.setResponses(Array.from({ length: 100 }, () => step));
     const models = createModels();
     models.setProvider(faux.provider);
-    app = await startTestRuntime(dir.path, { models, mirror: { debounceMs: 10, sweepMs: 60_000 } });
-    const library = new Library();
-    const visualReply = { title: "Sales", height: 320, digest: "b".repeat(64), size: 14 };
+    app = await startTestRuntime(dir.path, { models, mirror: { debounceMs, sweepMs: 600_000 } });
+    library = new Library();
     server = await FakeServer.open(app.socket, {
       ...library.handlers(),
       "tools.list": () => ({
         allowed: true,
         instructions: "",
-        tools: [{ name: "render_html", description: "Publish a visual reply.", inputSchema: { type: "object", properties: { html: { type: "string" } } } }],
+        tools: ["list_places", "render_html"].map((name) => ({ name, description: name, inputSchema: { type: "object", properties: {} } })),
       }),
-      "tools.call": () => ({ content: [{ type: "text", text: "Shown." }], isError: false, _meta: { wovenVisualReply: visualReply } }),
+      "tools.call": ({ name }) =>
+        name === "render_html"
+          ? { content: [{ type: "text", text: "Shown in the Forum." }], isError: false, _meta: { wovenVisualReply: visualReply } }
+          : { content: [{ type: "text", text: "Studio: piDurable" }], isError: false },
     });
     const { bot } = await server.request<{ bot: BotSummary }>("bots.create", { name: "Ada" });
     await server.until(() => server.calls("tools.list").some((call) => call.botId === bot.id));
-    await server.request("forum.open", {});
-    await server.request("forum.post", { text: "A chart, please", mentions: [bot.id] });
+    return bot;
+  };
+  const posts = () => library.forum.flatMap((push) => push.posts);
+  const seatItems = () => library.forum.flatMap((push) => push.seatItems ?? []);
+  const seatUsage = () => library.forum.flatMap((push) => push.seatUsage ?? []);
 
-    const posts = () => library.forum.flatMap((push) => push.posts);
-    await server.until(() => posts().length === 3);
+  it("saves a chat turn's message, thinking, tool call with its input and output, and answer, once and in order", async () => {
+    const bot = await start();
+    await server.request("message.send", { botId: bot.id, text: "look it up", from: { name: "Build", sessionId: "s-1" } });
+    await server.until(() => library.items(bot.id).some((item) => item.text === "Here it is."));
+    await app.mirror.sweep();
+    const items = library.items(bot.id);
+    expect(items.map((item) => [item.kind, item.text ?? item.tool])).toEqual([
+      ["user", "look it up"],
+      ["thinking", "Ask Woven first."],
+      ["tool", { name: "woven_list_places", input: "{}", output: "Studio: piDurable", failed: false }],
+      ["assistant", "Here it is."],
+    ]);
+    // From the session that sent it, not the person; each model turn's usage once.
+    expect(items[0]?.from).toEqual({ name: "Build", sessionId: "s-1" });
+    expect(items.filter((item) => item.usage)).toHaveLength(2);
+    expect(new Set(items.map((item) => item.key)).size).toBe(items.length);
+  });
+
+  it("saves a Forum turn's posts and its tool calls in the room, in time order, and each model turn's usage once", async () => {
+    const bot = await start();
+    await server.request("forum.open", {});
+    await server.request("forum.post", { text: "A chart, please", mentions: [bot.id], context: "Open note: Q3 plan" });
+    await server.until(() => posts().length === 3 && seatUsage().length === 3);
+    await app.mirror.sweep();
     expect(posts().map((post) => [post.author, post.text, post.visualReply])).toEqual([
       ["user", "A chart, please", undefined],
       ["bot", "", visualReply],
       ["bot", "Here it is.", undefined],
     ]);
-    expect(server.calls("tools.call")).toMatchObject([{ botId: bot.id, name: "render_html", forum: true }]);
-    // Clients get the post live with its visual reply; the HTML is in neither.
+    // The seat's work, but not its posts, its visual reply or its private words.
+    expect(seatItems().map(({ name, item }) => [name, item.kind, item.conversationId, item.text ?? item.tool])).toEqual([
+      ["Ada", "thinking", 1, "Ask Woven first."],
+      ["Ada", "tool", 1, { name: "woven_list_places", input: "{}", output: "Studio: piDurable", failed: false }],
+    ]);
+    const [asked, shown] = posts();
+    const call = seatItems()[1]?.item;
+    expect((asked?.createdAt ?? 0) <= (call?.createdAt ?? 0) && (call?.createdAt ?? 0) <= (shown?.createdAt ?? 0)).toBe(true);
+    expect(server.calls("tools.call").map((call) => [call.name, call.forum])).toEqual([
+      ["list_places", true],
+      ["render_html", true],
+    ]);
+    // Clients get the visual reply live; the HTML is in neither.
     const live = server.messages.flatMap((message: ServerMessage) => (message.type === "forum.post" ? [message.post as ForumPost] : []));
     expect(live.find((post) => post.id === 2)?.visualReply).toEqual(visualReply);
     expect(JSON.stringify([library.forum, live])).not.toContain("<h1>");
+    expect(new Set(seatUsage().map((usage) => usage.key)).size).toBe(3);
+    expect(seatUsage().every((usage) => usage.botId === bot.id && usage.roomId === 1)).toBe(true);
+    // The bot heard the person's open notes with the post, as a chat message carries them.
+    expect(JSON.stringify(library.items(bot.id))).not.toContain("Q3 plan");
+    expect(library.bots.get(bot.id)?.every((push) => push.items.length === 0)).toBe(true);
+  });
 
-    // Both model turns of the seat (the call, then the words) are recorded, once each, in the Forum.
-    const forumUsage = () => (library.bots.get(bot.id) ?? []).flatMap((push) => push.forumUsage ?? []);
-    await server.until(() => forumUsage().length === 2);
+  it("still saves the usage of a thread's turns when the thread is deleted before they were pushed", async () => {
+    const bot = await start(600_000);
     await app.mirror.sweep();
-    expect(forumUsage()).toHaveLength(2);
-    expect(new Set(forumUsage().map((usage) => usage.key)).size).toBe(2);
-    expect(forumUsage().every((usage) => usage.roomId === 1 && usage.usage.cacheWrite + usage.usage.cacheRead + usage.usage.input > 0)).toBe(true);
-    expect(library.items(bot.id)).toEqual([]);
+    const { post } = await server.request<{ post: ForumPost }>("forum.post", { text: "A topic" });
+    const { thread } = await server.request<{ thread: { roomId: number } }>("forum.thread.create", { postId: post.id });
+    await server.request("forum.post", { roomId: thread.roomId, text: "Look it up", mentions: [bot.id] });
+    await app.forum.idle();
+    // Its answer is posted once its turn has ended.
+    const answered = async () =>
+      (await app.forum.store.postsAfter(thread.roomId, 0)).some((post) => post.text === "Here it is.");
+    for (let tries = 0; !(await answered()); tries += 1) {
+      if (tries > 300) throw new Error("the thread's turn never ended");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(seatUsage()).toEqual([]);
+    await server.request("forum.thread.delete", { roomId: thread.roomId });
+    await app.mirror.sweep();
+    const used = seatUsage().filter((usage) => usage.roomId === thread.roomId);
+    // The call, the visual reply and the answer: three model turns.
+    expect(used).toHaveLength(3);
+    // Its tool calls went with the thread; its usage did not.
+    expect(seatItems().filter(({ item }) => item.conversationId === thread.roomId)).toEqual([]);
   });
 });
 

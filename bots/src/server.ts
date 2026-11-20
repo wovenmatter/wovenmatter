@@ -530,6 +530,7 @@ class Connection {
             started?.conversationId ?? request.conversationId,
             0,
             request.context,
+            request.from ? { from: request.from } : {},
           );
           return { conversationId: conversation.id, submissionId: submission.id };
         };
@@ -574,6 +575,8 @@ class Connection {
           throw error;
         }
       }
+      case "forum.abort":
+        return { roomId: request.roomId, stopped: await this.#forum().stopRoom(request.roomId) };
       case "forum.close": {
         const ids = this.#forumRooms.get(request.roomId);
         if (!ids) return { closed: false };
@@ -594,7 +597,7 @@ class Connection {
             text: request.text,
             ...(request.mentions ? { mentions: request.mentions } : {}),
             ...(request.everyone ? { everyone: true } : {}),
-            ...(request.agent ? { agent: request.agent } : {}),
+            ...(request.context ? { context: request.context } : {}),
           }),
         });
         return request.deliveryId ? this.#server.delivery(request.deliveryId, submit) : submit();

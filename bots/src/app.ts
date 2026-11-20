@@ -279,6 +279,8 @@ export async function startRuntime(
             wovenTools(bot.id, host, install, {
               seated: async (conversationId) =>
                 Boolean(await forumStore.seatOfConversation(bot.id, conversationId)),
+              check: async (conversationId) =>
+                void (await room.visualReplyRoom(bot.id, conversationId)),
               publish: async (conversationId, visualReply) =>
                 void (await room.postVisualReply(bot.id, conversationId, visualReply)),
             }),

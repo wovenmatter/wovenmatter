@@ -107,4 +107,37 @@ describe("a Forum reply a mentioned bot owes", () => {
     expect((await t.forum.createThread(root.id)).roomId).not.toBe(thread.roomId);
     await expect(t.forum.deleteThread(thread.roomId)).rejects.toThrow(`no Forum room ${thread.roomId}`);
   });
+
+  it("stops the bots working in one room on Stop, and leaves other rooms working", async () => {
+    let release!: () => void;
+    const held = new Promise((resolve) => {
+      release = () => resolve(undefined);
+    });
+    await start({ brain: (turn) => (turn.user.includes("@Ada") ? { say: "an answer", after: held } : { say: "noted" }) });
+    const root = await t.forum.postAsUser({ text: "a topic" });
+    await t.settle();
+    const thread = await t.forum.createThread(root.id);
+    const main = await t.forum.store.mainRoom();
+    await t.forum.postAsUser({ text: "@Ada in the Forum", mentions: [ada.id] });
+    await t.forum.postAsUser({ roomId: thread.roomId, text: "@Ada in the thread", mentions: [ada.id] });
+    for (let tries = 0; !(t.forum.thinking(main.id).includes(ada.id) && t.forum.thinking(thread.roomId).includes(ada.id)); tries += 1) {
+      if (tries > 300) throw new Error("Ada never started in both rooms");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    // Max may still be reading the posts there: it is stopped too.
+    expect(await t.forum.stopRoom(main.id)).toContain(ada.id);
+    for (let tries = 0; t.forum.thinking(main.id).length; tries += 1) {
+      if (tries > 300) throw new Error("the Forum's turn never stopped");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(t.forum.thinking(thread.roomId)).toEqual([ada.id]);
+    expect(await t.forum.paused()).toBe(false);
+    release();
+    await t.settle();
+    // The thread's turn answered; the Forum's mention says why it has no answer.
+    expect(await t.log(thread.roomId)).toEqual(["user: @Ada in the thread", "Ada: an answer"]);
+    const asked = (await t.forum.store.postsAfter(main.id, 0)).find((post) => post.text === "@Ada in the Forum");
+    expect((await t.forum.store.unanswered([asked?.id ?? 0])).get(asked?.id ?? 0)?.[0]?.reason).toBe("its reply was stopped");
+  });
 });

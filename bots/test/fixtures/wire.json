@@ -1410,6 +1410,12 @@
   "reply.forum.close": {
     "closed": true
   },
+  "reply.forum.abort": {
+    "roomId": 3,
+    "stopped": [
+      "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b"
+    ]
+  },
   "reply.forum.posts": {
     "posts": [
       {
@@ -1742,7 +1748,10 @@
       "bots": {
         "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b": 12
       },
-      "forum": 7
+      "forum": 7,
+      "seats": {
+        "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b": 20
+      }
     }
   },
   "host.mirror.bot": {
@@ -1782,6 +1791,24 @@
           "createdAt": 1795080600000,
           "kind": "user",
           "text": "Why does the build fail?"
+        },
+        {
+          "key": "13.1",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "user",
+          "text": "The tests pass now.",
+          "from": {
+            "name": "Fix the build",
+            "sessionId": "s-7"
+          }
+        },
+        {
+          "key": "13.2",
+          "conversationId": 4,
+          "createdAt": 1795080600000,
+          "kind": "thinking",
+          "text": "The log names the failing test."
         },
         {
           "key": "14",
@@ -1884,6 +1911,43 @@
           "createdAt": 1795080600000
         }
       ],
+      "seatItems": [
+        {
+          "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "name": "Ada",
+          "item": {
+            "key": "21",
+            "conversationId": 1,
+            "createdAt": 1795080600000,
+            "kind": "tool",
+            "tool": {
+              "name": "bash",
+              "input": "{\"command\":\"npm test\"}",
+              "output": "ok",
+              "failed": false
+            }
+          }
+        }
+      ],
+      "seatUsage": [
+        {
+          "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "key": "21",
+          "roomId": 1,
+          "createdAt": 1795080600000,
+          "usage": {
+            "model": "openai-codex/gpt-6-sol",
+            "input": 300,
+            "output": 20,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "cost": 0.0004
+          }
+        }
+      ],
+      "seats": {
+        "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b": 21
+      },
       "upTo": 9
     }
   },

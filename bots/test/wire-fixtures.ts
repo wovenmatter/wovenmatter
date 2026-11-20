@@ -341,6 +341,7 @@ const replies = {
   "forum.get": forumState,
   "forum.open": room,
   "forum.close": { closed: true },
+  "forum.abort": { roomId: 3, stopped: [ADA] },
   "forum.posts": { posts: [post], hasEarlier: true },
   "forum.post": { post },
   "forum.thread.create": { thread: forumThread },
@@ -377,7 +378,7 @@ const hostCalls = {
   ...host("git.setup", { botId: ADA }, { publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ada", identity: { name: "Sam", email: "sam@example.com" } }),
   ...host("git.agent", { botId: ADA, message: "AAAAAQs=" }, { message: "AAAAAQw=" }),
   ...host("tools.access", { botId: ADA }, { allowed: false }),
-  ...host("mirror.checkpoints", {}, { bots: { [ADA]: 12 }, forum: 7 }),
+  ...host("mirror.checkpoints", {}, { bots: { [ADA]: 12 }, forum: 7, seats: { [ADA]: 20 } }),
   ...host(
     "mirror.bot",
     {
@@ -388,6 +389,15 @@ const hostCalls = {
       ],
       items: [
         { key: "13", conversationId: 4, createdAt: MS, kind: "user", text: "Why does the build fail?" },
+        {
+          key: "13.1",
+          conversationId: 4,
+          createdAt: MS,
+          kind: "user",
+          text: "The tests pass now.",
+          from: { name: "Fix the build", sessionId: "s-7" },
+        },
+        { key: "13.2", conversationId: 4, createdAt: MS, kind: "thinking", text: "The log names the failing test." },
         {
           key: "14",
           conversationId: 4,
@@ -431,6 +441,29 @@ const hostCalls = {
           createdAt: MS,
         },
       ],
+      seatItems: [
+        {
+          botId: ADA,
+          name: "Ada",
+          item: {
+            key: "21",
+            conversationId: 1,
+            createdAt: MS,
+            kind: "tool",
+            tool: { name: "bash", input: '{"command":"npm test"}', output: "ok", failed: false },
+          },
+        },
+      ],
+      seatUsage: [
+        {
+          botId: ADA,
+          key: "21",
+          roomId: 1,
+          createdAt: MS,
+          usage: { model: "openai-codex/gpt-6-sol", input: 300, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.0004 },
+        },
+      ],
+      seats: { [ADA]: 21 },
       upTo: 9,
     },
     {},

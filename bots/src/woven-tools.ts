@@ -24,6 +24,8 @@ export const wovenToolsSlot: Extension = defineExtension({ name: WOVEN });
 export type WovenForumSeats = {
   /** Whether a conversation of the bot is one of its Forum seats. */
   seated(conversationId: number): Promise<boolean>;
+  /** Throws why a visual reply cannot be posted from this seat now (paused, not in the Forum). */
+  check(conversationId: number): Promise<void>;
   /** A visual reply published from a seat becomes a post in that seat's room. */
   publish(conversationId: number, visualReply: VisualReply): Promise<void>;
 };
@@ -78,6 +80,8 @@ function extension(
           try {
             const conversationId = Number(api.conversationId);
             const forum = await seats.seated(conversationId);
+            // Refused before the server stores anything, so no visual reply is left unposted.
+            if (forum && tool.name === "render_html") await seats.check(conversationId);
             const result = await host.call("tools.call", {
               botId,
               name: tool.name,

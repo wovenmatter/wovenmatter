@@ -175,7 +175,11 @@ export class Bot {
     conversationId?: number,
     round = 0,
     context?: string,
-    options: { readonly hidden?: boolean } = {},
+    options: {
+      readonly hidden?: boolean;
+      /** An agent session sent it: saved in the library as from that session. */
+      readonly from?: { readonly name: string; readonly sessionId: string };
+    } = {},
   ) {
     if (!this.#hasModel()) throw new Error(NO_MODEL_MESSAGE);
     const conversation = await this.conversation(conversationId);
@@ -190,7 +194,14 @@ export class Bot {
           .join("\n\n"),
         whenBusy: "steer",
         // Hidden inputs reach the model but never the chat (transcript.ts).
-        entry: { kind: "bot.input", data: options.hidden ? { round, hidden: true } : { round } },
+        entry: {
+          kind: "bot.input",
+          data: {
+            round,
+            ...(options.hidden ? { hidden: true } : {}),
+            ...(options.from ? { from: { ...options.from } } : {}),
+          },
+        },
       },
       ctx,
     );
