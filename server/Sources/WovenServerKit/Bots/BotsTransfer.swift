@@ -406,6 +406,9 @@ extension BotsHost {
     }
     try await prepareEngine()
     try await hosting.files.run(.import, configURL, incomingFolder.appendingPathComponent("files", isDirectory: true))
+    // A new stint: whatever bot chats and checkpoints this library still holds
+    // from an earlier one are gone, so the bots save their whole history again.
+    try await library.removeBotChats()
     tenure.end()
     let sessions = thisMachine + ":" + tenure.current
     hold = .receiving(source: transfer.source)
