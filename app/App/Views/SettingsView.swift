@@ -225,6 +225,9 @@ struct SettingsView: View {
         guard let scope = model.navigation.pendingConnectionsScope else { return }
         switch scope {
         case "general": route = .general
+        #if DEBUG
+        case "agents": route = .agents
+        #endif
         case "permissions": if route != .permissions { open(.permissions, .permissions, from: .landing) }
         default: if route != .accounts(scope) { open(.accounts, .accounts(scope), from: .landing) }
         }

@@ -396,16 +396,15 @@ final class AgentSettingsStore {
 
     // MARK: Commands: local model servers
 
-    func reloadLocalServers(on machineID: String?) async throws {
-        throw ClientError.notConnected
-    }
+    /// The server keeps no local model servers yet, so there are none to list.
+    func reloadLocalServers(on machineID: String?) async throws {}
 
     func connectLocalServer(url: String, key: String, replacing server: LocalModelServer?, on machineID: String?) async throws {
-        throw ClientError.notConnected
+        throw ClientError.notOffered("Adding a model server")
     }
 
     func removeLocalServer(_ server: LocalModelServer, on machineID: String?) async throws {
-        throw ClientError.notConnected
+        throw ClientError.notOffered("Removing a model server")
     }
 
     // MARK: Commands: Pi Durable SDK

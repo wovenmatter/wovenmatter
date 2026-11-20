@@ -118,6 +118,7 @@ struct WovenMatterApp: App {
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                     #if DEBUG
                     WindowCapture.startIfRequested()
+                    WindowCapture.openRequestedSettings(applicationModel)
                     #endif
                 }
                 .frame(minWidth: WovenMetrics.windowMinimumWidth, minHeight: 640)

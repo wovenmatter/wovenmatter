@@ -24,6 +24,19 @@ enum WindowCapture {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { MainActor.assumeIsolated { capture() } }
     }
 
+    /// `--settings-page agents`, `accounts` or `piDurable` opens that Settings page
+    /// once this Mac's server has answered, so a capture can show it.
+    static func openRequestedSettings(_ model: ApplicationModel) {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--settings-page"), index + 1 < arguments.count else { return }
+        let page = arguments[index + 1]
+        Task { @MainActor in
+            while model.thisMachineID == nil { try? await Task.sleep(for: .milliseconds(200)) }
+            if page == "piDurable" { model.navigation.pendingDefaultAgentSettingsScope = "global"; return }
+            model.navigation.pendingConnectionsScope = page == "accounts" ? model.thisMachineID : page
+        }
+    }
+
     /// Writes every visible window as NN-title.png.
     static func capture(_ label: String? = nil) {
         guard let folder else { return }
