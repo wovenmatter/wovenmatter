@@ -405,6 +405,8 @@ export type ForumPost = {
   /** The author's name when it posted ("" for a user without one); an agent session's name. */
   name: string;
   text: string;
+  /** A visual reply the bot published with `render_html` in this room; the post has no text then. */
+  visualReply?: PublishedPage;
   /** Bots the user asked for a reply. */
   mentions?: string[];
   /** Posted by the runtime at a time the user set. */
@@ -786,6 +788,8 @@ export type MirrorForum = {
     botId?: string;
     name: string;
     text: string;
+    /** A visual reply the bot published here, saved as a reference to the server's content. */
+    visualReply?: PublishedPage;
     /** Epoch ms. */
     createdAt: number;
   }[];

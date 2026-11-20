@@ -1,8 +1,10 @@
 import type { EntryRecord } from "@earendil-works/pi-durable";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mirrorItems } from "../src/mirror.ts";
 import { displayEntry } from "../src/transcript.ts";
-import type { BotSummary, MirrorBot, MirrorForum } from "../src/protocol.ts";
+import type { BotSummary, ForumPost, MirrorBot, MirrorForum, ServerMessage } from "../src/protocol.ts";
 import { echoModels, tempDir } from "./helpers.ts";
 import { startTestRuntime, type TestRuntime } from "./runtime.ts";
 import { FakeServer, type HostHandlers } from "./ws-client.ts";
@@ -130,6 +132,74 @@ describe("the library copy", () => {
     server = await FakeServer.open(app.socket, library.handlers());
     await server.until(() => library.purged.length === 1);
     expect(library.purged).toEqual([bot.id]);
+  });
+});
+
+describe("a Forum turn", () => {
+  let dir: Awaited<ReturnType<typeof tempDir>>;
+  let app: TestRuntime;
+  let server: FakeServer;
+  afterEach(async () => {
+    await server.close();
+    await app.close();
+    await dir.cleanup();
+  });
+
+  it("posts a visual reply in order with the bot's words, saves it once as a reference, and records each model turn's usage once", async () => {
+    dir = await tempDir();
+    // The bot answers a Forum mention with a visual reply, then words; anything else gets "ok".
+    const faux = fauxProvider({ tokensPerSecond: 5000 });
+    type Context = { messages?: { role: string; content: unknown }[] };
+    const step = (context: unknown) => {
+      const messages = (context as Context).messages ?? [];
+      const last = messages.at(-1);
+      if (last?.role === "toolResult") return fauxAssistantMessage([fauxText("Here it is.")]);
+      if (JSON.stringify(last?.content ?? "").includes("[Forum]")) {
+        return fauxAssistantMessage([fauxToolCall("woven_render_html", { html: "<h1>Sales</h1>" })], { stopReason: "toolUse" });
+      }
+      return fauxAssistantMessage([fauxText("ok")]);
+    };
+    faux.setResponses(Array.from({ length: 50 }, () => step));
+    const models = createModels();
+    models.setProvider(faux.provider);
+    app = await startTestRuntime(dir.path, { models, mirror: { debounceMs: 10, sweepMs: 60_000 } });
+    const library = new Library();
+    const visualReply = { title: "Sales", height: 320, digest: "b".repeat(64), size: 14 };
+    server = await FakeServer.open(app.socket, {
+      ...library.handlers(),
+      "tools.list": () => ({
+        allowed: true,
+        instructions: "",
+        tools: [{ name: "render_html", description: "Publish a visual reply.", inputSchema: { type: "object", properties: { html: { type: "string" } } } }],
+      }),
+      "tools.call": () => ({ content: [{ type: "text", text: "Shown." }], isError: false, _meta: { wovenPage: visualReply } }),
+    });
+    const { bot } = await server.request<{ bot: BotSummary }>("bots.create", { name: "Ada" });
+    await server.until(() => server.calls("tools.list").some((call) => call.botId === bot.id));
+    await server.request("forum.open", {});
+    await server.request("forum.post", { text: "A chart, please", mentions: [bot.id] });
+
+    const posts = () => library.forum.flatMap((push) => push.posts);
+    await server.until(() => posts().length === 3);
+    expect(posts().map((post) => [post.author, post.text, post.visualReply])).toEqual([
+      ["user", "A chart, please", undefined],
+      ["bot", "", visualReply],
+      ["bot", "Here it is.", undefined],
+    ]);
+    expect(server.calls("tools.call")).toMatchObject([{ botId: bot.id, name: "render_html", forum: true }]);
+    // Clients get the post live with its visual reply; the HTML is in neither.
+    const live = server.messages.flatMap((message: ServerMessage) => (message.type === "forum.post" ? [message.post as ForumPost] : []));
+    expect(live.find((post) => post.id === 2)?.visualReply).toEqual(visualReply);
+    expect(JSON.stringify([library.forum, live])).not.toContain("<h1>");
+
+    // Both model turns of the seat (the call, then the words) are recorded, once each, in the Forum.
+    const forumUsage = () => (library.bots.get(bot.id) ?? []).flatMap((push) => push.forumUsage ?? []);
+    await server.until(() => forumUsage().length === 2);
+    await app.mirror.sweep();
+    expect(forumUsage()).toHaveLength(2);
+    expect(new Set(forumUsage().map((usage) => usage.key)).size).toBe(2);
+    expect(forumUsage().every((usage) => usage.roomId === 1 && usage.usage.cacheWrite + usage.usage.cacheRead + usage.usage.input > 0)).toBe(true);
+    expect(library.items(bot.id)).toEqual([]);
   });
 });
 

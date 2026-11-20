@@ -17,6 +17,7 @@ import type {
   ForumScheduleSummary,
   ForumState,
   ForumThreadSummary,
+  PublishedPage,
 } from "./protocol.ts";
 import {
   AWAY,
@@ -106,9 +107,18 @@ type Outcome =
   | { readonly text: string }
   | { readonly reason: string; readonly issue?: "signIn" | "limit" };
 
+const postWords = (post: ForumPostRecord | undefined) =>
+  post ? (post.visualReply ? post.visualReply.title : post.text) : "";
+
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** What a post says in words: its text, or for a visual reply its title (bots never see its HTML). */
+const postText = (post: ForumPostRecord) =>
+  post.visualReply
+    ? `[a visual reply${post.visualReply.title ? `: ${post.visualReply.title}` : ""}]`
+    : post.text;
 
 const list = (items: readonly string[]) =>
   items.length <= 1
@@ -418,7 +428,7 @@ export class Forum {
       parentPostId: room.parentPostId ?? 0,
       ...(room.title ? { title: room.title } : {}),
       preview: clip(
-        oneLine((firsts.get(room.id) ?? parents.get(room.parentPostId ?? 0))?.text ?? ""),
+        oneLine(postWords(firsts.get(room.id) ?? parents.get(room.parentPostId ?? 0))),
         PREVIEW_CHARS,
       ),
       createdAt: room.createdAt,
@@ -456,6 +466,7 @@ export class Forum {
         ...(record.botId ? { botId: record.botId } : {}),
         name: record.name,
         text: record.text,
+        ...(record.visualReply ? { visualReply: record.visualReply } : {}),
         ...(record.mentions.length ? { mentions: [...record.mentions] } : {}),
         ...(record.scheduled ? { scheduled: true as const } : {}),
         ...(record.auto ? { auto: true as const } : {}),
@@ -581,21 +592,9 @@ export class Forum {
     botId: string,
     input: { readonly text: string; readonly threadId?: number; readonly conversationId: number },
   ): Promise<ForumPostRecord> {
-    const record = await this.#registry.get(botId);
-    if (!record) throw new NotFoundError(`no bot ${botId}`);
     if (!input.text.trim()) throw new ForumError("a post needs some text");
     if (input.text.length > MAX_POST_CHARS) throw new ForumError("that post is too long");
-    if (!(await this.isActive(record))) {
-      throw new ForumError(
-        "You are not in the Forum. The user can add you from the Forum's member list.",
-      );
-    }
-    if (await this.paused()) {
-      throw new ForumError(
-        "The Forum is paused. Nothing can be posted until the user resumes it.",
-      );
-    }
-    await this.#seatBots();
+    const record = await this.#poster(botId);
     const here = await this.store.seatOfConversation(botId, input.conversationId);
     const room = await this.#room(input.threadId ?? here?.roomId);
     const seat = await this.store.seat(room.id, botId);
@@ -621,6 +620,54 @@ export class Forum {
       scheduled: false,
       auto: false,
       origin: input.conversationId,
+    });
+    await this.#published(post, room);
+    return post;
+  }
+
+  /** A bot that may post now: it is in the Forum and the Forum is not paused. */
+  async #poster(botId: string): Promise<BotRecord> {
+    const record = await this.#registry.get(botId);
+    if (!record) throw new NotFoundError(`no bot ${botId}`);
+    if (!(await this.isActive(record))) {
+      throw new ForumError(
+        "You are not in the Forum. The user can add you from the Forum's member list.",
+      );
+    }
+    if (await this.paused()) {
+      throw new ForumError(
+        "The Forum is paused. Nothing can be posted until the user resumes it.",
+      );
+    }
+    await this.#seatBots();
+    return record;
+  }
+
+  /**
+   * A visual reply the bot published with `render_html` from its seat (`conversationId`): a post of
+   * its own in that seat's room, in order with what it posts. It answers no mention: the reply the
+   * bot owes is still its words.
+   */
+  async postVisualReply(
+    botId: string,
+    conversationId: number,
+    visualReply: PublishedPage,
+  ): Promise<ForumPostRecord> {
+    const record = await this.#poster(botId);
+    const seat = await this.store.seatOfConversation(botId, conversationId);
+    if (!seat) throw new ForumError("This conversation is not one of your Forum seats.");
+    const room = await this.#room(seat.roomId);
+    const post = await this.store.addPost({
+      roomId: room.id,
+      author: "bot",
+      botId,
+      name: record.name,
+      text: "",
+      mentions: [],
+      scheduled: false,
+      auto: false,
+      origin: conversationId,
+      visualReply,
     });
     await this.#published(post, room);
     return post;
@@ -658,7 +705,7 @@ export class Forum {
     if (!shown.length) return `${where} has no ${input.before ? "earlier " : ""}posts.`;
     const lines = shown.map((post) => {
       const who = this.#author(post, botId, user);
-      return `#${post.id} ${who} (${post.createdAt}): ${clip(post.text, READ_POST_CHARS)}`;
+      return `#${post.id} ${who} (${post.createdAt}): ${clip(postText(post), READ_POST_CHARS)}`;
     });
     const first = shown[0]?.id;
     const earlier = more ? ` (earlier ones: forum_read with before ${first})` : "";
@@ -688,9 +735,10 @@ export class Forum {
   #title(room: ForumRoom, post: ForumPostRecord): void {
     const titles = this.#titles;
     if (!titles || room.title || this.#titling.has(room.id) || this.#closed) return;
+    if (!postWords(post).trim()) return;
     this.#titling.add(room.id);
     void titles
-      .generate(post.text, this.#abort.signal)
+      .generate(postWords(post), this.#abort.signal)
       .then(async (title) => {
         if (title && (await this.store.setRoomTitleIfUntitled(room.id, title))) {
           this.#events.changed?.();
@@ -1096,11 +1144,11 @@ export class Forum {
     const { room, seat, botId, user, unseen, owed, reminders, missed } = input;
     const User = user === "the user" ? "The user" : user;
     const line = (post: ForumPostRecord) =>
-      `#${post.id} ${this.#author(post, botId, User)}: ${post.text}`;
+      `#${post.id} ${this.#author(post, botId, User)}: ${postText(post)}`;
     // Its own unseen posts are the ones it made elsewhere: its seat does not know of them.
     const unseenLine = (post: ForumPostRecord) =>
       post.botId === botId
-        ? `#${post.id} You (from another of your conversations): ${post.text}`
+        ? `#${post.id} You (from another of your conversations): ${postText(post)}`
         : line(post);
     const thread = room.parentPostId !== undefined;
     const parts: string[] = [];

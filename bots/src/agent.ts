@@ -34,6 +34,7 @@ import type { BotRecord } from "./storage/registry.ts";
 import { type SubagentLog, subagentExtension } from "./subagent.ts";
 import { type BotPlatform, botTools } from "./tools.ts";
 import { type WebToolsOptions, webTools } from "./web.ts";
+import { wovenToolsSlot } from "./woven-tools.ts";
 
 export type CompactionConfig = RawSettings["compaction"];
 
@@ -298,6 +299,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     ? forumTools(options.bot, platform.forum, () => platform.manager().registry)
     : undefined;
   const container = options.env ? containerTools(options.bot.id, options.env) : undefined;
+  const woven = options.wovenTools ? wovenToolsSlot : undefined;
   const web = options.web ? webTools(options.web) : undefined;
   // What a subagent keeps: coding tools (with a container) and web tools; nothing bot-specific.
   const childTools = [...(options.env ? [CodingTools] : []), ...(web ? [web] : [])].flatMap(
@@ -315,6 +317,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
       ...(tools ? [tools] : []),
       ...(forum ? [forum] : []),
       ...(container ? [container] : []),
+      ...(woven ? [woven] : []),
     ],
     ...(options.onSubagent ? { log: options.onSubagent } : {}),
   });
@@ -325,6 +328,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     ...(container ? [container] : []),
     ...(tools ? [tools] : []),
     ...(forum ? [forum] : []),
+    ...(woven ? [woven] : []),
     // Subagents keep the web tools: research is typical delegated work.
     ...(web ? [web] : []),
     subagent,

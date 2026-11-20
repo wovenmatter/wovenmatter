@@ -145,6 +145,12 @@
       "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
       "name": "Ada",
       "text": "The build is fixed.",
+      "visualReply": {
+        "title": "Build times",
+        "height": 320,
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048
+      },
       "mentions": [
         "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
       ],
@@ -186,6 +192,12 @@
     "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
     "name": "Ada",
     "text": "The build is fixed.",
+    "visualReply": {
+      "title": "Build times",
+      "height": 320,
+      "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size": 2048
+    },
     "mentions": [
       "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
     ],
@@ -482,6 +494,12 @@
       "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
       "name": "Ada",
       "text": "The build is fixed.",
+      "visualReply": {
+        "title": "Build times",
+        "height": 320,
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048
+      },
       "mentions": [
         "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
       ],
@@ -1317,6 +1335,12 @@
       "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
       "name": "Ada",
       "text": "The build is fixed.",
+      "visualReply": {
+        "title": "Build times",
+        "height": 320,
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048
+      },
       "mentions": [
         "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
       ],
@@ -1363,6 +1387,12 @@
         "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
         "name": "Ada",
         "text": "The build is fixed.",
+        "visualReply": {
+          "title": "Build times",
+          "height": 320,
+          "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "size": 2048
+        },
         "mentions": [
           "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
         ],
@@ -1393,6 +1423,12 @@
       "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
       "name": "Ada",
       "text": "The build is fixed.",
+      "visualReply": {
+        "title": "Build times",
+        "height": 320,
+        "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048
+      },
       "mentions": [
         "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
       ],
@@ -1799,9 +1835,24 @@
           "name": "",
           "text": "Thanks",
           "createdAt": 1795080600000
+        },
+        {
+          "id": 9,
+          "roomId": 1,
+          "author": "bot",
+          "botId": "6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b",
+          "name": "Ada",
+          "text": "",
+          "visualReply": {
+            "title": "Build times",
+            "height": 320,
+            "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 2048
+          },
+          "createdAt": 1795080600000
         }
       ],
-      "upTo": 8
+      "upTo": 9
     }
   },
   "host.mirror.forum.result": {

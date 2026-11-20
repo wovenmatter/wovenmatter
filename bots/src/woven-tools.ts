@@ -1,6 +1,7 @@
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { HostChannel } from "./host/channel.ts";
+import type { PublishedPage } from "./protocol.ts";
 
 /** One Woven tool as the server's catalog describes it (MCP's `tools/list` shape). */
 type CatalogTool = {
@@ -8,6 +9,23 @@ type CatalogTool = {
   description: string;
   inputSchema: Record<string, unknown>;
   annotations?: { readOnlyHint?: boolean };
+};
+
+const WOVEN = "woven";
+
+/**
+ * Where the Woven tools go in a bot's extensions until the server lists them: conversations select
+ * extensions by name from the harness's list, so the tools installed later under this name replace
+ * it in place and are offered.
+ */
+export const wovenToolsSlot: Extension = defineExtension({ name: WOVEN });
+
+/** The bot's Forum seats, as its Woven tools need them. */
+export type WovenForumSeats = {
+  /** Whether a conversation of the bot is one of its Forum seats. */
+  seated(conversationId: number): Promise<boolean>;
+  /** A visual reply published from a seat becomes a post in that seat's room. */
+  publish(conversationId: number, visualReply: PublishedPage): Promise<void>;
 };
 
 /**
@@ -21,7 +39,7 @@ export function wovenTools(
   botId: string,
   host: HostChannel,
   install: (extension: Extension) => void,
-  inForum: (conversationId: number) => Promise<boolean>,
+  seats: WovenForumSeats,
 ): void {
   let installed = false;
   const ask = async () => {
@@ -29,7 +47,7 @@ export function wovenTools(
     const reply = await host.call("tools.list", { botId });
     if (!reply.allowed || installed) return;
     installed = true;
-    install(extension(botId, host, reply.tools, reply.instructions, inForum));
+    install(extension(botId, host, reply.tools, reply.instructions, seats));
   };
   host.onConnected(() => void ask().catch(() => {}));
   void ask().catch(() => {});
@@ -37,18 +55,18 @@ export function wovenTools(
 
 /**
  * A call says when it comes from the bot's Forum seat (`forum`), and its result's `_meta` becomes the
- * result's details: a page `render_html` published (`wovenPage`), which the chat and the library
- * copy show in its place.
+ * result's details: a visual reply `render_html` published (`wovenPage`), which the chat and the
+ * library copy show in its place. One published from a seat is posted to the seat's room.
  */
 function extension(
   botId: string,
   host: HostChannel,
   tools: CatalogTool[],
   instructions: string,
-  inForum: (conversationId: number) => Promise<boolean>,
+  seats: WovenForumSeats,
 ): Extension {
   return defineExtension({
-    name: "woven",
+    name: WOVEN,
     sections: [section("woven", () => instructions, { tag: false })],
     tools: tools.map((tool) =>
       defineTool({
@@ -58,13 +76,16 @@ function extension(
         ...(tool.annotations?.readOnlyHint ? { replay: "safe" as const } : {}),
         execute: async (args, api) => {
           try {
-            const forum = await inForum(Number(api.conversationId));
+            const conversationId = Number(api.conversationId);
+            const forum = await seats.seated(conversationId);
             const result = await host.call("tools.call", {
               botId,
               name: tool.name,
               arguments: args ?? {},
               ...(forum ? { forum } : {}),
             });
+            const visualReply = result.isError ? undefined : result._meta?.wovenPage;
+            if (forum && visualReply) await seats.publish(conversationId, visualReply);
             return {
               output: result.content.map((block) =>
                 block.type === "image"

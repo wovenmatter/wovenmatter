@@ -373,6 +373,7 @@ export class LibraryMirror {
           ...(post.botId ? { botId: post.botId } : {}),
           name: post.name,
           text: post.text,
+          ...(post.visualReply ? { visualReply: post.visualReply } : {}),
           createdAt: Date.parse(post.createdAt),
         })),
         upTo,
