@@ -550,9 +550,21 @@ final class SessionStore {
             case .toolCall(let call):
                 let run = currentRun(at: entry.date)
                 if !entry.live { runs[run].completedAt = entry.date }
+                // A page published shows as its own item; only a call that failed shows as a call.
+                if call.kind == .page && !call.failed { continue }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
+                    createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
+            case .htmlPage(let page):
+                let run = currentRun(at: entry.date)
+                runs[run].completedAt = entry.date
+                activities.append(WorkspaceRunActivityRecord(
+                    id: entry.id, runID: runs[run].id, conversationID: sessionID,
+                    activity: AgentRunActivity(
+                        id: entry.id, kind: .activity, title: page.title, status: "completed", position: position,
+                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: page.title, height: page.height,
+                                                                    digest: page.digest)),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):
                 if notice.kind == .nativeSessionGone { goneNotice = entry.id }

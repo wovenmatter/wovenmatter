@@ -277,6 +277,8 @@ public enum BotsWire {
     /// "signIn" or "limit".
     public var issue: String?
     public var stopped: Bool?
+    /// Pages the bot published here with `render_html`.
+    public var pages: [HTMLPage]?
   }
 
   public struct ConversationSnapshot: Codable, Sendable, Hashable {

@@ -80,7 +80,11 @@ extension PiBotGroup {
 extension PiBotDisplayEntry {
     init(_ entry: BotsWire.DisplayEntry) {
         self.init(id: entry.id, conversationId: entry.conversationId, isUser: entry.role == "user", text: entry.text,
-                  error: entry.error, issue: BotReplyIssue(wire: entry.issue), isStopped: entry.stopped == true)
+                  error: entry.error, issue: BotReplyIssue(wire: entry.issue), isStopped: entry.stopped == true,
+                  pages: (entry.pages ?? []).enumerated().map { index, page in
+                      ConversationHTMLRenderReference(id: "\(entry.id):\(index)", title: page.title, height: page.height,
+                                                      digest: page.digest)
+                  })
     }
 
     /// A saved conversation's messages: what was said, a failure on the reply it ended, and a stop.
@@ -95,6 +99,11 @@ extension PiBotDisplayEntry {
             case .userMessage(let text, _): entries.append(entry(item, isUser: true, text: text))
             case .assistantMessage(let text): entries.append(entry(item, isUser: false, text: text))
             case .toolCall: break
+            case .htmlPage(let page):
+                var shown = entry(item, isUser: false, text: "")
+                shown.pages = [ConversationHTMLRenderReference(id: item.id, title: page.title, height: page.height,
+                                                               digest: page.digest)]
+                entries.append(shown)
             case .notice(let notice) where notice.kind == .interrupted:
                 if let last = entries.last, !last.isUser {
                     entries[entries.count - 1] = PiBotDisplayEntry(id: last.id, conversationId: last.conversationId, isUser: false,

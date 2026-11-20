@@ -1,25 +1,32 @@
 import SwiftUI
+import WovenProtocol
 import WebKit
 import AppKit
 
-/// Published pages are independent of the work disclosure and load full detail
-/// only when their row is mounted. Theme and zoom updates preserve page state.
+/// Published pages are independent of the work disclosure and load their
+/// content only when their row is mounted, by digest through this Mac's
+/// server, which fetches it from another machine when it is not here. Theme
+/// and zoom updates preserve page state.
 struct ConversationHTMLRenderView: View {
-    let activity: AgentRunActivity
-    let runID: String
-    @Environment(\.conversationActivityDetails) private var loadDetails
+    let reference: ConversationHTMLRenderReference
+    @Environment(\.workspaceApplicationModel) private var model
     @Environment(\.wovenTheme) private var theme
     @State private var page: ConversationHTMLPage?
     @State private var failure: String?
-    @State private var height: CGFloat = 400
+    @State private var height: CGFloat
     @State private var expanded = false
     @State private var zoom = 1.0
     @State private var pendingLink: URL?
 
+    init(reference: ConversationHTMLRenderReference) {
+        self.reference = reference
+        _height = State(initialValue: CGFloat(min(2000, max(80, reference.height))))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Text(activity.htmlRender?.title ?? "Visual reply").lineLimit(1)
+                Text(reference.title).lineLimit(1)
                 Spacer()
                 controls
                 Button { expanded = true } label: {
@@ -44,15 +51,15 @@ struct ConversationHTMLRenderView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(WovenPalette.mutedForeground)
                     .frame(maxWidth: .infinity)
-                    .frame(height: CGFloat(min(2000, max(80, activity.htmlRender?.height ?? 160))))
+                    .frame(height: height)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: activity.detailStamp) { await load() }
+        .task(id: reference.digest) { await load() }
         .sheet(isPresented: $expanded) {
             VStack(spacing: 0) {
                 HStack {
-                    Text(activity.htmlRender?.title ?? "Visual reply").font(.headline)
+                    Text(reference.title).font(.headline)
                     Spacer()
                     controls
                     Button("Done") { expanded = false }.keyboardShortcut(.cancelAction)
@@ -102,17 +109,23 @@ struct ConversationHTMLRenderView: View {
 
     @MainActor private func load() async {
         guard page == nil else { return }
+        let unavailable = "This page is unavailable. Reconnect to its workspace and try again."
+        guard let server = model?.server else { failure = unavailable; return }
         do {
-            let full = activity.rawOutputJSON != nil ? activity : try await loadDetails?(runID, activity.id)
-            try Task.checkCancellation()
-            guard let data = full?.rawOutputJSON?.data(using: .utf8) else {
-                failure = "This page is unavailable. Reconnect to its workspace and try again."; return
+            var data = Data()
+            while true {
+                let chunk = try await server.call(FetchContent(digest: reference.digest, offset: Int64(data.count)))
+                data.append(chunk.data)
+                if Int64(data.count) >= chunk.size || chunk.data.isEmpty { break }
             }
-            let saved = try JSONDecoder().decode(ConversationHTMLPage.self, from: data)
-            page = saved
-            height = CGFloat(saved.height)
+            try Task.checkCancellation()
+            page = ConversationHTMLPage(html: String(decoding: data, as: UTF8.self), title: reference.title,
+                                        height: reference.height)
             failure = nil
-        } catch is CancellationError {} catch { failure = error.localizedDescription }
+        } catch is CancellationError {
+        } catch let error as ProtocolError where error.code == .notFound {
+            failure = unavailable
+        } catch { failure = error.localizedDescription }
     }
 }
 

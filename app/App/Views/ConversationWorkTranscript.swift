@@ -147,8 +147,8 @@ struct ConversationWorkTranscript: View {
                                     if activity.kind == .thought {
                                         ConversationThinkingBlock(activity: activity, runID: run.id,
                                             isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
-                                    } else if activity.htmlRender != nil {
-                                        ConversationHTMLRenderView(activity: activity, runID: run.id)
+                                    } else if let reference = activity.htmlRender {
+                                        ConversationHTMLRenderView(reference: reference)
                                     } else if let children = activity.subagents, !children.isEmpty {
                                         VStack(alignment: .leading, spacing: 8) {
                                             ForEach(children) { child in

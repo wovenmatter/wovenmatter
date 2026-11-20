@@ -1,17 +1,19 @@
 import Foundation
 
-/// Small enough for transcript summaries; the page itself stays in full activity detail.
+/// A page an agent published in the chat: its item's identifier, title and
+/// starting height. The page itself is in the content store, by `digest`.
 public struct ConversationHTMLRenderReference: Codable, Equatable, Sendable {
   public let id: String
   public let title: String
   public let height: Int
-  public init(id: String, title: String, height: Int) {
-    self.id = id; self.title = title; self.height = height
+  public let digest: String
+  public init(id: String, title: String, height: Int, digest: String) {
+    self.id = id; self.title = title; self.height = height; self.digest = digest
   }
 }
 
-/// A visual reply an agent rendered, read from its activity's output.
-public struct ConversationHTMLPage: Codable, Equatable, Sendable {
+/// A visual reply an agent rendered, once its content has arrived.
+public struct ConversationHTMLPage: Equatable, Sendable {
   public let html: String
   public let title: String
   public let height: Int

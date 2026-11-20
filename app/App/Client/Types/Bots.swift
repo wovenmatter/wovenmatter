@@ -210,6 +210,8 @@ struct PiBotDisplayEntry: Equatable, Identifiable, Sendable {
     let error: String?
     let issue: BotReplyIssue?
     let isStopped: Bool
+    /// Pages the bot published with `render_html`, shown after the text.
+    var pages: [ConversationHTMLRenderReference] = []
 
     var needsSignIn: Bool { issue == .signIn }
     var hitLimit: Bool { issue == .limit }

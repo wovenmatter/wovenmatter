@@ -748,11 +748,14 @@ private struct BotMessageRow: View {
     @State private var copied = false
     @FocusState private var focusedAction: Action?
 
+    private var pageOnly: Bool { entry.text.isEmpty && !entry.pages.isEmpty && entry.error == nil }
+
     var body: some View {
         HStack(spacing: 0) {
             if entry.isUser { Spacer(minLength: 72) }
             VStack(alignment: entry.isUser ? .trailing : .leading, spacing: 6) {
-                if !entry.isUser {
+                // A page on its own continues the reply above it.
+                if !entry.isUser && !pageOnly {
                     Text(botName)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(WovenPalette.foreground)
@@ -766,6 +769,9 @@ private struct BotMessageRow: View {
                             .padding(.horizontal, 4)
                             .padding(.vertical, 2)
                     }
+                }
+                ForEach(entry.pages, id: \.id) { page in
+                    ConversationHTMLRenderView(reference: page).padding(.horizontal, 4)
                 }
                 if entry.isStopped {
                     Text("Stopped")
@@ -781,7 +787,7 @@ private struct BotMessageRow: View {
                 if !replies.isEmpty {
                     BotThreadReplies(replies: replies, onOpen: onOpenThread)
                 }
-                actions
+                if !pageOnly { actions }
             }
             .frame(maxWidth: entry.isUser ? nil : .infinity, alignment: entry.isUser ? .trailing : .leading)
             if !entry.isUser { Spacer(minLength: 0) }
