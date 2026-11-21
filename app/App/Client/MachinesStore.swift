@@ -106,14 +106,14 @@ final class MachinesStore {
     // MARK: Linux computers to add
 
     /// Tailnet computers without a Woven server.
-    private(set) var tailnetDevices: [TailnetDevice] = []
-    private(set) var isFindingDevices = false
-    private(set) var hasSearchedDevices = false
-    private(set) var findDevicesError: String?
-    private(set) var hostPreflights: [String: HostPreflight] = [:]
-    private(set) var inspectingHosts: Set<String> = []
-    private(set) var installingHosts: Set<String> = []
-    var hostErrors: [String: String] = [:]
+    private(set) var tailnetComputers: [TailnetComputer] = []
+    private(set) var isFindingComputers = false
+    private(set) var hasSearchedComputers = false
+    private(set) var findComputersError: String?
+    private(set) var machinePreflights: [String: MachinePreflight] = [:]
+    private(set) var inspectingHostnames: Set<String> = []
+    private(set) var installingHostnames: Set<String> = []
+    var machineErrors: [String: String] = [:]
 
     // MARK: This Mac's power policy
 
@@ -305,43 +305,43 @@ final class MachinesStore {
     // MARK: Linux computers to add
 
     /// Lists the tailnet's Linux computers without a Woven server, through this Mac's server.
-    func findDevices() {
-        guard !isFindingDevices else { return }
-        guard let server else { return findDevicesError = ClientError.notConnected.localizedDescription }
-        isFindingDevices = true
+    func findComputers() {
+        guard !isFindingComputers else { return }
+        guard let server else { return findComputersError = ClientError.notConnected.localizedDescription }
+        isFindingComputers = true
         Task {
             defer {
-                isFindingDevices = false
-                hasSearchedDevices = true
+                isFindingComputers = false
+                hasSearchedComputers = true
             }
             do {
-                tailnetDevices = try await server.call(FindDevices()).filter { $0.platform == .linux }.map { device in
-                    TailnetDevice(id: device.name, name: device.name, hostName: device.name, address: device.address)
+                tailnetComputers = try await server.call(FindComputers()).filter { $0.platform == .linux }.map { computer in
+                    TailnetComputer(id: computer.name, name: computer.name, hostName: computer.name, address: computer.address)
                 }
-                findDevicesError = nil
+                findComputersError = nil
             } catch {
-                findDevicesError = error.localizedDescription
+                findComputersError = error.localizedDescription
             }
         }
     }
 
     /// Looks at a Linux computer over SSH, through this Mac's server. Changes nothing.
-    func inspectHost(hostName: String, userName: String?) {
-        guard let server else { return hostErrors[hostName] = ClientError.notConnected.localizedDescription }
-        guard !inspectingHosts.contains(hostName) else { return }
-        inspectingHosts.insert(hostName)
-        hostErrors[hostName] = nil
+    func inspectMachine(hostName: String, userName: String?) {
+        guard let server else { return machineErrors[hostName] = ClientError.notConnected.localizedDescription }
+        guard !inspectingHostnames.contains(hostName) else { return }
+        inspectingHostnames.insert(hostName)
+        machineErrors[hostName] = nil
         Task {
-            defer { inspectingHosts.remove(hostName) }
+            defer { inspectingHostnames.remove(hostName) }
             do {
-                let facts = try await server.call(InspectHost(host: hostName, user: userName))
-                hostPreflights[hostName] = HostPreflight(hostName: hostName, ready: facts.problems.isEmpty,
+                let facts = try await server.call(InspectMachine(host: hostName, user: userName))
+                machinePreflights[hostName] = MachinePreflight(hostName: hostName, ready: facts.problems.isEmpty,
                                                         architecture: facts.architecture, limitations: facts.problems,
                                                         storageCapacityBytes: facts.storageCapacityBytes,
                                                         storageAvailableBytes: facts.storageAvailableBytes)
             } catch {
-                hostPreflights[hostName] = nil
-                hostErrors[hostName] = error.localizedDescription
+                machinePreflights[hostName] = nil
+                machineErrors[hostName] = error.localizedDescription
             }
         }
     }
@@ -349,21 +349,21 @@ final class MachinesStore {
     /// Installs and starts the server there over SSH, through this Mac's server,
     /// which replies once the new server answers. The machine then joins on its own.
     func installServer(hostName: String, userName: String?) {
-        guard let server else { return hostErrors[hostName] = ClientError.notConnected.localizedDescription }
-        guard !installingHosts.contains(hostName) else { return }
-        installingHosts.insert(hostName)
-        hostErrors[hostName] = nil
+        guard let server else { return machineErrors[hostName] = ClientError.notConnected.localizedDescription }
+        guard !installingHostnames.contains(hostName) else { return }
+        installingHostnames.insert(hostName)
+        machineErrors[hostName] = nil
         let known = Set(machines.map(\.id))
         Task {
-            defer { installingHosts.remove(hostName) }
+            defer { installingHostnames.remove(hostName) }
             do {
                 _ = try await server.call(InstallServer(host: hostName, user: userName))
-                tailnetDevices.removeAll { $0.hostName == hostName }
-                hostPreflights[hostName] = nil
+                tailnetComputers.removeAll { $0.hostName == hostName }
+                machinePreflights[hostName] = nil
                 await reload()
                 pendingHarnessSetupMachineIDs.formUnion(Set(machines.map(\.id)).subtracting(known))
             } catch {
-                hostErrors[hostName] = error.localizedDescription
+                machineErrors[hostName] = error.localizedDescription
             }
         }
     }

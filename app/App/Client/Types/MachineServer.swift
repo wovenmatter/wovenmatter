@@ -34,7 +34,7 @@ struct ServerStopResult: Hashable, Sendable {
 
 /// A Linux computer on the tailnet that does not run the Woven server yet. Adding a
 /// workspace lists these and installs the server over SSH.
-struct TailnetDevice: Identifiable, Hashable, Sendable {
+struct TailnetComputer: Identifiable, Hashable, Sendable {
     let id: String
     var name: String
     var hostName: String
@@ -42,7 +42,7 @@ struct TailnetDevice: Identifiable, Hashable, Sendable {
 }
 
 /// What inspecting a Linux computer over SSH found, before installing the server there.
-struct HostPreflight: Hashable, Sendable {
+struct MachinePreflight: Hashable, Sendable {
     var hostName: String
     var ready: Bool
     var architecture: String

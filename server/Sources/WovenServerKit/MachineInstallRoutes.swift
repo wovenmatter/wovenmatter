@@ -6,17 +6,17 @@ import WovenProtocol
 /// Remove, which uninstalls a Linux machine's server before deleting the
 /// machine from every library. `install` is nil where this server carries no
 /// Linux release (on Linux, and in tests); those requests are then refused.
-func registerDevices(_ router: inout Router, library: Library, peers: PeerSync, tailnet: any Tailnet, install: LinuxInstall?) {
-  router.on(FindDevices.self) { _, _ in
-    let devices = try await tailnet.devices()
+func registerMachineInstall(_ router: inout Router, library: Library, peers: PeerSync, tailnet: any Tailnet, install: LinuxInstall?) {
+  router.on(FindComputers.self) { _, _ in
+    let computers = try await tailnet.computers()
     var linked: Set<String> = []
     for machine in try await library.machines() {
       if let address = await peers.address(of: machine.id) { linked.insert(address.host) }
     }
-    return devices.filter { !linked.contains($0.address) }
+    return computers.filter { !linked.contains($0.address) }
   }
 
-  router.on(InspectHost.self) { request, _ in
+  router.on(InspectMachine.self) { request, _ in
     guard let install else { throw ProtocolError(.failed, "This machine cannot install the Woven server elsewhere.") }
     do {
       return try await install.inspect(on: LinuxInstall.Target(host: request.host, user: request.user))

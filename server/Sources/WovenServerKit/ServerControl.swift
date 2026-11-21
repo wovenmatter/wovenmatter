@@ -110,7 +110,7 @@ extension LinuxInstall {
   }
 
   /// Whether the server can be installed there, and its storage. Changes nothing.
-  func inspect(on target: Target) async throws -> HostFacts {
+  func inspect(on target: Target) async throws -> MachineFacts {
     let host = target.host
     let lines = try await ssh(target, script: """
       uname -m
@@ -129,7 +129,7 @@ extension LinuxInstall {
     // df -P: filesystem, 1024-blocks, used, available, capacity, mount point.
     let df = lines[2].split(separator: " ", omittingEmptySubsequences: true)
     let blocks = df.count >= 4 ? Int64(df[1]) : nil, free = df.count >= 4 ? Int64(df[3]) : nil
-    return HostFacts(architecture: arch, problems: problems,
+    return MachineFacts(architecture: arch, problems: problems,
                      storageCapacityBytes: blocks.map { $0 * 1024 }, storageAvailableBytes: free.map { $0 * 1024 })
   }
 

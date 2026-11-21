@@ -77,7 +77,7 @@ struct SettingsWorkspacesView: View {
             if let selectedMachine {
                 model.refreshHarnesses(on: selectedMachine.id)
             } else {
-                model.findDevices()
+                model.findComputers()
             }
         }
     }
@@ -162,8 +162,8 @@ struct SettingsWorkspacesView: View {
         selectedMachineID.flatMap { model.machine(id: $0) }
     }
 
-    private var currentPreflight: HostPreflight? {
-        trimmedHost.isEmpty ? nil : model.hostPreflights[trimmedHost]
+    private var currentPreflight: MachinePreflight? {
+        trimmedHost.isEmpty ? nil : model.machinePreflights[trimmedHost]
     }
 
     @ViewBuilder private var machineList: some View {
@@ -287,8 +287,8 @@ struct SettingsWorkspacesView: View {
         SettingsSection(title: "Machine", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
-                    let onlineMachines = model.tailnetDevices
-                    if onlineMachines.isEmpty, !model.isFindingDevices {
+                    let onlineMachines = model.tailnetComputers
+                    if onlineMachines.isEmpty, !model.isFindingComputers {
                         Text("No online machines discovered")
                             .font(.settingsSecondary)
                             .foregroundStyle(WovenPalette.mutedForeground)
@@ -296,7 +296,7 @@ struct SettingsWorkspacesView: View {
                     ForEach(onlineMachines) { machine in
                         Button {
                             hostName = machine.hostName
-                            inspectHost()
+                            inspectMachine()
                         } label: {
                             HStack(spacing: 8) {
                                 Text(machine.name)
@@ -307,26 +307,26 @@ struct SettingsWorkspacesView: View {
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
                     }
-                    Button(model.isFindingDevices ? "Discovering…" : "Refresh") {
-                        model.findDevices()
+                    Button(model.isFindingComputers ? "Discovering…" : "Refresh") {
+                        model.findComputers()
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isFindingDevices)
+                    .disabled(model.isFindingComputers)
                 }
             }
 
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .wovenInput()
-                    .onSubmit { inspectHost() }
+                    .onSubmit { inspectMachine() }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
                     .wovenInput()
             }
             SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
-            let inspecting = model.inspectingHosts.contains(trimmedHost)
-            Button(inspecting ? "Inspecting machine…" : "Inspect machine") { inspectHost() }
+            let inspecting = model.inspectingHostnames.contains(trimmedHost)
+            Button(inspecting ? "Inspecting machine…" : "Inspect machine") { inspectMachine() }
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(inspecting || trimmedHost.isEmpty)
             if currentPreflight == nil, !inspecting {
@@ -336,7 +336,7 @@ struct SettingsWorkspacesView: View {
                     .font(.settingsSecondary)
                     .foregroundStyle(WovenPalette.mutedForeground)
             }
-            if let error = model.hostErrors[trimmedHost] { SettingsError(error) }
+            if let error = model.machineErrors[trimmedHost] { SettingsError(error) }
             if let preflight = currentPreflight {
                 SettingsInset {
                     VStack(alignment: .leading, spacing: 8) {
@@ -363,11 +363,11 @@ struct SettingsWorkspacesView: View {
         .disabled(installing)
     }
 
-    private var installing: Bool { model.installingHosts.contains(trimmedHost) }
+    private var installing: Bool { model.installingHostnames.contains(trimmedHost) }
 
-    private func inspectHost() {
+    private func inspectMachine() {
         guard !trimmedHost.isEmpty else { return }
-        model.inspectHost(hostName: trimmedHost, userName: trimmedUser)
+        model.inspectMachine(hostName: trimmedHost, userName: trimmedUser)
     }
 
     private var createCard: some View {

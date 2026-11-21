@@ -29,12 +29,12 @@ public protocol Tailnet: Sendable {
   /// This machine on the tailnet: its name and the address to listen on.
   func thisMachine() async throws -> TailnetMachine
   /// The other computers of the tailnet that are online now, for adding a workspace.
-  func devices() async throws -> [TailnetDevice]
+  func computers() async throws -> [TailnetComputer]
 }
 
 extension Tailnet {
-  public func devices() async throws -> [TailnetDevice] {
-    try await machines().map { TailnetDevice(name: $0.name, address: $0.host, platform: .linux) }
+  public func computers() async throws -> [TailnetComputer] {
+    try await machines().map { TailnetComputer(name: $0.name, address: $0.host, platform: .linux) }
   }
 }
 
@@ -105,7 +105,7 @@ public struct TailscaleTailnet: Tailnet {
     }.sorted { $0.name < $1.name }
   }
 
-  public func devices() async throws -> [TailnetDevice] {
+  public func computers() async throws -> [TailnetComputer] {
     let status = try await json(["status", "--json"])
     guard status["BackendState"] as? String == "Running" else { throw Unavailable(description: "Tailscale is not connected.") }
     let peers = (status["Peer"] as? [String: Any] ?? [:]).values.compactMap { $0 as? [String: Any] }
@@ -117,7 +117,7 @@ public struct TailscaleTailnet: Tailnet {
       case "linux": .linux
       default: nil
       }
-      return TailnetDevice(name: peer["HostName"] as? String ?? address, address: address, platform: platform)
+      return TailnetComputer(name: peer["HostName"] as? String ?? address, address: address, platform: platform)
     }.sorted { $0.name < $1.name }
   }
 

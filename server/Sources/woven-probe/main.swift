@@ -14,9 +14,9 @@ let usage = """
     sign-out PROVIDER
     set-key PROVIDER [KEY]           set (or, without KEY, remove) an API key everywhere
     machines | sessions | folders | settings | folder-create NAME
-    devices                          tailnet computers without a Woven server
-    device-install HOST [USER]       install the Linux server there over SSH
-    device-update MACHINE | remove MACHINE | rename NAME [MACHINE]
+    computers                        tailnet computers without a Woven server
+    machine-install HOST [USER]      install the Linux server there over SSH
+    machine-update MACHINE | remove MACHINE | rename NAME [MACHINE]
     server MACHINE start|stop|restart  control a machine's server, as Settings does (stop confirmed)
     server-log MACHINE               the end of a machine's server log
     usage [DAYS]                     usage of the last DAYS (default 30) per machine, harness and inside or outside Woven Matter
@@ -233,14 +233,14 @@ do {
       out("\(status.machine.id)\t\(status.machine.name)\t\(status.machine.platform.rawValue)\t\(status.online ? "online" : "offline")"
           + (status.isThisMachine ? "\tthis machine" : "\t\(status.appVersion ?? "-")\t\(status.address ?? "-"):\(status.port.map(String.init) ?? "-")"))
     }
-  case "devices":
-    for device in try await client.call(FindDevices()) {
-      out("\(device.name)\t\(device.address)\t\(device.platform?.rawValue ?? "-")")
+  case "computers":
+    for computer in try await client.call(FindComputers()) {
+      out("\(computer.name)\t\(computer.address)\t\(computer.platform?.rawValue ?? "-")")
     }
-  case "device-install":
+  case "machine-install":
     _ = try await client.call(InstallServer(host: argument(0, "HOST"), user: arguments.count > 1 ? arguments[1] : nil))
     out("installed")
-  case "device-update":
+  case "machine-update":
     _ = try await client.call(UpdateServer(machineID: argument(0, "MACHINE")))
     out("updated")
   case "server":

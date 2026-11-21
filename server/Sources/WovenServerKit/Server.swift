@@ -133,7 +133,7 @@ public final class WovenServer: Sendable {
     #else
     let install: LinuxInstall? = nil
     #endif
-    registerDevices(&routes, library: library, peers: peers, tailnet: options.tailnet, install: install)
+    registerMachineInstall(&routes, library: library, peers: peers, tailnet: options.tailnet, install: install)
     registerServerControl(&routes, library: library, sessions: sessions, peers: peers, tailnet: options.tailnet,
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
