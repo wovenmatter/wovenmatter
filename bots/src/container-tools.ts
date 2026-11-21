@@ -1,20 +1,15 @@
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { BotEnvironmentAdapter } from "./env.ts";
-import type { PreviewManager } from "./environment/previews.ts";
 import { run } from "./tools.ts";
 
 type Result = Awaited<ReturnType<typeof run>>;
 
 /**
  * Tools that act on the bot's container through its supervisor: the restart list
- * (`keep_running`), the persistent browser, and previews of container ports.
+ * (`keep_running`) and the persistent browser.
  */
-export function containerTools(
-  botId: string,
-  env: BotEnvironmentAdapter,
-  previews: PreviewManager | undefined,
-): Extension {
+export function containerTools(botId: string, env: BotEnvironmentAdapter): Extension {
   const control = env.control;
   if (!control) return defineExtension({ name: "woven-container-tools" });
   const ask = (method: string, args: Record<string, unknown>, ctx: Parameters<typeof control>[3]) =>
@@ -113,38 +108,6 @@ export function containerTools(
           }
         },
       }),
-      ...(previews
-        ? [
-            defineTool({
-              name: "share_preview",
-              description:
-                "Share a port your container listens on (a web app or dev server) with the user: returns a private HTTPS URL on their tailnet to give them. HTTP and WebSockets work; it is never public. Viewing the preview keeps your container awake. Bind your server to 0.0.0.0 or 127.0.0.1 inside the container.",
-              parameters: Type.Object({ port: Type.Integer({ minimum: 1, maximum: 65535 }) }),
-              execute: (args) =>
-                run(async () => {
-                  const preview = await previews.share(botId, args.port);
-                  return { url: preview.url, containerPort: preview.containerPort };
-                }),
-            }),
-            defineTool({
-              name: "stop_preview",
-              description: "Stop sharing a container port shared with share_preview.",
-              parameters: Type.Object({ port: Type.Integer({ minimum: 1, maximum: 65535 }) }),
-              execute: (args) =>
-                run(async () =>
-                  (await previews.unshare(botId, args.port)) ? `Stopped sharing port ${args.port}.` : `Port ${args.port} was not shared.`,
-                ),
-            }),
-            defineTool({
-              name: "list_previews",
-              description: "List the container ports you share, with their URLs.",
-              parameters: Type.Object({}),
-              replay: "safe",
-              execute: () =>
-                run(async () => previews.list(botId).map((p) => ({ port: p.containerPort, url: p.url }))),
-            }),
-          ]
-        : []),
     ],
   });
 }

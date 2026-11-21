@@ -88,11 +88,15 @@ export async function openForumTest(dir: string, options: ForumTestOptions = {})
   const faux = fauxProvider({ tokensPerSecond: options.tokensPerSecond ?? 5000 });
   const turns: Turn[] = [];
   let brain = options.brain ?? (() => ({ say: "noted" }) as Move);
-  const step = async (context: unknown) => {
+  const step = async (context: unknown, options?: { readonly signal?: AbortSignal }) => {
     const turn = turnOf(context);
     turns.push(turn);
     const move = brain(turn);
-    await move.after;
+    // A stopped request stops waiting, as a provider's does.
+    const signal = options?.signal;
+    await (signal
+      ? Promise.race([move.after, new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))])
+      : move.after);
     if ("post" in move) {
       return fauxAssistantMessage(
         [
@@ -138,7 +142,7 @@ export async function openForumTest(dir: string, options: ForumTestOptions = {})
     },
   };
   const registry = new BotRegistry(db);
-  await registry.migrate();
+  await registry.createTables();
   const open = async () => {
     const store = new ForumStore(db);
     forum = await openForum({

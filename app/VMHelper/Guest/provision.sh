@@ -1,21 +1,16 @@
 #!/bin/bash
-# Woven VM guest provisioning, run by systemd (never by hand).
-#   first-boot: prepare the data disk, install the pinned Docker Engine, apply
-#               Woven's configuration. Retried on every boot until it succeeds.
-#   upgrade:    Woven's Update action: guest packages plus the pinned Docker
-#               Engine, then the same configuration. The Mac snapshots the
-#               disks before and reboots and health-checks the guest after.
+# Woven VM guest provisioning, run by systemd on first boot (never by hand):
+# prepare the data disk, install the pinned Docker Engine, apply Woven's
+# configuration. Retried on every boot until it succeeds.
 # Every step runs under its own time limit, so a hang ends as a failure that
 # names the step. The status file carries the step's limit and this boot's ID:
 # the Mac enforces the same limit when the guest itself is stuck, and never
 # takes an earlier boot's result for this one's.
 set -Eeuo pipefail
-mode="${1:-first-boot}"
 state=/var/lib/woven
 data=/var/lib/woven-data
 log=/var/log/woven-provision.log
 status_file="$state/status.json"
-[ "$mode" = upgrade ] && status_file="$state/update.json"
 mkdir -p "$state"
 exec >>"$log" 2>&1
 # shellcheck source=/dev/null
@@ -53,7 +48,7 @@ run_step() {
   step="$2"
   echo "--- $step"
   status running "$step" "" "$limit"
-  timeout --kill-after=30 "$limit" "$0" "$mode" --step "$3" || code=$?
+  timeout --kill-after=30 "$limit" "$0" --step "$3" || code=$?
   case "$code" in
     0) ;;
     124 | 137) fail "$step did not finish within $((limit / 60)) minutes." ;;
@@ -98,26 +93,30 @@ prepare_data_disk() {
     # sparse: nothing is written for space that bots never use.
     mkfs.ext4 -q -L woven-data -m 0 -i 65536 -E lazy_itable_init=1,lazy_journal_init=1,nodiscard "$device"
   fi
-  mkdir -p "$data" /var/lib/docker /var/lib/containerd
+  mkdir -p "$data"
   sed -i '/# woven-data$/d' /etc/fstab
   cat >>/etc/fstab <<EOF
 LABEL=woven-data $data ext4 defaults,noinit_itable,commit=2,x-systemd.device-timeout=60 0 2 # woven-data
-$data/docker /var/lib/docker none bind,x-systemd.requires-mounts-for=$data 0 0 # woven-data
-$data/containerd /var/lib/containerd none bind,x-systemd.requires-mounts-for=$data 0 0 # woven-data
 EOF
   systemctl daemon-reload
   mountpoint -q "$data" || mount "$data"
   resize2fs "$device" >/dev/null 2>&1 || true
   mkdir -p "$data/docker" "$data/containerd"
-  mountpoint -q /var/lib/docker || mount /var/lib/docker
-  mountpoint -q /var/lib/containerd || mount /var/lib/containerd
   if [ -f /etc/woven/disk-cap ]; then /usr/local/lib/woven/disk-cap.sh "$(cat /etc/woven/disk-cap)"; fi
 }
 
 install_docker() {
-  install -d -m 0755 /etc/docker /etc/apt/keyrings
+  install -d -m 0755 /etc/docker /etc/containerd /etc/apt/keyrings
+  # Docker's and containerd's data roots are on the data disk, so a new system
+  # disk (a guest update) finds the bots' volumes and images where they were.
+  # Written before the packages install, which then keep them.
+  cat >/etc/containerd/config.toml <<'EOF'
+root = "/var/lib/woven-data/containerd"
+disabled_plugins = ["cri"]
+EOF
   cat >/etc/docker/daemon.json <<'EOF'
 {
+  "data-root": "/var/lib/woven-data/docker",
   "log-driver": "local",
   "log-opts": { "max-size": "20m", "max-file": "3" },
   "live-restore": true,
@@ -157,7 +156,7 @@ EOF
     mkdir -p "/etc/systemd/system/$unit.d"
     cat >"/etc/systemd/system/$unit.d/woven.conf" <<'EOF'
 [Unit]
-RequiresMountsFor=/var/lib/docker /var/lib/containerd /var/lib/woven-data
+RequiresMountsFor=/var/lib/woven-data
 After=woven-egress.service
 Wants=woven-egress.service
 EOF
@@ -192,49 +191,18 @@ start_docker() {
   false
 }
 
-update_packages() {
-  apt-mark hold docker-ce docker-ce-cli containerd.io >/dev/null 2>&1 || true
-  apt_get update
-  apt_get -y full-upgrade
-}
-
-remove_unused_packages() {
-  apt_get -y autoremove --purge
-  apt_get clean
-}
-
-if [ "${2:-}" = --step ]; then
+if [ "${1:-}" = --step ]; then
   # One step, run by run_step under its time limit; run_step reports it.
-  "$3"
+  "$2"
   exit 0
 fi
 
-echo "=== $(date -Is) $mode"
+echo "=== $(date -Is)"
 trap failed ERR
-case "$mode" in
-  first-boot)
-    run_step 900 "Turning off automatic updates" turn_off_automatic_updates
-    run_step 900 "Preparing the bot disk" prepare_data_disk
-    run_step 1800 "Installing Docker Engine $DOCKER_CE_VERSION" install_docker
-    run_step 300 "Applying network rules" configure
-    run_step 300 "Starting Docker Engine" start_docker
-    printf '{"guestVersion": %s, "at": "%s"}\n' "$WOVEN_GUEST_VERSION" "$(date -Is)" >"$state/provisioned"
-    status ready "Ready"
-    ;;
-  upgrade)
-    run_step 900 "Turning off automatic updates" turn_off_automatic_updates
-    run_step 3600 "Updating guest packages" update_packages
-    # Idempotent: refreshes the data disk's mount options for the reboot.
-    run_step 900 "Preparing the bot disk" prepare_data_disk
-    run_step 1800 "Installing Docker Engine $DOCKER_CE_VERSION" install_docker
-    run_step 900 "Removing unused packages" remove_unused_packages
-    run_step 300 "Applying network rules" configure
-    run_step 300 "Starting Docker Engine" start_docker
-    printf '{"guestVersion": %s, "at": "%s"}\n' "$WOVEN_GUEST_VERSION" "$(date -Is)" >"$state/provisioned"
-    status ready "Updated"
-    ;;
-  *)
-    echo "unknown mode $mode" >&2
-    exit 2
-    ;;
-esac
+run_step 900 "Turning off automatic updates" turn_off_automatic_updates
+run_step 900 "Preparing the bot disk" prepare_data_disk
+run_step 1800 "Installing Docker Engine $DOCKER_CE_VERSION" install_docker
+run_step 300 "Applying network rules" configure
+run_step 300 "Starting Docker Engine" start_docker
+printf '{"at": "%s"}\n' "$(date -Is)" >"$state/provisioned"
+status ready "Ready"

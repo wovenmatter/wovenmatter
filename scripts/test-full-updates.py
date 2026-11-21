@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """A real same-version full-only update round trip, with no provider, Apple, or production access."""
 import importlib.util
-import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
 import subprocess
 import tempfile
-import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('assets', ROOT / 'scripts/release-assets.py')
@@ -44,7 +42,6 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
     info = dict(CFBundleIdentifier='wovenmatter.tests.update', CFBundleName='Woven Matter',
                 CFBundleExecutable='Probe', CFBundlePackageType='APPL',
                 CFBundleShortVersionString='0.3.0', CFBundleVersion='2', LSMinimumSystemVersion='26.0',
-                WovenMatterDeviceSetupVersion=assets.device_setup_version(),
                 SUFeedURL='https://example.invalid/appcast.xml', SUPublicEDKey=public,
                 SURequireSignedFeed=True, SUVerifyUpdateBeforeExtraction=True)
     (new / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
@@ -65,7 +62,6 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
     paths = importlib.util.module_from_spec(path_spec)
     path_spec.loader.exec_module(paths)
     paths.verify(output, notarized=False)
-    run(ROOT / 'scripts/generate-release-manifest.sh', '0.3.0', '2', output / 'WovenMatter_0.3.0_arm64.dmg', output / 'latest-mac.json')
     assets.prepare(output, '0.3.0', 2, 'a' * 40)
     run('swift', ROOT / 'scripts/verify-update-signatures.swift', output, public)
     fails(lambda: assets.verify(output, '0.3.0', 'b' * 40))

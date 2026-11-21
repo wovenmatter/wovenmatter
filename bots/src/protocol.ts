@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_EDITED_FACT_CHARS } from "./memory.ts";
+import { MAX_CONTEXT_LENGTH } from "./message-context.ts";
 import type { DisplayEntry } from "./transcript.ts";
 
 const botId = z.string().uuid();
@@ -36,8 +37,6 @@ export const requestSchema = z.discriminatedUnion("type", [
     botId,
     groupId: botId.nullable(),
   }),
-  // Per-bot Woven MCP status (keys come from the host API; nothing to connect by hand).
-  z.strictObject({ id: requestId, type: z.literal("woven.status") }),
   z.object({ id: requestId, type: z.literal("bots.list") }),
   z.object({
     id: requestId,
@@ -176,8 +175,12 @@ export const requestSchema = z.discriminatedUnion("type", [
     /** Starts a new thread for this message instead of using `conversationId`. */
     newThread: z.literal(true).optional(),
     text: z.string().min(1).max(100_000),
-    context: z.string().max(4000).optional(),
-    /** Set by the host: a retry with the same id is accepted without submitting again. */
+    context: z.string().max(MAX_CONTEXT_LENGTH).optional(),
+    /** Set by the server: an agent session sent this (`message_bot`), saved as from it. */
+    from: z
+      .strictObject({ name: z.string().trim().min(1).max(200), sessionId: z.string().min(1).max(200) })
+      .optional(),
+    /** Set by the server: a retry with the same id is accepted without submitting again. */
     deliveryId: z.string().min(1).max(128).optional(),
   }),
   z.strictObject({
@@ -186,7 +189,15 @@ export const requestSchema = z.discriminatedUnion("type", [
     botId,
     conversationId: conversationId.optional(),
     entryId: z.number().int().nonnegative(),
-    // Strict: threads cannot be named or renamed (`title` is rejected).
+    // Strict: a fork takes no title (`thread.setTitle` names a thread).
+  }),
+  // A title the person gives a thread in Woven; it replaces the generated one.
+  z.strictObject({
+    id: requestId,
+    type: z.literal("thread.setTitle"),
+    botId,
+    conversationId,
+    title: z.string().trim().min(1).max(200),
   }),
   z.strictObject({
     id: requestId,
@@ -195,6 +206,8 @@ export const requestSchema = z.discriminatedUnion("type", [
     conversationId,
     pinned: z.boolean(),
   }),
+  // Delete a thread at the source, stopping its turn first; the main channel is refused.
+  z.strictObject({ id: requestId, type: z.literal("thread.delete"), botId, conversationId }),
   z.object({
     id: requestId,
     type: z.literal("threads.list"),
@@ -211,19 +224,12 @@ export const requestSchema = z.discriminatedUnion("type", [
     titles: modelRefText.optional(),
     titlesReasoning: z.string().max(16).optional(),
   }),
-  // Runtime additions. A bot's container: state, idle status, restart list and previews.
+  // A bot's container: state, idle status and restart list.
   z.strictObject({ id: requestId, type: z.literal("bots.environment"), botId }),
   // Recreate a bot's container from a clean image, keeping its storage.
   z.strictObject({ id: requestId, type: z.literal("bots.rebuild"), botId }),
   // Stop a bot's container now (it starts again on the next tool call).
   z.strictObject({ id: requestId, type: z.literal("bots.stop"), botId }),
-  z.strictObject({ id: requestId, type: z.literal("previews.list"), botId: botId.optional() }),
-  z.strictObject({
-    id: requestId,
-    type: z.literal("previews.stop"),
-    botId,
-    port: z.number().int().min(1).max(65535),
-  }),
   // Update bots in place (all, or the listed ones): stop running work, snapshot, update,
   // health-check, roll back on failure. Progress arrives as `runtime.update` pushes.
   z.strictObject({
@@ -235,6 +241,8 @@ export const requestSchema = z.discriminatedUnion("type", [
   // The Forum: one group chat of the user and every bot, with threads (`forum.ts`).
   z.strictObject({ id: requestId, type: z.literal("forum.get") }),
   z.strictObject({ id: requestId, type: z.literal("forum.open"), roomId: roomId.optional() }),
+  // Stop the turns bots are running in one room, as a chat's Stop does (not Pause).
+  z.strictObject({ id: requestId, type: z.literal("forum.abort"), roomId }),
   z.strictObject({
     id: requestId,
     type: z.literal("forum.close"),
@@ -258,15 +266,25 @@ export const requestSchema = z.discriminatedUnion("type", [
     mentions: z.array(botId).max(1000).optional(),
     /** Ask every bot in the room. */
     everyone: z.boolean().optional(),
+    /** The person's open notes when they posted, for the bots in the room, as a chat message's. */
+    context: z.string().max(MAX_CONTEXT_LENGTH).optional(),
     deliveryId: z.string().min(1).max(128).optional(),
   }),
   z.strictObject({ id: requestId, type: z.literal("forum.thread.create"), postId }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("forum.thread.setTitle"),
+    roomId,
+    title: z.string().trim().min(1).max(200),
+  }),
   z.strictObject({
     id: requestId,
     type: z.literal("forum.thread.setPinned"),
     roomId,
     pinned: z.boolean(),
   }),
+  // Delete a Forum thread with its posts, stopping its turns first; the Forum itself is refused.
+  z.strictObject({ id: requestId, type: z.literal("forum.thread.delete"), roomId }),
   z.strictObject({ id: requestId, type: z.literal("forum.setPaused"), paused: z.boolean() }),
   z.strictObject({
     id: requestId,
@@ -393,6 +411,8 @@ export type ForumPost = {
   /** The author's name when it posted ("" for a user without one). */
   name: string;
   text: string;
+  /** A visual reply the bot published with `render_html` in this room; the post has no text then. */
+  visualReply?: VisualReply;
   /** Bots the user asked for a reply. */
   mentions?: string[];
   /** Posted by the runtime at a time the user set. */
@@ -477,15 +497,8 @@ export type StreamEvent =
   | { kind: "entry"; entry: DisplayEntry }
   | { kind: "error"; message: string };
 
-/** Server → client messages. */
+/** Runtime → server messages on the one connection: replies, pushes and host requests. */
 export type ServerMessage =
-  | {
-      type: "hello";
-      version: string;
-      protocol: number;
-      installationId: string;
-      capabilities: string[];
-    }
   | { type: "result"; id: string | number; data: unknown }
   | { type: "error"; id?: string | number; message: string }
   | { type: "event"; botId: string; conversationId: number; event: StreamEvent }
@@ -512,7 +525,8 @@ export type ServerMessage =
       botId?: string;
       phase: "stopping" | "updating" | "updated" | "rolledBack" | "skipped" | "done";
       error?: string;
-    };
+    }
+  | HostRequest;
 
 export type EnvironmentState = "missing" | "running" | "stopped" | "unavailable";
 
@@ -523,6 +537,345 @@ export type EnvironmentSummary = {
   busy?: string;
   /** Epoch ms of the last activity the runtime saw. */
   lastActivity?: number;
-  services?: unknown[];
-  previews: { port: number; url: string }[];
+  /** Its restart list (helper/supervisor.mjs), while it runs. */
+  services?: ServiceSummary[];
 };
+
+/** One entry of a bot's restart list (`keep_running`). */
+export type ServiceSummary = {
+  name: string;
+  command: string;
+  cwd: string;
+  running: boolean;
+  pid?: number;
+  /** ISO 8601: when the running process started. */
+  since?: string;
+  restarts: number;
+  lastExit?: { code: number | null; signal: string | null; at: string };
+};
+
+// --- Replies -------------------------------------------------------------------------------------
+
+export type SidebarGroup = { id: string; name: string; position: number };
+
+export type AccountStatus = {
+  id: string;
+  label: string;
+  group: string;
+  method: "oauth" | "api_key";
+  configured: boolean;
+};
+export type AccountsSummary = {
+  accounts: AccountStatus[];
+  search: { provider: string; providers: AccountStatus[] };
+};
+
+/** USD per million tokens. */
+export type PriceRates = { input: number; output: number; cacheRead: number; cacheWrite: number };
+/**
+ * A model's raw API price. `listed`: the catalog gives per-token prices. `zero`: the catalog lists
+ * $0 for everything, which pi-ai also uses for models it has no price for. `unknown`: no entry.
+ */
+export type ModelPricing =
+  | {
+      status: "listed";
+      rates: PriceRates;
+      /** Higher rates once a request's input passes `inputTokensAbove` tokens. */
+      tiers?: (PriceRates & { inputTokensAbove: number })[];
+      source: string;
+    }
+  | { status: "zero"; source: string }
+  | { status: "unknown" };
+/** How the provider is reached. */
+export type ModelAccess = {
+  kind: "subscription" | "api_key" | "unknown";
+  /** e.g. "ChatGPT subscription", "OpenRouter API key". */
+  label: string;
+};
+export type ModelOption = {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  contextWindow: number;
+  maxTokens?: number;
+  input?: string[];
+  unsupportedReasoning?: string[];
+  pricing: ModelPricing;
+  limit?: { kind: ModelLimitSummary["kind"]; label: string; account: string; resetsAt?: number };
+};
+export type ProviderModels = { id: string; name: string; access: ModelAccess; models: ModelOption[] };
+/** The title model ("" when unset: the default profile's main model) and its reasoning level. */
+export type Roles = { titles: string; titlesReasoning: string };
+export type ModelCatalog = { providers: ProviderModels[]; roles: Roles; reasoningLevels: string[] };
+
+export type RuntimeStatus = {
+  /** Where bots' tools run: `none`, `linux-dockerd` or `mac-vm`. */
+  environment: string;
+  bots: number;
+  /**
+   * The tools every bot container gets, the bots an update moves to a new base image
+   * (`staleBots`), and the bots an update changes at all (`outdatedBots`).
+   */
+  image?: {
+    tag: string;
+    base?: string;
+    node?: string;
+    playwright?: string;
+    staleBots: number;
+    outdatedBots: number;
+  };
+};
+
+/** What each request returns in its `result`. */
+export type Replies = {
+  "groups.list": { groups: SidebarGroup[] };
+  "groups.create": { group: SidebarGroup };
+  "groups.rename": { group: SidebarGroup };
+  "groups.delete": { deleted: true };
+  "groups.reorder": { groups: SidebarGroup[] };
+  "bots.setGroup": { bot: BotSummary };
+  "bots.list": { bots: BotSummary[] };
+  "bots.create": { bot: BotSummary };
+  "bots.delete": { deleted: boolean };
+  "bots.listDeleted": { bots: DeletedBotSummary[] };
+  "bots.restore": { restored: boolean; bot?: BotSummary };
+  "bots.purge": {
+    purged: true;
+    /** Tables of the bot's Pi Durable session that were dropped. */
+    tables: number;
+    /** Whether its container and files were removed (absent without a container engine). */
+    environment?: { removed: boolean; error?: string };
+  };
+  "bots.rename": { bot: BotSummary };
+  "bots.setManager": { bot: BotSummary };
+  "bots.setTeam": { bot: BotSummary };
+  "bots.replaceManager": { bot: BotSummary };
+  "bots.setOrchestrator": { bot: BotSummary | null };
+  "onboarding.status": OnboardingStatus;
+  "onboarding.setMainModel": { profile: ProfileSummary };
+  "profiles.list": ProfilesList;
+  "profiles.save": ProfilesList;
+  "profiles.delete": ProfilesList;
+  "profiles.setDefault": ProfilesList;
+  "bots.setProfile": { bot: BotSummary };
+  "memory.list": { facts: string[] };
+  "memory.add": { facts: string[] };
+  "memory.update": { facts: string[] };
+  "memory.delete": { facts: string[] };
+  "account.notes": { notes: string; updatedAt?: string };
+  "account.setNotes": { saved: true };
+  "conversation.open": ConversationSnapshot;
+  "conversation.close": { closed: boolean };
+  "conversation.abort": { conversationId: number; stopped: true };
+  /** `duplicate`: a retry of a delivery id already accepted. */
+  "message.send": { conversationId: number; submissionId: number } | { duplicate: true };
+  "thread.fork": { thread: ThreadSummary };
+  "thread.setTitle": { thread: ThreadSummary };
+  "thread.setPinned": { thread: ThreadSummary };
+  "thread.delete": { deleted: true };
+  "threads.list": { threads: ThreadSummary[] };
+  "settings.accounts": AccountsSummary;
+  "models.catalog": ModelCatalog;
+  "models.setRoles": { roles: Roles; restartRequired: false };
+  "bots.environment": { environment: EnvironmentSummary };
+  "bots.rebuild": { rebuilt: true };
+  "bots.stop": { stopped: true };
+  "runtime.update": { started: true };
+  "runtime.status": RuntimeStatus;
+  "forum.get": ForumState;
+  "forum.open": ForumRoomSnapshot;
+  "forum.close": { closed: boolean };
+  "forum.abort": { roomId: number; stopped: string[] };
+  "forum.posts": { posts: ForumPost[]; hasEarlier: boolean };
+  "forum.post": { post: ForumPost } | { duplicate: true };
+  "forum.thread.create": { thread: ForumThreadSummary };
+  "forum.thread.setTitle": { thread: ForumThreadSummary };
+  "forum.thread.setPinned": { thread: ForumThreadSummary };
+  "forum.thread.delete": { deleted: true };
+  "forum.setPaused": ForumState;
+  "forum.setBotActive": ForumState;
+  "forum.schedules.list": { schedules: ForumScheduleSummary[] };
+  "forum.schedules.save": { schedules: ForumScheduleSummary[] };
+  "forum.schedules.delete": { schedules: ForumScheduleSummary[] };
+  "user.get": { name: string };
+  "user.setName": { name: string };
+};
+
+// --- The host interface: runtime → server, on the same connection --------------------------------
+
+/**
+ * A provider credential as the server stores it for Pi Durable: an API key, a subscription's OAuth
+ * credential (Pi Durable's JSON, renewed here and reported back with `credentials.update`), or
+ * `native`: Claude Code's own sign-in on this machine, used with its default configuration.
+ */
+export type HostCredential =
+  | { type: "apiKey"; key: string }
+  | { type: "oauth"; access: string; refresh: string; expires: number; [field: string]: unknown }
+  | { type: "native" };
+
+export type SearchProviderId = "exa" | "brave" | "firecrawl";
+
+/** Settings → GitHub for one bot: the public half of the key while the bot may use it, and the commit identity. */
+export type GitSetup = {
+  readonly publicKey: string | null;
+  readonly identity: { readonly name: string; readonly email: string } | null;
+};
+
+export type MirrorConversation = {
+  conversationId: number;
+  kind: "main" | "thread";
+  parentConversationId?: number;
+  title?: string;
+  pinned?: boolean;
+  /** ISO 8601. */
+  createdAt: string;
+};
+
+/** A visual reply a bot published with `render_html` (not a Page artifact); its HTML is in the server's content store. */
+export type VisualReply = { title: string; height: number; digest: string; size: number };
+
+export type MirrorItem = {
+  /** Stable forever, unique within the bot: `<entryId>` or `<entryId>.<n>`. */
+  key: string;
+  conversationId: number;
+  /** Epoch ms. */
+  createdAt: number;
+  kind: "user" | "assistant" | "thinking" | "tool" | "visualReply" | "error" | "stopped";
+  /** user, assistant, thinking (the model's reasoning, as sessions save it), error. */
+  text?: string;
+  tool?: { name: string; input: string; output?: string; failed: boolean };
+  /** visualReply: shown in place of the `render_html` call that published it. */
+  visualReply?: VisualReply;
+  /** user: an agent session that sent it (`message_bot`), not the person. */
+  from?: { name: string; sessionId: string };
+  /** One model turn's usage, on the first item of that turn (its text when it has any). */
+  usage?: {
+    /** `provider/model`. */
+    model: string;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    /** USD. */
+    cost: number;
+  };
+};
+
+/** One bot's conversations and the finished items above the server's checkpoint. */
+export type MirrorBot = {
+  bot: {
+    id: string;
+    name: string;
+    kind: "admin" | "bot";
+    manager: boolean;
+    managerId?: string;
+    orchestrator: boolean;
+    deleted: boolean;
+    /** ISO 8601. */
+    createdAt: string;
+  };
+  /** The main channel and every thread (Forum seats go with the Forum; subagents are never mirrored). */
+  conversations: MirrorConversation[];
+  /** Sorted by entry, then n. At most 200. */
+  items: MirrorItem[];
+  /** Entries through this id are covered. */
+  upTo: number;
+};
+
+/** One model turn's usage in a bot's Forum seat, keyed like items (`<entryId>` or `<entryId>.<n>`). */
+export type MirrorSeatUsage = {
+  botId: string;
+  key: string;
+  roomId: number;
+  createdAt: number;
+  usage: NonNullable<MirrorItem["usage"]>;
+};
+
+export type MirrorForum = {
+  rooms: { roomId: number; parentPostId?: number; title?: string; pinned?: boolean; createdAt: string }[];
+  /** Sorted by id. At most 200. */
+  posts: {
+    id: number;
+    roomId: number;
+    author: "user" | "bot";
+    botId?: string;
+    name: string;
+    text: string;
+    /** A visual reply the bot published here, saved as a reference to the server's content. */
+    visualReply?: VisualReply;
+    /** Epoch ms. */
+    createdAt: number;
+  }[];
+  /**
+   * What bots did in their seats for these rooms: their tool calls and thinking (not their private
+   * words, nor the posts and visual replies they made, which are posts), saved in the room in time
+   * order with the posts, under the bot's name. `conversationId` is the seat's room.
+   */
+  seatItems?: { botId: string; name: string; item: MirrorItem }[];
+  /** Every model turn of the bots' seats, whatever it said. */
+  seatUsage?: MirrorSeatUsage[];
+  /** Each bot's seat entries through this id are covered. */
+  seats?: Record<string, number>;
+  /** Posts through this id are covered. */
+  upTo: number;
+};
+
+/** The server's checkpoints: what it already holds of each bot, of the Forum and of each bot's seats. */
+export type MirrorCheckpoints = { bots: Record<string, number>; forum: number; seats?: Record<string, number> };
+
+type Empty = Record<string, never>;
+
+/** Each host method's params and the `data` of its reply. */
+export type HostMethods = {
+  credentials: {
+    params: { provider: string };
+    /** `searchProvider` only for `provider: "web-search"`. */
+    data: { credential: HostCredential | null; searchProvider?: SearchProviderId };
+  };
+  "credentials.update": { params: { provider: string; credential: HostCredential }; data: Empty };
+  "git.setup": { params: { botId: string }; data: GitSetup };
+  /** One SSH agent request from the bot's container, answered by the machine's signing agent. */
+  "git.agent": { params: { botId: string; message: string }; data: { message: string } };
+  /** Whether the bot may use Woven tools (`bots.wovenTools`). */
+  "tools.access": { params: { botId: string }; data: { allowed: boolean } };
+  /** The Woven tool catalog and instructions, when the bot may use them; asked on every connection. */
+  "tools.list": {
+    params: { botId: string };
+    data:
+      | { allowed: false }
+      | {
+          allowed: true;
+          tools: {
+            name: string;
+            description: string;
+            inputSchema: Record<string, unknown>;
+            annotations?: { readOnlyHint?: boolean };
+          }[];
+          instructions: string;
+        };
+  };
+  /** One Woven tool call, carried out by the server (which checks access again). */
+  /** `forum`: the bot calls from its Forum seat, not one of its own chats. */
+  "tools.call": {
+    params: { botId: string; name: string; arguments: Record<string, unknown>; forum?: true };
+    data: {
+      content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
+      isError: boolean;
+      /** What the bot is not shown: the visual reply `render_html` published. */
+      _meta?: { wovenVisualReply?: VisualReply };
+    };
+  };
+  "mirror.checkpoints": { params: Empty; data: MirrorCheckpoints };
+  "mirror.bot": { params: MirrorBot; data: Empty };
+  "mirror.forum": { params: MirrorForum; data: Empty };
+  "mirror.purge": { params: { botId: string }; data: Empty };
+};
+export type HostMethod = keyof HostMethods;
+
+export type HostRequest = {
+  [M in HostMethod]: { type: "host"; id: string; method: M; params: HostMethods[M]["params"] };
+}[HostMethod];
+
+export type HostReply =
+  | { type: "host.result"; id: string; data: unknown }
+  | { type: "host.error"; id: string; message: string };

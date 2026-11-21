@@ -10,8 +10,8 @@ export type ErrorIssue = "signIn" | "limit";
 
 /** What a provider attached to a failed message (the Claude provider sets `signIn`). */
 export type IssueCarrier = Pick<AssistantMessage, "stopReason" | "errorMessage"> & {
-  pibotIssue?: ErrorIssue;
-  pibotLimit?: LimitClass;
+  botIssue?: ErrorIssue;
+  botLimit?: LimitClass;
 };
 
 /** Provider wording for a missing or refused sign-in or key. */
@@ -20,7 +20,7 @@ const SIGN_IN =
 
 export function errorIssue(message: IssueCarrier): ErrorIssue | undefined {
   if (message.stopReason !== "error") return undefined;
-  if (message.pibotIssue) return message.pibotIssue;
+  if (message.botIssue) return message.botIssue;
   const limit = classifyLimit(message);
   if (limit && limit.kind !== "rate") return "limit";
   return SIGN_IN.test(message.errorMessage ?? "") ? "signIn" : undefined;

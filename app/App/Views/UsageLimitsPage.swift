@@ -1,6 +1,5 @@
 import Charts
 import SwiftUI
-import WovenMatterCore
 
 enum UsageLimitPace {
     /// Where even spending would be, as the share of the window still to come.
@@ -29,7 +28,7 @@ struct UsageLimitsPage: View {
 
     /// Every supported provider appears, so a missing account is never mistaken for no usage.
     static func accounts(
-        from snapshot: LocalUsageSnapshot,
+        from snapshot: UsageSnapshot,
         isRefreshingLimits: Bool,
         error: String?
     ) -> [UsageLimitAccount] {

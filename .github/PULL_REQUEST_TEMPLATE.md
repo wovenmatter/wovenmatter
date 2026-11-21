@@ -13,7 +13,7 @@ motion or interaction changes. Delete this section when it does not apply.
 
 ## Validation
 
-- [ ] I ran the relevant `scripts/test-changes.sh` validation (`--all` across application, package, harness, remote, or build-system boundaries)
+- [ ] I ran `scripts/test-changes.sh`
 - [ ] No provider-consuming or credential-dependent tests were added
 
 ## Review notes

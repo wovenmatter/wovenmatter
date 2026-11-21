@@ -232,10 +232,7 @@ phase_notarize_dmg() {
 }
 
 phase_feed() {
-  release_status 'Generating updater manifest and checksums'
-  scripts/generate-release-manifest.sh \
-    "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"
-  release_status 'Generating signed full-only update feed'
+  release_status 'Generating the signed full-only update feed and checksums'
   scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir"
   release_status 'Distribution artifacts ready'
   printf 'Release artifacts ready in %s\n' "$output_dir"

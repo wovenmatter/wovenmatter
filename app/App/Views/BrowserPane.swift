@@ -1,9 +1,5 @@
-#if APP_FACADE_TESTS
-import FacadeBrowserTestBridge
-#endif
 import AppKit
 import SwiftUI
-import WovenMatterCore
 
 struct BrowserPane: View {
     let page: WMBrowserPage

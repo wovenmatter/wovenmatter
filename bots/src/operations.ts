@@ -2,8 +2,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/conte
 import type { BotManager } from "./bots.ts";
 import type { BotEnvironmentAdapter } from "./env.ts";
 import type { UpdateResult } from "./environment/container.ts";
-import type { PreviewManager } from "./environment/previews.ts";
-import type { EnvironmentSummary, ServerMessage } from "./protocol.ts";
+import type { EnvironmentSummary, ServerMessage, ServiceSummary } from "./protocol.ts";
 
 /** What a bot is told after an update stopped its turn. */
 export const INTERRUPTED_NOTE =
@@ -22,7 +21,6 @@ export type ForumHold = {
 export class RuntimeOperations {
   readonly #manager: BotManager;
   readonly #env: BotEnvironmentAdapter | undefined;
-  readonly #previews: PreviewManager | undefined;
   readonly #notify: (message: ServerMessage) => void;
   readonly #log: (message: string) => void;
   readonly #forum: ForumHold | undefined;
@@ -31,7 +29,6 @@ export class RuntimeOperations {
   constructor(options: {
     manager: BotManager;
     env?: BotEnvironmentAdapter;
-    previews?: PreviewManager;
     notify?: (message: ServerMessage) => void;
     log?: (message: string) => void;
     /** The Forum: an update stops and holds a bot's Forum turns like its other conversations. */
@@ -39,7 +36,6 @@ export class RuntimeOperations {
   }) {
     this.#manager = options.manager;
     this.#env = options.env;
-    this.#previews = options.previews;
     this.#notify = options.notify ?? (() => {});
     this.#log = options.log ?? (() => {});
     this.#forum = options.forum;
@@ -58,23 +54,22 @@ export class RuntimeOperations {
   async environment(botId: string): Promise<EnvironmentSummary> {
     await this.#manager.record(botId);
     const env = this.#env;
-    const previews = (this.#previews?.list(botId) ?? []).map((p) => ({ port: p.containerPort, url: p.url }));
-    if (!env?.state) return { botId, state: "unavailable", previews };
+    if (!env?.state) return { botId, state: "unavailable" };
     let state: EnvironmentSummary["state"];
     try {
       state = await env.state(botId);
     } catch {
-      return { botId, state: "unavailable", previews };
+      return { botId, state: "unavailable" };
     }
     const lastActivity = env.lastActivity?.(botId);
     let busy: string | undefined;
-    let services: unknown[] | undefined;
+    let services: ServiceSummary[] | undefined;
     if (state === "running") {
       busy = await env.busyReason?.(botId).catch(() => undefined);
       if (env.control) {
         const context = withAbortSignal(AbortSignal.timeout(10_000), BACKGROUND_CONTEXT);
         services = (await env.control(botId, "services.list", {}, context).catch(() => undefined)) as
-          | unknown[]
+          | ServiceSummary[]
           | undefined;
       }
     }
@@ -84,7 +79,6 @@ export class RuntimeOperations {
       ...(busy ? { busy } : {}),
       ...(lastActivity ? { lastActivity } : {}),
       ...(services ? { services } : {}),
-      previews,
     };
   }
 

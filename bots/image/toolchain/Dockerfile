@@ -12,8 +12,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Node from the official archive, checksum-verified. It links libatomic, which ../Dockerfile
-# installs too. Keep in step with remote/host/runtime-versions.json (dependency maintenance
-# updates both).
+# installs too.
 ARG NODE_VERSION=26.13.1
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
@@ -29,7 +28,7 @@ RUN set -eu; \
     ln -s ../node/bin/node /opt/woven-toolchain/bin/node; \
     /opt/woven-toolchain/bin/node --version
 
-# Playwright with Chromium. Keep the version in step with remote/host/runtime-versions.json.
+# Playwright with Chromium.
 ARG PLAYWRIGHT_VERSION=1.65.1
 # Node's archive npm is bootstrap-only. Use the same integrity-verified private
 # npm and locked vendor repairs as managed CLI installs and SDK updates. Its

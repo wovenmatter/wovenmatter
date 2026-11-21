@@ -1,78 +1,28 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
-/// Every workspace in one list. Remote workspace details open in place; agents' install,
+/// Every machine in one list. Machine details open in place; agents' install,
 /// sign-in, and update controls live on each agent page.
 struct SettingsWorkspacesView: View {
-    @Bindable var model: RemoteWorkspacesModel
+    @Bindable var model: MachinesStore
     let application: ApplicationModel
     var reservesRailControlSpace = false
-    var initialWorkspaceID: UUID?
-    var onMoreRuntime: (AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void
+    var initialMachineID: String?
+    var onMoreRuntime: (AgentRuntimeKind, Machine) -> Void
     var onBack: () -> Void
-    @State private var selectedWorkspaceID: UUID?
-    @State private var addingWorkspace = false
-    @State private var setupWorkspace: RemoteWorkspaceConfiguration?
-    @State private var name = ""
-    @State private var workspaceID = ""
+    @State private var selectedMachineID: String?
+    @State private var addingMachine = false
+    @State private var setupMachine: Machine?
     @State private var hostName = ""
     @State private var userName = ""
-    @State private var accessMode: RemoteWorkspaceAccessMode = .fullRoot
-    @State private var acknowledgedHostAccess = false
-    @State private var pendingDeletion: RemoteWorkspaceConfiguration?
-    @State private var browserWorkspace: RemoteWorkspaceConfiguration?
-    @State private var logsWorkspace: RemoteWorkspaceConfiguration?
-    @State private var sharedLogsWorkspace: ExecutionWorkspace?
+    @State private var acknowledgedMachineAccess = false
+    @State private var pendingRemoval: Machine?
+    @State private var logsMachine: Machine?
 
-    /// Workspaces this Mac did not add. Other paired devices own their Mac and iPhone or iPad
-    /// workspaces; every Linux host without an SSH setup here is managed by signed request.
-    private var sharedWorkspaces: [ExecutionWorkspace] {
-        let configured = Set(model.workspaces.map { $0.id.uuidString.lowercased() })
-        let thisDevice = application.libraryHost.peerIdentity?.deviceID
-        return application.libraryHost.executionWorkspaces.filter {
-            $0.isVisibleInConnections && !configured.contains($0.id)
-                && ($0.kind == .linux || $0.ownerDeviceID != thisDevice)
-        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    /// A workspace another device added. Linux hosts without an SSH setup here are
-    /// managed by signed request; other devices' Mac and iPhone or iPad workspaces are listed.
-    @ViewBuilder
-    private func sharedWorkspaceRow(_ workspace: ExecutionWorkspace) -> some View {
-        let addedOn = application.libraryHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name
-        let detail = [sharedWorkspaceKind(workspace.kind), addedOn.map { "Added on " + $0 }].compactMap { $0 }.joined(separator: " · ")
-        if workspace.kind == .linux {
-            let state = model.sharedHosts[workspace.id]
-            let ready = state?.serviceState == "running" || state?.serviceState == "ready"
-            VStack(alignment: .leading, spacing: 4) {
-                SettingsRow(title: workspace.name, detail: detail) {
-                    if state?.busy == true { ProgressView().controlSize(.small) }
-                    if let service = state?.serviceState {
-                        SettingsStatus(ready ? "Ready" : service.capitalized, tone: ready ? .good : .warning)
-                    } else if state?.error != nil {
-                        SettingsStatus("Needs attention", tone: .warning)
-                    }
-                    Menu("Manage") {
-                        Button("Refresh status") { model.manageSharedHost(workspace.id, .refresh) }
-                        Button("Restart") { model.manageSharedHost(workspace.id, .restart) }
-                        Button("Update server") { model.manageSharedHost(workspace.id, .update) }
-                        Divider()
-                        Button("Logs") { model.manageSharedHost(workspace.id, .logs); sharedLogsWorkspace = workspace }
-                    }
-                    .menuStyle(.button)
-                    .fixedSize()
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(state?.busy == true)
-                }
-                if let progress = state?.progress { SettingsNote(progress) }
-                if let error = state?.error { SettingsError(error) }
-            }
-            .task(id: workspace.id) { if model.sharedHosts[workspace.id] == nil { model.manageSharedHost(workspace.id, .refresh) } }
-        } else {
-            SettingsRow(title: workspace.name, detail: detail) { EmptyView() }
-        }
+    private var trimmedHost: String { hostName.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedUser: String? {
+        let user = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return user.isEmpty ? nil : user
     }
 
     private func deploymentProgress(_ message: String) -> some View {
@@ -84,79 +34,67 @@ struct SettingsWorkspacesView: View {
     }
 
     private var pageTitle: String {
-        selectedWorkspace?.name ?? (addingWorkspace ? "Add Workspace" : "Workspaces")
+        selectedMachine?.name ?? (addingMachine ? "Add Workspace" : "Workspaces")
     }
 
     private var workspacePage: some View {
         SettingsPage(
             title: pageTitle,
-            detail: selectedWorkspace.map(workspaceLocation),
+            detail: selectedMachine.map(machineLocation),
             reservesRailControlSpace: reservesRailControlSpace,
-            backTitle: selectedWorkspace != nil || addingWorkspace ? "Workspaces" : "Settings",
+            backTitle: selectedMachine != nil || addingMachine ? "Workspaces" : "Settings",
             onBack: {
-                if selectedWorkspaceID != nil {
-                    selectedWorkspaceID = nil
-                } else if addingWorkspace {
-                    addingWorkspace = false
+                if selectedMachineID != nil {
+                    selectedMachineID = nil
+                } else if addingMachine {
+                    addingMachine = false
                 } else {
                     onBack()
                 }
             }
         ) {
-            if let selectedWorkspace {
-                workspaceSection(selectedWorkspace)
-                agentsSection(selectedWorkspace)
-                detailsSection(selectedWorkspace)
+            if let selectedMachine {
+                machineSection(selectedMachine)
+                agentsSection(selectedMachine)
+                detailsSection(selectedMachine)
                 if let progress = model.progress {
                     deploymentProgress(progress)
                 }
-            } else if addingWorkspace {
-                hostCard
+            } else if addingMachine {
+                machineCard
                 if currentPreflight?.ready == true { createCard }
                 if let progress = model.progress { deploymentProgress(progress) }
             } else {
-                workspaceList
+                machineList
                 if let progress = model.progress { deploymentProgress(progress) }
             }
             if let error = model.errorMessage {
                 SettingsError(error)
             }
         }
-        .id(selectedWorkspaceID)
-        .task(id: selectedWorkspaceID == nil && !addingWorkspace) {
-            // Workspaces added on other paired devices arrive through host status.
-            guard selectedWorkspaceID == nil, !addingWorkspace else { return }
-            while !Task.isCancelled {
-                await application.libraryHost.refreshStatus()
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
-            }
-        }
-        .task(id: selectedWorkspaceID) {
-            if let selectedWorkspace {
-                model.refresh(selectedWorkspace)
+        .id(selectedMachineID)
+        .task(id: selectedMachineID) {
+            if let selectedMachine {
+                model.refreshHarnesses(on: selectedMachine.id)
             } else {
-                model.discoverMachines()
-                for workspace in model.workspaces { model.refresh(workspace) }
+                model.findMachines()
             }
         }
     }
 
     private var workspacePresentations: some View {
         workspacePage
-        .sheet(item: $browserWorkspace) { workspace in
-            RemoteBrowserView(workspaces: model, configuration: workspace)
-        }
-        .sheet(item: $logsWorkspace) { workspace in
+        .sheet(item: $logsMachine) { machine in
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("\(workspace.name) logs").font(.settingsSection)
+                    Text("\(machine.name) logs").font(.settingsSection)
                     Spacer()
-                    Button("Refresh") { model.loadLogs(workspace) }
-                    Button("Done") { logsWorkspace = nil }
+                    Button("Refresh") { model.loadLogs(on: machine.id) }
+                    Button("Done") { logsMachine = nil }
                 }.buttonStyle(SettingsQuietButtonStyle())
                 if let error = model.errorMessage { SettingsError(error) }
                 ScrollView {
-                    Text(model.workspaceLogs[workspace.id] ?? "Loading logs…")
+                    Text(model.serverLogs[machine.id] ?? "Loading logs…")
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -165,46 +103,25 @@ struct SettingsWorkspacesView: View {
             .padding(24).frame(width: 760, height: 520)
             .foregroundStyle(WovenPalette.foreground).background(WovenPalette.background)
         }
-        .sheet(item: $sharedLogsWorkspace) { workspace in
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("\(workspace.name) logs").font(.settingsSection)
-                    Spacer()
-                    Button("Refresh") { model.manageSharedHost(workspace.id, .logs) }
-                    Button("Done") { sharedLogsWorkspace = nil }
-                }.buttonStyle(SettingsQuietButtonStyle())
-                if let error = model.sharedHosts[workspace.id]?.error { SettingsError(error) }
-                ScrollView {
-                    Text(model.sharedHosts[workspace.id]?.logs ?? "Loading logs…")
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }.scrollIndicators(.never)
-            }
-            .padding(24).frame(width: 760, height: 520)
-            .foregroundStyle(WovenPalette.foreground).background(WovenPalette.background)
+        .onChange(of: hostName + userName) { _, _ in
+            acknowledgedMachineAccess = false
         }
-        .onChange(of: hostName + userName + accessMode.rawValue) { _, _ in
-            acknowledgedHostAccess = false
-        }
-        .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
-            if let selectedWorkspaceID,
-               !workspaceIDs.contains(selectedWorkspaceID) {
-                self.selectedWorkspaceID = nil
+        .onChange(of: model.machines.map(\.id)) { oldIDs, machineIDs in
+            if let selectedMachineID, !machineIDs.contains(selectedMachineID) {
+                self.selectedMachineID = nil
             }
+            if machineIDs.count > oldIDs.count { addingMachine = false }
         }
         .onAppear {
-            selectedWorkspaceID = selectedWorkspaceID ?? initialWorkspaceID
+            selectedMachineID = selectedMachineID ?? initialMachineID
             presentPendingSetup()
         }
-        .onChange(of: model.workspaces.count) { oldCount, newCount in
-            if newCount > oldCount { addingWorkspace = false }
-        }
-        .onChange(of: model.pendingHarnessSetupIDs) { _, _ in presentPendingSetup() }
-        .sheet(item: $setupWorkspace) { workspace in
-            RemoteHarnessSetupView(application: application, workspace: workspace) {
-                model.dismissHarnessSetup(workspace.id)
-                setupWorkspace = nil
+        .debugRequest("add-workspace") { selectedMachineID = nil; addingMachine = true }
+        .onChange(of: model.pendingHarnessSetupMachineIDs) { _, _ in presentPendingSetup() }
+        .sheet(item: $setupMachine) { machine in
+            RemoteHarnessSetupView(application: application, machine: machine) {
+                model.dismissHarnessSetup(machine.id)
+                setupMachine = nil
             }
         }
     }
@@ -212,214 +129,112 @@ struct SettingsWorkspacesView: View {
     private var workspaceConfirmations: some View {
         workspacePresentations
         .confirmationDialog(
-            "Authorize remote host preparation?",
+            "Remove \(pendingRemoval?.name ?? "machine")?",
             isPresented: Binding(
-                get: { model.pendingHostPreparation != nil },
-                set: { if !$0 { model.cancelHostPreparation() } }
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Authorize and prepare") {
-                model.authorizeHostPreparation()
-            }
-            Button("Cancel", role: .cancel) {
-                model.cancelHostPreparation()
-            }
-        } message: {
-            if let pending = model.pendingHostPreparation {
-                Text(
-                    (pending.inspection.preparationActions ?? [])
-                        .map { "• \($0)" }
-                        .joined(separator: "\n")
-                    + "\n\nThis prepares \(pending.hostName) and may download packages. Woven Matter will verify the host, then you can create a workspace."
-                )
-            }
-        }
-        .confirmationDialog(
-            "Delete remote workspace?",
-            isPresented: Binding(
-                get: { pendingDeletion != nil },
-                set: { if !$0 { pendingDeletion = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let pendingDeletion {
-                Button("Uninstall; keep data") {
-                    model.delete(pendingDeletion, removePersistentData: false)
-                    self.pendingDeletion = nil
-                }
-                Button("Uninstall and remove data", role: .destructive) {
-                    model.delete(pendingDeletion, removePersistentData: true)
-                    self.pendingDeletion = nil
+            if let pendingRemoval {
+                Button("Remove", role: .destructive) {
+                    model.remove(pendingRemoval.id)
+                    self.pendingRemoval = nil
                 }
             }
-            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
         } message: {
-            Text("Uninstall stops the native service and keeps workspace files and databases. Removing data cannot be undone.")
+            Text("This stops and uninstalls the server there, then removes the machine, its chats and its folders from every machine.")
         }
     }
 
     var body: some View {
         workspaceConfirmations
-        .confirmationDialog(
-            "Replace OpenCode 1?",
-            isPresented: Binding(
-                get: { setupWorkspace == nil && model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
-                set: {
-                    if !$0, setupWorkspace == nil, let prepared = model.preparedHarnessAction,
-                       prepared.action != "update" {
-                        model.cancelPreparedHarnessAction(
-                            workspaceID: prepared.configuration.id,
-                            harnessID: prepared.harness.id,
-                            action: prepared.action
-                        )
-                    }
-                }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Install OpenCode 2") {
-                if let prepared = model.preparedHarnessAction,
-                   prepared.action != "update" {
-                    model.confirmPreparedHarnessAction(
-                        workspaceID: prepared.configuration.id,
-                        harnessID: prepared.harness.id,
-                        action: prepared.action
-                    )
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                if let prepared = model.preparedHarnessAction,
-                   prepared.action != "update" {
-                    model.cancelPreparedHarnessAction(
-                        workspaceID: prepared.configuration.id,
-                        harnessID: prepared.harness.id,
-                        action: prepared.action
-                    )
-                }
-            }
-        } message: {
-            // Installs and updates run without review; the one question left is OpenCode 2
-            // replacing OpenCode 1's command on a host.
-            if let prepared = model.preparedHarnessAction {
-                let version = model.runtimeMaintenance[prepared.configuration.id]?
-                    .first(where: { $0.id == .opencode })?.openCodeV1?.version ?? "1"
-                Text(OpenCodeServiceLauncher.replacementNotice(replacing: version, on: prepared.configuration.name))
-            }
-        }
     }
 
     private func presentPendingSetup() {
-        guard setupWorkspace == nil,
-              let workspace = model.workspaces.first(where: { model.pendingHarnessSetupIDs.contains($0.id) }) else { return }
-        setupWorkspace = workspace
+        guard setupMachine == nil,
+              let machine = model.machines.first(where: { model.pendingHarnessSetupMachineIDs.contains($0.id) }) else { return }
+        setupMachine = machine
     }
 
-    private var selectedWorkspace: RemoteWorkspaceConfiguration? {
-        model.workspaces.first { $0.id == selectedWorkspaceID }
+    private var selectedMachine: Machine? {
+        selectedMachineID.flatMap { model.machine(id: $0) }
     }
 
-    private var currentPreflight: RemoteWorkspacePreflight? {
-        model.preflight(
-            hostName: hostName,
-            userName: userName, accessMode: accessMode
-        )
+    private var currentPreflight: MachinePreflight? {
+        trimmedHost.isEmpty ? nil : model.machinePreflights[trimmedHost]
     }
 
-    @ViewBuilder private var workspaceList: some View {
+    @ViewBuilder private var machineList: some View {
         SettingsSection(title: "This Mac", detail: "Create a blank project or link an existing directory from the sidebar.") {
-            SettingsRow(
-                title: "Local workspace",
-                detail: localWorkspaceDetail
-            ) {
-                SettingsStatus(application.localACPWorkspaceAvailability.isReady ? "Ready" : "Setup required",
-                    tone: application.localACPWorkspaceAvailability.isReady ? .good : .warning)
+            SettingsRow(title: "Local workspace", detail: model.thisMachine?.name) {
+                let running = model.thisMachine.flatMap { model.serverStatus(on: $0.id) }?.isRunning == true
+                SettingsStatus(running ? "Ready" : "Setup required", tone: running ? .good : .warning)
             }
         }
-        SettingsSection(title: "Remote workspaces", detail: "Agents and files on remote Linux machines.") {
-            if model.workspaces.isEmpty {
+        SettingsSection(title: "Remote workspaces", detail: "Agents and files on your other machines.") {
+            if model.otherMachines.isEmpty {
                 SettingsEmpty("No remote workspaces yet.")
             } else {
                 VStack(spacing: 2) {
-                    ForEach(model.workspaces) { workspace in workspaceRow(workspace) }
+                    ForEach(model.otherMachines) { machine in machineRow(machine) }
                 }
             }
-            Button("Add workspace") { addingWorkspace = true }
+            Button("Add workspace") { addingMachine = true }
                 .buttonStyle(SettingsQuietButtonStyle())
         }
-        if !sharedWorkspaces.isEmpty {
-            SettingsSection(title: "From other devices", detail: "Every Mac can manage these and start sessions there. Agents keep running on their own workspace.") {
-                ForEach(sharedWorkspaces) { workspace in sharedWorkspaceRow(workspace) }
-            }
-        }
     }
 
-    private var localWorkspaceDetail: String? {
-        let availability = application.localACPWorkspaceAvailability
-        let lines = [availability.rootPath, availability.isReady ? nil : availability.detail].compactMap { $0 }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    private func statusLabel(_ machine: Machine) -> String {
+        if model.isBusy(machine.id) || model.isMaintainingHarnesses(on: machine.id) { return "Working" }
+        if !machine.isOnline { return "Offline" }
+        return model.serverStatus(on: machine.id)?.state.displayName ?? "Unknown"
     }
 
-    private func sharedWorkspaceKind(_ kind: ExecutionWorkspace.Kind) -> String {
-        switch kind {
-        case .mac: "Mac workspace"
-        case .linux: "Linux workspace"
-        case .ios: "iPhone or iPad workspace"
-        }
+    private func isRunning(_ machine: Machine) -> Bool {
+        machine.isOnline && model.serverStatus(on: machine.id)?.isRunning == true
     }
 
-    private func statusLabel(_ workspace: RemoteWorkspaceConfiguration) -> String {
-        model.busyWorkspaceIDs.contains(workspace.id) || maintainingHarnesses(workspace)
-            ? "Working" : (model.statuses[workspace.id]?.state.capitalized ?? "Unknown")
-    }
-
-    /// Start, stop, server updates and removal wait for harness installs and updates there.
-    private func maintainingHarnesses(_ workspace: RemoteWorkspaceConfiguration) -> Bool {
-        model.maintainingHarnesses[workspace.id]?.isEmpty == false
-    }
-
-    private func workspaceRow(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
+    private func machineRow(_ machine: Machine) -> some View {
         SettingsDestinationRow(
-            title: workspace.name,
-            detail: workspaceLocation(workspace),
-            status: statusLabel(workspace),
-            statusTone: model.statuses[workspace.id]?.running == true ? .good : .warning,
-            icon: { LucideIcon(glyph: .container, size: 15) },
-            action: { selectedWorkspaceID = workspace.id }
+            title: machine.name,
+            detail: machineLocation(machine),
+            status: statusLabel(machine),
+            statusTone: isRunning(machine) ? .good : .warning,
+            icon: { MachineConnectionIcon(platform: machine.platform, size: 15) },
+            action: { selectedMachineID = machine.id }
         )
     }
 
-    private func workspaceSection(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        let status = model.statuses[workspace.id]
-        let busy = model.busyWorkspaceIDs.contains(workspace.id)
-        let maintaining = maintainingHarnesses(workspace)
+    private func machineSection(_ machine: Machine) -> some View {
+        let status = model.serverStatus(on: machine.id)
+        let busy = model.isBusy(machine.id)
+        let maintaining = model.isMaintainingHarnesses(on: machine.id)
         return SettingsSection {
             SettingsRow(title: "Status") {
-                SettingsStatus(statusLabel(workspace), tone: status?.running == true ? .good : .warning)
-                Button("Reconnect") { model.reconnect(workspace) }
-                    .help("Allow access to this workspace's saved Keychain token and reconnect.")
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(busy)
+                SettingsStatus(statusLabel(machine), tone: isRunning(machine) ? .good : .warning)
                 Menu("Manage") {
                     if let status {
-                        Button("Start") { model.lifecycle(.start, configuration: workspace) }
-                            .disabled(status.running || maintaining)
-                        Button("Stop") { model.lifecycle(.stop, configuration: workspace) }
-                            .disabled(!status.running || maintaining)
-                        Button("Restart") { model.lifecycle(.restart, configuration: workspace) }
-                            .disabled(!status.running || maintaining)
+                        // A stopped Mac cannot be reached to start it.
+                        if machine.platform == .linux {
+                            Button("Start") { manage { try await model.startServer(on: machine.id) } }
+                                .disabled(status.isRunning || maintaining)
+                        }
+                        Button("Stop") { manage { _ = try await model.stopServer(on: machine.id, confirmed: true) } }
+                            .disabled(!status.isRunning || maintaining)
+                        Button("Restart") { manage { _ = try await model.restartServer(on: machine.id, confirmed: true) } }
+                            .disabled(!status.isRunning || maintaining)
                         Divider()
                     }
-                    Button("Update server") { model.updateHost(workspace) }
-                        .disabled(maintaining)
-                    Button("View browser") { browserWorkspace = workspace }
-                    Button("Logs") { model.loadLogs(workspace); logsWorkspace = workspace }
+                    if machine.platform == .linux {
+                        Button("Update server") { model.updateServer(on: machine.id) }
+                            .disabled(maintaining)
+                    }
+                    Button("Logs") { model.loadLogs(on: machine.id); logsMachine = machine }
+                        .disabled(machine.platform == .mac && !machine.isOnline)
                     Divider()
-                    Button("Uninstall…", role: .destructive) { pendingDeletion = workspace }
+                    Button("Remove…", role: .destructive) { pendingRemoval = machine }
                         .disabled(maintaining)
                 }
                 .menuStyle(.button)
@@ -428,7 +243,7 @@ struct SettingsWorkspacesView: View {
                 .disabled(busy)
             }
             if status == nil {
-                SettingsEmpty("Reconnect to load this workspace's current status.")
+                SettingsEmpty("This machine's status appears when it is online.")
             }
             if maintaining {
                 SettingsNote("Harnesses are installing or updating. Stopping, updating or removing this workspace waits until they finish.")
@@ -439,88 +254,41 @@ struct SettingsWorkspacesView: View {
         }
     }
 
-    private func detailsSection(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
-        let status = model.statuses[workspace.id]
-        let busy = model.busyWorkspaceIDs.contains(workspace.id)
+    private func manage(_ action: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await action()
+                model.errorMessage = nil
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func detailsSection(_ machine: Machine) -> some View {
+        let status = model.serverStatus(on: machine.id)
         return SettingsSection(title: "Details") {
-            VStack(alignment: .leading, spacing: 2) {
-                SettingsToggleRow(
-                    title: "Keep working in the background",
-                    detail: "Tasks and sessions continue while this host is running. Results sync when you reconnect.",
-                    isOn: Binding(
-                        get: { workspace.backgroundExecutionEnabled },
-                        set: { model.setBackgroundExecution($0, for: workspace) }
-                    )
-                )
-                .disabled(busy || model.changingTaskGatewayIDs.contains(workspace.id))
-                if let gateway = model.taskGatewayStatuses[workspace.id], gateway.enabled != workspace.backgroundExecutionEnabled {
-                    SettingsNote("Waiting for this workspace to apply the background execution setting.")
-                }
-                if model.changingTaskGatewayIDs.contains(workspace.id) {
-                    ProgressView().controlSize(.small)
-                }
-                if let error = model.taskGatewayErrors[workspace.id] { SettingsError(error) }
-            }
-            SettingsSummaryRow("Access", value: workspace.accessMode == .fullRoot ? "Full root access" : "Normal user permissions") {
-                SettingsNote(hostWarning(user: workspace.userName, host: workspace.hostName))
-            }
             if let status {
-                SettingsSummaryRow("Storage", value: hostStorageLabel(status)) {
+                SettingsSummaryRow("Storage", value: machineStorageLabel(status)) {
                     SettingsValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
                     SettingsValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
-                    SettingsValueRow(label: "Host storage", value: hostStorageLabel(status))
+                    SettingsValueRow(label: "Machine storage", value: machineStorageLabel(status))
                 }
-            }
-            browserSandboxRow(workspace, status: status, busy: busy)
-            SettingsHelp {
-                SettingsNote("Background work is on by default. Pi Durable needs this Mac to unlock credentials after a remote restart.")
             }
         }
     }
 
-    private func browserSandboxRow(_ workspace: RemoteWorkspaceConfiguration, status: RemoteWorkspaceStatus?, busy: Bool) -> some View {
-        let result = model.browserSelfTests[workspace.id]
-        return SettingsSummaryRow(
-            "Browser sandbox",
-            value: result == nil ? "Not checked" : result?.ok == true ? "Verified" : "Needs attention",
-            tone: result == nil ? .neutral : result?.ok == true ? .good : .warning
-        ) {
-            if let result, !result.ok {
-                if let reason = result.reason { SettingsNote(reason.replacingOccurrences(of: "_", with: " ")) }
-                if let missing = result.missingLibraries, !missing.isEmpty {
-                    SettingsNote("Missing libraries: " + missing.joined(separator: ", "))
-                }
-                if let hint = result.hint { SettingsNote(hint) }
-            }
-            if result == nil { SettingsNote("Connect and verify the host browser to check its sandbox.") }
-            Button("Verify browser") { model.checkBrowserSandbox(workspace) }
-                .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || status?.running != true)
-        }
+    private func machineLocation(_ machine: Machine) -> String {
+        let status = model.serverStatus(on: machine.id)
+        return status?.hostName ?? machine.platform.displayName
     }
 
-    private func workspaceLocation(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) -> String {
-        "\(workspace.workspaceID) · \(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName)"
-    }
-
-    private var hostCard: some View {
-        SettingsSection(title: "Host", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
-            SettingsRow(title: "Workspace access") {
-                SettingsPicker("Workspace access", selection: $accessMode,
-                    options: [RemoteWorkspaceAccessMode.fullRoot, .user], popoverWidth: 220) {
-                    $0 == .fullRoot ? "Full root access" : "Normal user permissions"
-                }
-            }
-            SettingsNote(accessMode == .fullRoot
-                ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
-                : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
+    private var machineCard: some View {
+        SettingsSection(title: "Machine", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
-                    let onlineMachines = model.machineCandidates.filter(\.online)
-                    if onlineMachines.isEmpty, !model.isDiscovering {
+                    let onlineMachines = model.tailnetMachines
+                    if onlineMachines.isEmpty, !model.isFindingMachines {
                         Text("No online machines discovered")
                             .font(.settingsSecondary)
                             .foregroundStyle(WovenPalette.mutedForeground)
@@ -528,187 +296,139 @@ struct SettingsWorkspacesView: View {
                     ForEach(onlineMachines) { machine in
                         Button {
                             hostName = machine.hostName
-                            model.checkHost(hostName: hostName, userName: userName, accessMode: accessMode)
+                            inspectMachine()
                         } label: {
                             HStack(spacing: 8) {
-                                Text(machine.displayName)
-                                if hostName.trimmingCharacters(in: .whitespacesAndNewlines) == machine.hostName {
+                                Text(machine.name)
+                                if trimmedHost == machine.hostName {
                                     Text("Selected").font(.settingsSecondary.weight(.medium))
                                 }
                             }
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
                     }
-                    Button(model.isDiscovering ? "Discovering…" : "Refresh") {
-                        model.discoverMachines()
+                    Button(model.isFindingMachines ? "Discovering…" : "Refresh") {
+                        model.findMachines()
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isDiscovering)
+                    .disabled(model.isFindingMachines)
                 }
             }
 
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .wovenInput()
-                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, accessMode: accessMode) }
+                    .onSubmit { inspectMachine() }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
                     .wovenInput()
             }
             SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
-            Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
-                model.checkHost(
-                    hostName: hostName,
-                    userName: userName, accessMode: accessMode
-                )
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            .disabled(model.isCheckingHost || hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if currentPreflight == nil, !model.isCheckingHost {
-                Text(hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? "Select a host to see whether it is ready."
-                    : "Inspect this host to continue. Inspection makes no changes.")
+            let inspecting = model.inspectingHostnames.contains(trimmedHost)
+            Button(inspecting ? "Inspecting machine…" : "Inspect machine") { inspectMachine() }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(inspecting || trimmedHost.isEmpty)
+            if currentPreflight == nil, !inspecting {
+                Text(trimmedHost.isEmpty
+                    ? "Select a machine to see whether it is ready."
+                    : "Inspect this machine to continue. Inspection makes no changes.")
                     .font(.settingsSecondary)
                     .foregroundStyle(WovenPalette.mutedForeground)
             }
+            if let error = model.machineErrors[trimmedHost] { SettingsError(error) }
             if let preflight = currentPreflight {
                 SettingsInset {
                     VStack(alignment: .leading, spacing: 8) {
-                        SettingsValueRow(label: "Selected host", value: hostName.trimmingCharacters(in: .whitespacesAndNewlines))
+                        SettingsValueRow(label: "Selected machine", value: trimmedHost)
                         SettingsValueRow(
-                            label: "Host status",
-                            value: preflight.ready ? "Ready to create a workspace"
-                                : preflight.canPrepare == true ? "Host preparation available"
-                                : "Needs attention"
+                            label: "Machine status",
+                            value: preflight.ready ? "Ready to create a workspace" : "Needs attention"
                         )
                         SettingsValueRow(
                             label: "Runtime",
                             value: "Native Linux service · \(preflight.architecture)"
                         )
-                        VStack(alignment: .leading, spacing: 8) {
-                            SettingsValueRow(label: "Host storage", value: hostStorageLabel(preflight))
-                        }
-                        if let warning = preflight.storageWarning, !warning.isEmpty {
-                            storageWarning(warning)
-                        }
+                        SettingsValueRow(label: "Machine storage", value: storageCapacityLabel(
+                            capacity: preflight.storageCapacityBytes, available: preflight.storageAvailableBytes))
                         if !preflight.limitations.isEmpty {
                             Text(preflight.limitations.joined(separator: " "))
                                 .font(.settingsSecondary)
                                 .foregroundStyle(WovenPalette.mutedForeground)
                         }
-                        if preflight.preparationRequired == true {
-                            Text("Preparation required")
-                                .font(.settingsSecondary.weight(.semibold))
-                            ForEach(
-                                Array((preflight.preparationActions ?? []).enumerated()),
-                                id: \.offset
-                            ) { _, action in
-                                Text("• \(action)")
-                                    .font(.settingsSecondary)
-                                    .foregroundStyle(WovenPalette.mutedForeground)
-                            }
-                        }
-                        if preflight.canPrepare == true {
-                            Button(model.isCreating ? "Preparing host…" : "Prepare host") {
-                                model.prepareHost(hostName: hostName, userName: userName, accessMode: accessMode)
-                            }
-                            .buttonStyle(WovenPrimaryButtonStyle())
-                        }
                     }
                 }
             }
         }
-        .disabled(model.isCreating)
+        .disabled(installing)
+    }
+
+    private var installing: Bool { model.installingHostnames.contains(trimmedHost) }
+
+    private func inspectMachine() {
+        guard !trimmedHost.isEmpty else { return }
+        model.inspectMachine(hostName: trimmedHost, userName: trimmedUser)
     }
 
     private var createCard: some View {
-        SettingsSection(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
-            SettingsField("Name") {
-                TextField("Remote workspace name", text: $name)
-                    .wovenInput()
-            }
-            SettingsField("Workspace ID") {
-                TextField("remote-workspace-id", text: $workspaceID)
-                    .wovenInput()
-            }
+        SettingsSection(title: "Create workspace", detail: "On \(trimmedHost)") {
             SettingsNote("Files use available disk space on the remote machine.")
-            SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
-            Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
+            SettingsNote(hostWarning(user: trimmedUser, host: hostName))
+            Toggle("I understand this workspace's access to the machine", isOn: $acknowledgedMachineAccess)
 
-            Button(model.isCreating ? "Creating…" : "Create workspace") {
-                model.create(
-                    name: name,
-                    workspaceID: workspaceID,
-                    hostName: hostName,
-                    userName: userName,
-                    port: 7337,
-                    accessMode: accessMode
-                )
+            Button(installing ? "Creating…" : "Create workspace") {
+                model.installServer(hostName: trimmedHost, userName: trimmedUser)
             }
             .buttonStyle(WovenPrimaryButtonStyle())
-            .disabled(model.isCreating || currentPreflight?.ready != true
-                || !acknowledgedHostAccess
-                || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(installing || currentPreflight?.ready != true || !acknowledgedMachineAccess)
         }
     }
 
     private func hostWarning(user: String?, host: String) -> String {
-        "Host mode runs agents as \(user ?? "the SSH user")@\(host) with that user's full permissions. There is no container isolation."
+        "This workspace runs agents as \(user ?? "the SSH user")@\(host) with that user's full permissions. There is no container isolation."
     }
 
-    private func agentsSection(
-        _ workspace: RemoteWorkspaceConfiguration
-    ) -> some View {
+    private func agentsSection(_ machine: Machine) -> some View {
         SettingsSection(title: "Agents") {
-            let harnesses = model.currentHarnesses(for: workspace)
+            let harnesses = model.harnesses(on: machine.id)
             if harnesses.isEmpty {
                 SettingsEmpty("Start the workspace or refresh to check for agents.")
             } else {
                 VStack(spacing: 2) {
                     ForEach(harnesses) { harness in
                         SettingsDestinationRow(
-                            title: harness.displayName,
-                            detail: harness.id == .defaultAgent
-                                ? HarnessAccountPresentation.providerSummary(model.signInStatuses[workspace.id] ?? [])
-                                : HarnessAccountPresentation.remoteLabel(harness),
-                            status: harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
-                            statusTone: harness.state == "ready" ? .good : .warning,
-                            icon: { HarnessLogoIcon(logo: HarnessLogo(runtimeKind: harness.id), size: 15) },
-                            action: { onMoreRuntime(harness.id, workspace) }
+                            title: harness.runtimeKind.displayName,
+                            detail: harness.runtimeKind == .defaultAgent
+                                ? HarnessAccountPresentation.providerSummary(model.providerSignIns(on: machine.id))
+                                : HarnessAccountPresentation.accountLabel(harness.runtimeKind,
+                                    status: model.signInStatus(harness.runtimeKind, on: machine.id)),
+                            status: harness.state.displayName,
+                            statusTone: harness.state == .ready ? .good : .warning,
+                            icon: { HarnessLogoIcon(logo: HarnessLogo(runtimeKind: harness.runtimeKind), size: 15) },
+                            action: { onMoreRuntime(harness.runtimeKind, machine) }
                         )
                     }
                 }
             }
-            Button("Set up harnesses") { setupWorkspace = workspace }
+            Button("Set up harnesses") { setupMachine = machine }
                 .buttonStyle(SettingsQuietButtonStyle())
-            if let error = model.signInErrors[workspace.id] { SettingsError(error) }
-            if model.runtimeErrors[workspace.id] != nil {
+            if model.harnessInventoryUnavailable.contains(machine.id) {
                 SettingsNote("Runtime inventory unavailable. Open an agent and check for updates to retry.")
             }
         }
-        .task(id: workspace.id) { await model.refreshSignInStatus(workspace) }
     }
 
-    private func workspaceUsageLabel(_ status: RemoteWorkspaceStatus) -> String {
+    private func workspaceUsageLabel(_ status: MachineServerStatus) -> String {
         let usage = status.storageUsedBytes.map {
             ByteCountFormatter.string(fromByteCount: max($0, 0), countStyle: .file)
         } ?? "Usage unavailable"
-        return status.legacyStorage ? "\(usage) · legacy storage" : "\(usage) · no fixed limit"
+        return "\(usage) · no fixed limit"
     }
 
-    private func hostStorageLabel(_ status: RemoteWorkspaceStatus) -> String {
+    private func machineStorageLabel(_ status: MachineServerStatus) -> String {
         storageCapacityLabel(
-            capacity: status.hostStorageCapacityBytes,
-            available: status.hostStorageAvailableBytes
-        )
-    }
-
-    private func hostStorageLabel(_ preflight: RemoteWorkspacePreflight) -> String {
-        storageCapacityLabel(
-            capacity: preflight.hostStorageCapacityBytes,
-            available: preflight.hostStorageAvailableBytes
+            capacity: status.storageCapacityBytes,
+            available: status.storageAvailableBytes
         )
     }
 

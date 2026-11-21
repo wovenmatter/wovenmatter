@@ -25,7 +25,7 @@ if [ "${1:-}" = --print-node-bin ]; then printf '%s\n' "$cache/bin"; exit 0; fi
 export PATH="$cache/bin:$PATH"
 # Bootstrap npm only prepares the verified current private tooling. Use that
 # tooling for the locked SDK install as well as the installed Settings updater.
-npm_selection="$(node -e 'console.log(JSON.stringify({prefix:process.argv[1],node:process.argv[2]+"/bin/node",bootstrap:[process.argv[2]+"/bin/node",process.argv[2]+"/lib/node_modules/npm/bin/npm-cli.js"],securityGraph:process.argv[3]+"/remote/npm-runtime"}))' "${TMPDIR:-/tmp}/wovenmatter-private-npm" "$cache" "$repo_root")"
+npm_selection="$(node -e 'console.log(JSON.stringify({prefix:process.argv[1],node:process.argv[2]+"/bin/node",bootstrap:[process.argv[2]+"/bin/node",process.argv[2]+"/lib/node_modules/npm/bin/npm-cli.js"],securityGraph:process.argv[3]+"/harnesses/npm-runtime"}))' "${TMPDIR:-/tmp}/wovenmatter-private-npm" "$cache" "$repo_root")"
 private_npm="$(node "$repo_root/harnesses/prepare-npm.mjs" "$npm_selection")"
 export PATH="${private_npm%/npm}:$PATH"
 npm_provenance="${private_npm%/bin/npm}/provenance.json"
@@ -50,11 +50,7 @@ output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
   rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=/.node-version --exclude=.DS_Store "$agent_root/" "$output/"
-  # Native-host source fingerprints use the same canonical paths in a checkout
-  # and in the signed app's resources. These records are not runtime caches.
   cp "$agent_root/.node-version" "$output/.node-version"
-  mkdir -p "$(dirname "$output")/scripts"
-  cp -p "$repo_root/scripts/remote-host.sh" "$(dirname "$output")/scripts/remote-host.sh"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
@@ -81,7 +77,7 @@ codesign --verify --strict "$claude_binary"
 mkdir -p "$output/bin"
 cp "$cache/bin/node" "$output/bin/node"
 cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"
-# SDK maintenance runs npm with the signed bundled Node, without relying on a host install.
+# SDK maintenance runs npm with the signed bundled Node, without relying on a system install.
 mkdir -p "$output/lib/npm"
 rsync -a --delete "${private_npm%/bin/npm}/lib/node_modules/npm/" "$output/lib/npm/"
 cp "$npm_provenance" "$output/lib/npm/woven-provenance.json"

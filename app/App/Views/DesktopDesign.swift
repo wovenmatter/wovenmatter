@@ -1,37 +1,4 @@
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
-
-/// Through v0.4.2 the window, sidebar and theme settings were saved under
-/// "wovenmatter.dashboard." keys. Each moves once at launch, so this Mac keeps
-/// its layout, theme, pinned agents and sidebar choices.
-enum WindowPreferenceUpgrade {
-    static let renamedKeys: [String: String] = [
-        "wovenmatter.dashboard.theme": WovenTheme.storageKey,
-        "wovenmatter.dashboard.sidebar-style": SidebarStyle.storageKey,
-        "wovenmatter.dashboard.single-sidebar-side": SidebarSide.storageKey,
-        "wovenmatter.dashboard.left-rail": "wovenmatter.layout.left-rail",
-        "wovenmatter.dashboard.right-rail": "wovenmatter.layout.right-rail",
-        "wovenmatter.dashboard.single-rail": "wovenmatter.layout.single-rail",
-        "wovenmatter.dashboard.chat-width-percent": "wovenmatter.layout.chat-width-percent",
-        "wovenmatter.dashboard.note-on-left": "wovenmatter.layout.note-on-left",
-        "wovenmatter.dashboard.workspace-mode": "wovenmatter.layout.workspace-mode",
-        "wovenmatter.dashboard.show-localWorkspace": WorkspaceSidebarVisibility.localWorkspace.storageKey,
-        "wovenmatter.dashboard.show-remoteWorkspaces": WorkspaceSidebarVisibility.remoteWorkspaces.storageKey,
-        "wovenmatter.dashboard.collapsed-agent-sections": AgentDisclosureStore.storageKey,
-        "wovenmatter.dashboard.agent-order-by-group": AgentOrderStore.storageKey,
-        "wovenmatter.dashboard.pinned-agent-ids": PinnedAgentsStore.storageKey,
-        "wovenmatter.dashboard.bots.expanded-threads": BotThreadDisclosure.storageKey,
-    ]
-
-    static func moveRenamedKeys(in defaults: UserDefaults) {
-        for (legacy, current) in renamedKeys {
-            guard let value = defaults.object(forKey: legacy) else { continue }
-            if defaults.object(forKey: current) == nil { defaults.set(value, forKey: current) }
-            defaults.removeObject(forKey: legacy)
-        }
-    }
-}
 
 enum NewChatSource: String, CaseIterable, Identifiable {
     case acpDirect
@@ -47,8 +14,8 @@ enum NewChatSource: String, CaseIterable, Identifiable {
     }
 }
 
-/// Left-rail agent groupings for Woven Matter's product terminology.
-/// Each agent's `AgentBucket` follows its execution location.
+/// Left-rail agent groupings for Woven Matter's product terminology. The
+/// agents passed in are already those of one machine's section.
 enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
     case pinned
     case localWorkspace
@@ -66,64 +33,25 @@ enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     var orderKey: String { rawValue }
 
-    static func contains(
-        _ agent: WorkspaceAgent,
-        in group: AgentSidebarGroup,
-        pinnedIDs: Set<UUID>
-    ) -> Bool {
-        switch group {
-        case .pinned:
-            return pinnedIDs.contains(agent.id)
-        case .localWorkspace:
-            return agent.bucket == .localCLIAgents
-                && !pinnedIDs.contains(agent.id)
-        case .remoteWorkspaces:
-            return agent.bucket == .remoteWorkspaceAgents
-                && !pinnedIDs.contains(agent.id)
-        }
-    }
-
     static func agents(
         from agents: [WorkspaceAgent],
         in group: AgentSidebarGroup,
-        pinnedIDs: Set<UUID>,
-        customOrder: [UUID] = []
+        pinnedIDs: Set<String>,
+        customOrder: [String] = []
     ) -> [WorkspaceAgent] {
         switch group {
         case .pinned:
-            return applyOrder(
-                agents.filter { contains($0, in: .pinned, pinnedIDs: pinnedIDs) },
-                preferred: customOrder
-            )
-        case .localWorkspace:
+            return applyOrder(agents.filter { pinnedIDs.contains($0.id) }, preferred: customOrder)
+        case .localWorkspace, .remoteWorkspaces:
             let defaultOrder = agents
-                .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
+                .filter { !pinnedIDs.contains($0.id) }
                 .sorted { lhs, rhs in
                     if lhs.runtimeKind != rhs.runtimeKind {
-                        return lhs.runtimeKind.presentationRank
-                            < rhs.runtimeKind.presentationRank
+                        return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
                     }
-                    let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
-                        rhs.displayName
-                    )
+                    let comparison = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
                     if comparison != .orderedSame { return comparison == .orderedAscending }
-                    return lhs.id.uuidString < rhs.id.uuidString
-                }
-            return applyPreferredOrder(defaultOrder, preferred: customOrder)
-        case .remoteWorkspaces:
-            let defaultOrder = agents
-                .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
-                .sorted { lhs, rhs in
-                    if lhs.runtimeKind != rhs.runtimeKind {
-                        return lhs.runtimeKind.presentationRank
-                            < rhs.runtimeKind.presentationRank
-                    }
-                    if lhs.displayName != rhs.displayName {
-                        return lhs.displayName.localizedCaseInsensitiveCompare(
-                            rhs.displayName
-                        ) == .orderedAscending
-                    }
-                    return lhs.id.uuidString < rhs.id.uuidString
+                    return lhs.id < rhs.id
                 }
             return applyPreferredOrder(defaultOrder, preferred: customOrder)
         }
@@ -132,11 +60,11 @@ enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// Stable display order: preferred IDs first (when present), then name-sorted remainder.
     static func applyOrder(
         _ agents: [WorkspaceAgent],
-        preferred: [UUID]
+        preferred: [String]
     ) -> [WorkspaceAgent] {
         guard !agents.isEmpty else { return [] }
         let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
-        var seen = Set<UUID>()
+        var seen = Set<String>()
         var ordered: [WorkspaceAgent] = []
         for id in preferred {
             guard let agent = byID[id], seen.insert(id).inserted else { continue }
@@ -154,105 +82,16 @@ enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
     /// Applies preferred IDs while retaining the caller's fallback ordering.
     static func applyPreferredOrder(
         _ agents: [WorkspaceAgent],
-        preferred: [UUID]
+        preferred: [String]
     ) -> [WorkspaceAgent] {
         guard !agents.isEmpty, !preferred.isEmpty else { return agents }
         let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
-        var seen = Set<UUID>()
+        var seen = Set<String>()
         let preferredAgents = preferred.compactMap { id -> WorkspaceAgent? in
             guard let agent = byID[id], seen.insert(id).inserted else { return nil }
             return agent
         }
         return preferredAgents + agents.filter { seen.insert($0.id).inserted }
-    }
-}
-
-struct RemoteWorkspaceSidebarLink: Equatable, Identifiable {
-    let configuration: RemoteWorkspaceConfiguration
-    let readyTargets: [RemoteHarnessChatTarget]
-
-    var id: UUID { configuration.id }
-}
-
-enum RemoteWorkspaceSidebarModel {
-    /// Membership is persisted separately from transient connection/readiness checks.
-    static func agents(_ saved: [WorkspaceAgent], in workspaceID: UUID) -> [WorkspaceAgent] {
-        saved.filter { $0.executionLocation == .remote && $0.runtimeDeviceID == workspaceID }
-    }
-
-    static func links(
-        workspaces: [RemoteWorkspaceConfiguration],
-        readyTargets: [RemoteHarnessChatTarget]
-    ) -> [RemoteWorkspaceSidebarLink] {
-        let targetsByWorkspaceID = Dictionary(
-            grouping: readyTargets,
-            by: { $0.configuration.id }
-        )
-        return workspaces
-            .sorted { lhs, rhs in
-                let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
-                if comparison != .orderedSame { return comparison == .orderedAscending }
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-            .map { configuration in
-                RemoteWorkspaceSidebarLink(
-                    configuration: configuration,
-                    readyTargets: (targetsByWorkspaceID[configuration.id] ?? [])
-                        .sorted { lhs, rhs in
-                            lhs.harness.id.presentationRank
-                                < rhs.harness.id.presentationRank
-                        }
-                )
-            }
-    }
-}
-
-/// Paired iPhone and iPad workspaces, derived from the synced execution workspace
-/// registry so every Mac lists them, online or not. Quick Chats belong to the
-/// workspace that runs them; folders to the workspace they are bound to. Unfiled
-/// notes have no owner and stay in All Workspaces, as on the iPhone.
-enum PairedWorkspaceSidebarModel {
-    /// Folder bindings say `device:<id>` where registry rows say `<id>`; this is
-    /// display grouping only and never decides execution ownership.
-    static func canonicalID(_ value: String) -> String {
-        for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
-            if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }
-        }
-        return UUID(uuidString: value)?.uuidString.lowercased() ?? value
-    }
-
-    static func workspaces(_ registry: [ExecutionWorkspace]) -> [ExecutionWorkspace] {
-        var seen = Set<String>()
-        return registry
-            .filter { $0.kind == .ios && !$0.deleted && seen.insert(canonicalID($0.id)).inserted }
-            .sorted {
-                let comparison = $0.name.localizedStandardCompare($1.name)
-                return comparison == .orderedSame ? $0.id < $1.id : comparison == .orderedAscending
-            }
-    }
-
-    /// Quick Chat history this workspace ran, newest first.
-    static func history(
-        for workspace: ExecutionWorkspace,
-        conversations: [WorkspaceConversationRecord],
-        owners: [String: String]
-    ) -> [WorkspaceConversationRecord] {
-        let owner = canonicalID(workspace.id)
-        return conversations
-            .filter { !$0.isArchived && owners[$0.id].map(canonicalID) == owner }
-            .sorted { ($0.lastMessageAt ?? "") > ($1.lastMessageAt ?? "") }
-    }
-
-    static func folders(for workspace: ExecutionWorkspace, in folders: [WorkspaceFolderRecord]) -> [WorkspaceFolderRecord] {
-        let owner = canonicalID(workspace.id)
-        return folders.filter { $0.executionWorkspaceID.map(canonicalID) == owner }
-    }
-
-    /// True when the conversation's execution owner is an iPhone or iPad.
-    static func isPhoneHistory(owner: String?, registry: [ExecutionWorkspace]) -> Bool {
-        guard let owner else { return false }
-        let id = canonicalID(owner)
-        return registry.contains { $0.kind == .ios && canonicalID($0.id) == id }
     }
 }
 
@@ -277,8 +116,8 @@ enum AgentDisclosureKey {
     static let localWorkspace = "section:local-workspace"
     static let remoteWorkspaces = "section:remote-workspaces"
 
-    static func workspace(_ id: UUID) -> String {
-        "workspace:\(id.uuidString.lowercased())"
+    static func machine(_ id: String) -> String {
+        "workspace:\(id)"
     }
 }
 
@@ -319,41 +158,38 @@ enum AgentListMoveDirection: Sendable {
     case down
 }
 
-/// Device-local order of agents within each sidebar group (`AppStorage` JSON map).
+/// This Mac's order of agents within each sidebar group (`AppStorage` JSON map).
 enum AgentOrderStore {
     static let storageKey = "wovenmatter.sidebar.agent-order-by-group"
 
-    static func decode(_ raw: String) -> [String: [UUID]] {
+    static func decode(_ raw: String) -> [String: [String]] {
         guard let data = raw.data(using: .utf8),
               let values = try? JSONDecoder().decode([String: [String]].self, from: data) else {
             return [:]
         }
-        var result: [String: [UUID]] = [:]
-        for (key, ids) in values {
-            var seen = Set<UUID>()
-            result[key] = ids.compactMap { UUID(uuidString: $0) }.filter { seen.insert($0).inserted }
+        return values.mapValues { ids in
+            var seen = Set<String>()
+            return ids.filter { seen.insert($0).inserted }
         }
-        return result
     }
 
-    static func encode(_ map: [String: [UUID]]) -> String {
-        let values = map.mapValues { $0.map { $0.uuidString.lowercased() } }
-        guard let data = try? JSONEncoder().encode(values),
+    static func encode(_ map: [String: [String]]) -> String {
+        guard let data = try? JSONEncoder().encode(map),
               let raw = String(data: data, encoding: .utf8) else {
             return "{}"
         }
         return raw
     }
 
-    static func order(forKey key: String, in raw: String) -> [UUID] {
+    static func order(forKey key: String, in raw: String) -> [String] {
         decode(raw)[key] ?? []
     }
 
     /// Preferred IDs first when present, then remaining present IDs in their given order.
-    static func mergePreferred(_ preferred: [UUID], present: [UUID]) -> [UUID] {
+    static func mergePreferred(_ preferred: [String], present: [String]) -> [String] {
         let presentSet = Set(present)
-        var seen = Set<UUID>()
-        var result: [UUID] = []
+        var seen = Set<String>()
+        var result: [String] = []
         for id in preferred where presentSet.contains(id) && seen.insert(id).inserted {
             result.append(id)
         }
@@ -364,10 +200,10 @@ enum AgentOrderStore {
     }
 
     static func move(
-        id: UUID,
+        id: String,
         direction: AgentListMoveDirection,
         inKey key: String,
-        presentIDs: [UUID],
+        presentIDs: [String],
         raw: inout String
     ) {
         var map = decode(raw)
@@ -388,9 +224,9 @@ enum AgentOrderStore {
     }
 
     static func canMove(
-        id: UUID,
+        id: String,
         direction: AgentListMoveDirection,
-        presentIDs: [UUID]
+        presentIDs: [String]
     ) -> Bool {
         guard let index = presentIDs.firstIndex(of: id) else { return false }
         switch direction {
@@ -606,25 +442,7 @@ struct ActiveConversationRowBackground: View {
         ZStack {
             shape.fill(presentation.isActive ? theme.palette.themeWhisper : .clear)
             if presentation.allowsMotion {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                    // Animate drawing, rather than a child's frame and offset.
-                    // Active rows appear in both rails; relaying their sweep
-                    // through layout repeatedly invalidates the whole window.
-                    Canvas(rendersAsynchronously: true) { canvas, size in
-                        let progress = context.date.timeIntervalSinceReferenceDate
-                            .truncatingRemainder(dividingBy: 4.2) / 4.2
-                        let start = size.width * (-1.7 + 2.7 * progress)
-                        canvas.fill(
-                            Path(CGRect(x: start, y: 0, width: size.width * 1.7, height: size.height)),
-                            with: .linearGradient(
-                                Gradient(colors: [.clear, WovenPalette.primary.opacity(0.055), .clear]),
-                                startPoint: CGPoint(x: start, y: 0),
-                                endPoint: CGPoint(x: start + size.width * 1.7, y: 0)
-                            )
-                        )
-                    }
-                    .clipShape(shape)
-                }
+                ActiveRowSweep(cornerRadius: cornerRadius)
             }
             shape.fill(
                 selected
@@ -632,6 +450,115 @@ struct ActiveConversationRowBackground: View {
                     : hovered ? theme.palette.themeSoft : .clear
             )
         }
+    }
+}
+
+/// The faint band that sweeps across a running chat's row every 4.2 s. Core
+/// Animation moves it, so the rails are not evaluated or laid out again while
+/// it runs. It stops while the window is not visible. Every row shares one
+/// phase, so a chat's rows in both rails sweep together.
+private struct ActiveRowSweep: NSViewRepresentable {
+    let cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> ActiveRowSweepView { ActiveRowSweepView() }
+
+    func updateNSView(_ view: ActiveRowSweepView, context: Context) {
+        view.cornerRadius = cornerRadius
+    }
+}
+
+private final class ActiveRowSweepView: NSView {
+    private static let period: CFTimeInterval = 4.2
+    /// The band is this many row widths wide.
+    private static let bandWidth: CGFloat = 1.7
+    private static let animationKey = "sweep"
+
+    private let band = CAGradientLayer()
+
+    var cornerRadius: CGFloat = 0 {
+        didSet { layer?.cornerRadius = cornerRadius }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        let root = CALayer()
+        root.masksToBounds = true
+        root.cornerCurve = .continuous
+        layer = root
+        wantsLayer = true
+        clipsToBounds = true
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+        root.addSublayer(band)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        let size = bounds.size
+        let width = size.width * Self.bandWidth
+        guard band.bounds.size != CGSize(width: width, height: size.height) else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        band.anchorPoint = .zero
+        band.bounds = CGRect(x: 0, y: 0, width: width, height: size.height)
+        band.position = .zero
+        CATransaction.commit()
+        band.removeAnimation(forKey: Self.animationKey)
+        updateAnimation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(occlusionChanged),
+                name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        updateColor()
+        updateAnimation()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColor()
+    }
+
+    @objc private func occlusionChanged() { updateAnimation() }
+
+    private func updateColor() {
+        var colors: [CGColor] = []
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let primary = WovenColors.primary
+            colors = [primary.withAlphaComponent(0), primary.withAlphaComponent(0.055), primary.withAlphaComponent(0)]
+                .map(\.cgColor)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        band.colors = colors
+        CATransaction.commit()
+    }
+
+    /// The band's left edge travels from 1.7 row widths before the row to its
+    /// right edge, in step with the wall clock.
+    private func updateAnimation() {
+        let width = bounds.width
+        guard width > 0, window?.occlusionState.contains(.visible) == true else {
+            band.removeAnimation(forKey: Self.animationKey)
+            return
+        }
+        guard band.animation(forKey: Self.animationKey) == nil else { return }
+        let animation = CABasicAnimation(keyPath: "position.x")
+        animation.fromValue = -width * Self.bandWidth
+        animation.toValue = width
+        animation.duration = Self.period
+        animation.timeOffset = Date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.period)
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        band.add(animation, forKey: Self.animationKey)
     }
 }
 

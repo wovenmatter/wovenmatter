@@ -1,15 +1,13 @@
 import SwiftUI
-import WovenMatterClient
 
-/// Settings → Bots: what the bots call the user, and the Forum they share. Both belong to
-/// the one machine that runs bots; a runtime from before either shows nothing here.
+/// Settings → Bots: what the bots call the user, and the Forum they share.
 struct SettingsBotsYouAndForum: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
 
     var body: some View {
         if bots.isConnected {
-            if bots.supportsUserName { SettingsBotsUserName(bots: bots) }
-            if bots.supportsForum, let forum = bots.forum { forumSection(forum) }
+            SettingsBotsUserName(bots: bots)
+            if let forum = bots.forum { forumSection(forum) }
         }
     }
 
@@ -29,10 +27,10 @@ struct SettingsBotsYouAndForum: View {
     }
 }
 
-/// One value, kept by the bots runtime: every bot is told it, and Admin Bot asks for it
+/// One value, kept with the bots: every bot is told it, and Admin Bot asks for it
 /// while it is missing.
 private struct SettingsBotsUserName: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     /// The field's text while it differs from what is saved.
     @State private var draft: String?
     @State private var saving = false

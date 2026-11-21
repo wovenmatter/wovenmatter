@@ -1,115 +1,56 @@
 # Connections and dictation
 
-Open **Settings → Subscriptions & API Keys** to manage shared accounts. Account links in Usage and
-Pi Durable lead here.
+## Subscriptions and API keys
 
-**Accounts for** at the top chooses whose accounts you are editing: **All
-workspaces** for the shared accounts, or one workspace. Accounts saved for one
-workspace take priority for each provider there; shared accounts fill in when
-none are saved.
+Open **Settings → Subscriptions & API Keys** to connect model providers and web
+search. Account links in Usage and in Pi Durable's settings lead here.
 
-The page groups **Model providers**, **Web search**, and **Local model servers**.
-Expand a provider to see its subscription, with API keys folded below it. OpenAI, Anthropic,
-Grok/xAI, OpenRouter, and OpenCode connections power Pi Durable.
+**Sign in on** at the top chooses the machine. Subscription sign-ins (ChatGPT,
+Claude and Grok) belong to the machine you sign in on and are never copied to
+another one; sign in again on each machine that needs them. API keys are
+shared with every machine.
 
-Save up to four connections per type. Saved rows show account identity or a key
-label and date added, never the secret. Older connections show “Existing
-connection” when their original date is unknown. Choose **Use first**, then
-arrange the remaining accounts as backups. Pi Durable tries these before the next
-configured fallback model when authentication fails or allowance is exhausted.
-It does not switch for ordinary throttling or replay after output/tools begin.
+**Sign in** shows the provider's steps beneath its row: ChatGPT shows a link
+and code, and **Sign in with Claude** opens Anthropic's sign-in, after which you
+paste the code it returns and choose **Continue**. Saved rows show the account
+or key label and the date added, never the secret. **Remove** disconnects a
+connection.
 
-**Sign in** opens instructions beneath that connection. ChatGPT shows its device
-link and code; Claude uses its bundled runtime’s native browser flow. Keys and
-app-owned sign-in credentials stay in macOS Keychain. Shared remote credentials
-use encrypted storage; native Claude credentials stay with Claude. With a remote
-workspace selected under **Accounts for**, you can add one independent
-ChatGPT/Grok sign-in ahead of its shared accounts. **Use shared sign-in**
-removes that independent override.
+Pi Durable, the bots and Usage use these connections. Codex, Claude Code, Grok
+Build and OpenCode keep their own sign-ins.
 
-Workspace overrides apply to Pi Durable. Usage uses global accounts.
-**Usage → Limits** shows separate rows for each saved account, plus a line naming
-providers that need sign-in. Use **Manage subscriptions and keys** to add or reconnect an account.
-Device analytics imports Woven Matter and local harness history without account
-setup, provider enable switches, or Keychain access. It excludes account-wide
-OpenRouter API history from device totals and includes all OpenCode billing routes.
-API keys without a supported limits endpoint show that limitation rather
-than subscription quota. External harnesses keep their separate sign-ins.
-Disabling a feature keeps its connection; removing a connection affects the
-features using it.
+## GitHub
 
-## Executor
+**Settings → GitHub** holds one SSH key and a Git identity for your agents and
+bots on every machine. **Generate a key** makes one, or **Paste an existing
+private key**, then **Add key on GitHub** with the public key. Agents never
+receive the key file; the server uses the key for them.
 
-**Settings → Woven MCP → Connected apps** manages one local or remote Linux Executor runtime, shared by
-every agent through Woven MCP. Configure apps in its dashboard, choose defaults,
-and select apps per conversation. See [Executor apps](executor.md) for setup,
-permissions and recovery.
+## Mac permissions
+
+**Settings → Permissions & Access** lists the macOS permissions agents use on
+this Mac, such as Accessibility and Screen Recording for the computer tool.
+Choose **Allow** on each one, or **Allow all**. Some are switched on in System
+Settings; if a row offers **Reopen**, reopen the app afterwards. See
+[Mac access](../MAC_ACCESS.md).
 
 ## Dictation
 
-Dictation uses Apple's native on-device speech APIs on macOS and iOS 26 or later.
-No subscription, API key, or provider connection is needed. Grok connections
-continue to work for agents and Usage; dictation does not use them.
+Dictation uses Apple's on-device speech recognition on your Mac. No account or
+API key is needed, and audio is never saved or sent anywhere.
 
-Click the microphone in a conversation or note to start. Allow microphone access
-on first use. Apple may need an internet connection to prepare a language the
-first time; the app shows preparation progress and lets you cancel. Once language
-support is installed, speech recognition works offline. Audio and live previews
-are not written to files or sent to a workspace, provider, or agent.
+Click the microphone in a conversation or note, or press **⇧⌘D** in the focused
+editor. Allow microphone access the first time. Apple may need to download a
+language the first time you use it; after that, dictation works offline.
 
-Dictation is always available. **Settings → Dictation** on Mac has a
-language selector and shows whether the microphone is allowed; Microphone itself
-is set up in **Settings → Permissions & Access**. Automatic follows your preferred
-languages. In the iPhone beta, touch and hold the microphone to choose a language. Language
-changes apply to the next recording. Standard keyboard dictation remains available.
+Recording continues while you move between conversations and notes. Stop it in
+the editor where the text belongs: the finished transcript is inserted at the
+caret as one undoable edit, and it is never sent for you. If the text cannot
+be inserted there, it is kept so you can insert or discard it.
 
-### Dictation history
+**Settings → Dictation** sets the language; **Automatic** follows your preferred
+languages. **History** lists your finished dictations, newest first. A
+transcript is saved there when you stop recording; audio is not. History is
+part of your library, so it syncs to your other machines.
 
-**Settings → Dictation → History** lists your completed dictations, newest
-first. Click an entry to read it in full. A transcript is saved there when you
-stop recording; audio is never saved. History is part of your library, so it
-synchronizes with your other paired devices.
-
-### While you record
-
-Recording continues as you switch conversations and notes. Click the recording
-button in the destination editor to stop: the entire finalized transcript is
-inserted at that editor's caret, replacing its selection. It remains a draft for
-review and is never sent automatically. Native text editing preserves rich-text
-attributes and undo. On Mac, **⇧⌘D** starts or stops dictation in the active editor.
-
-Moving again while transcription finishes does not redirect the result. If an
-editor closes or its content conflicts with the insertion point, the transcript
-is retained for explicit insertion or discard. Cancel discards the recording.
-Leaving the workspace for another app page stops capture; backgrounding the
-iPhone app also stops capture. Interrupted recordings retain completed text where
-possible. Unsupported languages and failed preparation have explicit errors;
-there is no cloud transcription fallback.
-
-### How dictation works
-
-Dictation runs Apple's on-device speech recognition on the device you are
-using. Apple language assets download only when you start a recording that
-needs them. Live preview text can change while you speak; only the finalized
-text is inserted, as one undoable edit. If the editor changed in a way that
-conflicts with the insertion point, the transcript is kept for you to insert
-or discard.
-
-## Local Model Server
-
-In **Settings → Subscriptions & API Keys → Local model servers**, choose **Add model server**, enter a **Server URL** and **API key**, then click
-**Connect**. Use an OpenAI Responses-compatible base URL, such as
-`http://localhost:32100/v1`, or the server's address on your Tailscale network.
-No advanced settings are needed. Add up to 12 servers.
-
-Connect discovers models and verifies the Responses endpoint with a small test
-request. Available models then appear in Pi Durable's model preferences. Enable the ones
-you want in the conversation selector; the default model is always included. Reconnect after loading different models to refresh the
-catalog. A failed check leaves an existing saved connection intact. Editing a
-server address requires a new connection, keeping existing sessions and keys
-bound to their original server.
-
-A remote workspace must be able to reach the server address itself. `localhost`
-refers to the machine running that agent; use a reachable network address, such
-as the server's Tailscale name, to share a server across devices. Woven Matter does not install Tailscale
-or start model servers.
+Next: [Notes and data](notes-and-data.md).

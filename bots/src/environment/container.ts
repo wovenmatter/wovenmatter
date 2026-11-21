@@ -1,14 +1,12 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Context } from "@earendil-works/chord/context";
 import { randomUUID } from "node:crypto";
-import { Duplex } from "node:stream";
 import type { BotEnvironmentAdapter, HarnessEnvFactory } from "../env.ts";
-import { type DockerEngineAPI, EngineError, type ExecProcess } from "./engine-api.ts";
+import { type DockerEngineAPI, EngineError } from "./engine-api.ts";
 import {
   BASELINE,
   CAPTURE,
   CARRY_DIR,
-  HOME_DIR,
   CHROMIUM_DEPS,
   CHROMIUM_PROBE,
   PENDING_MARKER,
@@ -21,7 +19,6 @@ import {
   ensureImage,
   ensureSharedHelper,
   ensureSharedToolchain,
-  HELPER_LABEL,
   HELPER_MOUNT,
   helperArchive,
   helperDir,
@@ -48,14 +45,8 @@ export const WORKSPACE = "/workspace";
 export const BOT_LABEL = "woven.bot";
 /** The bot image a container was made from (its tag), kept through in-place updates. */
 export const IMAGE_LABEL = "woven.bots.image";
-export const MACHINE_LABEL = "woven.bots.machine";
-/**
- * The container layout: "2" has the shared volume at /opt/woven, its helper and toolchain links,
- * and its home folder in storage. A container without it predates that and moves on its next
- * update.
- */
-export const LAYOUT_LABEL = "woven.bots.layout";
-export const LAYOUT = "2";
+/** The runtime installation a container or volume belongs to (it moves with the bots folder). */
+export const INSTALLATION_LABEL = "woven.bots.installation";
 /** The contract's fixed idle period: a bot stops fully after 15 minutes idle. */
 export const IDLE_STOP_MS = 15 * 60_000;
 const AGENT_COMMAND = ["node", `${HELPER_MOUNT}/agent.mjs`];
@@ -117,7 +108,8 @@ export type BotEnvironmentOptions = {
   readonly imageDir?: string;
   /** Per-bot container memory limit; null: no cap. */
   readonly memoryBytes: number | null;
-  readonly machineId: string;
+  /** The runtime's installation identifier (`bots.sqlite`), on every container and volume. */
+  readonly installationId: string;
   /** The runtime's own view: a bot with a turn running or a viewer is never stopped. */
   readonly probe?: (botId: string) => Promise<IdleProbe>;
   /** Override the fixed idle period (tests only). */
@@ -150,7 +142,7 @@ export function engineUnavailable(error: unknown): boolean {
 /**
  * Pids that count as work: anything but PID 1 (tini), the supervisor and everything under it
  * (the restart list and the browser), env agents (but not their children: running commands),
- * preview forwarders and the inspecting `ps` itself. Orphans re-parented to PID 1 count.
+ * the SSH agent relay and the inspecting `ps` itself. Orphans re-parented to PID 1 count.
  */
 export function runningWork(psOutput: string): string[] {
   const rows = psOutput
@@ -176,7 +168,6 @@ export function runningWork(psOutput: string): string[] {
       if (row.pid === 1) return false;
       if (under(row.pid, supervisors)) return false;
       if (row.args.includes(`${HELPER_MOUNT}/agent.mjs`)) return false;
-      if (row.args.includes(`${HELPER_MOUNT}/forward.mjs`)) return false;
       // The SSH agent relay waits for git; it is not work of its own.
       if (row.args.includes(`${HELPER_MOUNT}/ssh-agent.mjs`)) return false;
       if (/^ps -eo /.test(row.args)) return false;
@@ -185,39 +176,12 @@ export function runningWork(psOutput: string): string[] {
     .map((row) => `${row.pid} ${row.args}`);
 }
 
-class ExecDuplex extends Duplex {
-  readonly #child: ExecProcess;
-  constructor(child: ExecProcess) {
-    super();
-    this.#child = child;
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (!this.push(chunk)) child.stdout.pause();
-    });
-    child.stdout.on("end", () => this.push(null));
-    child.once("error", (error: Error) => this.destroy(error));
-  }
-  override _read(): void {
-    this.#child.stdout.resume();
-  }
-  override _write(chunk: Buffer, _encoding: BufferEncoding, done: (error?: Error | null) => void): void {
-    this.#child.stdin.write(chunk, done);
-  }
-  override _final(done: (error?: Error | null) => void): void {
-    this.#child.stdin.end();
-    done();
-  }
-  override _destroy(error: Error | null, done: (error?: Error | null) => void): void {
-    this.#child.kill();
-    done(error);
-  }
-}
-
 /**
  * One container per bot on a Woven-owned Docker Engine, reached over its API socket. A bot's
  * container is created and started on its first tool call, runs the bot's restart list and browser
  * through the mounted supervisor, and stops after the fixed idle period. Its storage volume
  * outlives the container: soft delete stops it, purge removes both. No Docker socket is mounted
- * and no port is published; previews are carried over exec streams.
+ * and no port is published.
  */
 export class BotEnvironment implements BotEnvironmentAdapter {
   readonly kind: string;
@@ -235,10 +199,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   #currentToolchain: Promise<string> | undefined;
   #shared: Promise<{ readonly helper: string; readonly toolchain: string }> | undefined;
   #helperHash: Promise<string> | undefined;
-  /** Updates and rebuilds in progress: pruning waits until none is (a rollback needs its mounts). */
+  /** Updates and rebuilds in progress: pruning waits until none is (a rollback needs its links). */
   #changing = 0;
-  /** Volumes an update in progress may restore its old container with; never pruned meanwhile. */
-  readonly #restoring = new Set<string>();
   #closed = false;
 
   constructor(options: BotEnvironmentOptions) {
@@ -253,7 +215,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   }
 
   #labels(): Record<string, string> {
-    return { [MACHINE_LABEL]: this.#options.machineId };
+    return { [INSTALLATION_LABEL]: this.#options.installationId };
   }
 
   harnessEnv(botId: string): HarnessEnvFactory {
@@ -298,13 +260,12 @@ export class BotEnvironment implements BotEnvironmentAdapter {
 
   /** Each bot's SSH agent relay (helper/ssh-agent.mjs) and whether it is listening. */
   readonly #relays = new Map<string, { readonly process: AgentProcess; readonly ready: Promise<boolean> }>();
-  /** When a bot's relay last failed to start: an older helper has none, so wait before asking again. */
+  /** When a bot's relay last failed to start: it is not tried again for a minute. */
   readonly #relayFailed = new Map<string, number>();
 
   /**
    * The bot's relay, started if needed; true once it listens. git's ssh in the container asks it,
    * it asks here, and the machine's signing agent answers (the key never enters the container).
-   * A container whose helper predates the relay has none until an update.
    */
   #relay(botId: string): Promise<boolean> {
     const answer = this.#options.sshAgent;
@@ -382,11 +343,10 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     if (!this.#options.git) return;
     if (force) this.#gitWritten.delete(botId);
     try {
-      const answered = await this.#options.git(botId);
-      if (!answered) return;
-      // github.conf names the relay's socket: without a listening relay (an older helper), the
-      // files keep the user's own SSH settings and HTTPS remotes as they are.
-      const setup = answered.publicKey && !(await this.#relay(botId)) ? { ...answered, publicKey: null } : answered;
+      const setup = await this.#options.git(botId);
+      if (!setup) return;
+      // github.conf names the relay's socket: it listens before git can ask it.
+      if (setup.publicKey) await this.#relay(botId);
       const digest = gitDigest(setup);
       if (!force && this.#gitWritten.get(botId) === digest) return;
       const directory = this.#options.gitDirectory ?? CONTAINER_GIT_DIRECTORY;
@@ -514,8 +474,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     const outdatedBots: string[] = [];
     for (const container of await this.#engine.listContainers(BOT_LABEL)) {
       const botId = container.Labels[BOT_LABEL];
-      if (!botId || container.Labels[MACHINE_LABEL] !== this.#options.machineId) continue;
-      if (container.Labels[LAYOUT_LABEL] !== LAYOUT || container.Labels[IMAGE_LABEL] !== tag) {
+      if (!botId || container.Labels[INSTALLATION_LABEL] !== this.#options.installationId) continue;
+      if (container.Labels[IMAGE_LABEL] !== tag) {
         staleBots.push(botId);
         outdatedBots.push(botId);
         continue;
@@ -531,7 +491,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     return { tag, tools: await imageTools(this.#options.imageDir ?? IMAGE_DIR), staleBots, outdatedBots };
   }
 
-  /** A new container of the base image `image`, in the current layout. */
+  /** A new container of the base image `image`. */
   async #create(botId: string, image: string): Promise<void> {
     const memory = this.#options.memoryBytes;
     await this.#engine.createContainer(containerName(botId), {
@@ -546,7 +506,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
           ? Object.entries(gitEnvironment(this.#options.gitDirectory)).map(([key, value]) => `${key}=${value}`)
           : []),
       ],
-      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [IMAGE_LABEL]: image, [LAYOUT_LABEL]: LAYOUT },
+      Labels: { ...this.#labels(), [BOT_LABEL]: botId, [IMAGE_LABEL]: image },
       StopTimeout: STOP_SECONDS,
       HostConfig: {
         Mounts: [
@@ -634,12 +594,11 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       return;
     }
     if (!info.State.Running) {
-      const labels = info.Config.Labels ?? {};
-      await this.#healLinks(botId, labels);
+      await this.#healLinks(botId);
       await this.#engine.startContainer(name);
       // A move that stopped after its new container was made: apply what it captured, then start
       // again so the restart list comes back with it.
-      if (labels[LAYOUT_LABEL] === LAYOUT && (await this.#resumePending(botId))) {
+      if (await this.#resumePending(botId)) {
         await this.#engine.stopContainer(name, STOP_SECONDS);
         await this.#engine.startContainer(name);
       }
@@ -648,12 +607,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     this.touch(botId);
   }
 
-  /**
-   * A current-layout container whose links are missing (interrupted while they were written)
-   * gets the current ones, so it can start.
-   */
-  async #healLinks(botId: string, labels: Record<string, string>): Promise<void> {
-    if (labels[LAYOUT_LABEL] !== LAYOUT) return;
+  /** A container whose links are missing (interrupted while they were written) gets the current ones, so it can start. */
+  async #healLinks(botId: string): Promise<void> {
     const name = containerName(botId);
     const [runtime, tools] = await Promise.all([
       this.#engine.linkTarget(name, HELPER_MOUNT),
@@ -753,17 +708,6 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     });
   }
 
-  /** A stream to `port` inside the bot's container over an exec (previews). */
-  async connectPort(botId: string, port: number): Promise<Duplex> {
-    await this.ensure(botId);
-    const child = this.#engine.spawn(
-      containerName(botId),
-      ["node", `${HELPER_MOUNT}/forward.mjs`, String(port)],
-      { user: CONTAINER_USER },
-    );
-    return new ExecDuplex(child);
-  }
-
   lastActivity(botId: string): number | undefined {
     return this.#lastUse.get(botId);
   }
@@ -813,7 +757,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     const deleted = new Set(deletedBotIds);
     for (const container of await this.#engine.listContainers(BOT_LABEL)) {
       const botId = container.Labels[BOT_LABEL];
-      if (!botId || container.Labels[MACHINE_LABEL] !== this.#options.machineId) continue;
+      if (!botId || container.Labels[INSTALLATION_LABEL] !== this.#options.installationId) continue;
       if (container.State !== "running") continue;
       if (deleted.has(botId)) await this.dispose(botId).catch(() => {});
       // Left running by the last runtime: its idle clock starts now.
@@ -821,28 +765,10 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     }
   }
 
-  /** Prune helper volumes and shared directories, unless an update or rebuild is running. */
+  /** Prune shared directories, unless an update or rebuild is running. */
   async #prune(): Promise<void> {
     if (this.#changing > 0) return;
-    await this.pruneHelpers();
     await this.pruneShared();
-  }
-
-  /**
-   * Remove this machine's helper volumes from before the shared volume that no container uses any
-   * more (a container that still mounts one keeps it until it moves).
-   */
-  async pruneHelpers(): Promise<string[]> {
-    if (this.#changing > 0) return [];
-    const removed: string[] = [];
-    for (const volume of await this.#engine.listVolumes(HELPER_LABEL)) {
-      // An update that started meanwhile may need this volume to roll its bot back.
-      if (this.#changing > 0) break;
-      if (this.#restoring.has(volume.Name)) continue;
-      if (volume.Labels?.[MACHINE_LABEL] !== this.#options.machineId) continue;
-      if (await this.#engine.removeVolume(volume.Name).catch(() => false)) removed.push(volume.Name);
-    }
-    return removed;
   }
 
   /** Remove shared helper and toolchain directories that neither this runtime nor any bot uses. */
@@ -852,8 +778,8 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     const keep = new Set([`helper/${shared.helper}`, `toolchain/${shared.toolchain}`]);
     try {
       for (const container of await this.#engine.listContainers(BOT_LABEL)) {
-        // Every container on this engine (any machine's) whose layout uses the shared volume.
-        if (!container.Labels[BOT_LABEL] || container.Labels[LAYOUT_LABEL] !== LAYOUT) continue;
+        // Every bot container on this engine, whichever installation it belongs to.
+        if (!container.Labels[BOT_LABEL]) continue;
         for (const path of [HELPER_MOUNT, TOOLCHAIN_PATH]) {
           const target = await this.#engine.linkTarget(container.Id, path);
           if (target?.startsWith(`${SHARED_MOUNT}/`)) keep.add(target.slice(SHARED_MOUNT.length + 1));
@@ -976,7 +902,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
    * - **In place** (same base image): its links move to the current helper and toolchain (Node,
    *   npm, Playwright, Chromium) and its Ubuntu packages are upgraded. The container stays, with
    *   everything the bot installed in it.
-   * - **Moving** (a new base image, a container from before the current layout, or a rebuild):
+   * - **Moving** (a new base image, or a rebuild):
    *   what the bot changed in its container is recorded in its storage from the snapshot, the
    *   container is recreated from the base image, and those changes are applied there. Storage,
    *   home folder and browser profile stay as they are.
@@ -1001,12 +927,11 @@ export class BotEnvironment implements BotEnvironmentAdapter {
           ...(mount.RW === false ? { ReadOnly: true } : {}),
         })),
       };
-      for (const mount of previous.mounts) this.#restoring.add(mount.Source);
       const previousBase = labels[IMAGE_LABEL] ?? "unknown";
       const wasRunning = info.State.Running;
       const base = await this.image();
       const shared = await this.shared();
-      const moving = rebuild || labels[LAYOUT_LABEL] !== LAYOUT || previousBase !== base;
+      const moving = rebuild || previousBase !== base;
       const previousToolchain = moving ? undefined : await this.#engine.linkTarget(name, TOOLCHAIN_PATH).catch(() => undefined);
       this.#connections.get(botId)?.close();
       this.#gitWritten.delete(botId);
@@ -1068,14 +993,10 @@ export class BotEnvironment implements BotEnvironmentAdapter {
         } catch (copyError) {
           storage = copyError instanceof Error ? copyError.message : String(copyError);
           this.#log(`bot ${botId}: restoring its storage failed; it keeps its current files: ${storage}`);
-          // What this attempt added to storage must not outlive it: a home folder copied in for
-          // the old container (which still uses its own) would be taken as current next time.
-          await this.#runWithStorage(
-            botId,
-            base,
-            `if [ -f ${CARRY_DIR}/home-migrated ]; then rm -rf ${HOME_DIR}; fi; rm -rf ${CARRY_DIR} ${WORKSPACE}/.woven-incoming`,
-            "discard",
-          ).catch(() => {});
+          // What this attempt added to storage must not outlive it.
+          await this.#runWithStorage(botId, base, `rm -rf ${CARRY_DIR} ${WORKSPACE}/.woven-incoming`, "discard").catch(
+            () => {},
+          );
         }
         await this.#restore(botId, previous);
         if (wasRunning) {
@@ -1090,7 +1011,6 @@ export class BotEnvironment implements BotEnvironmentAdapter {
         };
       }
     } finally {
-      for (const mount of info.Mounts ?? []) if (mount.Name) this.#restoring.delete(mount.Name);
       this.#changing -= 1;
       if (this.#changing === 0) void this.#prune().catch(() => {});
     }
@@ -1105,6 +1025,54 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       const result = await this.#update(botId, true);
       if (result.skipped) await this.#ensureUnlocked(botId);
       else if (!result.ok) throw new Error(`rebuild failed and was rolled back: ${result.error ?? "unknown error"}`);
+    });
+  }
+
+  /** A created (never started) container of the base image with the bot's storage at /workspace. */
+  async #withStorage<T>(botId: string, kind: string, use: (name: string) => Promise<T>): Promise<T> {
+    const name = `woven-bots-${kind}-${randomUUID().slice(0, 8)}`;
+    await this.#engine.createContainer(name, {
+      Image: await this.image(),
+      User: "root",
+      Labels: { ...this.#labels(), "woven.bots.temporary": kind },
+      HostConfig: {
+        Mounts: [{ Type: "volume", Source: volumeName(botId), Target: WORKSPACE }],
+        NetworkMode: "none",
+      },
+    });
+    try {
+      return await use(name);
+    } finally {
+      await this.#engine.removeContainer(name).catch(() => {});
+    }
+  }
+
+  /**
+   * Write the bot's storage (everything under /workspace, its home folder included) as a tar
+   * archive at `path`, entries under `workspace/`. Its container is stopped first, so the files
+   * are at rest; the next tool call starts it again. False when the bot has no storage yet.
+   */
+  exportFiles(botId: string, path: string): Promise<boolean> {
+    this.#connections.get(botId)?.close();
+    return this.#locked(botId, async () => {
+      if (!(await this.#engine.volumeExists(volumeName(botId)))) return false;
+      this.#lastUse.delete(botId);
+      await this.#engine.stopContainer(containerName(botId), STOP_SECONDS);
+      await this.#withStorage(botId, "export", (name) => this.#engine.getArchiveToFile(name, WORKSPACE, path));
+      return true;
+    });
+  }
+
+  /** Put an archive written by `exportFiles` into the bot's storage (created when missing). */
+  importFiles(botId: string, path: string): Promise<void> {
+    this.#connections.get(botId)?.close();
+    return this.#locked(botId, async () => {
+      this.#lastUse.delete(botId);
+      await this.#engine.stopContainer(containerName(botId), STOP_SECONDS);
+      if (!(await this.#engine.volumeExists(volumeName(botId)))) {
+        await this.#engine.createVolume(volumeName(botId), { ...this.#labels(), [BOT_LABEL]: botId });
+      }
+      await this.#withStorage(botId, "import", (name) => this.#engine.putArchiveFromFile(name, "/", path));
     });
   }
 

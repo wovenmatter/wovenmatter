@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterCore
+import WovenProtocol
 
 /// Resolve only retained message identities, never read paths directly from agent text.
 struct ConversationFilePreviews: View {

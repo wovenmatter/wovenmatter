@@ -1,0 +1,13 @@
+{
+  "swiftVersion": "6.4.2",
+  "toolchainURL": "https://download.swift.org/swift-6.4.2-release/xcode/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE-osx.pkg",
+  "toolchainSHA256": "0a7d8489900d21dbf5f0187cb570e646a4c0226d0ddef2cbde8c7f54dfe79736",
+  "toolchainSigner": "Developer ID Installer: Swift Open Source (V9AUD2URP3)",
+  "staticSDKID": "swift-6.4.2-RELEASE_static-linux-0.1.0",
+  "staticSDKURL": "https://download.swift.org/swift-6.4.2-release/static-sdk/swift-6.4.2-RELEASE/swift-6.4.2-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz",
+  "staticSDKSHA256": "3786b179936d9cc9e266dd506bd1654176358d7b25288e243359f4d17cc4dc5a",
+  "sqliteURL": "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+  "sqliteSHA256": "0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9",
+  "nodeLinuxX64SHA256": "518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778",
+  "nodeLinuxArm64SHA256": "80a330b35415382878df18d41afbd106ea89bfb3be0087d6608e289a14c5cc7d"
+}

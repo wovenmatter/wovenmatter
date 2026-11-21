@@ -2,16 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>WovenMatterDeviceSetupVersion</key>
-    <integer>1</integer>
-    <key>WovenMatterDevelopmentMode</key>
-    <string>$(WOVENMATTER_DEV_MODE)</string>
     <key>WovenMatterDevelopmentInstance</key>
     <string>$(WOVENMATTER_DEV_INSTANCE)</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Woven Matter lets agents you start control apps such as System Events and Finder on this Mac.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Woven Matter uses your microphone to transcribe dictation on your Mac. Audio stays on this device.</string>
+    <string>Woven Matter uses your microphone to transcribe dictation on your Mac. Audio stays on this Mac.</string>
     <key>CFBundleShortVersionString</key>
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>

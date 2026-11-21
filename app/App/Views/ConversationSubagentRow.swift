@@ -1,32 +1,4 @@
 import SwiftUI
-#if os(macOS)
-import WovenMatterClient
-import WovenMatterCore
-#endif
-
-private struct ConversationArchiveConversationKey: EnvironmentKey {
-    static let defaultValue = ""
-}
-
-#if os(macOS)
-private struct ConversationSubagentHistoryKey: EnvironmentKey {
-    static let defaultValue: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? = nil
-}
-
-#endif
-
-extension EnvironmentValues {
-    var conversationArchiveConversationID: String {
-        get { self[ConversationArchiveConversationKey.self] }
-        set { self[ConversationArchiveConversationKey.self] = newValue }
-    }
-    #if os(macOS)
-    var conversationSubagentHistory: (@MainActor (BuiltInSubagentArchiveRequest) async throws -> JSONValue)? {
-        get { self[ConversationSubagentHistoryKey.self] }
-        set { self[ConversationSubagentHistoryKey.self] = newValue }
-    }
-    #endif
-}
 
 struct ConversationSubagentRow: View {
     let child: AgentRunSubagent
@@ -48,14 +20,6 @@ struct ConversationSubagentRow: View {
                 if let result = child.result?.nonempty { textBlock("Result", result) }
                 if let activity = child.activity, !activity.isEmpty { entries("Activity", activity) }
                 if let history = child.history, !history.isEmpty { entries("Recent Messages", history) }
-                #if os(macOS)
-                if let sourceID = child.sourceID,
-                   let nativeSessionID = child.nativeSessionID,
-                   let nativeConversationID = child.nativeConversationID {
-                    ConversationSubagentHistory(sourceID: sourceID, nativeSessionID: nativeSessionID,
-                        nativeConversationID: nativeConversationID)
-                }
-                #endif
             }
             .padding(.top, 6)
             .padding(.leading, 4)
@@ -119,111 +83,3 @@ struct ConversationSubagentRow: View {
         .foregroundStyle(WovenPalette.mutedForeground)
     }
 }
-
-#if os(macOS)
-private struct ConversationSubagentHistory: View {
-    let sourceID: String
-    let nativeSessionID: String
-    let nativeConversationID: String
-    @Environment(\.conversationArchiveConversationID) private var conversationID
-    @Environment(\.conversationSubagentHistory) private var loadHistory
-    @State private var expanded = false
-    @State private var rows: [JSONValue] = []
-    @State private var cursor: Int64 = 0
-    @State private var hasMore = true
-    @State private var busy = false
-    @State private var error: String?
-
-    var body: some View {
-        if loadHistory != nil {
-            DisclosureGroup("History", isExpanded: $expanded) {
-                if expanded {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                            if let fields = row.objectValue, let eventID = fields["id"]?.stringValue {
-                                ConversationSubagentArchiveEvent(request: request(eventID: eventID), fields: fields)
-                            }
-                        }
-                        if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
-                        if hasMore {
-                            Button(rows.isEmpty ? "Load history" : "Load more history") { Task { await loadNextPage() } }
-                                .buttonStyle(WovenQuietButtonStyle())
-                                .disabled(busy)
-                        }
-                        if busy { Text("Loading history…") }
-                    }.padding(.top, 5)
-                }
-            }
-            .font(.system(size: 11.5))
-            .foregroundStyle(WovenPalette.mutedForeground)
-        }
-    }
-
-    private func request(eventID: String? = nil) -> BuiltInSubagentArchiveRequest {
-        .init(conversationID: conversationID, sourceID: sourceID,
-            nativeSessionID: nativeSessionID, nativeConversationID: nativeConversationID,
-            after: cursor, eventID: eventID)
-    }
-
-    @MainActor private func loadNextPage() async {
-        guard !busy, let loadHistory else { return }
-        busy = true; error = nil
-        defer { busy = false }
-        do {
-            let page = try await loadHistory(request())
-            rows.append(contentsOf: page.objectValue?["rows"]?.arrayValue ?? [])
-            hasMore = page.objectValue?["hasMore"]?.boolValue ?? false
-            cursor = Int64(page.objectValue?["nextCursor"]?.intValue ?? Int(cursor))
-        } catch { self.error = error.localizedDescription }
-    }
-}
-
-private struct ConversationSubagentArchiveEvent: View {
-    let request: BuiltInSubagentArchiveRequest
-    let fields: [String: JSONValue]
-    @Environment(\.conversationSubagentHistory) private var loadHistory
-    @State private var chunks: [String] = []
-    @State private var offset = 0
-    @State private var hasMore = true
-    @State private var busy = false
-    @State private var error: String?
-
-    var body: some View {
-        DisclosureGroup(fields["kind"]?.stringValue ?? "Native record") {
-            VStack(alignment: .leading, spacing: 6) {
-                if let text = fields["text_content"]?.stringValue, !text.isEmpty {
-                    Text(text).font(.system(size: 12.5)).textSelection(.enabled)
-                }
-                ForEach(Array(chunks.enumerated()), id: \.offset) { _, chunk in
-                    Text(chunk).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
-                }
-                if let error { Text(error).foregroundStyle(WovenPalette.danger).textSelection(.enabled) }
-                if hasMore {
-                    Button(chunks.isEmpty ? "Read native record" : "Read more") { Task { await loadNextChunk() } }
-                        .buttonStyle(WovenQuietButtonStyle()).disabled(busy)
-                }
-                if busy { Text("Loading record…") }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 4)
-        }
-    }
-
-    @MainActor private func loadNextChunk() async {
-        guard !busy, let loadHistory else { return }
-        busy = true; error = nil
-        defer { busy = false }
-        do {
-            var next = request; next.offset = offset
-            let page = try await loadHistory(next)
-            guard let row = page.objectValue?["rows"]?.arrayValue?.first?.objectValue else {
-                throw BackendRPCError.remote("The native record is unavailable.")
-            }
-            chunks.append(row["payload"]?.stringValue ?? "")
-            hasMore = (row["payload_has_more"]?.intValue ?? 0) != 0
-            offset += 65536
-        } catch { self.error = error.localizedDescription }
-    }
-}
-
-#endif

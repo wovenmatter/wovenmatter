@@ -1,7 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 struct ConversationEmptyState: View {
     let icon: LucideGlyph
@@ -548,8 +546,7 @@ struct ConversationRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibility.label)
         .accessibilityValue(accessibility.value
-            + (appModel?.agentTools?.relationships[conversation.id]?.coordinatorID != nil ? ", actively coordinated" : "")
-            + (appModel?.agentTools?.timers.contains(where: { $0.sessionID == conversation.id && !$0.isPaused }) == true ? ", active timer" : ""))
+            + (appModel?.agentTools.timers.contains(where: { $0.sessionID == conversation.id && !$0.isPaused }) == true ? ", active timer" : ""))
         .accessibilityHint(accessibility.hint)
         .scrollAwareHover($hovered, token: "conversation:\(conversation.id)")
         .onChange(of: hovered) { _, isHovered in
@@ -586,7 +583,7 @@ struct ConversationRow: View {
         if let agent = presentation.agent {
             return agentIconGlyph(agent)
         }
-        return presentation.conversation.localRuntimeKind == nil ? .bot : .terminal
+        return presentation.conversation.runtimeKind == nil ? .bot : .terminal
     }
 
     private static var isMouseButtonPressed: Bool {
@@ -597,7 +594,7 @@ struct ConversationRow: View {
         if let agent = presentation.agent {
             return HarnessLogo(runtimeKind: agent.runtimeKind)
         }
-        return presentation.conversation.localRuntimeKind.map {
+        return presentation.conversation.runtimeKind.map {
             HarnessLogo(runtimeKind: $0)
         }
     }
@@ -640,7 +637,7 @@ struct ConversationHoverCard: View {
                         harnessLogo: meta.runtimeKind.map {
                             HarnessLogo(runtimeKind: $0)
                         },
-                        text: runtime + (presentation.conversation.importedAt == nil ? "" : " (imported)")
+                        text: runtime
                     )
                 }
                 hoverRow(icon: meta.locationKind.glyph, text: meta.locationLabel)
@@ -852,7 +849,7 @@ func agentIconGlyph(_ agent: WorkspaceAgent) -> LucideGlyph {
         if key.contains("brain") { return .brain }
         if key.contains("user") { return .userRound }
         if key.contains("cpu") { return .cpu }
-        return agent.executionLocation == .local ? .monitor : .bot
+        return .monitor
     }
 }
 
@@ -912,22 +909,14 @@ func listPreview(_ content: String, limit: Int) -> String {
     return preview.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-func shortTime(_ value: String?) -> String {
-    guard let value, let date = parsedISODate(value) else { return "" }
+func shortTime(_ date: Date?) -> String {
+    guard let date else { return "" }
     if Calendar.current.isDateInToday(date) {
         return date.formatted(date: .omitted, time: .shortened)
     }
     return date.formatted(.dateTime.month(.abbreviated).day())
 }
 
-
-func parsedISODate(_ value: String) -> Date? {
-    (try? fractionalISODateStyle.parse(value))
-        ?? (try? isoDateStyle.parse(value))
-}
-
-let fractionalISODateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-let isoDateStyle = Date.ISO8601FormatStyle()
 
 struct FolderContentCounts: Equatable {
     var chats = 0

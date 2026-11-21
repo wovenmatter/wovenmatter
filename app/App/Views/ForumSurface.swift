@@ -1,14 +1,13 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterClient
-import WovenMatterCore
 
 /// The Forum and, on wide panels, a thread beside it, laid out like a bot's channel.
-/// The bots runtime owns the rooms; this is Woven's own chat UI over its protocol.
 struct ForumWorkspace: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     let target: BotTarget
+    /// The person's open notes, sent with a post as a chat message sends them.
+    let context: String?
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
@@ -47,6 +46,7 @@ struct ForumWorkspace: View {
         ForumPane(
             bots: bots,
             controller: bots.forumRoom(roomID: roomID),
+            context: context,
             headerInsets: insets,
             headerActions: actions,
             showsPausedBanner: showsPause,
@@ -58,10 +58,10 @@ struct ForumWorkspace: View {
             onActivate: onActivate,
             onClosePanel: onClosePanel,
             onAddPanel: onAddPanel,
-            onOpenThread: { onRoute(.forum(machineID: bots.machineID, roomID: $0, showsThreadBesideMain: true)) },
+            onOpenThread: { onRoute(.forum(machineID: target.machineID, roomID: $0, showsThreadBesideMain: true)) },
             onOpenLink: onOpenLink
         )
-        .id(BotConversationKey(machineID: bots.machineID, botID: BotTarget.forumBotID, conversationID: roomID))
+        .id(BotConversationKey(machineID: target.machineID, botID: BotTarget.forumBotID, conversationID: roomID))
     }
 
     private func threadPane(wide: Bool, split: Bool, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool) -> some View {
@@ -70,11 +70,11 @@ struct ForumWorkspace: View {
         if wide {
             actions.append(BotPaneAction(glyph: split ? .maximize : .columns,
                 title: split ? "Expand thread" : "Show beside the Forum") {
-                onRoute(.forum(machineID: bots.machineID, roomID: roomID, showsThreadBesideMain: !split))
+                onRoute(.forum(machineID: target.machineID, roomID: roomID, showsThreadBesideMain: !split))
             })
         }
         actions.append(BotPaneAction(glyph: .close, title: "Back to the Forum") {
-            onRoute(.forum(machineID: bots.machineID))
+            onRoute(.forum(machineID: target.machineID))
         })
         // Beside the Forum, the Forum's own pane already says it is paused.
         return pane(roomID: roomID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split,
@@ -87,8 +87,9 @@ private struct ForumPane: View {
     private static let postPage = 60
     private static let endID = "forum-end"
 
-    @Bindable var bots: BotMachineSession
-    let controller: ForumRoomController
+    @Bindable var bots: BotsStore
+    let controller: ForumRoomStore
+    let context: String?
     let headerInsets: BotHeaderInsets
     let headerActions: [BotPaneAction]
     let showsPausedBanner: Bool
@@ -104,13 +105,14 @@ private struct ForumPane: View {
     let onOpenLink: (URL) -> Void
 
     @Environment(\.wovenTheme) private var theme
-    @State private var attached: ForumRoomController?
+    @State private var attached: ForumRoomStore?
     @State private var following = true
     @State private var isUserScrolling = false
     @State private var shownPosts = ForumPane.postPage
     @State private var bottomStackHeight: CGFloat = 0
     @State private var composerCollapseOverride: Bool?
     @State private var pausing = false
+    @State private var dismissedStatuses: Set<String> = []
 
     private var key: BotConversationKey { controller.key }
     private var isThread: Bool { controller.isThread }
@@ -149,6 +151,16 @@ private struct ForumPane: View {
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
             }
+            // A bot here on a fallback model or paused at its limits says so, as in its own chat.
+            ForEach(statusBots, id: \.bot.id) { item in
+                BotModelStatusBanner(text: PiBotModelStatusText(status: item.status, botName: item.bot.name),
+                                     showsFixes: item.status.kind == .paused || item.status.kind == .fallback) {
+                    dismissedStatuses.insert(item.key)
+                }
+                .frame(maxWidth: 768)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 8)
+            }
             ZStack(alignment: .bottom) {
                 transcript
                 bottomStack
@@ -164,6 +176,15 @@ private struct ForumPane: View {
         .onDisappear {
             attached?.detach()
             attached = nil
+        }
+    }
+
+    private var statusBots: [(bot: PiBotSummary, status: PiBotSummary.ModelStatus, key: String)] {
+        let members = memberIDs
+        return bots.bots.compactMap { bot in
+            guard members.contains(bot.id), let status = bot.modelStatus else { return nil }
+            let key = "\(bot.id):\(status.kind):\(status.at ?? 0)"
+            return dismissedStatuses.contains(key) ? nil : (bot, status, key)
         }
     }
 
@@ -370,11 +391,15 @@ private struct ForumPane: View {
     /// Who has a turn running here, so it shows that bots saw a post before any has answered.
     @ViewBuilder private var thinkingRow: some View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(WovenPalette.mutedForeground)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain").frame(width: 17)
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                    Text(text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                }
+                ConversationRunningDots()
             }
             .padding(.horizontal, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -382,7 +407,7 @@ private struct ForumPane: View {
         }
     }
 
-    /// Earlier posts already here come first; then the runtime's older pages.
+    /// Earlier posts already here come first; then the server's older pages.
     private func showEarlier(hidden: Int, anchor: Int, _ proxy: ScrollViewProxy) {
         following = false
         Task { @MainActor in
@@ -468,7 +493,8 @@ private struct ForumPane: View {
 
     private var composer: some View {
         let ready = controller.isReady
-        let placeholder = !ready ? "Connecting…" : isThread ? "Reply in thread…" : "Message the Forum…"
+        let placeholder = !ready ? (bots.isReadingSaved ? "\(bots.displayName) is unavailable" : "Connecting…")
+            : isThread ? "Reply in thread…" : "Message the Forum…"
         return ConversationComposer(
             placeholder: placeholder,
             draft: draftBinding,
@@ -496,9 +522,16 @@ private struct ForumPane: View {
             onDropFiles: attach,
             onCommandNavigation: { _ in false },
             onSend: send,
+            onStop: stopAction,
             directAttachmentLabel: "Attach text or code files",
             mentions: composerMentions
         )
+    }
+
+    /// Stop while bots work in this room, as a chat's composer offers it; it stops them here only.
+    private var stopAction: (() -> Void)? {
+        guard !controller.state.thinking.isEmpty, controller.isReady, !controller.stopping else { return nil }
+        return { Task { await controller.stop() } }
     }
 
     /// Who typing "@" offers: the bots in the Forum, then everyone in this room.
@@ -541,12 +574,13 @@ private struct ForumPane: View {
         // Mentions come from what was typed, never from an attached file's text.
         let mentions = draftMentions
         following = true
-        // Cleared on the way out so typing keeps working; put back if the runtime refuses it.
+        // Cleared on the way out so typing keeps working; put back if the server refuses it.
         bots.drafts[key] = BotDraftStore.Draft()
         let drafts = bots.drafts
         let key = key
         Task {
-            let sent = await controller.send(text: text, mentions: mentions.botIDs, everyone: mentions.everyone)
+            let sent = await controller.send(text: text, mentions: mentions.botIDs, everyone: mentions.everyone,
+                                             context: context)
             if !sent {
                 var restored = drafts[key]
                 restored.text = restored.text.isEmpty ? draft.text : draft.text + "\n" + restored.text
@@ -588,12 +622,14 @@ private struct ForumPostRow: View {
                             .foregroundStyle(WovenPalette.mutedForeground)
                             .padding(.horizontal, 4)
                     }
+                } else if let visualReply = post.visualReply {
+                    ConversationHTMLRenderView(reference: visualReply).padding(.horizontal, 4)
                 } else {
                     ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
                 }
-                ForEach(post.unanswered ?? []) { note in
+                ForEach(post.unanswered) { note in
                     InlineError(text: "\(note.name) didn't answer: \(note.reason)")
                     if note.needsSignIn { BotIssueButtons(issue: .signIn) }
                     else if note.hitLimit { BotIssueButtons(issue: .limit) }
@@ -613,18 +649,20 @@ private struct ForumPostRow: View {
 
     private var actions: some View {
         HStack(spacing: 4) {
-            Button {
-                NSPasteboard.general.clearContents()
-                copied = NSPasteboard.general.setString(post.text, forType: .string)
-            } label: {
-                LucideIcon(glyph: copied ? .check : .copy, size: 13)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
+            if post.visualReply == nil {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    copied = NSPasteboard.general.setString(post.text, forType: .string)
+                } label: {
+                    LucideIcon(glyph: copied ? .check : .copy, size: 13)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(WovenIconButtonStyle())
+                .focused($focusedAction, equals: .copy)
+                .help("Copy post")
+                .accessibilityLabel(copied ? "Post copied" : "Copy post")
             }
-            .buttonStyle(WovenIconButtonStyle())
-            .focused($focusedAction, equals: .copy)
-            .help("Copy post")
-            .accessibilityLabel(copied ? "Post copied" : "Copy post")
             if showsThreadControls, canStartThread || post.thread != nil {
                 Button(action: onOpenThread) {
                     HStack(spacing: 5) {
@@ -692,7 +730,11 @@ private struct ForumThreadOrigin: View {
                     .textSelection(.enabled)
             } else {
                 Text(post.name).font(.system(size: 12, weight: .medium))
-                ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
+                if let visualReply = post.visualReply {
+                    ConversationHTMLRenderView(reference: visualReply)
+                } else {
+                    ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -754,7 +796,7 @@ private struct ForumMentionNote: View {
 
 /// Who is in the Forum: a switch per bot. A bot that is out hears nothing and leaves its threads.
 private struct ForumMembersButton: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     @State private var shown = false
 
     private var activeCount: Int { bots.forum?.activeBotIDs.count ?? 0 }
@@ -794,7 +836,7 @@ private struct ForumMembersButton: View {
 
 /// One "In the Forum" switch per bot, Admin Bot last. Used here and in Settings → Bots.
 struct ForumMemberSwitches: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     @State private var changing = Set<String>()
 
     private var ordered: [PiBotSummary] { bots.bots.filter { !$0.isAdmin } + bots.bots.filter(\.isAdmin) }
@@ -861,10 +903,10 @@ private struct ForumThreadMembersButton: View {
 
 // MARK: - Scheduled posts
 
-/// Posts the runtime makes as the user at a set time. It keeps and fires them, so they
-/// arrive with no app open.
+/// Posts made as the user at a set time. The bots' host keeps and fires them, so
+/// they arrive with no app open.
 private struct ForumSchedulesButton: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     @State private var shown = false
     @State private var draft = PiBotForumScheduleDraft(date: ForumSchedulesButton.nextHour())
     @State private var saving = false

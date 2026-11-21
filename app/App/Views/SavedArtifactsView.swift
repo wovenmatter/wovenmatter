@@ -1,21 +1,20 @@
 import AppKit
 import SwiftUI
-import WovenMatterLibraryStore
 
 struct SavedArtifactsView: View {
-    @Bindable var model: SavedArtifactsModel
+    @Bindable var model: SavedArtifactsStore
     @State private var search = ""
     @State private var workspaceID: String?
 
     private var filtered: [SavedArtifactLibraryItem] {
         model.items.filter { item in
-            (workspaceID == nil || item.manifest.workspaceID == workspaceID)
-                && (search.isEmpty || item.manifest.title.localizedStandardContains(search)
-                    || item.workspaceName.localizedStandardContains(search))
+            (workspaceID == nil || item.machineID == workspaceID)
+                && (search.isEmpty || item.title.localizedStandardContains(search)
+                    || item.machineName.localizedStandardContains(search))
         }
     }
     private var workspaces: [(String, String)] {
-        Dictionary(model.items.map { ($0.manifest.workspaceID, $0.workspaceName) }, uniquingKeysWith: { first, _ in first })
+        Dictionary(model.items.map { ($0.machineID, $0.machineName) }, uniquingKeysWith: { first, _ in first })
             .sorted { $0.value.localizedStandardCompare($1.value) == .orderedAscending }
     }
     var body: some View {
@@ -55,7 +54,7 @@ struct SavedArtifactsView: View {
                     icon: .libraryBigControl,
                     title: model.items.isEmpty ? "No saved artifacts yet" : "No matching artifacts",
                     detail: model.items.isEmpty
-                        ? "Outputs saved from your devices and workspaces will appear here."
+                        ? "Outputs saved from your workspaces will appear here."
                         : "Adjust your workspace filter or search to find an artifact."
                 ).frame(maxHeight: .infinity)
             } else {
@@ -79,7 +78,7 @@ private struct SavedArtifactRow: View {
     @Environment(\.openDocumentPreview) private var openPreview
     @Environment(\.wovenTheme) private var theme
     let item: SavedArtifactLibraryItem
-    @Bindable var model: SavedArtifactsModel
+    @Bindable var model: SavedArtifactsStore
     @State private var shareRequest: SavedArtifactShareRequest?
     private var busy: Bool { model.preparing.contains(item.id) }
 
@@ -101,15 +100,15 @@ private struct SavedArtifactRow: View {
     }
     private var details: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: item.manifest.mediaType.hasPrefix("image/") ? "photo" : "doc")
+            Image(systemName: item.mediaType.hasPrefix("image/") ? "photo" : "doc")
                 .font(.system(size: 20)).foregroundStyle(WovenPalette.primary).frame(width: 36, height: 40)
             VStack(alignment: .leading, spacing: 5) {
                 Button { Task { if let openPreview { await model.open(item, onOpenFile: openPreview) } } } label: {
-                    Text(item.manifest.title).font(.system(size: 13, weight: .semibold))
+                    Text(item.title).font(.system(size: 13, weight: .semibold))
                         .lineLimit(2).multilineTextAlignment(.leading)
                 }.buttonStyle(.plain).disabled(busy)
-                Text(item.workspaceName).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
-                Text("\(ByteCountFormatter.string(fromByteCount: item.manifest.byteCount, countStyle: .file)) · \(item.manifest.mediaType)")
+                Text(item.machineName).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
+                Text("\(ByteCountFormatter.string(fromByteCount: item.byteCount, countStyle: .file)) · \(item.mediaType)")
                     .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground).lineLimit(1)
             }
         }

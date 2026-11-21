@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 private struct ConversationTaskProgressKey: EnvironmentKey {
     static let defaultValue: ConversationTaskProgress? = nil

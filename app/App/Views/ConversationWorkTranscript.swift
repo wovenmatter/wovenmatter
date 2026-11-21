@@ -1,17 +1,11 @@
 import SwiftUI
-#if os(macOS)
 import AppKit
-import WovenMatterCore
-import WovenMatterLibraryStore
-#else
-import WovenMatterShared
-#endif
 
-/// Display-only run values shared by the desktop and the device-owned runtime.
+/// Display-only run values shared by the desktop and the machine's runtime.
 struct ConversationWorkRun {
     let id: String
     let conversationID: String
-    let status: String
+    let status: RunStatus
     var error: String? = nil
 }
 
@@ -75,22 +69,23 @@ struct ConversationWorkTranscript: View {
         self.timeline = timeline
     }
 
-    #if os(macOS)
     init(
         run: WorkspaceRunRecord,
-        presentation: RunPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
+        // A run starts with its message and ends with its last saved item.
+        let duration = run.status == .running ? nil : run.startedAt.flatMap { start in
+            run.completedAt.map { formattedRunDuration($0.timeIntervalSince(start)) }
+        }
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
-                  presentation: presentation.map { ConversationWorkPresentation(startedAt: $0.startedAt, completedDuration: $0.completedDuration) },
+                  presentation: ConversationWorkPresentation(startedAt: run.startedAt, completedDuration: duration),
                   records: records, commentaryIDs: commentaryIDs,
                   hasFollowingResponse: hasFollowingResponse, timeline: timeline)
     }
 
-    #endif
 
     var body: some View {
         let timeline = self.timeline ?? ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs)
@@ -99,21 +94,7 @@ struct ConversationWorkTranscript: View {
             runError: run.error,
             hasVisibleActivities: timeline.hasVisibleActivities
         )
-        let isRunning = run.status == "running"
-        // Lost receipts can have no assistant output or tool activity at all.
-        // Keep the recovery state visible independently of the work disclosure.
-        if run.status == "uncertain" {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Waiting to confirm the remote outcome")
-                    .font(.system(size: 13, weight: .medium))
-                Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: run.error
-                    ?? "Reconnect this conversation to recover its result."))
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-            }
-            .foregroundStyle(WovenPalette.mutedForeground)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+        let isRunning = run.status == .running
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
                 if content.failureMessage != nil {
@@ -130,7 +111,7 @@ struct ConversationWorkTranscript: View {
                 // Failure belongs to the run, not to its optional work history.
                 // Keep it visible even when no tool or thinking event was supplied.
                 if let failureMessage = content.failureMessage {
-                    Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: failureMessage))
+                    Text(failureMessage)
                         .font(.system(size: 13))
                         .foregroundStyle(WovenPalette.danger)
                         .textSelection(.enabled)
@@ -151,7 +132,7 @@ struct ConversationWorkTranscript: View {
                                 switch entry.content {
                                 case .commentary(let activity):
                                     ConversationResponse(
-                                        content: RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? ""),
+                                        content: activity.content ?? "",
                                         isStreaming: false,
                                         showsCopyButton: false
                                     )
@@ -166,8 +147,8 @@ struct ConversationWorkTranscript: View {
                                     if activity.kind == .thought {
                                         ConversationThinkingBlock(activity: activity, runID: run.id,
                                             isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
-                                    } else if activity.htmlRender != nil {
-                                        ConversationHTMLRenderView(activity: activity, runID: run.id)
+                                    } else if let reference = activity.htmlRender {
+                                        ConversationHTMLRenderView(reference: reference)
                                     } else if let children = activity.subagents, !children.isEmpty {
                                         VStack(alignment: .leading, spacing: 8) {
                                             ForEach(children) { child in
@@ -185,19 +166,22 @@ struct ConversationWorkTranscript: View {
                                 }
                             }
                         }
-                        .environment(\.conversationArchiveConversationID, run.conversationID)
                         .padding(.top, 14)
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
                 if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
-                        Image(systemName: "sparkles").frame(width: 17)
+                        Image(systemName: "brain").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
                     }
                     .foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.top, 12)
                     .accessibilityLabel("Thinking")
+                }
+                // A response below takes the dots under its text instead.
+                if isRunning && !hasFollowingResponse {
+                    ConversationRunningDots().padding(.top, 6)
                 }
             }
         }
@@ -205,32 +189,29 @@ struct ConversationWorkTranscript: View {
 
     @ViewBuilder
     private var elapsedLabel: some View {
-        if run.status == "running", let startedAt = presentation?.startedAt {
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                Text("Working for \(Self.elapsed(context.date.timeIntervalSince(startedAt)))")
-                    .monospacedDigit()
+        switch run.status {
+        case .running:
+            if let startedAt = presentation?.startedAt {
+                RunningElapsedLabel(startedAt: startedAt)
+            } else {
+                Text("Working")
             }
-        } else if run.status == "running" {
-            Text("Working")
-        } else if run.status == "completed" {
+        case .queued:
+            Text("Queued")
+        case .completed:
             Text("Done after \(presentation?.completedDuration ?? "a moment")")
-        } else if run.status == "failed" {
+        case .failed:
             Text("Error\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
-        } else if run.status == "cancelled" {
+        case .cancelled:
             Text("Idle (cancelled)\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
-        } else if run.status == "uncertain" {
-            Text("Waiting to confirm the remote outcome")
-        } else {
-            Text(run.status.capitalized)
         }
     }
 
     /// Whole seconds for a once-per-second count; longer runs use the shared format.
-    private static func elapsed(_ interval: TimeInterval) -> String {
+    static func elapsed(_ interval: TimeInterval) -> String {
         interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval)
     }
 
-    #if os(macOS)
     static func hasVisibleContent(run: WorkspaceRunRecord, timeline: ConversationWorkTimeline) -> Bool {
         ConversationWorkTranscriptPresentation(
             runStatus: run.status,
@@ -238,7 +219,6 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         ).isVisible
     }
-    #endif
 }
 
 private struct ConversationElapsedButtonStyle: ButtonStyle {
@@ -294,12 +274,12 @@ private struct ConversationThinkingBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Thinking", systemImage: "sparkles")
+            Label("Thinking", systemImage: "brain")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(WovenPalette.mutedForeground)
             ConversationBoundedWorkList(
                 group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
-                runID: runID, runStatus: isLive ? "running" : "completed", followsAppends: isLive,
+                runID: runID, runStatus: isLive ? .running : .completed, followsAppends: isLive,
                 initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
                 saveScrollSnapshot: { snapshot in
                     if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
@@ -319,7 +299,7 @@ private struct ConversationThinkingBlock: View {
 private struct ConversationWorkGroupRow: View {
     let group: ConversationWorkGroup
     let runID: String
-    let runStatus: String
+    let runStatus: RunStatus
     let isTail: Bool
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
@@ -327,7 +307,7 @@ private struct ConversationWorkGroupRow: View {
     @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
 
     var body: some View {
-        let runIsActive = runStatus == "running"
+        let runIsActive = runStatus == .running
         let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
         if runIsActive && isTail {
             VStack(alignment: .leading, spacing: 8) {
@@ -393,7 +373,7 @@ private struct ConversationBoundedWorkList: View {
 
     let group: ConversationWorkGroup
     let runID: String
-    let runStatus: String
+    let runStatus: RunStatus
     let followsAppends: Bool
     let initialScrollSnapshot: ConversationWorkScrollSnapshot
     let saveScrollSnapshot: (ConversationWorkScrollSnapshot) -> Void
@@ -507,7 +487,7 @@ private struct ConversationBoundedWorkList: View {
                         // reasoning-only groups need no second row disclosure.
                         ConversationActivityDetails(
                             activity: activity, runID: runID,
-                            isLive: runStatus == "running" && group.showsProgress(activity),
+                            isLive: runStatus == .running && group.showsProgress(activity),
                             summary: nil, indentation: 0)
                     } else {
                         ConversationActivityRow(
@@ -525,7 +505,7 @@ private struct ConversationBoundedWorkList: View {
 private struct ConversationActivityRow: View {
     let activity: AgentRunActivity
     let runID: String
-    let runStatus: String
+    let runStatus: RunStatus
     /// The activity is unsettled, as its timeline decides; the run gates it.
     let showsProgress: Bool
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
@@ -657,7 +637,7 @@ private struct ConversationActivityRow: View {
 
     private var isFailure: Bool { activity.workTimelineIsFailure }
 
-    private var isLive: Bool { runStatus == "running" && showsProgress }
+    private var isLive: Bool { runStatus == .running && showsProgress }
 
     /// Expandable when anything is not already fully shown in the label.
     private var isExpandable: Bool {
@@ -673,7 +653,7 @@ private struct ConversationActivityRow: View {
         if activity.subagents != nil { return "person.2" }
         return switch activity.kind {
         case .assistant: "text.bubble"
-        case .thought: "sparkles"
+        case .thought: "brain"
         case .tool: ConversationToolAction(activity).systemImage
         case .plan: "list.bullet.clipboard"
         case .fileChange: "pencil.and.outline"
@@ -709,7 +689,7 @@ private enum ConversationActivityDetailCache {
     }()
 
     static func key(runID: String, activity: AgentRunActivity) -> NSString {
-        "\(runID)\u{1F}\(activity.id)\u{1F}\(activity.detailVersion.map(String.init) ?? "")" as NSString
+        "\(runID)\u{1F}\(activity.id)\u{1F}\(activity.detailStamp.map(String.init) ?? "")" as NSString
     }
 
     static subscript(key: NSString) -> AgentRunActivity? {
@@ -827,7 +807,7 @@ private struct ConversationActivityDetails: View {
 
     /// Per-token revisions do not restart the visible detail task.
     private var loadKey: LoadKey {
-        LoadKey(visible: isVisible, settled: !isLive, version: isLive ? nil : activity.detailVersion, attempt: attempt)
+        LoadKey(visible: isVisible, settled: !isLive, version: isLive ? nil : activity.detailStamp, attempt: attempt)
     }
 
     private var cacheKey: NSString { ConversationActivityDetailCache.key(runID: runID, activity: activity) }
@@ -873,10 +853,6 @@ private struct ConversationActivityDetails: View {
             if key.settled { ConversationActivityDetailCache[cacheKey] = value }
             if value == nil { error = "Details for this activity are no longer available." }
         } catch is CancellationError {
-        } catch let error as LibraryAPIError where error.code == "incomplete_activity_details" {
-            guard !Task.isCancelled else { return }
-            waitingForDetails = true
-            self.error = nil
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -924,10 +900,7 @@ private struct ConversationReasoningText: View {
     }
 
     private var committedText: String {
-        // Find stream boundaries and redact whole envelopes before slicing a
-        // page; a page beginning inside an envelope must not expose its tail.
-        RemoteNoteEditEnvelope.redactingEnvelopes(in:
-            isLive ? AssistantStreamingText.readyPrefix(of: text) : text)
+        isLive ? AssistantStreamingText.readyPrefix(of: text) : text
     }
 
     var body: some View {
@@ -1173,11 +1146,7 @@ private struct ConversationProposedPlan: View {
                     .foregroundStyle(WovenPalette.foreground.opacity(0.72))
             }
             if let content = activity.content?.nonempty {
-                #if os(macOS)
                 ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
-                #else
-                ConversationResponse(content: content, isStreaming: false, showsCopyButton: false)
-                #endif
             } else {
                 ForEach(activity.planEntries.indices, id: \.self) { index in
                     Text("• \(activity.planEntries[index].content)")
@@ -1314,7 +1283,7 @@ struct ConversationChangedFilesCard: View {
             for change in record.activity.changes {
                 result[change.path] = ConversationChangedFile(
                     path: change.path, runID: record.runID, activityID: record.activity.id,
-                    version: record.activity.detailVersion,
+                    version: record.activity.detailStamp,
                     additions: change.additionCount ?? 0, deletions: change.deletionCount ?? 0
                 )
             }
@@ -1471,11 +1440,7 @@ private struct ConversationDiffSheet: View {
                 }
             }
         }
-        #if os(macOS)
         .frame(minWidth: 780, idealWidth: 1040, minHeight: 520, idealHeight: 700)
-        #else
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        #endif
         .task(id: loadKey) { await load(loadKey) }
         .onDisappear {
             loadToken = nil
@@ -1594,4 +1559,71 @@ func formattedRunDuration(_ interval: TimeInterval) -> String {
     if seconds == 0 { return "\(minutes)m" }
     if seconds == 60 { return "\(minutes + 1)m" }
     return "\(minutes)m \(seconds)s"
+}
+
+/// "Working for …" while a run is under way. It ticks once a second from its
+/// own timer and only repaints itself: its size never changes, so a tick
+/// never makes the transcript lay out again.
+private struct RunningElapsedLabel: NSViewRepresentable {
+    let startedAt: Date
+
+    func makeNSView(context: Context) -> RunningElapsedView { RunningElapsedView() }
+
+    func updateNSView(_ view: RunningElapsedView, context: Context) { view.startedAt = startedAt }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: RunningElapsedView, context: Context) -> CGSize? {
+        RunningElapsedView.size
+    }
+}
+
+private final class RunningElapsedView: NSView {
+    private static let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    /// Wide enough for any count, so the label keeps one size.
+    static let size: CGSize = {
+        let size = NSAttributedString(string: "Working for 999m 59s", attributes: [.font: font]).size()
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }()
+
+    var startedAt = Date.distantPast {
+        didSet { if startedAt != oldValue { needsDisplay = true; schedule() } }
+    }
+    private var timer: Timer?
+
+    override var isFlipped: Bool { true }
+
+    private var text: String {
+        "Working for \(ConversationWorkTranscript.elapsed(Date().timeIntervalSince(startedAt)))"
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        schedule()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    /// Fires on each whole second since the start, as the count changes.
+    private func schedule() {
+        timer?.invalidate()
+        timer = nil
+        guard window != nil, startedAt != .distantPast else { return }
+        let next = startedAt.addingTimeInterval(Date().timeIntervalSince(startedAt).rounded(.down) + 1)
+        let timer = Timer(fire: next, interval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSAttributedString(string: text, attributes: [.font: Self.font, .foregroundColor: WovenColors.mutedForeground])
+            .draw(at: .zero)
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+    override func accessibilityValue() -> Any? { text }
 }

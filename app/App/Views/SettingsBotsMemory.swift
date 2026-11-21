@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterClient
 
 struct BotSettingsMemory: View {
     let state: BotSettingsState
@@ -7,7 +6,6 @@ struct BotSettingsMemory: View {
     @State private var picked: String?
     @State private var facts: [String]?
     @State private var factsBotID: String?
-    @State private var observer: UUID?
     private var bot: PiBotSummary? { bots.first { $0.id == picked } ?? bots.first }
 
     var body: some View {
@@ -27,20 +25,15 @@ struct BotSettingsMemory: View {
                 BotSettingsFactForm(label: "New memory", action: "Add", onSave: { await change(fact: nil, text: $0) }).id(bot.id)
             }
         }
-        .task(id: "\(state.bots.connection.rawValue):\(bot?.id ?? "")") {
-            if let observer { state.bots.stopObservingMemory(observer) }
+        .task(id: "\(state.bots.isConnected):\(state.bots.memoryRevision):\(bot?.id ?? "")") {
             guard let id = bot?.id, state.bots.isConnected else { return }
-            observer = state.bots.observeMemory { changed in
-                if changed == id { Task { await refresh(id) } }
-            }
             await refresh(id)
         }
-        .onDisappear { if let observer { state.bots.stopObservingMemory(observer) } }
     }
 
     private func refresh(_ id: String) async {
-        await state.load { client in
-            let next = try await client.memory(botID: id)
+        await state.load {
+            let next = try await state.bots.memory(botID: id)
             guard bot?.id == id else { return }
             facts = next; factsBotID = id
         }
@@ -48,10 +41,10 @@ struct BotSettingsMemory: View {
 
     private func change(fact: String?, text: String) async -> Bool {
         guard let id = bot?.id else { return false }
-        return await state.run { client in
+        return await state.run {
             let next: [String]
-            if let fact { next = try await client.updateMemory(botID: id, fact: fact, text: text) }
-            else { next = try await client.addMemory(botID: id, text: text) }
+            if let fact { next = try await state.bots.updateMemory(botID: id, fact: fact, text: text) }
+            else { next = try await state.bots.addMemory(botID: id, text: text) }
             guard bot?.id == id else { return }
             facts = next; factsBotID = id
         }
@@ -61,8 +54,8 @@ struct BotSettingsMemory: View {
         guard let id = bot?.id else { return }
         state.confirm("Delete this memory?\n\n\(fact)", action: "Delete") {
             Task {
-                await state.run { client in
-                    let next = try await client.deleteMemory(botID: id, fact: fact)
+                await state.run {
+                    let next = try await state.bots.deleteMemory(botID: id, fact: fact)
                     guard bot?.id == id else { return }
                     facts = next; factsBotID = id
                 }

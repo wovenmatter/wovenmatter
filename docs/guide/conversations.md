@@ -1,124 +1,82 @@
 # Conversations
 
-Choose **New chat** and select an agent. Agent names in the sidebar open their
-most recent chat; the separate plus starts a new chat with that agent in the
-selected folder. Woven groups agents by their local or remote workspace. Select
-a model and thinking level where the harness offers them.
+Choose **New chat** and select an agent. The sidebar lists each machine's
+agents under that machine; a chat started there runs on that machine. Select a
+model and thinking level where the harness offers them.
 
-Before the first message, the composer's folder selector lists **All Workspaces**
-and the sidebar folders. Folders belonging to another execution workspace are
-disabled. All Workspaces gives each chat its own blank scratch directory. The
-first message fixes the folder and working directory; use a new chat for another root.
+Before the first message, the composer's folder selector lists **All
+Workspaces** and the folders of the agent's machine. **All Workspaces** gives
+the chat its own empty working directory. The first message fixes the folder
+and working directory; start a new chat for another one. See
+[Folders and storage](workspaces.md).
 
-## Models, thinking, tools, and permissions
+## Models, thinking and permissions
 
-Selections belong to the conversation and stay with it when you reopen it. The
-composer popouts contain the choices for that conversation. Previously saved
-workspace and harness defaults are retained. New conversations use this order:
+Choices made in the composer belong to that conversation and stay with it.
+New chats start from the harness's **Defaults for new chats** in **Settings →
+Agents**.
 
-1. A choice supplied for that conversation.
-2. The workspace default for that harness.
-3. The harness default.
-4. Woven Matter's starting default: **Full access** for permissions on supported
-   harnesses; the harness's own default for other selections.
-
-New conversations start with Full access unless you choose the harness's auto
-mode or saved it as a default.
-
-Existing conversations keep their selections when defaults change. Defaults are
-independent for each control, so a saved workspace default can override the model
-while inheriting the harness's permission choice.
-
-Woven Matter offers two permission choices, and only those the harness
+Woven Matter offers at most two permission choices, and only those the harness
 supports appear:
 
-- **Full access** allows commands and edits without ordinary approval prompts,
-  within the harness's enforced policy. It is the default everywhere.
-- The harness's auto mode uses the harness's own review system to evaluate
-  actions and decide what it can approve. This is not blanket acceptance of
-  requests. Codex calls it **Approve for me**; Claude Code and Grok Build call
-  it **Auto**, and show it only when their adapter supports it.
+- **Full Access** runs commands and edits without ordinary approval prompts,
+  within the harness's own enforced policy. It is the default for new chats.
+- **Auto**, the harness's own auto mode, lets the harness's review system decide
+  what to approve. Codex, Claude Code and Grok Build offer it.
 
-Pi Durable and OpenCode have no auto mode, so they always run in Full access.
-Questions and sign-in steps still need your response in every mode. Changing
-Grok Build's policy reconnects the same conversation before the next message.
+Pi Durable and OpenCode always run in Full Access. Questions and sign-in steps
+still need your answer in every mode.
 
-There is no Ask for approval mode. A conversation or default saved in Ask for
-approval, or in another mode Woven Matter no longer offers (such as Read only,
-Plan, Auto-accept edits, Don't ask, or OpenCode's Deny), moves to Full access
-the next time it runs. If the harness withholds Full access, it moves to the
-harness's auto mode instead.
+## Woven tools
 
-Wait for a settings change to finish before sending.
+Every agent reaches Woven Matter through the Woven MCP. With it, agents can
+read notes, pages, sheets and apps and edit all but sheets, query and write databases, search the
+Library, start or message other sessions on any of your machines, talk to
+your bots, schedule tasks and timers, and use the browser in the Woven Matter
+window. The computer tool lets an agent see and use other apps on your Mac once
+Accessibility and Screen Recording are allowed in **Settings → Permissions &
+Access**. Browser and computer tools, and an agent's preview of a visual reply
+before it shows it, need the app open.
 
-## App tools and session access
+## Visual replies
 
-Use **Tools** in the composer to turn Notes, Conversation history, Session
-management, Timers, Usage data, Calendar, Library, Executor, Browser Use, and
-Computer Use on or off for that conversation. Defaults for new chats are in
-**Settings → Woven MCP → Tools for new chats**. Calendar can be Full access or
-Read only; Usage data and Library are read-only tools. Library lets an agent find
-exchanged files, links, and photos and identify their source messages. Browser
-Use controls the browser inside Woven Matter. Computer Use lets an agent see and
-use other apps on your Mac once Accessibility and Screen Recording are allowed in
-**Settings → Permissions & Access**. Executor starts off; see
-[Executor apps](executor.md). Goals and visual replies are always available.
+When you ask for a chart, a table, a diagram or something interactive, an
+agent can show it in the chat as a visual reply. It appears above the agent's
+text, stays when the work above it folds, and is there when you reopen the
+chat, on any of your machines. Use the buttons beside its title to zoom or
+expand it. A visual reply runs on its own, with no access to Woven Matter, your
+files or the chat; a link in it asks before it opens in your browser. It lives only in
+the chat: it is not a Page and is not in the Library. For something to keep and
+change later, ask for an app instead.
 
-Use the plus button to **Upload photos or files**, **Attach note**, or
-**Attach conversation**. You can also drop files onto the composer or paste
-a screenshot. Attachments remain drafts until you send the message. Files and
-photos appear in [Library](notes-and-data.md#library) after sending; note and
-conversation references stay attached to the message.
+## Attachments
 
-Attaching a conversation grants read-only access to that session even when
-Conversation history is disabled. Session management lets an agent create or
-message other sessions. Managing an existing session without history or an
-attachment grant asks for your approval. You can end coordination from the
-session controls; answering permission requests remains your responsibility.
+Use the plus button to **Upload photos or files**, or drop files onto the
+composer or paste a screenshot. Attachments stay drafts until you send.
+Files you send to a chat on another machine are copied to that machine.
+Typing a Mac path in a message does not copy that file anywhere.
 
-## Work across sessions in parallel
+## Work across sessions
 
-Run multiple sessions with the same harness or across different harnesses. Use
-panels to view up to five sessions at once, while additional sessions can continue
-running in the background. Open a note beside your conversation to work on it
-with your agent.
+Run many sessions at once, with one harness or several. Show up to five chats
+side by side in panels while others keep running. Open a note beside a chat to
+work on it with your agent. Answer questions and permission requests in the
+conversation; the choices come from the harness.
 
-Read responses and tool activity as the agent works. Answer questions and
-permission requests in the conversation; the available choices come from the harness.
+**Recents** in the sidebar returns you to recent work. Right-click a chat to
+**Rename** it.
 
-## Organize and continue your work
+## Chats on other machines
 
-Use folders to keep related conversations and notes together. **Recents** lets
-you return to work across your harnesses. Woven Matter saves conversation
-transcripts in your library alongside your notes and other items, and each
-paired Mac and Linux host keeps its own copy.
+A chat on another Mac or a Linux machine streams live from that machine while
+it is online. When that machine is offline, the chat shows its saved messages
+and sending is off until it is back. Every finished message is saved in your
+library, so every machine can read the chat.
 
-Reopen a conversation to review the work or continue a supported session.
-Reconnect an unavailable agent before sending another request. Agents in the
-same project can work on its files; each conversation retains its own harness,
-execution workspace, and working directory.
+If a harness no longer has the session behind a chat, the chat says so and
+can be read but not continued; start a new session to go on.
 
-Sessions from the former workspace layout remain readable as archived history.
-Their composer is disabled and they cannot be resumed. Start a new chat to
-continue working; existing project files are preserved.
-
-Local OpenCode settings also offer session imports.
-Available history and import limits depend on the integration. Imported sessions
-retain their original working directory where supplied by the harness.
-
-## Attachments and connections
-
-Use the attachment picker to add files or references. Supported file attachments
-are copied into managed remote workspaces when you send them. Attachment support
-still depends on the harness. Entering a Mac path in message text does not upload
-that file to a remote workspace.
-
-A chat running on another Mac or a Linux host streams live from that machine
-while it is open. When that machine is offline, the chat shows its saved
-history and goes live again when the machine is back.
-
-If a connection drops while sending, review the conversation status before
-retrying. The agent may have accepted the request even if the app did not receive
-a response.
+If the connection drops while you send, check the chat before sending again;
+the agent may have received the message.
 
 Next: [Notes and data](notes-and-data.md) or [Troubleshooting](troubleshooting.md).

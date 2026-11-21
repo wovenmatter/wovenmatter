@@ -34,6 +34,7 @@ fi
 "$tools/bin/sign_update" --ed-key-file "$WOVENMATTER_SPARKLE_PRIVATE_KEY" "$archives/appcast.xml"
 "$tools/bin/sign_update" --verify --ed-key-file "$WOVENMATTER_SPARKLE_PRIVATE_KEY" "$archives/appcast.xml"
 cp "$archives/$asset" "$archives/appcast.xml" "$output/"
+# Writes release-build.json and SHA256SUMS.txt, then checks the exact inventory.
 swift "$repo_root/scripts/verify-update-signatures.swift" "$output"
 python3 "$repo_root/scripts/release-assets.py" prepare "$output" "$version" "$(git -C "$repo_root" rev-parse HEAD)" --build "$build"
 

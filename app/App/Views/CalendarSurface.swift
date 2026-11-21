@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import WovenMatterCore
 
 struct CalendarMonthLayout: Equatable {
     struct Day: Equatable, Identifiable {
@@ -46,27 +45,27 @@ struct CalendarMonthLayout: Equatable {
 
 enum CalendarClipboard {
     static let type = NSPasteboard.PasteboardType("com.wovenmatter.calendar-event")
-    static func copy(_ draft: WorkspaceCalendarDraft) {
+    static func copy(_ draft: CalendarDraft) {
         guard let data = try? JSONEncoder().encode(draft) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setData(data, forType: type)
     }
-    static func read() -> WorkspaceCalendarDraft? {
+    static func read() -> CalendarDraft? {
         guard let data = NSPasteboard.general.data(forType: type), data.count <= 256 * 1_024 else { return nil }
-        return try? JSONDecoder().decode(WorkspaceCalendarDraft.self, from: data)
+        return try? JSONDecoder().decode(CalendarDraft.self, from: data)
     }
 }
 
 struct CalendarSelection: Identifiable {
     let id = UUID()
-    let draft: WorkspaceCalendarDraft
-    var occurrence: WorkspaceCalendarOccurrence?
+    let draft: CalendarDraft
+    var occurrence: CalendarOccurrence?
 }
 
 enum CalendarEntryStyle: CaseIterable {
     case event, task, recurringEvent, recurringTask
 
-    init(_ draft: WorkspaceCalendarDraft) {
+    init(_ draft: CalendarDraft) {
         switch (draft.task != nil, draft.recurrence != nil) {
         case (false, false): self = .event
         case (true, false): self = .task
@@ -106,11 +105,11 @@ struct CalendarSurface: View {
         let start = layout.days.first?.date ?? selectedDate
         return .init(start: start, end: calendar.date(byAdding: .day, value: 42, to: start) ?? start)
     }
-    private var occurrences: [WorkspaceCalendarOccurrence] {
-        WorkspaceCalendarSchedule.visibleOccurrences(events: model.calendarItems, runs: model.calendarRuns, in: visibleRange)
+    private var occurrences: [CalendarOccurrence] {
+        CalendarSchedule.visibleOccurrences(entries: model.calendar.entries, runs: model.calendar.runs, in: visibleRange)
     }
 
-    private func items(on day: Date, from occurrences: [WorkspaceCalendarOccurrence]) -> [WorkspaceCalendarOccurrence] {
+    private func items(on day: Date, from occurrences: [CalendarOccurrence]) -> [CalendarOccurrence] {
         let start = calendar.startOfDay(for: day)
         let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
         return occurrences.filter {
@@ -127,7 +126,7 @@ struct CalendarSurface: View {
                 VStack(spacing: 20) {
                     monthCard(occurrences)
                     selectedDayCard(items(on: selectedDate, from: occurrences))
-                    if let error = model.calendarMutationError {
+                    if let error = model.calendar.mutationError {
                         Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger)
                     }
                     legend
@@ -156,7 +155,7 @@ struct CalendarSurface: View {
         }.padding(.horizontal, 32).padding(.top, 56)
     }
 
-    private func monthCard(_ occurrences: [WorkspaceCalendarOccurrence]) -> some View {
+    private func monthCard(_ occurrences: [CalendarOccurrence]) -> some View {
         RoundedCard {
             VStack(spacing: 14) {
                 HStack(spacing: 8) {
@@ -202,7 +201,7 @@ struct CalendarSurface: View {
         }
     }
 
-    private func dayCell(_ day: CalendarMonthLayout.Day, occurrences: [WorkspaceCalendarOccurrence]) -> some View {
+    private func dayCell(_ day: CalendarMonthLayout.Day, occurrences: [CalendarOccurrence]) -> some View {
         let selected = calendar.isDate(day.date, inSameDayAs: selectedDate)
         let today = calendar.isDateInToday(day.date)
         return VStack(alignment: .leading, spacing: 5) {
@@ -233,7 +232,7 @@ struct CalendarSurface: View {
         }
     }
 
-    private func monthOccurrenceButton(_ occurrence: WorkspaceCalendarOccurrence) -> some View {
+    private func monthOccurrenceButton(_ occurrence: CalendarOccurrence) -> some View {
         let style = CalendarEntryStyle(occurrence.draft)
         let accessibilityLabel: String = occurrence.title + ", " + style.title
         let recurrenceLabel: String = occurrence.recurrence.map { " · " + $0.label } ?? ""
@@ -255,7 +254,7 @@ struct CalendarSurface: View {
         }
     }
 
-    private func selectedDayCard(_ occurrences: [WorkspaceCalendarOccurrence]) -> some View {
+    private func selectedDayCard(_ occurrences: [CalendarOccurrence]) -> some View {
         RoundedCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -280,7 +279,7 @@ struct CalendarSurface: View {
                             if let repeatRule = occurrence.recurrence {
                                 Text(repeatRule.label).font(.system(size: 11)).foregroundStyle(colors.color(for: style))
                             }
-                            if let run = model.calendarRuns.last(where: { $0.eventID == occurrence.event.id && $0.scheduledAt == occurrence.startsAt }) {
+                            if let run = model.calendar.runs.last(where: { $0.entryID == occurrence.entry.id && $0.scheduledAt == occurrence.startsAt }) {
                                 Text(run.statusLabel).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                             }
                             LucideIcon(glyph: .arrowRight, size: 12)
@@ -303,21 +302,21 @@ struct CalendarSurface: View {
         selectedDate = calendar.startOfDay(for: date)
         if !calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month) { displayedMonth = date }
     }
-    private func open(_ occurrence: WorkspaceCalendarOccurrence) {
-        model.clearCalendarMutationError()
+    private func open(_ occurrence: CalendarOccurrence) {
+        model.calendar.clearMutationError()
         selection = .init(draft: occurrence.draft, occurrence: occurrence)
     }
     private func add(on day: Date) {
-        model.clearCalendarMutationError()
+        model.calendar.clearMutationError()
         let start = calendar.isDateInToday(day) ? calendar.dateInterval(of: .hour, for: Date())?.end ?? Date()
             : calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day) ?? day
-        selection = .init(draft: .init(startsAt: start, endsAt: start.addingTimeInterval(3_600)))
+        selection = .init(draft: .init(startsAt: start, endsAt: start.addingTimeInterval(3_600), machineID: model.thisMachineID))
     }
     private func paste(on day: Date) {
         guard let draft = CalendarClipboard.read() else {
-            model.calendarMutationError = "Copy a calendar event first."; return
+            model.calendar.mutationError = "Copy a calendar event first."; return
         }
-        model.clearCalendarMutationError()
+        model.calendar.clearMutationError()
         selection = .init(draft: draft.copied(to: day))
     }
 }
@@ -341,10 +340,10 @@ struct ScheduledTasksSurface: View {
     @State private var selection: CalendarSelection?
 
     private var calendarTasks: Bool { provider == "Calendar Tasks" }
-    private var tasks: [WorkspaceCalendarItemRecord] {
-        model.calendarItems.filter {
-            $0.calendar.task != nil && $0.calendar.showsOnCalendar == calendarTasks
-        }.sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
+    private var tasks: [CalendarEntry] {
+        model.calendar.entries.filter {
+            $0.task != nil && $0.showsOnCalendar == calendarTasks
+        }.sorted { $0.startsAt < $1.startsAt }
     }
 
     var body: some View {
@@ -360,8 +359,6 @@ struct ScheduledTasksSurface: View {
                     Spacer()
                     Button("New task") { newTask() }.buttonStyle(WovenPrimaryButtonStyle())
                 }
-                Text("Local tasks run while Woven Matter is open or background execution is enabled. Remote tasks run on their workspace when its background execution is enabled.")
-                    .font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
             }.padding(.horizontal, 32).padding(.top, 48).padding(.bottom, 20)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
@@ -370,11 +367,7 @@ struct ScheduledTasksSurface: View {
                             .font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                     }
                     ForEach(tasks) { task in taskRow(task) }
-                    ForEach(model.remoteCalendarGatewayErrors.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
-                        Text("\(model.remoteWorkspaces.configuration(id: id)?.name ?? "Remote workspace"): \(model.remoteCalendarGatewayErrors[id] ?? "")")
-                            .font(.system(size: 12)).foregroundStyle(WovenPalette.danger)
-                    }
-                    if let error = model.calendarMutationError { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger) }
+                    if let error = model.calendar.mutationError { Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 32).padding(.bottom, 32)
             }.scrollIndicators(.never)
@@ -399,45 +392,43 @@ struct ScheduledTasksSurface: View {
             selection: $provider) { $0 }.frame(width: 300)
     }
     private func newTask() {
-        model.clearCalendarMutationError()
-        var draft = WorkspaceCalendarDraft(startsAt: Date().addingTimeInterval(3_600),
-            task: model.calendarTaskDefaults(runtime: .codex, workspaceID: nil))
+        model.calendar.clearMutationError()
+        var draft = CalendarDraft(startsAt: Date().addingTimeInterval(3_600),
+            task: model.calendar.taskDefaults(runtime: .codex), machineID: model.thisMachineID)
         draft.showsOnCalendar = calendarTasks
         selection = .init(draft: draft)
     }
-    private func taskRow(_ item: WorkspaceCalendarItemRecord) -> some View {
-        let run = model.calendarRuns.last { $0.eventID == item.id && $0.status != "cancelled" }
+    private func taskRow(_ item: CalendarEntry) -> some View {
+        let run = model.calendar.runs.last { $0.entryID == item.id && $0.status != .cancelled }
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 Button {
-                    model.clearCalendarMutationError()
-                    let occurrence = WorkspaceCalendarOccurrence(event: item, index: 0,
-                        startsAt: item.startDate ?? Date(), endsAt: item.endDate)
-                    selection = .init(draft: WorkspaceCalendarDraft(item), occurrence: occurrence)
+                    model.calendar.clearMutationError()
+                    let occurrence = CalendarOccurrence(entry: item, index: 0,
+                        startsAt: item.startsAt, endsAt: item.endsAt)
+                    selection = .init(draft: CalendarDraft(item), occurrence: occurrence)
                 } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.title).font(.system(size: 14, weight: .semibold))
-                        Text(item.calendar.task?.configuration.runtimeKind.displayName ?? "Agent")
+                        Text(item.task?.configuration.runtimeKind.displayName ?? "Agent")
                             .font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 Button(calendarTasks ? "Remove from calendar" : "Add to calendar") {
-                    var draft = WorkspaceCalendarDraft(item)
+                    var draft = CalendarDraft(item)
                     draft.showsOnCalendar.toggle()
-                    Task { _ = await model.saveCalendarEvent(draft, event: item) }
-                }.buttonStyle(WovenQuietButtonStyle()).disabled(model.isCreatingCalendarItem)
+                    Task { _ = await model.calendar.save(draft, entry: item) }
+                }.buttonStyle(WovenQuietButtonStyle()).disabled(model.calendar.isSaving)
             }
             HStack(spacing: 12) {
-                if let start = item.startDate {
-                    Text(start.formatted(date: .abbreviated, time: .shortened))
-                }
-                if let recurrence = item.calendar.recurrence { Text(recurrence.label) }
+                Text(item.startsAt.formatted(date: .abbreviated, time: .shortened))
+                if let recurrence = item.recurrence { Text(recurrence.label) }
                 if let run { Text(run.statusLabel) }
             }.font(.system(size: 12)).foregroundStyle(WovenPalette.mutedForeground)
-            if let prompt = item.calendar.task?.prompt {
+            if let prompt = item.task?.prompt {
                 Text(prompt).font(.system(size: 13)).lineLimit(2)
             }
-            if let run, model.workspaceOverview?.conversations.contains(where: { $0.id == run.sessionID }) == true {
+            if let run, model.workspace.workspaceOverview?.conversations.contains(where: { $0.id == run.sessionID }) == true {
                 Button("Open session") { onOpenSession(run.sessionID) }
                     .buttonStyle(WovenQuietButtonStyle())
             }

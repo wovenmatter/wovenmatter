@@ -1,31 +1,34 @@
 import SwiftUI
+import WovenProtocol
 import WebKit
-#if os(macOS)
 import AppKit
-import WovenMatterCore
-#else
-import UIKit
-import WovenMatterShared
-#endif
 
-/// Published pages are independent of the work disclosure and load full detail
-/// only when their row is mounted. Theme and zoom updates preserve page state.
+/// Published visual replies are independent of the work disclosure and load
+/// their content only when their row is mounted, by digest through this Mac's
+/// server, which fetches it from another machine when it is not here. Theme
+/// and zoom updates preserve their state.
 struct ConversationHTMLRenderView: View {
-    let activity: AgentRunActivity
-    let runID: String
-    @Environment(\.conversationActivityDetails) private var loadDetails
+    let reference: ConversationHTMLRenderReference
+    @Environment(\.workspaceApplicationModel) private var model
     @Environment(\.wovenTheme) private var theme
-    @State private var page: ConversationHTMLPage?
+    @State private var reply: ConversationVisualReply?
     @State private var failure: String?
-    @State private var height: CGFloat = 400
+    @State private var height: CGFloat
     @State private var expanded = false
     @State private var zoom = 1.0
     @State private var pendingLink: URL?
 
+    private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
+
+    init(reference: ConversationHTMLRenderReference) {
+        self.reference = reference
+        _height = State(initialValue: CGFloat(min(2000, max(80, reference.height))))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Text(activity.htmlRender?.title ?? "Visual reply").lineLimit(1)
+                Text(title).lineLimit(1)
                 Spacer()
                 controls
                 Button { expanded = true } label: {
@@ -33,14 +36,14 @@ struct ConversationHTMLRenderView: View {
                 }
                 .help("Expand visual reply")
                 .accessibilityLabel("Expand visual reply")
-                .disabled(page == nil)
+                .disabled(reply == nil)
             }
             .font(.system(size: 11.5, weight: .medium))
             .foregroundStyle(WovenPalette.mutedForeground)
             .buttonStyle(.plain)
             .padding(.vertical, 8)
-            if let page {
-                web(page).frame(height: min(20_000, max(80, height * zoom)))
+            if let reply {
+                web(reply).frame(height: min(20_000, max(80, height * zoom)))
             } else if let failure {
                 Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
                     .padding(.vertical, 16)
@@ -50,21 +53,21 @@ struct ConversationHTMLRenderView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(WovenPalette.mutedForeground)
                     .frame(maxWidth: .infinity)
-                    .frame(height: CGFloat(min(2000, max(80, activity.htmlRender?.height ?? 160))))
+                    .frame(height: height)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: activity.detailVersion) { await load() }
+        .task(id: reference.digest) { await load() }
         .sheet(isPresented: $expanded) {
             VStack(spacing: 0) {
                 HStack {
-                    Text(activity.htmlRender?.title ?? "Visual reply").font(.headline)
+                    Text(title).font(.headline)
                     Spacer()
                     controls
                     Button("Done") { expanded = false }.keyboardShortcut(.cancelAction)
                 }.padding(16)
                 Divider()
-                if let page { web(page, fitsHeight: false) }
+                if let reply { web(reply, fitsHeight: false) }
             }
             .frame(minWidth: expandedMinimumWidth, minHeight: 440)
             .environment(\.wovenTheme, theme)
@@ -75,21 +78,13 @@ struct ConversationHTMLRenderView: View {
             Button("Cancel", role: .cancel) { pendingLink = nil }
             Button("Open") {
                 pendingLink = nil
-                #if os(macOS)
                 NSWorkspace.shared.open(url)
-                #else
-                UIApplication.shared.open(url)
-                #endif
             }
         } message: { Text($0.absoluteString) }
     }
 
     private var expandedMinimumWidth: CGFloat? {
-        #if os(macOS)
         760
-        #else
-        nil
-        #endif
     }
 
     private var controls: some View {
@@ -103,30 +98,36 @@ struct ConversationHTMLRenderView: View {
         }.buttonStyle(.plain)
     }
 
-    private func web(_ page: ConversationHTMLPage, fitsHeight: Bool = true) -> some View {
-        ConversationHTMLWebView(html: page.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
+    private func web(_ reply: ConversationVisualReply, fitsHeight: Bool = true) -> some View {
+        ConversationHTMLWebView(html: reply.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
             forwardsConversationScroll: fitsHeight,
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
             }, onLink: { pendingLink = $0 }, onFailure: { error in
-                failure = error.localizedDescription; self.page = nil
+                failure = error.localizedDescription; self.reply = nil
             })
     }
 
     @MainActor private func load() async {
-        guard page == nil else { return }
+        guard reply == nil else { return }
+        let unavailable = "This visual reply is unavailable. Reconnect to its workspace and try again."
+        guard let server = model?.server else { failure = unavailable; return }
         do {
-            let full = activity.rawOutputJSON != nil ? activity : try await loadDetails?(runID, activity.id)
-            try Task.checkCancellation()
-            guard let data = full?.rawOutputJSON?.data(using: .utf8) else {
-                failure = "This page is unavailable. Reconnect to its workspace and try again."; return
+            var data = Data()
+            while true {
+                let chunk = try await server.call(FetchContent(digest: reference.digest, offset: Int64(data.count)))
+                data.append(chunk.data)
+                if Int64(data.count) >= chunk.size || chunk.data.isEmpty { break }
             }
-            let saved = try JSONDecoder().decode(ConversationHTMLPage.self, from: data)
-            page = try ConversationHTMLPage(html: saved.html, title: saved.title, height: saved.height)
-            height = CGFloat(saved.height)
+            try Task.checkCancellation()
+            reply = ConversationVisualReply(html: String(decoding: data, as: UTF8.self), title: reference.title,
+                                        height: reference.height)
             failure = nil
-        } catch is CancellationError {} catch { failure = error.localizedDescription }
+        } catch is CancellationError {
+        } catch let error as ProtocolError where error.code == .notFound {
+            failure = unavailable
+        } catch { failure = error.localizedDescription }
     }
 }
 
@@ -162,22 +163,12 @@ enum ConversationHTMLTheme {
         ]]
     }
     private static func hex(_ color: Color) -> String {
-        #if os(macOS)
         let rgb = NSColor(color).usingColorSpace(.sRGB) ?? .black
         return String(format: "#%02x%02x%02x%02x", Int(rgb.redComponent * 255), Int(rgb.greenComponent * 255), Int(rgb.blueComponent * 255), Int(rgb.alphaComponent * 255))
-        #else
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
-        return String(format: "#%02x%02x%02x%02x", Int(r * 255), Int(g * 255), Int(b * 255), Int(a * 255))
-        #endif
     }
 }
 
-#if os(macOS)
 private typealias ConversationHTMLRepresentable = NSViewRepresentable
-#else
-private typealias ConversationHTMLRepresentable = UIViewRepresentable
-#endif
 
 private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let html: String
@@ -189,22 +180,14 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let onFailure: (any Error) -> Void
 
     func makeCoordinator() -> ConversationHTMLWebCoordinator { ConversationHTMLWebCoordinator() }
-    #if os(macOS)
     func makeNSView(context: Context) -> WKWebView {
         context.coordinator.makeWebView(forwardsConversationScroll: forwardsConversationScroll)
     }
     func updateNSView(_ view: WKWebView, context: Context) { update(view, coordinator: context.coordinator) }
     static func dismantleNSView(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) { coordinator.stop(view) }
-    #else
-    func makeUIView(context: Context) -> WKWebView { context.coordinator.makeWebView() }
-    func updateUIView(_ view: WKWebView, context: Context) { update(view, coordinator: context.coordinator) }
-    static func dismantleUIView(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) { coordinator.stop(view) }
-    #endif
 
     private func update(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) {
-        #if os(macOS)
         (view as? ConversationHTMLNativeWebView)?.forwardsConversationScroll = forwardsConversationScroll
-        #endif
         coordinator.onHeight = onHeight; coordinator.onLink = onLink; coordinator.onFailure = onFailure
         coordinator.apply(html: html, theme: theme, to: view)
         if view.pageZoom != zoom { view.pageZoom = zoom }
@@ -226,19 +209,10 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(self, name: "wovenHTML")
-        #if os(macOS)
         let view = ConversationHTMLNativeWebView(frame: .zero, configuration: configuration)
         view.forwardsConversationScroll = forwardsConversationScroll
-        #else
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        #endif
         view.navigationDelegate = self
-        #if os(macOS)
         view.setValue(false, forKey: "drawsBackground")
-        #else
-        view.isOpaque = false; view.backgroundColor = .clear
-        view.scrollView.showsVerticalScrollIndicator = false; view.scrollView.showsHorizontalScrollIndicator = false
-        #endif
         return view
     }
 
@@ -296,13 +270,12 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { onFailure(error) }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { onFailure(error) }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        onFailure(NSError(domain: "WovenHTML", code: 1, userInfo: [NSLocalizedDescriptionKey: "The page stopped. Retry the preview."]))
+        onFailure(NSError(domain: "WovenHTML", code: 1, userInfo: [NSLocalizedDescriptionKey: "The visual reply stopped. Retry the preview."]))
     }
 }
 
-#if os(macOS)
-/// An inline page fits its content, so ordinary vertical scrolling belongs to
-/// the conversation. Expanded pages and modified/horizontal chart gestures
+/// An inline visual reply fits its content, so ordinary vertical scrolling
+/// belongs to the conversation. Expanded ones and modified/horizontal chart gestures
 /// retain WebKit's normal handling; links, selection and magnification do too.
 final class ConversationHTMLNativeWebView: WKWebView {
     var forwardsConversationScroll = false
@@ -368,4 +341,3 @@ struct ConversationHTMLScrollGesture {
         return result
     }
 }
-#endif

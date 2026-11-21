@@ -1,13 +1,17 @@
-import { realpathSync } from 'node:fs';
+// The Woven MCP's browser tool for one action on one embedded CEF page. The
+// app runs this with the bundled Node and relays CDP between it and the page
+// over stdio; CEF never opens a debugging port. Playwright connects to a
+// private loopback WebSocket that exposes only that page.
+//
+// stdin: one line {target: {id, url, title}, version, input}, then
+// {native: <CDP message from the page>} lines.
+// stdout: {cdp: <CDP message for the page>} lines, then {result} or {error}.
 import { chromium } from 'playwright-core';
 import { WebSocketServer } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
 
-// One authorized CEF page, one invocation, one private connection. CEF never
-// opens a debugging port. Native CDP traffic stays on the app-owned stdio pipe.
-export async function createCEFBridge({ target, version, sendNative, receiveNative }) {
+async function createCEFBridge({ target, version, sendNative, receiveNative }) {
   const token = randomUUID(), sessionId = 'woven-page';
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: 4 * 1024 * 1024 });
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -23,7 +27,7 @@ export async function createCEFBridge({ target, version, sendNative, receiveNati
       if (!call) return;
       calls.delete(message.id);
       if (call.resolve) { if (message.error) call.reject(new Error(message.error.message)); else call.resolve(message.result); return; }
-      if (!peer || peer.readyState !== 1) return;
+      if (peer?.readyState !== 1) return;
       peer.send(JSON.stringify({ ...message, id: call.id, ...(call.sessionId ? { sessionId: call.sessionId } : {}) }));
     } else if (peer?.readyState === 1) peer.send(JSON.stringify({ ...message, sessionId: message.sessionId ?? sessionId }));
   });
@@ -43,9 +47,9 @@ export async function createCEFBridge({ target, version, sendNative, receiveNati
           if (params.autoAttach) socket.send(JSON.stringify({ method: 'Target.attachedToTarget', params: { sessionId, targetInfo: info, waitingForDebugger: false } }));
           return reply({});
         }
-        // Native CEF owns download destinations and completion, not Playwright.
+        // The app owns download destinations and completion, not Playwright.
         if (method === 'Browser.setDownloadBehavior') return reply({});
-        return socket.send(JSON.stringify({ id, error: { code: -32601, message: 'This connection controls one embedded page. Use Woven Matter tab tools.' } }));
+        return socket.send(JSON.stringify({ id, error: { code: -32601, message: 'This connection controls one embedded page.' } }));
       }
       const nativeId = ++nextId;
       if (params.worldName?.startsWith('__playwright_utility_world_')) {
@@ -65,7 +69,7 @@ export async function createCEFBridge({ target, version, sendNative, receiveNati
   };
 }
 
-export async function browserAction(page, input, command, waitDownload) {
+async function browserAction(page, input, waitDownload) {
   page.setDefaultTimeout(15000);
   page.setDefaultNavigationTimeout(20000);
   let scope = page;
@@ -124,33 +128,29 @@ export async function browserAction(page, input, command, waitDownload) {
       const waiting = waitDownload();
       waiting.catch(() => {}); // The click can fail before the wait completes.
       await selector().click();
-      const receipt = await waiting;
-      if (receipt.status !== 'complete') throw new Error('Download was cancelled or exceeded 64 MiB.');
-      return { content: [{ type: 'text', text: JSON.stringify(receipt) }] };
-    }
-    case 'dialog': {
-      await command('Page.handleJavaScriptDialog', { accept: input.accept ?? true, promptText: input.text });
-      break;
+      const download = await waiting;
+      if (download.status !== 'complete') throw new Error('Download was cancelled or exceeded 64 MiB.');
+      return { content: [{ type: 'text', text: JSON.stringify(download) }] };
     }
     default: throw new Error('Unknown browser action.');
   }
   return { content: [{ type: 'text', text: JSON.stringify({ url: page.url(), title: await page.title() }) }] };
 }
 
-async function main() {
-  const lines = createInterface({ input: process.stdin });
-  const inputClosed = new Promise(resolve => lines.once('close', resolve));
-  const listeners = new Set();
-  const first = await new Promise(resolve => lines.once('line', line => resolve(JSON.parse(line))));
-  lines.on('line', line => { try { const packet = JSON.parse(line); if (packet.native) for (const listener of listeners) listener(packet.native); } catch {} });
-  const bridge = await createCEFBridge({ ...first, sendNative: cdp => process.stdout.write(JSON.stringify({ cdp }) + '\n'), receiveNative: listener => { listeners.add(listener); return () => listeners.delete(listener); } });
-  let browser;
-  try {
-    if (first.input.action === 'dialog') {
-      await bridge.command('Page.handleJavaScriptDialog', { accept: first.input.accept ?? true, promptText: first.input.text });
-      process.stdout.write(JSON.stringify({ result: { content: [{ type: 'text', text: 'Browser dialog handled.' }] } }) + '\n');
-      return;
-    }
+const write = packet => process.stdout.write(JSON.stringify(packet) + '\n');
+const lines = createInterface({ input: process.stdin });
+const inputClosed = new Promise(resolve => lines.once('close', resolve));
+const listeners = new Set();
+const first = await new Promise(resolve => lines.once('line', line => resolve(JSON.parse(line))));
+lines.on('line', line => { try { const packet = JSON.parse(line); if (packet.native) for (const listener of listeners) listener(packet.native); } catch {} });
+const bridge = await createCEFBridge({ ...first, sendNative: cdp => write({ cdp }), receiveNative: listener => { listeners.add(listener); return () => listeners.delete(listener); } });
+let browser;
+try {
+  if (first.input.action === 'dialog') {
+    // An open JavaScript dialog blocks the page, so answer it without Playwright.
+    await bridge.command('Page.handleJavaScriptDialog', { accept: first.input.accept ?? true, promptText: first.input.text });
+    write({ result: { content: [{ type: 'text', text: 'Browser dialog handled.' }] } });
+  } else {
     // Chromium identifies the main frame by its native target ID. A UI tab UUID
     // cannot substitute for this: Playwright would lose the utility context.
     const { frameTree } = await bridge.command('Page.getFrameTree', {});
@@ -158,8 +158,8 @@ async function main() {
     browser = await chromium.connectOverCDP(bridge.endpoint, { noDefaults: true, timeout: 15000 });
     const page = browser.contexts()[0]?.pages()[0];
     if (!page) throw new Error('The embedded page is unavailable.');
-    // Playwright normally dismisses dialogs. Explicit accept handles a site's
-    // confirmation/prompt in the triggering action without desktop permissions.
+    // Playwright normally dismisses dialogs. `accept` answers a site's
+    // confirmation or prompt raised by this same action.
     page.on('dialog', dialog => {
       (first.input.accept ? dialog.accept(first.input.text) : dialog.dismiss()).catch(() => {});
     });
@@ -171,17 +171,14 @@ async function main() {
       const timer = setTimeout(() => { listeners.delete(listener); reject(new Error('Download timed out.')); }, 20000);
       listeners.add(listener);
     });
-    const result = await browserAction(page, first.input, bridge.command, waitDownload);
-    process.stdout.write(JSON.stringify({ result }) + '\n');
-  } catch (error) {
-    process.stdout.write(JSON.stringify({ error: String(error.message).slice(0, 2000) }) + '\n');
-  } finally {
-    // CEF may emit more events after the result is written but before the
-    // host consumes it. The host detaches the observer and closes stdin when
-    // it handles that result; keep the pipe alive until that acknowledgement.
-    await inputClosed;
-    await browser?.close().catch(() => {});
-    await bridge.close(); lines.close();
+    write({ result: await browserAction(page, first.input, waitDownload) });
   }
+} catch (error) {
+  write({ error: String(error?.message ?? error).slice(0, 2000) });
+} finally {
+  // CEF may send more events after the result and before the app reads it.
+  // The app detaches the page and closes stdin once it has the result.
+  await inputClosed;
+  await browser?.close().catch(() => {});
+  await bridge.close(); lines.close();
 }
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(() => { process.exitCode = 1; });

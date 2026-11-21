@@ -1,11 +1,11 @@
 import SwiftUI
-import WovenMatterCore
+import WovenProtocol
 
 struct LibrarySurface: View {
     @Environment(\.wovenTheme) private var theme
     @Environment(\.openDocumentPreview) private var openPreview
-    @Bindable var library: LibraryModel
-    let configuredWorkspaces: [(id: String, name: String)]
+    @Bindable var library: LibraryItemsStore
+    let machines: [Machine]
     let onOpenMessage: (WorkspaceLibraryItem) -> Void
     @State private var collection = "Messages"
     @State private var selection = LibraryQuery()
@@ -16,10 +16,10 @@ struct LibrarySurface: View {
         return value
     }
     private var workspaces: [(String, String)] {
-        var values = ["local": "Local workspace"]
-        for workspace in configuredWorkspaces { values[workspace.id] = workspace.name }
-        for facet in library.facets where values[facet.workspaceID] == nil {
-            values[facet.workspaceID] = facet.workspaceName
+        var values: [String: String] = [:]
+        for machine in machines { values[machine.id] = machine.name }
+        for facet in library.facets where values[facet.machineID] == nil {
+            values[facet.machineID] = facet.machineName
         }
         return values.sorted { $0.value.localizedStandardCompare($1.value) == .orderedAscending }
     }
@@ -28,9 +28,9 @@ struct LibrarySurface: View {
         return names.sorted().map { ($0, AgentRuntimeKind(rawValue: $0)?.displayName ?? $0) }
     }
     private var agents: [(String, String)] {
-        let available = library.facets.filter { selection.workspaces?.contains($0.workspaceID) ?? true }
+        let available = library.facets.filter { selection.machines?.contains($0.machineID) ?? true }
         return Dictionary(
-            available.map { ($0.agentID, "\($0.agentName) · \($0.workspaceName)") },
+            available.map { ($0.agentID, "\($0.agentName) · \($0.machineName)") },
             uniquingKeysWith: { first, _ in first }
         )
         .sorted { $0.value.localizedStandardCompare($1.value) == .orderedAscending }
@@ -65,7 +65,7 @@ struct LibrarySurface: View {
                             ForEach(library.items) { item in
                                 LibraryRow(
                                     item: item, onOpen: { if let openPreview { library.open(item, onOpenFile: openPreview) } },
-                                    onSource: { onOpenMessage(item) }, onRetry: { library.retry(item) })
+                                    onSource: { onOpenMessage(item) })
                             }
                             if library.hasMore {
                                 Button("Load more") { Task { await library.load(query: query, more: true) } }
@@ -79,17 +79,12 @@ struct LibrarySurface: View {
             }
         }
         .background(theme.palette.workspace)
-        .task(id: LoadRequest(query: query, revision: library.revision)) {
+        .task(id: query) {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             await library.load(query: query, preserveCount: true)
         }
     }
-    private struct LoadRequest: Equatable {
-        let query: LibraryQuery
-        let revision: Int64
-    }
-
     private var itemCount: String {
         let noun = library.items.count == 1 && !library.hasMore ? "item" : "items"
         return "\(library.items.count)\(library.hasMore ? "+" : "") \(noun)"
@@ -119,7 +114,7 @@ struct LibrarySurface: View {
                 WovenSearchField(text: $selection.search, prompt: "Search Library")
                 ScrollView(.horizontal) {
                     HStack(spacing: 16) {
-                        multipleFilter("Workspaces", options: workspaces, selected: $selection.workspaces)
+                        multipleFilter("Workspaces", options: workspaces, selected: $selection.machines)
                         multipleFilter("Agent types", options: harnesses, selected: $selection.harnesses)
                         multipleFilter("Agents", options: agents, selected: $selection.agents)
                         Menu {
@@ -198,7 +193,6 @@ private struct LibraryRow: View {
     let item: WorkspaceLibraryItem
     let onOpen: () -> Void
     let onSource: () -> Void
-    let onRetry: () -> Void
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 14) {
@@ -228,12 +222,10 @@ private struct LibraryRow: View {
                         .leading)
                 }
                 .buttonStyle(.plain).disabled(!item.canOpen).help(item.source)
-                Text("\(item.sender.title) · \(item.agentName) · \(item.workspaceName)")
+                Text("\(item.sender.title) · \(item.agentName) · \(item.machineName)")
                     .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground).lineLimit(2)
-                if let date = item.sentDate {
-                    Text(date.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 11)).foregroundStyle(
-                        WovenPalette.mutedForeground)
-                }
+                Text(item.sentAt.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 11)).foregroundStyle(
+                    WovenPalette.mutedForeground)
                 if let error = item.error {
                     Text(error).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground).lineLimit(2)
                         .help(error)
@@ -245,9 +237,6 @@ private struct LibraryRow: View {
     }
     private var actions: some View {
         HStack(spacing: 8) {
-            if item.storage == .unavailable {
-                Button("Retry", action: onRetry).buttonStyle(WovenQuietButtonStyle())
-            }
             Button("Open", action: onOpen).buttonStyle(WovenQuietButtonStyle()).disabled(!item.canOpen)
             Button("Show in conversation", action: onSource).buttonStyle(WovenQuietButtonStyle())
         }.fixedSize()
@@ -266,15 +255,13 @@ struct LibrarySourceSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }
             }
-            Text(item.sentDate?.formatted(date: .abbreviated, time: .shortened) ?? item.sentAt).font(.caption)
+            Text(item.sentAt.formatted(date: .abbreviated, time: .shortened)).font(.caption)
             ScrollView { Text(content).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 .scrollIndicators(.never)
         }.padding(24).frame(width: 640, height: 460)
             .task {
                 do {
-                    content =
-                        try await model.libraryStore?.database.librarySourceMessage(id: item.id)
-                        ?? "The workspace is unavailable."
+                    content = try await model.library.sourceMessage(id: item.id)
                 } catch { content = error.localizedDescription }
             }
     }

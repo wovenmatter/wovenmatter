@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import WovenMatterCore
+import WovenProtocol
 
 struct DesktopNotePane: View {
     @Environment(\.wovenTheme) private var theme
@@ -29,23 +29,24 @@ struct DesktopNotePane: View {
     @State private var isRefreshingLinkedData = false
     @State private var activeLinkedDataRefreshID: UUID?
 
-    private var draft: NoteDraft {
-        model.noteDraft(for: note)
+    /// The document JSON as the server holds it, with this Mac's edits applied.
+    private var content: String {
+        model.documents.content(of: note)
     }
 
     private var title: Binding<String> {
         Binding(
-            get: { model.noteDraft(for: note).title },
-            set: { model.updateNoteDraft(note: note, title: $0) }
+            get: { model.documents.title(of: note) },
+            set: { model.documents.updateNote(id: note.id, title: $0) }
         )
     }
 
     private var document: Binding<NoteDocument> {
         Binding(
-            get: { documentCache.value(noteID: note.id, source: model.noteDraft(for: note).content) },
+            get: { documentCache.value(noteID: note.id, source: content) },
             set: { updated in
-                guard !model.noteEditingSuspended, documentIsEditable, let content = try? documentCache.encode(updated, noteID: note.id) else { return }
-                model.updateNoteDraft(note: note, content: content)
+                guard documentIsEditable, let content = try? documentCache.encode(updated, noteID: note.id) else { return }
+                model.documents.updateNote(id: note.id, content: content)
             }
         )
     }
@@ -133,7 +134,7 @@ struct DesktopNotePane: View {
     }
 
     private var documentIsEditable: Bool {
-        documentCache.isEditable(noteID: note.id, source: draft.content)
+        documentCache.isEditable(noteID: note.id, source: content)
     }
 
     private var currentDocument: NoteDocument {
@@ -161,7 +162,7 @@ struct DesktopNotePane: View {
     private var linkedDataStatus: String {
         var seen = Set<String>()
         return databaseLinks.compactMap { link -> String? in
-            guard let database = model.databasesSnapshot.database(
+            guard let database = model.databases.snapshot.database(
                 sourceID: link.sourceID, databaseID: link.databaseID
             ), seen.insert(database.id).inserted else { return nil }
             return "\(database.name): \(DatabaseFreshness.description(database))"
@@ -209,7 +210,7 @@ struct DesktopNotePane: View {
                 }.buttonStyle(WovenIconButtonStyle()).help("Version history").accessibilityLabel("Version history")
                 DatabaseLinkControl(
                     document: document,
-                    snapshot: model.databasesSnapshot
+                    snapshot: model.databases.snapshot
                 )
                 if hasDatabaseLinks {
                     Button {
@@ -288,7 +289,7 @@ struct DesktopNotePane: View {
                                 .font(.callout)
                                 .foregroundStyle(WovenPalette.mutedForeground)
                             ScrollView {
-                                Text(draft.content)
+                                Text(content)
                                     .font(.system(.body, design: .monospaced))
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -313,13 +314,10 @@ struct DesktopNotePane: View {
                             AppBuildPrompt()
                         case .html:
                             PersistentArtifactView(document: document, linkedDataJSON: linkedDataJSON,
-                                savedState: (try? NoteDocument.editableDocument(from: note.content))?.artifactState ?? [:],
-                                currentState: {
-                                    guard let asset = model.workspaceOverview?.notes.first(where: { $0.id == note.id }) else { return [:] }
-                                    return (try? NoteDocument.editableDocument(from: asset.content))?.artifactState ?? [:]
-                                },
-                                saveState: { model.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) },
-                                reportUnsaved: { model.setArtifactInputsUnsaved(generation: $0, $1) })
+                                savedState: model.documents.appState(noteID: note.id),
+                                currentState: { model.documents.appState(noteID: note.id) },
+                                saveState: { model.documents.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) },
+                                reportUnsaved: { model.documents.setArtifactInputsUnsaved(generation: $0, $1) })
                             .accessibilityLabel("App")
                         }
                     }
@@ -329,7 +327,7 @@ struct DesktopNotePane: View {
                     Text(linkedDataStatus)
                         .font(.system(size: 11))
                         .foregroundStyle(databaseLinks.contains { link in
-                            model.databasesSnapshot.database(
+                            model.databases.snapshot.database(
                                 sourceID: link.sourceID, databaseID: link.databaseID
                             )?.offline == true
                         } ? WovenPalette.warning : WovenPalette.mutedForeground)
@@ -346,37 +344,6 @@ struct DesktopNotePane: View {
                     .foregroundStyle(WovenPalette.warning)
                 }
 
-                if let notice = draft.reconciliationNotice {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(notice)
-                        Spacer(minLength: 4)
-                        Button("Dismiss") { model.dismissNoteReconciliationNotice(noteID: note.id) }
-                            .buttonStyle(.plain).underline()
-                    }
-                    .font(.system(size: 12)).foregroundStyle(WovenPalette.warning)
-                    .padding(.horizontal, currentDocument.kind == .canvas ? 24 : 0)
-                }
-                switch draft.saveState {
-                case .failed(let message):
-                    HStack(spacing: 6) {
-                        LucideIcon(glyph: .alertCircle, size: 12)
-                        Text(message)
-                            .lineLimit(2)
-                        Button("Retry") { model.retryNoteDraft(note: note) }
-                            .buttonStyle(.plain)
-                            .underline()
-                        Button("Save a copy") {
-                            Task { await model.preserveCurrentNoteDraftAsCopy(noteID: note.id) }
-                        }
-                        .buttonStyle(.plain)
-                        .underline()
-                        .help("Keep your writing in a new note and retain the Mac's current version.")
-                    }
-                    .font(.system(size: 11))
-                    .foregroundStyle(WovenPalette.danger)
-                case .saved, .saving:
-                    EmptyView()
-                }
             }
             .frame(
                 maxWidth: currentDocument.kind == .note ? 768 : .infinity,
@@ -409,19 +376,18 @@ struct DesktopNotePane: View {
                 .padding(.horizontal, 12)
             }
         }
-        .disabled(model.noteActionIDs.contains(note.id))
+        .disabled(model.workspace.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
-        .disabled(model.noteEditingSuspended)
-        .allowsHitTesting(!model.noteEditingSuspended)
-        .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
+        .sheet(isPresented: $showsVersionHistory) { NoteVersionHistory(model: model, noteID: note.id) }
+        .debugRequest("history") { showsVersionHistory = true }
         .onAppear {
-            model.prepareNoteDraft(note)
+            model.documents.open(note)
             if focusesTitleOnAppear {
                 titleFocused = true
                 onInitialFocusHandled()
             }
         }
-        .onChange(of: note) { _, updated in model.prepareNoteDraft(updated) }
+        .onChange(of: note) { _, updated in model.documents.open(updated) }
         .onChange(of: note.id) { _, _ in
             sheetHistory = SheetUndoHistory(); artifactHistory = ArtifactCodeHistory(); sheetDictation.unbind()
         }
@@ -429,13 +395,7 @@ struct DesktopNotePane: View {
         .onChange(of: artifactCode) { old, new in
             if let old, let new { artifactHistory.observe(old: old, new: new) }
         }
-        .onChange(of: draft.conflictComponentRemaps) { _, remaps in
-            if let id = activePageEditor?.selectedBlockID, let copyID = remaps[id] {
-                canvasViewState.selected = [copyID]
-                canvasViewState.revealCardID = copyID
-            }
-        }
-        .onChange(of: model.databasesSnapshot) { _, _ in
+        .onChange(of: model.databases.snapshot) { _, _ in
             guard hasDatabaseLinks else { return }
             Task { await refreshLinkedData() }
         }
@@ -449,7 +409,7 @@ struct DesktopNotePane: View {
             }
             await refreshLinkedData()
         }
-        .onDisappear { sheetDictation.unbind(); Task { _ = await model.flushNoteDrafts() } }
+        .onDisappear { sheetDictation.unbind() }
     }
 
     private func refreshLinkedData() async {
@@ -469,7 +429,7 @@ struct DesktopNotePane: View {
             switch snapshot.kind {
             case .html:
                 if let link = snapshot.databaseLink {
-                    let data = try await model.linkedData(for: link)
+                    let data = try await model.documents.linkedData(for: link)
                     guard !Task.isCancelled,
                           activeLinkedDataRefreshID == refreshID,
                           currentDocument.kind == .html,
@@ -482,7 +442,7 @@ struct DesktopNotePane: View {
                         guard case .table(let table) = block else { return nil }
                         return table
                     }.first
-                    let data = try await model.linkedData(for: link)
+                    let data = try await model.documents.linkedData(for: link)
                     guard !Task.isCancelled,
                           activeLinkedDataRefreshID == refreshID else { return }
                     var latest = currentDocument
@@ -503,7 +463,7 @@ struct DesktopNotePane: View {
                 for block in snapshot.blocks {
                     guard case .table(let table) = block,
                           let link = table.databaseLink ?? snapshot.databaseLink else { continue }
-                    let data = try await model.linkedData(for: link)
+                    let data = try await model.documents.linkedData(for: link)
                     guard !Task.isCancelled,
                           activeLinkedDataRefreshID == refreshID else { return }
                     loaded.append((table, data))
@@ -530,7 +490,7 @@ struct DesktopNotePane: View {
                         if let cached = scalarQueries[key] {
                             data = cached
                         } else {
-                            data = try await model.linkedData(for: link)
+                            data = try await model.documents.linkedData(for: link)
                             scalarQueries[key] = data
                         }
                         guard !Task.isCancelled, activeLinkedDataRefreshID == refreshID else { return }

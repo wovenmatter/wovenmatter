@@ -1,14 +1,12 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
+import { chmod, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationView, ConversationWatch, LiveState } from "@earendil-works/pi-durable";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type { BotManager, ModelStatus } from "./bots.ts";
 import { NotFoundError } from "./bots.ts";
-import { isLoopbackHost } from "./config.ts";
 import type { Forum } from "./forum.ts";
-import { CAPABILITIES, PROTOCOL } from "./identity.ts";
+import type { HostChannel } from "./host/channel.ts";
 import { entryId as toEntryId } from "./ids.ts";
 import { editFacts, type MemoryEdit } from "./memory.ts";
 import { describeProfile, type ProfileStore } from "./profiles.ts";
@@ -16,9 +14,12 @@ import {
   type BotSummary,
   type ConversationSnapshot,
   type ForumPost,
+  type HostReply,
   type OnboardingStatus,
   type ProfilesList,
+  type Replies,
   type Request,
+  type RequestType,
   requestSchema,
   type ServerMessage,
   type StreamEvent,
@@ -29,8 +30,6 @@ import type { SettingsService } from "./settings/service.ts";
 import type { BotRecord, ThreadRecord } from "./storage/registry.ts";
 import { ACCOUNT_NOTES } from "./tools.ts";
 import { assistantText, type DisplayEntry, displayEntry } from "./transcript.ts";
-import { VERSION } from "./version.ts";
-import type { WovenMCP } from "./woven-mcp.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const HISTORY_LIMIT = 200;
@@ -38,19 +37,17 @@ const HISTORY_LIMIT = 200;
 export type BotServerOptions = {
   /** Where bots' tools run: `none`, `linux-dockerd` or `mac-vm`. */
   readonly environment?: string;
-  /** Clients present `Authorization: Bearer <token>` (the config's `runtimeToken`). */
-  readonly token: string;
+  /** The Unix socket to listen on; its directory keeps others out. */
+  readonly socket: string;
+  /** The host interface, carried on the server's connection. */
+  readonly host: HostChannel;
   readonly operations?: RuntimeOperations;
   /** A client used a bot (opened its chat, sent a message): restart its idle clock. */
   readonly onActivity?: (botId: string) => void;
   readonly manager: BotManager;
-  readonly host: string;
-  /** 0 picks a free port (tests). */
-  readonly port: number;
   readonly log?: (message: string) => void;
   /** Settings backend; without it the settings requests fail. */
   readonly settings?: SettingsService;
-  readonly woven?: WovenMCP;
   /** The Forum; without it the `forum.*` requests fail. */
   readonly forum?: Forum;
   /** What bots call the user ("" for none); without it the `user.*` requests fail. */
@@ -58,8 +55,7 @@ export type BotServerOptions = {
 };
 
 export type BotServer = {
-  readonly url: string;
-  readonly port: number;
+  readonly socket: string;
   /** Tell every client the bot list changed. */
   botsChanged(): void;
   groupsChanged(): void;
@@ -125,38 +121,6 @@ const thread = (record: ThreadRecord): ThreadSummary => ({
   ...(record.pinned ? { pinned: true as const } : {}),
 });
 
-/** The runtime is reached only through the machine's Woven server, on loopback. */
-export function isLocalHostname(hostname: string): boolean {
-  return isLoopbackHost(hostname.replace(/^\[|\]$/g, "").toLowerCase());
-}
-
-/** Constant-time bearer check. */
-export function hasBearer(request: IncomingMessage, token: string): boolean {
-  const header = request.headers.authorization;
-  if (typeof header !== "string" || !header.startsWith("Bearer ")) return false;
-  const digest = (value: string) => createHash("sha256").update(value).digest();
-  return timingSafeEqual(digest(header.slice(7)), digest(token));
-}
-
-function hostnameOf(value: string | undefined, scheme = "http://"): string | undefined {
-  if (!value) return undefined;
-  try {
-    return new URL(value.includes("://") ? value : `${scheme}${value}`).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Reject cross-site and DNS-rebinding upgrades: Host and Origin must both be local. */
-export function isTrustedUpgrade(request: IncomingMessage): boolean {
-  const host = hostnameOf(request.headers.host);
-  if (!host || !isLocalHostname(host)) return false;
-  const origin = request.headers.origin;
-  if (origin === undefined) return true; // Non-browser clients (CLI, tests).
-  const originHost = hostnameOf(origin);
-  return originHost !== undefined && isLocalHostname(originHost);
-}
-
 /** Translate conversation revisions into the existing client protocol. */
 export function streamEvents(
   previous: Pick<ConversationView, "entries" | "docs">,
@@ -199,20 +163,27 @@ export function streamEvents(
   return out;
 }
 
+type SubscriptionId = string | number;
+
+/**
+ * One server connection. The server multiplexes its clients onto it, so a conversation or Forum
+ * room may be open for several subscriptions at once: it stays open until the last one closes.
+ */
 class Connection {
   readonly #socket: WebSocket;
   readonly #server: Server;
-  readonly #subscriptions = new Map<string, ConversationWatch>();
-  readonly #subscriptionIds = new Map<string, string | number>();
-  /** Forum rooms this client has open, with the request that opened each. */
-  readonly #forumRooms = new Map<number, string | number>();
+  /** `<botId>:<conversationId>` → its watch and the subscriptions that have it open. */
+  readonly #subscriptions = new Map<string, { stream: ConversationWatch; ids: Set<SubscriptionId> }>();
+  /** Forum rooms this connection has open, with the subscriptions that opened each. */
+  readonly #forumRooms = new Map<number, Set<SubscriptionId>>();
+  readonly #detachHost: () => void;
 
   constructor(socket: WebSocket, server: Server) {
     this.#socket = socket;
     this.#server = server;
     socket.on("message", (data, isBinary) => void this.#onMessage(data, isBinary));
     socket.on("close", () => void this.dispose());
-    this.send({ type: "hello", version: VERSION, ...server.identity });
+    this.#detachHost = server.host.attach((request) => this.send(request));
   }
 
   send(message: ServerMessage): void {
@@ -220,12 +191,12 @@ class Connection {
   }
 
   async dispose(): Promise<void> {
+    this.#detachHost();
     const streams = [...this.#subscriptions.values()];
     this.#subscriptions.clear();
-    this.#subscriptionIds.clear();
     this.#forumRooms.clear();
     this.#server.connections.delete(this);
-    await Promise.all(streams.map((stream) => stream.stop().catch(() => {})));
+    await Promise.all(streams.map(({ stream }) => stream.stop().catch(() => {})));
   }
 
   /** Whether this connection has one of the bot's conversations open. */
@@ -240,10 +211,9 @@ class Connection {
   }
 
   async unsubscribeBot(botId: string): Promise<void> {
-    for (const [key, stream] of this.#subscriptions) {
+    for (const [key, { stream }] of this.#subscriptions) {
       if (!key.startsWith(`${botId}:`)) continue;
       this.#subscriptions.delete(key);
-      this.#subscriptionIds.delete(key);
       await stream.stop().catch(() => {});
     }
   }
@@ -253,6 +223,10 @@ class Connection {
     try {
       if (isBinary) throw new Error("binary frames are not supported");
       const json: unknown = JSON.parse(data.toString());
+      if (isHostReply(json)) {
+        this.#server.host.deliver(json);
+        return;
+      }
       if (json && typeof json === "object" && "id" in json) {
         const candidate = (json as { id: unknown }).id;
         if (typeof candidate === "string" || typeof candidate === "number") id = candidate;
@@ -296,7 +270,7 @@ class Connection {
     return forum;
   }
 
-  async #handle(request: Request, afterReply: (() => void)[]): Promise<unknown> {
+  async #handle(request: Request, afterReply: (() => void)[]): Promise<Replies[RequestType]> {
     const manager = this.#server.manager;
     const bot = (record: BotRecord) =>
       botSummary(record, manager.profiles, manager.modelStatus(record.id));
@@ -326,8 +300,6 @@ class Connection {
         return { groups: await manager.reorderGroups(request.groupIds) };
       case "bots.setGroup":
         return { bot: bot(await manager.setGroup(request.botId, request.groupId)) };
-      case "woven.status":
-        return this.#server.woven?.status() ?? { state: "disconnected", toolCount: 0 };
 
       case "bots.list":
         return { bots: (await manager.list()).map(bot) };
@@ -435,7 +407,7 @@ class Connection {
         };
       case "memory.list":
         await manager.record(request.botId);
-        return { facts: (await manager.registry.memory(request.botId)).facts };
+        return { facts: [...(await manager.registry.memory(request.botId)).facts] };
       case "memory.add":
       case "memory.update":
       case "memory.delete": {
@@ -451,7 +423,7 @@ class Connection {
           checkpoint: memory.checkpoint,
         }));
         this.#server.memoryChanged(request.botId);
-        return { facts: saved.facts };
+        return { facts: [...saved.facts] };
       }
       case "account.notes": {
         const note = await manager.registry.note(ACCOUNT_NOTES);
@@ -476,10 +448,6 @@ class Connection {
       case "bots.stop":
         await this.#operations().stop(request.botId);
         return { stopped: true };
-      case "previews.list":
-        return { previews: this.#server.previews(request.botId) };
-      case "previews.stop":
-        return { stopped: await this.#server.stopPreview(request.botId, request.port) };
       case "runtime.update": {
         const operations = this.#operations();
         // The update runs past this reply; progress arrives as `runtime.update` pushes.
@@ -497,18 +465,15 @@ class Connection {
       case "runtime.status": {
         const image = await this.#operations().imageStatus();
         return {
-          version: VERSION,
-          environment: this.#server.identity.environment,
+          environment: this.#server.environment,
           bots: (await manager.list()).length,
-          // The tools every bot container gets, the bots an update moves to a new base image, and
-          // the bots an update changes at all.
           ...(image
             ? {
                 image: {
                   tag: image.tag,
                   ...image.tools,
                   staleBots: image.staleBots.length,
-                  outdatedBots: (image.outdatedBots ?? image.staleBots).length,
+                  outdatedBots: image.outdatedBots.length,
                 },
               }
             : {}),
@@ -529,6 +494,12 @@ class Connection {
         this.#server.threadsChanged(request.botId);
         return { thread: thread(record) };
       }
+      case "thread.setTitle": {
+        await manager.get(request.botId);
+        const record = await manager.registry.setThreadTitle(request.botId, request.conversationId, request.title);
+        this.#server.threadsChanged(request.botId);
+        return { thread: thread(record) };
+      }
       case "thread.setPinned": {
         await manager.get(request.botId);
         const record = await manager.registry.setThreadPinned(
@@ -538,6 +509,12 @@ class Connection {
         );
         this.#server.threadsChanged(request.botId);
         return { thread: thread(record) };
+      }
+      case "thread.delete": {
+        const target = await manager.get(request.botId);
+        await target.deleteThread(request.conversationId);
+        this.#server.threadsChanged(request.botId);
+        return { deleted: true };
       }
       case "message.send": {
         const target = await manager.get(request.botId);
@@ -553,6 +530,7 @@ class Connection {
             started?.conversationId ?? request.conversationId,
             0,
             request.context,
+            request.from ? { from: request.from } : {},
           );
           return { conversationId: conversation.id, submissionId: submission.id };
         };
@@ -565,16 +543,15 @@ class Connection {
       }
       case "conversation.close": {
         const key = `${request.botId}:${request.conversationId}`;
-        if (
-          request.subscriptionId !== undefined &&
-          this.#subscriptionIds.get(key) !== request.subscriptionId
-        )
-          return { closed: false };
-        const stream = this.#subscriptions.get(key);
+        const open = this.#subscriptions.get(key);
+        if (!open) return { closed: false };
+        if (request.subscriptionId !== undefined) {
+          if (!open.ids.delete(request.subscriptionId)) return { closed: false };
+          if (open.ids.size) return { closed: true };
+        }
         this.#subscriptions.delete(key);
-        this.#subscriptionIds.delete(key);
-        await stream?.stop();
-        return { closed: stream !== undefined };
+        await open.stream.stop();
+        return { closed: true };
       }
       case "conversation.open":
         return this.#open(request.botId, request.conversationId, afterReply, request.id);
@@ -586,25 +563,27 @@ class Connection {
         const roomId = request.roomId ?? (await forum.store.mainRoom()).id;
         // Subscribed before the snapshot is read: a post made meanwhile arrives as a push, and
         // clients merge posts by id.
-        const prior = this.#forumRooms.get(roomId);
-        this.#forumRooms.set(roomId, request.id);
+        const ids = this.#forumRooms.get(roomId) ?? new Set<SubscriptionId>();
+        const added = !ids.has(request.id);
+        ids.add(request.id);
+        this.#forumRooms.set(roomId, ids);
         try {
           return { ...(await forum.snapshot(roomId)), subscriptionId: request.id };
         } catch (error) {
-          if (this.#forumRooms.get(roomId) === request.id) {
-            if (prior === undefined) this.#forumRooms.delete(roomId);
-            else this.#forumRooms.set(roomId, prior);
-          }
+          if (added) ids.delete(request.id);
+          if (!ids.size) this.#forumRooms.delete(roomId);
           throw error;
         }
       }
+      case "forum.abort":
+        return { roomId: request.roomId, stopped: await this.#forum().stopRoom(request.roomId) };
       case "forum.close": {
-        const current = this.#forumRooms.get(request.roomId);
-        if (
-          current === undefined ||
-          (request.subscriptionId !== undefined && current !== request.subscriptionId)
-        )
-          return { closed: false };
+        const ids = this.#forumRooms.get(request.roomId);
+        if (!ids) return { closed: false };
+        if (request.subscriptionId !== undefined) {
+          if (!ids.delete(request.subscriptionId)) return { closed: false };
+          if (ids.size) return { closed: true };
+        }
         this.#forumRooms.delete(request.roomId);
         return { closed: true };
       }
@@ -618,14 +597,20 @@ class Connection {
             text: request.text,
             ...(request.mentions ? { mentions: request.mentions } : {}),
             ...(request.everyone ? { everyone: true } : {}),
+            ...(request.context ? { context: request.context } : {}),
           }),
         });
         return request.deliveryId ? this.#server.delivery(request.deliveryId, submit) : submit();
       }
       case "forum.thread.create":
         return { thread: await this.#forum().createThread(request.postId) };
+      case "forum.thread.setTitle":
+        return { thread: await this.#forum().setThreadTitle(request.roomId, request.title) };
       case "forum.thread.setPinned":
         return { thread: await this.#forum().setThreadPinned(request.roomId, request.pinned) };
+      case "forum.thread.delete":
+        await this.#forum().deleteThread(request.roomId);
+        return { deleted: true };
       case "forum.setPaused":
         return this.#forum().setPaused(request.paused);
       case "forum.setBotActive":
@@ -677,9 +662,11 @@ class Connection {
       throw new Error("connection closed");
     }
     const prior = this.#subscriptions.get(key);
-    this.#subscriptions.set(key, stream);
-    this.#subscriptionIds.set(key, subscriptionId);
-    await prior?.stop();
+    const ids = prior?.ids ?? new Set<SubscriptionId>();
+    ids.add(subscriptionId);
+    const open = { stream, ids };
+    this.#subscriptions.set(key, open);
+    await prior?.stream.stop();
     const { page, origin } = await Promise.all([
       conversation.entries({}, HISTORY_LIMIT, undefined, ctx),
       conversation.id === main.id
@@ -702,9 +689,9 @@ class Connection {
       })
       .catch(async (error) => {
         await stream.stop();
-        if (this.#subscriptions.get(key) === stream) {
+        if (this.#subscriptions.get(key) === open) {
+          ids.delete(subscriptionId);
           this.#subscriptions.delete(key);
-          this.#subscriptionIds.delete(key);
         }
         throw error;
       });
@@ -716,9 +703,9 @@ class Connection {
     const conversationId = conversation.id;
     let previous = stream.value;
     afterReply.push(() => {
-      if (this.#subscriptions.get(key) !== stream) return;
+      if (this.#subscriptions.get(key) !== open) return;
       stream.start(async (call) => {
-        if (this.#subscriptions.get(key) !== stream) return;
+        if (this.#subscriptions.get(key) !== open) return;
         if (call.kind === "failed") {
           this.send({
             type: "event",
@@ -757,9 +744,8 @@ class Connection {
       });
     });
     void stream.closed.then((end) => {
-      if (this.#subscriptions.get(key) !== stream) return;
+      if (this.#subscriptions.get(key) !== open) return;
       this.#subscriptions.delete(key);
-      this.#subscriptionIds.delete(key);
       // Reconnect reloads both the snapshot and its subscription after a failed watch.
       if (end.kind !== "stopped" && this.#socket.readyState === WebSocket.OPEN)
         this.#socket.close(1012, "Conversation subscription ended");
@@ -781,16 +767,22 @@ class Connection {
   }
 }
 
+function isHostReply(value: unknown): value is HostReply {
+  if (!value || typeof value !== "object") return false;
+  const { type, id } = value as { type?: unknown; id?: unknown };
+  return (type === "host.result" || type === "host.error") && typeof id === "string";
+}
+
 class Server {
   /**
-   * One submission per host delivery id. A retry that overlaps the original joins it, a later one
+   * One submission per delivery id. A retry that overlaps the original joins it, a later one
    * finds it accepted, and only a retry after a crash in between can repeat it.
    */
-  delivery(id: string, submit: () => Promise<unknown>): Promise<unknown> {
-    const running = this.#deliveries.get(id);
+  delivery<T>(id: string, submit: () => Promise<T>): Promise<T | { duplicate: true }> {
+    const running = this.#deliveries.get(id) as Promise<T | { duplicate: true }> | undefined;
     if (running) return running;
     const registry = this.manager.registry;
-    const work = (async () => {
+    const work = (async (): Promise<T | { duplicate: true }> => {
       if (!(await registry.claimDelivery(id))) return { duplicate: true };
       try {
         const result = await submit();
@@ -806,51 +798,27 @@ class Server {
   }
 
   readonly manager: BotManager;
+  readonly host: HostChannel;
   readonly settings: SettingsService | undefined;
   readonly operations: RuntimeOperations | undefined;
   readonly onActivity: ((botId: string) => void) | undefined;
+  readonly environment: string;
   readonly connections = new Set<Connection>();
-  readonly identity: {
-    protocol: number;
-    installationId: string;
-    capabilities: string[];
-    environment: string;
-  };
   readonly #deliveries = new Map<string, Promise<unknown>>();
-  readonly woven: WovenMCP | undefined;
-  forum: Forum | undefined;
-  user: BotServerOptions["user"];
-  log: (message: string) => void = () => {};
+  readonly forum: Forum | undefined;
+  readonly user: BotServerOptions["user"];
+  readonly log: (message: string) => void;
 
-  constructor(
-    manager: BotManager,
-    installationId: string,
-    woven: WovenMCP | undefined,
-    settings: SettingsService | undefined,
-    operations: RuntimeOperations | undefined,
-    onActivity: ((botId: string) => void) | undefined,
-    environment = "none",
-  ) {
-    this.manager = manager;
-    this.identity = {
-      protocol: PROTOCOL,
-      installationId,
-      capabilities: [...CAPABILITIES],
-      environment,
-    };
-    this.woven = woven;
-    this.settings = settings;
-    this.operations = operations;
-    this.onActivity = onActivity;
-  }
-
-  previewList: (botId?: string) => { botId: string; port: number; url: string }[] = () => [];
-  previews(botId?: string) {
-    return this.previewList(botId);
-  }
-  stopPreviewHandler: (botId: string, port: number) => Promise<boolean> = async () => false;
-  stopPreview(botId: string, port: number) {
-    return this.stopPreviewHandler(botId, port);
+  constructor(options: BotServerOptions) {
+    this.manager = options.manager;
+    this.host = options.host;
+    this.settings = options.settings;
+    this.operations = options.operations;
+    this.onActivity = options.onActivity;
+    this.environment = options.environment ?? "none";
+    this.forum = options.forum;
+    this.user = options.user;
+    this.log = options.log ?? (() => {});
   }
 
   broadcast(message: ServerMessage): void {
@@ -863,108 +831,47 @@ class Server {
   }
 
   threadsChanged(botId: string): void {
-    for (const connection of this.connections) connection.send({ type: "threads.changed", botId });
+    this.broadcast({ type: "threads.changed", botId });
   }
 
   memoryChanged(botId: string): void {
-    for (const connection of this.connections) connection.send({ type: "memory.changed", botId });
+    this.broadcast({ type: "memory.changed", botId });
   }
 }
 
-export async function startServer(
-  options: BotServerOptions & {
-    readonly previews?: {
-      list(botId?: string): { botId: string; containerPort: number; url: string }[];
-      unshare(botId: string, port: number): Promise<boolean>;
-    };
-  },
-): Promise<BotServer> {
-  if (!isLoopbackHost(options.host)) {
-    throw new Error(`refusing to bind ${options.host}: the bots runtime listens on loopback only`);
-  }
-  const state = new Server(
-    options.manager,
-    await options.manager.registry.installationId(),
-    options.woven,
-    options.settings,
-    options.operations,
-    options.onActivity,
-    options.environment,
-  );
-  if (options.log) state.log = options.log;
-  state.forum = options.forum;
-  state.user = options.user;
-  const previews = options.previews;
-  if (previews) {
-    state.previewList = (botId) =>
-      previews.list(botId).map((p) => ({ botId: p.botId, port: p.containerPort, url: p.url }));
-    state.stopPreviewHandler = (botId, port) => previews.unshare(botId, port);
-  }
-  const log = options.log ?? (() => {});
-
-  const http = createServer((request, response) => {
-    void (async () => {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (!isLocalHostname(hostnameOf(request.headers.host) ?? "")) {
-        response.writeHead(421).end();
-        return;
-      }
-      if (!hasBearer(request, options.token)) {
-        response.writeHead(401, { "www-authenticate": "Bearer" }).end();
-        return;
-      }
-      if (request.method === "GET" && url.pathname === "/health") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ ok: true, version: VERSION, ...state.identity }));
-        return;
-      }
-      response.writeHead(404, { "content-type": "text/plain" }).end("not found");
-    })().catch((error: unknown) => {
-      log(`http error: ${String(error)}`);
-      if (!response.headersSent) response.writeHead(500);
-      response.end();
-    });
+/**
+ * Listen for the server's WebSocket on the Unix socket `options.socket` (any request path). The
+ * socket's private directory is the only gate: there is no bearer and no handshake.
+ */
+export async function startServer(options: BotServerOptions): Promise<BotServer> {
+  const state = new Server(options);
+  const log = state.log;
+  const http = createServer((_request, response) => {
+    response.writeHead(404, { "content-type": "text/plain" }).end("not found");
   });
-
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   http.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url ?? "/", "http://localhost");
-    if (url.pathname !== "/ws" || !isTrustedUpgrade(request)) {
-      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    if (!hasBearer(request, options.token)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
     wss.handleUpgrade(request, socket, head, (ws) => {
       state.connections.add(new Connection(ws, state));
     });
   });
 
+  // A socket left by a runtime that did not exit cleanly would refuse the listen.
+  await rm(options.socket, { force: true });
   await new Promise<void>((resolvePromise, reject) => {
     http.once("error", reject);
-    http.listen(options.port, options.host, () => {
+    http.listen(options.socket, () => {
       http.off("error", reject);
       resolvePromise();
     });
   });
-  const port = (http.address() as AddressInfo).port;
-  const host = options.host.includes(":") ? `[${options.host}]` : options.host;
-  const url = `http://${host}:${port}`;
-  log(`bots runtime listening on ${url} (ws ${url.replace("http", "ws")}/ws)`);
+  await chmod(options.socket, 0o600);
+  log(`bots runtime listening on ${options.socket}`);
 
   return {
-    url,
-    port,
-    botsChanged() {
-      for (const connection of state.connections) connection.send({ type: "bots.changed" });
-    },
-    groupsChanged() {
-      for (const connection of state.connections) connection.send({ type: "groups.changed" });
-    },
+    socket: options.socket,
+    botsChanged: () => state.broadcast({ type: "bots.changed" }),
+    groupsChanged: () => state.broadcast({ type: "groups.changed" }),
     threadsChanged: (botId) => state.threadsChanged(botId),
     memoryChanged: (botId) => state.memoryChanged(botId),
     broadcast: (message) => state.broadcast(message),
@@ -975,9 +882,7 @@ export async function startServer(
     },
     forumThinking(roomId, botIds) {
       for (const connection of state.connections) {
-        if (connection.inForumRoom(roomId)) {
-          connection.send({ type: "forum.thinking", roomId, botIds });
-        }
+        if (connection.inForumRoom(roomId)) connection.send({ type: "forum.thinking", roomId, botIds });
       }
     },
     viewing: (botId) => state.viewing(botId),
@@ -986,6 +891,7 @@ export async function startServer(
       for (const client of wss.clients) client.terminate();
       wss.close();
       await new Promise<void>((done) => http.close(() => done()));
+      await rm(options.socket, { force: true });
     },
   };
 }

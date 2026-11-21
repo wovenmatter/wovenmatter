@@ -1,6 +1,5 @@
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
+import WovenProtocol
 
 /// A task on a Page is one line: a title, optional instructions, and who it
 /// is assigned to. Assigning never sends; Send starts each agent's or bot's own
@@ -12,6 +11,7 @@ struct PageTaskRow: View {
     @Binding var document: NoteDocument
     @Binding var viewState: CanvasViewState
     let componentID: String
+    let pageID: String
     let pageFolderID: String?
     var onOpenSession: ((String) -> Void)?
     @FocusState private var focus: Field?
@@ -129,7 +129,7 @@ struct PageTaskRow: View {
         switch assignee.kind {
         case .agent:
             guard let chat = assignee.conversationID,
-                  model.workspaceOverview?.conversations.contains(where: { $0.id == chat }) == true else { return nil }
+                  model.workspace.conversation(id: chat) != nil else { return nil }
             return chat
         case .bot:
             guard let machine = assignee.machineID, let bot = assignee.botID else { return nil }
@@ -160,14 +160,13 @@ struct PageTaskRow: View {
 
     private func change(_ assignee: BoardTaskAssignee) {
         apply(.init(action: .updateAssignee, id: componentID, assignee: assignee))
-        // The background process sends or stops it once the Page is saved.
-        if assignee.state == .sending { Task { _ = await model.flushNoteDrafts() } }
+        if assignee.state == .sending { dispatch() }
     }
 
     /// Unassigns someone not sent yet, or stops someone working on it.
     private func remove(_ assignee: BoardTaskAssignee) {
         apply(.init(action: .stopAssignee, id: componentID, assigneeID: assignee.id))
-        if assignee.isActive { Task { _ = await model.flushNoteDrafts() } }
+        if assignee.isActive { dispatch() }
     }
 
     private func sendWaiting() {
@@ -176,7 +175,13 @@ struct PageTaskRow: View {
             updated.state = .sending
             apply(.init(action: .updateAssignee, id: componentID, assignee: updated))
         }
-        Task { _ = await model.flushNoteDrafts() }
+        dispatch()
+    }
+
+    /// The server starts or stops each assignee's chat as the Page now says.
+    private func dispatch() {
+        guard viewState.error == nil else { return }
+        model.documents.dispatchPageTask(noteID: pageID, taskID: componentID)
     }
 
     private func apply(_ edit: PageEdit) {
@@ -193,7 +198,7 @@ struct PageTaskRow: View {
 }
 
 /// The task's Assign dropdown: who it is assigned to, with what each can do,
-/// then everyone it can be assigned to, by workspace and then bots.
+/// then everyone it can be assigned to, by machine and then bots.
 struct PageAssignMenu: View {
     @Bindable var model: ApplicationModel
     let pageFolderID: String?
@@ -203,7 +208,7 @@ struct PageAssignMenu: View {
     let onChange: (BoardTaskAssignee) -> Void
     let onRemove: (BoardTaskAssignee) -> Void
     var onOpenSession: ((String) -> Void)?
-    @State private var targets: [PageAssignTarget] = []
+    private var targets: [PageAssignTarget] { PageAssignTarget.targets(pageFolderID: pageFolderID, in: model) }
 
     private var listed: [BoardTaskAssignee] { assignees.filter { $0.state != .stopped || $0.kind != .user } }
 
@@ -231,9 +236,6 @@ struct PageAssignMenu: View {
         .padding(.horizontal, 7).padding(.vertical, 3)
         .background(Capsule().fill(WovenPalette.muted))
         .help(listed.isEmpty ? "Assign this task" : "Assigned to \(listed.map(\.name).joined(separator: ", "))")
-        .task(id: refreshKey) {
-            targets = await model.pageAssignTargets(pageFolderID: pageFolderID)
-        }
     }
 
     private var label: some View {
@@ -248,18 +250,6 @@ struct PageAssignMenu: View {
         }
         .font(.system(size: 11.5, weight: .medium))
         .frame(maxWidth: 180)
-    }
-
-    /// Reloads the list when harness readiness, workspaces, folders or bot
-    /// connections change. Edits to the Page itself never reload it.
-    private var refreshKey: String {
-        let ready = model.orderedLocalACPRuntimeDefinitions.filter { model.canStartCanonicalLocalSession($0.runtimeKind) }
-            .map(\.runtimeKind.rawValue)
-        let bots = model.bots.orderedSessions.map { "\($0.machineID):\($0.bots.count):\($0.connectedClient != nil)" }
-        let folders = (model.workspaceOverview?.folders ?? []).map { "\($0.id):\($0.executionWorkspaceID ?? "")" }
-        let places = model.remoteWorkspaces.readyChatTargets.map { "\($0.configuration.id):\($0.harness.id.rawValue)" }
-            + model.remoteWorkspaceAgents.map(\.id.uuidString)
-        return (ready + bots + folders + places).joined(separator: "|")
     }
 
     private var groupTitles: [String] {
@@ -294,7 +284,7 @@ struct PageAssignMenu: View {
     @ViewBuilder private func actions(_ assignee: BoardTaskAssignee) -> some View {
         if let chat = chatLink(assignee) { Button(assignee.kind == .bot ? "Open thread" : "Open chat") { onOpenSession?(chat) } }
         if assignee.kind == .agent, assignee.state == .assigned {
-            let folders = PageAssignTarget.folders(for: assignee.workspaceID, owner: nil, in: model)
+            let folders = PageAssignTarget.folders(on: assignee.machineID, in: model)
             Menu("Start in folder") {
                 Button { setFolder(assignee, nil) } label: { check("No folder", assignee.folderID == nil) }
                 ForEach(folders) { folder in
@@ -348,15 +338,36 @@ struct PageAssignTarget: Identifiable, Equatable {
     let assignee: BoardTaskAssignee
     let ready: Bool
     let detail: String?
-    /// The folder owner of the agent's workspace, to start its chat in the Page's folder.
-    let folderOwner: String?
 
-    /// Folders a new chat on this workspace may start in.
-    @MainActor static func folders(for workspaceID: String?, owner: String?, in model: ApplicationModel) -> [WorkspaceFolderRecord] {
-        let folders = model.workspaceOverview?.folders ?? []
-        let owners = [owner, workspaceID, model.executionWorkspaceRegistry.first { $0.id == workspaceID }?.folderOwnerID]
-            .compactMap { $0 }.map(PairedWorkspaceSidebarModel.canonicalID)
-        return folders.filter { folder in folder.executionWorkspaceID.map { owners.contains(PairedWorkspaceSidebarModel.canonicalID($0)) } ?? false }
+    /// The person, then every runtime on every machine, this Mac first. An agent's
+    /// chat starts in the Page's folder when that folder is on the agent's machine.
+    @MainActor static func targets(pageFolderID: String?, in model: ApplicationModel) -> [PageAssignTarget] {
+        let pageFolder = model.workspace.folder(id: pageFolderID)
+        var targets = [PageAssignTarget(id: "me", group: .me, assignee: BoardTaskAssignee(kind: .user), ready: true, detail: nil)]
+        for machine in model.machines.machines {
+            for runtime in AgentRuntimeKind.presentationOrder {
+                let ready = model.machines.isRuntimeReady(runtime, on: machine.id)
+                let detail: String? = !machine.canRun(runtime) ? "Not set up" : !machine.isOnline ? "Offline" : nil
+                targets.append(.init(id: "\(machine.id):\(runtime.rawValue)", group: .place(machine.name),
+                    assignee: BoardTaskAssignee(kind: .agent, name: runtime.displayName, place: machine.name,
+                        runtime: runtime.rawValue, folderID: pageFolder?.machineID == machine.id ? pageFolder?.id : nil,
+                        machineID: machine.id),
+                    ready: ready, detail: ready ? nil : detail))
+            }
+        }
+        if let host = model.bots.hostMachine {
+            for bot in model.bots.bots {
+                targets.append(.init(id: "bot:\(host.id):\(bot.id)", group: .bots,
+                    assignee: BoardTaskAssignee(kind: .bot, name: bot.name, place: host.name, botID: bot.id, machineID: host.id),
+                    ready: model.bots.isConnected, detail: host.name))
+            }
+        }
+        return targets
+    }
+
+    /// Folders a new chat on this machine may start in.
+    @MainActor static func folders(on machineID: String?, in model: ApplicationModel) -> [WorkspaceFolderRecord] {
+        machineID.map(model.workspace.folders(on:)) ?? []
     }
 }
 

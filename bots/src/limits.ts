@@ -11,9 +11,9 @@ export type Limit = { readonly kind: LimitKind; readonly resetsAt?: number };
 /** `rate`: a transient rate limit, retried as usual; never a fallback. */
 export type LimitClass = Limit | { readonly kind: "rate" };
 
-/** What a provider attached to its error message (`pibotLimit`; the Claude provider sets it). */
+/** What a provider attached to its error message (`botLimit`; the Claude provider sets it). */
 export type LimitCarrier = Pick<AssistantMessage, "stopReason" | "errorMessage"> & {
-  pibotLimit?: LimitClass;
+  botLimit?: LimitClass;
 };
 
 /** An HTTP error response seen by the observing fetch (relevant headers only, short body). */
@@ -114,7 +114,7 @@ export function classifyLimit(
   now = Date.now(),
 ): LimitClass | undefined {
   if (message.stopReason !== "error") return undefined;
-  if (message.pibotLimit) return message.pibotLimit;
+  if (message.botLimit) return message.botLimit;
   const body = observed?.body ?? "";
   const text = `${message.errorMessage ?? ""}\n${body}`;
   const error = body ? bodyError(body) : undefined;
@@ -142,7 +142,7 @@ export function classifyLimit(
   return { kind, ...(resetsAt !== undefined && resetsAt > now ? { resetsAt } : {}) };
 }
 
-/** Claude Code's `rate_limit_event` info (the fields pi-bot reads). */
+/** Claude Code's `rate_limit_event` info (the fields the runtime reads). */
 export type ClaudeRateLimitInfo = {
   readonly status?: string;
   readonly resetsAt?: number;
@@ -243,7 +243,7 @@ export type LimitEntry = {
   readonly at: number;
 };
 
-/** Where marked limits outlive a restart (`pibot_limits`; `BotRegistry` implements it). */
+/** Where marked limits outlive a restart (`bot_limits`; `BotRegistry` implements it). */
 export type LimitStore = {
   /** Entries as stored; `load()` checks each one. */
   limits(): Promise<readonly { readonly key: string; readonly entry: unknown }[]>;
@@ -445,7 +445,7 @@ export function observingFetch(base: Fetch, seen: (response: ObservedResponse) =
 }
 
 /**
- * Models whose failed requests carry their usage-limit class on the message (`pibotLimit`), read
+ * Models whose failed requests carry their usage-limit class on the message (`botLimit`), read
  * from the HTTP error the provider saw; providers without HTTP (Claude) set it themselves.
  */
 export function observeLimits(models: Models, fetch?: Fetch): Models {
@@ -467,9 +467,9 @@ export function observeLimits(models: Models, fetch?: Fetch): Models {
         const result = stream.result.bind(stream);
         stream.result = async () => {
           const message = (await result()) as AssistantMessage & LimitCarrier;
-          if (message.stopReason === "error" && observed && !message.pibotLimit) {
+          if (message.stopReason === "error" && observed && !message.botLimit) {
             const found = classifyLimit(message, observed);
-            if (found) message.pibotLimit = found;
+            if (found) message.botLimit = found;
           }
           return message;
         };

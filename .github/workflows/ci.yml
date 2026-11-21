@@ -1,5 +1,8 @@
 name: CI
 
+# One portable Linux check: static checks, the server package's tests (which
+# build protocol/ and library/ too) and the Node children's tests. No
+# provider, release, deployment or signing credentials.
 on:
   pull_request:
     branches: [main]
@@ -15,20 +18,23 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # The Swift release recorded in server/linux-build.json.
+    container: swift:6.4.2-noble
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@main
+      - name: Install SQLite headers
+        run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev python3 >/dev/null
       - uses: actions/setup-node@main
         with:
           node-version-file: default-agent/.node-version
-          cache: npm
-          cache-dependency-path: default-agent/package-lock.json
-      - name: Run focused Linux validation
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Reuse the Swift build
+        uses: actions/cache@main
+        with:
+          path: server/.build
+          key: swift-${{ runner.os }}-${{ hashFiles('server/Package.resolved') }}-${{ github.sha }}
+          restore-keys: swift-${{ runner.os }}-${{ hashFiles('server/Package.resolved') }}-
+      - name: Test
         run: |
-          # Compare the immutable PR trees without fetching the full history.
-          git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
-          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
-          scripts/test-ci.sh --files "$RUNNER_TEMP/changed-files"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          scripts/test-changes.sh --ci

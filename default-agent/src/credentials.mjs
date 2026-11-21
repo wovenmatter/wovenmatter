@@ -1,85 +1,72 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
-import { providers } from './config.mjs';
+// The server owns every credential. This process holds them in memory only,
+// asks the server for them with `woven/credentials`, and reports a renewed
+// OAuth credential with `woven/credentials/update` so the server can store it.
 
-const singleSubscriptionAccount = provider => ['openai-codex', 'claude-subscription', 'xai'].includes(provider);
+// Wire form ({type: "apiKey" | "oauth" | "native"}) to pi-ai's form and back.
+export function fromWire(credential) {
+  if (credential?.type === 'apiKey' && typeof credential.key === 'string') return { type: 'api_key', key: credential.key };
+  if (credential?.type === 'oauth' && typeof credential.access === 'string') return { ...credential };
+  if (credential?.type === 'native') return { type: 'native' };
+  return undefined;
+}
+export function toWire(credential) {
+  if (credential?.type === 'api_key') return { type: 'apiKey', key: credential.key };
+  return credential ? { ...credential } : undefined;
+}
 
-// Local sessions use access-only credentials supplied over private IPC. Only
-// control operations own local refresh tokens; their results go back to Keychain.
-export class Credentials extends InMemoryCredentialStore {
-  constructor(supplied = {}, vault, accounts = {}) { super(); this.supplied = supplied; this.vault = vault; this.owned = {}; this.accounts = accounts; this.context = new AsyncLocalStorage(); }
-  async initialize() { return this; }
-  // Pi accepts API-key/OAuth credentials, while Woven's native marker only
-  // selects a Claude-owned profile. Keep it in this store for account routing,
-  // but let Pi resolve that provider through its existing ambient-auth handler.
-  // Unknown types on every other provider still fail closed in Pi's resolver.
-  forModelRuntime() {
-    const nativeProfile = (provider, value) => provider === 'claude-subscription' && value?.type === 'native';
-    return {
-      read: async (provider, options) => {
-        const value = await this.read(provider, options);
-        return nativeProfile(provider, value) ? undefined : value;
-      },
-      list: async options => (await this.list(options)).filter(value => !nativeProfile(value.providerId, value)),
-      modify: (provider, update, options) => this.modify(provider, update, options),
-      delete: (provider, options) => this.delete(provider, options),
-    };
+const refetchAfterMs = 2000;
+const expiresSoon = credential => credential?.type === 'oauth' && Number(credential.expires) <= Date.now() + 60000;
+
+// pi-ai's CredentialStore, backed by the server.
+export class ServerCredentials {
+  constructor({ fetch, report }) {
+    this.fetchFromServer = fetch; this.report = report;
+    this.values = new Map(); this.fetchedAt = 0; this.fetching = undefined; this.chains = new Map();
   }
-  async replace(supplied, accounts) { this.supplied = supplied; if (accounts) this.accounts = accounts; }
-  async candidates(provider) {
-    const vault = this.vault ? await this.vault.read() : undefined;
-    const entries = (vault ? vault.accounts : this.accounts)?.[provider] ?? [];
-    const owned = vault?.owned?.[provider] ?? this.owned[provider];
-    if (owned) {
-      const account = { id: 'default', label: 'Workspace account', credential: owned, owned: true };
-      return singleSubscriptionAccount(provider) ? [account] : [account, ...entries];
-    }
-    return entries.length ? (singleSubscriptionAccount(provider) ? entries.slice(0, 1) : entries) : [{ id: 'default', label: 'Current account', credential: await this.read(provider) }];
+  async refresh() {
+    this.fetching ??= (async () => {
+      try {
+        const reply = await this.fetchFromServer();
+        this.values = new Map(Object.entries(reply?.credentials ?? {}).flatMap(([id, value]) => {
+          const credential = fromWire(value);
+          return credential ? [[id, credential]] : [];
+        }));
+        this.fetchedAt = Date.now();
+      } finally { this.fetching = undefined; }
+    })();
+    return this.fetching;
   }
-  runWithAccount(provider, account, operation) { return this.context.run({ provider, id: account.id, owned: account.owned === true }, operation); }
-  async read(provider) {
-    const context = this.context.getStore();
-    if (context?.provider === provider && context.id !== 'default') {
-      const stored = this.vault ? await this.vault.read() : { accounts: this.accounts, owned: this.owned };
-      const entries = stored.accounts?.[provider] ?? [];
-      if (singleSubscriptionAccount(provider)) {
-        const owned = stored.owned?.[provider];
-        if (owned || entries[0]?.id !== context.id) return undefined;
-      }
-      return entries.find(a => a.id === context.id)?.credential;
-    }
-    const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };
-    // Removing a workspace-owned sign-in must not silently change accounts
-    // inside an in-flight turn. The engine owns any permitted fallback.
-    if (context?.provider === provider && context.owned) return stored.owned?.[provider];
-    return stored.owned?.[provider] ?? stored.shared?.[provider] ?? stored.accounts?.[provider]?.[0]?.credential;
+  // Ask the server at first need, and again when a credential is missing or about to expire.
+  async current(providerId) {
+    const value = this.values.get(providerId);
+    if (!this.fetchedAt || ((!value || expiresSoon(value)) && Date.now() - this.fetchedAt > refetchAfterMs)) await this.refresh();
+    return this.values.get(providerId);
+  }
+  async providers() {
+    if (!this.fetchedAt) await this.refresh();
+    return [...this.values.keys()];
+  }
+  has(providerId) { return this.values.has(providerId); }
+  async read(providerId) {
+    const value = await this.current(providerId);
+    return value?.type === 'native' ? undefined : structuredClone(value);
   }
   async list() {
-    const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };
-    const custom = Object.keys({ ...stored.shared, ...stored.owned }).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id));
-    const values = await Promise.all([...providers, ...custom].map(async providerId => {
-      const credential = await this.read(providerId);
-      return credential ? { providerId, type: credential.type } : null;
-    }));
-    return values.filter(Boolean);
+    if (!this.fetchedAt) await this.refresh();
+    return [...this.values].filter(([, value]) => value.type !== 'native').map(([providerId, value]) => ({ providerId, type: value.type }));
   }
-  async delete(provider) {
-    if (this.vault) await this.vault.modify(async stored => { const owned = { ...stored.owned }; delete owned[provider]; return { ...stored, owned }; });
-    else { delete this.owned[provider]; delete this.supplied[provider]; }
+  modify(providerId, fn) {
+    const run = async () => {
+      const before = await this.read(providerId);
+      const next = await fn(before);
+      if (next === undefined) return before;
+      this.values.set(providerId, structuredClone(next));
+      if (JSON.stringify(next) !== JSON.stringify(before)) await this.report(providerId, toWire(next));
+      return structuredClone(next);
+    };
+    const result = (this.chains.get(providerId) ?? Promise.resolve()).then(run, run);
+    this.chains.set(providerId, result.catch(() => {}));
+    return result;
   }
-  async modify(provider, fn, options) {
-    return super.modify(provider, async () => {
-      let next;
-      const update = async stored => {
-        const current = stored.owned?.[provider] ?? stored.shared?.[provider];
-        if (!this.signingIn && current?.borrowed) throw new Error('Authentication required. Sign in in Settings → Subscriptions & API Keys.');
-        next = await fn(current) ?? current;
-        if (!this.signingIn && next && current?.displayName && !next.displayName) next = { ...next, displayName: current.displayName };
-        return { ...stored, owned: { ...stored.owned, ...(next ? { [provider]: next } : {}) } };
-      };
-      if (this.vault) await this.vault.modify(update);
-      else { const stored = await update({ shared: this.supplied, owned: this.owned }); this.owned = stored.owned; }
-      return next;
-    }, options);
-  }
+  async delete(providerId) { this.values.delete(providerId); }
 }

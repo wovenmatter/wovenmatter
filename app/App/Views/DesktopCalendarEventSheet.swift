@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 struct DesktopCalendarEventSheet: View {
     @Environment(\.wovenTheme) private var theme
@@ -10,7 +9,7 @@ struct DesktopCalendarEventSheet: View {
     @State private var selection: CalendarSelection
     let onOpenSession: (String) -> Void
     let tasksOnly: Bool
-    @State private var draft: WorkspaceCalendarDraft
+    @State private var draft: CalendarDraft
     @State private var editing: Bool
     @State private var scope: EditScope = .series
     @State private var showsDelete = false
@@ -21,17 +20,17 @@ struct DesktopCalendarEventSheet: View {
         _draft = State(initialValue: selection.draft)
         _editing = State(initialValue: selection.occurrence == nil)
     }
-    private var event: WorkspaceCalendarItemRecord? { selection.occurrence?.event }
+    private var event: CalendarEntry? { selection.occurrence?.entry }
     private var isPastRun: Bool { selection.occurrence?.recordedRun != nil }
-    private var isSeries: Bool { event?.calendar.recurrence != nil }
+    private var isSeries: Bool { event?.recurrence != nil }
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian); value.timeZone = TimeZone(identifier: draft.timeZoneID) ?? .current
         return value
     }
-    private var run: WorkspaceCalendarRun? {
+    private var run: CalendarRun? {
         if let recorded = selection.occurrence?.recordedRun { return recorded }
         guard let event else { return nil }
-        let runs = model.calendarRuns.filter { $0.eventID == event.id && $0.status != "cancelled" }
+        let runs = model.calendar.runs.filter { $0.entryID == event.id && $0.status != .cancelled }
         return runs.last { $0.scheduledAt == selection.occurrence?.startsAt } ?? (isSeries ? nil : runs.last)
     }
 
@@ -48,7 +47,7 @@ struct DesktopCalendarEventSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if editing { editor } else { information }
                     if let event { attribution(event) }
-                    if let error = model.calendarMutationError {
+                    if let error = model.calendar.mutationError {
                         Text(error).font(.system(size: 12)).foregroundStyle(WovenPalette.danger).fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(24)
@@ -65,7 +64,7 @@ struct DesktopCalendarEventSheet: View {
                 Button("Delete entire series", role: .destructive) { remove(nil) }
             } else { Button("Delete event", role: .destructive) { remove(nil) } }
             Button("Cancel", role: .cancel) { }
-        } message: { Text("Sessions that already ran will remain in your workspace.") }
+        } message: { Text("Sessions that already ran will remain in your library.") }
     }
 
     private var editor: some View {
@@ -80,8 +79,8 @@ struct DesktopCalendarEventSheet: View {
                     if scope == .detach, let occurrence = selection.occurrence {
                         draft.startsAt = occurrence.startsAt; draft.endsAt = occurrence.endsAt; draft.recurrence = nil
                     } else if let event {
-                        draft.startsAt = event.startDate ?? draft.startsAt; draft.endsAt = event.endDate
-                        draft.recurrence = event.calendar.recurrence
+                        draft.startsAt = event.startsAt; draft.endsAt = event.endsAt
+                        draft.recurrence = event.recurrence
                     }
                 }
             }
@@ -92,7 +91,7 @@ struct DesktopCalendarEventSheet: View {
             if !tasksOnly {
                 CalendarField("Type") {
                     WovenSegmentedSelector(options: [false, true], selection: Binding(get: { draft.task != nil }, set: { enabled in
-                        draft.task = enabled ? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: draft.title) : nil
+                        draft.task = enabled ? model.calendar.taskDefaults(runtime: .codex, title: draft.title) : nil
                         if enabled { draft.allDay = false }
                     })) { $0 ? "Scheduled task" : "Event" }
                 }
@@ -137,7 +136,7 @@ struct DesktopCalendarEventSheet: View {
                         TextField("Interval", value: Binding(get: { draft.recurrence?.interval ?? 1 }, set: { draft.recurrence?.interval = $0 }), format: .number)
                             .modifier(CalendarInputStyle()).frame(width: 64)
                         CalendarMenuPicker(title: "Repeat unit", selection: Binding(get: { draft.recurrence?.unit ?? .week }, set: { draft.recurrence?.unit = $0 }),
-                            options: WorkspaceCalendarRecurrence.Unit.allCases, label: { $0.title })
+                            options: CalendarRecurrence.Unit.calendarCases, label: { $0.title })
                     }
                 }
             }
@@ -148,7 +147,7 @@ struct DesktopCalendarEventSheet: View {
             }
             if draft.task != nil {
                 theme.palette.border.frame(height: 1)
-                CalendarTaskFields(model: model, task: Binding(get: { draft.task ?? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil) }, set: { draft.task = $0 }), recurring: draft.recurrence != nil)
+                CalendarTaskFields(model: model, task: Binding(get: { draft.task ?? model.calendar.taskDefaults(runtime: .codex) }, set: { draft.task = $0 }), machineID: $draft.machineID, recurring: draft.recurrence != nil)
             }
         }
         .font(.system(size: 13))
@@ -187,10 +186,9 @@ struct DesktopCalendarEventSheet: View {
                 LabeledContent("Model", value: task.configuration.model ?? "Agent default")
                 LabeledContent("Thinking level", value: task.configuration.thinking ?? "Agent default")
                 LabeledContent("Access", value: task.configuration.permission ?? "Agent default")
-                LabeledContent("Tools", value: WorkspaceToolGroup.allCases.filter { task.configuration.tools.enabled.contains($0) }.map(\.title).joined(separator: ", "))
-                LabeledContent("Work location", value: task.configuration.workspaceID.map { model.remoteWorkspaces.configuration(id: $0)?.name ?? "Unavailable workspace" } ?? "Local workspace")
-                LabeledContent("Session folder", value: task.configuration.folderID.map { id in model.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder" } ?? "All Workspaces")
-                if let directory = task.configuration.nativeWorkingDirectory { LabeledContent("Directory", value: directory).textSelection(.enabled) }
+                LabeledContent("Work location", value: CalendarTaskFields.machineName(draft.machineID, in: model))
+                LabeledContent("Session folder", value: task.configuration.folderID.map { id in model.workspace.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder" } ?? "All Workspaces")
+                if let directory = task.configuration.workingDirectory { LabeledContent("Directory", value: directory).textSelection(.enabled) }
                 if draft.recurrence != nil { LabeledContent("Session", value: task.sessionMode.title) }
                 Text("Prompt").fontWeight(.medium)
                 Text(task.prompt).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -201,19 +199,19 @@ struct DesktopCalendarEventSheet: View {
                 if let error = run.error { Text(error).foregroundStyle(WovenPalette.danger).fixedSize(horizontal: false, vertical: true) }
                 Button("Open session") { dismiss(); onOpenSession(run.sessionID) }
                     .buttonStyle(WovenPrimaryButtonStyle())
-                    .disabled(model.workspaceOverview?.conversations.contains { $0.id == run.sessionID } != true)
+                    .disabled(model.workspace.workspaceOverview?.conversations.contains { $0.id == run.sessionID } != true)
             }
         }
         .font(.system(size: 13))
         .labeledContentStyle(CalendarDetailStyle())
     }
 
-    private func attribution(_ event: WorkspaceCalendarItemRecord) -> some View {
+    private func attribution(_ event: CalendarEntry) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             theme.palette.border.frame(height: 1).padding(.bottom, 5)
-            Text("Created by \(event.calendar.createdBy.label)")
-            if let author = event.calendar.editedBy {
-                Text("Edited \(parsedISODate(event.updatedAt)?.formatted(date: .abbreviated, time: .shortened) ?? event.updatedAt) by \(author.label)")
+            Text("Created by \(event.createdBy.label)")
+            if let author = event.editedBy, let editedAt = event.editedAt {
+                Text("Edited \(editedAt.formatted(date: .abbreviated, time: .shortened)) by \(author.label)")
             }
         }.font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
     }
@@ -228,39 +226,38 @@ struct DesktopCalendarEventSheet: View {
             Spacer()
             if editing {
                 Button("Cancel") {
-                    model.clearCalendarMutationError()
+                    model.calendar.clearMutationError()
                     if event == nil { dismiss() } else { editing = false; draft = selection.draft }
                 }.buttonStyle(WovenQuietButtonStyle()).keyboardShortcut(.cancelAction)
-                Button(model.isCreatingCalendarItem ? "Saving…" : "Save") {
+                Button(model.calendar.isSaving ? "Saving…" : "Save") {
                     Task {
-                        if await model.saveCalendarEvent(draft, event: event, detaching: isSeries && scope == .detach ? selection.occurrence?.index : nil) { dismiss() }
+                        if await model.calendar.save(draft, entry: event, detaching: isSeries && scope == .detach ? selection.occurrence?.index : nil) { dismiss() }
                     }
                 }.buttonStyle(WovenPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
-                    .disabled(model.isCreatingCalendarItem || (try? draft.validated()) == nil)
+                    .disabled(model.calendar.isSaving || (try? draft.validated()) == nil)
             } else if isPastRun {
                 Button("View event") { viewCurrentEvent() }.buttonStyle(WovenPrimaryButtonStyle())
             } else {
                 Button("Edit") {
-                    draft = event.map(WorkspaceCalendarDraft.init) ?? selection.draft
-                    scope = .series; editing = true; model.clearCalendarMutationError()
+                    draft = event.map(CalendarDraft.init) ?? selection.draft
+                    scope = .series; editing = true; model.calendar.clearMutationError()
                 }.buttonStyle(WovenPrimaryButtonStyle())
             }
         }
     }
     private func viewCurrentEvent() {
-        guard let eventID = event?.id, let event = model.calendarItems.first(where: { $0.id == eventID }),
-              let start = event.startDate else { return }
-        let index = event.calendar.recurrence == nil ? 0 : selection.occurrence?.index ?? 0
-        let current = WorkspaceCalendarSchedule.occurrence(event, index: index)
-            ?? WorkspaceCalendarSchedule.next(event, after: Date()).flatMap { date in
-                WorkspaceCalendarSchedule.index(onOrBefore: date, start: start,
-                    recurrence: event.calendar.recurrence, timeZoneID: event.calendar.timeZoneID)
-                    .flatMap { WorkspaceCalendarSchedule.occurrence(event, index: $0) }
+        guard let eventID = event?.id, let event = model.calendar.entry(id: eventID) else { return }
+        let index = event.recurrence == nil ? 0 : selection.occurrence?.index ?? 0
+        let current = CalendarSchedule.occurrence(event, index: index)
+            ?? CalendarSchedule.next(event, after: Date()).flatMap { date in
+                CalendarSchedule.index(onOrBefore: date, start: event.startsAt,
+                    recurrence: event.recurrence, timeZoneID: event.timeZoneID)
+                    .flatMap { CalendarSchedule.occurrence(event, index: $0) }
             }
         guard let current else { return }
         selection = .init(draft: current.draft, occurrence: current)
         draft = current.draft
-        model.clearCalendarMutationError()
+        model.calendar.clearMutationError()
     }
 
     private func dateLabel(_ date: Date) -> String {
@@ -272,6 +269,6 @@ struct DesktopCalendarEventSheet: View {
     }
     private func remove(_ occurrence: Int?) {
         guard let event else { return }
-        Task { if await model.deleteCalendarEvent(event, occurrence: occurrence) { dismiss() } }
+        Task { if await model.calendar.delete(event, occurrence: occurrence) { dismiss() } }
     }
 }

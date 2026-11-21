@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterCore
 
 private struct DatabaseSourceButtonStyle: ButtonStyle {
     @Environment(\.wovenTheme) private var theme
@@ -59,7 +58,7 @@ struct DatabasesView: View {
     @State private var isCopyingDatabase = false
 
     private var writableSources: [DatabaseSource] {
-        model.databasesSnapshot.sources.filter(\.allowsCreation)
+        model.databases.snapshot.sources.filter(\.allowsCreation)
     }
 
     private var selectedSource: DatabaseSource? {
@@ -67,12 +66,12 @@ struct DatabasesView: View {
     }
 
     private var filteredSources: [DatabaseSource] {
-        model.databasesSnapshot.sources.filter { filter.includes($0.kind) }
+        model.databases.snapshot.sources.filter { filter.includes($0.kind) }
     }
 
     private var selectedDatabase: AgentDatabase? {
         guard let selectedDatabaseID else { return nil }
-        return model.databasesSnapshot.databases.first { $0.id == selectedDatabaseID }
+        return model.databases.snapshot.databases.first { $0.id == selectedDatabaseID }
     }
 
     var body: some View {
@@ -89,35 +88,31 @@ struct DatabasesView: View {
         }
         .background(theme.palette.workspace)
         .task {
-            await model.refreshDatabases()
+            await model.databases.refresh()
             selectDefaultSource()
         }
-        .onChange(of: model.remoteWorkspaces.workspaces) { _, _ in
-            Task { await model.refreshDatabases() }
+        .onChange(of: model.machines.machines) { _, _ in
+            Task { await model.databases.refresh() }
         }
         .onChange(of: filter) { _, _ in selectDefaultSource() }
-        .onChange(of: model.databasesSnapshot) { _, _ in selectDefaultSource() }
+        .onChange(of: model.databases.snapshot) { _, _ in selectDefaultSource() }
         .sheet(isPresented: $showsCreateDatabase) {
             CreateDatabaseSheet(
-                workspaceName: model.databasesSnapshot.sources.first { $0.id == creationSourceID }?.name ?? "Workspace",
-                isCreating: isCreatingDatabase, error: model.databaseError
+                workspaceName: model.databases.snapshot.sources.first { $0.id == creationSourceID }?.name ?? "Workspace",
+                isCreating: isCreatingDatabase, error: model.databases.error
             ) { name in
                 guard let sourceID = creationSourceID, !isCreatingDatabase else { return }
                 isCreatingDatabase = true
                 Task {
                     defer { isCreatingDatabase = false }
-                    if let id = await model.createDatabase(
-                        sourceID: sourceID,
-                        name: name
-                    ) {
-                        await model.analytics.record(.active)
+                    if let id = await model.databases.create(machineID: sourceID, name: name) {
                         selectedSourceID = sourceID
                         selectedDatabaseID = id
                         showsCreateDatabase = false
                     }
                 }
             } onCancel: {
-                model.clearDatabaseError()
+                model.databases.clearError()
                 showsCreateDatabase = false
             }
             .interactiveDismissDisabled(isCreatingDatabase)
@@ -127,24 +122,20 @@ struct DatabasesView: View {
                 database: database,
                 destinations: writableSources,
                 isCopying: isCopyingDatabase,
-                error: model.databaseError
+                error: model.databases.error
             ) { destinationSourceID, name in
                 guard !isCopyingDatabase else { return }
                 isCopyingDatabase = true
                 Task {
                     defer { isCopyingDatabase = false }
-                    if let id = await model.copyDatabase(
-                        database: database,
-                        destinationSourceID: destinationSourceID,
-                        name: name
-                    ) {
+                    if let id = await model.databases.copy(database, to: destinationSourceID, name: name) {
                         selectedSourceID = destinationSourceID
                         selectedDatabaseID = id
                         databaseToCopy = nil
                     }
                 }
             } onCancel: {
-                model.clearDatabaseError()
+                model.databases.clearError()
                 databaseToCopy = nil
             }
             .interactiveDismissDisabled(isCopyingDatabase)
@@ -152,13 +143,13 @@ struct DatabasesView: View {
         .alert(
             "Database Error",
             isPresented: Binding(
-                get: { !showsCreateDatabase && databaseToCopy == nil && model.databaseError != nil },
-                set: { if !$0 { model.clearDatabaseError() } }
+                get: { !showsCreateDatabase && databaseToCopy == nil && model.databases.error != nil },
+                set: { if !$0 { model.databases.clearError() } }
             )
         ) {
-            Button("OK") { model.clearDatabaseError() }
+            Button("OK") { model.databases.clearError() }
         } message: {
-            Text(model.databaseError ?? "The database operation failed.")
+            Text(model.databases.error ?? "The database operation failed.")
         }
     }
 
@@ -184,9 +175,9 @@ struct DatabasesView: View {
             }
             .frame(maxWidth: 360)
             Button {
-                Task { await model.refreshDatabases() }
+                Task { await model.databases.refresh() }
             } label: {
-                if model.isRefreshingDatabases {
+                if model.databases.isRefreshing {
                     ProgressView().controlSize(.small).frame(width: 32, height: 32)
                 } else {
                     LucideIcon(glyph: .rotate, size: 15)
@@ -194,7 +185,7 @@ struct DatabasesView: View {
                 }
             }
             .buttonStyle(WovenIconButtonStyle())
-            .disabled(model.isRefreshingDatabases)
+            .disabled(model.databases.isRefreshing)
             .help("Refresh databases")
             Button(action: beginCreatingDatabase) {
                 Label("New database", systemImage: "plus")
@@ -288,7 +279,7 @@ struct DatabasesView: View {
                     .scrollIndicators(.never)
                 }
                 if let selectedDatabase,
-                   selectedDatabase.sourceID == source.id {
+                   selectedDatabase.machineID == source.id {
                     databaseDetail(selectedDatabase)
                 }
             }
@@ -378,10 +369,10 @@ struct DatabasesView: View {
             }
             Spacer()
             Button("Copy to workspace…") {
-                model.clearDatabaseError()
+                model.databases.clearError()
                 databaseToCopy = database
             }
-            .disabled(writableSources.isEmpty || (database.offline && database.localURL == nil))
+            .disabled(writableSources.isEmpty || (database.offline && !database.hasCopy))
             .help(writableSources.isEmpty
                 ? "Connect a destination workspace to create a copy."
                 : "Create an independent database. Existing artifact links keep using the original.")
@@ -419,7 +410,7 @@ struct DatabasesView: View {
         } description: {
             Text(error)
         } actions: {
-            Button("Refresh") { Task { await model.refreshDatabases() } }
+            Button("Refresh") { Task { await model.databases.refresh() } }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -427,7 +418,7 @@ struct DatabasesView: View {
     private func beginCreatingDatabase() {
         guard let source = selectedSource, source.allowsCreation else { return }
         creationSourceID = source.id
-        model.clearDatabaseError()
+        model.databases.clearError()
         showsCreateDatabase = true
     }
 
@@ -438,7 +429,7 @@ struct DatabasesView: View {
             return
         }
         if let selectedDatabaseID,
-           !model.databasesSnapshot.databases.contains(where: { $0.id == selectedDatabaseID }) {
+           !model.databases.snapshot.databases.contains(where: { $0.id == selectedDatabaseID }) {
             self.selectedDatabaseID = nil
         }
     }
@@ -585,7 +576,7 @@ private struct CopyDatabaseSheet: View {
         .formFocusDismissal { nameFocused = false }
         .onAppear {
             name = "\(database.name) copy"
-            destinationSourceID = destinations.first { $0.id != database.sourceID }?.id
+            destinationSourceID = destinations.first { $0.id != database.machineID }?.id
                 ?? destinations.first?.id ?? ""
             nameFocused = true
         }
@@ -604,11 +595,6 @@ enum DatabaseFreshness {
         guard let updatedAt = database.updatedAt else {
             return database.offline ? "Offline · Last synced snapshot" : "Managed SQLite database"
         }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = formatter.date(from: updatedAt)
-            ?? ISO8601DateFormatter().date(from: updatedAt)
-        let label = date?.formatted(date: .abbreviated, time: .shortened) ?? updatedAt
-        return "\(prefix)Data updated \(label)"
+        return "\(prefix)Data updated \(updatedAt.formatted(date: .abbreviated, time: .shortened))"
     }
 }

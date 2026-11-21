@@ -1,6 +1,6 @@
 /**
  * Provider connections bots can use. They are Woven Matter accounts (Settings → Subscriptions & API Keys),
- * with the same ids as the machine's default agent; the runtime only reads them through the host.
+ * with the same ids as Pi Durable's; the runtime only asks the server for them.
  */
 export type AccountSpec = {
   /** Woven connection id, which is also the pi-ai provider id. */
@@ -22,7 +22,9 @@ export const ACCOUNTS: readonly AccountSpec[] = [
   { id: "opencode-go", provider: "opencode-go", group: "OpenCode Go", label: "OpenCode Go", method: "api_key" },
 ];
 
-export type SearchProviderId = "exa" | "brave" | "firecrawl";
+import type { SearchProviderId } from "../protocol.ts";
+
+export type { SearchProviderId };
 
 export const SEARCH_PROVIDERS: readonly (AccountSpec & { id: SearchProviderId })[] = [
   { id: "exa", provider: "exa", group: "Search", label: "Exa", method: "api_key" },

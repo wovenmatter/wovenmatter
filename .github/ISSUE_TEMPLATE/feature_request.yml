@@ -18,12 +18,10 @@ body:
       options:
         - Mac app
         - Harness or conversation
-        - Linux host or remote workspace
-        - Library sync or device pairing
+        - Linux machine or another Mac
+        - Library sync
         - Bots
-        - Executor apps
         - Browser or Computer Use
-        - iPhone app (beta)
         - Maintainer tooling or documentation
         - Not sure
     validations:

@@ -1,5 +1,5 @@
 import SwiftUI
-import WovenMatterCore
+import WovenProtocol
 
 struct PageTextFlow: View {
     @Binding var document: NoteDocument
@@ -19,8 +19,7 @@ struct PageTextFlow: View {
     @State private var editContext = PageFlowEditingContext()
 
     var body: some View {
-        let base = document.materializedPage()
-        NoteEditor(document: flowBinding(base: base), controller: controller,
+        NoteEditor(document: flowBinding, controller: controller,
             dictationEditor: dictationEditor, dictationIdentity: "page:\(pageID):\(flowID)",
             sizesToContent: true, editsPageFlow: true, onFocus: { controller in
                 // Add component inserts after the paragraph holding the cursor, or
@@ -34,7 +33,7 @@ struct PageTextFlow: View {
                     viewState.cursor = .init(selection: selection, position: .init(parentID: parentID, afterID: afterID, atStart: afterID == nil))
                 }
                 onFocus?(controller)
-            }, onSynchronize: { editContext.base = document.materializedPage() }, sharedUndoManager: undoManager,
+            }, sharedUndoManager: undoManager,
             contextMenuItems: inserter.map { inserter in { inserter.menuItems { inserter.cursorPosition } } })
             .frame(minHeight: 40)
             .accessibilityLabel("Page document text")
@@ -53,7 +52,7 @@ struct PageTextFlow: View {
         return blockIDs
     }
 
-    private func flowBinding(base: NoteDocument) -> Binding<NoteDocument> {
+    private var flowBinding: Binding<NoteDocument> {
         Binding(get: {
             let page = document.materializedPage()
             let ids = liveIDs(in: page)
@@ -71,9 +70,11 @@ struct PageTextFlow: View {
             return flow
         }, set: { updated in
             do {
-                let base = editContext.base ?? base
-                var local = base
-                try local.spliceFlow(liveIDs(in: base), with: updated.blocks, parentID: parentID, afterID: afterID)
+                // The flow's text applies to the newest Page, so changes made
+                // elsewhere on it while this text was being edited stay.
+                let current = document.materializedPage()
+                var local = current
+                try local.spliceFlow(liveIDs(in: current), with: updated.blocks, parentID: parentID, afterID: afterID)
                 let included = Set(local.blocks.map(\.id))
                 for block in updated.blocks where included.contains(block.id) {
                     if let changed = updated.boardItems?[block.id] {
@@ -96,13 +97,7 @@ struct PageTextFlow: View {
                         local.boardItems?[block.id]?.task = nil
                     }
                 }
-                let remote = document.materializedPage()
-                let merged = try NoteDocument.mergePage(base: base, local: local, remote: remote)
-                commitPage(document: $document, state: $viewState, recordsComponentUndo: false) { $0 = merged.document }
-                editContext.base = document.materializedPage()
-                if !merged.conflictedIDs.isEmpty {
-                    viewState.error = "Concurrent edits were retained as separate components and marked for review."
-                }
+                commitPage(document: $document, state: $viewState, recordsComponentUndo: false) { $0 = local }
             } catch { viewState.error = error.localizedDescription }
         })
     }
@@ -119,7 +114,6 @@ struct PageTextFlow: View {
 }
 
 @MainActor final class PageFlowEditingContext {
-    var base: NoteDocument?
     private var emptyID = UUID().uuidString.lowercased()
     func emptyBlockID(in page: NoteDocument) -> String {
         if page.blocks.contains(where: { $0.id == emptyID }) { emptyID = UUID().uuidString.lowercased() }

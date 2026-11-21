@@ -11,12 +11,14 @@ import {
 import { type Bot, type BotManager, NO_MODEL_MESSAGE, NotFoundError } from "./bots.ts";
 import { conversationId as toConversationId, entryId as toEntryId } from "./ids.ts";
 import { errorIssue } from "./issues.ts";
+import { contextNote } from "./message-context.ts";
 import type {
   ForumPost,
   ForumRoomSnapshot,
   ForumScheduleSummary,
   ForumState,
   ForumThreadSummary,
+  VisualReply,
 } from "./protocol.ts";
 import {
   AWAY,
@@ -35,7 +37,7 @@ import { isTimeZone, parseTimeOfDay, zonedEpoch, zonedTime } from "./zoned-time.
 
 const ctx = BACKGROUND_CONTEXT;
 
-/** What bots call the user (`pibot_notes`); unset: "the user". */
+/** What bots call the user (`bot_notes`); unset: "the user". */
 export const USER_NAME = "user.name";
 const PAUSED = "forum.paused";
 export { DELIVERY_KIND };
@@ -106,9 +108,18 @@ type Outcome =
   | { readonly text: string }
   | { readonly reason: string; readonly issue?: "signIn" | "limit" };
 
+const postWords = (post: ForumPostRecord | undefined) =>
+  post ? (post.visualReply ? post.visualReply.title : post.text) : "";
+
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** What a post says in words: its text, or for a visual reply its title (bots never see its HTML). */
+const postText = (post: ForumPostRecord) =>
+  post.visualReply
+    ? `[a visual reply${post.visualReply.title ? `: ${post.visualReply.title}` : ""}]`
+    : post.text;
 
 const list = (items: readonly string[]) =>
   items.length <= 1
@@ -418,7 +429,7 @@ export class Forum {
       parentPostId: room.parentPostId ?? 0,
       ...(room.title ? { title: room.title } : {}),
       preview: clip(
-        oneLine((firsts.get(room.id) ?? parents.get(room.parentPostId ?? 0))?.text ?? ""),
+        oneLine(postWords(firsts.get(room.id) ?? parents.get(room.parentPostId ?? 0))),
         PREVIEW_CHARS,
       ),
       createdAt: room.createdAt,
@@ -456,6 +467,7 @@ export class Forum {
         ...(record.botId ? { botId: record.botId } : {}),
         name: record.name,
         text: record.text,
+        ...(record.visualReply ? { visualReply: record.visualReply } : {}),
         ...(record.mentions.length ? { mentions: [...record.mentions] } : {}),
         ...(record.scheduled ? { scheduled: true as const } : {}),
         ...(record.auto ? { auto: true as const } : {}),
@@ -541,6 +553,8 @@ export class Forum {
     readonly mentions?: readonly string[];
     readonly everyone?: boolean;
     readonly scheduled?: boolean;
+    /** The person's open notes, for the bots that hear the post (`contextNote`). */
+    readonly context?: string;
   }): Promise<ForumPost> {
     if (!input.text.trim()) throw new ForumError("a post needs some text");
     if (input.text.length > MAX_POST_CHARS) throw new ForumError("that post is too long");
@@ -564,6 +578,7 @@ export class Forum {
         mentions,
         scheduled: input.scheduled === true,
         auto: false,
+        ...(input.context ? { context: input.context } : {}),
       },
       { join },
     );
@@ -579,21 +594,9 @@ export class Forum {
     botId: string,
     input: { readonly text: string; readonly threadId?: number; readonly conversationId: number },
   ): Promise<ForumPostRecord> {
-    const record = await this.#registry.get(botId);
-    if (!record) throw new NotFoundError(`no bot ${botId}`);
     if (!input.text.trim()) throw new ForumError("a post needs some text");
     if (input.text.length > MAX_POST_CHARS) throw new ForumError("that post is too long");
-    if (!(await this.isActive(record))) {
-      throw new ForumError(
-        "You are not in the Forum. The user can add you from the Forum's member list.",
-      );
-    }
-    if (await this.paused()) {
-      throw new ForumError(
-        "The Forum is paused. Nothing can be posted until the user resumes it.",
-      );
-    }
-    await this.#seatBots();
+    const record = await this.#poster(botId);
     const here = await this.store.seatOfConversation(botId, input.conversationId);
     const room = await this.#room(input.threadId ?? here?.roomId);
     const seat = await this.store.seat(room.id, botId);
@@ -619,6 +622,66 @@ export class Forum {
       scheduled: false,
       auto: false,
       origin: input.conversationId,
+    });
+    await this.#published(post, room);
+    return post;
+  }
+
+  /** A bot that may post now: it is in the Forum and the Forum is not paused. */
+  async #poster(botId: string): Promise<BotRecord> {
+    const record = await this.#registry.get(botId);
+    if (!record) throw new NotFoundError(`no bot ${botId}`);
+    if (!(await this.isActive(record))) {
+      throw new ForumError(
+        "You are not in the Forum. The user can add you from the Forum's member list.",
+      );
+    }
+    if (await this.paused()) {
+      throw new ForumError(
+        "The Forum is paused. Nothing can be posted until the user resumes it.",
+      );
+    }
+    await this.#seatBots();
+    return record;
+  }
+
+  /**
+   * Where a visual reply from the bot's seat (`conversationId`) would be posted, checked before it
+   * is published so a refused one is never stored: the bot is in the Forum, it is not paused, and
+   * the conversation is a seat.
+   */
+  async visualReplyRoom(
+    botId: string,
+    conversationId: number,
+  ): Promise<{ readonly record: BotRecord; readonly room: ForumRoom }> {
+    const record = await this.#poster(botId);
+    const seat = await this.store.seatOfConversation(botId, conversationId);
+    if (!seat) throw new ForumError("This conversation is not one of your Forum seats.");
+    return { record, room: await this.#room(seat.roomId) };
+  }
+
+  /**
+   * A visual reply the bot published with `render_html` from its seat (`conversationId`): a post of
+   * its own in that seat's room, in order with what it posts. It answers no mention: the reply the
+   * bot owes is still its words.
+   */
+  async postVisualReply(
+    botId: string,
+    conversationId: number,
+    visualReply: VisualReply,
+  ): Promise<ForumPostRecord> {
+    const { record, room } = await this.visualReplyRoom(botId, conversationId);
+    const post = await this.store.addPost({
+      roomId: room.id,
+      author: "bot",
+      botId,
+      name: record.name,
+      text: "",
+      mentions: [],
+      scheduled: false,
+      auto: false,
+      origin: conversationId,
+      visualReply,
     });
     await this.#published(post, room);
     return post;
@@ -656,7 +719,7 @@ export class Forum {
     if (!shown.length) return `${where} has no ${input.before ? "earlier " : ""}posts.`;
     const lines = shown.map((post) => {
       const who = this.#author(post, botId, user);
-      return `#${post.id} ${who} (${post.createdAt}): ${clip(post.text, READ_POST_CHARS)}`;
+      return `#${post.id} ${who} (${post.createdAt}): ${clip(postText(post), READ_POST_CHARS)}`;
     });
     const first = shown[0]?.id;
     const earlier = more ? ` (earlier ones: forum_read with before ${first})` : "";
@@ -685,9 +748,10 @@ export class Forum {
   #title(room: ForumRoom, post: ForumPostRecord): void {
     const titles = this.#titles;
     if (!titles || room.title || this.#titling.has(room.id) || this.#closed) return;
+    if (!postWords(post).trim()) return;
     this.#titling.add(room.id);
     void titles
-      .generate(post.text, this.#abort.signal)
+      .generate(postWords(post), this.#abort.signal)
       .then(async (title) => {
         if (title && (await this.store.setRoomTitleIfUntitled(room.id, title))) {
           this.#events.changed?.();
@@ -720,12 +784,46 @@ export class Forum {
     return this.#thread(thread.id);
   }
 
+  async setThreadTitle(roomId: number, title: string): Promise<ForumThreadSummary> {
+    const room = await this.#room(roomId);
+    if (room.parentPostId === undefined) throw new ForumError("only threads can be renamed");
+    await this.store.setRoomTitle(room.id, title);
+    this.#events.changed?.();
+    return this.#thread(room.id);
+  }
+
   async setThreadPinned(roomId: number, pinned: boolean): Promise<ForumThreadSummary> {
     const room = await this.#room(roomId);
     if (room.parentPostId === undefined) throw new ForumError("only threads can be pinned");
     await this.store.setRoomPinned(room.id, pinned);
     this.#events.changed?.();
     return this.#thread(room.id);
+  }
+
+  /**
+   * Delete a thread (never the Forum itself) and stop the bots' turns in it. The rows go first,
+   * so nothing more is delivered there or posted from a turn that ends meanwhile. The seats'
+   * conversations keep their entries; nothing hears the room through them again.
+   */
+  async deleteThread(roomId: number): Promise<void> {
+    const room = await this.#room(roomId);
+    if (room.parentPostId === undefined) throw new ForumError("only threads can be deleted");
+    const seats = await this.store.seats(room.id);
+    if (!(await this.store.deleteThread(room.id))) throw new NotFoundError(`no Forum thread ${roomId}`);
+    // On each seat's own line: a delivery under way finishes first and is then stopped.
+    await Promise.all(
+      seats.map((seat) =>
+        this.#enqueue(seat.roomId, seat.botId, async () => void (await this.#stop(seat))),
+      ),
+    );
+    let thinking = false;
+    for (const seat of seats) {
+      const key = this.#key(room.id, seat.botId);
+      if ((this.#seats.get(key)?.waiting ?? 0) > 0) thinking = true;
+      this.#seats.delete(key);
+    }
+    if (thinking) this.#emitThinking(room.id);
+    this.#events.changed?.();
   }
 
   async #thread(roomId: number): Promise<ForumThreadSummary> {
@@ -780,6 +878,24 @@ export class Forum {
       this.#events.changed?.();
     }
     return this.state();
+  }
+
+  /**
+   * The person's Stop in a room: every bot working there has its turn stopped, as a chat's Stop
+   * stops its bot; other rooms go on, and the Forum is not paused. A mention a stopped bot owed
+   * gets its note. Returns the bots that were working.
+   */
+  async stopRoom(roomId: number): Promise<string[]> {
+    const room = await this.#room(roomId);
+    const stopped: string[] = [];
+    await Promise.all(
+      (await this.store.seats(room.id)).map((seat) =>
+        this.#enqueue(seat.roomId, seat.botId, async () => {
+          if (await this.#stop(seat)) stopped.push(seat.botId);
+        }),
+      ),
+    );
+    return stopped.sort();
   }
 
   /**
@@ -1059,11 +1175,11 @@ export class Forum {
     const { room, seat, botId, user, unseen, owed, reminders, missed } = input;
     const User = user === "the user" ? "The user" : user;
     const line = (post: ForumPostRecord) =>
-      `#${post.id} ${this.#author(post, botId, User)}: ${post.text}`;
+      `#${post.id} ${this.#author(post, botId, User)}: ${postText(post)}`;
     // Its own unseen posts are the ones it made elsewhere: its seat does not know of them.
     const unseenLine = (post: ForumPostRecord) =>
       post.botId === botId
-        ? `#${post.id} You (from another of your conversations): ${post.text}`
+        ? `#${post.id} You (from another of your conversations): ${postText(post)}`
         : line(post);
     const thread = room.parentPostId !== undefined;
     const parts: string[] = [];
@@ -1107,6 +1223,9 @@ export class Forum {
         lead(`You have not replied to ${user}'s mention in ${where} yet: reply with forum_post.`),
       );
     }
+    // The person's open notes when they last posted, said first, as a chat message carries them.
+    const context = unseen.findLast((post) => post.author === "user" && post.context)?.context;
+    if (context) parts.unshift(contextNote(context));
     return parts.join("\n\n");
   }
 
@@ -1406,6 +1525,6 @@ export class Forum {
 
 /** Open the Forum over the shared database: its tables exist and it has its room. */
 export async function openForum(options: ForumOptions): Promise<Forum> {
-  await options.store.migrate(new Date((options.now ?? Date.now)()).toISOString());
+  await options.store.createTables(new Date((options.now ?? Date.now)()).toISOString());
   return new Forum(options);
 }

@@ -3,12 +3,10 @@
 
 Listens on vsock only and accepts connections only from the Mac (CID 2):
 - 2000: one JSON request per connection, one JSON reply (control);
-- 2001: preview forwards: a one-line header names the target, then raw bytes;
 - 2375: the Docker Engine API, bridged to /run/docker.sock.
-Both bridges keep each direction open until its own end-of-stream, so a
+The bridge keeps each direction open until its own end-of-stream, so a
 client's half-close (exec stdin EOF) never truncates the other direction.
 """
-import base64
 import http.client
 import json
 import os
@@ -17,15 +15,12 @@ import subprocess
 import threading
 import time
 
-AGENT_VERSION = 1
-AGENT_PORT, FORWARD_PORT, DOCKER_PORT = 2000, 2001, 2375
+AGENT_PORT, DOCKER_PORT = 2000, 2375
 HOST_CID = 2
 STATE = "/var/lib/woven"
 DATA = "/var/lib/woven-data"
 DOCKER_SOCKET = "/run/docker.sock"
 BUFFER = 256 * 1024
-UPDATABLE = ("/usr/local/lib/woven/", "/etc/systemd/system/woven-", "/etc/woven/versions.env",
-             "/etc/apt/keyrings/docker.asc")
 
 
 def read_json(path):
@@ -136,9 +131,8 @@ def op_status(_):
                 docker_version = body.get("Version")
         except (OSError, http.client.HTTPException, ValueError):
             pass
-    return {"agent": AGENT_VERSION, "os": os_name(), "kernel": os.uname().release, "docker": docker_version,
-            "provision": read_json(STATE + "/status.json"), "update": read_json(STATE + "/update.json"),
-            "provisioned": provisioned, "balloon": balloon_features(),
+    return {"os": os_name(), "kernel": os.uname().release, "docker": docker_version,
+            "provision": read_json(STATE + "/status.json"), "provisioned": provisioned, "balloon": balloon_features(),
             "boot_id": open("/proc/sys/kernel/random/boot_id").read().strip(),
             "cmdline": open("/proc/cmdline").read().strip()}
 
@@ -235,32 +229,6 @@ def op_running_containers(_):
     return {"running": len(body), "load": os.getloadavg()[0]}
 
 
-def op_update(request):
-    files = request.get("files", {})
-    for path, content in files.items():
-        if not path.startswith(UPDATABLE) or ".." in path:
-            raise ValueError("refusing to write " + path)
-    for path, content in files.items():
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        temporary = path + ".woven-new"
-        with open(temporary, "wb") as handle:
-            handle.write(base64.b64decode(content))
-        os.chmod(temporary, 0o755 if path.startswith("/usr/local/lib/woven/") else 0o644)
-        os.replace(temporary, path)
-    try:
-        os.unlink(STATE + "/update.json")
-    except FileNotFoundError:
-        pass
-    subprocess.run(["systemctl", "daemon-reload"], check=True, timeout=60)
-    subprocess.run(["systemctl", "start", "--no-block", "woven-update.service"], check=True, timeout=60)
-    return {"started": True}
-
-
-def op_provision(_):
-    subprocess.run(["systemctl", "restart", "--no-block", "woven-provision.service"], check=True, timeout=60)
-    return {"started": True}
-
-
 def op_trim(_):
     result = subprocess.run(["fstrim", "-av"], capture_output=True, text=True, timeout=600)
     return {"output": (result.stdout + result.stderr).strip(), "code": result.returncode}
@@ -283,7 +251,7 @@ def command_output(arguments, timeout=5, lines=80):
 def op_diagnostics(_):
     """What explains a stuck or failed guest, for the Mac's diagnostics."""
     journal = ["journalctl", "--no-pager", "-b", "-o", "short-iso"]
-    return {"provision": read_json(STATE + "/status.json"), "update": read_json(STATE + "/update.json"),
+    return {"provision": read_json(STATE + "/status.json"),
             "provision_log": tail("/var/log/woven-provision.log", 60),
             # The first alert-level lines: the first oops or lockup explains the rest.
             "kernel_alerts": command_output(["journalctl", "--no-pager", "-b", "-k", "-p", "0..2", "-o", "cat"],
@@ -297,10 +265,10 @@ def op_diagnostics(_):
             "cloud_init": command_output(["cloud-init", "status", "--long"], timeout=10)}
 
 
-OPERATIONS = {"ping": lambda _: {"agent": AGENT_VERSION}, "status": op_status, "meminfo": op_meminfo,
+OPERATIONS = {"ping": lambda _: {}, "status": op_status, "meminfo": op_meminfo,
               "set_time": op_set_time, "set_host_addresses": op_set_host_addresses,
               "disk": op_disk, "set_disk_cap": op_set_disk_cap, "running_containers": op_running_containers,
-              "update": op_update, "provision": op_provision, "trim": op_trim, "poweroff": op_poweroff,
+              "trim": op_trim, "poweroff": op_poweroff,
               "diagnostics": op_diagnostics}
 
 
@@ -361,37 +329,6 @@ def splice(first, second):
     second.close()
 
 
-def container_address(name):
-    code, body = docker("/containers/%s/json" % name)
-    if code != 200:
-        raise LookupError("no container named " + name)
-    if not body.get("State", {}).get("Running"):
-        raise LookupError(name + " is not running")
-    for network in (body.get("NetworkSettings", {}).get("Networks") or {}).values():
-        if network.get("IPAddress"):
-            return network["IPAddress"]
-    raise LookupError(name + " has no network address")
-
-
-def serve_forward(connection):
-    try:
-        connection.settimeout(10)
-        kind, target, port = read_line(connection, 4096).decode().split()
-        address = container_address(target) if kind == "container" else target
-        upstream = socket.create_connection((address, int(port)), timeout=10)
-        upstream.settimeout(None)
-        connection.settimeout(None)
-        connection.sendall(b"OK\n")
-    except Exception as error:
-        try:
-            connection.sendall(("ERR %s\n" % error).encode())
-        except OSError:
-            pass
-        connection.close()
-        return
-    splice(connection, upstream)
-
-
 def serve_docker(connection):
     try:
         upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -417,8 +354,7 @@ def listen(port, handler):
 
 def main():
     os.makedirs(STATE, exist_ok=True)
-    for port, handler in ((FORWARD_PORT, serve_forward), (DOCKER_PORT, serve_docker)):
-        threading.Thread(target=listen, args=(port, handler), daemon=True).start()
+    threading.Thread(target=listen, args=(DOCKER_PORT, serve_docker), daemon=True).start()
     listen(AGENT_PORT, serve_control)
 
 

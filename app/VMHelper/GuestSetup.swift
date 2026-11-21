@@ -10,8 +10,6 @@ enum GuestSetup {
     /// Room for the OS, packages and logs; bots' data lives on the data disk.
     static let rootDiskBytes: UInt64 = 16 << 30
 
-    static func dataDiskURL(_ paths: WovenVMPaths) -> URL { paths.root.appending(path: "data.img") }
-
     static func download(_ image: WovenVMGuestVersion.Image, into directory: URL,
                          progress: @escaping @Sendable (Double) -> Void) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -152,7 +152,7 @@ const SEARCH: Record<SearchProviderId, ProviderSearch> = {
       snippet: str(result.description),
     }));
   },
-  // https://docs.firecrawl.dev/api-reference/endpoint/search (v2: `data.web`; v1: `data`)
+  // https://docs.firecrawl.dev/api-reference/endpoint/search
   firecrawl: async (options, key, query, count) => {
     const body = await requestJson(options, "Firecrawl", "https://api.firecrawl.dev/v2/search", {
       method: "POST",
@@ -163,8 +163,7 @@ const SEARCH: Record<SearchProviderId, ProviderSearch> = {
       },
       body: JSON.stringify({ query, limit: count }),
     });
-    const data = body.data;
-    const web = Array.isArray(data) ? data : (data as Record<string, unknown> | undefined)?.web;
+    const web = (body.data as Record<string, unknown> | undefined)?.web;
     return records(web).map((result) => ({
       title: str(result.title),
       url: str(result.url),
@@ -498,7 +497,7 @@ export async function fetchUrl(
  */
 export function webTools(options: WebToolsOptions): Extension {
   return defineExtension({
-    name: "pi-bot-web",
+    name: "bot-web",
     tools: [
       defineTool({
         name: "web_search",

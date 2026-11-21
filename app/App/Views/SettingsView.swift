@@ -1,17 +1,15 @@
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 private enum HarnessSettingsOrigin: Equatable {
     case agents
     case general
-    case remoteWorkspace(UUID)
+    case machine(String)
 
     var route: SettingsRoute {
         switch self {
         case .agents: .agents
         case .general: .general
-        case .remoteWorkspace(let id): .workspaces(id)
+        case .machine(let id): .workspaces(id)
         }
     }
 }
@@ -30,10 +28,9 @@ private enum SettingsRoute: Equatable {
     case github
     case agents
     case piDurable(String, HarnessSettingsOrigin)
-    case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
+    case harness(AgentRuntimeKind, String?, HarnessSettingsOrigin)
     case wovenMCP
-    case workspaces(UUID?)
-    case appleDevices
+    case workspaces(String?)
     case backgroundServer
     case dictation
     case bots
@@ -50,7 +47,7 @@ struct SettingsView: View {
     /// Where each cross-linked page was opened from; Back returns there.
     @State private var origins: [CrossLinkedPage: SettingsRoute] = [:]
     @State private var macAccess = MacAccessSetupModel.shared
-    @State private var updates = FleetUpdatesModel.shared
+    private var updates: UpdatesStore { model.updates }
 
     private var theme: WovenTheme {
         WovenTheme(rawValue: storedTheme) ?? .green
@@ -69,7 +66,7 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .landing },
-                    onOpenCodex: { route = harnessRoute(.codex, workspaceID: nil, origin: .general) },
+                    onOpenCodex: { route = harnessRoute(.codex, machineID: nil, origin: .general) },
                     onOpenUpdates: { open(.updates, .updates, from: .general) }
                 )
             case .updates:
@@ -95,14 +92,14 @@ struct SettingsView: View {
                     onBack: { back(from: .accounts) }
                 )
             case .github:
-                SettingsGitHubView(model: model.github, bots: model.bots, reservesRailControlSpace: reservesRailControlSpace,
+                SettingsGitHubView(model: model, reservesRailControlSpace: reservesRailControlSpace,
                                    onBack: { route = .landing })
             case .agents:
                 SettingsAgentsView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .landing },
-                    onOpen: { route = harnessRoute($0, workspaceID: nil, origin: .agents) }
+                    onOpen: { route = harnessRoute($0, machineID: nil, origin: .agents) }
                 )
             case .piDurable(let scope, let origin):
                 SettingsDefaultAgentView(
@@ -115,12 +112,12 @@ struct SettingsView: View {
                         open(.accounts, .accounts(accountScope), from: .piDurable(accountScope, origin))
                     }
                 )
-            case .harness(let runtimeKind, let workspaceID, let origin):
+            case .harness(let runtimeKind, let machineID, let origin):
                 SettingsHarnessView(
                     model: model,
                     runtimeKind: runtimeKind,
-                    workspaceID: workspaceID,
-                    isWorkspaceScoped: { if case .remoteWorkspace = origin { true } else { false } }(),
+                    machineID: machineID,
+                    isMachineScoped: { if case .machine = origin { true } else { false } }(),
                     reservesRailControlSpace: reservesRailControlSpace,
                     backTitle: backTitle(origin),
                     onBack: { route = origin.route }
@@ -133,22 +130,17 @@ struct SettingsView: View {
                     onBack: { back(from: .wovenMCP) },
                     onOpenPermissions: { open(.permissions, .permissions, from: .wovenMCP) }
                 )
-            case .workspaces(let workspaceID):
+            case .workspaces(let machineID):
                 SettingsWorkspacesView(
-                    model: model.remoteWorkspaces,
+                    model: model.machines,
                     application: model,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    initialWorkspaceID: workspaceID,
-                    onMoreRuntime: { kind, configuration in
-                        route = harnessRoute(kind, workspaceID: configuration.id, origin: .remoteWorkspace(configuration.id))
+                    initialMachineID: machineID,
+                    onMoreRuntime: { kind, machine in
+                        route = harnessRoute(kind, machineID: machine.id, origin: .machine(machine.id))
                     },
                     onBack: { route = .landing }
                 )
-            case .appleDevices:
-                SettingsAppleDevicesView(model: model, host: model.libraryHost,
-                    reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { route = .landing },
-                    onOpenUpdates: { open(.updates, .updates, from: .appleDevices) })
             case .backgroundServer:
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .dictation:
@@ -169,7 +161,6 @@ struct SettingsView: View {
                 SettingsBotsMachineView(
                     bots: model.bots,
                     machineID: machineID,
-                    workspaces: model.remoteWorkspaces.workspaces,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .bots },
                     onOpenSection: { route = .botsSection(machineID: machineID, $0) },
@@ -177,20 +168,13 @@ struct SettingsView: View {
                     onOpenAccounts: { open(.accounts, .accounts($0), from: .botsMachine(machineID)) }
                 )
             case let .botsSection(machineID, botSection):
-                if let session = model.bots.session(for: machineID) {
-                    SettingsBotsSectionPage(
-                        bots: session,
-                        section: botSection,
-                        reservesRailControlSpace: reservesRailControlSpace,
-                        backTitle: machineTitle(machineID),
-                        onBack: { route = .botsMachine(machineID) }
-                    )
-                } else {
-                    SettingsPage(title: botSection.title, reservesRailControlSpace: reservesRailControlSpace,
-                                 backTitle: machineTitle(machineID), onBack: { route = .botsMachine(machineID) }) {
-                        SettingsEmpty("That machine's bots are not connected.")
-                    }
-                }
+                SettingsBotsSectionPage(
+                    bots: model.bots,
+                    section: botSection,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    backTitle: machineTitle(machineID),
+                    onBack: { route = .botsMachine(machineID) }
+                )
             case .botsResources(let machineID):
                 SettingsBotsResourcesView(
                     bots: model.bots, machineID: machineID,
@@ -204,12 +188,9 @@ struct SettingsView: View {
         .environment(\.wovenTheme, theme)
         .preferredColorScheme(theme.colorScheme)
         .tint(WovenPalette.primary)
-        .task {
-            model.refreshLocalACPRuntimesNow()
-        }
         .onAppear { openPendingDefaultAgentSettings(); openPendingConnections(); openPendingBotsSettings() }
-        .onChange(of: model.pendingBotsSettings) { _, _ in openPendingBotsSettings() }
-        .onChange(of: model.pendingConnectionsScope) { _, _ in openPendingConnections() }
+        .onChange(of: model.navigation.pendingBotsSettings) { _, _ in openPendingBotsSettings() }
+        .onChange(of: model.navigation.pendingConnectionsScope) { _, _ in openPendingConnections() }
         // Links inside Settings post these too; Back returns to the page that posted them.
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             let target = SettingsRoute.accounts(event.object as? String ?? "global")
@@ -218,35 +199,50 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: MacAccessSetupModel.openSettingsNotification)) { _ in
             if route != .permissions { open(.permissions, .permissions, from: route) }
         }
-        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
+        .onChange(of: model.navigation.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
     }
 
     private func openPendingDefaultAgentSettings() {
-        guard let scope = model.pendingDefaultAgentSettingsScope else { return }
+        guard let scope = model.navigation.pendingDefaultAgentSettingsScope else { return }
         route = .piDurable(scope, .agents)
-        model.pendingDefaultAgentSettingsScope = nil
+        model.navigation.pendingDefaultAgentSettingsScope = nil
     }
 
     private func openPendingBotsSettings() {
-        guard model.pendingBotsSettings else { return }
-        if let machineID = model.pendingBotProfilesMachine {
+        let navigation = model.navigation
+        guard navigation.pendingBotsSettings else { return }
+        if let machineID = navigation.pendingBotProfilesMachine {
             route = .botsSection(machineID: machineID, .profiles)
-            model.pendingBotProfilesMachine = nil
+            navigation.pendingBotProfilesMachine = nil
         } else if route != .bots { open(.bots, .bots, from: .landing) }
-        model.pendingBotsSettings = false
+        navigation.pendingBotsSettings = false
     }
 
     /// Requests from outside Settings open their page with Back returning to the landing list.
     /// The window also forwards the in-Settings notifications here; a page that is already
     /// open keeps the origin its notification recorded.
     private func openPendingConnections() {
-        guard let scope = model.pendingConnectionsScope else { return }
+        guard let scope = model.navigation.pendingConnectionsScope else { return }
         switch scope {
         case "general": route = .general
+        #if DEBUG
+        case "agents": route = .agents
+        case "updates": route = .updates
+        case "woven-mcp": route = .wovenMCP
+        case "opencode": route = harnessRoute(.opencode, machineID: nil, origin: .agents)
+        case "codex": route = harnessRoute(.codex, machineID: nil, origin: .agents)
+        case "claude-code": route = harnessRoute(.claudeCode, machineID: nil, origin: .agents)
+        case "grok-build": route = harnessRoute(.grokBuild, machineID: nil, origin: .agents)
+        case "pi-durable": route = harnessRoute(.defaultAgent, machineID: nil, origin: .agents)
+        case "github": route = .github
+        case "dictation": route = .dictation
+        case "workspaces": route = .workspaces(nil)
+        case "background-server": route = .backgroundServer
+        #endif
         case "permissions": if route != .permissions { open(.permissions, .permissions, from: .landing) }
         default: if route != .accounts(scope) { open(.accounts, .accounts(scope), from: .landing) }
         }
-        model.pendingConnectionsScope = nil
+        model.navigation.pendingConnectionsScope = nil
     }
 
     private func open(_ page: CrossLinkedPage, _ target: SettingsRoute, from origin: SettingsRoute) {
@@ -276,8 +272,7 @@ struct SettingsView: View {
         case .piDurable: "Pi Durable"
         case .harness(let kind, _, _): kind.displayName
         case .wovenMCP: "Woven MCP"
-        case .workspaces(let id): id.flatMap { model.remoteWorkspaces.configuration(id: $0)?.name } ?? "Workspaces"
-        case .appleDevices: "Apple Devices"
+        case .workspaces(let id): id.flatMap { model.machines.machine(id: $0)?.name } ?? "Workspaces"
         case .backgroundServer: "Background Server"
         case .dictation: "Dictation"
         case .bots: "Bots"
@@ -288,24 +283,24 @@ struct SettingsView: View {
     }
 
     private func machineTitle(_ machineID: String) -> String {
-        model.bots.machines.first { $0.id == machineID }?.displayName ?? "Bots"
+        model.machines.machine(id: machineID)?.name ?? "Bots"
     }
 
     private func backTitle(_ origin: HarnessSettingsOrigin) -> String {
         switch origin {
         case .agents: "Agents"
         case .general: "General"
-        case .remoteWorkspace(let id): model.remoteWorkspaces.configuration(id: id)?.name ?? "Workspaces"
+        case .machine(let id): model.machines.machine(id: id)?.name ?? "Workspaces"
         }
     }
 
     private func harnessRoute(
         _ runtimeKind: AgentRuntimeKind,
-        workspaceID: UUID?,
+        machineID: String?,
         origin: HarnessSettingsOrigin
     ) -> SettingsRoute {
-        guard runtimeKind == .defaultAgent else { return .harness(runtimeKind, workspaceID, origin) }
-        return .piDurable(workspaceID?.uuidString.lowercased() ?? "global", origin)
+        guard runtimeKind == .defaultAgent else { return .harness(runtimeKind, machineID, origin) }
+        return .piDurable(machineID ?? "global", origin)
     }
 
     private var landing: some View {
@@ -316,13 +311,13 @@ struct SettingsView: View {
             VStack(spacing: 2) {
                 SettingsDestinationRow(
                     title: "General",
-                    detail: "Version, appearance, conversation titles, and privacy.",
+                    detail: "Version, appearance, and conversation titles.",
                     icon: { LucideIcon(glyph: .settings, size: 15) },
                     action: { route = .general }
                 )
                 SettingsDestinationRow(
                     title: "Updates",
-                    detail: "Woven Matter and harnesses on every device.",
+                    detail: "Woven Matter and harnesses on every machine.",
                     status: updates.availableCount > 0 || updates.running ? updates.summary : nil,
                     statusTone: updates.availableCount > 0 ? .warning : .neutral,
                     icon: { LucideIcon(glyph: .rocket, size: 15) },
@@ -330,7 +325,7 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Permissions & Access",
-                    detail: "Keychain and the macOS permissions agents use.",
+                    detail: "The macOS permissions agents use.",
                     status: macAccess.summary,
                     statusTone: macAccess.remaining.isEmpty ? .good : .warning,
                     icon: { LucideIcon(glyph: .shieldCheck, size: 15) },
@@ -345,8 +340,8 @@ struct SettingsView: View {
                 SettingsDestinationRow(
                     title: "GitHub",
                     detail: "Your SSH key and commit identity for agents and bots everywhere.",
-                    status: model.github.snapshot.map { $0.key == nil ? "No key" : "Key added" },
-                    statusTone: model.github.snapshot?.key == nil ? .neutral : .good,
+                    status: model.settings.github.map { $0.key == nil ? "No key" : "Key added" },
+                    statusTone: model.settings.github?.key == nil ? .neutral : .good,
                     icon: { LucideIcon(glyph: .gitBranch, size: 15) },
                     action: { route = .github }
                 )
@@ -375,12 +370,6 @@ struct SettingsView: View {
                     action: { route = .workspaces(nil) }
                 )
                 SettingsDestinationRow(
-                    title: "Apple Devices",
-                    detail: "Connect Macs, iPhones, and iPads to share your library.",
-                    icon: { LucideIcon(glyph: .monitor, size: 15) },
-                    action: { route = .appleDevices }
-                )
-                SettingsDestinationRow(
                     title: "Background Server",
                     detail: "Keep agents working and see what is running.",
                     icon: { LucideIcon(glyph: .terminal, size: 15) },
@@ -395,9 +384,9 @@ struct SettingsView: View {
             }
         }
         .task {
-            macAccess.refresh(keychainReady: model.keychainAccessReady)
+            macAccess.refresh()
             updates.loadIfNeeded()
-            await model.github.load()
+            await model.settings.loadGitHub()
         }
     }
 }
@@ -410,6 +399,8 @@ private struct SettingsAgentsView: View {
     @Environment(\.openWindow) private var openWindow
 
     private let runtimes: [AgentRuntimeKind] = [.defaultAgent, .codex, .claudeCode, .grokBuild, .opencode]
+
+    private var thisMachineID: String? { model.thisMachineID }
 
     var body: some View {
         SettingsPage(title: "Agents", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
@@ -430,54 +421,47 @@ private struct SettingsAgentsView: View {
                     Button("Set up harnesses") { openWindow(id: HarnessSetupPresentation.windowID) }
                         .buttonStyle(SettingsQuietButtonStyle())
                 }
-                if let error = model.localACPAgentReconciliationError { SettingsError(error) }
-                if let error = model.openCode?.error { SettingsError(error) }
-                if let error = model.localRunError { SettingsError(error) }
             }
         }
         .task {
-            await model.openCode?.resolveExecutable()
-            model.refreshRuntimeInventory()
+            guard let thisMachineID else { return }
+            model.machines.refreshHarnesses(on: thisMachineID)
             await withTaskGroup(of: Void.self) { group in
-                group.addTask { await model.refreshLocalSignInStatus() }
                 for runtime in runtimes where runtime != .defaultAgent {
-                    group.addTask { await model.refreshHarnessSignIn(runtime) }
+                    group.addTask { await model.machines.refreshSignIn(runtime, on: thisMachineID) }
                 }
             }
         }
     }
 
     private func status(_ runtime: AgentRuntimeKind) -> (text: String, tone: SettingsStatusTone) {
+        guard let thisMachineID else { return ("Checking", .neutral) }
+        let machines = model.machines
         if runtime == .defaultAgent {
-            let summary = HarnessAccountPresentation.providerSummary(model.localSignInStatuses)
-            let connected = model.localSignInStatuses.contains { ["verified", "credentials_present"].contains($0.state) }
-            return (summary, connected ? .good : .neutral)
+            let statuses = machines.providerSignIns(on: thisMachineID)
+            return (HarnessAccountPresentation.providerSummary(statuses), statuses.contains(where: \.hasCredentials) ? .good : .neutral)
         }
-        if model.checkingLocalACPRuntimeKinds.contains(runtime) { return ("Checking", .neutral) }
-        guard let inventory = model.runtimeInventories[runtime] else { return ("Checking", .neutral) }
-        guard inventory.isInstalled else { return ("Not installed", .neutral) }
-        if runtime != .opencode, let availability = model.localACPRuntimeAvailability.first(where: { $0.runtimeKind == runtime }) {
-            if availability.isReady && !model.isLocalACPAgentReady(runtime) { return ("Workspace unavailable", .warning) }
-            switch availability.state {
-            case .ready: break
-            case .cliMissing: return ("CLI required", .warning)
-            case .adapterMissing: return ("Adapter required", .warning)
-            case .adapterOutdated: return ("Update required", .warning)
-            case .authenticationRequired: return ("Sign in required", .warning)
-            case .executableUnavailable: return ("Setup required", .warning)
-            }
+        if machines.isCheckingHarness(runtime, on: thisMachineID) { return ("Checking", .neutral) }
+        guard let harness = machines.harness(runtime, on: thisMachineID) else { return ("Checking", .neutral) }
+        guard harness.isInstalled else {
+            return harness.components.contains(where: \.isInstalled) ? ("Adapter required", .warning) : ("Not installed", .neutral)
         }
-        guard let signIn = model.harnessSignIn.statuses[runtime] else { return ("Installed", .neutral) }
-        return (signIn.label, ["verified", "credentials_present"].contains(signIn.state) ? .good : .warning)
+        switch harness.state {
+        case .ready, .notInstalled: break
+        case .signInRequired: return ("Sign in required", .warning)
+        case .unavailable, .failed: return ("Setup required", .warning)
+        }
+        guard let signIn = machines.signInStatus(runtime, on: thisMachineID) else { return ("Installed", .neutral) }
+        return (signIn.label, signIn.hasCredentials ? .good : .warning)
     }
 }
 
-/// Names new chats. A single row until opened.
+/// One harness's accounts, instances and defaults, for every machine or one machine.
 private struct SettingsHarnessView: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
-    var workspaceID: UUID?
-    var isWorkspaceScoped = false
+    var machineID: String?
+    var isMachineScoped = false
     var reservesRailControlSpace = false
     var backTitle = "Settings"
     let onBack: () -> Void
@@ -487,53 +471,45 @@ private struct SettingsHarnessView: View {
     init(
         model: ApplicationModel,
         runtimeKind: AgentRuntimeKind,
-        workspaceID: UUID?,
-        isWorkspaceScoped: Bool,
+        machineID: String?,
+        isMachineScoped: Bool,
         reservesRailControlSpace: Bool,
         backTitle: String,
         onBack: @escaping () -> Void
     ) {
         self.model = model
         self.runtimeKind = runtimeKind
-        self.workspaceID = workspaceID
-        self.isWorkspaceScoped = isWorkspaceScoped
+        self.machineID = machineID
+        self.isMachineScoped = isMachineScoped
         self.reservesRailControlSpace = reservesRailControlSpace
         self.backTitle = backTitle
         self.onBack = onBack
-        // Start in the right scope so a workspace page never loads the shared one first.
-        _scope = State(initialValue: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : "global")
+        // Start in the right scope so a machine's page never loads the shared one first.
+        _scope = State(initialValue: isMachineScoped ? machineID ?? model.thisMachineID ?? "global" : "global")
     }
 
-    private var workspaces: [RemoteWorkspaceConfiguration] { model.remoteWorkspaces.workspaces }
-    private var remoteWorkspace: RemoteWorkspaceConfiguration? {
-        workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
-    }
-    /// With no remote workspace there is nothing to choose, unless this Mac keeps its own defaults.
-    private var showsWorkspacePicker: Bool { !workspaces.isEmpty || scope != "global" || localOverrides }
+    private var machines: [Machine] { model.machines.machines }
+    private var scopedMachine: Machine? { machineID.flatMap { model.machines.machine(id: $0) } }
+    /// With one machine there is nothing to choose, unless it keeps its own defaults.
+    private var showsMachinePicker: Bool { machines.count > 1 || scope != "global" || localOverrides }
 
     var body: some View {
         SettingsPage(
             title: runtimeKind.displayName,
-            detail: isWorkspaceScoped
-                ? remoteWorkspace.map { "In \($0.name)." }
-                : nil,
+            detail: isMachineScoped ? scopedMachine.map { "In \($0.name)." } : nil,
             reservesRailControlSpace: reservesRailControlSpace,
             backTitle: backTitle,
             onBack: onBack
         ) {
-            if showsWorkspacePicker {
-                SettingsWorkspacePicker(title: "Applies to", scope: $scope, workspaces: workspaces)
+            if showsMachinePicker {
+                SettingsWorkspacePicker(title: "Applies to", scope: $scope, machines: machines)
             }
             SettingsHarnessAccounts(model: model, runtimeKind: runtimeKind, scope: scope)
-            if runtimeKind == .opencode {
-                SettingsOpenCodeInstances(model: model, scope: scope)
-            }
             SettingsAgentDefaultsSection(model: model, runtime: runtimeKind, scope: scope, managesSharing: true)
         }
-        .task(id: workspaceID) {
-            guard workspaces.isEmpty, let local = model.localACPWorkspaceLaunchConfiguration else { return }
-            let defaults = try? await model.agentSelectionDefaults(
-                runtime: runtimeKind, workspace: "local:" + local.rootURL.standardizedFileURL.path)
+        .task(id: machineID) {
+            guard machines.count <= 1, let thisMachineID = model.thisMachineID else { return }
+            let defaults = try? await model.settings.agentSelectionDefaults(runtime: runtimeKind, machineID: thisMachineID)
             localOverrides = defaults?.usesShared == false
         }
     }

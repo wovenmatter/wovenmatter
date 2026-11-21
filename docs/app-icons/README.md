@@ -1,30 +1,26 @@
 # App icons
 
-- **Production / Release:** sage green (`AppIcon`).
-- **macOS Dev / Debug:** pale cognac (`AppIconDev`).
-- **iPhone / iPad (all configurations):** the production sage green (`AppIcon`).
+- **Release:** sage green (`AppIcon`).
+- **Debug and development instances:** pale cognac (`AppIconDev`).
 
-Both variants use **one shared foreground**, traced from the original green
-**A11 Larger** design: identical cube pixels, shadow pixels, geometry, placement,
-and canvas padding. The cognac original (**C4 Larger**) is retained only as a
-background color reference; its independently generated cube and shadow are not
-used. These source designs came from the wovenmatter.com round 9 exploration on
-September 16, 2026.
+Both catalogs are in `app/App/Assets.xcassets`, and the Xcode build settings
+pick one per configuration. There is no runtime switching.
 
-Run `python3 docs/app-icons/export.py` with Pillow installed (tested with 11.3).
-It samples a background-only patch in both originals and transfers the RGB color
-difference to the green master outside the shared cube-and-shadow mask. This
-preserves the master's subtle background texture. The original neutral exterior
-is filled with the sampled background color,
-producing fully opaque square artwork. The source tile mask is used only to
-replace that exterior; it is not exported as transparency. The operating system
-applies the final outer icon shape. The full canvas and foreground coordinates are retained
-without cropping, scaling up, or repositioning. All existing macOS and iOS asset
-catalog sizes from 16 to 1024 pixels are exported with Lanczos
-resampling. The iOS 1024-pixel artwork is identical to the production macOS
-1024-pixel artwork; iOS assets are never derived from the cognac dev variant.
-Antialiased boundary pixels naturally blend with their respective backgrounds;
-the foreground artwork itself is shared, not regenerated.
+Both variants use one shared foreground, traced from the original green
+**A11 Larger** design: the same cube and shadow pixels, geometry, placement and
+canvas padding. The cognac original (**C4 Larger**) is kept only as a
+background colour reference; its own cube and shadow are not used. Both
+originals came from the wovenmatter.com round 9 exploration on September 16,
+2026.
 
-Xcode's existing build settings select the appropriate catalog. There is no
-runtime theme switching and no generative editing in the export process.
+Run `python3 docs/app-icons/export.py` with Pillow installed (tested with
+11.3). It samples a background-only patch in both originals and moves the
+colour difference onto the green master outside the shared cube-and-shadow
+mask, which keeps the master's background texture. The neutral exterior is
+filled with the sampled background colour, giving fully opaque square artwork;
+macOS applies the outer icon shape. The canvas is never cropped, scaled up or
+moved. Every catalog size from 16 to 1024 pixels is exported with Lanczos
+resampling.
+
+The script also writes the production artwork to the iPhone and iPad catalog in
+`ios/`, which is not built.

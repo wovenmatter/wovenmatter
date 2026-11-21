@@ -1,7 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
 
 /// The type scale for settings. Pages use these tokens instead of literal sizes.
 extension Font {
@@ -514,29 +512,6 @@ struct SettingsHelp<Content: View>: View {
     }
 }
 
-struct SettingsLocalRuntimeInventoryRow: View {
-    @Bindable var model: ApplicationModel
-    let runtimeKind: AgentRuntimeKind
-
-    private var status: String {
-        if model.checkingRuntimeKinds.contains(runtimeKind) { return "Checking" }
-        guard let inventory = model.runtimeInventories[runtimeKind] else { return "Checking" }
-        return inventory.isInstalled ? "Installed" : "Not installed"
-    }
-
-    var body: some View {
-        SettingsRuntimeSummaryRow(
-            summary: model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…",
-            status: status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .good : .warning) {
-            if model.runtimeInventories[runtimeKind]?.isInstalled == false {
-                SettingsLocalRuntimeInstallButton(model: model, runtimeKind: runtimeKind)
-            } else {
-                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
-            }
-        }
-    }
-}
-
 struct SettingsRuntimeSummaryRow<Actions: View>: View {
     var title = "Software"
     let summary: String
@@ -558,119 +533,6 @@ struct SettingsRuntimeSummaryRow<Actions: View>: View {
             actions
         }
         .frame(minHeight: SettingsMetrics.rowHeight)
-    }
-}
-
-struct SettingsLocalRuntimeInstallButton: View {
-    @Bindable var model: ApplicationModel
-    let runtimeKind: AgentRuntimeKind
-
-    var body: some View {
-        let inventory = model.runtimeInventories[runtimeKind]
-        let installing = model.installingLocalACPRuntimeKinds.contains(runtimeKind)
-            || (runtimeKind == .opencode && model.openCode?.isInstalling == true)
-        Button(installing ? "Installing…" : inventory == nil ? "Checking…" : "Install") {
-            model.installLocalACPRuntimeComponent(runtimeKind)
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(inventory == nil || model.runtimeMaintenanceBusy(runtimeKind) || model.checkingRuntimeInventory
-            || !model.installingLocalACPRuntimeKinds.isEmpty
-            || model.pendingRuntimeInstall != nil
-            || model.localRuntimeMaintenanceHasActiveConversation)
-        .accessibilityLabel("Install " + runtimeKind.displayName)
-    }
-}
-
-struct SettingsLocalRuntimeUpdateButton: View {
-    @Bindable var model: ApplicationModel
-    let runtimeKind: AgentRuntimeKind
-
-    var body: some View {
-        let inventory = model.runtimeInventories[runtimeKind]
-        let updating = model.updatingRuntimeKinds.contains(runtimeKind)
-        let checking = model.checkingRuntimeKinds.contains(runtimeKind)
-        let retryUpdate = model.failedRuntimeUpdateKinds.contains(runtimeKind)
-        let hasUpdate = inventory?.isInstalled == true
-            && (inventory?.updateAvailable == true || retryUpdate)
-        let retryCheck = model.checkedRuntimeKinds.contains(runtimeKind)
-            && inventory?.latestUnavailable == true
-        let label = updating ? "Updating…" : checking ? "Checking…"
-            : hasUpdate ? (retryUpdate ? "Retry update" : "Update")
-            : retryCheck ? "Retry check" : "Check for updates"
-        Button(label) {
-            if hasUpdate { model.updateRuntime(runtimeKind) }
-            else { model.checkRuntimeUpdate(runtimeKind) }
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(
-            checking || model.runtimeMaintenanceBusy(runtimeKind)
-                || (hasUpdate && model.localRuntimeMaintenanceHasActiveConversation)
-        )
-        .accessibilityLabel(label + " for " + runtimeKind.displayName)
-    }
-}
-
-struct SettingsRemoteRuntimeUpdateButton: View {
-    @Bindable var model: RemoteWorkspacesModel
-    let harness: RemoteHarnessStatus
-    let configuration: RemoteWorkspaceConfiguration
-
-    private var runtime: RemoteRuntimeMaintenance? {
-        model.runtimeMaintenance[configuration.id]?.first { $0.id == harness.id }
-    }
-
-    var body: some View {
-        let checking = model.checkingRuntimeIDs[configuration.id]?.contains(harness.id) == true
-        let running = runtime?.operation?.status == "running"
-        let unavailable = model.isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
-        let checkUnavailable = unavailable
-            || model.runtimeCheckErrors[configuration.id]?[harness.id] != nil
-            || runtime?.versionCheckAvailable == false
-        let busy = model.harnessMaintenanceBlocker(harness.id, in: configuration.id) != nil || model.isMaintaining(harness.id, in: configuration.id)
-            || running || checking
-        let label = updateButtonTitle(checking: checking, running: running, checkUnavailable: checkUnavailable)
-        Button(label) {
-            if let runtime, runtime.installed,
-               runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update"),
-               !checkUnavailable {
-                model.runHarnessMaintenance("update", harness: harness, configuration: configuration)
-            } else {
-                model.checkRuntimeUpdates(harness.id, configuration: configuration)
-            }
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(busy)
-        .accessibilityLabel(label + " for " + harness.displayName)
-    }
-
-    private func updateButtonTitle(checking: Bool, running: Bool, checkUnavailable: Bool) -> String {
-        if checking { return "Checking…" }
-        if running, runtime?.operation?.action == "update" { return "Updating…" }
-        if checkUnavailable && !running { return "Retry check" }
-        if let runtime {
-            if runtime.failureCount > 0, runtime.operation?.action == "update" { return "Retry update" }
-            if runtime.updateAvailable { return "Update" }
-        }
-        return "Check for updates"
-    }
-
-}
-
-struct SettingsRuntimeMaintenanceErrorView: View {
-    @Bindable var model: ApplicationModel
-    let runtimeKind: AgentRuntimeKind
-    var workspaceID: UUID?
-
-    private var message: String? {
-        guard let workspaceID else { return model.runtimeFailureDetails[runtimeKind] }
-        return model.remoteWorkspaces.runtimeMaintenanceError(runtimeKind, workspaceID: workspaceID)
-    }
-
-    @ViewBuilder
-    var body: some View {
-        if let message, !message.isEmpty {
-            SettingsError(message)
-        }
     }
 }
 
@@ -981,92 +843,24 @@ struct SettingsQuietButtonStyle: ButtonStyle {
     }
 }
 
-struct CredentialAccessDisclosureView: View {
-    let purpose: String
-    let onEnable: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "key.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(WovenPalette.primary)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        Circle().fill(WovenPalette.primary.opacity(0.1))
-                    )
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Enable Keychain access")
-                        .font(.system(size: 17, weight: .semibold))
-                    Text(purpose)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 9) {
-                disclosureRow(
-                    "Woven Matter saves your credentials in Apple Keychain."
-                )
-                disclosureRow(
-                    "Enabled features can reuse saved credentials. Automatic background refreshes never request permission."
-                )
-                disclosureRow(
-                    "You still choose which providers, runtimes, and workspaces to enable."
-                )
-            }
-
-            DisclosureGroup("Keychain prompts") {
-                Text("macOS may ask when you use Keychain in Settings → Permissions & Access. Choose Always Allow to remember access to the requested item. Background refreshes stay silent.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 6)
-            }
-            .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-
-            HStack {
-                Spacer()
-                Button("Not now", role: .cancel, action: onCancel)
-                    .buttonStyle(SettingsQuietButtonStyle())
-                Button("Enable Keychain access", action: onEnable)
-                    .buttonStyle(WovenPrimaryButtonStyle())
-            }
-        }
-        .padding(24)
-        .frame(width: 500)
-        .background(WovenPalette.background)
-    }
-
-    private func disclosureRow(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(WovenPalette.primary)
-                .padding(.top, 2)
-            Text(text)
-                .font(.system(size: 12))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-/// Shared native-harness account controls for setup and local settings: the signed-in
+/// Shared native-harness account controls for setup and settings: the signed-in
 /// account with Remove account, or Sign in. Codex, Claude Code, and Grok Build sign in
-/// inside the app; OpenCode adds keys with its own picker in Terminal.
+/// inside the app; OpenCode adds keys with its own picker in Terminal. The machine's
+/// server runs the harness's own commands; `machineID` nil is this Mac.
 struct SettingsHarnessSignInControl: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
     var compact = false
+    var machineID: String? = nil
     @State private var keyMethod: HarnessSignInFlow.Method?
     @State private var key = ""
     @State private var confirmsRemoval = false
     @State private var removingCredential: AgentSignInStatus.Account?
 
-    private var signIn: HarnessSignInModel { model.harnessSignIn }
-    private var status: AgentSignInStatus? { signIn.statuses[runtimeKind] }
+    private var machines: MachinesStore { model.machines }
+    private var target: String? { machineID ?? model.thisMachineID }
+    private var status: AgentSignInStatus? { target.flatMap { machines.signInStatus(runtimeKind, on: $0) } }
+    private var session: HarnessSignInSession? { target.flatMap { machines.signInSession(runtimeKind, on: $0) } }
     /// The setup window's compact row has no key field, so it offers only sign-in methods.
     private var methods: [HarnessSignInFlow.Method] {
         HarnessSignInFlow.methods(runtimeKind).filter { method in
@@ -1074,20 +868,18 @@ struct SettingsHarnessSignInControl: View {
             return true
         }
     }
-    private var hasCredentials: Bool {
-        ["verified", "credentials_present"].contains(status?.state ?? "")
-    }
-    private var busy: Bool {
-        model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind)
-            || signIn.removing.contains(runtimeKind) || signIn.sessions[runtimeKind]?.isActive == true
-    }
+    private var hasCredentials: Bool { status?.hasCredentials == true }
+    private var busy: Bool { target.map { machines.isSignInBusy(runtimeKind, on: $0) } ?? true }
+    private var opening: Bool { target.map { machines.isOpeningSignIn(runtimeKind, on: $0) } ?? false }
+    private var removing: Bool { target.map { machines.isRemovingSignIn(runtimeKind, on: $0) } ?? false }
+    private var notInstalled: Bool { status?.state == .notInstalled }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if compact {
                 HStack(spacing: 8) {
                     if hasCredentials {
-                        Text(status?.accounts?.first?.name ?? status?.label ?? "Signed in")
+                        Text(status?.accounts.first?.name ?? status?.label ?? "Signed in")
                             .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     } else {
                         signInButton
@@ -1096,37 +888,49 @@ struct SettingsHarnessSignInControl: View {
             } else {
                 if hasCredentials { accountRows } else { signedOutRow }
                 if let keyMethod { keyEntry(keyMethod) }
-                SettingsHarnessSignInPanel(model: model, runtimeKind: runtimeKind)
-                if let message = signIn.messages[runtimeKind] { SettingsNote(message) }
+                SettingsHarnessSignInPanel(model: model, runtimeKind: runtimeKind, machineID: machineID)
+                if let target, let message = machines.signInMessage(runtimeKind, on: target) { SettingsNote(message) }
             }
         }
         .frame(minHeight: compact ? nil : SettingsMetrics.rowHeight)
-        .task { await model.refreshHarnessSignIn(runtimeKind) }
+        .task(id: target) { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await model.refreshHarnessSignIn(runtimeKind) }
+            Task { await refresh() }
         }
-        .onChange(of: signIn.sessions[runtimeKind]?.state) { _, state in
-            if state == .succeeded { Task { await model.refreshHarnessSignIn(runtimeKind) } }
+        .onChange(of: session?.state) { _, state in
+            if state == .succeeded { Task { await refresh() } }
         }
-        .confirmationDialog("Remove your \(runtimeKind.displayName) account from this Mac?", isPresented: $confirmsRemoval,
+        .confirmationDialog("Remove your \(runtimeKind.displayName) account from \(placeName)?", isPresented: $confirmsRemoval,
                             titleVisibility: .visible) {
             Button("Remove account", role: .destructive) {
-                Task { await signIn.signOut(runtimeKind); await model.refreshHarnessSignIn(runtimeKind) }
+                guard let target else { return }
+                Task { await machines.signOut(runtimeKind, on: target); await refresh() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\(runtimeKind.displayName) signs out on this Mac. Sign in again to use it here.")
+            Text("\(runtimeKind.displayName) signs out on \(placeName). Sign in again to use it there.")
         }
         .confirmationDialog("Remove \(removingCredential?.name ?? "this key") from OpenCode?",
                             isPresented: Binding(get: { removingCredential != nil }, set: { if !$0 { removingCredential = nil } }),
                             titleVisibility: .visible, presenting: removingCredential) { account in
             Button("Remove", role: .destructive) {
-                Task { await signIn.remove(account); await model.refreshHarnessSignIn(runtimeKind) }
+                guard let target else { return }
+                Task { await machines.removeCredential(account, runtimeKind, on: target); await refresh() }
             }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("OpenCode stops using this saved key.")
         }
+    }
+
+    private var placeName: String {
+        guard let target, let machine = machines.machine(id: target), !machine.isThisMachine else { return "this Mac" }
+        return machine.name
+    }
+
+    private func refresh() async {
+        guard let target else { return }
+        await machines.refreshSignIn(runtimeKind, on: target)
     }
 
     /// Each account the harness reports. Most sign in once, so Remove account signs out;
@@ -1143,7 +947,7 @@ struct SettingsHarnessSignInControl: View {
         ForEach(Array(accounts.enumerated()), id: \.offset) { index, account in
             SettingsRow(title: account.name ?? account.method, detail: account.name == nil ? nil : account.method) {
                 if runtimeKind == .opencode {
-                    if account.target != nil {
+                    if account.isRemovable {
                         Button("Remove") { removingCredential = account }
                             .buttonStyle(SettingsQuietButtonStyle())
                             .disabled(busy)
@@ -1154,34 +958,34 @@ struct SettingsHarnessSignInControl: View {
                 }
             }
         }
-        if runtimeKind == .opencode {
+        if runtimeKind == .opencode, onThisMac {
             SettingsRow(title: "Add another key", detail: "OpenCode's picker opens in Terminal.") { signInButton }
         }
     }
 
     private var removeButton: some View {
-        Button(signIn.removing.contains(runtimeKind) ? "Removing…" : "Remove account") { confirmsRemoval = true }
+        Button(removing ? "Removing…" : "Remove account") { confirmsRemoval = true }
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(busy)
     }
 
     private var signedOutRow: some View {
-        SettingsRow(title: status?.state == "not_installed" ? "Not installed" : status == nil ? "Checking sign-in…" : "Not signed in",
-                    detail: status.map { $0.state == "sign_in_required" ? nil : $0.detail } ?? nil) {
+        SettingsRow(title: notInstalled ? "Not installed" : status == nil ? "Checking sign-in…" : "Not signed in",
+                    detail: status.flatMap { $0.state == .signInRequired ? nil : $0.detail }) {
             signInButton
         }
     }
 
+    /// OpenCode's picker runs in Terminal, so only this Mac can add its keys.
+    private var onThisMac: Bool { target != nil && target == model.thisMachineID }
+
     @ViewBuilder private var signInButton: some View {
         if runtimeKind == .opencode {
-            Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Add key…") { signIn.signIn(runtimeKind) }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(busy || status?.state == "not_installed")
-                .help("Opens OpenCode's sign-in in Terminal. Return here when finished.")
+            if onThisMac { openCodeButton }
         } else if methods.count == 1, let method = methods.first {
             Button(method.title) { begin(method) }
                 .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(busy || status?.state == "not_installed")
+                .disabled(busy || notInstalled)
         } else {
             Menu("Sign in") {
                 ForEach(methods) { method in Button(method.title) { begin(method) } }
@@ -1189,9 +993,18 @@ struct SettingsHarnessSignInControl: View {
             .menuStyle(.button)
             .fixedSize()
             .buttonStyle(SettingsQuietButtonStyle())
-            .disabled(busy || status?.state == "not_installed")
+            .disabled(busy || notInstalled)
             .accessibilityLabel("Sign in to \(runtimeKind.displayName)")
         }
+    }
+
+    private var openCodeButton: some View {
+            Button(opening ? "Opening…" : "Add key…") {
+                if let target { machines.openTerminalSignIn(runtimeKind, on: target) }
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(busy || notInstalled)
+            .help("Opens OpenCode's sign-in in Terminal. Return here when finished.")
     }
 
     private func begin(_ method: HarnessSignInFlow.Method) {
@@ -1200,7 +1013,7 @@ struct SettingsHarnessSignInControl: View {
             keyMethod = method
         } else {
             keyMethod = nil
-            signIn.start(runtimeKind, method: method)
+            if let target { machines.startSignIn(runtimeKind, method: method, on: target) }
         }
     }
 
@@ -1218,8 +1031,8 @@ struct SettingsHarnessSignInControl: View {
 
     private func saveKey(_ method: HarnessSignInFlow.Method) {
         let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        signIn.start(runtimeKind, method: method, key: value)
+        guard !value.isEmpty, let target else { return }
+        machines.startSignIn(runtimeKind, method: method, key: value, on: target)
         key = ""
         keyMethod = nil
     }
@@ -1261,17 +1074,20 @@ struct SettingsSignInHandoff: View {
 struct SettingsHarnessSignInPanel: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
+    var machineID: String? = nil
     @State private var code = ""
 
+    private var target: String? { machineID ?? model.thisMachineID }
+
     var body: some View {
-        if let session = model.harnessSignIn.sessions[runtimeKind], session.state != .succeeded {
+        if let target, let session = model.machines.signInSession(runtimeKind, on: target), session.state != .succeeded {
             VStack(alignment: .leading, spacing: 8) {
                 SettingsSignInHandoff(url: session.url, code: session.code)
-                if case .codeFromPage(let label) = session.method.input, session.state == .waiting, session.url != nil {
+                if session.acceptsCode, session.state == .waiting, session.url != nil {
                     HStack {
-                        TextField(label, text: $code).wovenInput()
-                            .onSubmit { send() }
-                        Button(session.sentCode ? "Sent" : "Continue") { send() }
+                        TextField(session.codeLabel, text: $code).wovenInput()
+                            .onSubmit { send(target) }
+                        Button(session.sentCode ? "Sent" : "Continue") { send(target) }
                             .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     SettingsNote("If the page shows a code instead of finishing on its own, paste it here.")
@@ -1286,10 +1102,10 @@ struct SettingsHarnessSignInPanel: View {
                     HStack {
                         ProgressView().controlSize(.small)
                         Text(session.url == nil ? "Preparing sign-in…" : "Waiting for sign-in…").font(.settingsBody)
-                        Button("Cancel") { model.harnessSignIn.cancel(runtimeKind) }
+                        Button("Cancel") { model.machines.cancelSignIn(runtimeKind, on: target) }
                     }
                 } else {
-                    Button("Done") { model.harnessSignIn.dismiss(runtimeKind) }
+                    Button("Done") { model.machines.dismissSignIn(runtimeKind, on: target) }
                 }
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -1297,31 +1113,27 @@ struct SettingsHarnessSignInPanel: View {
         }
     }
 
-    private func send() {
-        model.harnessSignIn.submit(runtimeKind, code: code)
+    private func send(_ target: String) {
+        model.machines.submitSignInCode(runtimeKind, code: code, on: target)
         code = ""
     }
 }
 
-/// One workspace selector per page. Hidden when a page has only one thing to apply to.
+/// One machine selector per page: every machine, or one. Hidden when a page has only
+/// one thing to apply to.
 struct SettingsWorkspacePicker: View {
     let title: String
+    /// "global" or a machine ID.
     @Binding var scope: String
-    let workspaces: [RemoteWorkspaceConfiguration]
+    let machines: [Machine]
     var sharedLabel = "All workspaces"
 
-    private var options: [String] {
-        ["global", "local"] + workspaces.map { $0.id.uuidString.lowercased() }
-    }
+    private var options: [String] { ["global"] + machines.map(\.id) }
 
     var body: some View {
         SettingsRow(title: title) {
             SettingsPicker(title, selection: $scope, options: options) { option in
-                switch option {
-                case "global": sharedLabel
-                case "local": "Local workspace"
-                default: workspaces.first { $0.id.uuidString.lowercased() == option }?.name ?? "Workspace"
-                }
+                option == "global" ? sharedLabel : machines.first { $0.id == option }?.name ?? "Workspace"
             }
         }
     }
@@ -1342,7 +1154,7 @@ struct SettingsHarnessAccountDetails: View {
                             .font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
-            } else if ["verified", "credentials_present"].contains(status?.state ?? "") {
+            } else if status?.hasCredentials == true {
                 SettingsNote("Account details not provided by this harness.")
             }
         }.textSelection(.enabled)

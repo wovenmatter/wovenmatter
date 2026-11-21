@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
-import WovenMatterClient
-import WovenMatterCore
+import WovenProtocol
 
 enum WorkspaceListMode: String, CaseIterable {
     case chats
@@ -21,25 +20,24 @@ enum AgentMoveScope {
 enum PinnedAgentsStore {
     static let storageKey = "wovenmatter.sidebar.pinned-agent-ids"
 
-    static func decode(_ raw: String) -> [UUID] {
+    static func decode(_ raw: String) -> [String] {
         guard let data = raw.data(using: .utf8),
               let values = try? JSONDecoder().decode([String].self, from: data) else {
             return []
         }
-        var seen = Set<UUID>()
-        return values.compactMap { UUID(uuidString: $0) }.filter { seen.insert($0).inserted }
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
 
-    static func encode(_ ids: [UUID]) -> String {
-        let values = ids.map { $0.uuidString.lowercased() }
-        guard let data = try? JSONEncoder().encode(values),
+    static func encode(_ ids: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(ids),
               let raw = String(data: data, encoding: .utf8) else {
             return "[]"
         }
         return raw
     }
 
-    static func toggle(id: UUID, in raw: inout String) {
+    static func toggle(id: String, in raw: inout String) {
         var ids = decode(raw)
         if let index = ids.firstIndex(of: id) {
             ids.remove(at: index)
@@ -71,17 +69,16 @@ struct SidebarActions {
     let onMoveSingleRail: () -> Void
     let onShowNavigation: () -> Void
     let onUtility: (WindowDestination) -> Void
-    let onSelectAgent: (UUID) -> Void
-    let onCreateAgentChat: (UUID) -> Void
-    let onSelectRemoteAgent: (RemoteHarnessChatTarget) -> Void
-    let onStartRemoteChat: (RemoteHarnessChatTarget) -> Void
+    let onSelectAgent: (String) -> Void
+    let onCreateAgentChat: (String) -> Void
     let onSelectFolder: (String?) -> Void
     let onSelectConversation: (String) -> Void
     let onSelectNote: (String) -> Void
     let onCreateAgent: () -> Void
     let onCreateConversation: () -> Void
     let onCreateNote: () -> Void
-    let onCreateFolder: (String, UUID?, URL?) -> Void
+    /// Name, the machine that will own the folder, and an existing directory to link.
+    let onCreateFolder: (String, String, URL?) -> Void
     let onRenameFolder: (String, String) -> Void
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
@@ -97,29 +94,25 @@ struct SidebarActions {
 }
 
 struct SidebarRail: View {
+    let model: ApplicationModel
     let side: SidebarSide
     let page: SidebarPage
     let style: SidebarStyle
     let adaptiveExpanded: Bool
     let agents: [WorkspaceAgent]
-    let navigationAgents: [WorkspaceAgent]
-    let remoteWorkspaces: RemoteWorkspacesModel
-    let localWorkspaceReady: Bool
-    let localExecutionWorkspaceID: String?
-    let executionWorkspaces: [ExecutionWorkspace]
-    let conversationOwners: [String: String]
+    /// This machine first, then the others.
+    let machines: [Machine]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
     let runningConversationIDs: Set<String>
-    let selectedAgentID: UUID?
+    let selectedAgentID: String?
     let selectedFolderID: String?
     let selectedConversationID: String?
     let selectedNoteID: String?
-    let bots: BotsModel
+    let bots: BotsStore
     let selectedBotTarget: BotTarget?
     let destination: WindowDestination
-    let contentRevision: Int64
     @Binding var pinnedAgentIDsRaw: String
     @Binding var agentOrderRaw: String
     @Binding var agentDisclosureRaw: String
@@ -142,13 +135,10 @@ struct SidebarRail: View {
 
     private var navigationPage: some View {
         SidebarNavigationPage(
+            model: model,
             side: side,
-            agents: navigationAgents,
-            remoteWorkspaces: remoteWorkspaces,
-            localWorkspaceReady: localWorkspaceReady,
-            localExecutionWorkspaceID: localExecutionWorkspaceID,
-            executionWorkspaces: executionWorkspaces,
-            conversationOwners: conversationOwners,
+            agents: agents,
+            machines: machines,
             folders: folders,
             conversations: conversations,
             notes: notes,
@@ -175,8 +165,8 @@ struct SidebarRail: View {
             notes: scopedNotes,
             runningConversationIDs: runningConversationIDs,
             agents: agents,
+            machines: machines,
             folders: folders,
-            contentRevision: contentRevision,
             contentScopeID: selectedFolderID,
             selectedConversationID: selectedConversationID,
             selectedNoteID: selectedNoteID,
@@ -205,21 +195,19 @@ struct SidebarRail: View {
 
 struct SidebarNavigationPage: View {
     @Environment(\.wovenTheme) private var theme
+    let model: ApplicationModel
     let side: SidebarSide
     let agents: [WorkspaceAgent]
-    let remoteWorkspaces: RemoteWorkspacesModel
-    let localWorkspaceReady: Bool
-    let localExecutionWorkspaceID: String?
-    let executionWorkspaces: [ExecutionWorkspace]
-    let conversationOwners: [String: String]
+    /// This machine first, then the others.
+    let machines: [Machine]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
     let runningConversationIDs: Set<String>
-    let selectedAgentID: UUID?
+    let selectedAgentID: String?
     let selectedFolderID: String?
     let selectedConversationID: String?
-    let bots: BotsModel
+    let bots: BotsStore
     let selectedBotTarget: BotTarget?
     let destination: WindowDestination
     @Binding var pinnedAgentIDsRaw: String
@@ -234,7 +222,6 @@ struct SidebarNavigationPage: View {
     @AppStorage(WorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
 
-    @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var presentedFolderID: String?
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = ScrollHoverCoordinator()
@@ -244,24 +231,17 @@ struct SidebarNavigationPage: View {
     @State private var deletingFolder: WorkspaceFolderRecord?
     @State private var editingReferenceFolderID: String?
 
-    private var pinnedAgentOrder: [UUID] {
+    private var pinnedAgentOrder: [String] {
         PinnedAgentsStore.decode(pinnedAgentIDsRaw)
     }
 
-    private var pinnedAgentIDs: Set<UUID> {
+    private var pinnedAgentIDs: Set<String> {
         Set(pinnedAgentOrder)
     }
 
-    private var pairedWorkspaceLinks: [ExecutionWorkspace] {
-        PairedWorkspaceSidebarModel.workspaces(executionWorkspaces)
-    }
+    private var thisMachine: Machine? { machines.first(where: \.isThisMachine) }
 
-    private var remoteWorkspaceLinks: [RemoteWorkspaceSidebarLink] {
-        RemoteWorkspaceSidebarModel.links(
-            workspaces: remoteWorkspaces.workspaces,
-            readyTargets: remoteWorkspaces.readyChatTargets
-        )
-    }
+    private var otherMachines: [Machine] { machines.filter { !$0.isThisMachine } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -291,9 +271,6 @@ struct SidebarNavigationPage: View {
                 scrollHoverCoordinator.setScrolling(phase.isScrolling)
             }
         }
-        .sheet(item: $browserWorkspace) { configuration in
-            RemoteBrowserView(workspaces: remoteWorkspaces, configuration: configuration)
-        }
     }
 
     private var mirrorsHeader: Bool {
@@ -310,7 +287,7 @@ struct SidebarNavigationPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Workspaces")
                     .font(.system(size: 13, weight: .semibold))
-                let workspaceCount = remoteWorkspaceLinks.count + pairedWorkspaceLinks.count + 1
+                let workspaceCount = otherMachines.count + 1
                 Text("\(workspaceCount) \(workspaceCount == 1 ? "workspace" : "workspaces")")
                 .font(.system(size: 11))
                 .foregroundStyle(WovenPalette.foreground)
@@ -420,128 +397,45 @@ struct SidebarNavigationPage: View {
                 let key = AgentDisclosureKey.localWorkspace
                 agentDisclosureHeading(title: "Local workspace", key: key)
                 if agentSectionExpanded(key) {
-                    workspaceContents(
-                        key: key,
-                        title: "Local workspace",
-                        workspaceAgents: agents.filter { $0.bucket == .localCLIAgents },
-                        workspaceFolders: localExecutionWorkspaceID.map { owner in
-                            folders.filter { $0.executionWorkspaceID == owner }
-                        } ?? []
-                    )
+                    workspaceContents(key: key, title: "Local workspace", machine: thisMachine)
                 }
             }
             if showsRemoteWorkspaces {
                 let key = AgentDisclosureKey.remoteWorkspaces
                 agentDisclosureHeading(title: "Remote workspaces", key: key)
                 if agentSectionExpanded(key) {
-                    if remoteWorkspaceLinks.isEmpty && pairedWorkspaceLinks.isEmpty {
+                    if otherMachines.isEmpty {
                         agentEmptyLabel("No remote workspaces yet")
                     }
-                    ForEach(remoteWorkspaceLinks) { workspace in
-                        remoteWorkspaceSection(workspace)
+                    ForEach(otherMachines) { machine in
+                        machineSection(machine)
                     }
-                    ForEach(pairedWorkspaceLinks) { workspace in
-                        pairedWorkspaceSection(workspace)
-                    }
-                }
-            }
-            // A disconnected workspace retains its captured folder ownership.
-            ForEach(unavailableFolderOwnerIDs, id: \.self) { ownerID in
-                let key = "unavailable-workspace:" + ownerID
-                let title = "Unavailable workspace"
-                agentDisclosureHeading(title: title, key: key)
-                if agentSectionExpanded(key) {
-                    workspaceContents(
-                        key: key,
-                        title: title, workspaceAgents: [],
-                        workspaceFolders: folders.filter { ($0.executionWorkspaceID ?? "") == ownerID },
-                        canCreateFolders: false
-                    )
                 }
             }
         }
     }
 
-    private var unavailableFolderOwnerIDs: [String] {
-        let known = Set(remoteWorkspaceLinks.map { ApplicationModel.remoteDatabaseSourceID($0.id) }
-            + [localExecutionWorkspaceID].compactMap { $0 })
-        // iPhone and iPad folders are listed under their own workspace.
-        let paired = Set(pairedWorkspaceLinks.map { PairedWorkspaceSidebarModel.canonicalID($0.id) })
-        return Set(folders.compactMap { $0.executionWorkspaceID }.filter {
-            !$0.isEmpty && !paired.contains(PairedWorkspaceSidebarModel.canonicalID($0))
-        }).subtracting(known).sorted()
-    }
-
-    /// A paired iPhone or iPad: its Quick Chat history (read-only here) and the
-    /// folders bound to it. Folders are created on the device itself.
-    @ViewBuilder
-    private func pairedWorkspaceSection(_ workspace: ExecutionWorkspace) -> some View {
-        let key = "paired-workspace:" + PairedWorkspaceSidebarModel.canonicalID(workspace.id)
-        let history = PairedWorkspaceSidebarModel.history(
-            for: workspace, conversations: conversations, owners: conversationOwners)
-        let sections = FolderSections(
-            folders: PairedWorkspaceSidebarModel.folders(for: workspace, in: folders))
-        let counts = folderContentCounts
-        agentDisclosureHeading(title: workspace.name, key: key)
-        if agentSectionExpanded(key) {
-            VStack(alignment: .leading, spacing: 0) {
-                agentDisclosureHeading(title: "Quick Chat", key: key + ":history")
-                if agentSectionExpanded(key + ":history") {
-                    if history.isEmpty { agentEmptyLabel("No synced chats yet") }
-                    ForEach(history) { conversation in
-                        RailRow(
-                            icon: .messageSquare,
-                            title: conversation.title,
-                            hoverID: "paired-conversation:\(conversation.id)",
-                            selected: selectedConversationID == conversation.id,
-                            conversationID: conversation.id
-                        ) {
-                            actions.onSelectConversation(conversation.id)
-                        }
-                        .help("Quick Chat history. Continue on \(workspace.name).")
-                    }
-                }
-                agentDisclosureHeading(title: "Folders", key: key + ":folders")
-                if agentSectionExpanded(key + ":folders") {
-                    if sections.pinned.isEmpty && sections.unpinned.isEmpty {
-                        agentEmptyLabel("No folders yet. Create folders on \(workspace.name).")
-                    }
-                    ForEach(sections.pinned) { folder in
-                        folderRow(folder, sectionFolders: sections.pinned,
-                                  counts: counts[folder.id, default: .init()], workspaceTitle: workspace.name)
-                    }
-                    ForEach(sections.unpinned) { folder in
-                        folderRow(folder, sectionFolders: sections.unpinned,
-                                  counts: counts[folder.id, default: .init()], workspaceTitle: workspace.name)
-                    }
-                }
-            }
-            .padding(.leading, 8)
-        }
-    }
-
+    /// One machine's agents and folders. Chats started here run on that machine;
+    /// a new folder is created by that machine on its own disk.
     @ViewBuilder
     private func workspaceContents(
         key: String,
         title: String,
-        workspaceAgents: [WorkspaceAgent],
-        workspaceFolders: [WorkspaceFolderRecord],
-        remoteWorkspace: RemoteWorkspaceSidebarLink? = nil,
-        canCreateFolders: Bool = true
+        machine: Machine?
     ) -> some View {
-        let sections = FolderSections(folders: workspaceFolders)
+        let isRemote = machine?.isThisMachine == false
+        let workspaceAgents = machine.map { machine in agents.filter { $0.machineID == machine.id } } ?? []
+        let sections = FolderSections(folders: machine.map { machine in folders.filter { $0.machineID == machine.id } } ?? [])
         let counts = folderContentCounts
+        let orderKey = isRemote ? key : AgentSidebarGroup.localWorkspace.orderKey
         let pinned = AgentSidebarGroup.applyOrder(
             workspaceAgents.filter { pinnedAgentIDs.contains($0.id) }, preferred: pinnedAgentOrder
         )
         let regular = AgentSidebarGroup.agents(
             from: workspaceAgents,
-            in: remoteWorkspace == nil ? .localWorkspace : .remoteWorkspaces,
+            in: isRemote ? .remoteWorkspaces : .localWorkspace,
             pinnedIDs: pinnedAgentIDs,
-            customOrder: AgentOrderStore.order(
-                forKey: remoteWorkspace == nil ? AgentSidebarGroup.localWorkspace.orderKey : key,
-                in: agentOrderRaw
-            )
+            customOrder: AgentOrderStore.order(forKey: orderKey, in: agentOrderRaw)
         )
         VStack(alignment: .leading, spacing: 0) {
             agentDisclosureHeading(title: "Agents", key: key + ":agents")
@@ -550,34 +444,22 @@ struct SidebarNavigationPage: View {
                     agentRow(agent, moveScope: .pinned, groupAgents: pinned, isPinned: true)
                 }
                 ForEach(regular) { agent in
-                    agentRow(agent, moveScope: .stored(remoteWorkspace == nil
-                        ? AgentSidebarGroup.localWorkspace.orderKey : key),
-                        groupAgents: regular, isPinned: false)
+                    agentRow(agent, moveScope: .stored(orderKey), groupAgents: regular, isPinned: false)
                 }
-                if let remoteWorkspace {
-                    let pendingTargets = remoteWorkspace.readyTargets.filter { remoteAgent(for: $0) == nil }
-                    ForEach(pendingTargets) { target in
-                        remoteTargetRow(target)
-                    }
-                    if pinned.isEmpty && regular.isEmpty && pendingTargets.isEmpty {
-                        agentEmptyLabel(remoteWorkspaceEmptyLabel(remoteWorkspace))
-                    }
-                } else if pinned.isEmpty && regular.isEmpty {
-                    agentEmptyLabel("No agents")
+                if pinned.isEmpty && regular.isEmpty {
+                    agentEmptyLabel(isRemote && machine?.isOnline == false ? "Workspace is stopped" : "No agents")
                 }
             }
             agentDisclosureHeading(title: "Folders", key: key + ":folders")
             if agentSectionExpanded(key + ":folders") {
-                if canCreateFolders {
-                    newFolderRow(key: key, workspaceID: remoteWorkspace?.id, workspaceTitle: title)
-                }
+                newFolderRow(key: key, machine: machine, workspaceTitle: machine?.name ?? title)
                 ForEach(sections.pinned) { folder in
                     folderRow(folder, sectionFolders: sections.pinned,
-                              counts: counts[folder.id, default: .init()], workspaceTitle: title)
+                              counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
                 }
                 ForEach(sections.unpinned) { folder in
                     folderRow(folder, sectionFolders: sections.unpinned,
-                              counts: counts[folder.id, default: .init()], workspaceTitle: title)
+                              counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
                 }
             }
         }
@@ -600,65 +482,15 @@ struct SidebarNavigationPage: View {
         }
     }
 
+    /// Another machine, online or offline, titled by its name.
     @ViewBuilder
-    private func remoteWorkspaceSection(
-        _ workspace: RemoteWorkspaceSidebarLink
-    ) -> some View {
-        let key = AgentDisclosureKey.workspace(workspace.id)
-        let ownerID = ApplicationModel.remoteDatabaseSourceID(workspace.id)
+    private func machineSection(_ machine: Machine) -> some View {
+        let key = AgentDisclosureKey.machine(machine.id)
         // Remote workspace names deliberately align with the local heading.
-        agentDisclosureHeading(title: workspace.configuration.name, key: key)
-            .contextMenu {
-                Button("View browser") { browserWorkspace = workspace.configuration }
-            }
+        agentDisclosureHeading(title: machine.name, key: key)
         if agentSectionExpanded(key) {
-            workspaceContents(
-                key: key, title: workspace.configuration.name,
-                workspaceAgents: RemoteWorkspaceSidebarModel.agents(agents, in: workspace.id),
-                workspaceFolders: folders.filter { $0.executionWorkspaceID == ownerID },
-                remoteWorkspace: workspace
-            )
+            workspaceContents(key: key, title: machine.name, machine: machine)
         }
-    }
-
-    private func remoteTargetRow(_ target: RemoteHarnessChatTarget) -> some View {
-        HStack(spacing: 0) {
-            RailRow(
-                icon: .container,
-                harnessLogo: HarnessLogo(runtimeKind: target.harness.id),
-                title: target.harness.displayName,
-                hoverID: "remote-harness:\(target.id)"
-            ) {
-                actions.onSelectRemoteAgent(target)
-            }
-            newChatButton(label: "New chat with \(target.harness.displayName) in \(target.configuration.name)") {
-                actions.onStartRemoteChat(target)
-            }
-            .disabled(!canCreateChat(workspaceID: ApplicationModel.remoteDatabaseSourceID(target.configuration.id)))
-        }
-    }
-
-    private func remoteAgent(for target: RemoteHarnessChatTarget) -> WorkspaceAgent? {
-        agents.first {
-            $0.executionLocation == .remote
-                && $0.runtimeDeviceID == target.configuration.id
-                && $0.runtimeKind == target.harness.id
-        }
-    }
-
-    private func remoteWorkspaceEmptyLabel(
-        _ workspace: RemoteWorkspaceSidebarLink
-    ) -> String {
-        let id = workspace.id
-        if remoteWorkspaces.busyWorkspaceIDs.contains(id) {
-            return "Refreshing workspace…"
-        }
-        guard let status = remoteWorkspaces.statuses[id] else {
-            return "Checking workspace…"
-        }
-        guard status.running else { return "Workspace is stopped" }
-        if remoteWorkspaces.harnesses[id] == nil { return "Checking agents…" }
-        return "No ready agents"
     }
 
     private func agentEmptyLabel(_ text: String) -> some View {
@@ -692,8 +524,8 @@ struct SidebarNavigationPage: View {
                 icon: agentIconGlyph(agent),
                 harnessLogo: HarnessLogo(runtimeKind: agent.runtimeKind),
                 title: presentation.displayName,
-                hoverID: "agent:\(agent.id.uuidString)",
-                trailing: agent.runtimeStatus == .running ? "Running" : nil,
+                hoverID: "agent:\(agent.id)",
+                trailing: agent.status == .running ? "Running" : nil,
                 showsPin: isPinned,
                 selected: destination == .workspace && selectedAgentID == agent.id,
                 pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
@@ -717,14 +549,14 @@ struct SidebarNavigationPage: View {
                 actions.onSelectAgent(agent.id)
             }
             newChatButton(label: "New chat with \(presentation.displayName)") { actions.onCreateAgentChat(agent.id) }
-                .disabled(!canCreateChat(workspaceID: agent.executionLocation == .remote
-                    ? agent.runtimeDeviceID.map { ApplicationModel.remoteDatabaseSourceID($0) } : localExecutionWorkspaceID))
+                .disabled(!canCreateChat(machineID: agent.machineID))
         }
     }
 
-    private func canCreateChat(workspaceID: String?) -> Bool {
-        let owner = folders.first { $0.id == selectedFolderID }?.executionWorkspaceID
-        return selectedFolderID == nil || (owner != nil && owner == workspaceID)
+    /// A chat in a folder runs on the folder's machine.
+    private func canCreateChat(machineID: String) -> Bool {
+        guard let selectedFolderID else { return true }
+        return folders.first { $0.id == selectedFolderID }?.machineID == machineID
     }
 
     private func newChatButton(label: String, action: @escaping () -> Void) -> some View {
@@ -738,10 +570,10 @@ struct SidebarNavigationPage: View {
     }
 
     private func moveAgent(
-        _ id: UUID,
+        _ id: String,
         in scope: AgentMoveScope,
         direction: AgentListMoveDirection,
-        presentIDs: [UUID]
+        presentIDs: [String]
     ) {
         switch scope {
         case .pinned:
@@ -776,7 +608,7 @@ struct SidebarNavigationPage: View {
         }
     }
 
-    private func newFolderRow(key: String, workspaceID: UUID?, workspaceTitle: String) -> some View {
+    private func newFolderRow(key: String, machine: Machine?, workspaceTitle: String) -> some View {
         RailRow(icon: .plus, title: "New folder", hoverID: "folder:create:" + key) {
             creatingFolderWorkspaceKey = key
         }
@@ -785,14 +617,13 @@ struct SidebarNavigationPage: View {
             set: { if !$0 { creatingFolderWorkspaceKey = nil } }
         ), arrowEdge: .trailing) {
             NewFolderPopover(
-                remoteWorkspaces: remoteWorkspaces,
-                localWorkspaceReady: localWorkspaceReady,
-                workspaceID: workspaceID,
+                workspace: model.workspace,
+                machine: machine,
                 workspaceTitle: workspaceTitle,
                 onCancel: { creatingFolderWorkspaceKey = nil },
-                onCreate: { name, workspaceID, externalRoot in
+                onCreate: { name, machineID, externalRoot in
                     creatingFolderWorkspaceKey = nil
-                    actions.onCreateFolder(name, workspaceID, externalRoot)
+                    actions.onCreateFolder(name, machineID, externalRoot)
                 }
             )
         }
@@ -893,7 +724,7 @@ struct SidebarNavigationPage: View {
         ), arrowEdge: .trailing) {
             FolderReferencesPopover(
                 folder: folder,
-                isOnThisMac: localExecutionWorkspaceID != nil && folder.executionWorkspaceID == localExecutionWorkspaceID,
+                isOnThisMac: folder.machineID == thisMachine?.id,
                 onClose: { editingReferenceFolderID = nil },
                 onChange: { actions.onSetFolderReferencePaths(folder.id, $0) }
             )
@@ -1027,12 +858,12 @@ enum RecentItem: Identifiable {
         }
     }
 
-    var activityTimestamp: String {
-        let timestamp: String? = switch self {
+    var activityTimestamp: Date {
+        let timestamp: Date? = switch self {
         case .conversation(let conversation): conversation.lastMessageAt
         case .note(let note): note.updatedAt ?? note.createdAt
         }
-        return timestamp ?? ""
+        return timestamp ?? .distantPast
     }
 
     func ranksBefore(_ other: RecentItem) -> Bool {
@@ -1044,27 +875,25 @@ enum RecentItem: Identifiable {
 }
 
 struct NewFolderPopover: View {
-    let remoteWorkspaces: RemoteWorkspacesModel
-    let localWorkspaceReady: Bool
-    let workspaceID: UUID?
+    let workspace: WorkspaceStore
+    /// The machine that will own the folder.
+    let machine: Machine?
     let workspaceTitle: String
     let onCancel: () -> Void
-    let onCreate: (String, UUID?, URL?) -> Void
+    let onCreate: (String, String, URL?) -> Void
     @State private var name = ""
     @State private var linksExistingDirectory = false
     @State private var externalRoot: URL?
-    @State private var hostDirectoryPath = ""
-    @State private var hostDirectoryFilter = ""
-    @State private var hostDirectoryListing: RemoteHostDirectoryListing?
-    @State private var loadingHostDirectories = false
-    @State private var hostDirectoryError: String?
-    @State private var hostDirectoryRequest = UUID()
+    @State private var machineDirectoryPath = ""
+    @State private var machineDirectoryFilter = ""
+    @State private var machineDirectoryListing: MachineDirectoryListing?
+    @State private var loadingMachineDirectories = false
+    @State private var machineDirectoryError: String?
+    @State private var machineDirectoryRequest = UUID()
     @FocusState private var nameFocused: Bool
 
     private var ownerIsAvailable: Bool {
-        guard let workspaceID else { return localWorkspaceReady }
-        return remoteWorkspaces.statuses[workspaceID]?.running == true
-            && !remoteWorkspaces.busyWorkspaceIDs.contains(workspaceID)
+        machine?.isOnline == true
     }
 
     private var canCreate: Bool {
@@ -1073,9 +902,10 @@ struct NewFolderPopover: View {
             && (linksExistingDirectory ? externalRoot != nil : !trimmed.contains("/") && trimmed != "." && trimmed != "..")
     }
 
-    private var nativeHost: RemoteWorkspaceConfiguration? {
-        guard let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) else { return nil }
-        return configuration
+    /// Another machine's directories are browsed through its server; this
+    /// Mac's through the open panel.
+    private var nativeMachine: Machine? {
+        machine.flatMap { $0.isThisMachine ? nil : $0 }
     }
 
     var body: some View {
@@ -1084,7 +914,7 @@ struct NewFolderPopover: View {
             Text(workspaceTitle)
                 .font(.system(size: 11.5))
                 .foregroundStyle(WovenPalette.mutedForeground)
-            if workspaceID == nil || nativeHost != nil {
+            if machine != nil {
                 Picker("Directory", selection: $linksExistingDirectory) {
                     Text("Create New").tag(false)
                     Text("Link Existing").tag(true)
@@ -1096,7 +926,7 @@ struct NewFolderPopover: View {
                 .quietTextInput()
                 .onSubmit { if canCreate { create() } }
             if linksExistingDirectory {
-                if nativeHost != nil { hostDirectoryBrowser }
+                if nativeMachine != nil { machineDirectoryBrowser }
                 else {
                     Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
                         .lineLimit(2)
@@ -1131,31 +961,31 @@ struct NewFolderPopover: View {
         .formFocusDismissal { nameFocused = false }
         .task { nameFocused = true }
         .task(id: linksExistingDirectory) {
-            if linksExistingDirectory, nativeHost != nil, hostDirectoryListing == nil {
-                await browseHostDirectory(nil)
+            if linksExistingDirectory, nativeMachine != nil, machineDirectoryListing == nil {
+                await browseMachineDirectory(nil)
             }
         }
     }
 
-    private var hostDirectoryBrowser: some View {
+    private var machineDirectoryBrowser: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Absolute directory on host", text: $hostDirectoryPath)
+            TextField("Absolute directory in this workspace", text: $machineDirectoryPath)
                 .quietTextInput()
-                .onSubmit { Task { await browseHostDirectory(hostDirectoryPath) } }
+                .onSubmit { Task { await browseMachineDirectory(machineDirectoryPath) } }
             HStack {
-                Button("Up") { Task { await browseHostDirectory(hostDirectoryListing?.parent) } }
-                    .disabled(hostDirectoryListing?.parent == nil || loadingHostDirectories)
-                Button("Browse") { Task { await browseHostDirectory(hostDirectoryPath) } }
-                    .disabled(loadingHostDirectories || !hostDirectoryPath.hasPrefix("/"))
+                Button("Up") { Task { await browseMachineDirectory(machineDirectoryListing?.parent) } }
+                    .disabled(machineDirectoryListing?.parent == nil || loadingMachineDirectories)
+                Button("Browse") { Task { await browseMachineDirectory(machineDirectoryPath) } }
+                    .disabled(loadingMachineDirectories || !machineDirectoryPath.hasPrefix("/"))
                 Spacer()
-                if loadingHostDirectories { ProgressView().controlSize(.small) }
+                if loadingMachineDirectories { ProgressView().controlSize(.small) }
             }
-            if let listing = hostDirectoryListing {
-                TextField("Find a directory here", text: $hostDirectoryFilter).quietTextInput()
+            if let listing = machineDirectoryListing {
+                TextField("Find a directory here", text: $machineDirectoryFilter).quietTextInput()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(listing.directories.filter { hostDirectoryFilter.isEmpty || $0.name.localizedCaseInsensitiveContains(hostDirectoryFilter) }) { directory in
-                            Button(directory.name) { Task { await browseHostDirectory(directory.path) } }
+                        ForEach(listing.directories.filter { machineDirectoryFilter.isEmpty || $0.name.localizedCaseInsensitiveContains(machineDirectoryFilter) }) { directory in
+                            Button(directory.name) { Task { await browseMachineDirectory(directory.path) } }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -1167,41 +997,41 @@ struct NewFolderPopover: View {
                 Button("Use this directory") {
                     externalRoot = URL(fileURLWithPath: listing.path)
                     if name.isEmpty { name = externalRoot?.lastPathComponent ?? "" }
-                }.disabled(loadingHostDirectories)
+                }.disabled(loadingMachineDirectories)
             }
             if let externalRoot {
                 Text("Selected: \(externalRoot.path)").font(.system(size: 11.5)).textSelection(.enabled)
             }
-            if let hostDirectoryError {
-                Text(hostDirectoryError).font(.system(size: 11.5)).foregroundStyle(WovenPalette.danger)
+            if let machineDirectoryError {
+                Text(machineDirectoryError).font(.system(size: 11.5)).foregroundStyle(WovenPalette.danger)
             }
         }
         .buttonStyle(SettingsQuietButtonStyle())
     }
 
     @MainActor
-    private func browseHostDirectory(_ path: String?) async {
-        guard let nativeHost else { return }
+    private func browseMachineDirectory(_ path: String?) async {
+        guard let nativeMachine else { return }
         let request = UUID()
-        hostDirectoryRequest = request
-        loadingHostDirectories = true
-        hostDirectoryError = nil
-        defer { if hostDirectoryRequest == request { loadingHostDirectories = false } }
+        machineDirectoryRequest = request
+        loadingMachineDirectories = true
+        machineDirectoryError = nil
+        defer { if machineDirectoryRequest == request { loadingMachineDirectories = false } }
         do {
-            let listing = try await remoteWorkspaces.hostDirectories(path: path, in: nativeHost)
-            guard hostDirectoryRequest == request, !Task.isCancelled else { return }
-            hostDirectoryListing = listing
-            hostDirectoryPath = listing.path
-            hostDirectoryFilter = ""
+            let listing = try await workspace.directories(on: nativeMachine.id, path: path)
+            guard machineDirectoryRequest == request, !Task.isCancelled else { return }
+            machineDirectoryListing = listing
+            machineDirectoryPath = listing.path
+            machineDirectoryFilter = ""
         } catch {
-            guard hostDirectoryRequest == request, !Task.isCancelled else { return }
-            hostDirectoryError = error.localizedDescription
+            guard machineDirectoryRequest == request, !Task.isCancelled else { return }
+            machineDirectoryError = error.localizedDescription
         }
     }
 
     private func create() {
-        guard canCreate else { return }
-        onCreate(name.trimmingCharacters(in: .whitespacesAndNewlines), workspaceID,
+        guard canCreate, let machine else { return }
+        onCreate(name.trimmingCharacters(in: .whitespacesAndNewlines), machine.id,
             linksExistingDirectory ? externalRoot : nil)
     }
 
@@ -1309,53 +1139,9 @@ struct FolderReferencesPopover: View {
     }
 }
 
-enum NewChatTarget {
-    case acpDirect(AgentRuntimeKind)
-    case remoteWorkspace(RemoteHarnessChatTarget)
-    /// Another Mac's agent, on that Mac or a Linux host it added, created there
-    /// with this Mac's member signature (`createPairedMacSession`).
-    case peerAgent(UUID)
-}
-
-/// An agent on another Mac or Linux workspace from the synced registry, offered
-/// in New Chat beside this Mac's own targets. The iPhone is never one: it runs
-/// only its own Quick Chats.
-struct NewChatPeerTarget: Identifiable, Equatable {
-    let agentID: UUID
-    let runtimeKind: AgentRuntimeKind
-    let workspace: ExecutionWorkspace
-    var id: UUID { agentID }
-
-    /// One row per workspace and harness, skipping those this Mac already
-    /// offers through a Linux host it manages, Macs first, then by name.
-    static func resolve(agents: [WorkspaceAgent], peerWorkspaces: [UUID: ExecutionWorkspace],
-                        configured: [RemoteHarnessChatTarget], folderOwnerID: String?) -> [Self] {
-        let owner = folderOwnerID.map(PairedWorkspaceSidebarModel.canonicalID)
-        var seen = Set(configured.map { $0.configuration.id.uuidString.lowercased() + ":" + $0.harness.id.rawValue })
-        return agents.compactMap { agent -> Self? in
-            guard let workspace = peerWorkspaces[agent.id], !workspace.deleted, workspace.kind == .mac || workspace.kind == .linux,
-                  owner == nil || owner == PairedWorkspaceSidebarModel.canonicalID(workspace.id),
-                  seen.insert(PairedWorkspaceSidebarModel.canonicalID(workspace.id) + ":" + agent.runtimeKind.rawValue).inserted
-            else { return nil }
-            return .init(agentID: agent.id, runtimeKind: agent.runtimeKind, workspace: workspace)
-        }.sorted {
-            let left = ($0.workspace.kind == .mac ? 0 : 1, $0.workspace.name.lowercased(), $0.runtimeKind.displayName)
-            let right = ($1.workspace.kind == .mac ? 0 : 1, $1.workspace.name.lowercased(), $1.runtimeKind.displayName)
-            return left < right
-        }
-    }
-}
-
 enum NewChatAvailabilitySummary {
     static func available(count: Int) -> String {
         "\(count) available"
-    }
-
-    static func localCLIs(
-        readyRuntimeCount: Int,
-        workspaceIsReady: Bool
-    ) -> String {
-        available(count: workspaceIsReady ? readyRuntimeCount : 0)
     }
 }
 
@@ -1424,22 +1210,40 @@ struct DrawerChrome<Heading: View, Content: View>: View {
 
 struct NewChatDrawer: View {
     @Bindable var model: ApplicationModel
-    let folderOwnerID: String?
-    let localExecutionWorkspaceID: String?
+    /// The machine of the selected folder: only its agents can start a chat there.
+    let folderMachineID: String?
     let onClose: () -> Void
-    let onSelect: (NewChatTarget) -> Void
+    let onSelect: (WorkspaceAgent) -> Void
     @State private var expandedSources = Set(NewChatSource.allCases)
 
-    private var remoteChatTargets: [RemoteHarnessChatTarget] {
-        model.remoteWorkspaces.readyChatTargets.filter {
-            folderOwnerID == nil || folderOwnerID == ApplicationModel.remoteDatabaseSourceID($0.configuration.id)
+    private var thisMachine: Machine? { model.machines.thisMachine }
+
+    private var localAgents: [WorkspaceAgent] {
+        guard let thisMachine else { return [] }
+        return model.workspace.agents(on: thisMachine.id).sorted { $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank }
+    }
+
+    /// Every other machine's agents, listed under that machine's name.
+    private var remoteAgents: [(agent: WorkspaceAgent, machine: Machine)] {
+        model.machines.otherMachines.flatMap { machine in
+            model.workspace.agents(on: machine.id)
+                .filter { _ in folderMachineID == nil || folderMachineID == machine.id }
+                .sorted { $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank }
+                .map { (agent: $0, machine: machine) }
         }
     }
 
-    /// Every other Mac's and Linux workspace's agents, whichever Mac added them.
-    private var peerTargets: [NewChatPeerTarget] {
-        NewChatPeerTarget.resolve(agents: model.remoteWorkspaceAgents, peerWorkspaces: model.peerAgentWorkspaces,
-                                           configured: model.remoteWorkspaces.readyChatTargets, folderOwnerID: folderOwnerID)
+    private func isReady(_ agent: WorkspaceAgent) -> Bool {
+        agent.status == .ready || agent.status == .running
+    }
+
+    private func detail(_ agent: WorkspaceAgent, on machine: Machine?) -> String {
+        switch agent.status {
+        case .ready, .running: machine?.name ?? agent.runtimeKind.displayName
+        case .needsAuthentication: "Sign in — see Settings"
+        case .offline: "Workspace is stopped"
+        case .failed: "Unavailable — see Settings"
+        }
     }
 
     var body: some View {
@@ -1451,110 +1255,54 @@ struct NewChatDrawer: View {
                 .foregroundStyle(WovenPalette.mutedForeground)
         } content: {
             VStack(alignment: .leading, spacing: 12) {
-                if folderOwnerID == nil || folderOwnerID == localExecutionWorkspaceID {
+                if folderMachineID == nil || folderMachineID == thisMachine?.id {
                     NewChatSection(
                         source: .acpDirect,
-                        summary: NewChatAvailabilitySummary.localCLIs(
-                            readyRuntimeCount: model.localACPRuntimeAvailability
-                                .filter {
-                                    $0.runtimeKind == .opencode ? (model.openCode?.isEnabled == true && model.openCode?.canConnect == true) : $0.isReady
-                                        && model.isLocalACPAgentReady($0.runtimeKind)
-                                        && !model.checkingLocalACPRuntimeKinds
-                                            .contains($0.runtimeKind)
-                                }
-                                .count,
-                            workspaceIsReady: model.localACPWorkspaceAvailability
-                                .isReady || model.openCode?.isReady == true
-                        ),
+                        summary: NewChatAvailabilitySummary.available(count: localAgents.filter(isReady).count),
                         isExpanded: expansionBinding(for: .acpDirect)
                     ) {
-                        ForEach(model.orderedLocalACPRuntimeDefinitions) { definition in
-                            let availability = model.localACPRuntimeAvailability
-                                .first {
-                                    $0.runtimeKind == definition.runtimeKind
-                                }
-                            let isChecking = model.checkingLocalACPRuntimeKinds
-                                .contains(definition.runtimeKind)
+                        ForEach(localAgents) { agent in
                             Button {
-                                onSelect(.acpDirect(definition.runtimeKind))
+                                onSelect(agent)
                             } label: {
                                 NewChatOptionCard(
                                     icon: .terminal,
-                                    harnessLogo: HarnessLogo(
-                                        runtimeKind: definition.runtimeKind
-                                    ),
-                                    title: definition.displayName,
-                                    detail: definition.runtimeKind == .opencode
-                                        ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Set up OpenCode in Settings")
-                                        : isChecking || availability == nil
-                                        ? "Checking…"
-                                        : availability?.isReady == true
-                                            && !model.isLocalACPAgentReady(definition.runtimeKind)
-                                            ? model.localACPAgentReconciliationError
-                                                ?? "Local workspace unavailable — see Settings"
-                                        : availability?.compactDetail
-                                            ?? "Unavailable — see Settings"
+                                    harnessLogo: HarnessLogo(runtimeKind: agent.runtimeKind),
+                                    title: agentDisplayName(agent),
+                                    detail: detail(agent, on: nil)
                                 )
                             }
                             .buttonStyle(WovenQuietButtonStyle())
-                            .disabled(
-                                definition.runtimeKind == .opencode ? (model.openCode?.isEnabled != true || model.openCode?.canConnect != true || model.openCode?.busy == true || !model.localACPWorkspaceAvailability.isReady) : isChecking
-                                    || availability?.isReady != true
-                                    || !model.isLocalACPAgentReady(definition.runtimeKind)
-                                    || !model.localACPWorkspaceAvailability.isReady
-                            )
-                        }
-
-                        if !model.localACPWorkspaceAvailability.isReady {
-                            InlineError(
-                                text: model.localACPWorkspaceAvailability.detail
-                            )
+                            .disabled(!isReady(agent))
                         }
                     }
-
                 }
                 NewChatSection(
                     source: .remoteWorkspace,
-                    summary: NewChatAvailabilitySummary.available(
-                        count: remoteChatTargets.count + peerTargets.count
-                    ),
+                    summary: NewChatAvailabilitySummary.available(count: remoteAgents.filter { isReady($0.agent) }.count),
                     isExpanded: expansionBinding(for: .remoteWorkspace)
                 ) {
-                    if remoteChatTargets.isEmpty && peerTargets.isEmpty {
+                    if remoteAgents.isEmpty {
                         NewChatEmptyCard(
                             icon: .container,
                             title: "No remote agents ready",
                             detail: "Set up a remote agent in Settings."
                         )
                     } else {
-                        ForEach(remoteChatTargets) { target in
+                        ForEach(remoteAgents, id: \.agent.id) { target in
                             Button {
-                                onSelect(.remoteWorkspace(target))
+                                onSelect(target.agent)
                             } label: {
                                 NewChatOptionCard(
-                                    icon: .container,
-                                    harnessLogo: HarnessLogo(
-                                        runtimeKind: target.harness.id
-                                    ),
-                                    title: target.harness.displayName,
-                                    detail: target.configuration.name
+                                    icon: target.machine.platform == .mac ? .monitor : .container,
+                                    harnessLogo: HarnessLogo(runtimeKind: target.agent.runtimeKind),
+                                    title: agentDisplayName(target.agent),
+                                    detail: detail(target.agent, on: target.machine)
                                 )
                             }
                             .buttonStyle(WovenQuietButtonStyle())
-                        }
-                        ForEach(peerTargets) { target in
-                            Button {
-                                onSelect(.peerAgent(target.agentID))
-                            } label: {
-                                NewChatOptionCard(
-                                    icon: target.workspace.kind == .mac ? .monitor : .container,
-                                    harnessLogo: HarnessLogo(runtimeKind: target.runtimeKind),
-                                    title: target.runtimeKind.displayName,
-                                    detail: target.workspace.name
-                                )
-                            }
-                            .buttonStyle(WovenQuietButtonStyle())
-                            .accessibilityLabel("\(target.runtimeKind.displayName) on \(target.workspace.name)")
+                            .disabled(!isReady(target.agent))
+                            .accessibilityLabel("\(agentDisplayName(target.agent)) on \(target.machine.name)")
                         }
                     }
                 }
@@ -1754,8 +1502,8 @@ struct SidebarWorkspacePage: View {
     let notes: [WorkspaceNoteRecord]
     let runningConversationIDs: Set<String>
     let agents: [WorkspaceAgent]
+    let machines: [Machine]
     let folders: [WorkspaceFolderRecord]
-    let contentRevision: Int64
     let contentScopeID: String?
     let selectedConversationID: String?
     let selectedNoteID: String?
@@ -1891,6 +1639,7 @@ struct SidebarWorkspacePage: View {
             let conversations = conversations
             let notes = notes
             let agents = agents
+            let machines = machines
             let folders = folders
             let query = query
             let readFilter = readFilter
@@ -1900,6 +1649,7 @@ struct SidebarWorkspacePage: View {
                     conversations: conversations,
                     notes: notes,
                     agents: agents,
+                    machines: machines,
                     folders: folders,
                     query: query,
                     readFilter: readFilter
@@ -1921,9 +1671,11 @@ struct SidebarWorkspacePage: View {
 
     private var contentTaskID: RightRailContentTaskID {
         RightRailContentTaskID(
-            revision: contentRevision,
+            conversations: conversations,
+            notes: notes,
             scopeID: contentScopeID,
-            agentRevisions: agents.map { "\($0.id.uuidString):\($0.revision)" }.joined(separator: ","),
+            agents: agents,
+            machines: machines,
             folderRevisions: folders.map { "\($0.id):\($0.name)" }.joined(separator: ","),
             timeContext: ListTimeContext.current,
             query: query,
@@ -2122,10 +1874,12 @@ struct SidebarWorkspacePage: View {
     }
 }
 
-struct RightRailContentTaskID: Hashable {
-    let revision: Int64
+struct RightRailContentTaskID: Equatable {
+    let conversations: [WorkspaceConversationRecord]
+    let notes: [WorkspaceNoteRecord]
     let scopeID: String?
-    let agentRevisions: String
+    let agents: [WorkspaceAgent]
+    let machines: [Machine]
     let folderRevisions: String
     let timeContext: String
     let query: String
@@ -2148,7 +1902,7 @@ enum ReadFilter: String, Hashable, Sendable {
 struct ConversationListMeta: Equatable, Sendable {
     let agentLabel: String
     let folderLabel: String
-    /// Product location bucket, e.g. "Local workspace".
+    /// The name of the machine that owns the chat.
     let locationLabel: String
     let locationKind: ConversationLocationKind
     /// Runtime product name when known, e.g. "Codex", "Claude Code".
@@ -2158,40 +1912,11 @@ struct ConversationListMeta: Equatable, Sendable {
     static func resolve(
         conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
+        machine: Machine?,
         foldersByID: [String: WorkspaceFolderRecord]
     ) -> ConversationListMeta {
-        let agentLabel: String
-        let locationLabel: String
-        let locationKind: ConversationLocationKind
-        let runtimeLabel: String?
-        let runtimeKind: AgentRuntimeKind?
-        if let agent {
-            agentLabel = agentDisplayName(agent)
-            locationLabel = ConversationLocationKind.resolve(agent.bucket).label
-            locationKind = ConversationLocationKind.resolve(agent.bucket)
-            runtimeLabel = agent.runtimeKind.displayName
-            runtimeKind = agent.runtimeKind
-        } else if let runtime = conversation.localRuntimeKind {
-            agentLabel = runtime.displayName
-            locationLabel = ConversationLocationKind.workspaceAgent.label
-            locationKind = .workspaceAgent
-            runtimeLabel = runtime.displayName
-            runtimeKind = runtime
-        } else if let codename = conversation.agentCodename?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !codename.isEmpty {
-            agentLabel = codename
-            locationLabel = "Local workspace"
-            locationKind = .workspaceAgent
-            runtimeLabel = nil
-            runtimeKind = nil
-        } else {
-            agentLabel = "Unknown agent"
-            locationLabel = "Unknown"
-            locationKind = .workspaceAgent
-            runtimeLabel = nil
-            runtimeKind = nil
-        }
+        let runtime = agent?.runtimeKind ?? conversation.runtimeKind
+        let agentLabel = agent.map(agentDisplayName) ?? conversation.runtimeName
 
         let folderLabel: String
         if let folderID = conversation.folderID,
@@ -2205,35 +1930,19 @@ struct ConversationListMeta: Equatable, Sendable {
         return ConversationListMeta(
             agentLabel: agentLabel,
             folderLabel: folderLabel,
-            locationLabel: locationLabel,
-            locationKind: locationKind,
-            runtimeLabel: runtimeLabel,
-            runtimeKind: runtimeKind
+            locationLabel: machine?.name ?? "Unknown",
+            locationKind: machine?.isThisMachine == false ? .remoteWorkspace : .workspaceAgent,
+            runtimeLabel: runtime?.displayName ?? conversation.runtimeName,
+            runtimeKind: runtime
         )
     }
 }
 
 enum ConversationLocationKind: Equatable, Sendable {
+    /// This machine.
     case workspaceAgent
+    /// Another machine.
     case remoteWorkspace
-
-    static func resolve(_ bucket: AgentBucket) -> Self {
-        switch bucket {
-        case .localCLIAgents:
-            .workspaceAgent
-        case .remoteWorkspaceAgents:
-            .remoteWorkspace
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .workspaceAgent:
-            "Local workspace"
-        case .remoteWorkspace:
-            "Remote workspace"
-        }
-    }
 
     var glyph: LucideGlyph {
         switch self {
@@ -2332,6 +2041,7 @@ final class ListPresentationCache: @unchecked Sendable {
     func presentation(
         for conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
+        machine: Machine?,
         foldersByID: [String: WorkspaceFolderRecord],
         timeContext: String
     ) -> ConversationRowPresentation {
@@ -2339,6 +2049,7 @@ final class ListPresentationCache: @unchecked Sendable {
         let meta = ConversationListMeta.resolve(
             conversation: conversation,
             agent: agent,
+            machine: machine,
             foldersByID: foldersByID
         )
         if let cached = conversations.object(forKey: key)?.value,
@@ -2349,9 +2060,7 @@ final class ListPresentationCache: @unchecked Sendable {
             return cached
         }
 
-        let fallbackPreview = conversation.localRuntimeKind?.displayName
-            ?? agent.map(agentDisplayName)
-            ?? "Conversation"
+        let fallbackPreview = agent.map(agentDisplayName) ?? conversation.runtimeName
         let presentation = ConversationRowPresentation(
             conversation: conversation,
             agent: agent,
@@ -2376,25 +2085,11 @@ final class ListPresentationCache: @unchecked Sendable {
             return cached
         }
 
-        let document = NoteDocument.decode(note.content)
-        let preview: String = switch document.kind {
-        case .note:
-            listPreview(document.plainText, limit: 180)
-        case .spreadsheet:
-            document.blocks.compactMap { block -> String? in
-                guard case .table(let table) = block else { return nil }
-                return "Sheet · \(table.rows.count) rows × \(table.columns.count) columns"
-            }.first ?? "Sheet"
-        case .html:
-            document.databaseLink == nil ? "Interactive App" : "Live App"
-        case .canvas:
-            "Page · \(document.materializedPage().blocks.count) components"
-        }
         let presentation = NoteRowPresentation(
             note: note,
-            kind: document.kind,
+            kind: note.kind,
             title: listPreview(note.title.isEmpty ? "Untitled note" : note.title, limit: 160),
-            preview: preview
+            preview: listPreview(note.preview, limit: 180)
         )
         notes.setObject(NoteRowPresentationBox(presentation), forKey: key)
         return presentation
@@ -2430,20 +2125,15 @@ struct RightRailContent: Equatable, Sendable {
         conversations: [WorkspaceConversationRecord],
         notes: [WorkspaceNoteRecord],
         agents: [WorkspaceAgent],
+        machines: [Machine] = [],
         folders: [WorkspaceFolderRecord] = [],
         query: String,
         readFilter: ReadFilter?
     ) {
         let presentationCache = ListPresentationCache.shared
         let timeContext = ListTimeContext.current
-        var agentsByCodename: [String: WorkspaceAgent] = [:]
-        for agent in agents {
-            if Task.isCancelled { break }
-            agentsByCodename[agent.codename] = agent
-            if let platformCodename = agent.platformCodename {
-                agentsByCodename[platformCodename] = agent
-            }
-        }
+        let agentsByID = Dictionary(agents.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let machinesByID = Dictionary(machines.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let foldersByID = Dictionary(
             uniqueKeysWithValues: folders.map { ($0.id, $0) }
         )
@@ -2455,10 +2145,12 @@ struct RightRailContent: Equatable, Sendable {
             if Task.isCancelled { break }
             guard readFilter?.includes(unread: conversation.unread) != false else { continue }
 
-            let agent = conversation.agentCodename.flatMap { agentsByCodename[$0] }
+            let agent = conversation.agentID.flatMap { agentsByID[$0] }
+            let machine = machinesByID[conversation.machineID]
             let meta = ConversationListMeta.resolve(
                 conversation: conversation,
                 agent: agent,
+                machine: machine,
                 foldersByID: foldersByID
             )
             guard query.isEmpty
@@ -2471,6 +2163,7 @@ struct RightRailContent: Equatable, Sendable {
             let presentation = presentationCache.presentation(
                 for: conversation,
                 agent: agent,
+                machine: machine,
                 foldersByID: foldersByID,
                 timeContext: timeContext
             )
@@ -2487,7 +2180,7 @@ struct RightRailContent: Equatable, Sendable {
             if Task.isCancelled { break }
             guard query.isEmpty
                     || note.title.localizedCaseInsensitiveContains(query)
-                    || note.content.localizedCaseInsensitiveContains(query)
+                    || note.preview.localizedCaseInsensitiveContains(query)
             else { continue }
             let presentation = presentationCache.presentation(for: note)
             if note.isPinned {

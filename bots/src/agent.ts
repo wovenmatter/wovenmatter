@@ -10,6 +10,7 @@ import {
   type CompactionSettings,
   configure,
   defineExtension,
+  type Extension,
   type Harness,
   type HarnessOptions,
   type HookApi,
@@ -17,11 +18,10 @@ import {
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { createCompactionRegistry, NativeCompaction } from "./compaction/context.ts";
-import { type ModelRef, type Profile, parseModelRef, type RawConfig } from "./config.ts";
+import { type ModelRef, type Profile, parseModelRef, type RawSettings } from "./config.ts";
 import { containerTools } from "./container-tools.ts";
 import { forumTools } from "./forum-tools.ts";
 import type { BotEnvironmentAdapter } from "./env.ts";
-import type { PreviewManager } from "./environment/previews.ts";
 import {
   classifyLimit,
   hasFallbackNote,
@@ -30,14 +30,13 @@ import {
   type LimitEntry,
   observeLimits,
 } from "./limits.ts";
-import type { BeforeCompactHook } from "./memory.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { type SubagentLog, subagentExtension } from "./subagent.ts";
 import { type BotPlatform, botTools } from "./tools.ts";
 import { type WebToolsOptions, webTools } from "./web.ts";
-import type { WovenMCP } from "./woven-mcp.ts";
+import { wovenToolsSlot } from "./woven-tools.ts";
 
-export type CompactionConfig = RawConfig["compaction"];
+export type CompactionConfig = RawSettings["compaction"];
 
 /** `[compaction]` as Pi Durable's harness-wide policy with per-model overrides. */
 export function compactionSettings(config: CompactionConfig | undefined): CompactionSettings {
@@ -87,15 +86,12 @@ export type BotAgentOptions = {
   /** `web_search` and `fetch_url` (the app always passes it); omitted: no web tools. */
   readonly web?: WebToolsOptions;
   readonly env?: BotEnvironmentAdapter;
-  /** `share_preview` (with an environment). */
-  readonly previews?: PreviewManager;
-  readonly woven?: WovenMCP;
+  /** The bot's Woven tools, when the server allows them (`woven-tools.ts`). */
+  readonly wovenTools?: (install: (extension: Extension) => void) => void;
   readonly onReport?: (error: unknown, info: unknown) => void;
   readonly compaction?: CompactionConfig;
   /** Fetch for provider requests (native compaction and generation); tests inject a fake. */
   readonly fetch?: FetchFunction;
-  /** Runs before every compaction; a no-op by default (`MemoryExtractor` reads stored messages). */
-  readonly onBeforeCompact?: BeforeCompactHook;
   /** The bot's extracted memory as prompt text (`memorySection`); undefined: none yet. */
   readonly memory?: () => Promise<string | undefined>;
   /**
@@ -169,11 +165,11 @@ export function defaultAgent(main: ModelRef): AgentChange {
 }
 
 const CONTAINER =
-  " Your tools run in your own Linux container (Ubuntu, user bot with passwordless sudo) with your files in /workspace, which persists; git, Node, Python, build tools and Chromium are installed. The container stops after 15 idle minutes and starts again on your next tool call: register long-running services with keep_running so they come back on every start, use the browser tool for websites (its tabs and sign-ins persist), and share_preview to show the user a web app you run." +
+  " Your tools run in your own Linux container (Ubuntu, user bot with passwordless sudo) with your files in /workspace, which persists; git, Node, Python, build tools and Chromium are installed. The container stops after 15 idle minutes and starts again on your next tool call: register long-running services with keep_running so they come back on every start, use the browser tool for websites (its tabs and sign-ins persist),." +
   " Your home folder (dotfiles, ~/.ssh, CLI sign-ins, ~/.local with your `npm install -g` and `pip install --user` packages) lives in your storage too. Woven updates your container now and then: tool updates keep it as it is, and a move to a new image or a rebuild reinstalls the apt packages, system npm and pip packages and files under /etc, /usr/local and /opt you added. For anything else outside /workspace and your home (say, something built from source), keep an idempotent /workspace/.woven/setup.sh, which runs as root after each move or rebuild. After one, /workspace/.woven/system/update-report.md says what came across and what to check.";
 
 /** Admin Bot's standing instructions: account/config management, user's ask = go-ahead. */
-export const ADMIN_PROMPT = `You are Admin Bot, the setup bot of this machine's Woven Matter bots. You set up model profiles (which models bots use) and create and organize bots and teams on the user's behalf.
+export const ADMIN_PROMPT = `You are Admin Bot, the setup bot of the user's Woven Matter bots. You set up model profiles (which models bots use) and create and organize bots and teams on the user's behalf.
 Before you change model profiles, say exactly what you will change and ask the user to confirm, unless the user already asked for that change: their request is the go-ahead. Do not ask twice.
 Provider sign-ins and API keys (Claude, ChatGPT, Grok, OpenRouter, OpenCode Go, web search) are Woven Matter accounts, managed in Woven Matter Settings → Subscriptions & API Keys: point the user there. Never ask the user to paste a secret into the chat and never reveal one.
 You are never on a team, never manage one and are never the orchestrator. Your name is always Admin Bot; you can rename any other bot when the user asks (rename_bot). Deleting and restoring bots is done by the user in the Bots settings.
@@ -183,7 +179,7 @@ In your first conversation, keep it short, friendly and non-technical:
 - Explain that new bots use this default model unless the user names a model or profile when they ask for one; to change bots that already exist, they can tell you or use Settings → Bots → Profiles.
 - Offer to create their first bot: ask what it should help with.
 Links: when you point the user to a page, say where it is in words (for example "Settings → Bots → Profiles") and put the links at the end of the message, each on its own line: [Subscriptions & API Keys](wovenmatter://settings/accounts) and [Bot profiles](wovenmatter://settings/bots/profiles). They open those pages in Woven Matter. End your first message with both links.
-Mention other bot features (threads, each bot's own Linux computer with a browser, previews, teams, an orchestrator, bots messaging each other, the Forum where the user and every bot share one chat) only when they are relevant or the user asks.
+Mention other bot features (threads, each bot's own Linux container with a browser, teams, an orchestrator, bots messaging each other, the Forum where the user and every bot share one chat) only when they are relevant or the user asks.
 Models work through profiles. A profile has a main model, which runs a bot's main channel and every thread. The main model can always hand self-contained work to subagents running on itself (run_subagent); the profile's model pool adds more models for subagents, each with optional notes, and its model preferences are the user's own words about the models, which the main model weighs together with the task, each model's capabilities and its API list prices; they are guidance, not routing rules. Separately, a profile can set a memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory; unset, the bot's active main model does it. A profile can also list up to 5 ordered fallback main models: when the main model hits a usage limit or its key runs out of credits, the bot switches to the first available fallback and back once the main model resets; with no fallbacks it is out of usage until then. Every bot runs one profile; new bots get the default profile, and editing a profile changes every bot on it from its next reply.
 Setting up models: work from what settings_status lists as signed in and available; never ask the user about subscription tiers or spending. When the user asks for a bot without naming a model or profile, put it on the default profile. When they ask for different models, propose profiles (main and pool models, which bot runs which) and apply them with the profile tools. If a needed connection is missing, send the user to Woven Matter Settings → Subscriptions & API Keys first. Save lasting preferences the user tells you about models with write_account_notes and read them back (read_account_notes) before later model decisions.`;
 
@@ -259,7 +255,6 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
   const native = new NativeCompaction(typeof source === "function" ? source : () => source, {
     native: options.compaction?.native ?? "auto",
     ...(options.fetch ? { fetch: options.fetch } : {}),
-    ...(options.onBeforeCompact ? { onBeforeCompact: options.onBeforeCompact } : {}),
     ...(options.onReport ? { onReport: options.onReport } : {}),
   });
   const profile = () =>
@@ -267,7 +262,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
   // The bot's identity, standing instructions and memory; subagents run without them.
   const memory = options.memory;
   const identity = defineExtension({
-    name: "pi-bot-preamble",
+    name: "bot-preamble",
     sections: [
       section("preamble", () => preamble(options), { tag: false }),
       ...(memory ? [section("memory", () => memory())] : []),
@@ -285,7 +280,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
       }
     : native.beforeRequest;
   const extension = defineExtension({
-    name: "pi-bot",
+    name: "bot",
     // One implementation for the main channel and every thread.
     hooks: [
       {
@@ -303,12 +298,8 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
   const forum = platform?.forum
     ? forumTools(options.bot, platform.forum, () => platform.manager().registry)
     : undefined;
-  const identityOf = async () =>
-    options.platform ? options.platform.manager().record(options.bot.id) : options.bot;
-  const woven = options.woven?.extension(options.bot.id, identityOf);
-  const container = options.env
-    ? containerTools(options.bot.id, options.env, options.previews)
-    : undefined;
+  const container = options.env ? containerTools(options.bot.id, options.env) : undefined;
+  const woven = options.wovenTools ? wovenToolsSlot : undefined;
   const web = options.web ? webTools(options.web) : undefined;
   // What a subagent keeps: coding tools (with a container) and web tools; nothing bot-specific.
   const childTools = [...(options.env ? [CodingTools] : []), ...(web ? [web] : [])].flatMap(
@@ -325,19 +316,19 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
       identity,
       ...(tools ? [tools] : []),
       ...(forum ? [forum] : []),
-      ...(woven ? [woven] : []),
       ...(container ? [container] : []),
+      ...(woven ? [woven] : []),
     ],
     ...(options.onSubagent ? { log: options.onSubagent } : {}),
   });
   const extensions = [
     identity,
     extension,
-    ...(woven ? [woven] : []),
     ...(options.env ? [CodingTools] : []),
     ...(container ? [container] : []),
     ...(tools ? [tools] : []),
     ...(forum ? [forum] : []),
+    ...(woven ? [woven] : []),
     // Subagents keep the web tools: research is typical delegated work.
     ...(web ? [web] : []),
     subagent,
@@ -358,17 +349,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
     },
     attach: (harness) => {
       native.harness.attach(harness);
-      if (options.woven) {
-        const client = options.woven;
-        const stop = client.subscribe((botId) => {
-          if (botId === options.bot.id) registry.install(client.extension(botId, identityOf));
-        });
-        void harness.closed.then(stop);
-        // The bot's own Woven MCP key, fetched in the background; cached tools serve meanwhile.
-        void identityOf()
-          .then((bot) => client.connect(bot))
-          .catch(() => {});
-      }
+      options.wovenTools?.((woven) => registry.install(woven));
     },
     conversationCreated: (tx, conversation) => {
       // Without a main model the conversation starts unconfigured; choosing one applies it.

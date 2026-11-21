@@ -12,22 +12,22 @@ import {
   type RuntimeConfig,
 } from "./config.ts";
 import type { BotEnvironmentAdapter } from "./env.ts";
-import { BotEnvironment, IDLE_STOP_MS } from "./environment/container.ts";
+import { BotEnvironment } from "./environment/container.ts";
 import { DockerEngineAPI } from "./environment/engine-api.ts";
 import { type Forum, openForum, USER_NAME } from "./forum.ts";
-import { PreviewManager, type PreviewTransport } from "./environment/previews.ts";
-import { type HostAPI, HostClient } from "./host/client.ts";
-import { HostCredentialStore } from "./host/credentials.ts";
-import { HostGitSource, NO_GIT } from "./host/git.ts";
+import { HostChannel } from "./host/channel.ts";
+import { ServerCredentials } from "./host/credentials.ts";
+import { HostGitSource } from "./host/git.ts";
 import { ModelAvailability } from "./limits.ts";
 import { MemoryExtractor, memorySection } from "./memory.ts";
-import { ConversationMirror } from "./mirror.ts";
+import { LibraryMirror } from "./mirror.ts";
 import { FileModelsStore } from "./model-catalog.ts";
 import { checkModelRoles, createBotModels, refreshBotModels } from "./models.ts";
+import { wovenTools } from "./woven-tools.ts";
 import { RuntimeOperations } from "./operations.ts";
 import { ProfileStore } from "./profiles.ts";
 import { type BotServer, startServer } from "./server.ts";
-import type { SearchProviderId } from "./settings/catalog.ts";
+import type { SearchProviderId } from "./protocol.ts";
 import { SettingsService } from "./settings/service.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { openSharedDatabase } from "./storage/database.ts";
@@ -35,19 +35,17 @@ import { ForumStore } from "./storage/forum.ts";
 import { BotRegistry } from "./storage/registry.ts";
 import { TitleGenerator } from "./titles.ts";
 import { type BotPlatform, checkUserName, forgetBotMessages } from "./tools.ts";
-import { WovenMCP } from "./woven-mcp.ts";
 
 export type BotsRuntime = {
   readonly db: SqliteDatabase;
   readonly models: Models;
   readonly manager: BotManager;
-  readonly woven: WovenMCP;
+  readonly host: HostChannel;
   readonly availability: ModelAvailability;
   readonly server: BotServer;
   readonly operations: RuntimeOperations;
   readonly env?: BotEnvironmentAdapter;
-  readonly previews?: PreviewManager;
-  readonly mirror: ConversationMirror;
+  readonly mirror: LibraryMirror;
   readonly forum: Forum;
   readonly settings: SettingsStore;
   /** Startup environment reconcile (in the background; never rejects). */
@@ -58,26 +56,20 @@ export type BotsRuntime = {
 export type StartOptions = {
   /** Override the pi-ai models (tests use the faux provider). */
   readonly models?: Models;
-  /** The host API (tests pass a fake). */
-  readonly host?: HostAPI;
   /** Where bots' tools run; defaults to containers on the configured engine. `null`: no tools. */
   readonly env?: BotEnvironmentAdapter | null;
-  /** How preview traffic reaches a container port; defaults to exec streams. */
-  readonly previewTransport?: PreviewTransport;
   /** Settings store override (tests keep settings in memory). */
   readonly settings?: SettingsStore;
-  /** Woven MCP HTTP (tests inject a fake). */
-  readonly fetch?: typeof fetch;
   /** Pi's model catalog service (tests point it at a fake). */
   readonly catalog?: { readonly fetch?: typeof fetch; readonly baseUrl?: string; readonly now?: () => number };
-  readonly port?: number;
+  /** How long a host request waits for the server (tests shorten it). */
+  readonly hostTimeoutMs?: number;
+  /** Library copy timing (tests shorten it). */
+  readonly mirror?: { readonly debounceMs?: number; readonly sweepMs?: number };
   readonly log?: (message: string) => void;
   /** Options for the default container environment (tests shorten the idle period). */
   readonly environment?: Partial<ConstructorParameters<typeof BotEnvironment>[0]>;
 };
-
-/** How long before a Woven timer fires that a bot counts as busy. */
-const TIMER_WINDOW_MS = 5 * 60_000;
 
 async function reconcileWithRetry(
   env: BotEnvironmentAdapter,
@@ -107,15 +99,15 @@ export async function startRuntime(
   let server: BotServer | undefined;
   let manager: BotManager | undefined;
   let memory: MemoryExtractor | undefined;
-  let mirror: ConversationMirror | undefined;
+  let mirror: LibraryMirror | undefined;
   let forum: Forum | undefined;
   let refreshModels: (how?: Parameters<typeof refreshBotModels>[1]) => Promise<void> = async () => {};
   const settings = options.settings ?? (await SettingsStore.open(config.paths.settings));
-  const host = options.host ?? new HostClient(config.host.url, config.host.token);
-  const credentials = new HostCredentialStore(host);
-  const git = new HostGitSource((botId) => host.gitSetup?.(botId) ?? Promise.resolve(NO_GIT));
+  const host = new HostChannel(options.hostTimeoutMs ? { timeoutMs: options.hostTimeoutMs } : {});
+  const credentials = new ServerCredentials(host.call);
+  const git = new HostGitSource((botId) => host.call("git.setup", { botId }));
   const searchProvider = async (): Promise<SearchProviderId | undefined> =>
-    (await host.inferenceCredential("web-search").catch(() => undefined))?.searchProvider;
+    (await host.call("credentials", { provider: "web-search" }).catch(() => undefined))?.searchProvider;
   const platform: BotPlatform = {
     manager: () => {
       if (!manager) throw new Error("bots are still starting");
@@ -139,11 +131,10 @@ export async function startRuntime(
   };
   const db = await openSharedDatabase(config.paths.database);
   const registry = new BotRegistry(db);
-  await registry.migrate();
+  await registry.createTables();
+  const installationId = await registry.installationId();
   const forumStore = new ForumStore(db);
   let env: BotEnvironmentAdapter | undefined;
-  let previews: PreviewManager | undefined;
-  const woven = new WovenMCP(registry, host, options.fetch ?? fetch);
   // The runtime-side half of the idle rule (the container side is checked inside it).
   const probe = async (botId: string) => {
     const bot = await manager?.get(botId).catch(() => undefined);
@@ -152,14 +143,6 @@ export async function startRuntime(
       if (live.tasks.length || live.submissions.length) return { busy: "a turn is running" };
     }
     if (server?.viewing(botId)) return { busy: "someone has its chat open" };
-    const lastTraffic = previews?.lastTraffic(botId);
-    if (lastTraffic && Date.now() - lastTraffic < (options.environment?.idleMs ?? IDLE_STOP_MS)) {
-      return { busy: "preview traffic" };
-    }
-    const record = await manager?.record(botId).catch(() => undefined);
-    if (record && (await woven.timerDueWithin(record, TIMER_WINDOW_MS).catch(() => undefined))) {
-      return { busy: "a timer is due soon" };
-    }
     return {};
   };
   if (options.env !== null) {
@@ -170,25 +153,14 @@ export async function startRuntime(
         kind: config.engine.kind,
         imageName: config.image.tag,
         memoryBytes: config.limits.botMemoryBytes,
-        machineId: config.machine.deviceID,
+        installationId,
         probe,
         log,
-        ...(host.gitSetup ? { git: (botId: string) => git.current(botId) } : {}),
-        ...(host.sshAgent ? { sshAgent: (botId: string, message: Buffer) => host.sshAgent!(botId, message) } : {}),
+        git: (botId: string) => git.current(botId),
+        sshAgent: async (botId: string, message: Buffer) =>
+          Buffer.from((await host.call("git.agent", { botId, message: message.toString("base64") })).message, "base64"),
         ...options.environment,
       });
-    const environment = env;
-    if (environment.connectPort) {
-      previews = new PreviewManager({
-        host,
-        registry,
-        transport: options.previewTransport ?? {
-          connect: (botId, port) => environment.connectPort!(botId, port),
-        },
-        activity: (botId) => environment.touch?.(botId),
-        log,
-      });
-    }
   }
   try {
     const live = options.models
@@ -255,7 +227,6 @@ export async function startRuntime(
         `usage limit (from before the restart): ${entry.model} (${entry.account}): ${entry.kind}, retry ${new Date(entry.retryAt).toISOString()}`,
       );
     }
-    await woven.load((await registry.list()).map((bot) => bot.id));
     const titles = new TitleGenerator({
       models,
       // The title model, or else the default profile's main model; neither: no titles yet.
@@ -271,9 +242,15 @@ export async function startRuntime(
       manager: platform.manager,
       titles,
       events: {
-        post: (post) => server?.forumPost(post),
+        post: (post) => {
+          server?.forumPost(post);
+          mirror?.scheduleForum();
+        },
         thinking: (roomId, botIds) => server?.forumThinking(roomId, botIds),
-        changed: () => server?.broadcast({ type: "forum.changed" }),
+        changed: () => {
+          server?.broadcast({ type: "forum.changed" });
+          mirror?.scheduleForum();
+        },
       },
       log,
     });
@@ -281,7 +258,10 @@ export async function startRuntime(
     const opened = await BotManager.open({
       db,
       ensureAdmin: true,
-      onBotsChanged: () => server?.botsChanged(),
+      onBotsChanged: () => {
+        server?.botsChanged();
+        void mirror?.sweep();
+      },
       onGroupsChanged: () => server?.groupsChanged(),
       onThreadsChanged: (botId) => {
         server?.threadsChanged(botId);
@@ -295,7 +275,15 @@ export async function startRuntime(
         manager ??= self;
         return createBotHarnessOptions({
           bot,
-          woven,
+          wovenTools: (install) =>
+            wovenTools(bot.id, host, install, {
+              seated: async (conversationId) =>
+                Boolean(await forumStore.seatOfConversation(bot.id, conversationId)),
+              check: async (conversationId) =>
+                void (await room.visualReplyRoom(bot.id, conversationId)),
+              publish: async (conversationId, visualReply) =>
+                void (await room.postVisualReply(bot.id, conversationId, visualReply)),
+            }),
           models,
           profile: () => profiles.resolve(self.assignedProfile(bot.id)),
           onSubagent: (event) =>
@@ -307,7 +295,6 @@ export async function startRuntime(
           web: { credentials, provider: searchProvider },
           compaction: settings.current.compaction,
           ...(env ? { env } : {}),
-          ...(previews ? { previews } : {}),
           onReport: (error) => log(`bot ${bot.id}: ${String(error)}`),
           onLimit: (conversationId, model, limit) =>
             self.reportLimit(bot.id, conversationId, model, limit),
@@ -325,13 +312,13 @@ export async function startRuntime(
       },
       onBotDeleted: async (bot) => {
         await room.botDeleted(bot.id).catch((error: unknown) => log(`forum: ${String(error)}`));
+        mirror?.schedule(bot.id);
         await env?.dispose(bot.id);
       },
       onBotPurged: async (botId) => {
         forgetBotMessages(platform, botId);
         await room.botPurged(botId).catch((error: unknown) => log(`forum: ${String(error)}`));
-        await previews?.unshareAll(botId).catch(() => {});
-        await woven.revoke(botId).catch((error: unknown) => log(`bot ${botId}: revoke MCP key: ${String(error)}`));
+        await mirror?.purged(botId);
         if (!env) return undefined;
         if (!env.purge) return { removed: false, error: `the ${env.kind} environment can't remove storage` };
         await env.purge(botId);
@@ -352,7 +339,7 @@ export async function startRuntime(
       },
     });
     manager = opened;
-    mirror = new ConversationMirror({ manager: opened, host, log });
+    mirror = new LibraryMirror({ manager: opened, forum: forumStore, host, log, ...options.mirror });
     for (const record of await opened.list()) mirror.attach(await opened.get(record.id));
     const extraction = settings.current.extraction;
     memory = extraction.enabled
@@ -379,7 +366,6 @@ export async function startRuntime(
     const operations = new RuntimeOperations({
       manager: opened,
       ...(env ? { env } : {}),
-      ...(previews ? { previews } : {}),
       notify: (message) => server?.broadcast(message),
       forum: room,
       log,
@@ -387,14 +373,11 @@ export async function startRuntime(
     server = await startServer({
       manager: opened,
       settings: settingsService,
-      woven,
       operations,
-      token: config.runtimeToken,
+      socket: config.socket,
+      host,
       environment: env?.kind ?? "none",
-      host: config.listen.host,
-      port: options.port ?? config.listen.port,
       onActivity: (botId) => env?.touch?.(botId),
-      ...(previews ? { previews } : {}),
       forum: room,
       user: {
         name: async () => (await platform.userName?.()) ?? "",
@@ -409,19 +392,15 @@ export async function startRuntime(
       deleted: (await opened.listDeleted()).map((bot) => bot.id),
     });
     const reconciled = env?.reconcile ? reconcileWithRetry(env, activeIds, log) : Promise.resolve();
-    void previews
-      ?.restore((await opened.list()).map((bot) => bot.id))
-      .catch((error: unknown) => log(`previews: ${String(error)}`));
     return {
       db,
       models,
       manager: opened,
-      woven,
+      host,
       availability,
       server,
       operations,
       ...(env ? { env } : {}),
-      ...(previews ? { previews } : {}),
       mirror,
       forum: room,
       settings,
@@ -429,7 +408,6 @@ export async function startRuntime(
       async close() {
         await server?.close();
         await room.close();
-        previews?.close();
         await mirror?.close();
         await memory?.close();
         await opened.close();
@@ -443,7 +421,6 @@ export async function startRuntime(
   } catch (error) {
     await server?.close().catch(() => {});
     await forum?.close().catch(() => {});
-    previews?.close();
     await mirror?.close().catch(() => {});
     await memory?.close().catch(() => {});
     await manager?.close().catch(() => {});

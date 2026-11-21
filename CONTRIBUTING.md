@@ -4,21 +4,32 @@ Thank you for helping improve Woven Matter.
 
 ## Build from source
 
-Development requires macOS 26, Xcode 26, the Node.js release recorded in
-`default-agent/.node-version`, and `jq` for the validation scripts. The Xcode
-project is `app/WovenMatter.xcodeproj`; the Swift package is rooted at `app/`.
-No provider credentials are needed to build or test.
+Development requires an Apple silicon Mac with macOS 26 and Xcode 27, and the
+Node.js release recorded in `default-agent/.node-version`. No provider
+credentials are needed to build or test. Read the
+[architecture](docs/ARCHITECTURE.md) first: it describes the parts below and
+the rules every change keeps.
 
-Build and launch the development app:
+| Path | What it is |
+| --- | --- |
+| `protocol/` | The wire types every client and server speaks |
+| `library/` | The library: schema, writer, reads and sync |
+| `server/` | The background server, for macOS and Linux |
+| `app/` | The Mac app (`app/WovenMatter.xcodeproj`) |
+| `default-agent/` | Pi Durable, a Node child process of the server |
+| `bots/` | The bots runtime, a Node child process of the server |
+| `harnesses/` | The harness catalog and adapters |
+
+Build and launch a development instance:
 
 ```sh
-scripts/build_and_run.sh
+scripts/build_and_run.sh --instance NAME
 ```
 
-Each worktree gets its own instance, bundle ID, caches, and isolated data. See
-[build and run](README.md#build-and-run) for the snapshot and live modes.
-Development builds are separate from signed production releases;
-build and test scripts never publish or notarize a release. Follow the
+Each instance has its own bundle identifier, its own data folder and its own
+server, and never reads or changes the data of an installed app. Development
+builds are separate from signed production releases; build and test scripts
+never publish or notarize a release. Follow the
 [style guide](docs/STYLE_GUIDE.md) for UI changes.
 
 ## Before opening a change
@@ -30,7 +41,7 @@ build and test scripts never publish or notarize a release. Follow the
 - Open the pull request against `main`.
 - Do not include credentials, provider transcripts, personal paths, private
   hosts, generated build products, or proprietary assets.
-- Keep the Mac app useful on its own, without a Linux host or another device.
+- Keep the Mac app useful on its own, without a Linux machine or another Mac.
 - Do not bundle third-party harness CLIs or ACP adapters. Settings installs
   them, or uses the installations people already have.
 - Follow the [dependency policy](docs/DEPENDENCIES.md) for any new or updated
@@ -40,16 +51,16 @@ build and test scripts never publish or notarize a release. Follow the
 ## Validate
 
 ```sh
-scripts/test-changes.sh          # suites chosen from the files you changed
-scripts/test-changes.sh --all    # changes that span components
+scripts/test-changes.sh
 ```
 
-Tests must be deterministic, need no provider credentials, and make no real
-model calls. Describe any platform or environment limitation in the pull
-request. Pull request CI runs one portable Linux check without provider,
-release, deployment, or signing credentials. Native, mobile, and image
-workflows run only when a maintainer requests them. See the
-[maintainer workflow](docs/MAINTAINER_WORKFLOW.md) for the validation contract.
+It runs the static checks, the server package's tests (which cover the
+library and the protocol) and the Pi Durable and bots tests. Tests must be
+deterministic, use a stand-in runtime, need no provider credentials, and make
+no real model calls. Keep the suite small: one test for each behaviour that
+would hurt if it broke. Pull request CI runs the same suite on Linux
+(`scripts/test-changes.sh --ci`) without provider, release, deployment, or
+signing credentials. Describe any platform limitation in the pull request.
 
 ## Pull requests
 
@@ -58,13 +69,12 @@ call out security, privacy, persistence, or third-party provenance impacts.
 Every pull request targeting `main` needs approval from the code owner before
 it can merge.
 
-New and reopened pull requests receive an author label. Verified members of the
-Woven Matter GitHub organization, including owners and agent accounts, receive
-`author:organization`. Outside contributors and authors whose membership cannot
-be verified receive `author:external-or-unverified` for closer review.
-Collaborator access or bot status alone does not establish membership. Comment
-`/recheck-author` on a pull request to refresh its label after a membership
-change. Labels never bypass code-owner approval, branch protections, or
+Comment `/recheck-author` on a pull request to give it an author label.
+Verified members of the Woven Matter GitHub organization, including owners and
+agent accounts, receive `author:organization`. Outside contributors and
+authors whose membership cannot be verified receive
+`author:external-or-unverified` for closer review. Collaborator access or bot
+status alone does not establish membership. Labels never bypass code-owner approval, branch protections, or
 required checks.
 
 ## Documentation

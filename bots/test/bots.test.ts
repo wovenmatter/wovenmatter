@@ -2,13 +2,20 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Bot, NotFoundError } from "../src/bots.ts";
+import { type Bot, BotRuleError, NotFoundError } from "../src/bots.ts";
+import {
+  BOTS_TABLE,
+  MEMORY_TABLE,
+  NOTES_TABLE,
+  prefixedObjects,
+  THREADS_TABLE,
+} from "../src/storage/registry.ts";
 import { displayEntry } from "../src/transcript.ts";
 import { FAUX_MODEL, openTestManager, tempDir } from "./helpers.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
-describe("bots", () => {
+describe("bot lifecycle", () => {
   let dir: Awaited<ReturnType<typeof tempDir>>;
   beforeEach(async () => {
     dir = await tempDir();
@@ -18,7 +25,7 @@ describe("bots", () => {
   });
 
   it("creates and lists bots, each with a main-channel conversation", async () => {
-    const t = await openTestManager(join(dir.path, "pi-bot.sqlite"));
+    const t = await openTestManager(join(dir.path, "bots.sqlite"));
     try {
       expect(await t.manager.list()).toEqual([]);
       const alpha = await t.manager.create("  Alpha ");
@@ -36,43 +43,9 @@ describe("bots", () => {
     }
   });
 
-  it("rejects empty names and unknown bots", async () => {
-    const t = await openTestManager(join(dir.path, "pi-bot.sqlite"));
-    try {
-      await expect(t.manager.create("   ")).rejects.toThrow(/required/);
-      await expect(t.manager.get("00000000-0000-4000-8000-000000000000")).rejects.toThrow(
-        NotFoundError,
-      );
-    } finally {
-      await t.close();
-    }
-  });
-
-  it("persists bots and main-channel history across restarts", async () => {
-    const path = join(dir.path, "pi-bot.sqlite");
-    const first = await openTestManager(path);
-    const bot = await first.manager.create("Alpha");
-    const main = await (await first.manager.get(bot.id)).main();
-    const sub = await main.submit({ type: "input", content: "remember me" }, ctx);
-    await expect(sub.wait(ctx)).resolves.toMatchObject({ status: "done" });
-    await first.close();
-
-    const second = await openTestManager(path);
-    try {
-      expect((await second.manager.list()).map((b) => b.id)).toEqual([bot.id]);
-      const reopened = await (await second.manager.get(bot.id)).main();
-      const page = await reopened.entries({ order: "ascending" }, 50, undefined, ctx);
-      const text = JSON.stringify(page.items);
-      expect(text).toContain("remember me");
-      expect(text).toContain("echo: remember me");
-    } finally {
-      await second.close();
-    }
-  });
-
   it("soft-deletes: closes and evicts the harness, releases the env once, refuses messages", async () => {
     const released: string[] = [];
-    const t = await openTestManager(join(dir.path, "pi-bot.sqlite"), {
+    const t = await openTestManager(join(dir.path, "bots.sqlite"), {
       onBotDeleted: async (record) => {
         released.push(record.id);
       },
@@ -96,7 +69,7 @@ describe("bots", () => {
   });
 
   it("restores a soft-deleted bot with its history and threads, ready to message", async () => {
-    const path = join(dir.path, "pi-bot.sqlite");
+    const path = join(dir.path, "bots.sqlite");
     const t = await openTestManager(path);
     let alphaId: string;
     let threadId: number;
@@ -154,6 +127,125 @@ describe("bots", () => {
       expect(await texts(bot, threadId)).toHaveLength(4);
     } finally {
       await reopened.close();
+    }
+  });
+
+  it("deletes a thread at the source: its turn stops and a restart does not bring it back", async () => {
+    const path = join(dir.path, "bots.sqlite");
+    // 2 tokens/s: the thread's reply is still running when it is deleted.
+    const t = await openTestManager(path, { tokensPerSecond: 2 });
+    let botId: string;
+    let threadId: number;
+    try {
+      const record = await t.manager.create("Alpha");
+      botId = record.id;
+      const bot = await t.manager.get(record.id);
+      const main = await bot.main();
+      await bot.send("hello");
+      await bot.abort();
+      const last = (await main.entries({ order: "descending" }, 1, undefined, ctx)).items[0];
+      if (!last) throw new Error("empty main");
+      threadId = (await bot.fork({ entryId: last.id as unknown as number })).conversationId;
+      const sent = await bot.send("side note", threadId);
+      for (let tries = 0; ; tries += 1) {
+        const live = await bot.harness.inspect(ctx);
+        if (live.tasks.some((task) => task.record.conversationId === threadId)) break;
+        if (tries > 200) throw new Error("the thread's turn never started");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      await expect(bot.deleteThread(main.id)).rejects.toThrow(BotRuleError);
+      await bot.deleteThread(threadId);
+      await expect(sent.submission.wait(ctx)).resolves.toMatchObject({ status: "unanswered" });
+      expect(await bot.threads()).toEqual([]);
+      await expect(bot.conversation(threadId)).rejects.toThrow(NotFoundError);
+      await expect(bot.deleteThread(threadId)).rejects.toThrow(NotFoundError);
+    } finally {
+      await t.close();
+    }
+    // Pi Durable still holds the fork; startup reconciliation must not adopt it again.
+    const reopened = await openTestManager(path);
+    try {
+      const bot = await reopened.manager.get(botId);
+      expect(await bot.threads()).toEqual([]);
+      await expect(bot.conversation(threadId)).rejects.toThrow(NotFoundError);
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it("purges only a deleted bot, never Admin Bot: every row and table of it, nothing of the others", async () => {
+    const purged: string[] = [];
+    const t = await openTestManager(join(dir.path, "bots.sqlite"), {
+      ensureAdmin: true,
+      onBotPurged: async (botId) => {
+        purged.push(botId);
+        return { removed: true };
+      },
+    });
+    try {
+      const a = await t.manager.create("Alpha");
+      const b = await t.manager.create("Beta");
+      await t.manager.setManager(a.id, true);
+      await t.manager.setTeam(b.id, a.id);
+      const alpha = await t.manager.get(a.id);
+      const sent = await alpha.send("remember me");
+      await expect(sent.submission.wait(ctx)).resolves.toMatchObject({ status: "done" });
+      const main = await alpha.main();
+      const last = (await main.entries({ order: "descending" }, 1, undefined, ctx)).items[0];
+      if (!last) throw new Error("empty main");
+      await alpha.fork({ entryId: last.id as unknown as number });
+      const beta = await t.manager.get(b.id);
+      await (await beta.send("hi")).submission.wait(ctx);
+      await t.manager.registry.setNote("account", "plans");
+      await t.manager.registry.updateMemory(a.id, () => ({
+        facts: ["Alpha memory"],
+        checkpoint: 1,
+      }));
+      await t.manager.registry.updateMemory(b.id, () => ({
+        facts: ["Beta memory"],
+        checkpoint: 2,
+      }));
+      const betaObjects = await prefixedObjects(t.db, b.prefix);
+      const betaThreads = await t.manager.registry.listThreads(b.id);
+
+      // Live bots and Admin Bot are refused; nothing is touched.
+      await expect(t.manager.purge(a.id)).rejects.toThrow(BotRuleError);
+      const admin = await t.manager.admin();
+      if (!admin) throw new Error("no admin");
+      await expect(t.manager.purge(admin.id)).rejects.toThrow(BotRuleError);
+      expect((await prefixedObjects(t.db, a.prefix)).length).toBeGreaterThan(0);
+
+      await t.manager.delete(a.id);
+      await alpha.harness.closed;
+      expect(await t.manager.purge(a.id)).toEqual({
+        tables: expect.any(Number),
+        environment: { removed: true },
+      });
+      expect(purged).toEqual([a.id]);
+      expect(await t.db.all(`SELECT * FROM ${MEMORY_TABLE} WHERE bot_id = ?`, a.id)).toEqual([]);
+      expect((await t.manager.registry.memory(b.id)).facts).toEqual(["Beta memory"]);
+
+      // Every table under its prefix, its thread rows and its registry row are gone.
+      expect(await prefixedObjects(t.db, a.prefix)).toEqual([]);
+      expect(await t.db.all(`SELECT * FROM ${THREADS_TABLE} WHERE bot_id = ?`, a.id)).toEqual([]);
+      expect(await t.db.all(`SELECT * FROM ${BOTS_TABLE} WHERE id = ?`, a.id)).toEqual([]);
+      expect(await t.db.all(`SELECT id FROM ${BOTS_TABLE} WHERE manager_id = ?`, a.id)).toEqual([]);
+      expect(await t.manager.listDeleted()).toEqual([]);
+      await expect(t.manager.get(a.id)).rejects.toThrow(NotFoundError);
+      expect(await t.manager.restore(a.id)).toBeUndefined();
+      await expect(t.manager.purge(a.id)).rejects.toThrow(NotFoundError);
+
+      // Other bots and shared tables are untouched, and Beta still works.
+      expect(await prefixedObjects(t.db, b.prefix)).toEqual(betaObjects);
+      expect(await t.manager.registry.listThreads(b.id)).toEqual(betaThreads);
+      expect((await t.manager.list()).map((bot) => bot.name)).toEqual(["Admin Bot", "Beta"]);
+      expect(await t.manager.registry.note("account")).toMatchObject({ text: "plans" });
+      expect(await t.db.get(`SELECT count(*) AS n FROM ${NOTES_TABLE}`)).toEqual({ n: 1 });
+      const again = await beta.send("still here?");
+      await expect(again.submission.wait(ctx)).resolves.toMatchObject({ status: "done" });
+    } finally {
+      await t.close();
     }
   });
 });

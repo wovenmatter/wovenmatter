@@ -151,7 +151,7 @@ export class Bot {
         const data = entry.data;
         const round =
           data && typeof data === "object" && !Array.isArray(data) ? data.round : undefined;
-        return entry.kind === "pibot.input" &&
+        return entry.kind === "bot.input" &&
           typeof round === "number" &&
           Number.isInteger(round) &&
           round >= 0
@@ -165,7 +165,8 @@ export class Bot {
 
   /**
    * Send a message to the main channel or a thread: a user message (round 0), or with `round` a
-   * bot-to-bot message. The first message of an untitled thread also starts its title generation,
+   * bot-to-bot message. While the bot works, it steers that turn, joining it after the current
+   * tool round. The first message of an untitled thread also starts its title generation,
    * as Woven titles a conversation from its first prompt. While the bot runs a fallback main model,
    * the stored input starts with the fallback note (the chat hides it).
    */
@@ -174,7 +175,11 @@ export class Bot {
     conversationId?: number,
     round = 0,
     context?: string,
-    options: { readonly hidden?: boolean } = {},
+    options: {
+      readonly hidden?: boolean;
+      /** An agent session sent it: saved in the library as from that session. */
+      readonly from?: { readonly name: string; readonly sessionId: string };
+    } = {},
   ) {
     if (!this.#hasModel()) throw new Error(NO_MODEL_MESSAGE);
     const conversation = await this.conversation(conversationId);
@@ -187,9 +192,16 @@ export class Bot {
         content: [note, round === 0 && context ? contextNote(context) : undefined, text]
           .filter(Boolean)
           .join("\n\n"),
-        whenBusy: "followUp",
+        whenBusy: "steer",
         // Hidden inputs reach the model but never the chat (transcript.ts).
-        entry: { kind: "pibot.input", data: options.hidden ? { round, hidden: true } : { round } },
+        entry: {
+          kind: "bot.input",
+          data: {
+            round,
+            ...(options.hidden ? { hidden: true } : {}),
+            ...(options.from ? { from: { ...options.from } } : {}),
+          },
+        },
       },
       ctx,
     );
@@ -209,6 +221,19 @@ export class Bot {
     const conversation = await this.conversation(conversationId);
     await conversation.abort(ctx);
     return conversation;
+  }
+
+  /**
+   * Delete one of this bot's threads (never the main channel) and stop its turn. The row goes
+   * first, so nothing can send to the thread while it stops. Pi Durable keeps the conversation's
+   * entries; nothing lists or mirrors it again.
+   */
+  async deleteThread(conversationId: number): Promise<void> {
+    const main = await this.main();
+    if (conversationId === main.id) throw new BotRuleError("the main channel cannot be deleted");
+    const conversation = await this.conversation(conversationId);
+    await this.#registry.deleteThread(this.id, conversationId);
+    await conversation.abort(ctx);
   }
 
   /**
@@ -274,9 +299,11 @@ export class Bot {
       return all;
     }, ctx);
     const stored = new Set<number>(records.map((record) => record.id));
+    const deleted = await this.#registry.deletedThreads(this.id);
     const adoptedThreads: number[] = [];
     for (const conversation of records) {
       if (!isThreadFork(conversation, main.id) || registered.has(conversation.id)) continue;
+      if (deleted.has(conversation.id)) continue;
       await this.#registry.addThread({
         botId: this.id,
         conversationId: conversation.id,
@@ -477,11 +504,10 @@ export type BotManagerOptions = {
   readonly onThreadsChanged?: (botId: string) => void;
   /**
    * Model profiles. With them, each open bot's main channel and threads follow its profile's main
-   * model (on open, on `setProfile`, and on every profile change), and legacy per-bot model
-   * overrides are migrated to profiles on open.
+   * model (on open, on `setProfile`, and on every profile change).
    */
   readonly profiles?: ProfileStore;
-  /** Server-side log lines (model changes, migrations). */
+  /** Server-side log lines (model changes). */
   readonly log?: (message: string) => void;
   /**
    * Main-model usage limits shared by every bot. With it (and profiles), a bot whose main model is
@@ -576,10 +602,9 @@ export class BotManager {
 
   static async open(options: BotManagerOptions): Promise<BotManager> {
     const manager = new BotManager(options);
-    await manager.registry.migrate();
-    if (options.ensureAdmin) {
-      if (await manager.registry.admin()) await manager.registry.renameAdmin(ADMIN_NAME);
-      else await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
+    await manager.registry.createTables();
+    if (options.ensureAdmin && !(await manager.registry.admin())) {
+      await manager.#insert(ADMIN_NAME, { kind: "admin", manager: false });
     }
     options.profiles?.onChange(() => manager.#profilesChanged());
     options.availability?.onChange(() => void manager.#reapplyAll());
@@ -905,9 +930,9 @@ export class BotManager {
   }
 
   /**
-   * Woven Matter's load path (`engine.mjs` `create`): reinstall the host around committed work,
-   * inspect it, then resume scheduling so interrupted runs and queued input continue. Pi Durable's
-   * open already reconciled interrupted invocations; `resume()` lets them run again.
+   * After a restart or crash: reconcile the thread registry with the stored forks, inspect live
+   * work, then resume scheduling so interrupted runs and queued input continue. Pi Durable's open
+   * already reconciled interrupted invocations; `resume()` lets them run again.
    */
   async #recover(bot: Bot): Promise<RecoveryReport> {
     // `#open` rejects soft-deleted bots before a harness exists, so they never reach recovery.

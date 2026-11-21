@@ -2,23 +2,29 @@ import { randomUUID } from "node:crypto";
 import { validateSqliteSchemaPrefix } from "@earendil-works/chord/sqlite";
 import type { SqliteDatabase, SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import type { LimitEntry } from "../limits.ts";
-import { BOTS_SCHEMA_VERSION, supportedSchemaVersion } from "./database.ts";
 
-/** Shared tables. Bot tables all start with `pibot_<32 hex>_`, so these can never collide. */
-export type SidebarGroup = { id: string; name: string; position: number };
-export const GROUPS_TABLE = "pibot_groups";
-export const DELIVERIES_TABLE = "pibot_host_deliveries";
-/** Hosts retry within minutes; a month is far past any retry and bounds the table. */
+import type { SidebarGroup } from "../protocol.ts";
+
+export type { SidebarGroup };
+/** Shared tables. Bot tables all start with `bot_<32 hex>_`, so these can never collide. */
+export const GROUPS_TABLE = "bot_groups";
+export const DELIVERIES_TABLE = "bot_deliveries";
+/** The server retries within minutes; a month is far past any retry and bounds the table. */
 const DELIVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-export const BOTS_TABLE = "pibot_bots";
-export const THREADS_TABLE = "pibot_threads";
+export const BOTS_TABLE = "bot_bots";
+export const THREADS_TABLE = "bot_threads";
+/**
+ * Threads the user deleted. Pi Durable cannot delete a conversation, so its entries stay; this
+ * keeps startup reconciliation from adopting the ownerless fork as a thread again.
+ */
+export const DELETED_THREADS_TABLE = "bot_deleted_threads";
 /** Free-text notes, e.g. the user's plans and comfort spend (`account`), which Admin Bot reads. */
-export const NOTES_TABLE = "pibot_notes";
+export const NOTES_TABLE = "bot_notes";
 /** Marked main-model usage limits (`ModelAvailability`), so they outlive a restart. */
-export const LIMITS_TABLE = "pibot_limits";
+export const LIMITS_TABLE = "bot_limits";
 /** Each bot's extracted memory (one fact per line) and its extraction checkpoint. */
-export const MEMORY_TABLE = "pibot_memory";
+export const MEMORY_TABLE = "bot_memory";
 
 /** A bot's memory: facts oldest first, and the newest entry id extraction has read. */
 export type BotMemory = {
@@ -31,7 +37,7 @@ export type BotMemory = {
 export type BotRecord = {
   readonly id: string;
   readonly name: string;
-  /** Table prefix of this bot's Pi Durable session, `pibot_<id without dashes>_`. */
+  /** Table prefix of this bot's Pi Durable session, `bot_<id without dashes>_`. */
   readonly prefix: string;
   readonly createdAt: string;
   /** `admin`: the one built-in account/config bot (never deleted, renamed or on a team). */
@@ -100,7 +106,7 @@ const BOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Per-bot table prefix, mirroring Woven's `wm_pi_<id>_`. */
 export function botPrefix(botId: string): string {
   if (!BOT_ID.test(botId)) throw new Error(`invalid bot id ${JSON.stringify(botId)}`);
-  const prefix = `pibot_${botId.replaceAll("-", "")}_`;
+  const prefix = `bot_${botId.replaceAll("-", "")}_`;
   validateSqliteSchemaPrefix(prefix);
   return prefix;
 }
@@ -171,26 +177,9 @@ export class BotRegistry {
     this.#db = db;
   }
 
-  /**
-   * Brings the shared tables to `BOTS_SCHEMA_VERSION` and records it, in one transaction. A
-   * database from a newer Woven Matter is refused unchanged. Every open runs the idempotent
-   * `CREATE ... IF NOT EXISTS`; only a database below a version runs that version's step.
-   */
-  async migrate(): Promise<void> {
-    await this.#db.transaction(async (tx) => {
-      const version = await supportedSchemaVersion(tx);
-      await this.#createTables(tx);
-      // Step 1, from version 0: the shapes of builds before the version was recorded.
-      if (version < 1) await this.#addLaterColumns(tx);
-      // Step 2 goes here: `if (version < 2) ...`, with BOTS_SCHEMA_VERSION raised to 2.
-      await this.#createIndexes(tx);
-      if (version < BOTS_SCHEMA_VERSION)
-        await tx.exec(`PRAGMA user_version = ${BOTS_SCHEMA_VERSION}`);
-    });
-  }
-
-  async #createTables(db: SqliteExecutor): Promise<void> {
-    await db.exec(`
+  /** Creates the shared tables and their indexes when they are missing. */
+  async createTables(): Promise<void> {
+    await this.#db.exec(`
       CREATE TABLE IF NOT EXISTS ${GROUPS_TABLE} (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL
       ) STRICT;
@@ -202,7 +191,13 @@ export class BotRegistry {
         name TEXT NOT NULL,
         schema_prefix TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
-        deleted_at TEXT
+        deleted_at TEXT,
+        kind TEXT NOT NULL DEFAULT 'bot',
+        is_manager INTEGER NOT NULL DEFAULT 0,
+        manager_id TEXT,
+        profile TEXT,
+        group_id TEXT REFERENCES ${GROUPS_TABLE}(id) ON DELETE SET NULL,
+        is_orchestrator INTEGER NOT NULL DEFAULT 0
       ) STRICT;
       CREATE TABLE IF NOT EXISTS ${THREADS_TABLE} (
         bot_id TEXT NOT NULL REFERENCES ${BOTS_TABLE}(id) ON DELETE CASCADE,
@@ -211,6 +206,12 @@ export class BotRegistry {
         forked_at_entry INTEGER NOT NULL,
         title TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (bot_id, conversation_id)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS ${DELETED_THREADS_TABLE} (
+        bot_id TEXT NOT NULL REFERENCES ${BOTS_TABLE}(id) ON DELETE CASCADE,
+        conversation_id INTEGER NOT NULL,
         PRIMARY KEY (bot_id, conversation_id)
       ) STRICT;
       CREATE TABLE IF NOT EXISTS ${NOTES_TABLE} (
@@ -228,57 +229,13 @@ export class BotRegistry {
         checkpoint INTEGER NOT NULL,
         updated_at TEXT NOT NULL
       ) STRICT;
+      -- At most one Admin Bot, and at most one orchestrator.
+      CREATE UNIQUE INDEX IF NOT EXISTS bot_bots_one_admin ON ${BOTS_TABLE}(kind) WHERE kind = 'admin';
+      CREATE UNIQUE INDEX IF NOT EXISTS bot_bots_one_orchestrator ON ${BOTS_TABLE}(is_orchestrator) WHERE is_orchestrator = 1;
     `);
   }
 
-  async #addLaterColumns(db: SqliteExecutor): Promise<void> {
-    const threadColumns = await db.all<{ name: string }>(
-      `PRAGMA table_info(${THREADS_TABLE})`,
-    );
-    if (!threadColumns.some((column) => column.name === "is_pinned"))
-      await db.exec(
-        `ALTER TABLE ${THREADS_TABLE} ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0`,
-      );
-    // Older databases lack later columns: add each missing one (existing bots are plain bots).
-    const columns = new Set(
-      (await db.all<{ name: string }>(`PRAGMA table_info(${BOTS_TABLE})`)).map(
-        (column) => column.name,
-      ),
-    );
-    const deliveryColumns = await db.all<{ name: string }>(
-      `PRAGMA table_info(${DELIVERIES_TABLE})`,
-    );
-    if (!deliveryColumns.some((column) => column.name === "accepted")) {
-      await db.exec(
-        `ALTER TABLE ${DELIVERIES_TABLE} ADD COLUMN accepted INTEGER NOT NULL DEFAULT 0`,
-      );
-    }
-    const added: [string, string][] = [
-      ["deleted_at", "TEXT"],
-      ["kind", "TEXT NOT NULL DEFAULT 'bot'"],
-      ["is_manager", "INTEGER NOT NULL DEFAULT 0"],
-      ["manager_id", "TEXT"],
-      ["profile", "TEXT"],
-      ["group_id", `TEXT REFERENCES ${GROUPS_TABLE}(id) ON DELETE SET NULL`],
-      ["is_orchestrator", "INTEGER NOT NULL DEFAULT 0"],
-    ];
-    for (const [name, type] of added) {
-      if (!columns.has(name))
-        await db.exec(`ALTER TABLE ${BOTS_TABLE} ADD COLUMN ${name} ${type}`);
-    }
-  }
-
-  async #createIndexes(db: SqliteExecutor): Promise<void> {
-    // At most one Admin Bot.
-    await db.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS pibot_bots_one_admin ON ${BOTS_TABLE}(kind) WHERE kind = 'admin'`,
-    );
-    // At most one orchestrator.
-    await db.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS pibot_bots_one_orchestrator ON ${BOTS_TABLE}(is_orchestrator) WHERE is_orchestrator = 1`,
-    );
-  }
-
+  /** This runtime's own identifier (container and volume labels); it moves with the bots folder. */
   async installationId(): Promise<string> {
     await this.#db.run(
       `INSERT OR IGNORE INTO ${NOTES_TABLE} (name, text, updated_at) VALUES ('installationId', ?, ?)`,
@@ -291,8 +248,8 @@ export class BotRegistry {
   }
 
   /**
-   * False once a host delivery id has been accepted. A crash before `acceptDelivery` lets the host's
-   * retry through: repeating a notification is better than losing it.
+   * False once a delivery id has been accepted. A crash before `acceptDelivery` lets the server's
+   * retry through: repeating a message is better than losing it.
    */
   async claimDelivery(id: string): Promise<boolean> {
     const now = Date.now();
@@ -389,15 +346,6 @@ export class BotRegistry {
       `UPDATE ${BOTS_TABLE} SET name = ? WHERE id = ? AND deleted_at IS NULL`,
       name,
       id,
-    );
-  }
-
-  /** Startup migration: give the admin-kind bot its current built-in name. */
-  async renameAdmin(name: string): Promise<void> {
-    await this.#db.run(
-      `UPDATE ${BOTS_TABLE} SET name = ? WHERE kind = 'admin' AND name <> ?`,
-      name,
-      name,
     );
   }
 
@@ -631,7 +579,7 @@ export class BotRegistry {
         id,
       );
       if (!row || row.kind === "admin") return undefined;
-      // Only ever the bot's own `pibot_<32 hex>_` prefix, never another bot's or a shared table.
+      // Only ever the bot's own `bot_<32 hex>_` prefix, never another bot's or a shared table.
       if (row.schema_prefix !== botPrefix(id)) {
         throw new Error(`bot ${id} has an unexpected table prefix; not purged`);
       }
@@ -646,6 +594,7 @@ export class BotRegistry {
       const tables = objects.filter((object) => object.type === "table").map((t) => t.name);
       for (const table of tables) await tx.exec(`DROP TABLE IF EXISTS ${quoted(table)}`);
       await tx.run(`DELETE FROM ${THREADS_TABLE} WHERE bot_id = ?`, id);
+      await tx.run(`DELETE FROM ${DELETED_THREADS_TABLE} WHERE bot_id = ?`, id);
       await tx.run(`DELETE FROM ${MEMORY_TABLE} WHERE bot_id = ?`, id);
       await tx.run(`UPDATE ${BOTS_TABLE} SET manager_id = NULL WHERE manager_id = ?`, id);
       await tx.run(`DELETE FROM ${BOTS_TABLE} WHERE id = ?`, id);
@@ -673,6 +622,17 @@ export class BotRegistry {
     return rows.map(toThread);
   }
 
+  async setThreadTitle(botId: string, conversationId: number, title: string): Promise<ThreadRecord> {
+    const row = await this.#db.get<ThreadRow>(
+      `UPDATE ${THREADS_TABLE} SET title = ? WHERE bot_id = ? AND conversation_id = ? RETURNING *`,
+      title.trim(),
+      botId,
+      conversationId,
+    );
+    if (!row) throw new Error("Thread not found");
+    return toThread(row);
+  }
+
   async setThreadPinned(
     botId: string,
     conversationId: number,
@@ -686,6 +646,35 @@ export class BotRegistry {
     );
     if (!row) throw new Error("Thread not found");
     return toThread(row);
+  }
+
+  /**
+   * Remove a thread's row and remember it was deleted, in one transaction. Threads forked from it
+   * keep their own rows. Throws for an unknown thread.
+   */
+  async deleteThread(botId: string, conversationId: number): Promise<void> {
+    await this.#db.transaction(async (tx) => {
+      const row = await tx.get<{ conversation_id: number }>(
+        `DELETE FROM ${THREADS_TABLE} WHERE bot_id = ? AND conversation_id = ? RETURNING conversation_id`,
+        botId,
+        conversationId,
+      );
+      if (!row) throw new Error("Thread not found");
+      await tx.run(
+        `INSERT OR IGNORE INTO ${DELETED_THREADS_TABLE} (bot_id, conversation_id) VALUES (?, ?)`,
+        botId,
+        conversationId,
+      );
+    });
+  }
+
+  /** The conversations of a bot's deleted threads. */
+  async deletedThreads(botId: string): Promise<Set<number>> {
+    const rows = await this.#db.all<{ conversation_id: number }>(
+      `SELECT conversation_id FROM ${DELETED_THREADS_TABLE} WHERE bot_id = ?`,
+      botId,
+    );
+    return new Set(rows.map((row) => row.conversation_id));
   }
 
   /** Woven's `updateConversationTitleIfCurrent`: set the title only while it is still empty. */

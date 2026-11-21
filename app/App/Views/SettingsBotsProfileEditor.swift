@@ -1,5 +1,4 @@
 import SwiftUI
-import WovenMatterClient
 
 struct BotSettingsProfileEditor: View {
     let profile: PiBotProfile?

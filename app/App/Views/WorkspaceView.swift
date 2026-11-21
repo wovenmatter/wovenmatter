@@ -1,8 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WovenMatterClient
-import WovenMatterCore
+import WovenProtocol
 
 final class ScrollHoverCoordinator: @unchecked Sendable {
     var isScrolling = false
@@ -50,21 +49,6 @@ extension EnvironmentValues {
     }
 }
 
-struct RunDisplayPolicy {
-    static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
-        run.status != "queued" && run.status != "accepted"
-    }
-
-    static func presentsMessage(
-        _ message: WorkspaceMessageRecord,
-        run: WorkspaceRunRecord?
-    ) -> Bool {
-        guard message.role == "assistant", message.content.isEmpty else { return true }
-        guard let run else { return true }
-        return presentsStatus(run)
-    }
-}
-
 struct WorkspaceView: View {
     @Bindable var model: ApplicationModel
     @State private var conversationToRename: WorkspaceConversationRecord?
@@ -83,12 +67,11 @@ struct WorkspaceView: View {
     @AppStorage(PinnedAgentsStore.storageKey) private var pinnedAgentIDsRaw = "[]"
     @AppStorage(AgentOrderStore.storageKey) private var agentOrderRaw = "{}"
     @AppStorage(AgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
-    @State private var selectedAgentID: UUID?
+    @State private var selectedAgentID: String?
     @State private var chatPanels = ChatPanelState()
     private var assets: WorkspaceAssetSession { model.workspaceAssets }
     private var selectedNoteID: String? { assets.tabs.selectedNoteID }
     @State private var selectedFolderID: String?
-    @State private var localExecutionWorkspaceID: String?
     @State private var sidebarNavigation = SidebarNavigationState()
     @State private var destination = WindowDestination.workspace
     /// The one rail revealed while the window is too narrow for the requested rails.
@@ -113,17 +96,15 @@ struct WorkspaceView: View {
     }
 
     private var allAgents: [WorkspaceAgent] {
-        model.orderedLocalCLIAgents
-            + model.remoteWorkspaceAgents
+        model.workspace.agents
+    }
+
+    private var overview: WorkspaceOverview? {
+        model.workspace.workspaceOverview
     }
 
     private var selectedConversationID: String? {
         chatPanels.activeConversationID
-    }
-
-    private var sidebarAgents: [WorkspaceAgent] {
-        model.installedOrderedLocalCLIAgents
-            + model.remoteWorkspaceAgents
     }
 
     private var surfacePreferenceSignature: String {
@@ -154,7 +135,7 @@ struct WorkspaceView: View {
             newChat: createConversation,
             newNote: openNewNoteChooser,
             newBrowserTab: openNewBrowserTab,
-            refresh: { Task { await model.refreshWorkspace() } }
+            refresh: { Task { await model.workspace.refresh() } }
         ))
         .environment(\.openDocumentPreview) { url, identity in
             do {
@@ -170,22 +151,29 @@ struct WorkspaceView: View {
         .onChange(of: model.bots.notice) { _, message in
             if let message { showNotice(message); model.bots.notice = nil }
         }
-        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
+        .onChange(of: model.navigation.pendingDefaultAgentSettingsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
-        .onChange(of: model.pendingConnectionsScope) { _, scope in
+        .debugNavigation(openNote: selectNote, show: { destination = $0 })
+        .debugRequest("trash") { showsWorkspaceTrash = true }
+        // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent, `new:RUNTIME@MACHINE` there.
+        .debugCommand("chat:") { selectConversation($0) }
+        .debugCommand("new:", startDebugChat)
+        // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
+        .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.hostMachineID ?? "", botID: $0)) }
+        .debugRequest("bots-settings") { openBotSettings() }
+        // `settings-page:NAME` opens a Settings page, as `--settings-page` does at launch.
+        .debugCommand("settings-page:") { model.navigation.pendingConnectionsScope = $0 }
+        .onChange(of: model.navigation.pendingConnectionsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
         .onReceive(NotificationCenter.default.publisher(for: MacAccessSetupModel.openSettingsNotification)) { _ in
-            model.pendingConnectionsScope = "permissions"
+            model.navigation.pendingConnectionsScope = "permissions"
             openUtility(.settings)
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
-            model.pendingConnectionsScope = event.object as? String ?? "global"
+            model.navigation.pendingConnectionsScope = event.object as? String ?? model.machines.thisMachine?.id
             openUtility(.settings)
-        }
-        .task(id: model.state == .ready) {
-            localExecutionWorkspaceID = try? await model.executionWorkspaceIdentity(workspaceID: nil)
         }
     }
 
@@ -209,9 +197,9 @@ struct WorkspaceView: View {
                 // Narrowing the window hides the rails again; widening restores
                 // the rails the person requested.
                 .onChange(of: layout.compact) { _, _ in compactRail = nil }
-                .alert("Pi Durable switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
-                    Button("OK") { model.defaultAgentFallbackNotice = nil }
-                } message: { Text(model.defaultAgentFallbackNotice ?? "") }
+                .alert("Pi Durable switched models", isPresented: Binding(get: { model.sessions.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.sessions.defaultAgentFallbackNotice = nil } })) {
+                    Button("OK") { model.sessions.defaultAgentFallbackNotice = nil }
+                } message: { Text(model.sessions.defaultAgentFallbackNotice ?? "") }
 
                 if showsNewChatChooser || showsNewNoteChooser {
                     Color.black.opacity(0.20)
@@ -225,10 +213,9 @@ struct WorkspaceView: View {
                 if showsNewChatChooser {
                     NewChatDrawer(
                         model: model,
-                        folderOwnerID: model.workspaceOverview?.folders.first(where: { $0.id == selectedFolderID })?.executionWorkspaceID,
-                        localExecutionWorkspaceID: localExecutionWorkspaceID,
+                        folderMachineID: model.workspace.folder(id: selectedFolderID)?.machineID,
                         onClose: closeNewChatChooser,
-                        onSelect: startNewChat
+                        onSelect: { startChat(with: $0) }
                     )
                     .frame(width: min(440, max(360, geometry.size.width - 32)))
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -262,11 +249,11 @@ struct WorkspaceView: View {
     }
 
     private var workspaceConversationIDs: [String] {
-        model.workspaceOverview?.conversations.map(\.id) ?? []
+        overview?.conversations.map(\.id) ?? []
     }
 
     private var workspaceNoteIDs: [String] {
-        model.workspaceOverview?.notes.map(\.id) ?? []
+        overview?.notes.map(\.id) ?? []
     }
 
     private func reconcileConversations(oldIDs: [String], ids: [String]) {
@@ -285,7 +272,6 @@ struct WorkspaceView: View {
     private var workspaceNavigation: some View {
         workspaceLayout
         .onAppear {
-            model.startAutomationHost()
             selectDefaults()
         }
         .overlay(alignment: .top) { DictationFeedback().padding(.top, 12) }
@@ -301,7 +287,13 @@ struct WorkspaceView: View {
         }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
-                model.markConversationRead(id: conversationID)
+                model.workspace.markConversationRead(id: conversationID)
+            }
+        }
+        // A reply that arrives in the open chat is seen as it arrives.
+        .onChange(of: selectedConversation?.unread) { _, unread in
+            if unread == true, let conversationID = selectedConversationID {
+                model.workspace.markConversationRead(id: conversationID)
             }
         }
     }
@@ -329,17 +321,17 @@ struct WorkspaceView: View {
             compactRail = newSide
         }
         .onChange(of: surfacePreferenceSignature) { _, _ in
-            model.persistMacSurfaceProfileFromUserDefaults()
+            model.settings.persistMacSurfaceProfileFromUserDefaults()
         }
         .onDisappear { noticeTask?.cancel() }
         .sheet(item: $conversationToRename) { conversation in
             RenameSheet(heading: "Rename chat", placeholder: "Chat name", initialTitle: conversation.title) { title in
-                try await model.mutateConversation(id: conversation.id, mutation: .rename(title))
+                try await model.workspace.mutateConversation(id: conversation.id, mutation: .rename(title))
             }
         }
         .sheet(item: $noteToRename) { note in
-            RenameSheet(heading: "Rename artifact", placeholder: "Artifact name", initialTitle: model.noteDraft(for: note).title) { title in
-                try await model.mutateNote(id: note.id, mutation: .rename(title))
+            RenameSheet(heading: "Rename artifact", placeholder: "Artifact name", initialTitle: note.title) { title in
+                try await model.workspace.mutateNote(id: note.id, mutation: .rename(title))
             }
         }
         .sheet(isPresented: $showsWorkspaceTrash) {
@@ -371,13 +363,14 @@ struct WorkspaceView: View {
         .sheet(item: $attachmentPicker) { kind in
             AttachmentPicker(
                 kind: kind,
-                notes: model.workspaceOverview?.notes ?? [],
-                conversations: (model.workspaceOverview?.conversations ?? []).filter {
+                notes: overview?.notes ?? [],
+                conversations: (overview?.conversations ?? []).filter {
                     $0.id != attachmentTargetConversationID
                 },
                 onSelectNote: { note in
                     if let conversationID = attachmentTargetConversationID {
-                        appendAttachment(model.noteAttachmentDraft(note), conversationID: conversationID)
+                        appendAttachment(.reference(AgentMessageReferenceDraft(
+                            kind: .note, resourceID: note.id, titleSnapshot: note.title)), conversationID: conversationID)
                     }
                     attachmentPicker = nil
                     attachmentTargetConversationID = nil
@@ -388,7 +381,8 @@ struct WorkspaceView: View {
                     attachmentPicker = nil
                     Task { @MainActor in
                         if let conversationID = targetConversationID {
-                            appendAttachment(model.conversationAttachmentDraft(conversation), conversationID: conversationID)
+                            appendAttachment(.reference(AgentMessageReferenceDraft(
+                                kind: .conversation, resourceID: conversation.id, titleSnapshot: conversation.title)), conversationID: conversationID)
                         }
                     }
                 }
@@ -475,21 +469,17 @@ struct WorkspaceView: View {
         adaptiveExpanded: Bool
     ) -> some View {
         SidebarRail(
+            model: model,
             side: side,
             page: page,
             style: sidebarStyle,
             adaptiveExpanded: adaptiveExpanded,
             agents: allAgents,
-            navigationAgents: sidebarAgents,
-            remoteWorkspaces: model.remoteWorkspaces,
-            localWorkspaceReady: model.localACPWorkspaceAvailability.isReady,
-            localExecutionWorkspaceID: localExecutionWorkspaceID,
-            executionWorkspaces: model.executionWorkspaceRegistry,
-            conversationOwners: model.federatedExecutionOwners,
-            folders: model.workspaceOverview?.folders ?? [],
-            conversations: model.workspaceOverview?.conversations ?? [],
-            notes: model.workspaceOverview?.notes ?? [],
-            runningConversationIDs: model.localRunningConversationIDs,
+            machines: model.machines.machines,
+            folders: overview?.folders ?? [],
+            conversations: overview?.conversations ?? [],
+            notes: overview?.notes ?? [],
+            runningConversationIDs: model.workspace.runningConversationIDs,
             selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
@@ -497,7 +487,6 @@ struct WorkspaceView: View {
             bots: model.bots,
             selectedBotTarget: chatPanels.activeBotTarget,
             destination: destination,
-            contentRevision: model.workspaceListRevision,
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
             agentOrderRaw: $agentOrderRaw,
             agentDisclosureRaw: $agentDisclosureRaw,
@@ -508,8 +497,6 @@ struct WorkspaceView: View {
                 onUtility: openUtility,
                 onSelectAgent: selectAgent,
                 onCreateAgentChat: createAgentChat,
-                onSelectRemoteAgent: selectRemoteAgent,
-                onStartRemoteChat: startRemoteChat,
                 onSelectFolder: selectFolder,
                 onSelectConversation: selectConversation,
                 onSelectNote: selectNote,
@@ -533,7 +520,7 @@ struct WorkspaceView: View {
                 onOpenBotSettings: openBotSettings
             ),
             onSurfaceProfileChange: {
-                model.persistMacSurfaceProfileFromUserDefaults()
+                model.settings.persistMacSurfaceProfileFromUserDefaults()
             }
         )
     }
@@ -588,7 +575,7 @@ struct WorkspaceView: View {
                     WorkspaceSurface(
                         model: model,
                         agents: allAgents,
-                        conversations: model.workspaceOverview?.conversations ?? [],
+                        conversations: overview?.conversations ?? [],
                         chatPanels: chatPanels,
                         assets: assets,
                         draftsByConversationID: $draftsByConversationID,
@@ -618,6 +605,7 @@ struct WorkspaceView: View {
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
                         onDropFiles: attachFiles,
+                        onReplaceSession: startChat(replacing:),
                         onBotRoute: { target, panelID in
                             _ = chatPanels.setBot(target, in: panelID)
                         },
@@ -638,11 +626,9 @@ struct WorkspaceView: View {
                         }
                     )
                 case .library:
-                    LibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
-                        (id: $0.id.uuidString.lowercased(), name: $0.name)
-                    }) { item in
-                        if model.workspaceOverview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
-                            model.libraryMessageTarget = item
+                    LibrarySurface(library: model.library, machines: model.machines.machines) { item in
+                        if overview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
+                            model.navigation.libraryMessageTarget = item
                             destination = .workspace
                             selectConversation(item.conversationID)
                         } else {
@@ -724,17 +710,13 @@ struct WorkspaceView: View {
     }
 
     private var selectedConversation: WorkspaceConversationRecord? {
-        model.workspaceOverview?.conversations.first { $0.id == selectedConversationID }
-    }
-
-    private var selectedNote: WorkspaceNoteRecord? {
-        model.workspaceOverview?.notes.first { $0.id == selectedNoteID }
+        overview?.conversations.first { $0.id == selectedConversationID }
     }
 
     private var conversationsForSelectedAgent: [WorkspaceConversationRecord] {
         guard let agent = selectedAgent else { return [] }
-        return (model.workspaceOverview?.conversations ?? []).filter { conversation in
-            return conversation.agentID == agent.id.uuidString.lowercased()
+        return (overview?.conversations ?? []).filter { conversation in
+            return conversation.agentID == agent.id
         }
     }
 
@@ -744,12 +726,8 @@ struct WorkspaceView: View {
         // A successful creation may arrive before the read projection. Keep its
         // selected ID until the next snapshot instead of restoring an older chat.
         if selectedConversationID != nil && selectedConversation == nil { return }
-        if selectedConversation?.localRuntimeKind != nil {
-            selectedAgentID = selectedConversation?.agentID.flatMap { agentID in
-                allAgents.first {
-                    $0.id.uuidString.lowercased() == agentID
-                }?.id
-            }
+        if let selectedConversation {
+            selectedAgentID = model.workspace.agent(id: selectedConversation.agentID)?.id
             return
         }
         if selectedConversation == nil,
@@ -763,8 +741,7 @@ struct WorkspaceView: View {
     }
 
     private func selectConversationForCurrentAgent() {
-        if selectedAgent == nil,
-           selectedConversation?.localRuntimeKind != nil {
+        if selectedAgent == nil, selectedConversation != nil {
             return
         }
         if let selectedConversation, conversationsForSelectedAgent.contains(where: { $0.id == selectedConversation.id }) {
@@ -775,51 +752,19 @@ struct WorkspaceView: View {
         )
     }
 
-    private func selectAgent(_ id: UUID) {
+    private func selectAgent(_ id: String) {
         selectedAgentID = id
         let latest = conversationsForSelectedAgent.max {
-            ($0.lastMessageAt ?? "", $0.id) < ($1.lastMessageAt ?? "", $1.id)
+            ($0.lastMessageAt ?? .distantPast, $0.id) < ($1.lastMessageAt ?? .distantPast, $1.id)
         }
         _ = chatPanels.replaceActiveConversation(with: latest?.id)
         destination = .workspace
         compactWorkspacePane = .chat
     }
 
-    private func selectRemoteAgent(_ target: RemoteHarnessChatTarget) {
-        let latest = (model.workspaceOverview?.conversations ?? []).filter {
-            $0.remoteWorkspaceID == target.configuration.id && $0.localRuntimeKind == target.harness.id
-        }.max { ($0.lastMessageAt ?? "", $0.id) < ($1.lastMessageAt ?? "", $1.id) }
-        if let latest { selectConversation(latest.id) }
-        else {
-            _ = chatPanels.replaceActiveConversation(with: nil)
-            selectedAgentID = nil
-            destination = .workspace
-            compactWorkspacePane = .chat
-        }
-    }
-
-    private func createAgentChat(_ id: UUID) {
-        if let agent = allAgents.first(where: { $0.id == id }) {
-            if model.peerAgentWorkspaces[agent.id] != nil {
-                let folder = selectedFolderID
-                let selection = beginChatCreation(agentID: agent.id)
-                Task {
-                    do {
-                        let id = try await model.createPairedMacSession(agentID: agent.id, conversationID: selection.id, folderID: folder)
-                        finishChatCreation(selection, conversationID: id)
-                    } catch { finishChatCreation(selection, conversationID: nil); showNotice(error.localizedDescription) }
-                }
-            } else if agent.executionLocation == .remote,
-               let target = model.remoteWorkspaces.readyChatTargets.first(where: {
-                   $0.configuration.id == agent.runtimeDeviceID && $0.harness.id == agent.runtimeKind
-               }) {
-                startRemoteChat(target)
-
-            } else if agent.executionLocation != .remote {
-                startDirectChat(agent.runtimeKind)
-            } else {
-                showNotice("Connect this workspace before starting a chat.")
-            }
+    private func createAgentChat(_ id: String) {
+        if let agent = model.workspace.agent(id: id) {
+            startChat(with: agent)
         }
         destination = .workspace
         compactWorkspacePane = .chat
@@ -833,13 +778,8 @@ struct WorkspaceView: View {
     }
 
     private func openBotSettings() {
-        model.pendingBotsSettings = true
+        model.navigation.pendingBotsSettings = true
         openUtility(.settings)
-    }
-
-    /// Subscriptions & API Keys for the device a bot runs on: its bots use that device's sign-ins.
-    private func botSignInDevice(_ machineID: String) -> String {
-        SignInDevicePicker.device(forBotMachine: machineID, machines: model.bots.machines, devices: model.signInConnections.devices)
     }
 
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
@@ -847,9 +787,10 @@ struct WorkspaceView: View {
         if let page = WovenAppLink(url) {
             switch page {
             case .accounts:
-                model.pendingConnectionsScope = chatPanels.panel(id: panelID)?.botTarget.map { botSignInDevice($0.machineID) } ?? SignInDevice.localID
+                // Subscriptions & API Keys of the machine a bot runs on: its bots use that machine's sign-ins.
+                model.navigation.pendingConnectionsScope = chatPanels.panel(id: panelID)?.botTarget?.machineID ?? model.machines.thisMachine?.id
             case .botProfiles:
-                model.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
+                model.navigation.pendingBotProfilesMachine = chatPanels.panel(id: panelID)?.botTarget?.machineID
                 openBotSettings()
             }
             return
@@ -878,15 +819,9 @@ struct WorkspaceView: View {
     }
 
     private func selectConversation(_ id: String) {
-        guard let conversation = model.workspaceOverview?.conversations.first(where: { $0.id == id }) else { return }
+        guard let conversation = overview?.conversations.first(where: { $0.id == id }) else { return }
         _ = chatPanels.replaceActiveConversation(with: id)
-        if conversation.localRuntimeKind != nil {
-            selectedAgentID = conversation.agentID.flatMap { agentID in
-                allAgents.first {
-                    $0.id.uuidString.lowercased() == agentID
-                }?.id
-            }
-        }
+        selectedAgentID = model.workspace.agent(id: conversation.agentID)?.id
         destination = .workspace
         compactWorkspacePane = .chat
     }
@@ -904,13 +839,13 @@ struct WorkspaceView: View {
             showNotice(WorkspaceAssetTabs.Capacity.notes.localizedDescription)
             return
         }
-        model.clearNoteMutationError()
+        model.workspace.clearNoteMutationError()
         Task {
-            guard let noteID = await model.createNote(
+            guard let noteID = await model.workspace.createNote(
                 folderID: selectedFolderID,
                 kind: kind
             ) else {
-                showNotice(model.noteMutationError ?? "The note could not be created.")
+                showNotice(model.workspace.noteMutationError ?? "The note could not be created.")
                 return
             }
             newlyCreatedNoteID = noteID
@@ -918,11 +853,11 @@ struct WorkspaceView: View {
         }
     }
 
-    private func createFolder(name: String, workspaceID: UUID?, externalRoot: URL?) {
-        model.clearFolderMutationError()
+    private func createFolder(name: String, machineID: String, externalRoot: URL?) {
+        model.workspace.clearFolderMutationError()
         Task {
-            guard let folderID = await model.createFolder(name: name, workspaceID: workspaceID, externalRoot: externalRoot) else {
-                showNotice(model.folderMutationError ?? "The folder could not be created.")
+            guard let folderID = await model.workspace.createFolder(name: name, machineID: machineID, externalRoot: externalRoot) else {
+                showNotice(model.workspace.folderMutationError ?? "The folder could not be created.")
                 return
             }
             selectFolder(folderID)
@@ -930,40 +865,40 @@ struct WorkspaceView: View {
     }
 
     private func renameFolder(id: String, name: String) {
-        model.clearFolderMutationError()
+        model.workspace.clearFolderMutationError()
         Task {
-            guard await model.renameFolder(id: id, name: name) else {
-                showNotice(model.folderMutationError ?? "The folder could not be renamed.")
+            guard await model.workspace.renameFolder(id: id, name: name) else {
+                showNotice(model.workspace.folderMutationError ?? "The folder could not be renamed.")
                 return
             }
         }
     }
 
     private func setFolderPinned(id: String, isPinned: Bool) {
-        model.clearFolderMutationError()
+        model.workspace.clearFolderMutationError()
         Task {
-            guard await model.setFolderPinned(id: id, isPinned: isPinned) else {
-                showNotice(model.folderMutationError ?? "The folder could not be updated.")
+            guard await model.workspace.setFolderPinned(id: id, isPinned: isPinned) else {
+                showNotice(model.workspace.folderMutationError ?? "The folder could not be updated.")
                 return
             }
         }
     }
 
     private func moveFolder(id: String, direction: WorkspaceFolderMoveDirection) {
-        model.clearFolderMutationError()
+        model.workspace.clearFolderMutationError()
         Task {
-            guard await model.moveFolder(id: id, direction: direction) else {
-                showNotice(model.folderMutationError ?? "The folder could not be moved.")
+            guard await model.workspace.moveFolder(id: id, direction: direction) else {
+                showNotice(model.workspace.folderMutationError ?? "The folder could not be moved.")
                 return
             }
         }
     }
 
     private func deleteFolder(id: String, deleteRoot: Bool) {
-        model.clearFolderMutationError()
+        model.workspace.clearFolderMutationError()
         Task {
-            guard await model.deleteFolder(id: id, deleteRoot: deleteRoot) else {
-                showNotice(model.folderMutationError ?? "The folder could not be removed.")
+            guard await model.workspace.deleteFolder(id: id, deleteRoot: deleteRoot) else {
+                showNotice(model.workspace.folderMutationError ?? "The folder could not be removed.")
                 return
             }
             if selectedFolderID == id {
@@ -973,10 +908,10 @@ struct WorkspaceView: View {
     }
 
     private func setFolderReferencePaths(id: String, paths: [String]) {
-        model.clearFolderMutationError()
+        model.workspace.clearFolderMutationError()
         Task {
-            guard await model.setFolderReferencePaths(id: id, paths: paths) else {
-                showNotice(model.folderMutationError ?? "The reference locations could not be updated.")
+            guard await model.workspace.setFolderReferencePaths(id: id, paths: paths) else {
+                showNotice(model.workspace.folderMutationError ?? "The reference locations could not be updated.")
                 return
             }
         }
@@ -998,16 +933,16 @@ struct WorkspaceView: View {
                 switch action {
                 case .rename: break
                 case .setPinned(let pinned):
-                    try await model.mutateConversation(id: conversation.id, mutation: .setPinned(pinned))
+                    try await model.workspace.mutateConversation(id: conversation.id, mutation: .setPinned(pinned))
                 case .moveToTrash:
-                    try await model.mutateConversation(id: conversation.id, mutation: .moveToTrash)
+                    try await model.workspace.mutateConversation(id: conversation.id, mutation: .moveToTrash)
                     for panel in chatPanels.panels where panel.conversationID == conversation.id {
                         _ = chatPanels.setConversation(nil, in: panel.id)
                     }
                     selectDefaults()
                     showNotice("Chat moved to Trash.")
                 case .export(let format):
-                    let url = try await model.exportConversation(id: conversation.id, format: format)
+                    let url = try await model.workspace.exportConversation(id: conversation.id, format: format)
                     if try await ConversationExport.save(url: url, title: conversation.title, format: format) {
                         showNotice("Chat exported.")
                     }
@@ -1028,15 +963,15 @@ struct WorkspaceView: View {
                 switch action {
                 case .rename: break
                 case .setPinned(let pinned):
-                    try await model.mutateNote(id: note.id, mutation: .setPinned(pinned))
+                    try await model.workspace.mutateNote(id: note.id, mutation: .setPinned(pinned))
                 case .moveToFolder(let folderID):
-                    try await model.mutateNote(id: note.id, mutation: .moveToFolder(folderID))
+                    try await model.workspace.mutateNote(id: note.id, mutation: .moveToFolder(folderID))
                 case .moveToTrash:
-                    try await model.mutateNote(id: note.id, mutation: .moveToTrash)
+                    try await model.workspace.mutateNote(id: note.id, mutation: .moveToTrash)
                     assets.close(.note(note.id))
                     showNotice("Note moved to Trash.")
                 case .export(let format):
-                    let export = try await model.exportNote(id: note.id, format: format)
+                    let export = try await model.workspace.exportNote(id: note.id, format: format)
                     if try await NoteExport.save(export) {
                         showNotice("Note exported.")
                     }
@@ -1061,17 +996,6 @@ struct WorkspaceView: View {
         showsNewChatChooser = true
     }
 
-    private func startNewChat(_ target: NewChatTarget) {
-        switch target {
-        case .acpDirect(let runtimeKind):
-            startDirectChat(runtimeKind)
-        case .remoteWorkspace(let target):
-            startRemoteChat(target)
-        case .peerAgent(let id):
-            createAgentChat(id)
-        }
-    }
-
     private func presentCreatedConversation(_ id: String) {
         // A successful command can precede the next read-projection snapshot.
         _ = chatPanels.replaceActiveConversation(with: id)
@@ -1083,11 +1007,11 @@ struct WorkspaceView: View {
     private struct ChatCreationSelection {
         let id = UUID()
         let previousConversationID: String?
-        let previousAgentID: UUID?
+        let previousAgentID: String?
         var conversationID: String { id.uuidString.lowercased() }
     }
 
-    private func beginChatCreation(agentID: UUID?) -> ChatCreationSelection {
+    private func beginChatCreation(agentID: String?) -> ChatCreationSelection {
         let selection = ChatCreationSelection(previousConversationID: selectedConversationID, previousAgentID: selectedAgentID)
         selectedAgentID = agentID
         closeNewChatChooser()
@@ -1105,45 +1029,52 @@ struct WorkspaceView: View {
         }
     }
 
-    private func startDirectChat(_ runtimeKind: AgentRuntimeKind) {
+    /// Starts a chat with `agent` on the machine that runs it, in the selected
+    /// folder. The new chat is shown at once and replaced if the start fails.
+    private func startChat(with agent: WorkspaceAgent) {
         let requestedFolderID = selectedFolderID
-        let selection = beginChatCreation(agentID: allAgents.first {
-            $0.executionLocation != .remote && $0.runtimeKind == runtimeKind
-        }?.id)
+        let selection = beginChatCreation(agentID: agent.id)
         Task {
-            guard let conversationID = await model.createLocalACPSession(
-                runtimeKind: runtimeKind, requestedConversationID: selection.id, folderID: requestedFolderID
-            ) else {
+            do {
+                let conversationID = try await model.workspace.startSession(agent: agent, folderID: requestedFolderID)
+                finishChatCreation(selection, conversationID: conversationID)
+            } catch {
                 finishChatCreation(selection, conversationID: nil)
-                showNotice(
-                    model.localRunError
-                        ?? "The local CLI chat could not be created."
-                )
-                return
+                showNotice(error.localizedDescription)
             }
-            await model.analytics.record(.active)
-            finishChatCreation(selection, conversationID: conversationID)
         }
     }
 
-    private func startRemoteChat(_ target: RemoteHarnessChatTarget) {
-        let requestedFolderID = selectedFolderID
-        let selection = beginChatCreation(agentID: allAgents.first {
-            $0.executionLocation == .remote && $0.runtimeDeviceID == target.configuration.id && $0.runtimeKind == target.harness.id
-        }?.id)
-        Task {
-            guard let conversationID = await model.createRemoteACPSession(
-                target: target, requestedConversationID: selection.id, folderID: requestedFolderID
-            ) else {
-                finishChatCreation(selection, conversationID: nil)
-                showNotice(
-                    model.localRunError
-                        ?? "The remote workspace chat could not be created."
-                )
-                return
+    /// `RUNTIME@MACHINE` starts one with any runtime that machine's server
+    /// offers (a dev instance's stand-in, say) through the usual start path.
+    private func startDebugChat(_ runtime: String) {
+        let parts = runtime.split(separator: "@", maxSplits: 1).map(String.init)
+        if parts.count == 2 {
+            let selection = beginChatCreation(agentID: nil)
+            Task {
+                let id = try? await model.workspace.startSession(runtime: RuntimeKind(rawValue: parts[0]), on: parts[1], folderID: nil)
+                finishChatCreation(selection, conversationID: id)
             }
-            await model.analytics.record(.active)
-            finishChatCreation(selection, conversationID: conversationID)
+            return
+        }
+        let here = model.machines.thisMachine?.id
+        guard let agent = model.workspace.agents.first(where: { $0.runtimeKind.rawValue == runtime && $0.machineID == here }) else { return }
+        startChat(with: agent)
+    }
+
+    /// Starts a chat with the same runtime, machine and folder as one whose
+    /// native session is gone.
+    private func startChat(replacing conversation: WorkspaceConversationRecord) {
+        let selection = beginChatCreation(agentID: conversation.agentID)
+        Task {
+            do {
+                let conversationID = try await model.workspace.startSession(
+                    runtime: conversation.runtime, on: conversation.machineID, folderID: conversation.folderID)
+                finishChatCreation(selection, conversationID: conversationID)
+            } catch {
+                finishChatCreation(selection, conversationID: nil)
+                showNotice(error.localizedDescription)
+            }
         }
     }
 
@@ -1189,7 +1120,7 @@ struct WorkspaceView: View {
         let openConversationIDs = Set(chatPanels.panels.compactMap(\.conversationID))
         let conversationID = ConversationSelection
             .mostRecentAvailableConversationID(
-                in: model.workspaceOverview?.conversations ?? [],
+                in: overview?.conversations ?? [],
                 excluding: openConversationIDs
             )
         guard chatPanels.addPanel(
@@ -1218,44 +1149,34 @@ struct WorkspaceView: View {
 
     private func synchronizeSelectionToActivePanel() {
         guard let conversation = selectedConversation else { return }
-        if conversation.localRuntimeKind != nil {
-            selectedAgentID = conversation.agentID.flatMap { agentID in
-                allAgents.first {
-                    $0.id.uuidString.lowercased() == agentID
-                }?.id
-            }
-        }
-        model.markConversationRead(id: conversation.id)
+        selectedAgentID = model.workspace.agent(id: conversation.agentID)?.id
+        model.workspace.markConversationRead(id: conversation.id)
     }
 
-    private func send(from panelID: ChatPanelID) {
-        if let selectedConversation = conversation(in: panelID) {
+    /// Sends the draft of the chat a panel shows, to that chat. While a
+    /// chosen chat loads, the one still on screen is the one its composer shows.
+    private func send(from panelID: ChatPanelID, shownConversationID: String?) {
+        if let selectedConversation = overview?.conversations.first(where: { $0.id == shownConversationID }) {
             let conversationID = selectedConversation.id
             guard submittingConversationIDs.insert(conversationID).inserted else {
                 return
             }
             let content = draftsByConversationID[conversationID, default: ""]
             let submittedAttachments = attachmentDraftsByConversation[conversationID] ?? []
-            let capturedNote = panelID == .primary && assets.tabs.isPresented ? selectedNote : nil
             let capturedWorkspace = panelID == .primary
-                ? assets.snapshot(notes: model.workspaceOverview?.notes ?? [], title: { model.noteDraft(for: $0).title })
+                ? assets.snapshot(notes: overview?.notes ?? [], title: \.title)
                 : nil
+            let session = model.sessions.session(for: selectedConversation.id)
             Task { @MainActor in
-                let notesSaved = capturedWorkspace?.notes.isEmpty != false ? true : await model.flushNoteDrafts()
-                guard notesSaved else {
-                    submittingConversationIDs.remove(conversationID)
-                    showNotice("Save the open artifacts before sending. Your draft is preserved.")
-                    return
-                }
-                let accepted = await model.sendAgentMessage(
-                    conversation: selectedConversation,
-                    input: AgentMessageInput(
+                var sendError: String?
+                do {
+                    try await session.send(AgentMessageInput(
                         text: content,
                         attachments: submittedAttachments,
                         visibleWorkspace: capturedWorkspace
-                    ),
-                    note: capturedNote
-                )
+                    ))
+                } catch { sendError = error.localizedDescription }
+                let accepted = sendError == nil
                 let currentDraft = draftsByConversationID[conversationID, default: ""]
                 draftsByConversationID[conversationID] = accepted && currentDraft == content ? "" : currentDraft
                 if accepted {
@@ -1265,10 +1186,7 @@ struct WorkspaceView: View {
                 }
                 submittingConversationIDs.remove(conversationID)
                 if !accepted, chatPanels.activeConversationID == conversationID {
-                    showNotice(
-                        model.conversationError(for: conversationID)
-                            ?? "The agent connection is unavailable. Your draft is preserved."
-                    )
+                    showNotice(sendError ?? "The agent connection is unavailable. Your draft is preserved.")
                 }
             }
             return
@@ -1316,7 +1234,7 @@ struct WorkspaceView: View {
                     let type = UTType(filenameExtension: url.pathExtension)
                     return (url: url, mimeType: type?.preferredMIMEType ?? "application/octet-stream")
                 }
-                for attachment in try await model.stageMessageAttachments(files) {
+                for attachment in try await model.sessions.stageMessageAttachments(files) {
                     appendAttachment(attachment, conversationID: conversationID)
                 }
             } catch {
@@ -1376,7 +1294,7 @@ struct WorkspaceView: View {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
             return nil
         }
-        return model.workspaceOverview?.conversations.first { $0.id == conversationID }
+        return overview?.conversations.first { $0.id == conversationID }
     }
 
 }
@@ -1413,13 +1331,18 @@ struct WorkspaceSurface: View {
     let onClosePanel: (ChatPanelID) -> Void
     let onNavigatePanel: (ChatPanelDirection) -> Bool
     let onOpenBoardSession: (String) -> Void
-    let onSend: (ChatPanelID) -> Void
+    /// Sends from a panel, naming the chat it shows.
+    let onSend: (ChatPanelID, String?) -> Void
     let onAttachmentAction: (ChatPanelID, ComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, ChatPanelID) -> Void
     let onDropFiles: ([URL], ChatPanelID) -> Bool
+    /// Starts a new chat in place of one whose native session is gone.
+    let onReplaceSession: (WorkspaceConversationRecord) -> Void
     let onBotRoute: (BotTarget, ChatPanelID) -> Void
     let onOpenBotLink: (URL, ChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
+    /// The chat each panel shows now, nil for none (see `conversation(for:)`).
+    @State private var shownConversationIDs: [ChatPanelID: String?] = [:]
 
     var body: some View {
         GeometryReader { geometry in
@@ -1471,13 +1394,6 @@ struct WorkspaceSurface: View {
         }
     }
 
-    private func conversationState(
-        for conversation: WorkspaceConversationRecord?
-    ) -> ConversationState? {
-        guard let conversation else { return nil }
-        return model.conversationState(for: conversation.id)
-    }
-
     private func assetPane(compact: Bool = false) -> some View {
         AssetPane(
             model: model, assets: assets, compact: compact, noteOnLeft: $noteOnLeft,
@@ -1508,15 +1424,12 @@ struct WorkspaceSurface: View {
         return labels.isEmpty ? nil : labels.joined(separator: " · ")
     }
 
-    /// Open notes and pages at send time, from the same snapshot regular chats use.
-    /// A note reference is offered only while bots hold the Notes tool group.
+    /// Open artifacts and browser tabs at send time, from the same snapshot regular chats use.
     private func botContext(for panelID: ChatPanelID) -> String? {
         guard panelID == .primary else { return nil }
         _ = assets.pageRevision
-        let notes = model.workspaceOverview?.notes ?? []
-        let snapshot = assets.snapshot(notes: notes) { $0.title }
-        guard let context = snapshot?.promptContext else { return nil }
-        return context.count <= 4_000 ? context : nil
+        let notes = model.workspace.workspaceOverview?.notes ?? []
+        return assets.snapshot(notes: notes) { $0.title }?.promptContext
     }
 
     @ViewBuilder private func chatPanel(
@@ -1564,11 +1477,11 @@ struct WorkspaceSurface: View {
                 onOpenLink: { onOpenBotLink($0, panelID) },
                 onOpenSettings: onOpenBotSettings,
                 onOpenConnections: {
-                    model.pendingConnectionsScope = SignInDevicePicker.device(forBotMachine: target.machineID,
-                        machines: model.bots.machines, devices: model.signInConnections.devices)
+                    // Bots use the sign-ins of the machine they run on.
+                    model.navigation.pendingConnectionsScope = target.machineID
                 },
                 onOpenProfiles: {
-                    model.pendingBotProfilesMachine = target.machineID
+                    model.navigation.pendingBotProfilesMachine = target.machineID
                     onOpenBotSettings()
                 }
             )
@@ -1595,7 +1508,6 @@ struct WorkspaceSurface: View {
         showNoteButton: Bool
     ) -> some View {
         let conversation = conversation(for: panelID)
-        let conversationState = conversationState(for: conversation)
         let attachments = conversation.flatMap {
             attachmentDraftsByConversation[$0.id]
         } ?? []
@@ -1604,16 +1516,9 @@ struct WorkspaceSurface: View {
                 model: model,
                 agent: agent(for: conversation),
                 conversation: conversation,
-                messages: conversationState?.content?.messages ?? [],
-                messageAttachments: conversationState?.content?.attachments ?? [],
-                messageReferences: conversationState?.content?.references ?? [],
-                messagePresentations: conversationState?.messagePresentations ?? [:],
-                activeRuns: conversationState?.content?.runs ?? [],
-                runActivities: conversationState?.runActivities ?? [],
-                runPresentations: conversationState?.runPresentations ?? [:],
                 attachedNoteTitle: panelID == .primary && assets.tabs.isPresented
                     ? workspaceContextLabel : nil,
-                draft: draftBinding(for: panelID),
+                draft: draftBinding(for: conversation?.id),
                 attachments: attachments,
                 sendInProgress: conversation.map {
                     submittingConversationIDs.contains($0.id)
@@ -1628,42 +1533,53 @@ struct WorkspaceSurface: View {
                 onActivatePanel: { onActivatePanel(panelID) },
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },
-                onSend: { onSend(panelID) },
+                onSend: { onSend(panelID, conversation?.id) },
                 onAttachmentAction: { onAttachmentAction(panelID, $0) },
                 onRemoveAttachment: { onRemoveAttachment($0, panelID) },
                 onDropFiles: { onDropFiles($0, panelID) },
-                onCommandNavigation: handleComposerNavigation
+                onCommandNavigation: handleComposerNavigation,
+                onNewSession: conversation.map { gone in { onReplaceSession(gone) } }
             )
             if showNoteButton { compactAssetsButton }
         }
         .task(id: conversation?.id) {
             guard let conversation else { return }
-            if model.libraryMessageTarget?.conversationID != conversation.id {
-                await model.refreshConversation(id: conversation.id)
-            }
             // The open chat follows its live state until it closes.
-            await model.followLiveConversation(conversation.id)
+            await model.sessions.follow(conversation.id)
         }
+        .task(id: chatPanels.panel(id: panelID)?.conversationID) {
+            // The chosen chat loads while the one on screen stays.
+            guard let chosen = chatPanels.panel(id: panelID)?.conversationID else { return }
+            await model.sessions.follow(chosen)
+        }
+        .onChange(of: conversation?.id, initial: true) { _, shown in shownConversationIDs[panelID] = .some(shown) }
     }
 
+    /// The chat a panel shows. A chosen chat replaces the one on screen, or
+    /// the panel's empty state, once its first view has arrived, so the
+    /// transcript changes in one step instead of showing an empty chat first.
     private func conversation(
         for panelID: ChatPanelID
     ) -> WorkspaceConversationRecord? {
         guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
             return nil
         }
-        return conversations.first { $0.id == conversationID }
+        let chosen = conversations.first { $0.id == conversationID }
+        guard let shownID = shownConversationIDs[panelID], shownID != conversationID,
+              !model.sessions.session(for: conversationID).hasLoaded else { return chosen }
+        guard let shownID else { return nil }
+        return conversations.first { $0.id == shownID } ?? chosen
     }
 
     private func agent(
         for conversation: WorkspaceConversationRecord?
     ) -> WorkspaceAgent? {
         guard let agentID = conversation?.agentID else { return nil }
-        return agents.first { $0.id.uuidString.lowercased() == agentID }
+        return agents.first { $0.id == agentID }
     }
 
-    private func draftBinding(for panelID: ChatPanelID) -> Binding<String> {
-        let conversationID = chatPanels.panel(id: panelID)?.conversationID ?? ""
+    private func draftBinding(for conversationID: String?) -> Binding<String> {
+        let conversationID = conversationID ?? ""
         return Binding(
             get: { draftsByConversationID[conversationID, default: ""] },
             set: { draftsByConversationID[conversationID] = $0 }

@@ -1,8 +1,7 @@
 import SwiftUI
 import Observation
-import WovenMatterClient
 
-/// Bot settings that belong to one machine's runtime: profiles, bots and teams.
+/// Bot settings: profiles, bots and teams.
 /// Provider accounts, search and sign-ins are Woven's own, in Settings → Subscriptions & API Keys.
 enum PiBotSettingsSection: String, CaseIterable, Identifiable, Sendable {
     case profiles, bots
@@ -27,16 +26,16 @@ enum PiBotSettingsSection: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// One settings section of one machine's runtime, native over its protocol.
+/// One settings section of the bots.
 struct SettingsBotsSectionPage: View {
-    @Bindable var bots: BotMachineSession
+    @Bindable var bots: BotsStore
     let section: PiBotSettingsSection
     var reservesRailControlSpace = false
     var backTitle = "Bots"
     let onBack: () -> Void
     @State private var state: BotSettingsState
 
-    init(bots: BotMachineSession, section: PiBotSettingsSection, reservesRailControlSpace: Bool = false,
+    init(bots: BotsStore, section: PiBotSettingsSection, reservesRailControlSpace: Bool = false,
          backTitle: String = "Bots", onBack: @escaping () -> Void) {
         self.bots = bots; self.section = section
         self.reservesRailControlSpace = reservesRailControlSpace
@@ -68,20 +67,20 @@ struct SettingsBotsSectionPage: View {
 
 @MainActor @Observable
 final class BotSettingsState {
-    let bots: BotMachineSession
+    let bots: BotsStore
     var error: String?
     var confirmation: BotSettingsConfirmation?
     private(set) var pending = 0
     var disabled: Bool { !bots.isConnected || pending > 0 }
 
-    init(bots: BotMachineSession) { self.bots = bots }
+    init(bots: BotsStore) { self.bots = bots }
 
     /// Reads don't disable anything, so a background refresh never takes focus from a field.
     @discardableResult
-    func load(_ work: @MainActor (PiBotClient) async throws -> Void) async -> Bool {
-        guard let client = bots.connectedClient else { return false }
+    func load(_ work: @MainActor () async throws -> Void) async -> Bool {
+        guard bots.isConnected else { return false }
         do {
-            try await work(client)
+            try await work()
             return true
         } catch is CancellationError {
             return false
@@ -93,13 +92,13 @@ final class BotSettingsState {
 
     /// A change: the section's controls wait until it finishes.
     @discardableResult
-    func run(_ work: @MainActor (PiBotClient) async throws -> Void) async -> Bool {
-        guard let client = bots.connectedClient else { error = "Bots are not connected."; return false }
+    func run(_ work: @MainActor () async throws -> Void) async -> Bool {
+        guard bots.isConnected else { error = "Bots are not connected."; return false }
         error = nil
         pending += 1
         defer { pending -= 1 }
         do {
-            try await work(client)
+            try await work()
             return true
         } catch is CancellationError {
             return false

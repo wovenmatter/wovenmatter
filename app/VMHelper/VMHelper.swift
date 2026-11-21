@@ -7,16 +7,14 @@ struct HelperState: Codable {
     var machineIdentifier: Data?
     var macAddress: String?
     var instanceID = "woven-" + UUID().uuidString.lowercased()
-    var forwards: [WovenVMForward] = []
-    var updateFailure: String?
     /// The guest kernel last seen leaves the pages it hands to the balloon
     /// untouched, so the next boot can be capped from the start.
     var guestLeavesBalloonUntouched: Bool?
 }
 
 /// Owns the Woven VM. All mutable state is confined to `queue`, which is also
-/// the Virtualization.framework queue. Blocking sequences (boot, update,
-/// restart, stop) run on worker threads and only touch state through `queue`.
+/// the Virtualization.framework queue. Blocking sequences (boot, restart,
+/// stop) run on worker threads and only touch state through `queue`.
 final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     let paths: WovenVMPaths
     let resources: URL
@@ -37,8 +35,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     private var guestDisk: (used: UInt64, cap: UInt64)?
     private var vmProcess: pid_t?
     private var listeners: [Listener] = []
-    private var forwardListeners: [String: Listener] = [:]
-    /// A sequence (boot, update, restart, stop) owns the VM; unexpected stops
+    /// A sequence (boot, restart, stop) owns the VM; unexpected stops
     /// are not auto-restarted while one runs.
     private var busy = false
     private var maintaining = false
@@ -62,9 +59,9 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         chmod(paths.root.path, 0o700)
-        // The socket directory may be under /private/tmp: never listen in one
-        // another user created or can enter.
-        try WovenVMPaths.preparePrivateDirectory(paths.socketDirectory)
+        // The socket directory is under /tmp: never listen in one another
+        // user created or can enter.
+        try SocketFolder.prepare(paths.socketDirectory)
         lockDescriptor = open(paths.root.appending(path: "helper.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard lockDescriptor >= 0, flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0 else {
             throw HelperAlreadyRunning()
@@ -76,7 +73,6 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
                 Listener(fd: control, queue: acceptQueue) { [self] fd in detach { self.serveControl(fd) } },
                 Listener(fd: engine, queue: acceptQueue) { [self] fd in detach { self.serveEngine(fd) } }
             ]
-            restoreForwards()
         }
         log("helper started for \(paths.root.path)")
         let timer = DispatchSource.makeTimerSource(queue: acceptQueue)
@@ -121,7 +117,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             try? FileManager.default.removeItem(at: paths.downloads)
         }
         set(.preparing, "Preparing the bot disk")
-        try GuestSetup.ensureDataDisk(at: GuestSetup.dataDiskURL(paths), bytes: dataDiskBytes())
+        try GuestSetup.ensureDataDisk(at: paths.dataDisk, bytes: dataDiskBytes())
         if !FileManager.default.fileExists(atPath: paths.seed.path) {
             let files = try WovenVMGuestFiles.files(resources: resources, version: version)
             let instance = queue.sync { state.instanceID }
@@ -182,7 +178,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             return device
         }
         configuration.storageDevices = [try disk(paths.disk, "woven-root", readOnly: false),
-                                        try disk(GuestSetup.dataDiskURL(paths), "woven-data", readOnly: false),
+                                        try disk(paths.dataDisk, "woven-data", readOnly: false),
                                         try disk(paths.seed, "woven-seed", readOnly: true)]
 
         let network = VZVirtioNetworkDeviceConfiguration()
@@ -360,7 +356,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         return WovenVMGuestDiagnostics.kernelFault(texts).map { " The guest kernel reported a fault: \($0)" } ?? ""
     }
 
-    /// Helper, console and guest state for `GET /v1/diagnostics`.
+    /// Helper, console and guest state for `GET /diagnostics`.
     func diagnostics() -> WovenVMDiagnostics {
         var guest: [String: String]?
         var guestError: String?
@@ -375,9 +371,8 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     }
 
     private func recordGuest(_ status: [String: Any]) {
-        let provisioned = (status["provisioned"] as? [String: Any])?["guestVersion"] as? Int
         let info = WovenVMGuestInfo(os: status["os"] as? String, kernel: status["kernel"] as? String,
-                                    docker: status["docker"] as? String, provisionedVersion: provisioned)
+                                    docker: status["docker"] as? String)
         let commandLine = status["cmdline"] as? String
         queue.async { [self] in
             guest = info
@@ -710,96 +705,6 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         exit(code)
     }
 
-    private let snapshotFiles = ["disk.img", "data.img", "efi-vars.fd"]
-
-    /// APFS clones of the disks taken with the guest shut down; one is kept.
-    private func takeSnapshot() throws {
-        let directory = paths.snapshot
-        try? FileManager.default.removeItem(at: directory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        for name in snapshotFiles {
-            guard clonefile(paths.root.appending(path: name).path, directory.appending(path: name).path, 0) == 0 else {
-                throw Sockets.posixError("snapshot \(name)")
-            }
-        }
-        let info = ["at": ISO8601DateFormatter().string(from: Date()), "guestVersion": String(queue.sync { guest?.provisionedVersion ?? 0 })]
-        try JSONSerialization.data(withJSONObject: info).write(to: directory.appending(path: "info.json"))
-    }
-
-    private func restoreSnapshot() throws {
-        for name in snapshotFiles {
-            let live = paths.root.appending(path: name), saved = paths.snapshot.appending(path: name)
-            guard FileManager.default.fileExists(atPath: saved.path) else { throw WovenVMError.failed("The snapshot is incomplete.") }
-            unlink(live.path)
-            guard clonefile(saved.path, live.path, 0) == 0 else { throw Sockets.posixError("restore \(name)") }
-        }
-    }
-
-    /// Woven's Update action for the VM: snapshot, update guest packages and the
-    /// pinned Docker Engine, reboot, health-check; roll back on any failure.
-    func runUpdate() {
-        guard beginSequence() else { return }
-        defer { endSequence() }
-        set(.updating, "Stopping the VM")
-        stopGuest()
-        do {
-            set(.updating, "Saving a snapshot")
-            try takeSnapshot()
-        } catch {
-            log("snapshot failed: \(error.localizedDescription)")
-            queue.sync { state.updateFailure = "The snapshot could not be saved: \(error.localizedDescription)"; saveState() }
-            do { try bootAndWait(timeout: Self.readyLimit, report: true) } catch { fail(error) }
-            return
-        }
-        do {
-            set(.updating, "Starting the VM")
-            try boot()
-            try waitUntilReady(timeout: 1800, report: false)
-            set(.updating, "Updating guest packages and Docker Engine")
-            let files = try WovenVMGuestFiles.files(resources: resources, version: version)
-            _ = try agent(["op": "update", "files": files.mapValues { $0.base64EncodedString() }], timeout: 120)
-            try waitForUpdate(timeout: Self.readyLimit)
-            set(.updating, "Restarting the VM")
-            stopGuest()
-            try boot()
-            try waitUntilReady(timeout: 1800, report: false)
-            let status = try agent(["op": "status"], timeout: 10)
-            guard status["docker"] as? String == version.docker.engineVersion else {
-                throw WovenVMError.failed("Docker Engine reports \(status["docker"] as? String ?? "nothing") after the update.")
-            }
-            queue.sync { state.updateFailure = nil; saveState() }
-            set(.ready, "Updated")
-            afterReady()
-            log("update finished")
-        } catch {
-            log("update failed, rolling back: \(error.localizedDescription)")
-            set(.updating, "Update failed; restoring the snapshot")
-            stopGuest()
-            do {
-                try restoreSnapshot()
-                queue.sync { state.updateFailure = "The update failed and was rolled back: \(error.localizedDescription)"; saveState() }
-                try bootAndWait(timeout: Self.readyLimit, report: true)
-            } catch {
-                fail(error)
-            }
-        }
-    }
-
-    private func waitForUpdate(timeout: TimeInterval) throws {
-        let started = Date()
-        var watch = WovenVMProvisionWatch(now: started)
-        while Date().timeIntervalSince(started) < timeout {
-            Thread.sleep(forTimeInterval: 2)
-            let status = try? agent(["op": "status"], timeout: 10)
-            switch watch.observe(status.map(WovenVMProvisionWatch.Report.init(updateIn:)), now: Date()) {
-            case .done: return
-            case .failed(let message): throw WovenVMError.failed(message + recordDiagnostics())
-            case .waiting(let step): if status != nil { set(.updating, step) }
-            }
-        }
-        throw WovenVMError.failed("The guest update did not finish in time.")
-    }
-
     // MARK: Status and settings
 
     private func set(_ newPhase: WovenVMPhase, _ newDetail: String?, progress newProgress: Double? = nil) {
@@ -826,8 +731,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
 
     func status() -> WovenVMStatus {
         let volume = HostMetrics.volume(containing: paths.root)
-        let allocated = HostMetrics.allocatedBytes(paths.disk) + HostMetrics.allocatedBytes(GuestSetup.dataDiskURL(paths))
-        let snapshot = FileManager.default.fileExists(atPath: paths.snapshot.appending(path: "info.json").path)
+        let allocated = HostMetrics.allocatedBytes(paths.disk) + HostMetrics.allocatedBytes(paths.dataDisk)
         return queue.sync {
             let desired = desiredMemory()
             let report = WovenVMResourceReport(
@@ -839,11 +743,8 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
                 vmDiskCapBytes: guestDisk?.cap ?? config.diskBytes ?? volume.total,
                 vmDiskAllocatedBytes: allocated, guestDiskUsedBytes: guestDisk?.used,
                 restartPending: machine != nil && bootedMemory != desired)
-            var status = WovenVMStatus(phase: phase, detail: detail, failure: failure, progress: progress,
-                                       engineSocket: paths.engineSocket.path, resources: report, guest: guest,
-                                       forwards: state.forwards, snapshotAvailable: snapshot)
-            status.updateFailure = state.updateFailure
-            return status
+            return WovenVMStatus(phase: phase, detail: detail, failure: failure, progress: progress,
+                                 engineSocket: paths.engineSocket.path, resources: report, guest: guest)
         }
     }
 
@@ -860,78 +761,6 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             return phase == .ready
         }
         if ready { detach { [self] in applyDiskCap() } }
-    }
-
-    // MARK: Forwards
-
-    func addForward(_ request: WovenVMForwardRequest) throws -> WovenVMForward {
-        let request = try request.validated()
-        if let existing = queue.sync(execute: {
-            state.forwards.first {
-                $0.container == request.container && $0.address == request.address && $0.port == request.port
-                    && (request.hostPort ?? 0 == 0 || $0.hostPort == request.hostPort)
-            }
-        }) { return existing }
-        let (fd, port) = try Sockets.listenLoopback(port: request.hostPort ?? 0)
-        let forward = WovenVMForward(id: UUID().uuidString.lowercased(), container: request.container,
-                                     address: request.address, port: request.port, hostPort: port)
-        queue.sync {
-            installForward(forward, fd: fd)
-            state.forwards.append(forward)
-            saveState()
-        }
-        log("forwarding 127.0.0.1:\(port) to \(request.container ?? request.address ?? ""):\(request.port)")
-        return forward
-    }
-
-    func removeForward(id: String) -> Bool {
-        queue.sync {
-            guard let index = state.forwards.firstIndex(where: { $0.id == id }) else { return false }
-            state.forwards.remove(at: index)
-            forwardListeners.removeValue(forKey: id)?.cancel()
-            saveState()
-            return true
-        }
-    }
-
-    /// Runs on `queue`. The same loopback ports come back after a helper
-    /// restart, so Woven's preview proxy keeps pointing at the right place.
-    private func restoreForwards() {
-        state.forwards = state.forwards.filter { forward in
-            guard let (fd, _) = try? Sockets.listenLoopback(port: forward.hostPort) else {
-                log("dropped forward on port \(forward.hostPort): the port is taken")
-                return false
-            }
-            installForward(forward, fd: fd)
-            return true
-        }
-        saveState()
-    }
-
-    private func installForward(_ forward: WovenVMForward, fd: Int32) {
-        forwardListeners[forward.id] = Listener(fd: fd, queue: acceptQueue) { [self] client in
-            detach { self.serveForward(client, forward: forward) }
-        }
-    }
-
-    private func serveForward(_ client: Int32, forward: WovenVMForward) {
-        guard let upstream = try? connect(port: WovenVMGuestPort.forward, timeout: 5) else {
-            close(client)
-            return
-        }
-        Sockets.setBlocking(upstream)
-        var interval = timeval(tv_sec: 15, tv_usec: 0)
-        setsockopt(upstream, SOL_SOCKET, SO_RCVTIMEO, &interval, socklen_t(MemoryLayout<timeval>.size))
-        let header = forward.container.map { "container \($0) \(forward.port)\n" }
-            ?? "address \(forward.address ?? "") \(forward.port)\n"
-        guard Sockets.writeAll(upstream, Data(header.utf8)), Sockets.readLine(upstream) == "OK" else {
-            close(upstream)
-            close(client)
-            return
-        }
-        interval = timeval(tv_sec: 0, tv_usec: 0)
-        setsockopt(upstream, SOL_SOCKET, SO_RCVTIMEO, &interval, socklen_t(MemoryLayout<timeval>.size))
-        Sockets.splice(client, upstream)
     }
 
     // MARK: Engine socket and control API
@@ -976,37 +805,19 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     private func route(_ request: WovenVMControlHTTP.Request) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
         func json(_ status: Int, _ value: some Encodable) -> Data {
             WovenVMControlHTTP.response(status: status, body: (try? encoder.encode(value)) ?? Data())
         }
         do {
             switch (request.method, request.path) {
-            case ("GET", "/v1/status"):
+            case ("GET", "/status"):
                 return json(200, status())
-            case ("GET", "/v1/diagnostics"):
+            case ("GET", "/diagnostics"):
                 return json(200, diagnostics())
-            case ("PUT", "/v1/resources"):
+            case ("PUT", "/resources"):
                 try applyResources(JSONDecoder().decode(WovenVMResources.self, from: request.body))
                 return json(200, status())
-            case ("GET", "/v1/forwards"):
-                return json(200, queue.sync { state.forwards })
-            case ("POST", "/v1/forwards"):
-                return json(201, try addForward(JSONDecoder().decode(WovenVMForwardRequest.self, from: request.body)))
-            case ("DELETE", let path) where path.hasPrefix("/v1/forwards/"):
-                return removeForward(id: String(path.dropFirst("/v1/forwards/".count)))
-                    ? WovenVMControlHTTP.response(status: 204, body: Data())
-                    : reply(404, WovenVMError.invalid("No such forward."))
-            case ("POST", "/v1/update"):
-                guard queue.sync(execute: { phase == .ready && !busy }) else {
-                    return reply(409, WovenVMError.unavailable("The VM can update only when it is ready."))
-                }
-                detach { [self] in runUpdate() }
-                return json(202, status())
-            case ("POST", "/v1/restart"):
-                detach { [self] in restartVM() }
-                return json(202, status())
-            case ("POST", "/v1/stop"):
+            case ("POST", "/stop"):
                 detach { [self] in terminate(code: 0) }
                 return json(202, status())
             default:

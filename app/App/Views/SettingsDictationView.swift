@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenMatterShared
 
 struct SettingsDictationView: View {
     let model: ApplicationModel
@@ -88,8 +87,7 @@ struct SettingsDictationView: View {
     private func reload() async {
         let requestedPage = page
         do {
-            guard let database = model.libraryStore?.database else { throw ApplicationModelError.libraryStoreUnavailable }
-            let fetched = try await database.dictationHistory(limit: pageSize + 1, offset: requestedPage * pageSize)
+            let fetched = try await model.settings.dictationHistory(limit: pageSize + 1, offset: requestedPage * pageSize)
             guard !Task.isCancelled, page == requestedPage else { return }
             records = Array(fetched.prefix(pageSize)); hasNextPage = fetched.count > pageSize
             loaded = true; error = nil

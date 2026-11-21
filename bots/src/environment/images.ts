@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -23,8 +22,6 @@ export const TOOLCHAIN_PATH = "/opt/woven-toolchain";
 /** The runtime's shared volume, mounted read-only in every bot: helper/<hash>, toolchain/<hash>. */
 export const SHARED_VOLUME = "woven-bots-shared";
 export const SHARED_MOUNT = "/opt/woven";
-/** Legacy helper volumes (one per helper version, before the shared volume) carry this label. */
-export const HELPER_LABEL = "woven.bots.helper";
 export const SHARED_LABEL = "woven.bots.shared";
 const COMPLETE = ".complete";
 /** Where filler containers mount the shared volume, writable. */
@@ -72,10 +69,9 @@ export async function imageContext(dir = IMAGE_DIR): Promise<Buffer> {
 /** The toolchain image's context: bots/image/toolchain plus the npm tooling records it uses. */
 export async function toolchainContext(dir = IMAGE_DIR, sourceRoot = SOURCE_ROOT): Promise<Buffer> {
   const entries = await directoryEntries(join(dir, TOOLCHAIN_DIR));
-  // Signed app resources retain remote/npm-runtime; native host bundles put it
-  // at the release root. Include the canonical records in the content hash so
-  // a tooling refresh rebuilds the toolchain without maintaining another copy.
-  const graph = existsSync(join(sourceRoot, "remote/npm-runtime")) ? "remote/npm-runtime" : "npm-runtime";
+  // The private npm's records (harnesses/npm-runtime) are in the content hash, so a tooling
+  // refresh rebuilds the toolchain without another copy to maintain.
+  const graph = "harnesses/npm-runtime";
   for (const [source, target] of [
     ["harnesses/prepare-npm.mjs", "harnesses/prepare-npm.mjs"],
     ["harnesses/install-adapter.mjs", "harnesses/install-adapter.mjs"],
@@ -199,28 +195,6 @@ export async function helperArchive(
   // The marker goes last: a volume holding it holds everything before it.
   const tar = createTar([...entries, { path: COMPLETE, data: Buffer.from(hash) }]);
   return { tar, hash };
-}
-
-/**
- * Builds the helper archive from the SDK copy at `nodeModules`, unpacks it as a bot's helper
- * directory, and loads the helper's imports there: every one must resolve inside the archive.
- */
-export async function verifyHelper(nodeModules: string, helperDir = HELPER_DIR): Promise<void> {
-  const { tar } = await helperArchive(helperDir, nodeModules);
-  const into = realpathSync(await mkdtemp(join(tmpdir(), "woven-bots-helper-")));
-  try {
-    for (const entry of readTarEntries(tar)) {
-      const path = join(into, ...entry.path.split("/"));
-      if (entry.directory) await mkdir(path, { recursive: true });
-      else if (entry.data) {
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, entry.data, { mode: entry.mode ?? 0o644 });
-      }
-    }
-    await helperPackages(into, helperDir);
-  } finally {
-    await rm(into, { recursive: true, force: true });
-  }
 }
 
 /** What the bot image carries, read from its Dockerfile: the base and the pinned tools. */

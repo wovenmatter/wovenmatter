@@ -1,10 +1,9 @@
 import SwiftUI
-import WovenMatterClient
 
-/// Settings → Bots → a machine → Resources: the memory pool, each bot's memory, and one
+/// Settings → Bots → the bots' machine → Resources: the memory pool, each bot's memory, and one
 /// disk cap. On a Mac they size the VM; on Linux, the engine's slice and disk image.
 struct SettingsBotsResourcesView: View {
-    @Bindable var bots: BotsModel
+    @Bindable var bots: BotsStore
     let machineID: String
     var reservesRailControlSpace = false
     var backTitle = "Bots"
@@ -13,13 +12,13 @@ struct SettingsBotsResourcesView: View {
     @State private var saving = false
     @State private var error: String?
 
-    private var machine: BotMachine? { bots.machines.first { $0.id == machineID } }
+    private var machine: Machine? { bots.hostMachine.flatMap { $0.id == machineID ? $0 : nil } }
 
     var body: some View {
-        SettingsPage(title: "Resources", detail: machine.map { "How much of \($0.kind == .thisMac ? "this Mac" : $0.displayName)'s memory and disk your bots may use." },
+        SettingsPage(title: "Resources", detail: machine.map { "How much of \($0.isThisMachine ? "this Mac" : $0.name)'s memory and disk your bots may use." },
                      reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
-            if let machine, let capacity = machine.capacity {
-                let settings = draft ?? machine.resources ?? BotResourcePolicy.defaults(for: capacity)
+            if machine != nil, let capacity = bots.capacity {
+                let settings = draft ?? bots.resources ?? BotResourcePolicy.defaults(for: capacity)
                 memorySection(settings, capacity)
                 diskSection(settings, capacity)
                 SettingsSection {
@@ -43,7 +42,7 @@ struct SettingsBotsResourcesView: View {
     }
 
     private func memorySection(_ settings: BotResourceSettings, _ capacity: BotMachineCapacity) -> some View {
-        SettingsSection(title: "Memory", detail: "This device has \(BotResourcePolicy.format(capacity.memoryBytes)). Bots share one pool, and each bot has its own limit.") {
+        SettingsSection(title: "Memory", detail: "This machine has \(BotResourcePolicy.format(capacity.memoryBytes)). Bots share one pool, and each bot has its own limit.") {
             SettingsRow(title: "All bots") {
                 picker("Memory for all bots", selection: settings.poolBytes, choices: BotResourcePolicy.poolChoices(capacity)) { value in
                     var next = settings; next.poolBytes = value
@@ -75,7 +74,7 @@ struct SettingsBotsResourcesView: View {
     }
 
     private func picker(_ title: String, selection: Int64?, choices: [Int64], onChange: @escaping @MainActor (Int64?) -> Void) -> some View {
-        // A stored value outside today's choices (another device set it) still shows.
+        // A stored value outside today's choices (another machine set it) still shows.
         let options: [Int64?] = [nil] + (choices.contains(selection ?? -1) || selection == nil ? choices : (choices + [selection!]).sorted())
         return SettingsPicker(title, selection: Binding(get: { selection }, set: { onChange($0) }), options: options) {
             BotResourcePolicy.format($0)
@@ -88,7 +87,7 @@ struct SettingsBotsResourcesView: View {
         Task {
             defer { saving = false }
             do {
-                try await bots.send(.setResources(machineID: machineID, BotResourcePolicy.validated(settings, capacity)))
+                try await bots.setResources(BotResourcePolicy.validated(settings, capacity))
                 draft = nil
             } catch { self.error = error.localizedDescription }
         }

@@ -87,45 +87,15 @@ assets="$temporary/assets"
 # fetch refuses a non-draft release before downloading anything.
 python3 scripts/release-artifacts.py fetch "$repository" "$tag" "$expected_sha" "$assets" "$record"
 
-expected_asset="WovenMatter_${version}_arm64.dmg"
-actual_assets="$(jq -r '.assets[].name' "$record" | sort)"
-if grep -qx release-build.json <<<"$actual_assets"; then
-  # The exact signed feed, provenance, and checksum inventory are checked after download.
-  while IFS= read -r asset_name; do
-    [[ "$asset_name" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 65
-  done <<<"$actual_assets"
-else
-  expected_assets="$(printf '%s\n' SHA256SUMS.txt "$expected_asset" latest-mac.json | sort)"
-  test "$actual_assets" = "$expected_assets" \
-    || { printf '%s has an unexpected release asset set.\n' "$tag" >&2; exit 65; }
-fi
-
 (
   cd "$assets"
   shasum -a 256 -c SHA256SUMS.txt
 )
+# The exact asset inventory, provenance record, signed feed and checksums.
+python3 scripts/release-assets.py verify "$assets" "$version" "$expected_sha"
+swift scripts/verify-update-signatures.swift "$assets"
 
-if [ -f "$assets/release-build.json" ]; then
-  python3 scripts/release-assets.py verify "$assets" "$version" "$expected_sha"
-  swift scripts/verify-update-signatures.swift "$assets"
-fi
-
-dmg="${assets}/${expected_asset}"
-manifest="${assets}/latest-mac.json"
-dmg_sha="$(shasum -a 256 "$dmg" | awk '{ print $1 }')"
-jq -e \
-  --arg version "$version" \
-  --arg asset "$expected_asset" \
-  --arg sha "$dmg_sha" '
-    .schema_version == 1
-    and .version == $version
-    and (.build | type == "number" and . > 0)
-    and .architecture == "arm64"
-    and .minimum_macos == "26.0"
-    and .download_url == ("https://github.com/wovenmatter/wovenmatter/releases/download/v" + $version + "/" + $asset)
-    and .release_url == ("https://github.com/wovenmatter/wovenmatter/releases/tag/v" + $version)
-    and .sha256 == $sha
-  ' "$manifest" >/dev/null
+dmg="${assets}/WovenMatter_${version}_arm64.dmg"
 
 codesign --verify --verbose=2 "$dmg"
 codesign -dvv "$dmg" 2>&1 | grep -F 'Authority=Developer ID Application:' >/dev/null

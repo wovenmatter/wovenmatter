@@ -1,170 +1,75 @@
 # Notes and data
 
-Open a note beside your conversation to work on it with your agent. Keep a
-research summary in view, develop a plan, or organize reference material without
-scrolling back through the chat. Notes and conversations can share the same folders.
+Notes, pages, sheets and apps live in your library beside your chats. Any
+machine can edit them at any time, online or not, and the changes sync. You can
+write them without an agent, or open one beside a chat and work on it together.
+
+## Notes, pages, sheets and apps
+
+Choose **New Artifact** in the sidebar and pick **Note**, **Page**, **Sheet**
+or **App**.
+
+- A **Note** is plain writing.
+- A **Page** is a flowing document of components: text, tasks, tables, nested
+  sections, and embedded notes, sheets or apps.
+- A **Sheet** is a table.
+- An **App** is a live HTML document, such as a dashboard or calculator. It keeps
+  what you type into its controls, and it can show data from a database.
+
+Artifacts, browser pages and document previews share one tab strip beside the
+chat. Closing a tab keeps the saved item.
+
+Agents work with these through the Woven tools: they can find and read all four,
+create and edit notes, pages and apps, and rename sheets. You see their changes
+in the editor.
+
+## Version history
+
+Choose **Version history** in the toolbar to preview an earlier version and
+**Restore version**. If two machines edited the same item while apart, the
+newer edit becomes current and the other is kept in its version history.
 
 ## Library
 
-**Library** collects files, links, and photos, including screenshots, exchanged
-in new messages after the feature becomes available. Existing conversation
-history is not added. An item appears when you send an attachment or link, or
-when an agent hands back a file, image, link, or citation. Files only mentioned
-in internal tool activity are not collected. Notes and conversation references
-remain message attachments and do not appear as Library files.
-
-Combine workspace, agent type, individual agent, sender, and item-type filters.
-Workspace and agent filters allow multiple selections, all, or none. Date
-filters include Today, Last 7 days, Last 30 days, Last 90 days, and All time.
-Search by title, link, or conversation, and sort newest or oldest first. Each
-item shows its sender, workspace, and sent date and time.
-
-Choose **Open** to open the link, photo, or file, or **Show in conversation** to
-jump to its source message. Archived conversations show a read-only source
-message. Separate exchanges have separate entries, even when they share a URL
-or file. Deleting a source message, clearing its conversation, or deleting the
-conversation removes its Library entries. Archiving keeps them.
-
-Web URLs stay links. Uploaded files reuse existing attachment storage. Files
-handed back from a local workspace or a connected remote workspace are saved
-as local snapshots, up to 25 MB each, so they remain available after the
-workspace disconnects or the original changes. Remote reads use the existing
-workspace connection and are restricted to its working folder and temporary
-output folders. Unavailable files show the reason and a **Retry** action;
-reconnect the workspace or ask the agent for a smaller file when needed.
-
-File bytes live on disk, outside SQLite. Identical saved content shares one
-stored copy; unreferenced Library copies are cleaned up after a short grace
-period. Original workspace files are not deleted or edited by the Library.
-
-## Work beside a note
-
-The **New Asset** picker offers **Note**, **Sheet**, **Artifact**, and **Page**.
-Artifacts are interactive HTML artifacts built on live data, including dashboards,
-calculators, and visuals; a data connection is optional. Each asset is saved in
-your Woven Matter library. You can take and organize notes without connecting an
-agent.
-
-An Artifact connected to live data is a **Live Artifact**. It runs inside Woven
-Matter and refreshes through its data links. Choose **Artifact** to create one; Live is
-a description of its data connection, not a separate option in the picker.
-
-Artifacts save inputs from standard HTML controls with a stable `id`, `name`, or
-`data-woven-key`. Custom interfaces use `window.wovenArtifact` to save JSON state.
-Those inputs belong to the original Artifact, including when it is embedded in a
-Page. Closing and reopening it restores saved input. Live-data refreshes update
-the existing interface without discarding an unfinished form. A save conflict
-keeps input visible and offers **Retry saving**.
-
-Pages are flowing documents for work with your agents. Type normally, add tasks
-and tables, nest sections, and embed original Notes, Sheets, Artifacts, or Pages.
-The same Page can be a project workspace, checklist, or reference document.
-[Pages](../PAGES.md) describes component editing and agent collaboration.
-
-Artifacts, browser pages, and document previews share one tab strip beside the
-chat. Keep up to 10 artifacts, 10 browser tabs, and 8 document previews open at once.
-Tabs stay open when you switch conversations. Closing an artifact tab keeps the saved
-asset; hiding the asset pane keeps its tabs. Open tabs are not restored after
-quitting the app.
-
-With **Notes** enabled in the conversation's **Tools** menu, the agent can find,
-read, create, and edit workspace notes. Opening a note beside the conversation
-shares open-note references when you send a message, with the selected tab marked
-active. Ask the agent to add text, update a table, or create an HTML artifact;
-changes appear in the editor. Disable Notes to stop further tool access.
+**Library** collects the files, links and photos exchanged in your chats. Filter
+by machine, agent, sender, type and date, search, and sort **Newest first** or
+**Oldest first**. Choose **Open** to open an item or **Show in conversation** to
+jump to its message.
 
 ## Preview documents
 
-On a Mac, click a file to open a read-only preview tab beside the chat. This
-works for files you upload, files an agent hands back, Library files and photos,
-and saved artifacts. The preview uses macOS Quick Look, so PDFs, images, common
-documents and spreadsheets show inline; other formats show a summary. The
-toolbar offers **Open in** the file's app and **Reveal in Finder**. To edit a
-file, open it in its app. Spreadsheet formulas are not recalculated in the
-preview.
-
-A file an agent hands back appears as an attachment under its reply. Click its
-name to preview it, drag it to Finder or another app to copy it, or use its
-save button or **Save As…** to choose where to keep a copy. Opening a preview does not add the file's
-contents to your next message.
+Click a file to open a read-only preview beside the chat. This works for files
+you send, files an agent hands back, and Library files. The preview uses macOS
+Quick Look. Use **Reveal in Finder** or open the file in its own app to edit it.
 
 ## Browse beside your work
 
-Use the globe beside the chat to open the browser. Notes and browser pages share
-the asset pane; the tab-strip plus opens another browser tab. Enter
-an address or search in the URL bar. The ellipsis menu offers Find in Page,
-Copy Page URL, Fill Saved Password when available, and Clear Browser Data.
+The browser opens in the pane beside the chat; the tab-strip plus opens another
+tab. Its menu offers **Find in Page…** and **Clear Browser Data…**. Agents use
+this same browser through the browser tool, so you can watch what they do.
 
-When the pane is open, sending a message shares its browser titles and web URLs.
-It does not share page contents, cookies, or saved passwords, or give the agent
-access to signed-in pages. Closing the pane stops sharing its context.
+## Databases
 
-Website sessions persist across restarts. Password saving and autofill are
-enabled; confirm Save or Update above the page when offered. Saved passwords
-use your Mac's Keychain; allow it under **Keychain** in **Settings → Permissions &
-Access**. Clear
-Browser Data clears site sessions on the next restart and keeps saved passwords.
+A database is a named SQLite file that belongs to one machine. Open
+**Databases** to see them under **All**, **Local** or **Remote**, and choose
+**New database** to make one on a connected machine. Agents create tables and
+write data through the Woven database tools.
 
-## Restore a version
+- Only the owning machine writes to a database. An agent on another machine can
+  still write: the write is carried out by the owner, and fails with a message
+  when the owner is offline.
+- After each write the owner shares a copy, and every machine reads from its
+  latest copy. While the owner is offline, linked content shows the last copy
+  and says so.
+- **Copy to workspace…** makes an independent database on another machine. It
+  does not follow later changes to the original.
 
-Choose **Version history** in the note toolbar to preview a retained version and
-restore its title and content. The current saved document is retained before
-restoration. If the document changed while you were reviewing, refresh before
-trying again.
+## Show live data
 
-Woven Matter retains up to 50 versions and 20 MB per document, within a 256 MB
-workspace limit. This covers notes, spreadsheets, and HTML. Document versions
-do not version the underlying managed databases.
+An app can read a database: choose the **Database** and query in its toolbar,
+and the result reaches the page as `window.wovenMatterData`. It refreshes when
+committed data changes. Notes, pages and sheets can also link to a database
+for tables or single values with the same toolbar button. An agent can set up
+only an app's link. A broken query shows an error; ask the agent to fix it.
 
-## Curate data with your agents
-
-Use **Databases** to browse **All**, **Local**, or **Remote** workspaces. Select a
-connected workspace and choose **New database**. Each named database is a
-managed SQLite file with its own identity and one writable workspace owner.
-Agents create tables, collect data, and change the dataset schema through
-Woven's database tools. A database can contain multiple tables.
-
-Dataset files live in Woven's application or service storage, separate from
-project directories and the internal history/settings SQLite database. They
-can be linked from notes and artifacts in any UI folder. Ordinary editing of
-external JSON or SQLite files is not the managed database workflow.
-
-Remote agents, including scheduled agents, write on their owning workspace even
-when your Macs are disconnected, provided that host and its Woven service keep
-running.
-Woven syncs complete readable replicas when the app opens or reconnects and
-during normal background refresh. Offline views show the last complete synced
-data and its freshness. The owner remains authoritative; replicas do not merge
-writes back to it.
-
-## Copy a database
-
-Select a database, choose **Copy to workspace**, and select an available
-writable destination and a name. This creates an independent database with a new
-identity and destination owner. It does not merge future changes with the
-original. Existing artifact links continue using the original until you relink
-them.
-
-If the source is offline, Woven can copy its last complete synced snapshot. Check
-the displayed freshness before copying. The destination must be available.
-
-## Read linked data
-
-Use **Database** in the note toolbar to choose a workspace, named database, and
-SQL query. For notes, add a new linked table or select an existing table. A
-spreadsheet presents the linked result in its first table. HTML receives the
-query result as `window.wovenMatterData`.
-
-Ask an agent to add a live inline value when a single number or text value
-belongs in a note. Its query must return exactly one row and one column. The
-Database popover can edit existing inline-value links; directly editing a linked
-value's text removes that link.
-
-Linked tables, values, spreadsheets, and HTML refresh after committed changes
-and replica sync. Woven preserves surrounding prose and unrelated document
-layout; linking data does not automatically rewrite the rest of a note. Offline
-state and last-updated information appear with linked data.
-
-A broken query or schema link shows an error. Ask your agent to fix the query or
-link; Woven does not automatically repair the dataset. Use smaller queries when
-you reach the [remote database limits](../reference/REMOTE_DATABASES.md).
+Next: [Scheduled work and usage](schedules-and-usage.md).

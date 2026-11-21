@@ -24,32 +24,32 @@ import {
   type ClaudeSdkEvent,
   type ClaudeSdkFrame,
 } from "./runtime.ts";
-import { NATIVE_PREFIX } from "../host/credentials.ts";
+import { NATIVE_KEY } from "../host/credentials.ts";
 
 /**
  * Claude through the Claude Agent SDK (Claude Code), so a Claude subscription works, after Woven
  * Matter's `default-agent/src/claude-provider.mjs`. Pi owns the loop: each request replays the
  * canonical history into a fresh SDK process (`shouldQuery: false` frames), runs exactly one model
  * turn (`maxTurns: 1`, no built-in tools, no settings, no skills), and returns the reply to Pi.
- * Tool calls come back as `mcp__pibot__<name>` from an inventory-only MCP server; Pi executes them.
+ * Tool calls come back as `mcp__bot__<name>` from an inventory-only MCP server; Pi executes them.
  */
 
 export const CLAUDE_SUBSCRIPTION_PROVIDER = "claude-subscription";
 export const CLAUDE_AGENT_BASE_URL = "process://claude-agent-sdk";
-const PREFIX = "mcp__pibot__";
+const PREFIX = "mcp__bot__";
 const INVENTORY = fileURLToPath(
   new URL(import.meta.url.endsWith(".ts") ? "./inventory.ts" : "./inventory.js", import.meta.url),
 );
 
 /** Set on a compaction request (`Models.stream` options); the summary comes back on the result. */
-export type ClaudeCompactOptions = { readonly pibotCompact?: { readonly instructions?: string } };
+export type ClaudeCompactOptions = { readonly botCompact?: { readonly instructions?: string } };
 export type ClaudeCompaction = { readonly summary: string; readonly preTokens?: number };
 export type ClaudeCompactedMessage = AssistantMessage & {
-  pibotCompaction?: ClaudeCompaction;
+  botCompaction?: ClaudeCompaction;
   /** The usage limit Claude Code reported for a failed request (see limits.ts). */
-  pibotLimit?: LimitClass;
+  botLimit?: LimitClass;
   /** Claude Code is not signed in (see issues.ts). */
-  pibotIssue?: ErrorIssue;
+  botIssue?: ErrorIssue;
 };
 
 /** Claude Code's own sign-in failure ("Not logged in · Please run /login"), which bots can't run. */
@@ -68,32 +68,15 @@ const zeroUsage = (): Usage => ({
 class ClaudeAgentError extends Error {}
 
 export type ClaudeCredential = {
-  /** The machine's native Claude runtime directories: Claude Code owns the sign-in there. */
-  readonly native?: { readonly configDir: string; readonly secureStorageDir?: string };
+  /** Claude Code's own sign-in on this machine, with its default configuration. */
+  readonly native?: true;
   /** A setup token or API key handed to Claude Code through its environment. */
   readonly key?: string;
 };
 
-/** Split the host's credential: a marked native profile, or a plain key. */
+/** The server's credential: Claude Code's own sign-in, or a plain key. */
 export function claudeCredential(key: string): ClaudeCredential {
-  if (!key.startsWith(NATIVE_PREFIX)) return { key };
-  try {
-    const parsed = JSON.parse(key.slice(NATIVE_PREFIX.length)) as {
-      configDir?: unknown;
-      secureStorageDir?: unknown;
-    };
-    if (typeof parsed.configDir !== "string" || !parsed.configDir) throw new Error();
-    return {
-      native: {
-        configDir: parsed.configDir,
-        ...(typeof parsed.secureStorageDir === "string" && parsed.secureStorageDir
-          ? { secureStorageDir: parsed.secureStorageDir }
-          : {}),
-      },
-    };
-  } catch {
-    throw new ClaudeAgentError("The Claude connection from Woven Matter is unreadable.");
-  }
+  return key === NATIVE_KEY ? { native: true } : { key };
 }
 
 function nativeToolId(value: string): string {
@@ -266,9 +249,9 @@ export class ClaudeAgentStream {
       );
     }
     const credential = claudeCredential(key);
-    const compact = options.pibotCompact;
+    const compact = options.botCompact;
     const request = claudeRequest(messages, model, compact !== undefined);
-    const { config, workspace } = await this.#runtime.directories(credential.native?.configDir);
+    const { config, workspace } = await this.#runtime.directories(credential.native === true);
     const scratch = await mkdtemp(join(workspace, "request-"));
     const toolsFile = join(scratch, "tools.json");
     await writeFile(toolsFile, JSON.stringify(request.inventory), { mode: 0o600 });
@@ -414,7 +397,7 @@ export class ClaudeAgentStream {
           skills: [],
           settingSources: [],
           strictMcpConfig: true,
-          mcpServers: { pibot: { command: process.execPath, args: [INVENTORY, toolsFile] } },
+          mcpServers: { bot: { command: process.execPath, args: [INVENTORY, toolsFile] } },
           systemPrompt: { type: "custom", prompt: request.system, snapshot: false },
           maxTurns: 1,
           permissionMode: "dontAsk",
@@ -488,7 +471,7 @@ export class ClaudeAgentStream {
     signal?.throwIfAborted();
     if (failure) {
       const limit = claudeLimit(rateLimit, assistantError, failure);
-      if (limit) message.pibotLimit = limit;
+      if (limit) message.botLimit = limit;
     }
     if (timedOut) throw new ClaudeAgentError("The Claude request timed out.");
 
@@ -496,11 +479,11 @@ export class ClaudeAgentStream {
       if (!boundary || !summary) {
         throw new ClaudeAgentError(failure ?? "Claude Code did not compact this conversation.");
       }
-      message.pibotCompaction = { summary, preTokens: boundary.compact_metadata?.pre_tokens };
+      message.botCompaction = { summary, preTokens: boundary.compact_metadata?.pre_tokens };
       return;
     }
     if (assistantError === "authentication_failed" || (failure && NOT_LOGGED_IN.test(failure))) {
-      message.pibotIssue = "signIn";
+      message.botIssue = "signIn";
       throw new ClaudeAgentError("Not logged in to Claude.");
     }
     if (failure) throw new ClaudeAgentError(failure);
@@ -569,8 +552,8 @@ export function claudeAgentProvider(options: ClaudeAgentOptions): Provider {
     name: "Claude (Claude Agent SDK)",
     baseUrl: CLAUDE_AGENT_BASE_URL,
     auth: {
-      // The host API supplies the credential: the machine's native Claude profile (no token
-      // material), or an API key. Sign-in belongs to Woven settings.
+      // The server supplies the credential: Claude Code's own sign-in (no token material), or an
+      // API key. Sign-in belongs to Woven settings.
       apiKey: {
         name: "Claude (Woven connection)",
         resolve: async (input: { credential?: { key?: string } }) =>

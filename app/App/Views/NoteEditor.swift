@@ -1,7 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
-import WovenMatterCore
+import WovenProtocol
 
 private extension NSAttributedString.Key {
     static let noteBlockID = Self("wovenmatter.note.block-id")
@@ -506,7 +506,6 @@ struct NoteEditor: NSViewRepresentable {
     /// flows set this; an embedded original Note keeps ordinary Notes editing.
     var editsPageFlow = false
     var onFocus: ((NoteEditorController) -> Void)?
-    var onSynchronize: (() -> Void)?
     var sharedUndoManager: UndoManager?
     /// Items placed first in the text view's right-click menu.
     var contextMenuItems: (() -> [NSMenuItem])?
@@ -616,7 +615,6 @@ struct NoteEditor: NSViewRepresentable {
             }
             restoreTypingAttributes(in: textView)
             synchronizedText = NSAttributedString(attributedString: textView.attributedString())
-            parent.onSynchronize?()
         }
 
         func apply(_ document: NoteDocument, to textView: NSTextView) {
@@ -657,7 +655,6 @@ struct NoteEditor: NSViewRepresentable {
             textView.checkText(in: NSRange(location: 0, length: textView.string.utf16.count),
                                types: NSTextCheckingResult.CheckingType.spelling.rawValue, options: [:])
             applying = false
-            parent.onSynchronize?()
         }
 
         /// What a Page flow shows: its blocks and each task's checkbox. Other

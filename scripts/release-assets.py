@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
-"""Exact update inventory and provenance validation, shared by draft and refresh paths."""
+"""Exact release asset inventory and provenance, written by the feed phase and
+verified again before upload and publication."""
 import argparse
 import hashlib
 import json
 from pathlib import Path
-import plistlib
 import re
 import xml.etree.ElementTree as ET
 
 SPARKLE = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 PUBLIC_KEY = 'fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI='
-APP_INFO = Path(__file__).resolve().parents[1] / 'app/App/Info.plist'
-
-def device_setup_version(info=APP_INFO):
-    """The remote device setup capability the release app advertises, read
-    exactly as generate-release-manifest.sh reads it."""
-    with Path(info).open('rb') as source:
-        value = plistlib.load(source).get('WovenMatterDeviceSetupVersion', 0)
-    assert type(value) is int and value >= 0, 'Invalid device setup capability in app Info.plist'
-    return value
-
 def digest(path):
     h = hashlib.sha256()
     with path.open('rb') as f:
@@ -32,9 +22,8 @@ def inventory(folder):
 
 def prepare(folder, version, build, revision):
     asset = f'WovenMatter_{version}_{build}_arm64.dmg'
-    # Releases are full-only; the schema keeps an empty delta list.
-    record = dict(schema_version=1, version=version, build=build, source_revision=revision,
-                  full_asset=asset, public_ed_key=PUBLIC_KEY, supported_builds=[build], delta_assets=[])
+    record = dict(version=version, build=build, source_revision=revision,
+                  full_asset=asset, public_ed_key=PUBLIC_KEY)
     (folder / 'release-build.json').write_text(json.dumps(record, indent=2) + '\n')
     (folder / 'SHA256SUMS.txt').write_text(''.join(f'{digest(folder / name)}  {name}\n' for name in inventory(folder)))
     verify(folder, version, revision)
@@ -43,17 +32,14 @@ def verify(folder, version, revision):
     record = json.loads((folder / 'release-build.json').read_text())
     build = record['build']
     assert isinstance(build, int) and not isinstance(build, bool) and build > 0
-    assert record['schema_version'] == 1 and record['version'] == version
-    assert record['source_revision'] == revision and re.fullmatch('[0-9a-f]{40}', revision)
-    assert record['public_ed_key'] == PUBLIC_KEY
-    supported = record['supported_builds']
-    assert supported == sorted(set(supported)) and 1 <= len(supported) <= 6
-    assert supported[-1] == build and all(isinstance(b, int) and 0 < b <= build for b in supported)
     asset = f'WovenMatter_{version}_{build}_arm64.dmg'
-    assert record['full_asset'] == asset
-    legacy = f'WovenMatter_{version}_arm64.dmg'
-    assert record['delta_assets'] == [], 'Full-only release must not list delta assets'
-    expected = sorted([asset, legacy, 'latest-mac.json', 'appcast.xml', 'release-build.json'])
+    assert record == dict(version=version, build=build, source_revision=revision,
+                          full_asset=asset, public_ed_key=PUBLIC_KEY), 'Unexpected release record'
+    assert re.fullmatch('[0-9a-f]{40}', revision)
+    # The feed's archive carries the build; the download badge links the plain name.
+    download = f'WovenMatter_{version}_arm64.dmg'
+    # Full-only: a delta asset fails this exact inventory.
+    expected = sorted([asset, download, 'appcast.xml', 'release-build.json'])
     assert inventory(folder) == expected, 'Unexpected release asset inventory'
     checksums = {}
     for line in (folder / 'SHA256SUMS.txt').read_text().splitlines():
@@ -63,16 +49,8 @@ def verify(folder, version, revision):
     assert sorted(checksums) == expected, 'Incomplete checksum inventory'
     for name, sha in checksums.items():
         assert digest(folder / name) == sha, f'Checksum mismatch: {name}'
-    assert checksums[asset] == checksums[legacy], 'Compatibility DMG differs from signed update'
-    manifest = json.loads((folder / 'latest-mac.json').read_text())
+    assert checksums[asset] == checksums[download], 'Download DMG differs from signed update'
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{version}/'
-    # JSON true equals 1 in Python, so the capability's type is checked first.
-    assert type(manifest.get('device_setup_version')) is int, 'Invalid device setup capability in manifest'
-    assert manifest == dict(schema_version=1, version=version, build=build, architecture='arm64',
-                           minimum_macos='26.0', device_setup_version=device_setup_version(),
-                           download_url=prefix + legacy,
-                           release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{version}',
-                           sha256=checksums[legacy]), 'Update manifest differs from the generated contract'
     items = ET.parse(folder / 'appcast.xml').findall('./channel/item')
     assert len(items) == 1, 'Feed must contain exactly the current build'
     item = items[0]
