@@ -76,6 +76,7 @@ public protocol InferenceOAuthHTTPTransport: Sendable {
 }
 
 /// Authentication traffic never follows redirects, uses shared cookies, or enters the model transport.
+/// `@unchecked Sendable`: an `NSObject` delegate with no stored state.
 public final class InferenceOAuthURLSessionTransport: NSObject, InferenceOAuthHTTPTransport, URLSessionTaskDelegate, @unchecked Sendable {
   public override init() { super.init() }
   public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,

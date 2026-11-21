@@ -22,6 +22,8 @@ final class ServerConnection {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var runner: Task<Void, Never>?
     @ObservationIgnored private let hello: Hello
+    /// Followers waiting for a new connection, woken when one opens.
+    @ObservationIgnored private var connectionWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     #if os(iOS)
     /// Opens a new connection to a server in this process, such as the device's own core.
@@ -71,6 +73,7 @@ final class ServerConnection {
                 self.remote = remote
                 generation += 1
                 isConnected = true
+                wakeConnectionWaiters()
                 delay = .milliseconds(250)
                 await closed()
                 await client.close()
@@ -144,12 +147,27 @@ final class ServerConnection {
 
     /// The current client once its connection is newer than `generation`;
     /// nil when the task is cancelled first.
+    /// It waits without polling: a connection to a machine that is away may
+    /// not open for hours, and nothing should wake meanwhile.
     private func connection(newerThan generation: Int) async -> (Client, Int)? {
         while !Task.isCancelled {
             if let client, self.generation > generation { return (client, self.generation) }
-            try? await Task.sleep(for: .milliseconds(100))
+            let id = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if Task.isCancelled { continuation.resume() } else { connectionWaiters[id] = continuation }
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in self?.connectionWaiters.removeValue(forKey: id)?.resume() }
+            }
         }
         return nil
+    }
+
+    private func wakeConnectionWaiters() {
+        let waiters = connectionWaiters
+        connectionWaiters = [:]
+        for waiter in waiters.values { waiter.resume() }
     }
 }
 

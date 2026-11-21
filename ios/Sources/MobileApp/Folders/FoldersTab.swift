@@ -25,10 +25,10 @@ struct FoldersTab: View {
             List {
                 topRows
                 deviceSection
-                if app.machines.machines.isEmpty {
+                if app.machines.connectedMachines.isEmpty {
                     connectRows
                 } else {
-                    ForEach(app.machines.machines) { machineSection($0) }
+                    ForEach(app.machines.connectedMachines) { machineSection($0) }
                 }
                 row(glyph: .trash, title: "Trash", identifier: "folders-trash") { push(.trash) }
                     .padding(.top, 8)
@@ -45,10 +45,10 @@ struct FoldersTab: View {
             }
         }
         .sheet(isPresented: $chooserPresented) {
-            ChatChooser(model: model).folderSheetTheme(theme)
+            ChatChooser(model: model).sheetTheme(theme)
         }
         .sheet(item: $newFolderOwner) { owner in
-            NewFolderSheet(model: model, owner: owner).folderSheetTheme(theme)
+            NewFolderSheet(model: model, owner: owner).sheetTheme(theme)
         }
         .folderItemPrompts(actions, model: model)
     }
@@ -79,10 +79,7 @@ struct FoldersTab: View {
         if isExpanded(key) {
             subheading("Agents", key: key + ":agents")
             if isExpanded(key + ":agents") {
-                Button {
-                    model.chat.newChat(.quickChat)
-                    model.tab = .chat
-                } label: {
+                Button { model.newChat(.quickChat) } label: {
                     FolderRowLabel(title: "Quick Chat") { AgentIcon(runtime: .defaultAgent, size: logo) }
                 }
                 .buttonStyle(FolderRowButtonStyle())
@@ -110,10 +107,7 @@ struct FoldersTab: View {
                 if isExpanded(key + ":agents") {
                     if agents.isEmpty { FolderCaption("No agents").folderRow(indent: 8) }
                     ForEach(agents) { agent in
-                        Button {
-                            model.chat.newChat(ChatTarget(runtime: agent.runtimeKind.runtime, machineID: machine.id))
-                            model.tab = .chat
-                        } label: {
+                        Button { model.newChat(ChatTarget(runtime: agent.runtimeKind.runtime, machineID: machine.id)) } label: {
                             FolderRowLabel(title: agent.displayName) { AgentIcon(runtime: agent.runtimeKind, size: logo) }
                         }
                         .buttonStyle(FolderRowButtonStyle())

@@ -85,13 +85,13 @@ struct ArtifactScreen: View {
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
     .onDisappear { session.controller.reset() }
     .sheet(isPresented: $chooserPresented) {
-      ArtifactChooser(model: model, record: record).artifactSheetTheme(theme)
+      ArtifactChooser(model: model, record: record).sheetTheme(theme)
     }
     .sheet(isPresented: $versionsPresented) {
-      ArtifactVersionHistory(model: model, artifactID: record.id).artifactSheetTheme(theme)
+      ArtifactVersionHistory(model: model, artifactID: record.id).sheetTheme(theme)
     }
     .sheet(isPresented: $databasePresented) {
-      ArtifactDatabaseLinks(links: databaseLinks, snapshot: model.app.databases.snapshot).artifactSheetTheme(theme)
+      ArtifactDatabaseLinks(links: databaseLinks, snapshot: model.app.databases.snapshot).sheetTheme(theme)
     }
     .sheet(isPresented: $sheetFormatPresented) {
       NavigationStack {
@@ -104,7 +104,7 @@ struct ArtifactScreen: View {
           .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sheetFormatPresented = false } } }
       }
       .presentationDetents([.height(180)])
-      .artifactSheetTheme(theme)
+      .sheetTheme(theme)
     }
     .alert("Link", isPresented: $linkEditorPresented) {
       TextField("https://…", text: $link).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
@@ -403,14 +403,5 @@ private struct ArtifactDatabaseLinks: View {
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
     .presentationDetents([.medium])
-  }
-}
-
-extension View {
-  /// A sheet over the tabs, in the app's theme.
-  func artifactSheetTheme(_ theme: WovenTheme) -> some View {
-    environment(\.wovenTheme, theme)
-      .preferredColorScheme(theme.colorScheme)
-      .tint(theme.palette.themeAccent)
   }
 }

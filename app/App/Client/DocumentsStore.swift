@@ -27,6 +27,7 @@ final class DocumentsStore {
     @ObservationIgnored private var flushes: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private weak var server: ServerConnection?
     @ObservationIgnored private weak var machines: MachinesStore?
+    @ObservationIgnored private weak var devices: DevicesStore?
     @ObservationIgnored private weak var databases: DatabasesStore?
 
     /// How long typing pauses before an edit is sent.
@@ -34,9 +35,10 @@ final class DocumentsStore {
 
     init() {}
 
-    func attach(_ server: ServerConnection, machines: MachinesStore, databases: DatabasesStore) {
+    func attach(_ server: ServerConnection, machines: MachinesStore, devices: DevicesStore, databases: DatabasesStore) {
         self.server = server
         self.machines = machines
+        self.devices = devices
         self.databases = databases
     }
 
@@ -173,7 +175,9 @@ final class DocumentsStore {
             let source: NoteVersion.Source = switch version.reason {
             case .checkpoint: .checkpoint
             case .restore: .beforeRestore
-            case .conflict: .otherMachine(machines?.machine(id: version.machineID)?.name ?? "another writer")
+            // Written on a machine or on an iPhone or iPad.
+            case .conflict: .otherMachine(machines?.machine(id: version.machineID)?.name
+                ?? devices?.names[version.machineID] ?? "another writer")
             }
             versions.append(NoteVersion(id: version.id, title: version.title, content: saved.body, savedAt: version.savedAt,
                                         source: source))

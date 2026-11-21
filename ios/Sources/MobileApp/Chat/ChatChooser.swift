@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Opened from the chat's title: New Chat (Quick Chat first, then each
-/// workspace reachable now, once under its own name with its agents) and
-/// Recents.
+/// workspace once under its own name with its agents, an offline one's
+/// agents off) and Recents.
 struct ChatChooser: View {
     @Bindable var model: MobileModel
     @Environment(\.dismiss) private var dismiss
@@ -16,17 +16,18 @@ struct ChatChooser: View {
             List {
                 Section("New Chat") {
                     row(title: "Quick Chat", runtime: .defaultAgent, identifier: "new-chat-quick-chat") {
-                        model.chat.newChat(.quickChat)
+                        model.newChat(.quickChat)
                     }
                 }
-                ForEach(app.machines.onlineMachines) { machine in
+                ForEach(app.machines.connectedMachines) { machine in
                     let agents = app.workspace.agents(on: machine.id)
                     if !agents.isEmpty {
-                        Section(machine.name) {
+                        Section(machine.isOnline ? machine.name : "\(machine.name) · Offline") {
                             ForEach(agents) { agent in
                                 row(title: agent.displayName, runtime: agent.runtimeKind, identifier: "new-chat-\(agent.id)") {
-                                    model.chat.newChat(ChatTarget(runtime: agent.runtimeKind.runtime, machineID: agent.machineID))
+                                    model.newChat(ChatTarget(runtime: agent.runtimeKind.runtime, machineID: agent.machineID))
                                 }
+                                .disabled(!machine.isOnline)
                             }
                         }
                     }
@@ -71,16 +72,12 @@ struct ChatChooser: View {
     }
 
     private func place(_ conversation: WorkspaceConversationRecord) -> String {
-        if conversation.machineID == model.deviceID { return "Quick Chat" }
-        guard let machine = app.machines.machine(id: conversation.machineID) else { return "Quick Chat · another device" }
-        return "\(conversation.runtimeName) · \(machine.name)"
+        FolderPlaces(model: model).place(of: conversation)
     }
 
     private func row(title: String, runtime: AgentRuntimeKind, identifier: String, action: @escaping () -> Void) -> some View {
         Button {
             action()
-            // Opened from another tab (Folders), the new chat shows in the Chat tab.
-            model.tab = .chat
             dismiss()
         } label: {
             HStack(spacing: 12) {

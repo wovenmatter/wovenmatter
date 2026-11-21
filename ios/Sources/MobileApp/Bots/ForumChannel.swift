@@ -386,9 +386,7 @@ private struct ForumSheet: View {
                 }
         }
         .presentationDetents([.medium, .large])
-        .environment(\.wovenTheme, theme)
-        .preferredColorScheme(theme.colorScheme)
-        .tint(theme.palette.themeAccent)
+        .sheetTheme(theme)
     }
 
     private var title: String {

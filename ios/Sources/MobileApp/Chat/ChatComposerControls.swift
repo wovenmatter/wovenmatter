@@ -25,10 +25,17 @@ private struct CompactToolToggleStyle: ToggleStyle {
 
 /// The composer's one compact row: add, model name, thinking level,
 /// permission key, tools icon, then send or stop. Each opens a popout driven by
-/// the session's own settings, as the Mac composer's are.
+/// the chat's settings, as the Mac composer's are: the open session's, or for
+/// a chat not started yet what its runtime offers, kept until it starts.
 struct ChatComposerControls<Accessory: View, Submission: View>: View {
-    /// The open chat; nil for a new chat, whose settings arrive with its session.
-    let session: SessionStore?
+    let settings: SessionSettings?
+    /// The open session, for its tools; nil for a chat not started yet.
+    let sessionID: String?
+    let isUpdating: Bool
+    /// The last change that failed.
+    let error: String?
+    /// Makes a change; true once it took.
+    let apply: @MainActor (SessionSettingsChange) async -> Bool
     let tools: AgentToolsStore
     /// The chat can be changed now: its owner is reachable and no turn runs.
     let configurable: Bool
@@ -44,8 +51,6 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
         case model, thinking, permission, tools
         var id: String { rawValue }
     }
-
-    private var settings: SessionSettings? { session?.settings }
 
     private var modelLabel: String {
         settings?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: settings?.modelOptionMetadata[$0]) } ?? "Model"
@@ -63,7 +68,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
 
     private var permissionLabel: String { settings?.permission.map(permissionName) ?? "Permissions" }
 
-    private var changeable: Bool { configurable && settings != nil && session?.isUpdatingSettings != true }
+    private var changeable: Bool { configurable && settings != nil && !isUpdating }
 
     var body: some View {
         HStack(spacing: 2) {
@@ -99,7 +104,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
             .popover(item: popout(.thinking)) { _ in
                 popoutPage("Thinking Level", rows: settings?.selectableThinkingLevels.count ?? 0) {
                     ForEach(settings?.selectableThinkingLevels ?? [], id: \.self) { id in
-                        selectionRow(thinkingName(id), selected: id == settings?.thinking) { apply(SessionSettingsChange(thinking: id)) }
+                        selectionRow(thinkingName(id), selected: id == settings?.thinking) { change(SessionSettingsChange(thinking: id)) }
                     }
                 }
             }
@@ -116,7 +121,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
                 popoutPage("Permissions", rows: max(1, settings?.permissionOptions.count ?? 0) * 2) {
                     ForEach(settings?.permissionOptions ?? [], id: \.self) { id in
                         selectionRow(permissionName(id), detail: settings?.permissionOptionMetadata[id]?.description,
-                                     selected: id == settings?.permission) { apply(SessionSettingsChange(permission: id)) }
+                                     selected: id == settings?.permission) { change(SessionSettingsChange(permission: id)) }
                     }
                 }
             }
@@ -125,7 +130,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
                 LucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(session == nil || !configurable)
+            .disabled(sessionID == nil || !configurable)
             .accessibilityLabel("Session tools")
             .accessibilityIdentifier("chat-tools")
             .popover(item: popout(.tools)) { _ in toolsPopout }
@@ -158,7 +163,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
                 }
                 ForEach(group.ids, id: \.self) { id in
                     selectionRow(SessionOptionMetadata.modelLabel(id: id, metadata: settings?.modelOptionMetadata[id]),
-                                 selected: id == settings?.model) { apply(SessionSettingsChange(model: id)) }
+                                 selected: id == settings?.model) { change(SessionSettingsChange(model: id)) }
                 }
             }
             if matches.isEmpty {
@@ -170,7 +175,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
 
     private var toolsPopout: some View {
         popoutPage("Tools", rows: WorkspaceToolGroup.allCases.count) {
-            if let sessionID = session?.sessionID {
+            if let sessionID {
                 ForEach(WorkspaceToolGroup.allCases) { group in
                     Toggle(group.title, isOn: Binding(
                         get: { tools.policy(for: sessionID).enabled.contains(group) },
@@ -183,7 +188,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
         .confirmationDialog("Removing timer access pauses this session’s timers.", isPresented: $confirmTimers,
                             titleVisibility: .visible) {
             Button("Pause timers and remove access") {
-                if let sessionID = session?.sessionID { setTool(.timers, enabled: false, sessionID: sessionID, confirmed: true) }
+                if let sessionID { setTool(.timers, enabled: false, sessionID: sessionID, confirmed: true) }
             }
             Button("Cancel", role: .cancel) {}
         }
@@ -207,7 +212,7 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.never)
-            if let problem = problem ?? session?.error {
+            if let problem = problem ?? error {
                 Text(problem).font(.caption).foregroundStyle(WovenPalette.danger)
             }
         }
@@ -237,12 +242,9 @@ struct ChatComposerControls<Accessory: View, Submission: View>: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func apply(_ change: SessionSettingsChange) {
-        guard let session, changeable else { return }
-        Task {
-            await session.updateSettings(change)
-            if session.error == nil { open = nil }
-        }
+    private func change(_ change: SessionSettingsChange) {
+        guard changeable else { return }
+        Task { if await apply(change) { open = nil } }
     }
 
     private func setTool(_ group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmed: Bool = false) {

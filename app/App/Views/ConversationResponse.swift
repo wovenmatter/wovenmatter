@@ -768,12 +768,20 @@ struct ConversationUserBubble<Attachments: View>: View {
     var hasAttachments = false
     @ViewBuilder var attachments: () -> Attachments
     @State private var expanded = false
+    #if os(iOS)
+    // The phone's text follows Dynamic Type; the Mac keeps its fixed sizes.
+    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .footnote) private var toggleSize: CGFloat = 12.5
+    #else
+    private let fontSize: CGFloat = 15
+    private let toggleSize: CGFloat = 12.5
+    #endif
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if !content.isEmpty {
                 Text(content)
-                    .font(.system(size: 15))
+                    .font(.system(size: fontSize))
                     .lineSpacing(4)
                     .lineLimit(isLong && !expanded ? 6 : nil)
                     .foregroundStyle(WovenPalette.foreground)
@@ -786,7 +794,7 @@ struct ConversationUserBubble<Attachments: View>: View {
                     withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12.5, weight: .medium))
+                .font(.system(size: toggleSize, weight: .medium))
                 .foregroundStyle(WovenPalette.mutedForeground)
             }
         }
@@ -799,7 +807,7 @@ struct ConversationUserBubble<Attachments: View>: View {
     private var isLong: Bool { content.count > 420 || content.filter { $0 == "\n" }.count > 5 }
     private var preferredContentWidth: CGFloat {
         if hasAttachments { return 420 }
-        let font = ResponseFont.systemFont(ofSize: 15)
+        let font = ResponseFont.systemFont(ofSize: fontSize)
         let longestLine = content.split(separator: "\n", omittingEmptySubsequences: false)
             .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         return min(586, max(isLong ? 118 : 1, ceil(longestLine)))

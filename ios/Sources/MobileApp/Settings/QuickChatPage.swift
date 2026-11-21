@@ -22,7 +22,7 @@ struct QuickChatPage: View {
                                 page: .providers)
                     .accessibilityIdentifier("quick-chat-providers")
             } header: {
-                SettingsHeader(title: "Quick Chat", detail: "Quick questions, web search and notes on this \(ThisDevice.kind). Powered by Pi Durable.")
+                SettingsHeader(title: "Quick Chat", detail: "Quick questions, web search and artifacts on this \(ThisDevice.kind). Powered by Pi Durable.")
             }
             Section {
                 SettingsLinkRow(title: "Default model", value: defaultModelName, page: .defaultModel)

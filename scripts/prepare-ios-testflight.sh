@@ -17,7 +17,8 @@ team=3M84Q9NAMN
 product='Woven Matter / com.wovenmatter.wovenmatter'
 
 usage() {
-  printf '%s\n' 'usage: scripts/prepare-ios-testflight.sh --plan' \
+  printf '%s\n' 'usage: scripts/prepare-ios-testflight.sh [--version X.Y.Z] COMMAND' \
+    '       scripts/prepare-ios-testflight.sh --plan' \
     '       scripts/prepare-ios-testflight.sh --unsigned-build NEW_OUTPUT_DIRECTORY' \
     '       scripts/prepare-ios-testflight.sh --archive NEW_OUTPUT_DIRECTORY' \
     '       scripts/prepare-ios-testflight.sh --upload NEW_OUTPUT_DIRECTORY' \
@@ -30,7 +31,9 @@ step() { printf '\n==> %s\n' "$*"; }
 
 marketing_version() {
   local value
-  # The Woven Matter app's version, shared with the Mac app.
+  # The Woven Matter app's version, shared with the Mac app: the release's,
+  # given as --version as scripts/build-release.sh is given it, else the file's.
+  if [[ -n "$release_version" ]]; then printf '%s' "$release_version"; return; fi
   value="$(sed -n 's/^ *MARKETING_VERSION *= *//p' "$root/app/Version.xcconfig" | head -n 1 | tr -d "\"'\r ")"
   [[ -n "$value" ]] || fail 65 'Missing MARKETING_VERSION in app/Version.xcconfig.'
   printf '%s' "$value"
@@ -134,7 +137,7 @@ archive_and_export() {
   logged "$output/archive.log" xcodebuild -project "$project" -scheme "$scheme" -configuration Release \
     -destination 'generic/platform=iOS' -onlyUsePackageVersionsFromResolvedFile \
     -archivePath "$output/WovenMatter.xcarchive" ${xcode_authentication[@]+"${xcode_authentication[@]}"} \
-    CURRENT_PROJECT_VERSION="$build" archive
+    MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" archive
   app="$output/WovenMatter.xcarchive/Products/Applications/WovenMatter.app"
   "$verify" "$app" distribution --version "$version" --build "$build"
   step 'Exporting for App Store Connect'
@@ -147,6 +150,13 @@ archive_and_export() {
   ipa="${ipas[0]}"
 }
 
+# A release passes its version, as it does to the Mac build, so both apps match.
+release_version=
+if [[ "${1:-}" == --version ]]; then
+  [[ $# -ge 2 && "$2" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 64 'Give --version as X.Y.Z, the release being built.'
+  release_version="$2"
+  shift 2
+fi
 version="$(marketing_version)"
 case "${1:-}" in
   --plan)
@@ -155,7 +165,7 @@ case "${1:-}" in
     printf '%s\n' 'TestFlight plan (nothing is built, signed or uploaded)' \
       "  Product:        $product (Release)" \
       '  Dev builds:     Woven Matter Dev / com.wovenmatter.wovenmatter.dev (Debug)' \
-      "  Version:        $version (MARKETING_VERSION in app/Version.xcconfig)" \
+      "  Version:        $version ($(if [[ -n "$release_version" ]]; then printf 'from --version'; else printf 'MARKETING_VERSION in app/Version.xcconfig; a release passes --version'; fi))" \
       "  Build number:   stamped from the UTC clock at archive time; now it would be $(build_number)" \
       "  Team:           $team" \
       "  Distribution identities for $team in this keychain: $(distribution_identities)" \
@@ -176,7 +186,7 @@ case "${1:-}" in
     step "Building unsigned $product $version for devices"
     logged "$output/build.log" xcodebuild -project "$project" -scheme "$scheme" -configuration Release \
       -destination 'generic/platform=iOS' -onlyUsePackageVersionsFromResolvedFile \
-      -derivedDataPath "$output/DerivedData" CODE_SIGNING_ALLOWED=NO build
+      -derivedDataPath "$output/DerivedData" MARKETING_VERSION="$version" CODE_SIGNING_ALLOWED=NO build
     step 'Verifying the Release bundle'
     "$verify" "$output/DerivedData/Build/Products/Release-iphoneos/WovenMatter.app" distribution --version "$version"
     printf '\n'; printf '%s\n' "Unsigned Release build verified in $output." \

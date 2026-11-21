@@ -109,7 +109,7 @@ final class ApplicationModel {
         agentTools.attach(server, workspace: workspace, settings: settings)
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
-        documents.attach(server, machines: machines, databases: databases)
+        documents.attach(server, machines: machines, devices: devices, databases: databases)
         bots.attach(machineConnections, machines: machines, settings: settings)
         calendar.attach(server, workspace: workspace, machines: machines)
         server.start()

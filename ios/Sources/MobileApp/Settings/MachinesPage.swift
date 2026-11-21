@@ -14,7 +14,7 @@ struct MachinesPage: View {
         List {
             if machines.isConnected {
                 Section {
-                    ForEach(machines.machines) { machine in
+                    ForEach(machines.connectedMachines) { machine in
                         MachineRow(machine: machine)
                     }
                 } header: {
@@ -37,13 +37,6 @@ struct MachinesPage: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This \(ThisDevice.kind) forgets your machines and stops syncing. Its chats and artifacts stay on it.")
-        }
-        // Whether each machine answers changes without the library changing.
-        .task {
-            while !Task.isCancelled {
-                await machines.reload()
-                try? await Task.sleep(for: .seconds(5))
-            }
         }
     }
 
@@ -106,11 +99,15 @@ private struct MachineRow: View {
 }
 
 extension MachinesStore {
-    /// The device remembers where at least one machine is. Its core reports
-    /// an address for each machine it knows how to reach.
-    var isConnected: Bool {
-        machines.contains { serverStatus(on: $0.id)?.hostName != nil }
+    /// The machines this device is connected to, online or offline: those its
+    /// core remembers an address for. After Disconnect the library may still
+    /// hold their rows, but they are no longer the device's machines.
+    var connectedMachines: [Machine] {
+        machines.filter { serverStatus(on: $0.id)?.hostName != nil }
     }
+
+    /// The device remembers where at least one machine is.
+    var isConnected: Bool { !connectedMachines.isEmpty }
 
     /// A machine runs another release, so the two do not sync.
     var releaseMismatch: Bool {

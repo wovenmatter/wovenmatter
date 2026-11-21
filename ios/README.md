@@ -127,8 +127,12 @@ commit it or paste it anywhere, and revoke it on the same page if it leaks.
 
 ### Each build
 
-**Version and build number.** The version is `MARKETING_VERSION` in
-`app/Version.xcconfig`, shared with the Mac app. You never set a build number:
+**Version and build number.** The version is the Woven Matter release's, shared
+with the Mac app: pass it as `--version X.Y.Z` before the command
+(`scripts/prepare-ios-testflight.sh --version 0.4.7 --upload DIR`), as
+`scripts/build-release.sh` is given it for the Mac, so the two match and sync.
+Without it the script uses `MARKETING_VERSION` in `app/Version.xcconfig`, the
+development version. You never set a build number:
 every `--archive` and `--upload` stamps one from the UTC clock, `YYYYMMDD.T`
 with `T` = hour × 10000 + minute × 100 + second (18:34:02 UTC on 11 November
 2026 is `20261111.183402`), so every build is unique and higher than the last.
@@ -143,12 +147,12 @@ the app → Distribution → Pricing and Availability, keep **iPhone and iPad Ap
 Apple Silicon Macs** and **Apple Vision Pro** unchecked.
 
 **What gets checked.** `scripts/verify-ios-app.sh` checks the Release app and
-the exported IPA before anything is uploaded: the name, bundle ID, URL scheme,
+the exported IPA before anything is uploaded: the name, bundle ID, connection link scheme,
 version and build number, with no unexpanded build settings; iPhone and iPad
 support, the AppIcon catalog, the bundled icon license, and the camera and
 microphone purpose strings; no continued background processing; the privacy
 manifest, exactly as below; `ITSAppUsesNonExemptEncryption` set to false; no
-Debug-only fixture or development markers in any binary; and, in the IPA, one app with an
+Debug-only launch hook (`WOVENMATTER_CONNECT_CODE`) in any binary; and, in the IPA, one app with an
 Apple Distribution signature for team `3M84Q9NAMN`, an unexpired App Store
 provisioning profile that allows TestFlight, and only the expected
 entitlements, with debugging off. Its tests,

@@ -121,7 +121,7 @@ struct MobilePageEditor: View {
       MobilePageAssetPicker(model: model, pageID: record.id) { assetID in
         state.add(.asset, assetID: assetID, at: insertion.position, in: session)
       }
-      .environment(\.wovenTheme, theme).preferredColorScheme(theme.colorScheme)
+      .sheetTheme(theme)
     }
     .sheet(item: Binding(get: { state.cell }, set: { state.cell = $0 })) { target in
       if case .table(let table)? = layout.blocks[target.tableID] {
@@ -134,7 +134,7 @@ struct MobilePageEditor: View {
               block: .table(try transform(current))))
           }
         }
-        .environment(\.wovenTheme, theme).preferredColorScheme(theme.colorScheme)
+        .sheetTheme(theme)
       }
     }
   }

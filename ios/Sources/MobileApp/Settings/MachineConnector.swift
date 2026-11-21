@@ -72,7 +72,7 @@ final class MachineConnector {
             let machines = model.app.machines
             for _ in 0..<40 where !Task.isCancelled {
                 await machines.reload()
-                if machines.machines.contains(where: { machines.serverStatus(on: $0.id)?.hostName != nil }) { break }
+                if machines.isConnected { break }
                 try? await Task.sleep(for: .milliseconds(500))
             }
             guard !Task.isCancelled else { return }

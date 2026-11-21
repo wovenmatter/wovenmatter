@@ -62,7 +62,7 @@ struct FolderPlaces {
 
     /// Every folder by its workspace: this device first, then each machine.
     var folderGroups: [(owner: FolderOwner, folders: [WorkspaceFolderRecord])] {
-        let owners = (deviceID.map { [$0] } ?? []) + app.machines.machines.map(\.id)
+        let owners = (deviceID.map { [$0] } ?? []) + app.machines.connectedMachines.map(\.id)
         return owners.map { (owner($0), folders(on: $0)) }.filter { !$0.folders.isEmpty }
     }
 
@@ -135,13 +135,4 @@ func folderRowTime(_ date: Date?) -> String {
     guard let date, date > .distantPast else { return "" }
     if Calendar.current.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
     return date.formatted(.dateTime.month(.abbreviated).day())
-}
-
-extension View {
-    /// A sheet opened from the Folders tab, in the app's theme.
-    func folderSheetTheme(_ theme: WovenTheme) -> some View {
-        environment(\.wovenTheme, theme)
-            .preferredColorScheme(theme.colorScheme)
-            .tint(theme.palette.themeAccent)
-    }
 }

@@ -12,9 +12,10 @@ import UIKit
 /// is not visible. VoiceOver skips them: the turn's "Working" label says it runs.
 struct ConversationRunningDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationAnimationsPaused) private var paused
 
     var body: some View {
-        RunningDots(reduceMotion: reduceMotion)
+        RunningDots(reduceMotion: reduceMotion, paused: paused)
             .frame(width: RunningDotsView.width, height: RunningDotsView.diameter)
             // Centred in the work rows' 17 pt icon column.
             .frame(width: 17)
@@ -22,9 +23,17 @@ struct ConversationRunningDots: View {
     }
 }
 
+extension EnvironmentValues {
+    /// The page is out of sight though still in the window, as a tab kept alive
+    /// behind the one showing: the dots stand still, so nothing animates unseen.
+    @Entry var conversationAnimationsPaused = false
+}
+
 #if os(macOS)
 private struct RunningDots: NSViewRepresentable {
     let reduceMotion: Bool
+    /// The window's occlusion already pauses them on a Mac.
+    let paused: Bool
 
     func makeNSView(context: Context) -> RunningDotsView { RunningDotsView() }
 
@@ -96,11 +105,13 @@ private final class RunningDotsView: NSView {
 #else
 private struct RunningDots: UIViewRepresentable {
     let reduceMotion: Bool
+    let paused: Bool
 
     func makeUIView(context: Context) -> RunningDotsView { RunningDotsView() }
 
     func updateUIView(_ view: RunningDotsView, context: Context) {
         view.reduceMotion = reduceMotion
+        view.paused = paused
     }
 }
 
@@ -113,6 +124,10 @@ private final class RunningDotsView: UIView {
 
     var reduceMotion = false {
         didSet { if reduceMotion != oldValue { updateAnimation() } }
+    }
+
+    var paused = false {
+        didSet { if paused != oldValue { updateAnimation() } }
     }
 
     init() {
@@ -144,7 +159,7 @@ private final class RunningDotsView: UIView {
     }
 
     private func updateAnimation() {
-        RunningDotsView.animate(dots, animates: !reduceMotion && window != nil, reduceMotion: reduceMotion)
+        RunningDotsView.animate(dots, animates: !reduceMotion && !paused && window != nil, reduceMotion: reduceMotion)
     }
 }
 #endif

@@ -73,14 +73,6 @@ final class FolderItemActions {
             }
         }
     }
-
-    /// Starts a chat with `runtime` on its machine in the folder, and opens it in the Chat tab.
-    func startChat(_ runtime: RuntimeKind, on machineID: String, folderID: String, model: MobileModel) {
-        Task {
-            do { model.open(sessionID: try await model.app.workspace.startSession(runtime: runtime, on: machineID, folderID: folderID)) }
-            catch { self.error = error.localizedDescription }
-        }
-    }
 }
 
 /// The context menus and swipe actions for chats, artifacts and folders.

@@ -81,6 +81,7 @@ public struct CatalogHTTPResponse: Sendable {
 public protocol CatalogHTTPTransport: Sendable {
   func fetch(_ request: URLRequest) async throws -> CatalogHTTPResponse
 }
+/// Catalog requests never follow redirects. `@unchecked Sendable`: an `NSObject` delegate with no stored state.
 private final class CatalogURLSessionTransport: NSObject, CatalogHTTPTransport, URLSessionTaskDelegate, @unchecked Sendable {
   func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                   newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }

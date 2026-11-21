@@ -94,6 +94,13 @@ final class MobileModel {
         tab = .chat
     }
 
+    /// Shows a new chat with `target` in the Chat tab; its session starts with the first message.
+    func newChat(_ target: ChatTarget) {
+        chat.newChat(target)
+        paths[.chat] = NavigationPath()
+        tab = .chat
+    }
+
     /// Shows an artifact in the Artifacts tab.
     func open(artifactID: String) {
         self.artifactID = artifactID

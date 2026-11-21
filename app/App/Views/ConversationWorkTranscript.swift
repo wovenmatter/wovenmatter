@@ -99,16 +99,22 @@ struct ConversationWorkTranscript: View {
         let isRunning = run.status == .running
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                if content.failureMessage != nil {
-                    HStack(spacing: 7) {
-                        LucideIcon(glyph: .alertCircle, size: 13)
+                Group {
+                    if content.failureMessage != nil {
+                        HStack(spacing: 7) {
+                            LucideIcon(glyph: .alertCircle, size: 13)
+                            elapsedLabel
+                        }
+                        .foregroundStyle(WovenPalette.danger)
+                    } else {
                         elapsedLabel
+                            .foregroundStyle(WovenPalette.mutedForeground)
                     }
-                    .foregroundStyle(WovenPalette.danger)
-                } else {
-                    elapsedLabel
-                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
+                #if os(iOS)
+                // Quieter than the reply's text, as the Mac's 13 points are beside its 15.
+                .font(.footnote)
+                #endif
 
                 // Failure belongs to the run, not to its optional work history.
                 // Keep it visible even when no tool or thinking event was supplied.

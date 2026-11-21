@@ -81,9 +81,11 @@ final class MachinesStore {
     func reload() async {
         guard let server else { return }
         do {
-            statuses = try await server.call(ListMachines())
+            // Unchanged, it is not set again, so nothing that shows it redraws.
+            let listed = try await server.call(ListMachines())
+            if listed != statuses { statuses = listed }
             connections?.update(statuses)
-            errorMessage = nil
+            if errorMessage != nil { errorMessage = nil }
         } catch {
             errorMessage = error.localizedDescription
         }

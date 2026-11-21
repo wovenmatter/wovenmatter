@@ -29,10 +29,7 @@ struct MobileShell: View {
         .environment(\.workspaceApplicationModel, model.app)
         .environment(\.openWorkspaceConversation, { model.open(sessionID: $0) })
         .sheet(isPresented: $model.settingsPresented) {
-            SettingsRoot(model: model)
-                .environment(\.wovenTheme, theme)
-                .preferredColorScheme(theme.colorScheme)
-                .tint(theme.palette.themeAccent)
+            SettingsRoot(model: model).sheetTheme(theme)
         }
         // Dictation inserts into the composer it started in, so it ends when that page leaves.
         .onChange(of: model.tab) { _, _ in MobileDictation.shared.stop() }
@@ -54,10 +51,13 @@ struct MobileShell: View {
                     root(tab)
                         .toolbar(.hidden, for: .navigationBar)
                         .mobilePageSurface()
+                        .accessibilityHidden(!selected)
                 }
                 .opacity(selected ? 1 : 0)
                 .allowsHitTesting(selected)
                 .accessibilityHidden(!selected)
+                // Nothing animates in a tab that is out of sight.
+                .environment(\.conversationAnimationsPaused, !selected)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -29,11 +29,11 @@ struct ChatTab: View {
             app.workspace.markConversationRead(id: id)
             await app.sessions.follow(id)
         }
+        // A new chat's model and thinking choices, read again once its machine
+        // answers or Quick Chat's sign-ins change.
+        .task(id: newChatOptionsKey) { await chat.loadNewChatOptions() }
         .sheet(isPresented: $chooserPresented) {
-            ChatChooser(model: model)
-                .environment(\.wovenTheme, theme)
-                .preferredColorScheme(theme.colorScheme)
-                .tint(theme.palette.themeAccent)
+            ChatChooser(model: model).sheetTheme(theme)
         }
     }
 
@@ -42,12 +42,22 @@ struct ChatTab: View {
         return chat.target.isQuickChat ? "Quick Chat" : "New Chat"
     }
 
-    /// Where the chat runs: Quick Chat, or its agent on its workspace.
+    /// Where the chat runs: Quick Chat, or its agent on its workspace, and the
+    /// folder a new chat starts in.
     private var subtitle: String? {
         let target = chat.target
-        if target.isQuickChat { return chat.sessionID == nil ? nil : "Quick Chat" }
+        let folder = chat.sessionID == nil ? target.folderID.flatMap { app.workspace.folder(id: $0)?.name } : nil
+        if target.isQuickChat { return chat.sessionID == nil ? folder : "Quick Chat" }
         let agent = AgentRuntimeKind(runtime: target.runtime)?.displayName ?? chat.conversation?.runtimeName ?? target.runtime.rawValue
-        return "\(agent) · \(chat.machineName(target))"
+        return (["\(agent) · \(chat.machineName(target))"] + [folder].compactMap { $0 }).joined(separator: " · ")
+    }
+
+    private var newChatOptionsKey: String {
+        let target = chat.target
+        let machineID = target.machineID ?? model.deviceID ?? ""
+        let runtimes = app.machines.machineRuntimes[machineID]?.map { "\($0.runtime.rawValue):\(String(describing: $0.signedIn))" } ?? []
+        return [target.runtime.rawValue, machineID, chat.sessionID == nil ? "new" : "open",
+                app.machineConnections?.isConnected(machineID) == true ? "up" : "down"].joined(separator: "|") + runtimes.joined(separator: ",")
     }
 
     @ViewBuilder private var content: some View {
@@ -174,12 +184,13 @@ private struct QuickChatSetupNotice: View {
     private func notice(_ text: String, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(text).font(.callout).foregroundStyle(WovenPalette.mutedForeground)
+                Text(text).font(.footnote).foregroundStyle(WovenPalette.mutedForeground)
                     .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 LucideIcon(glyph: .arrowRight, size: 12).foregroundStyle(WovenPalette.mutedForeground)
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous).fill(theme.palette.workspace)

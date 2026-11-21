@@ -57,12 +57,12 @@ struct FolderPage: View {
         return Menu {
             Section("New Chat") {
                 if places.isDevice(machineID) {
-                    Button { actions.startChat(.piDurable, on: machineID, folderID: folder.id, model: model) } label: {
+                    Button { model.newChat(ChatTarget(runtime: .piDurable, machineID: nil, folderID: folder.id)) } label: {
                         Label { Text("Quick Chat") } icon: { harnessImage(.defaultAgent) }
                     }
                 } else {
                     ForEach(app.workspace.agents(on: machineID)) { agent in
-                        Button { actions.startChat(agent.runtimeKind.runtime, on: machineID, folderID: folder.id, model: model) } label: {
+                        Button { model.newChat(ChatTarget(runtime: agent.runtimeKind.runtime, machineID: machineID, folderID: folder.id)) } label: {
                             Label { Text(agent.displayName) } icon: { harnessImage(agent.runtimeKind) }
                         }
                         .accessibilityIdentifier("folders-new-chat-\(agent.id)")
@@ -235,7 +235,7 @@ struct AllWorkspacesPage: View {
                 .accessibilityIdentifier("folders-all-add")
             }
         }
-        .sheet(isPresented: $chooserPresented) { ChatChooser(model: model).folderSheetTheme(theme) }
+        .sheet(isPresented: $chooserPresented) { ChatChooser(model: model).sheetTheme(theme) }
         .folderItemPrompts(actions, model: model)
     }
 }

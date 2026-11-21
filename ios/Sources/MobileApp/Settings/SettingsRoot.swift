@@ -117,8 +117,8 @@ struct SettingsRoot: View {
     private var machinesSummary: (text: String, tone: SettingsTone?) {
         guard machines.isConnected else { return ("Not connected", nil) }
         if machines.releaseMismatch { return ("Update needed", .warning) }
-        let count = machines.machines.count
-        return (count == 1 ? "1 machine" : "\(count) machines", .good)
+        let connected = machines.connectedMachines
+        return (connected.count == 1 ? "1 machine" : "\(connected.count) machines", connected.contains(where: \.isOnline) ? .good : nil)
     }
 
     private var quickChatSummary: (text: String, tone: SettingsTone) {

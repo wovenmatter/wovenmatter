@@ -67,20 +67,6 @@ extension TabRootHeader where Trailing == EmptyView {
     }
 }
 
-/// A tab's page that has nothing in it yet.
-struct TabPlaceholder: View {
-    let glyph: LucideGlyph
-    let title: String
-
-    var body: some View {
-        VStack(spacing: 10) {
-            LucideIcon(glyph: glyph, size: 28).foregroundStyle(WovenPalette.mutedForeground)
-            Text(title).font(.headline)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
 /// A harness's logo, or a generic chip for a runtime without one.
 struct AgentIcon: View {
     let runtime: AgentRuntimeKind?
@@ -114,6 +100,13 @@ private struct MobilePageSurface: ViewModifier {
 }
 
 extension View {
+    /// A sheet over the tabs, in the app's theme: sheets do not inherit it.
+    func sheetTheme(_ theme: WovenTheme) -> some View {
+        environment(\.wovenTheme, theme)
+            .preferredColorScheme(theme.colorScheme)
+            .tint(theme.palette.themeAccent)
+    }
+
     /// A page on the theme's workspace colour.
     func mobilePageSurface() -> some View { modifier(MobilePageSurface()) }
 }

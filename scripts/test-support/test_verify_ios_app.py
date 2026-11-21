@@ -65,7 +65,7 @@ def mutations():
     yield 'dev name in Release', info(lambda v: v.update(CFBundleDisplayName='Woven Matter Dev'))
     yield 'unexpanded build setting', info(lambda v: v.update(CFBundleDisplayName='$(WOVENMATTER_DISPLAY_NAME)'))
     yield 'dev link scheme in Release', info(lambda v: v.update(CFBundleURLTypes=[{'CFBundleURLSchemes': ['wovenmatter-dev']}]))
-    yield 'no pairing link scheme', info(lambda v: v.pop('CFBundleURLTypes'))
+    yield 'no connection link scheme', info(lambda v: v.pop('CFBundleURLTypes'))
     yield 'unexpanded version', info(lambda v: v.update(CFBundleVersion='$(CURRENT_PROJECT_VERSION)'))
     yield 'invalid build number', info(lambda v: v.update(CFBundleVersion='19a'))
     yield 'four-part build number', info(lambda v: v.update(CFBundleVersion='.'.join(['20261111', '1', '2', '3'])))  # Joined, so the public-tree scan does not read an address.
@@ -98,13 +98,8 @@ def mutations():
     yield 'tracking data type', privacy(lambda v: collected(v)[0].update(NSPrivacyCollectedDataTypeTracking=True))
     yield 'search history unlinked', privacy(lambda v: collected(v)[1].update(NSPrivacyCollectedDataTypeLinked=False))
     yield 'wrong purpose', privacy(lambda v: collected(v)[1].update(NSPrivacyCollectedDataTypePurposes=['NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising']))
-    yield 'debug fixtures', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE binary')
-    yield 'fixture namespace lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE_NAMESPACE\0binary')
-    yield 'fixture scenario lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_SCENARIO\0binary')
-    yield 'fixture tab lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_TAB\0binary')
-    yield 'development tailnet', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_DEV_TAILNET\0')
-    yield 'fixtures in nested framework', lambda app: nested_binary(app, b' WOVENMATTER_UI_FIXTURE\0')
-
+    yield 'connect code hook', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_CONNECT_CODE\0binary')
+    yield 'connect code hook in nested framework', lambda app: nested_binary(app, b' WOVENMATTER_CONNECT_CODE\0')
 
 def run_cli(prefix, extra_env, arguments):
     env = {key: value for key, value in os.environ.items() if not key.startswith('PYTHON')}
@@ -131,9 +126,9 @@ with tempfile.TemporaryDirectory() as temporary:
         expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--version', '9.9.9']), 'unexpected version')
         expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--build', '18']), 'unexpected build number')
     dev = make_app(base / 'dev', 'dev')
-    (dev / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE')
+    (dev / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_CONNECT_CODE')
     if run_cli(*INTERPRETERS[1], [str(dev), 'dev']).returncode != 0:
-        fail('a Debug bundle with fixtures was rejected for the dev profile')
+        fail('a Debug bundle with its connect code hook was rejected for the dev profile')
     for index, (label, mutate) in enumerate(mutations()):
         app = make_app(base / f'case-{index}')
         mutate(app)

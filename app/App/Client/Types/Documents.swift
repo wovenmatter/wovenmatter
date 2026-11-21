@@ -19,7 +19,7 @@ struct NoteVersion: Identifiable, Equatable, Sendable {
         case beforeAgentEdit
         case restored
         case beforeRestore
-        /// The other side of an edit made apart on another machine.
+        /// The other side of an edit made apart on another machine or device.
         case otherMachine(String)
 
         var displayName: String {

@@ -328,7 +328,9 @@ struct CloudConversation: View {
                 help: "Remove panel",
                 action: onClosePanel
             )
-        } else if let conversation, !conversation.isArchived, conversation.runtimeKind == .defaultAgent {
+        } else if let conversation, !conversation.isArchived, conversation.runtimeKind == .defaultAgent,
+                  model.devices.device(id: conversation.machineID) == nil {
+            // A device's Quick Chat is set up on that device, not here.
             PanelControlButton(
                 glyph: .settings,
                 accessibilityLabel: "Pi Durable settings",

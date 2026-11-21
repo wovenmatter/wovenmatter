@@ -54,7 +54,7 @@ struct ArtifactLibrary: View {
             }
         }
         if workspace.workspaceOverview != nil && artifacts.isEmpty {
-          Text(search.isEmpty ? "No artifacts." : "No matching artifacts.")
+          Text(search.isEmpty && kind == nil ? "No artifacts" : "No matches")
             .font(.callout).foregroundStyle(WovenPalette.mutedForeground)
             .frame(maxWidth: .infinity, minHeight: 88)
             .listRowBackground(Color.clear)
@@ -69,6 +69,9 @@ struct ArtifactLibrary: View {
       .listStyle(.plain)
       .scrollDismissesKeyboard(.immediately)
       .contentMargins(.bottom, 24, for: .scrollContent)
+      // A readable column on iPad, as the Folders tab has.
+      .frame(maxWidth: 760)
+      .frame(maxWidth: .infinity)
     }
   }
 

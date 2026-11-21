@@ -96,7 +96,7 @@ struct BotsTab: View {
 private struct BotsEmptyState: View {
     @Bindable var model: MobileModel
 
-    private var hasMachine: Bool { model.app.machines.machines.contains { !$0.isThisMachine } }
+    private var hasMachine: Bool { model.app.machines.isConnected }
 
     var body: some View {
         ScrollView {

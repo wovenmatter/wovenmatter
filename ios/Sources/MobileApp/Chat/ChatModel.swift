@@ -3,10 +3,11 @@ import Observation
 import WovenProtocol
 
 /// What a new chat starts with: a runtime on a machine, or Quick Chat on this
-/// device when `machineID` is nil.
+/// device when `machineID` is nil, in `folderID` when it is started from a folder.
 struct ChatTarget: Hashable {
     var runtime: RuntimeKind
     var machineID: String?
+    var folderID: String? = nil
 
     static let quickChat = ChatTarget(runtime: .piDurable, machineID: nil)
 
@@ -31,6 +32,12 @@ final class ChatModel {
     private(set) var isSending = false
     /// The last send that failed; the draft stays.
     var error: String?
+    /// What a new chat can choose from before its session exists: what its
+    /// runtime last reported on its machine. Nil until it has reported once.
+    private(set) var newChatOptions: SessionSettings?
+    /// The model, thinking level and permission picked for the new chat,
+    /// given to its session when the first message starts it.
+    private(set) var newChatChoice = SessionSettingsChange()
 
     @ObservationIgnored private unowned let app: ApplicationModel
 
@@ -48,9 +55,13 @@ final class ChatModel {
 
     func open(_ sessionID: String) {
         self.sessionID = sessionID
+        newChatChoice = SessionSettingsChange()
         if let conversation = app.workspace.conversation(id: sessionID) {
-            target = ChatTarget(runtime: conversation.runtime,
-                                machineID: conversation.machineID == deviceID ? nil : conversation.machineID)
+            let opened = ChatTarget(runtime: conversation.runtime,
+                                    machineID: conversation.machineID == deviceID ? nil : conversation.machineID,
+                                    folderID: conversation.folderID)
+            if opened.runtime != target.runtime || opened.machineID != target.machineID { newChatOptions = nil }
+            target = opened
         }
         error = nil
         progress = nil
@@ -58,10 +69,44 @@ final class ChatModel {
 
     /// A new chat with `target`, shown at once; the session starts with its first message.
     func newChat(_ target: ChatTarget) {
+        if target.runtime != self.target.runtime || target.machineID != self.target.machineID { newChatOptions = nil }
         self.target = target
+        newChatChoice = SessionSettingsChange()
         sessionID = nil
         error = nil
         progress = nil
+    }
+
+    /// The new chat's settings as its composer shows them: the runtime's
+    /// options with the person's picks over them.
+    var newChatSettings: SessionSettings? {
+        guard var settings = newChatOptions else { return nil }
+        if let model = newChatChoice.model { settings.model = model }
+        if let thinking = newChatChoice.thinking { settings.thinking = thinking }
+        if let permission = newChatChoice.permission { settings.permission = permission }
+        return settings
+    }
+
+    /// Picks a model, thinking level or permission for the chat about to start.
+    func chooseForNewChat(_ change: SessionSettingsChange) {
+        if let model = change.model {
+            // A thinking level belongs to the model it was chosen for.
+            if model != (newChatChoice.model ?? newChatOptions?.model) { newChatChoice.thinking = nil }
+            newChatChoice.model = model
+        }
+        if let thinking = change.thinking { newChatChoice.thinking = thinking }
+        if let permission = change.permission { newChatChoice.permission = permission }
+    }
+
+    /// Reads what the new chat's runtime offers on its machine.
+    func loadNewChatOptions() async {
+        let target = self.target
+        guard sessionID == nil, let runtime = AgentRuntimeKind(runtime: target.runtime),
+              let machineID = target.machineID ?? deviceID else { return }
+        let options = try? await app.settings.sessionOptions(runtime: runtime, machineID: machineID,
+                                                             machines: app.machines, model: nil)
+        guard self.target == target, sessionID == nil else { return }
+        newChatOptions = options
     }
 
     private var deviceID: String? { app.server?.remote?.machine.id }
@@ -90,7 +135,7 @@ final class ChatModel {
                 let target = self.target
                 if !target.isQuickChat { progress = "Starting on \(machineName(target))…" }
                 guard let machineID = target.machineID ?? deviceID else { throw ClientError.notConnected }
-                id = try await app.workspace.startSession(runtime: target.runtime, on: machineID, folderID: nil)
+                id = try await app.workspace.startSession(runtime: target.runtime, on: machineID, folderID: target.folderID)
                 drafts[key] = nil
                 attachments[key] = nil
                 drafts[id] = text
@@ -101,6 +146,12 @@ final class ChatModel {
             if !target.isQuickChat { progress = "Sending to \(machineName(target))…" }
             // The chat view follows the session; its owner answers within moments.
             for _ in 0..<100 where !session.isOwnerReachable { try await Task.sleep(for: .milliseconds(100)) }
+            // What was picked before the chat started goes to its session first.
+            let choice = newChatChoice
+            if choice != SessionSettingsChange() {
+                newChatChoice = SessionSettingsChange()
+                await session.updateSettings(choice)
+            }
             try await session.send(AgentMessageInput(text: text, attachments: staged))
             if drafts[id] == text { drafts[id] = nil }
             attachments[id] = nil

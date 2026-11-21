@@ -46,8 +46,17 @@ struct ChatComposer: View {
                     .accessibilityIdentifier("chat-composer")
                 MobileDictationMicrophone(editor: dictationEditor)
             }
-            ChatComposerControls(session: session, tools: model.app.agentTools,
-                                 configurable: reachable && !isRunning) {
+            ChatComposerControls(settings: session?.settings ?? chat.newChatSettings, sessionID: session?.sessionID,
+                                 isUpdating: session?.isUpdatingSettings == true, error: session?.error,
+                                 apply: { [chat] change in
+                                     guard let session = chat.session else {
+                                         chat.chooseForNewChat(change)
+                                         return true
+                                     }
+                                     await session.updateSettings(change)
+                                     return session.error == nil
+                                 },
+                                 tools: model.app.agentTools, configurable: reachable && !isRunning) {
                 addMenu
             } submission: {
                 submission

@@ -1908,7 +1908,9 @@ struct ConversationListMeta: Equatable, Sendable {
         foldersByID: [String: WorkspaceFolderRecord]
     ) -> ConversationListMeta {
         let runtime = agent?.runtimeKind ?? conversation.runtimeKind
-        let agentLabel = agent.map(agentDisplayName) ?? conversation.runtimeName
+        // A device's chats are its Quick Chats, whatever runtime runs them.
+        let isDevice = machine == nil && deviceName != nil
+        let agentLabel = isDevice ? "Quick Chat" : agent.map(agentDisplayName) ?? conversation.runtimeName
 
         let folderLabel: String
         if let folderID = conversation.folderID,
@@ -1923,9 +1925,9 @@ struct ConversationListMeta: Equatable, Sendable {
             agentLabel: agentLabel,
             folderLabel: folderLabel,
             locationLabel: machine?.name ?? deviceName ?? "Unknown",
-            locationKind: machine == nil && deviceName != nil ? .device
+            locationKind: isDevice ? .device
                 : machine?.isThisMachine == false ? .remoteWorkspace : .workspaceAgent,
-            runtimeLabel: runtime?.displayName ?? conversation.runtimeName,
+            runtimeLabel: isDevice ? "Quick Chat" : runtime?.displayName ?? conversation.runtimeName,
             runtimeKind: runtime
         )
     }
