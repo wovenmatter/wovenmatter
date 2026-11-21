@@ -38,8 +38,9 @@ never reaches stay external; the build fails if any survives tree shaking.
 
 `PiDurableRuntime` (Swift) opens a `PiDurableSession` per conversation, under
 `<directory>/<conversation id>/`. The SDK's log there is the conversation's
-native log; reopening continues it, and a run a relaunch cut short continues on
-open. The directory takes an exclusive lock, and its files are fsynced before a
+native log; reopening continues it. A run that a close or a relaunch cut short
+is settled as aborted on open, not continued: the host has saved that turn as
+stopped, and the next message starts a turn. The directory takes an exclusive lock, and its files are fsynced before a
 commit is published. Credentials never enter JavaScript or the log: the
 inference closure receives pi-ai's `{model, context, options, scope}` and emits
 pi-ai events. Tools are the host's closure, except `ask_user`, which surfaces

@@ -32,7 +32,7 @@ public struct PiDurableRuntime: Sendable {
     return directory.appendingPathComponent(conversationID, isDirectory: true)
   }
 
-  /// Opens a conversation. Work a relaunch cut short continues at once.
+  /// Opens a conversation. A run a close or relaunch cut short is settled as aborted, not continued.
   @MainActor
   public func open(_ start: PiDurableStart) async throws -> PiDurableSession {
     let folder = try directory(for: start.conversationID)
@@ -102,7 +102,7 @@ public final class PiDurableSession {
     emit.yield(.promptResolved(id: promptID))
   }
 
-  /// Suspends the conversation. A turn still running ends with a failure; the next open continues its work.
+  /// Suspends the conversation. A turn still running ends with a failure; the next open settles it.
   public func close() async {
     guard !closed else { return }
     if context != nil { _ = try? await invoke("close") }

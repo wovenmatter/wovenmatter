@@ -267,8 +267,8 @@ final class PiDurableRuntimeTests: XCTestCase {
     await second.close()
   }
 
-  func testATurnCutShortByClosingContinuesWhenReopened() async throws {
-    let standIn = StandIn([{ _ in try await Task.sleep(for: .seconds(600)) }, { $0.text("Back again.") }])
+  func testATurnCutShortByClosingIsSettledWhenReopenedAndTheNextMessageStartsATurn() async throws {
+    let standIn = StandIn([{ _ in try await Task.sleep(for: .seconds(600)) }, { $0.text("Here now.") }])
     let first = try await runtime(standIn).open(start("cut"))
     let recorder = Recorder(first)
     try await first.send("answer slowly")
@@ -279,11 +279,18 @@ final class PiDurableRuntimeTests: XCTestCase {
     XCTAssertEqual(recorder.items, [.userMessage(text: "answer slowly"),
                                     .turnFinished(failure: "The conversation was closed during the turn.", usage: nil)])
 
+    // The host saved that turn as stopped, so it does not run again by itself.
     let second = try await runtime(standIn).open(start("cut", resume: true))
-    let resumed = Recorder(second)
-    try await resumed.turnFinished()
-    XCTAssertEqual(resumed.items.first, .messageFinished(text: "Back again."))
-    guard case .turnFinished(nil, _) = resumed.items.last else { return XCTFail("The resumed turn did not end: \(resumed.items)") }
+    let reopened = Recorder(second)
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(reopened.items, [])
+    try await second.send("and now?")
+    try await reopened.turnFinished()
+    XCTAssertEqual(Array(reopened.items.prefix(2)), [.userMessage(text: "and now?"), .messageFinished(text: "Here now.")])
+    guard case .turnFinished(nil, _) = reopened.items.last else { return XCTFail("The new turn did not end: \(reopened.items)") }
+    let requests = await standIn.requests
+    XCTAssertEqual(requests.count, 2)
+    XCTAssertTrue(requests[1].contains("and now?"))
     await second.close()
   }
 }

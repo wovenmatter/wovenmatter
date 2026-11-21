@@ -283,3 +283,29 @@ func aQuickChatContinuesAfterTheAppStartsAgain() async throws {
   let last = try #require(await model.requests.last)
   #expect(last.contains("remember 42") && last.contains("Noted."))
 }
+
+@Test(.timeLimit(.minutes(1)))
+func aQuickChatStoppedMidTurnTakesTheNextMessageAsANewTurn() async throws {
+  let model = Model()
+  await model.then({ reply in reply.text("Partial"); try await Task.sleep(for: .seconds(600)) },
+                   { $0.text("Answer to the new one.") })
+  let first = try await Device.start(model)
+  defer { try? FileManager.default.removeItem(at: first.folder) }
+  let chat = try await first.ui.call(CreateSession(runtime: .piDurable, title: "Quick Chat"))
+  let watching = try await first.watch(chat.id)
+  _ = try await first.ui.call(SendTurn(sessionID: chat.id, text: "answer slowly"))
+  try await watching.until { events in events.contains { if case .text(_, "Partial") = $0 { true } else { false } } }
+  await first.device.stop()
+
+  // The stopped turn stays stopped: the next message starts a turn, once.
+  let again = try await Device.start(model, folder: first.folder)
+  defer { Task { await again.device.stop() } }
+  let resumed = try await again.watch(chat.id)
+  _ = try await again.ui.call(SendTurn(sessionID: chat.id, text: "a new message"))
+  try await resumed.idle(after: 1)
+  #expect(content(try await again.ui.call(SessionItems(sessionID: chat.id))) == [
+    "user: answer slowly", "assistant: Partial", "notice: The session was stopped while this reply was being written.",
+    "user: a new message", "assistant: Answer to the new one.",
+  ])
+  #expect(await model.requests.count == 2)
+}

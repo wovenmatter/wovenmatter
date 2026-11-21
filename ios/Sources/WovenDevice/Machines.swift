@@ -181,8 +181,11 @@ actor Machines: Peers {
   private func follow(_ id: String, _ entry: AddressBook.Entry) async throws {
     let (client, remote) = try await open(host: entry.host, port: entry.port)
     defer {
-      if clients[id] === client { clients[id] = nil }
-      statuses[id]?.online = false
+      // Only this link's own end says the machine is offline: a newer link may be up already.
+      if clients[id] === client {
+        clients[id] = nil
+        statuses[id]?.online = false
+      }
       Task { await client.close() }
     }
     // Another machine answers there now: remember it, and look for this one again.
@@ -208,7 +211,7 @@ actor Machines: Peers {
     let announced = try await client.subscribe(SubscribeLibrary())
     let changes = library.changes()
     try await library.pull(from: client, machineID: id)
-    try await handOff.handOver(to: client, machineID: id)
+    try await handOff.handOver(to: client, machineID: id, fresh: true)
     try await library.push(to: client)
     try await withThrowingTaskGroup(of: Void.self) { group in
       group.addTask {

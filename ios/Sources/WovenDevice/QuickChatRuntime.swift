@@ -47,11 +47,7 @@ final class QuickChatRuntime: Runtime {
       conversationID: start.nativeHandle ?? start.sessionID, runtime: self, tools: start.sessionTools,
       instructions: QuickChatTools.instructions(device: platform),
       model: model, thinking: Self.thinking(start.choices.thinking, for: model), offered: offered)
-    do {
-      try await session.open(resume: start.nativeHandle != nil)
-    } catch PiDurableError.conversationGone {
-      throw RuntimeError.nativeSessionGone
-    }
+    try await session.open(resume: start.nativeHandle != nil)
     return session
   }
 
@@ -162,9 +158,21 @@ final class QuickChatSession: RuntimeSession {
         try await Self.run(request, woven: woven, providers: providers,
                            searchProvider: await runtime.settings["searchProvider"]?.string)
       })
-    let session = try await pi.open(PiDurableStart(conversationID: nativeHandle, resume: resume,
-                                                   modelJSON: try model.descriptorJSON(), thinkingLevel: thinking,
-                                                   instructions: instructions, tools: tools))
+    let session: PiDurableSession
+    do {
+      session = try await pi.open(PiDurableStart(conversationID: nativeHandle, resume: resume,
+                                                 modelJSON: try model.descriptorJSON(), thinkingLevel: thinking,
+                                                 instructions: instructions, tools: tools))
+    } catch {
+      // Opened again in place of one that was open: the host learns it is
+      // gone, so the next turn opens the session afresh or says it is lost.
+      let gone = error as? PiDurableError == .conversationGone
+      if previous != nil {
+        emit.yield(gone ? .nativeSessionGone : .exited)
+        emit.finish()
+      }
+      throw gone ? RuntimeError.nativeSessionGone : error
+    }
     let generation = state.withLock { state in
       state.open = session
       state.tools = tools

@@ -23,9 +23,39 @@ private actor Announcements {
   }
 }
 
-/// Whether the stand-in Mac answers.
+/// Whether the stand-in Mac answers, and whether it takes files.
 private final class Reachable: Sendable {
   let on = Mutex(true)
+  let takesFiles = Mutex(false)
+}
+
+/// A connection on which the server refuses every `content.put`, as a full
+/// disk or a file too large for it would.
+private final class RefusingFiles: MessageTransport {
+  let incoming: AsyncThrowingStream<String, any Error>
+  private let inner: any MessageTransport
+  private let reply: AsyncThrowingStream<String, any Error>.Continuation
+
+  init(_ inner: any MessageTransport) {
+    self.inner = inner
+    let (incoming, reply) = AsyncThrowingStream<String, any Error>.makeStream()
+    self.incoming = incoming
+    self.reply = reply
+    Task {
+      do { for try await text in inner.incoming { reply.yield(text) } } catch {}
+      reply.finish()
+    }
+  }
+
+  func send(_ text: String) throws {
+    if case .request(let id, PutContent.method, _)? = try? Message(text: text) {
+      reply.yield(try Message.reply(id: id, result: .failure(ProtocolError(.failed, "The disk is full."))).text())
+      return
+    }
+    try inner.send(text)
+  }
+
+  func close() { inner.close() }
 }
 
 private func eventually(_ check: () async throws -> Bool) async throws -> Bool {
@@ -50,7 +80,8 @@ func aDeviceSyncsWithTheMacItAddsAndStartsAgainWhenRemoved() async throws {
   let reachable = Reachable()
   let dial: Machines.Dial = { _, _ in
     guard reachable.on.withLock({ $0 }) else { throw ConnectionClosed() }
-    return connect(.tailnet(name: "phone"))
+    let transport = connect(.tailnet(name: "phone"))
+    return reachable.takesFiles.withLock { $0 } ? transport : RefusingFiles(transport)
   }
   let model = Model()
   await model.then(
@@ -73,11 +104,16 @@ func aDeviceSyncsWithTheMacItAddsAndStartsAgainWhenRemoved() async throws {
     if case .visualReply(let reply) = item.content { reply } else { nil }
   }.first)
 
-  // Adding the Mac syncs both ways; the visual reply's content reaches it too.
+  // Adding the Mac syncs both ways. A file the Mac does not take does not
+  // hold up the rows; it reaches the Mac on the next connection that takes it.
   let code = try #require(ConnectionCode(code: "000-0AK"))
   try await phone.device.add(code)
   #expect(try await eventually { try await mac.items(sessionID: chat.id).count == 4 })
-  #expect(try await mac.hasContent(reply.digest))
+  #expect(try await !mac.hasContent(reply.digest))
+  reachable.takesFiles.withLock { $0 = true }
+  await phone.device.setActive(false)
+  await phone.device.setActive(true)
+  #expect(try await eventually { try await mac.hasContent(reply.digest) })
   let onMac = Client(transport: connect(.local))
   _ = try await onMac.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI", platform: .mac), appVersion: appVersion))
   let note = try await onMac.call(CreateArtifact(kind: .note, title: "Groceries"))

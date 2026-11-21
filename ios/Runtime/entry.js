@@ -132,15 +132,18 @@ const methods = {
     harness = await Harness.open(storage, { models, registry,
       onReport: error => globalThis.__wmLog(String(error?.message ?? error)) }, context);
     root = await harness.root(context, { agent: { model: configuration.model } });
-    // Model, thinking and instructions are this device's choice, applied before saved work resumes.
+    // Model, thinking and instructions are this device's choice, applied before anything runs.
     await root.configure({ model: configuration.model, instructions: config.instructions, thinkingLevel: config.thinkingLevel }, context);
     turns = new Turns(emit);
     projection = turns.projection(Projection);
-    const watch = await root.watch(context);
-    projection.attach(watch);
-    // A run a relaunch cut short continues now, as a turn the runtime started by itself.
-    const run = watch.value.docs?.['pi.live']?.run;
-    if (run) track({ before: await usageNow() }, root.waitForIdle(context).then(() => undefined));
+    // A run that a close or a relaunch cut short is not continued: the host has
+    // already saved that turn as stopped, so it is settled as aborted here, before
+    // anything is watched, and the next message starts a turn of its own.
+    const before = await root.watch(context);
+    const cutShort = Boolean(before.value.docs?.['pi.live']?.run);
+    await before.stop();
+    if (cutShort) await root.abort(context);
+    projection.attach(await root.watch(context));
     harness.resume();
   },
   async send({ text }) {

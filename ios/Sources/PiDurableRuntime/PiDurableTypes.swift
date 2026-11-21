@@ -91,8 +91,7 @@ public struct PiTokenUsage: Sendable, Hashable {
 
 /// What a conversation says, in order, on one stream for as long as it is open. Each finished
 /// item arrives once, after everything before it and before anything after it, so a host saves
-/// items as they finish. A turn the runtime resumes on open (a relaunch cut one short) has no
-/// `userMessage`; its first event begins it, and it ends with `turnFinished` like any other.
+/// items as they finish. Each turn starts with its `userMessage` and ends with `turnFinished`.
 public enum PiDurableEvent: Sendable, Hashable {
   /// A message the person sent: the start of a turn, or one that steered it.
   case userMessage(text: String)

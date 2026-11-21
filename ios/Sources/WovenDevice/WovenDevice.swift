@@ -105,6 +105,7 @@ public final class WovenDevice: Sendable {
 
   private static func run(_ options: Options) async throws -> Running {
     let folder = options.dataFolder
+    try excludeFromBackup(folder)
     let library = try await Library.open(folder: folder, machineName: options.deviceName, platform: options.platform)
     let providers = Providers(
       credentials: options.credentials ?? InferenceCredentialStore(),
@@ -165,6 +166,19 @@ public final class WovenDevice: Sendable {
       closeConnections()
       watchForRemoval()
     }
+  }
+
+  /// Nothing in the data folder travels in a backup or to a new phone: the
+  /// library's identity, its counter and the cursors and logs that go with it
+  /// belong to this device alone. A restored phone starts as a new device and
+  /// gets everything back by syncing. (Sign-ins are this-device-only Keychain
+  /// items already.)
+  private static func excludeFromBackup(_ folder: URL) throws {
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    var url = folder
+    try url.setResourceValues(values)
   }
 
   /// A conversation log whose session is no longer in the library (deleted,
