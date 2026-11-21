@@ -64,7 +64,7 @@ struct DesktopCalendarEventSheet: View {
                 Button("Delete entire series", role: .destructive) { remove(nil) }
             } else { Button("Delete event", role: .destructive) { remove(nil) } }
             Button("Cancel", role: .cancel) { }
-        } message: { Text("Sessions that already ran will remain in your workspace.") }
+        } message: { Text("Sessions that already ran will remain in your library.") }
     }
 
     private var editor: some View {

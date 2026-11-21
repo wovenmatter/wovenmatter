@@ -317,7 +317,7 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Updates",
-                    detail: "Woven Matter and harnesses on every device.",
+                    detail: "Woven Matter and harnesses on every machine.",
                     status: updates.availableCount > 0 || updates.running ? updates.summary : nil,
                     statusTone: updates.availableCount > 0 ? .warning : .neutral,
                     icon: { LucideIcon(glyph: .rocket, size: 15) },

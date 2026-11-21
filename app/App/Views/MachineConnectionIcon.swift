@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct DeviceConnectionIcon: View {
+struct MachineConnectionIcon: View {
     let platform: Machine.Platform
     var size: CGFloat = 20
     var body: some View {

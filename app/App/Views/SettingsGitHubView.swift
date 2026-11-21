@@ -30,7 +30,7 @@ struct SettingsGitHubView: View {
     var body: some View {
         SettingsPage(
             title: "GitHub",
-            detail: "One SSH key and commit identity for git everywhere Woven works: agents on this Mac and your other Macs, Linux workspaces, and bots.",
+            detail: "One SSH key and commit identity for git everywhere Woven works: agents on this Mac and your other Macs, Linux machines, and bots.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
@@ -180,7 +180,7 @@ struct SettingsGitHubView: View {
         let listed = places.flatMap { [$0.id] + $0.bots.map(\.id) }
         return SettingsSection(title: "Where the key goes",
                                detail: "Agents and bots use the key only where it's on. Your name and email apply everywhere.") {
-            SettingsToggleRow(title: "New places get the key", detail: "Macs, workspaces, and bots you add later.",
+            SettingsToggleRow(title: "New places get the key", detail: "Machines and bots you add later.",
                               isOn: Binding(get: { snapshot.access.newPlaces }, set: { value in
                                   Task { await store.runGitHub(.setNewPlaces(value, listed: listed)) }
                               }))
@@ -216,7 +216,7 @@ private struct GitHubPlace: Identifiable {
 
     @MainActor static func list(_ machines: [Machine], bots: BotsStore) -> [GitHubPlace] {
         machines.map { machine in
-            let detail = machine.isThisMachine ? "Mac you're using" : machine.platform == .mac ? "Mac" : "Linux workspace"
+            let detail = machine.isThisMachine ? "Mac you're using" : machine.platform == .mac ? "Mac" : "Linux machine"
             let botsHere = machine.id == bots.hostMachineID
                 ? bots.bots.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                     .map { Bot(id: $0.id, name: $0.name) }

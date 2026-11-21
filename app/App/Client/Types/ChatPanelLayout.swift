@@ -15,7 +15,7 @@ public struct ChatPanelID: Hashable, Codable, Sendable, Identifiable {
 /// A bot's channel or thread shown in a chat panel. The bot's runtime owns the
 /// conversation; the panel only records which one is on screen.
 public struct BotTarget: Hashable, Codable, Sendable {
-  /// The Woven device ID of the machine whose runtime hosts the bot.
+  /// The ID of the machine whose runtime runs the bot.
   public var machineID: String
   public var botID: String
   /// nil is the bot's main channel.

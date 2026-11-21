@@ -1180,7 +1180,7 @@ struct AttachmentPicker: View {
             .overlay {
                 if kind == .note && filteredNotes.isEmpty {
                     ContentUnavailableView(query.isEmpty ? "No notes yet" : "No matching notes", systemImage: "note.text",
-                        description: Text(query.isEmpty ? "Create a note in your workspace, then attach it here." : "Try a different search."))
+                        description: Text(query.isEmpty ? "Create a note in your library, then attach it here." : "Try a different search."))
                 }
             }
             .searchable(text: $query, prompt: kind == .note ? "Search notes" : "Search conversations")

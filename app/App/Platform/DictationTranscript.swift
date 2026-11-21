@@ -41,7 +41,7 @@ public enum DictationError: LocalizedError, Equatable, Sendable {
     switch self {
     case .microphoneDenied: "Microphone access is disabled. Allow microphone access for Woven Matter in system Settings."
     case .unavailable: "On-device dictation is unavailable. Check your microphone and try again."
-    case .unsupportedLanguage: "Apple on-device dictation does not support the selected language on this device. Choose another dictation language."
+    case .unsupportedLanguage: "Apple on-device dictation does not support the selected language on this Mac. Choose another dictation language."
     case .languagePreparation: "Dictation language support could not be prepared. Connect to the internet for the first download, check available storage, and try again."
     case .audioBacklog: "Dictation stopped because audio processing could not keep up with the microphone."
     case .incomplete: "Dictation did not finish. Any completed transcript is available to insert."

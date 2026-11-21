@@ -42,7 +42,7 @@ struct SettingsBotsResourcesView: View {
     }
 
     private func memorySection(_ settings: BotResourceSettings, _ capacity: BotMachineCapacity) -> some View {
-        SettingsSection(title: "Memory", detail: "This device has \(BotResourcePolicy.format(capacity.memoryBytes)). Bots share one pool, and each bot has its own limit.") {
+        SettingsSection(title: "Memory", detail: "This machine has \(BotResourcePolicy.format(capacity.memoryBytes)). Bots share one pool, and each bot has its own limit.") {
             SettingsRow(title: "All bots") {
                 picker("Memory for all bots", selection: settings.poolBytes, choices: BotResourcePolicy.poolChoices(capacity)) { value in
                     var next = settings; next.poolBytes = value
@@ -74,7 +74,7 @@ struct SettingsBotsResourcesView: View {
     }
 
     private func picker(_ title: String, selection: Int64?, choices: [Int64], onChange: @escaping @MainActor (Int64?) -> Void) -> some View {
-        // A stored value outside today's choices (another device set it) still shows.
+        // A stored value outside today's choices (another machine set it) still shows.
         let options: [Int64?] = [nil] + (choices.contains(selection ?? -1) || selection == nil ? choices : (choices + [selection!]).sorted())
         return SettingsPicker(title, selection: Binding(get: { selection }, set: { onChange($0) }), options: options) {
             BotResourcePolicy.format($0)

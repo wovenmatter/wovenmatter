@@ -54,7 +54,7 @@ struct SavedArtifactsView: View {
                     icon: .libraryBigControl,
                     title: model.items.isEmpty ? "No saved artifacts yet" : "No matching artifacts",
                     detail: model.items.isEmpty
-                        ? "Outputs saved from your devices and workspaces will appear here."
+                        ? "Outputs saved from your workspaces will appear here."
                         : "Adjust your workspace filter or search to find an artifact."
                 ).frame(maxHeight: .infinity)
             } else {

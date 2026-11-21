@@ -4,8 +4,8 @@ import WovenProtocol
 
 /// Every Woven machine on the tailnet, this Mac first: whether it is online,
 /// what it can run, its harness inventory and sign-ins, its Mac permission
-/// status and its server. Commands rename and remove machines, find devices
-/// and install the server over SSH, and install or update harnesses.
+/// status and its server. Commands rename and remove machines, find Linux
+/// computers and install the server over SSH, and install or update harnesses.
 ///
 /// Per-machine state is keyed by machine id. Harness and sign-in members are in
 /// `MachinesStore+Harnesses.swift`.
@@ -103,7 +103,7 @@ final class MachinesStore {
     private(set) var progress: String?
     var errorMessage: String?
 
-    // MARK: Find Devices
+    // MARK: Linux computers to add
 
     /// Tailnet computers without a Woven server.
     private(set) var tailnetDevices: [TailnetDevice] = []
@@ -302,7 +302,7 @@ final class MachinesStore {
         }
     }
 
-    // MARK: Find Devices
+    // MARK: Linux computers to add
 
     /// Lists the tailnet's Linux computers without a Woven server, through this Mac's server.
     func findDevices() {
@@ -337,8 +337,8 @@ final class MachinesStore {
                 let facts = try await server.call(InspectHost(host: hostName, user: userName))
                 hostPreflights[hostName] = HostPreflight(hostName: hostName, ready: facts.problems.isEmpty,
                                                         architecture: facts.architecture, limitations: facts.problems,
-                                                        hostStorageCapacityBytes: facts.storageCapacityBytes,
-                                                        hostStorageAvailableBytes: facts.storageAvailableBytes)
+                                                        storageCapacityBytes: facts.storageCapacityBytes,
+                                                        storageAvailableBytes: facts.storageAvailableBytes)
             } catch {
                 hostPreflights[hostName] = nil
                 hostErrors[hostName] = error.localizedDescription

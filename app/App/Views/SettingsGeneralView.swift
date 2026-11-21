@@ -94,12 +94,12 @@ struct SettingsGeneralView: View {
     }
 
     /// The first row: this Mac's Woven Matter version. The whole row opens Settings → Updates,
-    /// where this Mac and every other device are updated.
+    /// where this Mac and every other machine are updated.
     private var versionSection: some View {
         SettingsSection {
             SettingsDestinationRow(
                 title: Self.isDevelopmentBuild ? "Woven Matter development build" : "Woven Matter \(Self.appVersion)",
-                detail: "Open Updates to update this Mac, your other devices, and their harnesses.",
+                detail: "Open Updates to update this Mac, your other machines, and their harnesses.",
                 status: updates.running ? "Updating…" : updates.availableCount > 0 ? "Update available" : nil,
                 statusTone: updates.running ? .neutral : .warning,
                 icon: { LucideIcon(glyph: .rocket, size: 15) },

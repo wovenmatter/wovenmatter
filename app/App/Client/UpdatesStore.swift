@@ -124,7 +124,7 @@ final class UpdatesStore {
     var availableCount: Int { machines.values.filter(\.hasUpdate).count }
     var summary: String {
         if running { return "Updating…" }
-        return availableCount == 1 ? "1 device" : "\(availableCount) devices"
+        return availableCount == 1 ? "1 machine" : "\(availableCount) machines"
     }
 
     func isUpdating(_ request: Request) -> Bool {

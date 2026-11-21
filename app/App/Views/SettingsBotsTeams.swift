@@ -204,14 +204,14 @@ struct BotSettingsBots: View {
     }
 
     private func purge(_ bot: PiBotDeletedBot) {
-        state.confirm("Delete \(bot.name) permanently?\n\nThis removes its conversations, threads, memory and notes, its settings, and its workspace and container.\n\nThis can't be undone.", action: "Delete permanently") {
+        state.confirm("Delete \(bot.name) permanently?\n\nThis removes its conversations, threads, memory and notes, its settings, and its files and container.\n\nThis can't be undone.", action: "Delete permanently") {
             purging = bot.id
             Task {
                 defer { purging = nil }
                 await state.run {
                     let result = try await bots.purgeBot(id: bot.id)
                     if let error = result.environmentError {
-                        state.error = "\(bot.name) was deleted permanently, but its workspace was not removed: \(error)"
+                        state.error = "\(bot.name) was deleted permanently, but its files were not removed: \(error)"
                     }
                     try await refresh()
                 }

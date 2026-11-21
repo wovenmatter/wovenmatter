@@ -534,7 +534,7 @@ struct PiBotDeletedBot: Equatable, Identifiable, Sendable {
 }
 
 struct PiBotPurgeResult: Equatable, Sendable {
-    /// Why the bot's workspace and container were not removed, when they were not.
+    /// Why the bot's files and container were not removed, when they were not.
     let environmentError: String?
 }
 
@@ -594,20 +594,20 @@ struct BotMachineCapacity: Equatable, Sendable {
 /// The rules in Settings → Bots → Resources, without any view.
 enum BotResourcePolicy {
     static let gib = BotResourceSettings.gib
-    /// Below this much memory left over, the device itself suffers.
-    static let deviceReserveBytes: Int64 = 4 * gib
+    /// Below this much memory left over, the machine itself suffers.
+    static let machineReserveBytes: Int64 = 4 * gib
 
     enum Warning: Equatable, Sendable {
         case poolLeavesLittleMemory(leftBytes: Int64)
         case diskCapExceedsFree(freeBytes: Int64)
     }
 
-    /// Whole gigabytes from 1 GB to the device's memory.
+    /// Whole gigabytes from 1 GB to the machine's memory.
     static func poolChoices(_ capacity: BotMachineCapacity) -> [Int64] {
         stride(from: gib, through: max(gib, capacity.memoryBytes / gib * gib), by: Int(gib)).map { $0 }
     }
 
-    /// Whole gigabytes up to the pool, or up to the device's memory with no pool cap.
+    /// Whole gigabytes up to the pool, or up to the machine's memory with no pool cap.
     static func perBotChoices(pool: Int64?, _ capacity: BotMachineCapacity) -> [Int64] {
         let ceiling = pool ?? max(gib, capacity.memoryBytes / gib * gib)
         return stride(from: gib, through: max(gib, ceiling), by: Int(gib)).map { $0 }
@@ -625,7 +625,7 @@ enum BotResourcePolicy {
         validated(.defaults, capacity)
     }
 
-    /// Brings every value inside its range: the pool within 1 GB…device memory, per-bot within
+    /// Brings every value inside its range: the pool within 1 GB…machine memory, per-bot within
     /// the pool, and disk within the disk's size and at least what bots already use.
     static func validated(_ settings: BotResourceSettings, _ capacity: BotMachineCapacity) -> BotResourceSettings {
         var result = settings
@@ -641,9 +641,9 @@ enum BotResourcePolicy {
 
     static func warnings(_ settings: BotResourceSettings, _ capacity: BotMachineCapacity) -> [Warning] {
         var result: [Warning] = []
-        // No cap can take everything, so it leaves the device nothing it can count on.
+        // No cap can take everything, so it leaves the machine nothing it can count on.
         let left = capacity.memoryBytes - (settings.poolBytes ?? capacity.memoryBytes)
-        if left < deviceReserveBytes { result.append(.poolLeavesLittleMemory(leftBytes: max(0, left))) }
+        if left < machineReserveBytes { result.append(.poolLeavesLittleMemory(leftBytes: max(0, left))) }
         if (settings.diskBytes ?? Int64.max) > capacity.diskFreeBytes + (capacity.diskUsedByBotsBytes ?? 0) {
             result.append(.diskCapExceedsFree(freeBytes: capacity.diskFreeBytes))
         }
@@ -653,7 +653,7 @@ enum BotResourcePolicy {
     static func text(_ warning: Warning) -> String {
         switch warning {
         case .poolLeavesLittleMemory(let left):
-            "This leaves \(format(left)) for everything else on this device. Keep at least 4 GB free."
+            "This leaves \(format(left)) for everything else on this machine. Keep at least 4 GB free."
         case .diskCapExceedsFree(let free):
             "This is more than the \(format(free)) free on this disk. Bots stop saving files when the disk fills."
         }

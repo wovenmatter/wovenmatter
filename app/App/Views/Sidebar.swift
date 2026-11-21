@@ -884,12 +884,12 @@ struct NewFolderPopover: View {
     @State private var name = ""
     @State private var linksExistingDirectory = false
     @State private var externalRoot: URL?
-    @State private var hostDirectoryPath = ""
-    @State private var hostDirectoryFilter = ""
-    @State private var hostDirectoryListing: MachineDirectoryListing?
-    @State private var loadingHostDirectories = false
-    @State private var hostDirectoryError: String?
-    @State private var hostDirectoryRequest = UUID()
+    @State private var machineDirectoryPath = ""
+    @State private var machineDirectoryFilter = ""
+    @State private var machineDirectoryListing: MachineDirectoryListing?
+    @State private var loadingMachineDirectories = false
+    @State private var machineDirectoryError: String?
+    @State private var machineDirectoryRequest = UUID()
     @FocusState private var nameFocused: Bool
 
     private var ownerIsAvailable: Bool {
@@ -904,7 +904,7 @@ struct NewFolderPopover: View {
 
     /// Another machine's directories are browsed through its server; this
     /// Mac's through the open panel.
-    private var nativeHost: Machine? {
+    private var nativeMachine: Machine? {
         machine.flatMap { $0.isThisMachine ? nil : $0 }
     }
 
@@ -926,7 +926,7 @@ struct NewFolderPopover: View {
                 .quietTextInput()
                 .onSubmit { if canCreate { create() } }
             if linksExistingDirectory {
-                if nativeHost != nil { hostDirectoryBrowser }
+                if nativeMachine != nil { machineDirectoryBrowser }
                 else {
                     Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
                         .lineLimit(2)
@@ -961,31 +961,31 @@ struct NewFolderPopover: View {
         .formFocusDismissal { nameFocused = false }
         .task { nameFocused = true }
         .task(id: linksExistingDirectory) {
-            if linksExistingDirectory, nativeHost != nil, hostDirectoryListing == nil {
-                await browseHostDirectory(nil)
+            if linksExistingDirectory, nativeMachine != nil, machineDirectoryListing == nil {
+                await browseMachineDirectory(nil)
             }
         }
     }
 
-    private var hostDirectoryBrowser: some View {
+    private var machineDirectoryBrowser: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Absolute directory on host", text: $hostDirectoryPath)
+            TextField("Absolute directory in this workspace", text: $machineDirectoryPath)
                 .quietTextInput()
-                .onSubmit { Task { await browseHostDirectory(hostDirectoryPath) } }
+                .onSubmit { Task { await browseMachineDirectory(machineDirectoryPath) } }
             HStack {
-                Button("Up") { Task { await browseHostDirectory(hostDirectoryListing?.parent) } }
-                    .disabled(hostDirectoryListing?.parent == nil || loadingHostDirectories)
-                Button("Browse") { Task { await browseHostDirectory(hostDirectoryPath) } }
-                    .disabled(loadingHostDirectories || !hostDirectoryPath.hasPrefix("/"))
+                Button("Up") { Task { await browseMachineDirectory(machineDirectoryListing?.parent) } }
+                    .disabled(machineDirectoryListing?.parent == nil || loadingMachineDirectories)
+                Button("Browse") { Task { await browseMachineDirectory(machineDirectoryPath) } }
+                    .disabled(loadingMachineDirectories || !machineDirectoryPath.hasPrefix("/"))
                 Spacer()
-                if loadingHostDirectories { ProgressView().controlSize(.small) }
+                if loadingMachineDirectories { ProgressView().controlSize(.small) }
             }
-            if let listing = hostDirectoryListing {
-                TextField("Find a directory here", text: $hostDirectoryFilter).quietTextInput()
+            if let listing = machineDirectoryListing {
+                TextField("Find a directory here", text: $machineDirectoryFilter).quietTextInput()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(listing.directories.filter { hostDirectoryFilter.isEmpty || $0.name.localizedCaseInsensitiveContains(hostDirectoryFilter) }) { directory in
-                            Button(directory.name) { Task { await browseHostDirectory(directory.path) } }
+                        ForEach(listing.directories.filter { machineDirectoryFilter.isEmpty || $0.name.localizedCaseInsensitiveContains(machineDirectoryFilter) }) { directory in
+                            Button(directory.name) { Task { await browseMachineDirectory(directory.path) } }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
@@ -997,35 +997,35 @@ struct NewFolderPopover: View {
                 Button("Use this directory") {
                     externalRoot = URL(fileURLWithPath: listing.path)
                     if name.isEmpty { name = externalRoot?.lastPathComponent ?? "" }
-                }.disabled(loadingHostDirectories)
+                }.disabled(loadingMachineDirectories)
             }
             if let externalRoot {
                 Text("Selected: \(externalRoot.path)").font(.system(size: 11.5)).textSelection(.enabled)
             }
-            if let hostDirectoryError {
-                Text(hostDirectoryError).font(.system(size: 11.5)).foregroundStyle(WovenPalette.danger)
+            if let machineDirectoryError {
+                Text(machineDirectoryError).font(.system(size: 11.5)).foregroundStyle(WovenPalette.danger)
             }
         }
         .buttonStyle(SettingsQuietButtonStyle())
     }
 
     @MainActor
-    private func browseHostDirectory(_ path: String?) async {
-        guard let nativeHost else { return }
+    private func browseMachineDirectory(_ path: String?) async {
+        guard let nativeMachine else { return }
         let request = UUID()
-        hostDirectoryRequest = request
-        loadingHostDirectories = true
-        hostDirectoryError = nil
-        defer { if hostDirectoryRequest == request { loadingHostDirectories = false } }
+        machineDirectoryRequest = request
+        loadingMachineDirectories = true
+        machineDirectoryError = nil
+        defer { if machineDirectoryRequest == request { loadingMachineDirectories = false } }
         do {
-            let listing = try await workspace.directories(on: nativeHost.id, path: path)
-            guard hostDirectoryRequest == request, !Task.isCancelled else { return }
-            hostDirectoryListing = listing
-            hostDirectoryPath = listing.path
-            hostDirectoryFilter = ""
+            let listing = try await workspace.directories(on: nativeMachine.id, path: path)
+            guard machineDirectoryRequest == request, !Task.isCancelled else { return }
+            machineDirectoryListing = listing
+            machineDirectoryPath = listing.path
+            machineDirectoryFilter = ""
         } catch {
-            guard hostDirectoryRequest == request, !Task.isCancelled else { return }
-            hostDirectoryError = error.localizedDescription
+            guard machineDirectoryRequest == request, !Task.isCancelled else { return }
+            machineDirectoryError = error.localizedDescription
         }
     }
 

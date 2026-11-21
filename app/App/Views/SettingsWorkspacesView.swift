@@ -15,7 +15,7 @@ struct SettingsWorkspacesView: View {
     @State private var setupMachine: Machine?
     @State private var hostName = ""
     @State private var userName = ""
-    @State private var acknowledgedHostAccess = false
+    @State private var acknowledgedMachineAccess = false
     @State private var pendingRemoval: Machine?
     @State private var logsMachine: Machine?
 
@@ -61,7 +61,7 @@ struct SettingsWorkspacesView: View {
                     deploymentProgress(progress)
                 }
             } else if addingMachine {
-                hostCard
+                machineCard
                 if currentPreflight?.ready == true { createCard }
                 if let progress = model.progress { deploymentProgress(progress) }
             } else {
@@ -104,7 +104,7 @@ struct SettingsWorkspacesView: View {
             .foregroundStyle(WovenPalette.foreground).background(WovenPalette.background)
         }
         .onChange(of: hostName + userName) { _, _ in
-            acknowledgedHostAccess = false
+            acknowledgedMachineAccess = false
         }
         .onChange(of: model.machines.map(\.id)) { oldIDs, machineIDs in
             if let selectedMachineID, !machineIDs.contains(selectedMachineID) {
@@ -144,7 +144,7 @@ struct SettingsWorkspacesView: View {
             }
             Button("Cancel", role: .cancel) { pendingRemoval = nil }
         } message: {
-            Text("This stops and uninstalls the server there, then removes the machine, its chats and its folders from every device.")
+            Text("This stops and uninstalls the server there, then removes the machine, its chats and its folders from every machine.")
         }
     }
 
@@ -202,7 +202,7 @@ struct SettingsWorkspacesView: View {
             detail: machineLocation(machine),
             status: statusLabel(machine),
             statusTone: isRunning(machine) ? .good : .warning,
-            icon: { DeviceConnectionIcon(platform: machine.platform, size: 15) },
+            icon: { MachineConnectionIcon(platform: machine.platform, size: 15) },
             action: { selectedMachineID = machine.id }
         )
     }
@@ -269,10 +269,10 @@ struct SettingsWorkspacesView: View {
         let status = model.serverStatus(on: machine.id)
         return SettingsSection(title: "Details") {
             if let status {
-                SettingsSummaryRow("Storage", value: hostStorageLabel(status)) {
+                SettingsSummaryRow("Storage", value: machineStorageLabel(status)) {
                     SettingsValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
                     SettingsValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
-                    SettingsValueRow(label: "Host storage", value: hostStorageLabel(status))
+                    SettingsValueRow(label: "Machine storage", value: machineStorageLabel(status))
                 }
             }
         }
@@ -283,8 +283,8 @@ struct SettingsWorkspacesView: View {
         return status?.hostName ?? machine.platform.displayName
     }
 
-    private var hostCard: some View {
-        SettingsSection(title: "Host", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
+    private var machineCard: some View {
+        SettingsSection(title: "Machine", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.tailnetDevices
@@ -326,13 +326,13 @@ struct SettingsWorkspacesView: View {
             }
             SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
             let inspecting = model.inspectingHosts.contains(trimmedHost)
-            Button(inspecting ? "Inspecting host…" : "Inspect host") { inspectHost() }
+            Button(inspecting ? "Inspecting machine…" : "Inspect machine") { inspectHost() }
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(inspecting || trimmedHost.isEmpty)
             if currentPreflight == nil, !inspecting {
                 Text(trimmedHost.isEmpty
-                    ? "Select a host to see whether it is ready."
-                    : "Inspect this host to continue. Inspection makes no changes.")
+                    ? "Select a machine to see whether it is ready."
+                    : "Inspect this machine to continue. Inspection makes no changes.")
                     .font(.settingsSecondary)
                     .foregroundStyle(WovenPalette.mutedForeground)
             }
@@ -340,17 +340,17 @@ struct SettingsWorkspacesView: View {
             if let preflight = currentPreflight {
                 SettingsInset {
                     VStack(alignment: .leading, spacing: 8) {
-                        SettingsValueRow(label: "Selected host", value: trimmedHost)
+                        SettingsValueRow(label: "Selected machine", value: trimmedHost)
                         SettingsValueRow(
-                            label: "Host status",
+                            label: "Machine status",
                             value: preflight.ready ? "Ready to create a workspace" : "Needs attention"
                         )
                         SettingsValueRow(
                             label: "Runtime",
                             value: "Native Linux service · \(preflight.architecture)"
                         )
-                        SettingsValueRow(label: "Host storage", value: storageCapacityLabel(
-                            capacity: preflight.hostStorageCapacityBytes, available: preflight.hostStorageAvailableBytes))
+                        SettingsValueRow(label: "Machine storage", value: storageCapacityLabel(
+                            capacity: preflight.storageCapacityBytes, available: preflight.storageAvailableBytes))
                         if !preflight.limitations.isEmpty {
                             Text(preflight.limitations.joined(separator: " "))
                                 .font(.settingsSecondary)
@@ -374,18 +374,18 @@ struct SettingsWorkspacesView: View {
         SettingsSection(title: "Create workspace", detail: "On \(trimmedHost)") {
             SettingsNote("Files use available disk space on the remote machine.")
             SettingsNote(hostWarning(user: trimmedUser, host: hostName))
-            Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
+            Toggle("I understand this workspace's access to the machine", isOn: $acknowledgedMachineAccess)
 
             Button(installing ? "Creating…" : "Create workspace") {
                 model.installServer(hostName: trimmedHost, userName: trimmedUser)
             }
             .buttonStyle(WovenPrimaryButtonStyle())
-            .disabled(installing || currentPreflight?.ready != true || !acknowledgedHostAccess)
+            .disabled(installing || currentPreflight?.ready != true || !acknowledgedMachineAccess)
         }
     }
 
     private func hostWarning(user: String?, host: String) -> String {
-        "Host mode runs agents as \(user ?? "the SSH user")@\(host) with that user's full permissions. There is no container isolation."
+        "This workspace runs agents as \(user ?? "the SSH user")@\(host) with that user's full permissions. There is no container isolation."
     }
 
     private func agentsSection(_ machine: Machine) -> some View {
@@ -425,10 +425,10 @@ struct SettingsWorkspacesView: View {
         return "\(usage) · no fixed limit"
     }
 
-    private func hostStorageLabel(_ status: MachineServerStatus) -> String {
+    private func machineStorageLabel(_ status: MachineServerStatus) -> String {
         storageCapacityLabel(
-            capacity: status.hostStorageCapacityBytes,
-            available: status.hostStorageAvailableBytes
+            capacity: status.storageCapacityBytes,
+            available: status.storageAvailableBytes
         )
     }
 

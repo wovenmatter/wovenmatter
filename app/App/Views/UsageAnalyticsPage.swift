@@ -18,7 +18,7 @@ struct UsageAnalyticsFilters: Equatable {
 
     mutating func clear() { self = UsageAnalyticsFilters() }
 
-    /// Provider and device rows ignore their own filter so a hidden one still shows its total.
+    /// Provider and machine rows ignore their own filter so a hidden one still shows its total.
     func matches(_ sample: UsageSample, ignoringProviders: Bool = false, ignoringMachines: Bool = false) -> Bool {
         matches(sample, query: searchQuery, ignoringProviders: ignoringProviders, ignoringMachines: ignoringMachines)
     }
@@ -93,8 +93,8 @@ struct UsageSessionRow: Identifiable {
     let reasoningLevel: String?
     let harness: String
     let application: String
-    /// Set for usage from another device.
-    let deviceName: String?
+    /// Set for usage from another machine.
+    let machineName: String?
     let latest: Date
     let tokens: UsageTokenCounts
     let directCostUSD: Double?
@@ -103,7 +103,7 @@ struct UsageSessionRow: Identifiable {
     /// Attribution in reading order, with repeated values left out.
     var attribution: String {
         var parts: [String] = []
-        for part in [deviceName, harness, application, billingRoute, reasoningLevel].compactMap({ $0 })
+        for part in [machineName, harness, application, billingRoute, reasoningLevel].compactMap({ $0 })
         where !part.isEmpty && !parts.contains(part) && part != "Unknown" {
             parts.append(part)
         }
@@ -125,7 +125,7 @@ struct UsageSessionRow: Identifiable {
                 reasoningLevel: latest.reasoningLevel,
                 harness: latest.harness,
                 application: latest.application,
-                deviceName: machineNames[latest.machineID],
+                machineName: machineNames[latest.machineID],
                 latest: latest.timestamp,
                 tokens: values.reduce(.zero) { $0 + $1.tokens },
                 directCostUSD: costs.isEmpty ? nil : costs.reduce(0, +),
@@ -195,7 +195,7 @@ struct UsageAnalyticsPage: View {
 }
 
 private extension UsageAnalyticsPage {
-    /// Each device's total under every other filter, so a hidden device still shows its total.
+    /// Each machine's total under every other filter, so a hidden machine still shows its total.
     static func machineTotals(
         _ samples: [UsageSample],
         filters: UsageAnalyticsFilters,
@@ -245,19 +245,19 @@ private struct UsageFilterColumn: View {
                         ) { $0 == .yesterday ? "Yest." : $0.compactLabel }
                     }
                 }
-                group("Devices") {
+                group("Machines") {
                     VStack(spacing: 1) {
-                        ForEach(machines) { device in
+                        ForEach(machines) { machine in
                             UsageFilterToggleRow(
-                                title: device.name,
+                                title: machine.name,
                                 color: WovenPalette.foreground,
-                                value: machineTotals[device.id].flatMap { $0.isEmpty ? nil : $0 },
-                                detail: device.state.rowDetail,
-                                help: device.helpText,
-                                isOn: !filters.hiddenMachines.contains(device.id)
+                                value: machineTotals[machine.id].flatMap { $0.isEmpty ? nil : $0 },
+                                detail: machine.state.rowDetail,
+                                help: machine.helpText,
+                                isOn: !filters.hiddenMachines.contains(machine.id)
                             ) {
-                                if filters.hiddenMachines.remove(device.id) == nil {
-                                    filters.hiddenMachines.insert(device.id)
+                                if filters.hiddenMachines.remove(machine.id) == nil {
+                                    filters.hiddenMachines.insert(machine.id)
                                 }
                             }
                         }
@@ -353,7 +353,7 @@ private struct UsageFilterColumn: View {
     }
 }
 
-/// One click shows or hides a device or provider. Provider rows also act as the graph's legend.
+/// One click shows or hides a machine or provider. Provider rows also act as the graph's legend.
 private struct UsageFilterToggleRow: View {
     let title: String
     let color: Color
@@ -412,7 +412,7 @@ private struct UsageFilterToggleRow: View {
 }
 
 private extension UsageMachineSyncState {
-    /// Shown only when this device's usage may be missing or old.
+    /// Shown only when this machine's usage may be missing or old.
     var rowDetail: String? {
         switch self {
         case .thisMachine, .synced: nil
@@ -426,15 +426,15 @@ private extension UsageMachineSyncState {
 
 private extension UsageMachineSummary {
     var helpText: String {
-        // Long device names can truncate in the row, so the full name is always here.
+        // Long machine names can truncate in the row, so the full name is always here.
         var parts = [name + "."]
         switch state {
         case .thisMachine: parts.append("Usage from this Mac.")
         case .synced: break
-        case .scanning: parts.append("This device is still reading its usage history.")
-        case .waiting: parts.append("Usage from this device hasn't arrived yet.")
-        case .updateRequired: parts.append("Update Woven Matter on this device to include its usage.")
-        case .unavailable: parts.append(detail ?? "This device couldn't be reached.")
+        case .scanning: parts.append("This machine is still reading its usage history.")
+        case .waiting: parts.append("Usage from this machine hasn't arrived yet.")
+        case .updateRequired: parts.append("Update Woven Matter on this machine to include its usage.")
+        case .unavailable: parts.append(detail ?? "This machine couldn't be reached.")
         }
         if let syncedAt {
             parts.append("Last updated \(syncedAt.formatted(.relative(presentation: .named))).")

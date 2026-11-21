@@ -83,7 +83,7 @@ struct CalendarTaskFields: View {
     }
 
     private func folderName(_ id: String) -> String {
-        guard !id.isEmpty else { return "All Workspace" }
+        guard !id.isEmpty else { return "All Workspaces" }
         let folder = model.workspace.workspaceOverview?.folders.first { $0.id == id }
         return folder?.name ?? "Unavailable folder"
     }

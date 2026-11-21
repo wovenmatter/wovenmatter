@@ -37,7 +37,7 @@ struct SettingsRemoteHarnessAccountView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let harness = model.harness(runtimeKind, on: machine.id) {
                 if harness.isSystemInstall, let path = harness.path {
-                    SettingsNote("Using \(path) (installed on host)")
+                    SettingsNote("Using \(path) (installed on the machine)")
                 }
                 let status = model.signInStatus(runtimeKind, on: machine.id)
                 HStack {

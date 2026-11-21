@@ -114,14 +114,14 @@ struct SettingsRemoteHarnessSoftware: View {
                     } else if harness?.isSystemInstall != true {
                         SettingsHarnessUpdateButton(model: model, runtimeKind: runtimeKind, machineID: machine.id)
                     } else {
-                        Text("Managed on host").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
+                        Text("Managed on the machine").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
                     }
                 }
                 .help(harness?.components.compactMap(\.path).joined(separator: "\n") ?? "")
                 if let harness {
                     ForEach(harness.components) { component in
                         if component.isSystemInstall, let path = component.path {
-                            SettingsNote("Using \(path) (installed on host)")
+                            SettingsNote("Using \(path) (installed on the machine)")
                         }
                     }
                     if !harness.versionCheckAvailable {

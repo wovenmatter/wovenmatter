@@ -6,7 +6,7 @@ import Foundation
 import Observation
 
 /// One-time permission setup (Settings → Permissions & Access). Sessions are
-/// often started from another device while nobody is at this Mac, so every
+/// often started from another machine while nobody is at this Mac, so every
 /// permission a session may need is granted here once, ahead of time.
 ///
 /// macOS attributes privacy permissions to the responsible app. The window, the

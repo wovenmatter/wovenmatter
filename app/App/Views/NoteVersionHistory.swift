@@ -26,7 +26,7 @@ struct NoteVersionHistory: View {
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Text("Up to 50 versions and 20 MB per document are retained, within a 256 MB workspace limit. Linked external data is not included.")
+            Text("Up to 50 versions and 20 MB per document are retained, within a 256 MB library limit. Linked external data is not included.")
                 .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 16) {

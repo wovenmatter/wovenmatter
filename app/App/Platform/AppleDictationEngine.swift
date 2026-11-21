@@ -3,7 +3,7 @@ import Foundation
 import Speech
 
 /// Native, streaming SpeechAnalyzer input. Assets are Apple-managed and only
-/// prepared on an explicit recording action. Audio never leaves this device.
+/// prepared on an explicit recording action. Audio never leaves this Mac.
 @MainActor public final class AppleDictationEngine: DictationEngine {
   private var analyzer: SpeechAnalyzer?
   private var transcriber: SpeechTranscriber?

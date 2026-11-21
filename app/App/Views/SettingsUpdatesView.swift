@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Settings → Updates: this Mac's version with Check for updates and Update this Mac, three
-/// rows that update all your devices at once, then each device, which opens to update
+/// rows that update all your machines at once, then each machine, which opens to update
 /// everything on it or one part. Updates run side by side; only the rows an update covers wait.
 struct SettingsUpdatesView: View {
     @Bindable var model: ApplicationModel
@@ -16,14 +16,14 @@ struct SettingsUpdatesView: View {
     var body: some View {
         SettingsPage(
             title: "Updates",
-            detail: "Woven Matter and its harnesses on this Mac and your other devices.",
+            detail: "Woven Matter and its harnesses on this Mac and your other machines.",
             reservesRailControlSpace: reservesRailControlSpace,
             backTitle: backTitle,
             onBack: onBack
         ) {
             overview
-            allDevices
-            yourDevices
+            allMachines
+            yourMachines
         }
         .task {
             updates.loadIfNeeded()
@@ -31,7 +31,7 @@ struct SettingsUpdatesView: View {
         }
     }
 
-    // MARK: This Mac, then all your devices
+    // MARK: This Mac, then all your machines
 
     /// "Woven Matter 0.4.3".
     private var thisMacProduct: String {
@@ -73,20 +73,20 @@ struct SettingsUpdatesView: View {
                 }
             }
             if updates.releaseError != nil {
-                SettingsNote("The newest release couldn't be checked, so devices are compared with this Mac.")
+                SettingsNote("The newest release couldn't be checked, so machines are compared with this Mac.")
             }
             ForEach(updates.failures, id: \.self) { SettingsError($0) }
         }
     }
 
-    /// One kind of thing on every device at once.
-    private var allDevices: some View {
+    /// One kind of thing on every machine at once.
+    private var allMachines: some View {
         SettingsSection {
-            updateRow("Update everything", detail: "Update everything across all your devices.",
+            updateRow("Update everything", detail: "Update everything across all your machines.",
                       request: .everything, available: appsAvailable || harnessesAvailable)
-            updateRow("Update just Woven Matter", detail: "Update just the Woven Matter apps across your devices.",
+            updateRow("Update just Woven Matter", detail: "Update just the Woven Matter apps across your machines.",
                       request: .apps, available: appsAvailable)
-            updateRow("Update just the harnesses", detail: "Update just the harnesses across your devices.",
+            updateRow("Update just the harnesses", detail: "Update just the harnesses across your machines.",
                       request: .harnesses, available: harnessesAvailable)
         }
     }
@@ -110,34 +110,34 @@ struct SettingsUpdatesView: View {
         }
     }
 
-    // MARK: Your devices
+    // MARK: Your machines
 
     /// This Mac, then other Macs, then Linux machines.
-    private var deviceList: [Machine] {
+    private var machineList: [Machine] {
         let others = model.machines.otherMachines.sorted { ($0.platform == .linux ? 1 : 0) < ($1.platform == .linux ? 1 : 0) }
         return (thisMac.map { [$0] } ?? []) + others
     }
 
-    private var yourDevices: some View {
-        SettingsSection(title: "Your devices") {
-            ForEach(deviceList) { deviceRow($0) }
+    private var yourMachines: some View {
+        SettingsSection(title: "Your machines") {
+            ForEach(machineList) { machineRow($0) }
         }
     }
 
     private func hasBots(_ machine: Machine) -> Bool { model.bots.hostMachineID == machine.id }
 
     /// "Woven Matter 0.4.3 · Bots", the version it's on and whether its bots run there.
-    private func deviceSummary(_ machine: Machine) -> String {
+    private func machineSummary(_ machine: Machine) -> String {
         let product = machine.isThisMachine ? thisMacProduct
             : (machine.platform == .linux ? "Woven server" : "Woven Matter") + (machine.appVersion.map { " " + $0 } ?? "")
         return [product, hasBots(machine) ? "Bots" : nil].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// A device's name and version. Opening it shows its Update buttons.
-    private func deviceRow(_ machine: Machine) -> some View {
+    /// A machine's name and version. Opening it shows its Update buttons.
+    private func machineRow(_ machine: Machine) -> some View {
         let state = updates.state(of: machine.id)
         let offline = !machine.isOnline
-        return SettingsDisclosureRow(machine.name, detail: deviceSummary(machine)) {
+        return SettingsDisclosureRow(machine.name, detail: machineSummary(machine)) {
             if state.isUpdating {
                 ProgressView().controlSize(.small)
                 SettingsStatus("Updating", tone: .neutral)
@@ -149,7 +149,7 @@ struct SettingsUpdatesView: View {
                 SettingsStatus("Up to date", tone: .good)
             }
         } content: {
-            updateRow("Update everything on this device", detail: everythingDetail(machine),
+            updateRow("Update everything on this machine", detail: everythingDetail(machine),
                       request: .machine(machine.id), available: !offline && state.hasUpdate,
                       accessibility: "Update everything on \(machine.name)")
             if machine.isThisMachine || machine.platform == .linux { appRow(machine, state) }
@@ -159,7 +159,7 @@ struct SettingsUpdatesView: View {
 
     private func everythingDetail(_ machine: Machine) -> String {
         let product = machine.platform == .linux ? "the Woven server" : "Woven Matter"
-        return "Updates \(product) and every harness on this device."
+        return "Updates \(product) and every harness on this machine."
     }
 
     /// This Mac's Woven Matter or a Linux machine's Woven server, alone.
@@ -168,7 +168,7 @@ struct SettingsUpdatesView: View {
         let request = UpdatesStore.Request.app(machineID: machine.id)
         let detail = machine.isThisMachine ? Self.thisMacAbout
             : outdated && state.appWaitsForThisMac ? "Update this Mac first. Its Woven Matter brings this server's update."
-            : "This updates the Woven server on this device."
+            : "This updates the Woven server on this machine."
         return SettingsRow(title: "Update just Woven Matter", detail: detail) {
             if state.updatingApp { ProgressView().controlSize(.small) }
             else if !machine.isOnline { SettingsStatus("Offline", tone: .neutral) }
@@ -183,7 +183,7 @@ struct SettingsUpdatesView: View {
 
     // MARK: Harnesses
 
-    /// Each harness on a device, with its versions and its own Update.
+    /// Each harness on a machine, with its versions and its own Update.
     @ViewBuilder private func harnessRows(_ machine: Machine, _ state: UpdatesStore.MachineState) -> some View {
         if let harnesses = state.harnesses {
             if harnesses.isEmpty { SettingsNote("No harnesses are installed here yet.") }

@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Display-only run values shared by the desktop and the device-owned runtime.
+/// Display-only run values shared by the desktop and the machine's runtime.
 struct ConversationWorkRun {
     let id: String
     let conversationID: String

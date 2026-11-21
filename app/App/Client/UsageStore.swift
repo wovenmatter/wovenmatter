@@ -60,7 +60,7 @@ final class UsageStore {
             let names = Dictionary((machineStore?.machines ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             let samples = report.groups.enumerated().map { Self.sample($1, index: $0) }
             let sources = Dictionary(grouping: samples, by: \.machineID).map { machineID, values in
-                UsageSourceCoverage(id: machineID, sourceName: names[machineID] ?? "Removed device", provider: .unknown, harness: nil,
+                UsageSourceCoverage(id: machineID, sourceName: names[machineID] ?? "Removed machine", provider: .unknown, harness: nil,
                                     status: .available, location: "Woven library",
                                     discoveredSessions: Set(values.map(\.sessionID)).count, attributedSamples: values.count, detail: "")
             }.sorted { $0.sourceName < $1.sourceName }

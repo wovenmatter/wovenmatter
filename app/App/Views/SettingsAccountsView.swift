@@ -90,7 +90,7 @@ struct SettingsAccountsView: View {
 /// other machines, each by name.
 enum SignInMachinePicker {
     static let title = "Sign in on"
-    static let pageDetail = "Used by Pi Durable and bots on the selected device. Codex, Claude Code, Grok Build, and OpenCode sign in on their own pages. Usage limits shows the accounts signed in on this device."
+    static let pageDetail = "Used by Pi Durable and bots in the selected workspace. Codex, Claude Code, Grok Build, and OpenCode sign in on their own pages. Usage limits shows the accounts signed in on this machine."
     /// Marks the machine whose bots use its sign-ins.
     static let botsMark = "Bots"
 

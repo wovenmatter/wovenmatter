@@ -158,7 +158,7 @@ enum AgentListMoveDirection: Sendable {
     case down
 }
 
-/// Device-local order of agents within each sidebar group (`AppStorage` JSON map).
+/// This Mac's order of agents within each sidebar group (`AppStorage` JSON map).
 enum AgentOrderStore {
     static let storageKey = "wovenmatter.sidebar.agent-order-by-group"
 
