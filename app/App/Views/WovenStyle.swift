@@ -142,6 +142,18 @@ enum HarnessLogo: String, CaseIterable, Sendable {
     }
 }
 
+extension HarnessLogo {
+    init(runtimeKind: AgentRuntimeKind) {
+        switch runtimeKind {
+        case .codex: self = .codex
+        case .claudeCode: self = .claude
+        case .grokBuild: self = .grok
+        case .defaultAgent: self = .defaultAgent
+        case .opencode: self = .openCode
+        }
+    }
+}
+
 enum CodexLogoStyle: String, CaseIterable, Sendable {
     case cloud
     case openAIMark
@@ -648,6 +660,38 @@ struct WovenIconButtonStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { hovered = $0 }
+    }
+}
+
+/// Compact native switches share the app's forest-green action color.
+/// Keeping the native control preserves keyboard and accessibility behavior.
+struct CompactSwitchToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: WovenPalette.primary))
+                #if os(macOS)
+                .controlSize(.mini)
+                .fixedSize()
+                .scaleEffect(0.8)
+                .frame(width: 28, height: 16)
+                #else
+                // A 65% switch in a full touch frame.
+                .fixedSize()
+                .scaleEffect(0.65)
+                .frame(width: 44, height: 44)
+                #endif
+            configuration.label
+                .contentShape(Rectangle())
+                .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+        }
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
     }
 }
 

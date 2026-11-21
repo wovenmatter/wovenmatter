@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import Foundation
 import WovenProtocol
 
@@ -351,6 +353,7 @@ extension MachinesStore {
         await readRuntimes(on: machineID, checkForUpdates: false)
     }
 
+    #if os(macOS)
     /// OpenCode only: its own interactive `opencode auth login`, in Terminal on
     /// this Mac. Its saved keys show once the person returns.
     func openTerminalSignIn(_ kind: AgentRuntimeKind, on machineID: String) {
@@ -373,4 +376,5 @@ extension MachinesStore {
             signInMessages[machineID, default: [:]][kind] = error.localizedDescription
         }
     }
+    #endif
 }

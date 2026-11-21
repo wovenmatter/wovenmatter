@@ -32,7 +32,7 @@ VERSION = re.compile(r'(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){0,2}')
 DEBUG_MARKERS = (
     b'WOVENMATTER_UI_FIXTURE', b'WOVENMATTER_UI_SCENARIO', b'WOVENMATTER_UI_TAB',
     b'WOVENMATTER_DEV_TAILNET', b'WOVENMATTER_DEV_PAIR_LINK', b'WOVENMATTER_DEV_TAB',
-    b'WOVENMATTER_DEVICE_RUNTIME_SMOKE',
+    b'WOVENMATTER_DEVICE_RUNTIME_SMOKE', b'WOVENMATTER_DEVICE_SERVER',
 )
 # The privacy manifest must declare exactly these required-reason APIs and data
 # types (ios/Config/PrivacyInfo.xcprivacy; audit notes in ios/README.md). A new
@@ -47,8 +47,6 @@ COLLECTED_DATA = {
     # type: (linked to the user, purposes)
     'OtherUserContent': (True, ['AppFunctionality']),   # Quick Chat content to the chosen model provider.
     'SearchHistory': (True, ['AppFunctionality']),      # Web searches to the chosen search provider.
-    'UserID': (False, ['Analytics']),                   # Random library analytics ID, relayed by the Mac.
-    'ProductInteraction': (False, ['Analytics']),       # app_opened / app_active signals.
 }
 USAGE_DESCRIPTIONS = ('NSMicrophoneUsageDescription', 'NSCameraUsageDescription')
 ALLOWED_ENTITLEMENTS = {

@@ -96,8 +96,8 @@ def mutations():
         {'NSPrivacyCollectedDataType': 'NSPrivacyCollectedDataTypeEmailAddress', 'NSPrivacyCollectedDataTypeLinked': True,
          'NSPrivacyCollectedDataTypeTracking': False, 'NSPrivacyCollectedDataTypePurposes': ['NSPrivacyCollectedDataTypePurposeAppFunctionality']}))
     yield 'tracking data type', privacy(lambda v: collected(v)[0].update(NSPrivacyCollectedDataTypeTracking=True))
-    yield 'analytics linked', privacy(lambda v: collected(v)[3].update(NSPrivacyCollectedDataTypeLinked=True))
-    yield 'wrong purpose', privacy(lambda v: collected(v)[2].update(NSPrivacyCollectedDataTypePurposes=['NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising']))
+    yield 'search history unlinked', privacy(lambda v: collected(v)[1].update(NSPrivacyCollectedDataTypeLinked=False))
+    yield 'wrong purpose', privacy(lambda v: collected(v)[1].update(NSPrivacyCollectedDataTypePurposes=['NSPrivacyCollectedDataTypePurposeThirdPartyAdvertising']))
     yield 'debug fixtures', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE binary')
     yield 'fixture namespace lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE_NAMESPACE\0binary')
     yield 'fixture scenario lookup', lambda app: (app / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_SCENARIO\0binary')
@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory() as temporary:
             if result.returncode != 0 or f'Verified distribution iOS bundle: Woven Matter {VERSION} ({BUILD})' not in result.stdout:
                 fail(f'valid fixture was rejected under {prefix} {env} {extra}: {result.stderr}')
         expect_failure(run_cli(prefix, env, [str(valid), 'dev']), 'distribution bundle as dev')
-        expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--version', '0.1.0']), 'unexpected version')
+        expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--version', '9.9.9']), 'unexpected version')
         expect_failure(run_cli(prefix, env, [str(valid), 'distribution', '--build', '18']), 'unexpected build number')
     dev = make_app(base / 'dev', 'dev')
     (dev / 'WovenMatter').write_bytes(b'\xcf\xfa\xed\xfe WOVENMATTER_UI_FIXTURE')

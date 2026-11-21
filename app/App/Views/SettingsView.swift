@@ -31,6 +31,7 @@ private enum SettingsRoute: Equatable {
     case harness(AgentRuntimeKind, String?, HarnessSettingsOrigin)
     case wovenMCP
     case workspaces(String?)
+    case appleDevices
     case backgroundServer
     case dictation
     case bots
@@ -141,6 +142,8 @@ struct SettingsView: View {
                     },
                     onBack: { route = .landing }
                 )
+            case .appleDevices:
+                SettingsAppleDevicesView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .backgroundServer:
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .dictation:
@@ -237,6 +240,7 @@ struct SettingsView: View {
         case "github": route = .github
         case "dictation": route = .dictation
         case "workspaces": route = .workspaces(nil)
+        case "apple-devices": route = .appleDevices
         case "background-server": route = .backgroundServer
         #endif
         case "permissions": if route != .permissions { open(.permissions, .permissions, from: .landing) }
@@ -273,6 +277,7 @@ struct SettingsView: View {
         case .harness(let kind, _, _): kind.displayName
         case .wovenMCP: "Woven MCP"
         case .workspaces(let id): id.flatMap { model.machines.machine(id: $0)?.name } ?? "Workspaces"
+        case .appleDevices: "Apple Devices"
         case .backgroundServer: "Background Server"
         case .dictation: "Dictation"
         case .bots: "Bots"
@@ -370,6 +375,13 @@ struct SettingsView: View {
                     action: { route = .workspaces(nil) }
                 )
                 SettingsDestinationRow(
+                    title: "Apple Devices",
+                    detail: "Your iPhones and iPads, and the code to connect one.",
+                    status: deviceCount,
+                    icon: { LucideIcon(glyph: .smartphone, size: 15) },
+                    action: { route = .appleDevices }
+                )
+                SettingsDestinationRow(
                     title: "Background Server",
                     detail: "Keep agents working and see what is running.",
                     icon: { LucideIcon(glyph: .terminal, size: 15) },
@@ -387,7 +399,14 @@ struct SettingsView: View {
             macAccess.refresh()
             updates.loadIfNeeded()
             await model.settings.loadGitHub()
+            await model.devices.reload()
         }
+    }
+
+    /// How many devices are in the library, once there is one.
+    private var deviceCount: String? {
+        let count = model.devices.devices.count
+        return count == 0 ? nil : count == 1 ? "1 device" : "\(count) devices"
     }
 }
 

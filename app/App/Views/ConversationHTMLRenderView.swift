@@ -1,7 +1,11 @@
 import SwiftUI
 import WovenProtocol
 import WebKit
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 /// Published visual replies are independent of the work disclosure and load
 /// their content only when their row is mounted, by digest through this Mac's
@@ -78,13 +82,21 @@ struct ConversationHTMLRenderView: View {
             Button("Cancel", role: .cancel) { pendingLink = nil }
             Button("Open") {
                 pendingLink = nil
+                #if os(macOS)
                 NSWorkspace.shared.open(url)
+                #else
+                UIApplication.shared.open(url)
+                #endif
             }
         } message: { Text($0.absoluteString) }
     }
 
     private var expandedMinimumWidth: CGFloat? {
+        #if os(macOS)
         760
+        #else
+        nil
+        #endif
     }
 
     private var controls: some View {
@@ -163,12 +175,22 @@ enum ConversationHTMLTheme {
         ]]
     }
     private static func hex(_ color: Color) -> String {
+        #if os(macOS)
         let rgb = NSColor(color).usingColorSpace(.sRGB) ?? .black
         return String(format: "#%02x%02x%02x%02x", Int(rgb.redComponent * 255), Int(rgb.greenComponent * 255), Int(rgb.blueComponent * 255), Int(rgb.alphaComponent * 255))
+        #else
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+        return String(format: "#%02x%02x%02x%02x", Int(r * 255), Int(g * 255), Int(b * 255), Int(a * 255))
+        #endif
     }
 }
 
+#if os(macOS)
 private typealias ConversationHTMLRepresentable = NSViewRepresentable
+#else
+private typealias ConversationHTMLRepresentable = UIViewRepresentable
+#endif
 
 private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let html: String
@@ -180,14 +202,24 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let onFailure: (any Error) -> Void
 
     func makeCoordinator() -> ConversationHTMLWebCoordinator { ConversationHTMLWebCoordinator() }
+    #if os(macOS)
     func makeNSView(context: Context) -> WKWebView {
         context.coordinator.makeWebView(forwardsConversationScroll: forwardsConversationScroll)
     }
     func updateNSView(_ view: WKWebView, context: Context) { update(view, coordinator: context.coordinator) }
     static func dismantleNSView(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) { coordinator.stop(view) }
+    #else
+    func makeUIView(context: Context) -> WKWebView {
+        context.coordinator.makeWebView(forwardsConversationScroll: forwardsConversationScroll)
+    }
+    func updateUIView(_ view: WKWebView, context: Context) { update(view, coordinator: context.coordinator) }
+    static func dismantleUIView(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) { coordinator.stop(view) }
+    #endif
 
     private func update(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) {
+        #if os(macOS)
         (view as? ConversationHTMLNativeWebView)?.forwardsConversationScroll = forwardsConversationScroll
+        #endif
         coordinator.onHeight = onHeight; coordinator.onLink = onLink; coordinator.onFailure = onFailure
         coordinator.apply(html: html, theme: theme, to: view)
         if view.pageZoom != zoom { view.pageZoom = zoom }
@@ -209,10 +241,21 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(self, name: "wovenHTML")
+        #if os(macOS)
         let view = ConversationHTMLNativeWebView(frame: .zero, configuration: configuration)
         view.forwardsConversationScroll = forwardsConversationScroll
+        #else
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        // Inline, it fits its content: vertical scrolling belongs to the chat.
+        view.scrollView.isScrollEnabled = forwardsConversationScroll == false
+        #endif
         view.navigationDelegate = self
+        #if os(macOS)
         view.setValue(false, forKey: "drawsBackground")
+        #else
+        view.isOpaque = false; view.backgroundColor = .clear
+        view.scrollView.showsVerticalScrollIndicator = false; view.scrollView.showsHorizontalScrollIndicator = false
+        #endif
         return view
     }
 
@@ -274,6 +317,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     }
 }
 
+#if os(macOS)
 /// An inline visual reply fits its content, so ordinary vertical scrolling
 /// belongs to the conversation. Expanded ones and modified/horizontal chart gestures
 /// retain WebKit's normal handling; links, selection and magnification do too.
@@ -341,3 +385,4 @@ struct ConversationHTMLScrollGesture {
         return result
     }
 }
+#endif

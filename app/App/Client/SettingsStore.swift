@@ -112,6 +112,7 @@ final class SettingsStore {
         return MacSurfaceProfile(theme: theme, sidebarStyle: sidebarStyle)
     }
 
+    #if os(macOS)
     /// Sends the theme and sidebar layout this Mac stores in UserDefaults to the synced settings.
     func persistMacSurfaceProfileFromUserDefaults() {
         let defaults = UserDefaults.standard
@@ -123,6 +124,7 @@ final class SettingsStore {
             try? await set(Key.sidebarStyle, to: .string(sidebarStyle))
         }
     }
+    #endif
 
     // MARK: GitHub (in SettingsStore+GitHub.swift)
 

@@ -1401,7 +1401,3 @@ extension View {
         modifier(ComposerPopoverModifier())
     }
 }
-
-func sessionThinkingLabel(_ value: String) -> String {
-    value.replacingOccurrences(of: "_", with: " ").capitalized
-}

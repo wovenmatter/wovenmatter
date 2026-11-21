@@ -155,7 +155,7 @@ when an intentional design change is accepted.
   and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
   are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
   Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
-  shows only a version status link to Updates. Bots use Subscriptions & API Keys on the
+  shows no versions. Bots use Subscriptions & API Keys on the
   machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
@@ -323,6 +323,17 @@ when an intentional design change is accepted.
   menu, its agents, and Details; do not lay actions out as a strip of buttons.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
+- **Apple Devices:** Connect an iPhone or iPad has one sentence (scan or type the code;
+  both on the same tailnet), then this Mac's QR code on a plain white tile beside the
+  typed code in large monospace with Copy code. A development build's code opens the
+  development iPhone and iPad app. Without a tailnet address the section shows only
+  "This Mac is not on your tailnet." Your devices has one row per device: its name, then
+  iPhone or iPad and when it last synced with this Mac, and Remove…, which asks first
+  and says its Quick Chats and folders are deleted from every machine and the device
+  starts again empty. It is "Connect" and a "code", never pairing. The landing row
+  shows how many devices there are. On a Mac a device's Quick Chat appears in All
+  Workspaces and Recents under the device's name with its saved items, and its
+  composer is off under "Continue this Quick Chat on NAME."
 - **Machines:** every machine on your tailnet that runs the Woven server reaches all
   workspaces; do not add per-machine workspace permissions or
   execution-sharing switches.

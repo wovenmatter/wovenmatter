@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 struct ConversationMarkdown: View {
@@ -26,7 +30,11 @@ struct ConversationMarkdown: View {
                 Button("Cancel", role: .cancel) { pendingExternalURL = nil }
                 Button("Open") {
                     pendingExternalURL = nil
+                    #if os(macOS)
                     NSWorkspace.shared.open(url)
+                    #else
+                    UIApplication.shared.open(url)
+                    #endif
                 }
             } message: { url in
                 Text(url.absoluteString)
@@ -151,8 +159,12 @@ private struct ConversationCodeBlock: View {
                 Text(language?.isEmpty == false ? language! : "Code")
                 Spacer()
                 Button {
+                    #if os(macOS)
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(content, forType: .string)
+                    #else
+                    UIPasteboard.general.string = content
+                    #endif
                     copied = true
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
@@ -295,8 +307,12 @@ private struct ConversationMarkdownTable: View {
         let rows = [table.header] + table.rows
         let text = rows.map { row in row.map(\.plainText).joined(separator: "\t") }
             .joined(separator: "\n")
+        #if os(macOS)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
         copied = true
     }
 }

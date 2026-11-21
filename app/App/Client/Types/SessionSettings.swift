@@ -100,6 +100,11 @@ struct SessionSettings: Hashable, Sendable {
     }
 }
 
+/// A thinking level as a composer shows it, when the runtime gives it no name.
+func sessionThinkingLabel(_ value: String) -> String {
+    value.replacingOccurrences(of: "_", with: " ").capitalized
+}
+
 /// A change to a session's settings the person asked for.
 struct SessionSettingsChange: Hashable, Sendable {
     var model: String?

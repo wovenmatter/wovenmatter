@@ -95,3 +95,10 @@ struct WorkspaceGoal: Identifiable, Hashable, Sendable {
 enum WorkspaceGoalMutation: Hashable, Sendable {
     case clear(id: String)
 }
+
+/// The text trimmed, or nil when nothing is left.
+func nonemptyString(_ value: String?) -> String? {
+    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !trimmed.isEmpty else { return nil }
+    return trimmed
+}

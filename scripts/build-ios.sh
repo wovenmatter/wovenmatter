@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
+# Builds the iPhone and iPad app for the simulator; --device-compile builds it
+# for devices without signing.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${WOVENMATTER_IOS_BUILD_DIR:-${TMPDIR:-/tmp}/wovenmatter-ios-build}"
 destination="generic/platform=iOS Simulator"
-signing=(CODE_SIGNING_ALLOWED=NO)
-if [[ "${1:-}" == "--device-compile" ]]; then
-  destination="generic/platform=iOS"
-elif [[ "${1:-}" == "--device" ]]; then
-  : "${WOVENMATTER_IOS_DEVICE_ID:?Set WOVENMATTER_IOS_DEVICE_ID to the registered test iPhone or iPad identifier}"
-  destination="platform=iOS,id=$WOVENMATTER_IOS_DEVICE_ID"
-  signing=(CODE_SIGNING_ALLOWED=YES) # Use existing local signing assets; account setup is performed by the user.
-fi
-xcodebuild -project "$root/ios/WovenMatter.xcodeproj" -scheme WovenMatter \
+case "${1:-}" in
+  '') ;;
+  --device-compile) destination="generic/platform=iOS" ;;
+  *) printf '%s\n' 'usage: scripts/build-ios.sh [--device-compile]' >&2; exit 64 ;;
+esac
+xcodebuild -onlyUsePackageVersionsFromResolvedFile -project "$root/ios/WovenMatter.xcodeproj" -scheme WovenMatter \
   -configuration Debug -destination "$destination" -derivedDataPath "$build_dir" \
-  "${signing[@]}" build
+  CODE_SIGNING_ALLOWED=NO build

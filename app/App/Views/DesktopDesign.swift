@@ -241,18 +241,6 @@ struct AgentPresentation: Equatable {
     let iconKey: String
 }
 
-extension HarnessLogo {
-    init(runtimeKind: AgentRuntimeKind) {
-        switch runtimeKind {
-        case .codex: self = .codex
-        case .claudeCode: self = .claude
-        case .grokBuild: self = .grok
-        case .defaultAgent: self = .defaultAgent
-        case .opencode: self = .openCode
-        }
-    }
-}
-
 enum SidebarStyle: String, CaseIterable, Identifiable {
     case adaptive
     case single
@@ -573,30 +561,5 @@ struct RoundedCard<Content: View>: View {
         content
             .padding(16)
             .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
-    }
-}
-
-/// Compact native switches share the app's forest-green action color.
-/// Keeping the native control preserves keyboard and accessibility behavior.
-struct CompactSwitchToggleStyle: ToggleStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 8) {
-            Toggle(isOn: configuration.$isOn) { configuration.label }
-                .labelsHidden()
-                .toggleStyle(SwitchToggleStyle(tint: WovenPalette.primary))
-                .controlSize(.mini)
-                .fixedSize()
-                .scaleEffect(0.8)
-                .frame(width: 28, height: 16)
-            configuration.label
-                .contentShape(Rectangle())
-                .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
-        }
-        .accessibilityRepresentation {
-            Toggle(isOn: configuration.$isOn) { configuration.label }
-                .toggleStyle(.switch)
-        }
     }
 }

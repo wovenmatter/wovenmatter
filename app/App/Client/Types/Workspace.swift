@@ -89,3 +89,20 @@ struct WorkspaceTrashedNote: Identifiable, Hashable, Sendable {
     var kind: NoteArtifactKind
     var trashedAt: Date
 }
+
+/// A machine's folders as lists show them: pinned first, each part in its saved order.
+struct FolderSections {
+    let pinned: [WorkspaceFolderRecord]
+    let unpinned: [WorkspaceFolderRecord]
+
+    init(folders: [WorkspaceFolderRecord]) {
+        let sorted = folders.sorted {
+            if $0.position != $1.position { return $0.position < $1.position }
+            let nameComparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+            if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
+            return $0.id < $1.id
+        }
+        pinned = sorted.filter(\.isPinned)
+        unpinned = sorted.filter { !$0.isPinned }
+    }
+}

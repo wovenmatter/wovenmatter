@@ -44,17 +44,6 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "4AE95EA0BC35DC21C78ED9D6"
-               BuildableName = "MobileAppTests.xctest"
-               BlueprintName = "MobileAppTests"
-               ReferencedContainer = "container:WovenMatter.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
                BlueprintIdentifier = "6F72DF4517F427A623C09D8F"
                BuildableName = "MobileUITests.xctest"
                BlueprintName = "MobileUITests"

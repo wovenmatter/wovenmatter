@@ -313,7 +313,7 @@ private extension View {
         padding(13)
             .frame(maxWidth: 768, alignment: .leading)
             .background(theme.palette.themeWhisper)
-            .clipShape(DesktopShapes.card)
-            .overlay { DesktopShapes.card.stroke(theme.palette.border, lineWidth: 1) }
+            .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous).stroke(theme.palette.border, lineWidth: 1) }
     }
 }

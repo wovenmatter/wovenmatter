@@ -221,7 +221,9 @@ final class MachinesStore {
         busyMachineIDs.insert(machineID)
         defer { busyMachineIDs.remove(machineID) }
         if machineID == thisMachine?.id {
+            #if os(macOS)
             try await ThisMachineServer.start()
+            #endif
         } else {
             guard let server, server.isConnected else { throw ClientError.notConnected }
             _ = try await server.call(ControlServer(machineID: machineID, action: .start))

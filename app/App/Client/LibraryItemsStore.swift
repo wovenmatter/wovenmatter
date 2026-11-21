@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Foundation
 import Observation
 import WovenProtocol
@@ -79,7 +83,11 @@ final class LibraryItemsStore {
     /// Opens a web link in the browser, or the item's file in the preview.
     func open(_ item: WorkspaceLibraryItem, onOpenFile: @escaping @MainActor (URL, String?) -> Void) {
         if item.storage == .link, item.isWebLink, let url = URL(string: item.source) {
+            #if os(macOS)
             NSWorkspace.shared.open(url)
+            #else
+            UIApplication.shared.open(url)
+            #endif
             return
         }
         Task {
