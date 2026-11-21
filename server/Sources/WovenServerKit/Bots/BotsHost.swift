@@ -7,7 +7,7 @@ import Darwin
 import Glibc
 #endif
 
-/// The bots on this server, one per server. Watches the setting `bots.home`:
+/// The bots on this server, one per server. Watches the setting `bots.host`:
 ///
 /// - When it names this machine, prepares the container engine, writes
 ///   `D/bots-runtime/config.json`, starts the runtime and keeps it running
@@ -17,11 +17,11 @@ import Glibc
 /// - When it names another machine, follows that machine's server for its
 ///   status and forwards calls to it (an agent here calls through the Woven
 ///   MCP). Subscriptions are refused with `notOwner`: a UI connects to the
-///   home machine's server directly.
+///   host's server directly.
 /// - When it is unset, the bots are off.
 ///
 /// A transfer (`BotsTransfer.swift`) holds the bots apart from the setting
-/// while it runs: stopped on the old home, running on the target before the
+/// while it runs: stopped on the old host, running on the target before the
 /// switch.
 actor BotsHost {
   typealias Events = AsyncThrowingStream<BotsEvent, any Error>
@@ -48,11 +48,11 @@ actor BotsHost {
 
   /// Where a transfer holds the bots, apart from the setting.
   enum Hold: Equatable {
-    /// The old home: the bots are stopped here while they move to `target`.
+    /// The old host: the bots are stopped here while they move to `target`.
     case sending(target: String)
     /// The target: the bots run here before the switch.
     case receiving(source: String)
-    /// The old home after the switch, until it has removed its copy.
+    /// The old host after the switch, until it has removed its copy.
     case moved(target: String)
   }
 
@@ -66,12 +66,12 @@ actor BotsHost {
   var thisMachine: String { library.machineID }
 
   /// Where the bots run, as this server acts on it: the setting, unless a transfer holds them.
-  private(set) var home: String?
-  /// The setting `bots.home`. A transfer sets it as soon as it writes it.
+  private(set) var hostID: String?
+  /// The setting `bots.host`. A transfer sets it as soon as it writes it.
   var setting: String?
   var hold: Hold?
   private(set) var resources = BotsResources.defaults
-  private(set) var status = BotsStatus(homeMachineID: nil, state: .off)
+  private(set) var status = BotsStatus(hostMachineID: nil, state: .off)
   private var watcher: Task<Void, Never>?
   private var supervisor: Task<Void, Never>?
   private var relay: Task<Void, Never>?
@@ -80,7 +80,7 @@ actor BotsHost {
   var engineStarted = false
   // A transfer this server runs, sends or receives (`BotsTransfer.swift`).
   var outgoing: Task<Void, any Error>?
-  /// When the old home last asked the target anything but to give back.
+  /// When the old host last asked the target anything but to give back.
   var lastAsked = ContinuousClock.now
   var incoming: IncomingTransfer?
   var watchdog: Task<Void, Never>?
@@ -118,7 +118,7 @@ actor BotsHost {
   var configURL: URL { runtimeFolder.appendingPathComponent("config.json") }
   private var logURL: URL { runtimeFolder.appendingPathComponent("runtime.log") }
 
-  /// The Woven MCP, offered to the bots when this machine is their home.
+  /// The Woven MCP, offered to the bots when this machine is their host.
   func offerTools(_ tools: WovenTools) {
     interface.tools.attach(tools)
   }
@@ -141,30 +141,30 @@ actor BotsHost {
     watcher = nil
     watchdog?.cancel()
     watchdog = nil
-    home = nil
-    await leaveHome()
+    hostID = nil
+    await detachFromHost()
     await releaseEngine()
     for continuation in everyone.values { continuation.finish() }
     everyone.removeAll()
   }
 
   private func settingsChanged() async {
-    let stored = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value
+    let stored = ((try? await library.setting(botsHostSetting)) ?? nil)?.value
     let newSetting = stored?.string.flatMap { $0.isEmpty ? nil : $0 }
     let newResources = ((try? await library.setting(BotsResources.setting)) ?? nil)
       .flatMap { try? $0.value.decode(BotsResources.self) } ?? .defaults
     guard !Task.isCancelled else { return }
     setting = newSetting
-    let moved = desiredHome != home
+    let moved = desiredHostID != hostID
     if moved || newResources != resources {
       let changed = newResources != resources
       resources = newResources
-      if moved { await reconcileHome() } else if changed, home == thisMachine { await resourcesChanged() }
+      if moved { await reconcileHost() } else if changed, hostID == thisMachine { await resourcesChanged() }
     }
   }
 
   /// Where the bots should run now: the setting, unless a transfer holds them.
-  private var desiredHome: String? {
+  private var desiredHostID: String? {
     switch hold {
     case .receiving: thisMachine
     case .moved(let target): target
@@ -172,32 +172,32 @@ actor BotsHost {
     }
   }
 
-  /// Whether this machine's runtime should run: it is home and no transfer stopped it.
+  /// Whether this machine's runtime should run: it is the host and no transfer stopped it.
   private var runsHere: Bool {
     if case .sending = hold { return false }
-    return desiredHome == thisMachine
+    return desiredHostID == thisMachine
   }
 
-  /// Moves to the home the setting and any transfer name, starting or
+  /// Moves to the host the setting and any transfer name, starting or
   /// stopping this machine's runtime to match.
-  func reconcileHome(keepEngine: Bool? = nil) async {
-    let desired = desiredHome
-    if desired == home, (home != thisMachine) || (runsHere == (supervisor != nil)) {
-      if home == thisMachine, !runsHere, status.state != .transferring { setStatus(localStatus(.transferring)) }
+  func reconcileHost(keepEngine: Bool? = nil) async {
+    let desired = desiredHostID
+    if desired == hostID, (hostID != thisMachine) || (runsHere == (supervisor != nil)) {
+      if hostID == thisMachine, !runsHere, status.state != .transferring { setStatus(localStatus(.transferring)) }
       return
     }
     // The engine stays up while the bots stay here: a transfer still needs it.
-    await leaveHome(keepEngine: keepEngine ?? (desired == thisMachine))
-    home = desired
-    enterHome()
+    await detachFromHost(keepEngine: keepEngine ?? (desired == thisMachine))
+    hostID = desired
+    attachToHost()
   }
 
-  private func enterHome() {
-    guard let home else {
-      setStatus(BotsStatus(homeMachineID: nil, state: .off))
+  private func attachToHost() {
+    guard let hostID else {
+      setStatus(BotsStatus(hostMachineID: nil, state: .off))
       return
     }
-    if home == thisMachine {
+    if hostID == thisMachine {
       guard runsHere else {
         setStatus(localStatus(.transferring, transfer: status.transfer))
         return
@@ -205,14 +205,14 @@ actor BotsHost {
       setStatus(localStatus(.starting))
       supervisor = Task { await self.supervise() }
     } else {
-      setStatus(BotsStatus(homeMachineID: home, state: .unreachable))
-      relay = Task { await self.follow(home) }
+      setStatus(BotsStatus(hostMachineID: hostID, state: .unreachable))
+      relay = Task { await self.follow(hostID) }
     }
   }
 
-  /// Stops following another home, or this machine's runtime. The engine is
+  /// Stops following another host, or this machine's runtime. The engine is
   /// stopped too unless `keepEngine`.
-  func leaveHome(keepEngine: Bool = false) async {
+  func detachFromHost(keepEngine: Bool = false) async {
     if let relay {
       relay.cancel()
       await relay.value
@@ -248,7 +248,7 @@ actor BotsHost {
     }
   }
 
-  // MARK: Supervision (this machine is home)
+  // MARK: Supervision (this machine is the host)
 
   private func supervise() async {
     var failures = 0
@@ -370,7 +370,7 @@ actor BotsHost {
   }
 
   func localStatus(_ state: BotsState, message: String? = nil, transfer: BotsTransferProgress? = nil) -> BotsStatus {
-    BotsStatus(homeMachineID: thisMachine, state: state, message: message, engine: engine.kind,
+    BotsStatus(hostMachineID: thisMachine, state: state, message: message, engine: engine.kind,
                capacity: state == .ready ? capacity : nil, transfer: transfer)
   }
 
@@ -526,41 +526,41 @@ actor BotsHost {
 
   // MARK: Requests
 
-  /// `BotsCall`: run here when this machine is home, else on the home machine's server.
+  /// `BotsCall`: run here when this machine is the host, else on the host's server.
   func call(_ request: JSONValue, caller: Caller) async throws -> JSONValue {
-    guard let home else { throw ProtocolError(.failed, "No machine runs the bots.") }
+    guard let hostID else { throw ProtocolError(.failed, "No machine runs the bots.") }
     let type = request["type"]?.string
     if ["conversation.open", "conversation.close", "forum.open", "forum.close"].contains(type) {
       throw ProtocolError(.badRequest, "\(type ?? "") goes through SubscribeBots.")
     }
-    if home == thisMachine {
+    if hostID == thisMachine {
       return try await withCheckedThrowingContinuation { continuation in
         do { try send(request, .call(continuation)) } catch { continuation.resume(throwing: error) }
       }
     }
-    let client = try await homeClient(home, caller: caller)
+    let client = try await hostClient(hostID, caller: caller)
     do {
       return try await client.call(BotsCall(request: request))
     } catch let error as ProtocolError {
       throw error
     } catch {
-      throw await unreachable(home)
+      throw await unreachable(hostID)
     }
   }
 
   /// `SubscribeBots`: the status and the messages for everyone, or with
-  /// `open` that conversation or Forum room. Only the home machine's server
+  /// `open` that conversation or Forum room. Only the host's server
   /// answers: a UI connects to it directly, and no server relays its stream.
   func subscribe(open: JSONValue?, caller: Caller) async throws -> (BotsOpened, Events) {
-    if let home, home != thisMachine {
-      throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: home)
+    if let hostID, hostID != thisMachine {
+      throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: hostID)
     }
     guard let open else {
       let (events, continuation) = makeStream()
       everyone[continuation.id] = continuation.continuation
       return (BotsOpened(status: status), events)
     }
-    guard home != nil else { return (BotsOpened(status: status), Self.ended) }
+    guard hostID != nil else { return (BotsOpened(status: status), Self.ended) }
     guard connection != nil, ["conversation.open", "forum.open"].contains(open["type"]?.string) else {
       if connection != nil { throw ProtocolError(.badRequest, "open is a conversation.open or forum.open request.") }
       return (BotsOpened(status: status), Self.ended)
@@ -588,27 +588,27 @@ actor BotsHost {
     return (events, (id, continuation))
   }
 
-  // MARK: Another machine is home
+  // MARK: Another machine is the host
 
-  private func homeClient(_ home: String, caller: Caller) async throws -> Client {
+  private func hostClient(_ hostID: String, caller: Caller) async throws -> Client {
     // A request another server sent here is never sent on again.
     guard caller.hello.role != .server else {
-      throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: home)
+      throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: hostID)
     }
-    guard let client = await peers.client(for: home) else { throw await unreachable(home) }
+    guard let client = await peers.client(for: hostID) else { throw await unreachable(hostID) }
     return client
   }
 
-  private func unreachable(_ home: String) async -> ProtocolError {
-    let name = (try? await library.machine(home))?.name ?? home
-    return ProtocolError(.ownerUnreachable, "\(name) runs the bots and is not reachable.", machineID: home)
+  private func unreachable(_ hostID: String) async -> ProtocolError {
+    let name = (try? await library.machine(hostID))?.name ?? hostID
+    return ProtocolError(.ownerUnreachable, "\(name) runs the bots and is not reachable.", machineID: hostID)
   }
 
-  /// Follows the home machine's server: its status, and its messages for
-  /// everyone, for this server's subscribers. Reconnects while it is home.
-  private func follow(_ home: String) async {
+  /// Follows the host's server: its status, and its messages for
+  /// everyone, for this server's subscribers. Reconnects while it is the host.
+  private func follow(_ hostID: String) async {
     while !Task.isCancelled {
-      if let client = await peers.client(for: home),
+      if let client = await peers.client(for: hostID),
          let subscription = try? await client.subscribe(SubscribeBots()) {
         setStatus(subscription.reply.status)
         do {
@@ -622,8 +622,8 @@ actor BotsHost {
         if Task.isCancelled { try? await client.unsubscribe(subscription.id) }
       }
       guard !Task.isCancelled else { return }
-      let name = (try? await library.machine(home))?.name ?? home
-      setStatus(BotsStatus(homeMachineID: home, state: .unreachable, message: "\(name) is not reachable."))
+      let name = (try? await library.machine(hostID))?.name ?? hostID
+      setStatus(BotsStatus(hostMachineID: hostID, state: .unreachable, message: "\(name) is not reachable."))
       try? await Task.sleep(for: .seconds(1))
     }
   }
@@ -664,7 +664,7 @@ func registerBots(_ router: inout Router, bots: BotsHost, library: Library, sess
                                            tools: request.tools)
   }
   // A bot chat is deleted in the runtime first, so it is gone at the source
-  // and the bots never save it again (on this home or the next). Replaces
+  // and the bots never save it again (on this host or the next). Replaces
   // the general handler.
   router.on(DeleteSession.self) { request, caller in
     if let chat = try await library.savedBots().chats.first(where: { $0.session.id == request.sessionID }) {

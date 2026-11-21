@@ -46,7 +46,7 @@ let usage = """
     bots                             the bots and their chats as the library holds them
     bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
     bots-follow [OPEN_JSON]          print the bots' status and messages (or one opened conversation's)
-    bots-home MACHINE                choose the bots' first home, as Settings → Bots does
+    bots-host MACHINE                choose the bots' first host, as Settings → Bots does
     bots-transfer MACHINE            move the bots to that machine, as Settings → Bots does
   """
 
@@ -416,7 +416,7 @@ do {
   case "bots":
     let saved = try await client.call(ListSavedBots())
     for bot in saved.bots {
-      out("bot \(bot.id)\t\(bot.name)\t\(bot.isAdmin ? "admin" : "bot")\thome \(bot.homeMachineID)" + (bot.trashed ? "\ttrashed" : ""))
+      out("bot \(bot.id)\t\(bot.name)\t\(bot.isAdmin ? "admin" : "bot")\thost \(bot.hostMachineID)" + (bot.trashed ? "\ttrashed" : ""))
     }
     for chat in saved.chats {
       out("chat \(chat.session.id)\t\(chat.kind.rawValue)\t\(chat.session.title)\tconversation \(chat.conversationID)"
@@ -428,8 +428,8 @@ do {
   case "bots-call":
     let request = try Wire.decoder.decode(JSONValue.self, from: Data(argument(0, "JSON").utf8))
     out(json(try await client.call(BotsCall(request: request))))
-  case "bots-home":
-    _ = try await client.call(ChooseBotsHome(machineID: argument(0, "MACHINE")))
+  case "bots-host":
+    _ = try await client.call(ChooseBotsHost(machineID: argument(0, "MACHINE")))
     out("chosen")
   case "bots-transfer":
     _ = try await client.call(TransferBots(targetMachineID: argument(0, "MACHINE")))

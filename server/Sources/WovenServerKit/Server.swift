@@ -29,7 +29,7 @@ public final class WovenServer: Sendable {
     /// Where this machine's private key and subscription sign-ins are kept;
     /// nil for the Keychain on a Mac and a private file on Linux.
     public var secretStore: (any SecretStore)?
-    /// How this machine runs the bots when it is their home; tests give a stand-in.
+    /// How this machine runs the bots when it is their host; tests give a stand-in.
     var botsHosting: BotsHosting = .standard
     /// The scheduler's clock; tests move it.
     var schedulerClock: @Sendable () -> Date = { Date() }
@@ -361,9 +361,9 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     try await library.settings()
   }
   router.on(SetSetting.self) { request, _ in
-    // Only `ChooseBotsHome` and a transfer write where the bots live.
-    guard request.key != botsHomeSetting else {
-      throw ProtocolError(.badRequest, "The bots' home is chosen once, then changed by moving the bots.")
+    // Only `ChooseBotsHost` and a transfer write where the bots live.
+    guard request.key != botsHostSetting else {
+      throw ProtocolError(.badRequest, "The bots' host is chosen once, then changed by moving the bots.")
     }
     return try await library.setSetting(request.key, to: request.value)
   }

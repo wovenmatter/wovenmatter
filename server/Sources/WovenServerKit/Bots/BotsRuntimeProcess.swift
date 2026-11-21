@@ -15,7 +15,7 @@ protocol BotsRuntimeProcess: Sendable {
   func stop() async
 }
 
-/// How the home machine runs the bots: its container engine and how the
+/// How the host runs the bots: its container engine and how the
 /// runtime is started. Tests give a stand-in for both.
 struct BotsHosting: Sendable {
   /// The engine for a data folder and, on Linux, a development instance's own engine.
@@ -24,7 +24,7 @@ struct BotsHosting: Sendable {
   var launch: @Sendable (_ config: URL, _ log: URL) throws -> any BotsRuntimeProcess
   /// Writes each bot's files out of the engine and back, for a transfer.
   var files: BotsFiles = .node
-  /// Called once a transfer's target has begun to make itself the home,
+  /// Called once a transfer's target has begun to make itself the host,
   /// before it writes the setting. Tests pause here.
   var committing: @Sendable () async -> Void = {}
 

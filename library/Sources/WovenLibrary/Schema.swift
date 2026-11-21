@@ -225,9 +225,9 @@ public enum Schema {
       .integer("copied_at"),
       .integer("created_at", 0),
     ], parents: [Parent(column: "machine_id", table: "machines")]),
-    // The bots, as their home machine's runtime reports them, so any machine
-    // can list them and read their chats while the home machine is away.
-    // `id` is the bot's own identifier; `machine_id` is the home machine.
+    // The bots, as their host's runtime reports them, so any machine
+    // can list them and read their chats while the host is away.
+    // `id` is the bot's own identifier; `machine_id` is the host.
     Table("bots", .newestWins, [
       .text("machine_id", ""),
       .text("name", ""),

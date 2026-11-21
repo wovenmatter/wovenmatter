@@ -1,15 +1,15 @@
 import Foundation
 import UniformTypeIdentifiers
 
-// What the bots views show, as the bots' home machine's server reports it.
+// What the bots views show, as the bots' host's server reports it.
 
-/// Where the bots are: the state of the bots runtime on their home machine.
+/// Where the bots are: the state of the bots runtime on their host.
 enum BotsState: Equatable, Sendable {
-    /// No home machine is chosen, or bots are turned off there.
+    /// No host is chosen, or bots are turned off there.
     case off
     case starting
     case ready
-    /// The home machine is offline, or its server does not answer.
+    /// The host is offline, or its server does not answer.
     case unreachable
     case failed
     /// They are moving to another machine.
@@ -562,7 +562,7 @@ struct PiBotEnvironment: Equatable, Sendable {
     }
 }
 
-/// A bots update running on the home machine: which bot it is on, and how far.
+/// A bots update running on the host: which bot it is on, and how far.
 struct BotsUpdateProgress: Equatable, Sendable {
     let botID: String?
     let text: String
@@ -570,7 +570,7 @@ struct BotsUpdateProgress: Equatable, Sendable {
 
 // MARK: - Resources
 
-/// Byte counts for the bots' home machine. nil means no cap.
+/// Byte counts for the bots' host. nil means no cap.
 struct BotResourceSettings: Equatable, Sendable {
     static let gib: Int64 = 1 << 30
     static let defaults = BotResourceSettings(poolBytes: 8 * gib, perBotBytes: 4 * gib, diskBytes: 50 * gib)

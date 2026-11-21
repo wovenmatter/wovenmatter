@@ -1,27 +1,27 @@
 import Foundation
 
-// The bots and the Forum. There is one set of bots, on one home machine (the
-// synced setting `bots.home`, a machine identifier); only that machine's
-// server runs the bots runtime. Any server answers these: the home machine's
-// itself, every other one by asking the home machine's server.
+// The bots and the Forum. There is one set of bots, on one host (the
+// synced setting `bots.host`, a machine identifier); only that machine's
+// server runs the bots runtime. Any server answers these: the host's server
+// itself, every other one by asking the host's server.
 //
 // The runtime's own requests and messages are defined once, in
 // `bots/src/protocol.ts`. They pass through `BotsCall` and `SubscribeBots`
 // as JSON; `BotsWire.swift` decodes what the UI shows.
 
-/// The setting that names the bots' home machine.
-public let botsHomeSetting = "bots.home"
+/// The setting that names the bots' host.
+public let botsHostSetting = "bots.host"
 /// The setting that says which bots may use the Woven tools:
 /// `{"paused": Bool, "denied": [bot identifier]}`.
 public let botsWovenToolsSetting = "bots.wovenTools"
 
-/// What the bots runtime on the home machine is doing.
+/// What the bots runtime on the host is doing.
 public enum BotsState: String, Codable, Sendable, Hashable {
-  /// No home machine is chosen.
+  /// No host is chosen.
   case off
   case starting
   case ready
-  /// The home machine's server cannot be reached.
+  /// The host's server cannot be reached.
   case unreachable
   /// The runtime or its container engine failed; `message` says why.
   case failed
@@ -29,7 +29,7 @@ public enum BotsState: String, Codable, Sendable, Hashable {
   case transferring
 }
 
-/// The home machine's memory and disk, for Settings > Bots > Resources.
+/// The host's memory and disk, for Settings > Bots > Resources.
 public struct BotsCapacity: Codable, Sendable, Hashable {
   public var memoryBytes: Int64
   public var diskTotalBytes: Int64
@@ -45,9 +45,9 @@ public struct BotsCapacity: Codable, Sendable, Hashable {
   }
 }
 
-/// The bots' home machine and the state of its runtime.
+/// The bots' host and the state of its runtime.
 public struct BotsStatus: Codable, Sendable, Hashable {
-  public var homeMachineID: String?
+  public var hostMachineID: String?
   public var state: BotsState
   public var message: String?
   /// The container engine: "mac-vm" or "linux-dockerd".
@@ -56,9 +56,9 @@ public struct BotsStatus: Codable, Sendable, Hashable {
   /// A transfer to another machine, while one runs.
   public var transfer: BotsTransferProgress?
 
-  public init(homeMachineID: String?, state: BotsState, message: String? = nil, engine: String? = nil,
+  public init(hostMachineID: String?, state: BotsState, message: String? = nil, engine: String? = nil,
               capacity: BotsCapacity? = nil, transfer: BotsTransferProgress? = nil) {
-    self.homeMachineID = homeMachineID
+    self.hostMachineID = hostMachineID
     self.state = state
     self.message = message
     self.engine = engine
@@ -136,7 +136,7 @@ public enum BotsEvent: Codable, Sendable, Hashable {
 /// A bot as the library holds it.
 public struct SavedBot: Codable, Sendable, Hashable, Identifiable {
   public var id: String
-  public var homeMachineID: String
+  public var hostMachineID: String
   public var name: String
   public var isAdmin: Bool
   public var manager: Bool
@@ -145,10 +145,10 @@ public struct SavedBot: Codable, Sendable, Hashable, Identifiable {
   public var trashed: Bool
   public var createdAt: Date
 
-  public init(id: String, homeMachineID: String, name: String, isAdmin: Bool, manager: Bool, managerID: String?,
+  public init(id: String, hostMachineID: String, name: String, isAdmin: Bool, manager: Bool, managerID: String?,
               orchestrator: Bool, trashed: Bool, createdAt: Date) {
     self.id = id
-    self.homeMachineID = homeMachineID
+    self.hostMachineID = hostMachineID
     self.name = name
     self.isAdmin = isAdmin
     self.manager = manager
@@ -187,7 +187,7 @@ public struct SavedBotChat: Codable, Sendable, Hashable {
 }
 
 /// The bots and their chats as the library holds them, for reading while
-/// the home machine is away. Their items come from `SessionItems`.
+/// the host is away. Their items come from `SessionItems`.
 public struct ListSavedBots: Request {
   public static let method = "bots.saved"
   public typealias Reply = SavedBots
@@ -204,18 +204,18 @@ public struct SavedBots: Codable, Sendable, Hashable {
   }
 }
 
-/// Makes `machineID` the bots' first home. `bots.home` is never written as an
+/// Makes `machineID` the bots' first host. `bots.host` is never written as an
 /// ordinary setting: a server accepts this only while its library names no
-/// home and holds no bots, and once every machine it reaches has answered
+/// host and holds no bots, and once every machine it reaches has answered
 /// that it knows none either. Moving the bots later is a transfer.
-public struct ChooseBotsHome: Request {
-  public static let method = "bots.chooseHome"
+public struct ChooseBotsHost: Request {
+  public static let method = "bots.chooseHost"
   public typealias Reply = Done
   public var machineID: String
   public init(machineID: String) { self.machineID = machineID }
 }
 
-/// Between servers, before a first home is chosen: what this machine knows of the bots.
+/// Between servers, before a first host is chosen: what this machine knows of the bots.
 public struct BotsPresence: Request {
   public static let method = "bots.presence"
   public typealias Reply = BotsPresenceReply
@@ -223,12 +223,12 @@ public struct BotsPresence: Request {
 }
 
 public struct BotsPresenceReply: Codable, Sendable, Hashable {
-  /// The home this machine's library names.
-  public var homeMachineID: String?
+  /// The host this machine's library names.
+  public var hostMachineID: String?
   /// This machine's library holds bots, or a transfer is under way here.
   public var hasBots: Bool
-  public init(homeMachineID: String?, hasBots: Bool) {
-    self.homeMachineID = homeMachineID
+  public init(hostMachineID: String?, hasBots: Bool) {
+    self.hostMachineID = hostMachineID
     self.hasBots = hasBots
   }
 }

@@ -2,7 +2,7 @@ import Foundation
 import WovenProtocol
 
 /// One push of the bots runtime's finished entries, already mapped to the
-/// library's shapes by the home machine's server. Saved in one transaction
+/// library's shapes by the host's server. Saved in one transaction
 /// with its checkpoint.
 public struct BotMirror: Sendable {
   public struct Bot: Sendable {
@@ -95,7 +95,7 @@ public struct BotMirror: Sendable {
   }
 
   /// One model turn's usage. Its id is the bot's and the entry's, the same on
-  /// every home machine, so a transfer never records a turn twice.
+  /// every host, so a transfer never records a turn twice.
   public struct UsageRecord: Sendable {
     public var id: String
     public var sessionID: String
@@ -261,8 +261,8 @@ extension Library {
 
   // MARK: Transfer
 
-  /// What a transfer's target must hold before it becomes the home: the bots
-  /// and chats this machine's library holds as their home, and its checkpoints.
+  /// What a transfer's target must hold before it becomes the host: the bots
+  /// and chats this machine's library holds as their host, and its checkpoints.
   public func botsTransferExpected() async throws -> BotsTransferExpected {
     let machineID = machineID
     return try await read { db in
@@ -289,8 +289,8 @@ extension Library {
     }
   }
 
-  /// Before the bots start on a new home: a session for each chat the old
-  /// home held, under the id this machine will save it as (starting
+  /// Before the bots start on a new host: a session for each chat the old
+  /// host held, under the id this machine will save it as (starting
   /// `sessions`), with what the person set on the old one. The bots' pushes
   /// then fill it.
   public func carryBotChats(_ chats: [BotsTransferExpected.Chat], sessions: String) async throws {
@@ -311,8 +311,8 @@ extension Library {
   }
 
   /// What of `expected` this machine's library does not hold yet as the bots'
-  /// home: a bot, a chat (under session ids starting `sessions`), or a live
-  /// bot's or the Forum's entries up to the old home's checkpoint. Nil when it
+  /// host: a bot, a chat (under session ids starting `sessions`), or a live
+  /// bot's or the Forum's entries up to the old host's checkpoint. Nil when it
   /// holds everything.
   public func botsTransferMissing(_ expected: BotsTransferExpected, sessions: String) async throws -> String? {
     let machineID = machineID
@@ -340,8 +340,8 @@ extension Library {
   }
 
   /// After a transfer away: the bot chats and Forum rooms this machine owned
-  /// are deleted in every library (the new home saved them under its own),
-  /// and its checkpoints go. The bots' rows stay: the new home writes them.
+  /// are deleted in every library (the new host saved them under its own),
+  /// and its checkpoints go. The bots' rows stay: the new host writes them.
   public func removeBotChats() async throws {
     let machineID = machineID
     try await write { writer in
@@ -352,7 +352,7 @@ extension Library {
     }
   }
 
-  /// The bots and their chats as stored here, for reading while the home
+  /// The bots and their chats as stored here, for reading while the host
   /// machine is away.
   public func savedBots() async throws -> SavedBots {
     let rows = try await read { db in
@@ -360,7 +360,7 @@ extension Library {
        try db.query("SELECT * FROM bot_chats WHERE deleted = 0"))
     }
     let bots = rows.0.map { row in
-      SavedBot(id: row.text("id") ?? "", homeMachineID: row.text("machine_id") ?? "", name: row.text("name") ?? "",
+      SavedBot(id: row.text("id") ?? "", hostMachineID: row.text("machine_id") ?? "", name: row.text("name") ?? "",
                isAdmin: row.text("kind") == "admin", manager: row.bool("manager"), managerID: row.text("manager_id"),
                orchestrator: row.bool("orchestrator"), trashed: row.bool("trashed"), createdAt: row.date("created_at"))
     }

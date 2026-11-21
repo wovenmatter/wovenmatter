@@ -160,7 +160,7 @@ struct WorkspaceView: View {
         .debugCommand("chat:") { selectConversation($0) }
         .debugCommand("new:", startDebugChat)
         // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
-        .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.homeMachineID ?? "", botID: $0)) }
+        .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.hostMachineID ?? "", botID: $0)) }
         .debugRequest("bots-settings") { openBotSettings() }
         // `settings-page:NAME` opens a Settings page, as `--settings-page` does at launch.
         .debugCommand("settings-page:") { model.navigation.pendingConnectionsScope = $0 }

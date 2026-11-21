@@ -16,7 +16,7 @@ enum BotThreadDisclosure {
     }
 }
 
-/// The one Bots section: the bots and Forum on the bots' home machine.
+/// The one Bots section: the bots and Forum on the bots' host.
 struct BotsSidebar: View {
     @Bindable var bots: BotsStore
     let selectedTarget: BotTarget?
@@ -26,7 +26,7 @@ struct BotsSidebar: View {
     let onOpenSettings: () -> Void
 
     var body: some View {
-        if let machineID = bots.homeMachineID {
+        if let machineID = bots.hostMachineID {
             BotsSidebarSection(
                 bots: bots,
                 machineID: machineID,
@@ -54,7 +54,7 @@ struct BotsSidebar: View {
 
 struct BotsSidebarSection: View {
     @Bindable var bots: BotsStore
-    /// The bots' home machine.
+    /// The bots' host.
     let machineID: String
     let selectedTarget: BotTarget?
     let isWorkspaceDestination: Bool

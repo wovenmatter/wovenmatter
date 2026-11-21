@@ -34,7 +34,7 @@ struct SettingsAccountsView: View {
                 SettingsPicker(SignInMachinePicker.title,
                                selection: Binding(get: { machineID ?? "" }, set: { select($0) }),
                                options: SignInMachinePicker.options(model.machines.machines, selected: machineID)) { id in
-                    SignInMachinePicker.label(id, machines: model.machines.machines, botsHome: model.bots.homeMachineID)
+                    SignInMachinePicker.label(id, machines: model.machines.machines, botsHost: model.bots.hostMachineID)
                 }
             }
             .disabled(agent.busy)
@@ -101,10 +101,10 @@ enum SignInMachinePicker {
         return ids.isEmpty ? [""] : ids
     }
 
-    static func label(_ id: String, machines: [Machine], botsHome: String?) -> String {
+    static func label(_ id: String, machines: [Machine], botsHost: String?) -> String {
         guard let machine = machines.first(where: { $0.id == id }) else { return "Local workspace" }
         let name = machine.isThisMachine ? "Local workspace (\(machine.name))" : machine.name
-        return machine.id == botsHome ? "\(name) · \(botsMark)" : name
+        return machine.id == botsHost ? "\(name) · \(botsMark)" : name
     }
 }
 

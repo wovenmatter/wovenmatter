@@ -255,9 +255,9 @@ private struct TestServer {
     return client
   }
 
-  /// Makes this machine the bots' home and waits until its runtime is ready.
-  func makeHome(_ client: Client, _ runtime: StandInBotsRuntime) async throws {
-    _ = try await client.call(ChooseBotsHome(machineID: server.machineID))
+  /// Makes this machine the bots' host and waits until its runtime is ready.
+  func makeHost(_ client: Client, _ runtime: StandInBotsRuntime) async throws {
+    _ = try await client.call(ChooseBotsHost(machineID: server.machineID))
     let subscription = try await client.subscribe(SubscribeBots())
     if subscription.reply.status.state != .ready {
       for try await event in subscription.events {
@@ -276,10 +276,10 @@ private func json(_ text: String) -> JSONValue {
 @Test(.timeLimit(.minutes(1)))
 func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   let runtime = StandInBotsRuntime()
-  let home = try await TestServer.start(name: "Studio", runtime: runtime)
-  defer { home.finishLater() }
-  let client = try await home.connect()
-  try await home.makeHome(client, runtime)
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
 
   // A session's message, the model's thinking, and a call whose output is over the cap sessions keep.
   let long = String(repeating: "x", count: ToolOutput.limit + 10)
@@ -311,7 +311,7 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
   let saved = try await client.call(ListSavedBots())
   #expect(saved.bots.map(\.name) == ["Ada"])
   let main = try #require(saved.chats.first { $0.kind == .main })
-  #expect(main.session.id.hasPrefix("bot:\(home.server.machineID):") && main.session.id.hasSuffix(":b1:1"))
+  #expect(main.session.id.hasPrefix("bot:\(host.server.machineID):") && main.session.id.hasSuffix(":b1:1"))
   #expect(main.session.title == "Ada")
   #expect(main.session.runtime == .bots)
   let items = try await client.call(SessionItems(sessionID: main.session.id))
@@ -334,10 +334,10 @@ func mirrorPushIsSavedOnceWithItsCheckpoint() async throws {
 @Test(.timeLimit(.minutes(1)))
 func callsAndOpenedConversationsPassThroughToTheRuntime() async throws {
   let runtime = StandInBotsRuntime()
-  let home = try await TestServer.start(name: "Studio", runtime: runtime)
-  defer { home.finishLater() }
-  let client = try await home.connect()
-  try await home.makeHome(client, runtime)
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
 
   let reply = try await client.call(BotsCall(request: json(#"{"type": "bots.list"}"#)))
   #expect(reply["asked"]?["type"]?.string == "bots.list")
@@ -370,7 +370,7 @@ func callsAndOpenedConversationsPassThroughToTheRuntime() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func anotherServerSendsUIsToTheHomeMachineAndForwardsCalls() async throws {
+func anotherServerSendsUIsToTheHostAndForwardsCalls() async throws {
   let runtime = StandInBotsRuntime()
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
   let a = try await TestServer.start(name: "Studio", runtime: runtime, tailnet: tailnetA, listen: true)
@@ -380,10 +380,10 @@ func anotherServerSendsUIsToTheHomeMachineAndForwardsCalls() async throws {
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])
   await a.server.discoverMachines()
   await b.server.discoverMachines()
-  try await a.makeHome(try await a.connect(), runtime)
+  try await a.makeHost(try await a.connect(), runtime)
 
   // Once the setting reaches it, the other server streams nothing of the bots:
-  // it names the home machine, whose server a UI connects to directly.
+  // it names the host, whose server a UI connects to directly.
   let onB = try await b.connect()
   while true {
     do {
@@ -403,7 +403,7 @@ func anotherServerSendsUIsToTheHomeMachineAndForwardsCalls() async throws {
 
 // MARK: Transfer
 
-/// Two linked servers; the first is the bots' home, its stand-in runtime
+/// Two linked servers; the first is the bots' host, its stand-in runtime
 /// holding one bot with a chat, a turn's usage, a Forum post, a visual reply
 /// it published in the Forum (its HTML in the first server's content store),
 /// a Forum turn's usage, and files.
@@ -453,10 +453,10 @@ private struct TransferSetup {
     try Data("{}".utf8).write(to: bots.appendingPathComponent("settings.json"))
     filesA.volumes.withLock { $0["b1"] = Data("Ada's files".utf8) }
     let onA = try await a.connect(), onB = try await b.connect()
-    try await a.makeHome(onA, runtimeA)
+    try await a.makeHost(onA, runtimeA)
     while try await onA.call(ListSavedBots()).chats.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
-    // The other server knows the home and can reach it.
-    while try await onB.call(ListSettings()).first(where: { $0.key == botsHomeSetting })?.value.string != a.server.machineID {
+    // The other server knows the host and can reach it.
+    while try await onB.call(ListSettings()).first(where: { $0.key == botsHostSetting })?.value.string != a.server.machineID {
       try await Task.sleep(for: .milliseconds(20))
     }
     return TransferSetup(a: a, b: b, runtimeA: runtimeA, runtimeB: runtimeB, filesA: filesA, filesB: filesB, onA: onA, onB: onB)
@@ -468,12 +468,12 @@ private struct TransferSetup {
   }
 }
 
-private func home(_ client: Client) async throws -> String? {
-  try await client.call(ListSettings()).first { $0.key == botsHomeSetting }?.value.string
+private func hostSetting(_ client: Client) async throws -> String? {
+  try await client.call(ListSettings()).first { $0.key == botsHostSetting }?.value.string
 }
 
 @Test(.timeLimit(.minutes(1)))
-func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
+func transferMovesTheBotsAndSwitchesTheHostWithNothingTwice() async throws {
   let setup = try await TransferSetup.start()
   defer { setup.finishLater() }
   let (a, b) = (setup.a, setup.b)
@@ -483,20 +483,20 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
 
   _ = try await setup.onA.call(TransferBots(targetMachineID: b.server.machineID))
 
-  // The folder and the files moved, the home switched, and the old copy is gone.
+  // The folder and the files moved, the host switched, and the old copy is gone.
   #expect(FileManager.default.contents(atPath: b.folder.appendingPathComponent("bots/bots.json").path) != nil)
   #expect(FileManager.default.contents(atPath: b.folder.appendingPathComponent("bots/settings.json").path) == Data("{}".utf8))
   #expect(setup.filesB.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
   #expect(setup.filesA.volumes.withLock { $0.isEmpty })
   #expect(!FileManager.default.fileExists(atPath: a.folder.appendingPathComponent("bots").path))
-  #expect(try await home(setup.onB) == b.server.machineID)
+  #expect(try await hostSetting(setup.onB) == b.server.machineID)
   #expect(setup.runtimeB.connected)
 
-  // Once both libraries have synced, every chat and turn is there once, owned by the new home.
+  // Once both libraries have synced, every chat and turn is there once, owned by the new host.
   for client in [setup.onA, setup.onB] {
     while true {
       let saved = try await client.call(ListSavedBots())
-      if try await home(client) == b.server.machineID, saved.chats.count == 2,
+      if try await hostSetting(client) == b.server.machineID, saved.chats.count == 2,
          saved.chats.allSatisfy({ $0.session.machineID == b.server.machineID }) { break }
       try await Task.sleep(for: .milliseconds(20))
     }
@@ -508,7 +508,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
     let usage = try await server.server.library.usage(from: .distantPast, to: .distantFuture, periodSeconds: 86400)
     #expect(usage.totals.requests == 2)
   }
-  // The Forum's visual reply is one small item on both, and its HTML came to the new home.
+  // The Forum's visual reply is one small item on both, and its HTML came to the new host.
   let digest = Library.digest(of: TransferSetup.visualReplyHTML)
   let expected: [ItemContent] = [.assistantMessage(text: "Morning"),
                                  .toolCall(ToolCall(name: "bash", input: "ls", output: "a", kind: .execute)),
@@ -530,13 +530,13 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
   }
   #expect(try await b.server.library.content(digest)?.data == TransferSetup.visualReplyHTML)
 
-  // And back: the first home saves them again under new sessions, though it deleted its old ones.
+  // And back: the first host saves them again under new sessions, though it deleted its old ones.
   _ = try await setup.onB.call(TransferBots(targetMachineID: a.server.machineID))
   #expect(setup.filesA.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
   for client in [setup.onA, setup.onB] {
     while true {
       let saved = try await client.call(ListSavedBots())
-      if try await home(client) == a.server.machineID, saved.chats.count == 2,
+      if try await hostSetting(client) == a.server.machineID, saved.chats.count == 2,
          saved.chats.allSatisfy({ $0.session.machineID == a.server.machineID }) { break }
       try await Task.sleep(for: .milliseconds(20))
     }
@@ -546,7 +546,7 @@ func transferMovesTheBotsAndSwitchesTheHomeWithNothingTwice() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aFailedTransferLeavesTheBotsRunningOnTheOldHome() async throws {
+func aFailedTransferLeavesTheBotsRunningOnTheOldHost() async throws {
   let setup = try await TransferSetup.start(failImport: true)
   defer { setup.finishLater() }
   let (a, b) = (setup.a, setup.b)
@@ -560,7 +560,7 @@ func aFailedTransferLeavesTheBotsRunningOnTheOldHome() async throws {
       if case .status(let status) = event, status.state == .ready { break }
     }
   }
-  #expect(try await home(setup.onA) == a.server.machineID)
+  #expect(try await hostSetting(setup.onA) == a.server.machineID)
   #expect(setup.filesA.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
   #expect(FileManager.default.fileExists(atPath: a.folder.appendingPathComponent("bots/bots.json").path))
   // The target removed what it received.
@@ -602,7 +602,7 @@ func aTransferGivenBackDuringTheInstallNeverStartsTheBotsOnTheTarget() async thr
 
   await #expect(throws: ProtocolError.self) { _ = try await transfer.value }
   try await ready(setup.onA)
-  #expect(try await home(setup.onA) == a.server.machineID)
+  #expect(try await hostSetting(setup.onA) == a.server.machineID)
   #expect(setup.filesA.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
   #expect(setup.runtimeB.launches == 0)
 }
@@ -621,7 +621,7 @@ func onceTheTargetBeginsToCommitNothingGivesTheTransferBack() async throws {
   committing.open()
   _ = try await transfer.value
 
-  #expect(try await home(setup.onB) == b.server.machineID)
+  #expect(try await hostSetting(setup.onB) == b.server.machineID)
   #expect(setup.filesB.volumes.withLock { $0 } == ["b1": Data("Ada's files".utf8)])
   #expect(FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("bots/bots.json").path))
   #expect(setup.runtimeB.connected)
@@ -632,16 +632,16 @@ func onceTheTargetBeginsToCommitNothingGivesTheTransferBack() async throws {
 @Test(.timeLimit(.minutes(1)))
 func aSessionMessagesABotAsItself() async throws {
   let runtime = StandInBotsRuntime()
-  let home = try await TestServer.start(name: "Studio", runtime: runtime)
-  defer { home.finishLater() }
-  let client = try await home.connect()
-  try await home.makeHome(client, runtime)
+  let host = try await TestServer.start(name: "Studio", runtime: runtime)
+  defer { host.finishLater() }
+  let client = try await host.connect()
+  try await host.makeHost(client, runtime)
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Build"))
-  let tools = try #require(await home.server.bots.toolsForTests)
+  let tools = try #require(await host.server.bots.toolsForTests)
 
   // A session a bot sent off reports back: the bot's chat gets it as from that session.
   let result = await tools.call("message_bot", arguments: .object(["botID": .string("b1"), "text": .string("Done.")]),
-                                caller: ToolCaller(machineID: home.server.machineID, sessionID: session.id))
+                                caller: ToolCaller(machineID: host.server.machineID, sessionID: session.id))
   #expect(!result.isError)
   let sent = try #require(runtime.received.last { $0["type"]?.string == "message.send" })
   #expect(sent["text"]?.string == "Done.")

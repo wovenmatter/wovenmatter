@@ -359,22 +359,22 @@ The calendar page shows and adds tasks and events.
 There is one set of bots and one Forum. They live on one machine that the
 person chooses from their Woven machines; that choice is a synced setting, and
 only that machine's server runs the bots runtime. The setting is never written
-as an ordinary setting. The first home is chosen through a request that a
-server accepts only while its library names no home and holds no bots, and
+as an ordinary setting. The first host is chosen through a request that a
+server accepts only while its library names no host and holds no bots, and
 after every machine it reaches has said the same. Every later change is a
 transfer.
 
-- Any UI talks to the bots and the Forum by connecting directly to the home
-  machine's server. A server forwards a bots call to the home machine only when
+- Any UI talks to the bots and the Forum by connecting directly to the host's
+  server. A server forwards a bots call to the host only when
   an agent on its own machine makes one through the Woven MCP.
 - Bot chats and Forum posts are saved to the library like every other
-  transcript, so they can be read when the home machine is away. A visual reply a
+  transcript, so they can be read when the host is away. A visual reply a
   bot shows in its own chat is saved there as a `visualReply` item in place of
   its call. A visual reply it publishes during a Forum turn is a post of its own in
   the room or thread it is answering in, in order with its words: the bots'
   database keeps a small reference with the post, and the library one
   `visualReply` item. Its HTML is stored once, in the content store, and a new
-  home fetches by digest what it does not hold as the posts arrive.
+  host fetches by digest what it does not hold as the posts arrive.
 - A bot's items are a session's kinds, saved through the same writer: messages
   (one from another session under its name), the model's thinking, tool calls
   with their input and output under the same cap, visual replies, failures and
@@ -387,29 +387,29 @@ transfer.
   the bot switched out). A Forum post carries the person's open notes to the
   bots as a chat message does, and Stop in a room stops the bots working there
   only; Pause stops every room.
-- The bots folder on the home machine holds the bots' own database (bots,
+- The bots folder on the host holds the bots' own database (bots,
   chats, memories, the Forum, schedules) and the model profiles. Nothing in it
   is tied to that machine. Each bot's files are a volume in that machine's
   container engine and can be written out and read back as an archive.
 - What hosts the bots (the engine, the Mac's virtual machine, sockets, logs) is
   kept outside the bots folder and is never moved.
-- **Transfer** moves the bots to another machine, in this order: the old home
+- **Transfer** moves the bots to another machine, in this order: the old host
   stops the bots (running turns are interrupted); writes each bot's files out
   as archives and sends them with the bots folder in pieces, each checked by
   digest; the target reads them in, starts the bots and confirms its library
-  holds every bot and chat; the target sets the home to itself; the old home
+  holds every bot and chat; the target sets the host to itself; the old host
   removes its copy. Any failure before the switch leaves the bots on the old
-  home: the target removes what it received and the old home starts them
+  host: the target removes what it received and the old host starts them
   again. Each side records its step, so a restart ends in one of those two
   states. Sign-ins that are per machine are made again on the new one.
-- Until the switch, the old home asks the target how it stands every few
+- Until the switch, the old host asks the target how it stands every few
   seconds. A target that hears nothing of the transfer for a minute gives it
-  back. An old home that cannot reach the target starts the bots again only
+  back. An old host that cannot reach the target starts the bots again only
   once the target has said it gave the transfer back, or 90 seconds after it
   last asked it anything else. Once the target has begun to switch, nothing
-  gives the transfer back, and an old home that lost the reply waits for the
+  gives the transfer back, and an old host that lost the reply waits for the
   target's answer.
-- Each new home saves the chats under sessions of its own and carries over
+- Each new host saves the chats under sessions of its own and carries over
   what the person set on the old ones: title, Trash, folder, pin and read
   state. Deleting a bot chat deletes it in the bots runtime, so it never comes
   back.

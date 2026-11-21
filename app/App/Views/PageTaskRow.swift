@@ -355,11 +355,11 @@ struct PageAssignTarget: Identifiable, Equatable {
                     ready: ready, detail: ready ? nil : detail))
             }
         }
-        if let home = model.bots.homeMachine {
+        if let host = model.bots.hostMachine {
             for bot in model.bots.bots {
-                targets.append(.init(id: "bot:\(home.id):\(bot.id)", group: .bots,
-                    assignee: BoardTaskAssignee(kind: .bot, name: bot.name, place: home.name, botID: bot.id, machineID: home.id),
-                    ready: model.bots.isConnected, detail: home.name))
+                targets.append(.init(id: "bot:\(host.id):\(bot.id)", group: .bots,
+                    assignee: BoardTaskAssignee(kind: .bot, name: bot.name, place: host.name, botID: bot.id, machineID: host.id),
+                    ready: model.bots.isConnected, detail: host.name))
             }
         }
         return targets

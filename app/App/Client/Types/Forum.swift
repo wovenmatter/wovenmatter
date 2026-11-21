@@ -1,6 +1,6 @@
 import Foundation
 
-// The Forum: one group chat with the user and every bot, and threads, on the bots' home machine.
+// The Forum: one group chat with the user and every bot, and threads, on the bots' host.
 
 struct PiBotForumPost: Equatable, Identifiable, Sendable {
     /// A Forum post's thread: its room and how many posts it holds.

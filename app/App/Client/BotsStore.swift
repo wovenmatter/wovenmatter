@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import WovenProtocol
 
-/// A bots request the runtime or the home machine's server refused, in its own words.
+/// A bots request the runtime or the host's server refused, in its own words.
 struct BotsCallError: LocalizedError, Equatable {
     let message: String
     var errorDescription: String? { message }
@@ -10,9 +10,9 @@ struct BotsCallError: LocalizedError, Equatable {
     static let notConnected = BotsCallError(message: "Bots are not connected.")
 }
 
-/// The bots and the Forum, on the bots' home machine: bots, groups, threads, the Forum, onboarding
+/// The bots and the Forum, on the bots' host: bots, groups, threads, the Forum, onboarding
 /// and resources. There is one set of bots, on one machine chosen from the Woven machines. The UI
-/// connects to the home machine's server directly for the bots and the Forum; while that machine
+/// connects to the host's server directly for the bots and the Forum; while that machine
 /// is away, the bots and their chats show what this Mac's library holds.
 @MainActor
 @Observable
@@ -22,14 +22,14 @@ final class BotsStore {
     /// This Mac's server, for what the library holds.
     @ObservationIgnored private(set) weak var library: ServerConnection?
     @ObservationIgnored private weak var connections: MachineConnections?
-    /// The home machine's server, connected to directly; this Mac's until a home is known.
-    var server: ServerConnection? { connections?.connection(for: homeMachineID) ?? library }
+    /// The host's server, connected to directly; this Mac's until a host is known.
+    var server: ServerConnection? { connections?.connection(for: hostMachineID) ?? library }
     @ObservationIgnored private weak var machines: MachinesStore?
     @ObservationIgnored private weak var settings: SettingsStore?
     @ObservationIgnored private var following: Task<Void, Never>?
 
-    /// Follows the bots on the home machine's server for as long as the app runs, moving to
-    /// another machine's when the home changes. While the home machine cannot be reached the
+    /// Follows the bots on the host's server for as long as the app runs, moving to
+    /// another machine's when the host changes. While the host cannot be reached the
     /// bots read as unreachable, from the library.
     func attach(_ connections: MachineConnections, machines: MachinesStore, settings: SettingsStore) {
         self.library = connections.local
@@ -51,8 +51,8 @@ final class BotsStore {
                     })
                 }
                 while !Task.isCancelled, let self, self.server === server {
-                    if !server.isConnected, server !== library, let home = homeMachineID, state != .unreachable {
-                        apply(BotsStatus(homeMachineID: home, state: .unreachable), reload: true)
+                    if !server.isConnected, server !== library, let host = hostMachineID, state != .unreachable {
+                        apply(BotsStatus(hostMachineID: host, state: .unreachable), reload: true)
                     }
                     try? await Task.sleep(for: .milliseconds(500))
                 }
@@ -61,18 +61,18 @@ final class BotsStore {
         }
     }
 
-    // MARK: Home machine
+    // MARK: Host
 
     /// The runtime's state as the server last reported it.
     private var status: BotsStatus?
 
     /// The machine the bots live on; nil until one is chosen.
-    var homeMachineID: String? { status?.homeMachineID ?? settings?.values[botsHomeSetting]?.string }
-    var homeMachine: Machine? { homeMachineID.flatMap { id in machines?.machines.first { $0.id == id } } }
+    var hostMachineID: String? { status?.hostMachineID ?? settings?.values[botsHostSetting]?.string }
+    var hostMachine: Machine? { hostMachineID.flatMap { id in machines?.machines.first { $0.id == id } } }
 
-    /// The bots runtime on the home machine.
+    /// The bots runtime on the host.
     var state: BotsState {
-        guard homeMachineID != nil else { return .off }
+        guard hostMachineID != nil else { return .off }
         switch status?.state {
         case .ready: return .ready
         case .unreachable: return .unreachable
@@ -87,7 +87,7 @@ final class BotsStore {
     /// Why the last transfer failed.
     private(set) var transferError: String?
 
-    /// Moves the bots to `machineID`: the home machine's server stops them, sends them, and
+    /// Moves the bots to `machineID`: the host's server stops them, sends them, and
     /// they start there. Returns once they run there or the transfer failed.
     func transfer(to machineID: String) async {
         transferError = nil
@@ -101,7 +101,7 @@ final class BotsStore {
 
     /// Why the runtime is in its state, when the server says.
     var message: String? { status?.message }
-    /// The home machine's memory and disk, once its server has reported them.
+    /// The host's memory and disk, once its server has reported them.
     var capacity: BotMachineCapacity? {
         status?.capacity.map {
             BotMachineCapacity(memoryBytes: $0.memoryBytes, diskTotalBytes: $0.diskTotalBytes, diskFreeBytes: $0.diskFreeBytes,
@@ -109,19 +109,19 @@ final class BotsStore {
         }
     }
 
-    /// "This Mac", or the home machine's name.
+    /// "This Mac", or the host's name.
     var displayName: String {
-        guard let homeMachine else { return "Bots" }
-        return homeMachine.isThisMachine ? "This Mac" : homeMachine.name
+        guard let hostMachine else { return "Bots" }
+        return hostMachine.isThisMachine ? "This Mac" : hostMachine.name
     }
 
-    /// Makes `machineID` the bots' first home. This Mac's server refuses while any machine it
-    /// reaches knows of bots: moving the bots is a transfer, not a new home.
-    func chooseHome(_ machineID: String) async {
-        guard homeMachineID == nil else { return }
+    /// Makes `machineID` the bots' first host. This Mac's server refuses while any machine it
+    /// reaches knows of bots: moving the bots is a transfer, not a new host.
+    func chooseHost(_ machineID: String) async {
+        guard hostMachineID == nil else { return }
         do {
             guard let library else { throw ClientError.notConnected }
-            _ = try await library.call(ChooseBotsHome(machineID: machineID))
+            _ = try await library.call(ChooseBotsHost(machineID: machineID))
             loadError = nil
         } catch {
             loadError = (error as? ProtocolError)?.message ?? error.localizedDescription
@@ -173,11 +173,11 @@ final class BotsStore {
 
     // MARK: Bots runtime
 
-    /// Connected to the bots runtime on the home machine's server.
+    /// Connected to the bots runtime on the host's server.
     var isConnected: Bool { state == .ready && server?.isConnected == true }
-    /// The home machine is away: the bots and their chats show what the library holds.
-    var isReadingSaved: Bool { homeMachineID != nil && state == .unreachable }
-    var isAvailable: Bool { homeMachine != nil && state == .ready }
+    /// The host is away: the bots and their chats show what the library holds.
+    var isReadingSaved: Bool { hostMachineID != nil && state == .unreachable }
+    var isAvailable: Bool { hostMachine != nil && state == .ready }
 
     private(set) var hasLoadedBots = false
     private(set) var bots: [PiBotSummary] = []
@@ -217,7 +217,7 @@ final class BotsStore {
     /// Whether the last status was live; a change reopens every open chat.
     @ObservationIgnored private var wasLive: Bool?
 
-    /// Reads the bots again: from the runtime, or from the library while the home machine is away.
+    /// Reads the bots again: from the runtime, or from the library while the host is away.
     func refresh() async {
         if isConnected { await loadLive() } else if isReadingSaved { await loadSaved() }
     }
@@ -315,12 +315,12 @@ final class BotsStore {
 
     /// The bots and their chats as the library holds them.
     private func loadSaved() async {
-        guard let library, let home = homeMachineID else { return }
+        guard let library, let host = hostMachineID else { return }
         do {
             let saved = try await library.call(ListSavedBots())
             guard !isConnected else { return }
-            savedChats = saved.chats.filter { $0.session.machineID == home }
-            bots = saved.bots.filter { $0.homeMachineID == home && !$0.trashed }
+            savedChats = saved.chats.filter { $0.session.machineID == host }
+            bots = saved.bots.filter { $0.hostMachineID == host && !$0.trashed }
                 .sorted { ($0.isAdmin ? 0 : 1, $0.createdAt) < ($1.isAdmin ? 0 : 1, $1.createdAt) }
                 .map(PiBotSummary.init(saved:))
             groups = []
@@ -353,7 +353,7 @@ final class BotsStore {
 
     // MARK: Requests
 
-    /// One request of `bots/src/protocol.ts`, to the home machine's server.
+    /// One request of `bots/src/protocol.ts`, to the host's server.
     func call(_ type: String, _ fields: [String: JSONValue] = [:]) async throws -> JSONValue {
         guard let server, isConnected else { throw BotsCallError.notConnected }
         var request = fields
@@ -557,7 +557,7 @@ final class BotsStore {
 
     /// The open chat for one bot conversation (nil is its main channel), kept while the window lasts.
     func conversation(botID: String, conversationID: Int?) -> BotChatStore {
-        let key = BotConversationKey(machineID: homeMachineID ?? "", botID: botID, conversationID: conversationID)
+        let key = BotConversationKey(machineID: hostMachineID ?? "", botID: botID, conversationID: conversationID)
         if let chat = chats[key] { return chat }
         let chat = BotChatStore(key: key, bots: self)
         chats[key] = chat
@@ -567,7 +567,7 @@ final class BotsStore {
     /// The open Forum room (nil is the Forum itself).
     func forumRoom(roomID: Int?) -> ForumRoomStore {
         if let room = rooms[roomID] { return room }
-        let room = ForumRoomStore(key: BotConversationKey(machineID: homeMachineID ?? "", botID: BotTarget.forumBotID,
+        let room = ForumRoomStore(key: BotConversationKey(machineID: hostMachineID ?? "", botID: BotTarget.forumBotID,
                                                           conversationID: roomID), bots: self)
         rooms[roomID] = room
         return room

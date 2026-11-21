@@ -15,10 +15,10 @@ struct BotsHostInterface: Sendable {
   /// The Woven MCP, once the server has made it.
   let tools = ToolsLink()
 
-  /// The home machine: this one.
-  private var home: String { library.machineID }
-  /// What the chats' session ids start with: this machine and its stint as the home.
-  private var sessions: String { home + ":" + tenure.current }
+  /// The host: this one.
+  private var host: String { library.machineID }
+  /// What the chats' session ids start with: this machine and its stint as the host.
+  private var sessions: String { host + ":" + tenure.current }
 
   func handle(_ method: String, _ params: JSONValue) async throws -> JSONValue {
     switch method {
@@ -60,7 +60,7 @@ struct BotsHostInterface: Sendable {
         return try JSONValue(encoding: ToolResult.error("Woven tools are turned off for this bot in Settings."))
       }
       // `forum`: the bot is answering in the Forum, not in one of its own chats.
-      let caller = ToolCaller(machineID: home, botID: botID, inForum: params["forum"]?.bool == true ? true : nil)
+      let caller = ToolCaller(machineID: host, botID: botID, inForum: params["forum"]?.bool == true ? true : nil)
       return try JSONValue(encoding: await tools.call(name, arguments: params["arguments"] ?? .object([:]), caller: caller))
     case "mirror.checkpoints":
       var bots: [String: JSONValue] = [:], seats: [String: JSONValue] = [:]
@@ -73,12 +73,12 @@ struct BotsHostInterface: Sendable {
       return .object(["bots": .object(bots), "forum": .integer(forum), "seats": .object(seats)])
     case "mirror.bot":
       let push = try params.decode(MirrorBot.self)
-      try await library.saveBotMirror(BotsMirrorMapping.bot(push, home: sessions))
+      try await library.saveBotMirror(BotsMirrorMapping.bot(push, host: sessions))
       fetchMissing(push.items.compactMap(\.visualReply?.digest))
       return .object([:])
     case "mirror.forum":
       let push = try params.decode(MirrorForum.self)
-      try await library.saveBotMirror(BotsMirrorMapping.forum(push, home: sessions))
+      try await library.saveBotMirror(BotsMirrorMapping.forum(push, host: sessions))
       fetchMissing(push.posts.compactMap(\.visualReply?.digest))
       return .object([:])
     case "mirror.purge":
@@ -91,7 +91,7 @@ struct BotsHostInterface: Sendable {
   }
 
   /// After a transfer the visual replies of the chats and the Forum are still
-  /// on the old home: fetched now, so this home holds them before the old one
+  /// on the old host: fetched now, so this host holds them before the old one
   /// goes away.
   private func fetchMissing(_ digests: [String]) {
     guard !digests.isEmpty else { return }
@@ -251,7 +251,7 @@ struct MirrorForum: Decodable, Sendable {
   var upTo: Int64
 }
 
-/// This machine's stint as the bots' home, in `D/bots-runtime/tenure`: part
+/// This machine's stint as the bots' host, in `D/bots-runtime/tenure`: part
 /// of the session ids it saves their chats under. It is new each time the
 /// bots come here, so a machine they come back to never meets the sessions it
 /// deleted when they left (a deletion is final).
@@ -287,36 +287,36 @@ final class BotsTenure: Sendable {
 }
 
 /// The contract's mapping of a push to the library's sessions and items.
-/// `home` is the session prefix: the home machine and its stint.
+/// `host` is the session prefix: the host and its stint.
 enum BotsMirrorMapping {
-  static func botSession(home: String, botID: String, conversationID: Int) -> String {
-    "bot:\(home):\(botID):\(conversationID)"
+  static func botSession(host: String, botID: String, conversationID: Int) -> String {
+    "bot:\(host):\(botID):\(conversationID)"
   }
 
-  static func forumSession(home: String, roomID: Int) -> String {
-    "forum:\(home):\(roomID)"
+  static func forumSession(host: String, roomID: Int) -> String {
+    "forum:\(host):\(roomID)"
   }
 
-  static func bot(_ push: MirrorBot, home: String) -> BotMirror {
+  static func bot(_ push: MirrorBot, host: String) -> BotMirror {
     let bot = push.bot
     let chats = push.conversations.map { conversation in
       let thread = conversation.kind == "thread"
       return BotMirror.Chat(
-        sessionID: botSession(home: home, botID: bot.id, conversationID: conversation.conversationId), botID: bot.id,
+        sessionID: botSession(host: host, botID: bot.id, conversationID: conversation.conversationId), botID: bot.id,
         conversationID: conversation.conversationId, kind: thread ? .thread : .main,
         parentConversationID: conversation.parentConversationId,
         title: thread ? (conversation.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled thread") : bot.name,
         pinned: conversation.pinned ?? false, createdAt: date(conversation.createdAt))
     }
     let items = push.items.map { item in
-      let session = botSession(home: home, botID: bot.id, conversationID: item.conversationId)
+      let session = botSession(host: host, botID: bot.id, conversationID: item.conversationId)
       return BotMirror.Item(id: "\(session):\(item.key)", sessionID: session, content: content(item),
                             author: item.from.map { ItemAuthor(botID: nil, name: $0.name, sessionID: $0.sessionId) },
                             createdAt: Date(timeIntervalSince1970: item.createdAt / 1000))
     }
     let usage = push.items.compactMap { item in
       item.usage.map {
-        record(bot: bot.id, key: item.key, botSession(home: home, botID: bot.id, conversationID: item.conversationId),
+        record(bot: bot.id, key: item.key, botSession(host: host, botID: bot.id, conversationID: item.conversationId),
                item.createdAt, $0)
       }
     }
@@ -327,8 +327,8 @@ enum BotsMirrorMapping {
       chats: chats, items: items, usage: usage, checkpoint: "bot:" + bot.id, upTo: push.upTo)
   }
 
-  /// One model turn's usage. Keyed by the bot and its entry, not the home
-  /// machine: after a transfer the new home pushes the same turns again and
+  /// One model turn's usage. Keyed by the bot and its entry, not the host:
+  /// after a transfer the new host pushes the same turns again and
   /// records none twice.
   private static func record(bot: String, key: String, _ session: String, _ createdAt: Double,
                              _ usage: MirrorBot.Item.Usage) -> BotMirror.UsageRecord {
@@ -341,10 +341,10 @@ enum BotsMirrorMapping {
   /// The rooms, their posts, and what bots did in their seats for them, in
   /// time order (a post before seat work of the same moment), each bot's
   /// work under its name.
-  static func forum(_ push: MirrorForum, home: String) -> BotMirror {
+  static func forum(_ push: MirrorForum, host: String) -> BotMirror {
     let main = push.rooms.first { $0.parentPostId == nil }?.roomId
     let chats = push.rooms.map { room in
-      let session = forumSession(home: home, roomID: room.roomId)
+      let session = forumSession(host: host, roomID: room.roomId)
       guard let parentPost = room.parentPostId else {
         return BotMirror.Chat(sessionID: session, botID: nil, conversationID: room.roomId, kind: .forum,
                               parentConversationID: nil, title: "Forum", pinned: room.pinned ?? false,
@@ -357,7 +357,7 @@ enum BotsMirrorMapping {
                             pinned: room.pinned ?? false, createdAt: date(room.createdAt))
     }
     let posts = push.posts.map { post in
-      let session = forumSession(home: home, roomID: post.roomId)
+      let session = forumSession(host: host, roomID: post.roomId)
       // A bot speaks as itself.
       let bot = post.author == "bot"
       return BotMirror.Item(
@@ -368,7 +368,7 @@ enum BotsMirrorMapping {
         createdAt: Date(timeIntervalSince1970: post.createdAt / 1000))
     }
     let work = (push.seatItems ?? []).map { seat in
-      let session = forumSession(home: home, roomID: seat.item.conversationId)
+      let session = forumSession(host: host, roomID: seat.item.conversationId)
       return BotMirror.Item(id: "\(session):\(seat.botId).\(seat.item.key)", sessionID: session, content: content(seat.item),
                             author: ItemAuthor(botID: seat.botId, name: seat.name),
                             createdAt: Date(timeIntervalSince1970: seat.item.createdAt / 1000))
@@ -377,7 +377,7 @@ enum BotsMirrorMapping {
       .enumerated().sorted { ($0.element.0.createdAt, $0.element.1, $0.offset) < ($1.element.0.createdAt, $1.element.1, $1.offset) }
       .map(\.element.0)
     let usage = (push.seatUsage ?? []).map {
-      record(bot: $0.botId, key: $0.key, forumSession(home: home, roomID: $0.roomId), $0.createdAt, $0.usage)
+      record(bot: $0.botId, key: $0.key, forumSession(host: host, roomID: $0.roomId), $0.createdAt, $0.usage)
     }
     return BotMirror(bot: nil, chats: chats, items: items, usage: usage, checkpoint: "forum", upTo: push.upTo,
                      checkpoints: Dictionary(uniqueKeysWithValues: (push.seats ?? [:]).map { ("seat:" + $0.key, $0.value) }))

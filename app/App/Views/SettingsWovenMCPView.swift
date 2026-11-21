@@ -18,7 +18,7 @@ struct SettingsWovenMCPView: View {
             onBack: onBack
         ) {
             WorkspaceToolDefaultsCard(tools: model.agentTools, onOpenPermissions: onOpenPermissions)
-            if model.bots.homeMachine != nil { SettingsBotsMCPAccessSection(bots: model.bots) }
+            if model.bots.hostMachine != nil { SettingsBotsMCPAccessSection(bots: model.bots) }
             SettingsMCPAccessSection(settings: model.settings)
         }
     }

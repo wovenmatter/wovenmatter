@@ -205,7 +205,7 @@ struct SettingsGitHubView: View {
     }
 }
 
-/// A Mac or Linux machine on the GitHub page, with the bots nested under their home machine.
+/// A Mac or Linux machine on the GitHub page, with the bots nested under their host.
 private struct GitHubPlace: Identifiable {
     struct Bot: Identifiable { let id: String; let name: String }
     let id: String
@@ -217,7 +217,7 @@ private struct GitHubPlace: Identifiable {
     @MainActor static func list(_ machines: [Machine], bots: BotsStore) -> [GitHubPlace] {
         machines.map { machine in
             let detail = machine.isThisMachine ? "Mac you're using" : machine.platform == .mac ? "Mac" : "Linux workspace"
-            let botsHere = machine.id == bots.homeMachineID
+            let botsHere = machine.id == bots.hostMachineID
                 ? bots.bots.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                     .map { Bot(id: $0.id, name: $0.name) }
                 : []

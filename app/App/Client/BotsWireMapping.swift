@@ -2,7 +2,7 @@ import Foundation
 import WovenProtocol
 
 // What the bots views show, from the runtime's shapes (`BotsWire`) and from
-// what the library holds while the home machine is away.
+// what the library holds while the host is away.
 
 enum BotsDate {
     /// The runtime writes ISO 8601 times, with or without fractional seconds.

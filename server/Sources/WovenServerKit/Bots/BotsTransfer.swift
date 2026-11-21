@@ -3,13 +3,13 @@ import Synchronization
 import WovenLibrary
 import WovenProtocol
 
-// Transfer: the home machine's server moves the bots to another machine's
+// Transfer: the host's server moves the bots to another machine's
 // server, over their server-to-server connection. Each side is one state
 // machine; each step below is taken in one place, on the `BotsHost` actor,
 // and kept in a marker file so a restart ends the transfer in one of two
-// states: the bots on the old home, or on the new one.
+// states: the bots on the old host, or on the new one.
 //
-// The old home (`OutgoingStep`):
+// The old host (`OutgoingStep`):
 //  sending     The runtime is stopped (running turns are interrupted; Pi
 //              Durable picks its work up again wherever the bots start next).
 //              Each bot's files are written out of the engine as archives into
@@ -17,11 +17,11 @@ import WovenProtocol
 //              folder and the archives) with its size and digest, and what its
 //              library must hold; the files are sent in pieces.
 //  started     The target was asked to start the bots. While it works, the old
-//              home asks it every `heartbeat` how it stands.
-//  committing  The target was asked to become the home. Only its answer (or
-//              its setting arriving by sync) decides what follows; the old home
+//              host asks it every `heartbeat` how it stands.
+//  committing  The target was asked to become the host. Only its answer (or
+//              its setting arriving by sync) decides what follows; the old host
 //              waits for it however long that takes.
-//  removing    The target is the home. The old home removes every container
+//  removing    The target is the host. The old host removes every container
 //              and volume of the bots in its engine, the bots folder, and the
 //              bot chats it owned, retrying until it has.
 //
@@ -31,13 +31,13 @@ import WovenProtocol
 //              are read into the engine, the runtime starts, and the library
 //              is filled until it holds every bot and chat.
 //  confirmed   It holds everything and waits for the commit.
-//  committing  It writes `bots.home` as itself. From here nothing gives the
+//  committing  It writes `bots.host` as itself. From here nothing gives the
 //              transfer back.
 //
 // Giving back: before `committing`, the target stops what it started and
-// removes what it received when the old home says so, when it has heard
+// removes what it received when the old host says so, when it has heard
 // nothing of the transfer for `targetSilence`, or when it restarts. The old
-// home starts its bots again once the target has answered that it gave the
+// host starts its bots again once the target has answered that it gave the
 // transfer back, or, when it cannot reach the target, once `targetSilence`
 // plus `stopMargin` have passed since it last asked the target anything other
 // than to give back: by then the target has stopped by its own rule.
@@ -110,13 +110,13 @@ struct IncomingTransfer: Sendable {
   var files: [BotsTransferFile]
   var expected: BotsTransferExpected
   var phase = Phase.receiving
-  /// When the old home last asked anything of this transfer.
+  /// When the old host last asked anything of this transfer.
   var lastHeard = ContinuousClock.now
-  /// The install, once the old home asked for it.
+  /// The install, once the old host asked for it.
   var work: Task<Void, any Error>?
 }
 
-/// The old home's steps.
+/// The old host's steps.
 enum OutgoingStep: String, Codable {
   case sending, started, committing, removing
 }
@@ -141,9 +141,9 @@ extension BotsHost {
   static let targetSilence = Duration.seconds(60)
   /// What the target may take to stop the bots once it has given up.
   static let stopMargin = Duration.seconds(30)
-  /// How often the old home asks the target how it stands while the bots start there.
+  /// How often the old host asks the target how it stands while the bots start there.
   static let heartbeat = Duration.seconds(5)
-  /// The longest the old home waits for the reply to one call.
+  /// The longest the old host waits for the reply to one call.
   static let callLimit = Duration.seconds(30)
   /// How long the target has to read the bots in, start them, and hold every chat.
   static let installLimit = Duration.seconds(15 * 60)
@@ -188,12 +188,12 @@ extension BotsHost {
     (try? await library.machine(machineID))?.name ?? machineID
   }
 
-  // MARK: The old home
+  // MARK: The old host
 
   /// `TransferBots`: runs the transfer to `target` and returns once the bots
   /// run there. The transfer goes on if the caller goes away.
   func transfer(to target: String, caller: Caller) async throws {
-    guard setting == thisMachine, home == thisMachine, hold == nil, outgoing == nil, incoming == nil, ending == nil else {
+    guard setting == thisMachine, hostID == thisMachine, hold == nil, outgoing == nil, incoming == nil, ending == nil else {
       if setting == thisMachine { throw ProtocolError(.busy, "The bots are already moving.") }
       throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: setting)
     }
@@ -225,7 +225,7 @@ extension BotsHost {
     try step(id, target, .sending)
     hold = .sending(target: target)
     progress(target, .stopping)
-    await reconcileHome()
+    await reconcileHost()
     var started = false
     do {
       progress(target, .exporting)
@@ -272,7 +272,7 @@ extension BotsHost {
       _ = try await client.call(CommitReceivedBots(transferID: id), timeout: Self.callLimit)
       committed = true
     } catch let refused as ProtocolError {
-      // It answered: it is not the home, and gives the transfer back.
+      // It answered: it is not the host, and gives the transfer back.
       if await giveUp(id, target: target, started: true) { return }
       throw refused
     } catch {
@@ -327,7 +327,7 @@ extension BotsHost {
   }
 
   /// The commit's reply was lost: asks the target until it says whether it
-  /// is the home, or its setting arrives here. Never guesses.
+  /// is the host, or its setting arrives here. Never guesses.
   private func outcome(_ id: String, target: String) async -> Bool {
     while true {
       if setting == target { return true }
@@ -349,7 +349,7 @@ extension BotsHost {
 
   /// Before the switch: the target gives back what it started, then the
   /// bots start here again. Returns true when the target turned out to be
-  /// the home after all (this machine then removed its copy).
+  /// the host after all (this machine then removed its copy).
   private func giveUp(_ id: String, target: String, started: Bool) async -> Bool {
     // Once the target cannot have heard anything but "give back" for this
     // long, it has stopped by its own rule.
@@ -360,7 +360,7 @@ extension BotsHost {
           _ = try await client.call(AbortReceivedBots(transferID: id), timeout: Self.callLimit)
           break
         } catch let refused as ProtocolError where refused.code == .busy {
-          // It has begun to make itself the home: only its answer decides.
+          // It has begun to make itself the host: only its answer decides.
           if await outcome(id, target: target) {
             await removeCopy(id, target: target)
             return true
@@ -376,18 +376,18 @@ extension BotsHost {
     remove(outgoingFolder)
     remove(outgoingMarker)
     hold = nil
-    await reconcileHome()
+    await reconcileHost()
     return false
   }
 
-  /// After the switch: this machine follows the new home and removes its copy.
+  /// After the switch: this machine follows the new host and removes its copy.
   private func removeCopy(_ id: String, target: String) async {
     try? step(id, target, .removing)
     hold = .moved(target: target)
     // The value the target wrote, written here too so a restart reads it at once.
-    _ = try? await library.setSetting(botsHomeSetting, to: .string(target))
+    _ = try? await library.setSetting(botsHostSetting, to: .string(target))
     setting = target
-    await reconcileHome(keepEngine: true)
+    await reconcileHost(keepEngine: true)
     progress(target, .removing)
     do {
       try await prepareEngine()
@@ -409,23 +409,23 @@ extension BotsHost {
     tenure.end()
     remove(outgoingMarker)
     hold = nil
-    await reconcileHome()
+    await reconcileHost()
   }
 
   // MARK: The target
 
-  /// `ReceiveBots`: a transfer from the home machine's server begins.
+  /// `ReceiveBots`: a transfer from the host's server begins.
   func receive(_ request: ReceiveBots, caller: Caller) async throws {
     let source = caller.hello.machine.id
     // The library's value: the cached one may not have caught up with sync yet.
-    let stored = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value.string
+    let stored = ((try? await library.setting(botsHostSetting)) ?? nil)?.value.string
     guard caller.hello.role == .server, source == stored, source != thisMachine else {
-      throw ProtocolError(.refused, "Only the bots' home machine sends them.")
+      throw ProtocolError(.refused, "Only the bots' host sends them.")
     }
     await ending?.value
     if let incoming {
       guard incoming.id != request.transferID else { throw ProtocolError(.badRequest, "That transfer has begun.") }
-      guard await abortIncoming(incoming.id) else { throw ProtocolError(.busy, "This machine is becoming the bots' home.") }
+      guard await abortIncoming(incoming.id) else { throw ProtocolError(.busy, "This machine is becoming the bots' host.") }
     }
     // Nothing held here and nothing outgoing: a removal still under way would
     // remove what this transfer puts in place.
@@ -457,7 +457,7 @@ extension BotsHost {
     return parts[0] == "bots" || (parts[0] == "files" && parts.count == 2 && path.hasSuffix(".tar"))
   }
 
-  /// The old home asked something of transfer `id`.
+  /// The old host asked something of transfer `id`.
   private func heard(_ id: String) {
     if incoming?.id == id { incoming?.lastHeard = .now }
   }
@@ -531,7 +531,7 @@ extension BotsHost {
     try stillCurrent(id)
     // A new stint: whatever bot chats and checkpoints this library still holds
     // from an earlier one are gone, so the bots save their whole history again,
-    // under sessions that carry what the person set on the old home's.
+    // under sessions that carry what the person set on the old host's.
     try await library.removeBotChats()
     try stillCurrent(id)
     tenure.end()
@@ -539,7 +539,7 @@ extension BotsHost {
     try await library.carryBotChats(transfer.expected.chats, sessions: sessions)
     try stillCurrent(id)
     hold = .receiving(source: transfer.source)
-    await reconcileHome()
+    await reconcileHost()
     let deadline = ContinuousClock.now + Self.installLimit
     while true {
       try stillCurrent(id)
@@ -556,7 +556,7 @@ extension BotsHost {
     incoming?.phase = .confirmed
   }
 
-  /// `CommitReceivedBots`: this machine becomes the home. Once begun, nothing
+  /// `CommitReceivedBots`: this machine becomes the host. Once begun, nothing
   /// gives the transfer back.
   func commitReceived(_ id: String) async throws {
     if committed(id) { return }
@@ -572,7 +572,7 @@ extension BotsHost {
     incoming?.phase = .committing
     await hosting.committing()
     do {
-      _ = try await library.setSetting(botsHomeSetting, to: .string(thisMachine))
+      _ = try await library.setSetting(botsHostSetting, to: .string(thisMachine))
     } catch {
       incoming?.phase = .confirmed
       throw error
@@ -585,14 +585,14 @@ extension BotsHost {
     remove(incomingFolder)
     remove(incomingMarker)
     hold = nil
-    await reconcileHome()
+    await reconcileHost()
   }
 
   /// `AbortReceivedBots`: replies once this machine holds nothing of the
-  /// transfer; refused once it has begun to make itself the home.
+  /// transfer; refused once it has begun to make itself the host.
   func abortReceived(_ id: String) async throws {
     guard !committed(id), await abortIncoming(id) else {
-      throw ProtocolError(.busy, "\(await name(of: thisMachine)) is becoming the bots' home.")
+      throw ProtocolError(.busy, "\(await name(of: thisMachine)) is becoming the bots' host.")
     }
   }
 
@@ -639,7 +639,7 @@ extension BotsHost {
   private func giveBack(_ transfer: IncomingTransfer) async {
     _ = try? await transfer.work?.value
     if case .receiving? = hold { hold = nil }
-    await reconcileHome(keepEngine: true)
+    await reconcileHost(keepEngine: true)
     if transfer.work != nil { await removeReceived() } else { await releaseEngine() }
     remove(incomingFolder)
     remove(incomingMarker)
@@ -655,7 +655,7 @@ extension BotsHost {
     tenure.end()
   }
 
-  /// Gives the transfer back once the old home has asked nothing of it for `targetSilence`.
+  /// Gives the transfer back once the old host has asked nothing of it for `targetSilence`.
   private func startWatchdog() {
     watchdog?.cancel()
     watchdog = Task { [weak self] in
@@ -673,13 +673,13 @@ extension BotsHost {
   // MARK: After a restart
 
   /// A transfer the last run of this server left: each side ends it in one
-  /// of the two states, the bots on the old home or on the new one.
+  /// of the two states, the bots on the old host or on the new one.
   func recoverTransfer() {
     if let marker = readMarker(incomingMarker, as: IncomingStep.self) {
       let (library, me) = (library, thisMachine)
       _ = beginEnding {
-        let setting = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value.string
-        await self.recoverIncoming(marker, madeHome: setting == me)
+        let setting = ((try? await library.setting(botsHostSetting)) ?? nil)?.value.string
+        await self.recoverIncoming(marker, becameHost: setting == me)
       }
     }
     guard let marker = readMarker(outgoingMarker, as: OutgoingStep.self) else { return }
@@ -702,9 +702,9 @@ extension BotsHost {
     }
   }
 
-  private func recoverIncoming(_ marker: TransferMarker<IncomingStep>, madeHome: Bool) async {
-    if madeHome {
-      // It made itself home just before the restart.
+  private func recoverIncoming(_ marker: TransferMarker<IncomingStep>, becameHost: Bool) async {
+    if becameHost {
+      // It made itself the host just before the restart.
       try? marker.id.write(to: committedFile, atomically: true, encoding: .utf8)
     } else if marker.step == .installed {
       await removeReceived()
@@ -713,22 +713,22 @@ extension BotsHost {
     remove(incomingMarker)
   }
 
-  // MARK: Choosing the first home
+  // MARK: Choosing the first host
 
   /// `BotsPresence`: what this machine knows of the bots.
   func presence() async -> BotsPresenceReply {
-    let stored = ((try? await library.setting(botsHomeSetting)) ?? nil)?.value.string.flatMap { $0.isEmpty ? nil : $0 }
+    let stored = ((try? await library.setting(botsHostSetting)) ?? nil)?.value.string.flatMap { $0.isEmpty ? nil : $0 }
     let saved = (try? await library.savedBots().bots.isEmpty) == false
     let moving = hold != nil || incoming != nil || outgoing != nil || ending != nil
-    return BotsPresenceReply(homeMachineID: stored ?? setting, hasBots: saved || moving)
+    return BotsPresenceReply(hostMachineID: stored ?? setting, hasBots: saved || moving)
   }
 
-  /// `ChooseBotsHome`: the first home, only while no machine knows of any bots.
-  func chooseHome(_ machineID: String) async throws {
+  /// `ChooseBotsHost`: the first host, only while no machine knows of any bots.
+  func chooseHost(_ machineID: String) async throws {
     func unknown() async throws {
       let here = await presence()
-      guard here.homeMachineID == nil, !here.hasBots else {
-        throw ProtocolError(.refused, "The bots already have a home. Moving them is a transfer.")
+      guard here.hostMachineID == nil, !here.hasBots else {
+        throw ProtocolError(.refused, "The bots already have a host. Moving them is a transfer.")
       }
     }
     try await unknown()
@@ -740,7 +740,7 @@ extension BotsHost {
     for (peerID, client) in await peers.linked() {
       guard let there = try? await client.call(BotsPresence(), timeout: .seconds(10)) else { continue }
       if peerID == machineID { askedChosen = true }
-      if there.homeMachineID != nil || there.hasBots {
+      if there.hostMachineID != nil || there.hasBots {
         throw ProtocolError(.refused, "\(await name(of: peerID)) knows of the bots already. Wait until it has synced.",
                             machineID: peerID)
       }
@@ -749,7 +749,7 @@ extension BotsHost {
       throw ProtocolError(.ownerUnreachable, "\(await name(of: machineID)) is not reachable.", machineID: machineID)
     }
     try await unknown()
-    _ = try await library.setSetting(botsHomeSetting, to: .string(machineID))
+    _ = try await library.setSetting(botsHostSetting, to: .string(machineID))
   }
 }
 
@@ -780,8 +780,8 @@ func registerBotsTransfer(_ router: inout Router, bots: BotsHost) {
     try await bots.abortReceived(request.transferID)
     return Done()
   }
-  router.on(ChooseBotsHome.self) { request, _ in
-    try await bots.chooseHome(request.machineID)
+  router.on(ChooseBotsHost.self) { request, _ in
+    try await bots.chooseHost(request.machineID)
     return Done()
   }
   router.on(BotsPresence.self) { _, _ in

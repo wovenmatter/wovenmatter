@@ -2,7 +2,7 @@ import Foundation
 import WovenProtocol
 
 /// Settings → Bots: profiles, models, bots and teams, containers and memory.
-/// Each read and change is one `BotsCall` to the home machine's server.
+/// Each read and change is one `BotsCall` to the host's server.
 extension BotsStore {
     // MARK: Profiles and models
 

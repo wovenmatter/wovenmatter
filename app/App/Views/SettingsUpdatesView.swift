@@ -124,7 +124,7 @@ struct SettingsUpdatesView: View {
         }
     }
 
-    private func hasBots(_ machine: Machine) -> Bool { model.bots.homeMachineID == machine.id }
+    private func hasBots(_ machine: Machine) -> Bool { model.bots.hostMachineID == machine.id }
 
     /// "Woven Matter 0.4.3 · Bots", the version it's on and whether its bots run there.
     private func deviceSummary(_ machine: Machine) -> String {

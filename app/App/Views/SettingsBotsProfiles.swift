@@ -141,7 +141,7 @@ struct BotSettingsProfiles: View {
         SettingsSection(title: "Available models", detail: "From Settings → Subscriptions & API Keys.") {
             if providers.isEmpty {
                 SettingsEmpty("No providers are connected.")
-                if let machineID = state.bots.homeMachineID { ManageAccountsLink(machineID: machineID) } else { ManageAccountsLink() }
+                if let machineID = state.bots.hostMachineID { ManageAccountsLink(machineID: machineID) } else { ManageAccountsLink() }
             } else {
                 ForEach(providers) { provider in
                     SettingsSummaryRow(provider.name, value: provider.models.count == 1 ? "1 model" : "\(provider.models.count) models") {

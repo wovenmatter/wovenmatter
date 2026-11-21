@@ -39,7 +39,7 @@ struct Machine: Identifiable, Hashable, Sendable {
 }
 
 /// The runtimes a session can run on. Bots are not here: they have their own
-/// surface on the bots' home machine.
+/// surface on the bots' host.
 enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable {
     case defaultAgent = "default_agent"
     case codex

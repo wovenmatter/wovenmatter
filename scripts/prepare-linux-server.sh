@@ -113,7 +113,7 @@ for arch in x86_64 aarch64; do
   )
   find "$resources/default-agent/node_modules" -type f -name '*.map' -delete
   rsync -a --exclude=.DS_Store "$root/harnesses/" "$resources/harnesses/"
-  # The bots runtime, so this machine can be the bots' home: its sources, the engine
+  # The bots runtime, so this machine can be the bots' host: its sources, the engine
   # installer and its production packages for Linux, without its own copy of the SDK it
   # loads from Pi Durable's (as prepare-bots.sh does for the Mac).
   rsync -a --exclude=/node_modules --exclude=/test --exclude=.DS_Store --exclude='*.map' "$root/bots/" "$resources/bots/"

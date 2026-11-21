@@ -37,7 +37,7 @@ struct BotIssueButtons: View {
     }
 }
 
-/// A bot's channel or thread in a chat panel, from the bots' home machine.
+/// A bot's channel or thread in a chat panel, from the bots' host.
 struct BotConversationSurface: View {
     @Bindable var bots: BotsStore
     let panelID: ChatPanelID
@@ -59,13 +59,13 @@ struct BotConversationSurface: View {
     /// This machine's Profiles page, where a bot's model changes; Bot settings when unset.
     var onOpenProfiles: (() -> Void)?
 
-    /// The target belongs to the bots' home machine; one left from a former home does not.
-    private var isHome: Bool { bots.homeMachineID == target.machineID }
-    private var bot: PiBotSummary? { isHome ? bots.bots.first { $0.id == target.botID } : nil }
+    /// The target belongs to the bots' host; one left from a former host does not.
+    private var isOnHost: Bool { bots.hostMachineID == target.machineID }
+    private var bot: PiBotSummary? { isOnHost ? bots.bots.first { $0.id == target.botID } : nil }
 
     var body: some View {
         Group {
-            if isHome, bots.isAvailable || bots.isReadingSaved {
+            if isOnHost, bots.isAvailable || bots.isReadingSaved {
                 content
             } else {
                 unavailable
@@ -137,7 +137,7 @@ struct BotConversationSurface: View {
 
     private var unavailable: some View {
         ZStack {
-            BotsUnavailableView(bots: isHome ? bots : nil, onOpenSettings: onOpenSettings)
+            BotsUnavailableView(bots: isOnHost ? bots : nil, onOpenSettings: onOpenSettings)
             controls
         }
     }
@@ -995,7 +995,7 @@ struct BotDismissibleError: View {
 }
 
 struct BotsUnavailableView: View {
-    /// The bots, when the chat belongs to their home machine.
+    /// The bots, when the chat belongs to their host.
     let bots: BotsStore?
     let onOpenSettings: () -> Void
 
@@ -1020,7 +1020,7 @@ struct BotsUnavailableView: View {
     private var name: String { bots?.displayName ?? "that machine" }
 
     private var title: String {
-        guard let bots, bots.homeMachine != nil else { return "This bot's machine isn't connected" }
+        guard let bots, bots.hostMachine != nil else { return "This bot's machine isn't connected" }
         switch bots.state {
         case .off: return "Bots are off"
         case .starting: return "Starting bots…"
@@ -1032,7 +1032,7 @@ struct BotsUnavailableView: View {
     }
 
     private var detail: String? {
-        guard let bots, bots.homeMachine != nil else { return "Choose where bots run in Settings → Bots, then try again." }
+        guard let bots, bots.hostMachine != nil else { return "Choose where bots run in Settings → Bots, then try again." }
         if bots.state == .off { return "Turn them on in Settings → Bots." }
         return bots.message
     }

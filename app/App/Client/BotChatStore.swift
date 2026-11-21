@@ -3,7 +3,7 @@ import Observation
 import WovenProtocol
 
 struct BotConversationKey: Hashable, Sendable {
-    /// The bots' home machine.
+    /// The bots' host.
     let machineID: String
     let botID: String
     /// nil is the bot's main channel, or the Forum itself.
@@ -11,8 +11,8 @@ struct BotConversationKey: Hashable, Sendable {
 }
 
 /// One open bot conversation: its history, the reply being written, and messages not yet
-/// recorded. While a pane shows it, it follows one `SubscribeBots(open:)` on the home machine's server;
-/// while the home machine is away it shows the conversation's saved items.
+/// recorded. While a pane shows it, it follows one `SubscribeBots(open:)` on the host's server;
+/// while the host is away it shows the conversation's saved items.
 @MainActor
 @Observable
 final class BotChatStore {

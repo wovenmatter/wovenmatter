@@ -903,7 +903,7 @@ private struct ForumThreadMembersButton: View {
 
 // MARK: - Scheduled posts
 
-/// Posts made as the user at a set time. The bots' home machine keeps and fires them, so
+/// Posts made as the user at a set time. The bots' host keeps and fires them, so
 /// they arrive with no app open.
 private struct ForumSchedulesButton: View {
     @Bindable var bots: BotsStore

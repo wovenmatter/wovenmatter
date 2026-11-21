@@ -45,7 +45,7 @@ struct SettingsBotsView: View {
                 pendingHost = nil
                 choosing = true
                 Task {
-                    if let target { if moving { await bots.transfer(to: target) } else { await bots.chooseHome(target) } }
+                    if let target { if moving { await bots.transfer(to: target) } else { await bots.chooseHost(target) } }
                     choosing = false
                 }
             }
@@ -57,8 +57,8 @@ struct SettingsBotsView: View {
 
     // MARK: Where bots run
 
-    /// The home machine, once one is chosen.
-    private var host: Machine? { bots.homeMachine }
+    /// The host, once one is chosen.
+    private var host: Machine? { bots.hostMachine }
 
     /// This Mac, then the other Woven machines that are online.
     private var candidates: [Machine] {
@@ -106,7 +106,7 @@ struct SettingsBotsView: View {
 
 // MARK: - One machine
 
-/// The bots' home machine: status and maintenance, then its profiles, bots and teams, and resources.
+/// The bots' host: status and maintenance, then its profiles, bots and teams, and resources.
 struct SettingsBotsMachineView: View {
     @Bindable var bots: BotsStore
     let machineID: String
@@ -117,7 +117,7 @@ struct SettingsBotsMachineView: View {
     var onOpenAccounts: (String) -> Void = { _ in }
     @State private var confirmingImageMove = false
 
-    private var machine: Machine? { bots.homeMachine.flatMap { $0.id == machineID ? $0 : nil } }
+    private var machine: Machine? { bots.hostMachine.flatMap { $0.id == machineID ? $0 : nil } }
 
     var body: some View {
         SettingsPage(
@@ -289,7 +289,7 @@ enum BotMachineText {
     /// The operating system bots run on, and how many bots once it is ready. No versions: a
     /// machine that needs updating says so in its status and Settings → Updates.
     static func summary(_ bots: BotsStore) -> String {
-        var parts = [bots.homeMachine?.platform.displayName ?? "Mac"]
+        var parts = [bots.hostMachine?.platform.displayName ?? "Mac"]
         if bots.state == .ready, bots.hasLoadedBots {
             parts.append(bots.bots.count == 1 ? "1 bot" : "\(bots.bots.count) bots")
         }

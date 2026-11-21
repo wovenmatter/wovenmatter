@@ -12,7 +12,7 @@ struct SettingsBotsResourcesView: View {
     @State private var saving = false
     @State private var error: String?
 
-    private var machine: Machine? { bots.homeMachine.flatMap { $0.id == machineID ? $0 : nil } }
+    private var machine: Machine? { bots.hostMachine.flatMap { $0.id == machineID ? $0 : nil } }
 
     var body: some View {
         SettingsPage(title: "Resources", detail: machine.map { "How much of \($0.isThisMachine ? "this Mac" : $0.name)'s memory and disk your bots may use." },

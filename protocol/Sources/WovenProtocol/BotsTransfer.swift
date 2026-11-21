@@ -1,16 +1,16 @@
 import Foundation
 
-// Transfer: the bots move from their home machine to another Woven machine.
-// The home machine's server runs it with the target machine's server over
+// Transfer: the bots move from their host to another Woven machine.
+// The host's server runs it with the target machine's server over
 // their server-to-server connection: it stops the bots, writes each bot's
 // files out as archives, sends them and the bots folder, and asks the target
 // to start the bots. Only once the target has every bot and chat does the
-// target become the home (`bots.home`); the old home then removes its copy.
-// Until that switch, a failure leaves the bots on the old home, started again.
+// target become the host (`bots.host`); the old host then removes its copy.
+// Until that switch, a failure leaves the bots on the old host, started again.
 
-/// Moves the bots to `targetMachineID`. Sent to the home machine's server;
+/// Moves the bots to `targetMachineID`. Sent to the host's server;
 /// replies once the bots run there, or fails with what went wrong (the bots
-/// then run on the old home again). Progress is in `BotsStatus.transfer`.
+/// then run on the old host again). Progress is in `BotsStatus.transfer`.
 public struct TransferBots: Request {
   public static let method = "bots.transfer"
   public typealias Reply = Done
@@ -19,7 +19,7 @@ public struct TransferBots: Request {
 }
 
 public enum BotsTransferPhase: String, Codable, Sendable, Hashable {
-  /// Stopping the bots on the old home.
+  /// Stopping the bots on the old host.
   case stopping
   /// Writing each bot's files out of the container engine.
   case exporting
@@ -27,7 +27,7 @@ public enum BotsTransferPhase: String, Codable, Sendable, Hashable {
   case copying
   /// The target reads them in, starts its engine and the bots, and checks it has every bot and chat.
   case starting
-  /// The old home removes its copy.
+  /// The old host removes its copy.
   case removing
 }
 
@@ -63,14 +63,14 @@ public struct BotsTransferFile: Codable, Sendable, Hashable {
   }
 }
 
-/// What the target must hold before it becomes the home, as the old home's
+/// What the target must hold before it becomes the host, as the old host's
 /// library had it when the bots stopped.
 public struct BotsTransferExpected: Codable, Sendable, Hashable {
   public struct Chat: Codable, Sendable, Hashable {
     /// Nil for a Forum room.
     public var botID: String?
     public var conversationID: Int
-    /// The old home's session for it, whose state the new home's session takes on.
+    /// The old host's session for it, whose state the new host's session takes on.
     public var session: CarriedSession
 
     public init(botID: String?, conversationID: Int, session: CarriedSession) {
@@ -81,7 +81,7 @@ public struct BotsTransferExpected: Codable, Sendable, Hashable {
   }
 
   /// What the person set on a bot chat's session: carried to the session the
-  /// new home saves the chat under.
+  /// new host saves the chat under.
   public struct CarriedSession: Codable, Sendable, Hashable {
     public var title: String
     public var archived: Bool
@@ -106,7 +106,7 @@ public struct BotsTransferExpected: Codable, Sendable, Hashable {
 
   public var bots: [String]
   public var chats: [Chat]
-  /// How far the old home's library held each bot's entries (`bot:<id>`) and the Forum's (`forum`).
+  /// How far the old host's library held each bot's entries (`bot:<id>`) and the Forum's (`forum`).
   public var checkpoints: [String: Int64]
 
   public init(bots: [String], chats: [Chat], checkpoints: [String: Int64]) {
@@ -116,7 +116,7 @@ public struct BotsTransferExpected: Codable, Sendable, Hashable {
   }
 }
 
-/// The old home's server opens a transfer on the target's: the files that follow and what to expect.
+/// The old host's server opens a transfer on the target's: the files that follow and what to expect.
 public struct ReceiveBots: Request {
   public static let method = "bots.transfer.receive"
   public typealias Reply = Done
@@ -148,7 +148,7 @@ public struct ReceiveBotsPiece: Request {
 
 /// Every file is sent: the target checks them, reads them in, starts the bots
 /// and replies once it holds every expected bot and chat. Until the commit,
-/// the target stops the bots and removes them again if the old home goes away.
+/// the target stops the bots and removes them again if the old host goes away.
 public struct StartReceivedBots: Request {
   public static let method = "bots.transfer.start"
   public typealias Reply = Done
@@ -156,7 +156,7 @@ public struct StartReceivedBots: Request {
   public init(transferID: String) { self.transferID = transferID }
 }
 
-/// The switch: the target makes itself the bots' home.
+/// The switch: the target makes itself the bots' host.
 public struct CommitReceivedBots: Request {
   public static let method = "bots.transfer.commit"
   public typealias Reply = Done
@@ -164,7 +164,7 @@ public struct CommitReceivedBots: Request {
   public init(transferID: String) { self.transferID = transferID }
 }
 
-/// The old home gives up: the target stops what it started and removes what it received.
+/// The old host gives up: the target stops what it started and removes what it received.
 public struct AbortReceivedBots: Request {
   public static let method = "bots.transfer.abort"
   public typealias Reply = Done
@@ -172,9 +172,9 @@ public struct AbortReceivedBots: Request {
   public init(transferID: String) { self.transferID = transferID }
 }
 
-/// Whether the target made itself home for a transfer, for an old home that
+/// Whether the target made itself the host for a transfer, for an old host that
 /// lost the commit's reply. While the bots run on the target before the
-/// switch, the old home also sends it every few seconds: a target that hears
+/// switch, the old host also sends it every few seconds: a target that hears
 /// nothing of its transfer for a minute gives it back.
 public struct ReceivedBotsState: Request {
   public static let method = "bots.transfer.state"
@@ -184,7 +184,7 @@ public struct ReceivedBotsState: Request {
 }
 
 public enum ReceivedBotsOutcome: String, Codable, Sendable, Hashable {
-  /// The target is the home.
+  /// The target is the host.
   case committed
   /// The target still holds the transfer, not yet committed, or is still giving it back.
   case pending

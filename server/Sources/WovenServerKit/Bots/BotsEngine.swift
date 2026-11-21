@@ -1,7 +1,7 @@
 import Foundation
 import WovenProtocol
 
-/// Limits for the bots on their home machine, from the synced setting
+/// Limits for the bots on their host, from the synced setting
 /// `bots.resources` (`{"poolBytes", "perBotBytes", "diskBytes"}`, each a
 /// byte count or null for no cap).
 public struct BotsResources: Codable, Sendable, Hashable {
@@ -22,7 +22,7 @@ public struct BotsResources: Codable, Sendable, Hashable {
   }
 }
 
-/// The Docker Engine the bots' containers run in, on the home machine: on a
+/// The Docker Engine the bots' containers run in, on the host: on a
 /// Mac, Woven's own Linux VM through the VM helper; on Linux, the dedicated
 /// dockerd. The runtime is given only its socket.
 protocol BotsEngine: Sendable {
