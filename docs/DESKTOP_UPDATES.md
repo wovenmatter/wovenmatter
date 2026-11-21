@@ -31,9 +31,11 @@ vulnerabilities first. `scripts/cut-release.sh build X.Y.Z` then makes a fresh
 worktree of current `origin/main` on this Mac and compiles the production
 Release app with an ad-hoc signature and the release version, build number and
 source revision. The compile builds everything the app carries, including the
-Linux `woven-server` and its resources for x86_64 and aarch64
-(`scripts/prepare-linux-server.sh`, into `Contents/Resources/linux-server`),
-which the Mac installs on Linux machines over SSH. The script then runs the
+Linux `woven-server` for x86_64 and aarch64 and the Linux Node record
+(`scripts/prepare-linux-server.sh`, into `Contents/Resources/linux-server`).
+The Mac installs that server on Linux machines over SSH with its own Pi
+Durable, bots runtime and harness files, and the machine downloads its Node
+from nodejs.org. The script then runs the
 native app checks. `scripts/cut-release.sh ship X.Y.Z` uploads that zipped app
 and a small record (version, build, commit, SHA-256) to the private draft, then
 pushes the `vX.Y.Z` tag.

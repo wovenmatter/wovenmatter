@@ -47,8 +47,8 @@ Bundled dependencies retain their own upstream licenses and notices.
 Pi Durable can use Claude models through the
 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript),
 which is © Anthropic PBC and used under
-[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). Its
-native runtime keeps Anthropic's original signature and is never modified.
+[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). It
+runs the Claude Code installed on each machine; no copy of Claude Code ships.
 
 ## Lucide
 
@@ -169,9 +169,8 @@ production dependencies in `bots/package-lock.json`, installed unmodified with
 (MIT) and `zod` (MIT), and their dependencies under MIT, Apache-2.0, BSD-2-Clause,
 BSD-3-Clause, ISC, 0BSD and Unlicense terms. The
 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript)
-and its native runtime are © Anthropic PBC and used under
-[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); the
-runtime keeps Anthropic's original signature and is never modified. Each
+is © Anthropic PBC and used under
+[Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance). Each
 package's license and notice files remain in the bundled `node_modules`.
 
 The in-container helper (`bots/helper/`) adapts Pi Bot's environment agent.

@@ -4,7 +4,8 @@
 #   scripts/cut-release.sh build X.Y.Z
 #     Fresh worktree of current origin/main, production Release app compiled
 #     here (ad-hoc signed; the compile also builds the Linux woven-server for
-#     x86_64 and aarch64 into the app) and checked. Uploads nothing.
+#     x86_64 and aarch64 into the app, and no Claude engine is bundled) and
+#     checked. Uploads nothing.
 #   scripts/cut-release.sh ship X.Y.Z
 #     Uploads that exact build to the private draft and pushes the tag, which
 #     starts .github/workflows/release.yml to sign, notarize and package it.
@@ -64,7 +65,8 @@ build() {
   compile_app "$work/build"
   local app="$work/build/DerivedData/Build/Products/Release/Woven Matter.app"
 
-  # Includes the Linux server for x86_64 and aarch64, Pi Durable, the bots and the VM helper.
+  # Includes the Linux server for x86_64 and aarch64 and the Linux Node record, Pi Durable,
+  # the bots and the VM helper.
   step 'Checking the app'
   python3 scripts/validate-release-metadata.py verify "$version" "$build_number" "$revision" \
     --plist "$app/Contents/Info.plist"

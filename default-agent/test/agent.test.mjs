@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
+import { claudeExecutable } from '../src/claude.mjs';
 import { startAgent } from './fixtures/client.mjs';
 
 async function folders(t) {
@@ -93,4 +94,15 @@ test('a message sent during a turn steers it, and the turn answers once', async 
   const idle = await agent.request('_session/steering', { sessionId, prompt: [{ type: 'text', text: 'late' }] });
   assert.equal(idle.result.outcome, 'promptRequired');
   await agent.stop();
+});
+
+test('Claude runs the first executable claude on PATH, or says it is not installed', async t => {
+  const { cwd } = await folders(t);
+  const [none, plain, installed] = ['none', 'plain', 'installed'].map(name => join(cwd, name));
+  for (const folder of [none, plain, installed]) await mkdir(folder);
+  await writeFile(join(plain, 'claude'), '');
+  await writeFile(join(installed, 'claude'), '#!/bin/sh\n');
+  await chmod(join(installed, 'claude'), 0o755);
+  assert.equal(claudeExecutable([none, plain, installed].join(delimiter)), join(installed, 'claude'));
+  assert.throws(() => claudeExecutable([none, plain].join(delimiter)), { message: 'Claude Code is not installed on this machine.' });
 });

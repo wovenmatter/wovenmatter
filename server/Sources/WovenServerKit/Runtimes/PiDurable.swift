@@ -91,7 +91,7 @@ public final class PiDurableRuntime: Runtime {
     let modules = agent.appendingPathComponent("node_modules")
     if !FileManager.default.fileExists(atPath: modules.path) {
       guard let npm = ChildProcess.find("npm") else { throw RuntimeError.failed("Installing Pi Durable needs npm.") }
-      let result = await ChildProcess.run(npm, ["ci", "--omit=dev", "--no-audit", "--no-fund"],
+      let result = await ChildProcess.run(npm, ["ci", "--omit=dev", "--omit=optional", "--no-audit", "--no-fund"],
                                           directory: agent.path, timeout: .seconds(900))
       guard result.status == 0 else { throw RuntimeError.failed("npm ci failed: \(result.output.suffix(2000))") }
       return

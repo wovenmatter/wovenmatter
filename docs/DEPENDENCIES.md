@@ -62,12 +62,17 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   from swift.org's release list, verified again by `swift sdk install`). Xcode's
   compiler cannot use that SDK. SQLite is the recorded amalgamation, compiled
   with FTS5 and math functions. This is an exact selection because the binary
-  is fully static. Its child processes get the official Linux Node of
-  `default-agent/.node-version` and Pi Durable's packages installed for Linux
-  with `npm ci`, all shipped in the release, so a target downloads nothing at
-  install. Release builds always build it; Debug builds copy one already built.
-  Maintenance moves the toolchain and SDK together. A Linux machine receives a
-  new binary only from an updated Mac app.
+  is fully static. The app carries only that binary for each architecture
+  (`linux-<arch>/woven-server.tar.xz`) and `node.json`, the Node release of
+  `default-agent/.node-version` with the Linux archives' SHA-256 from
+  `server/linux-build.json`. An install sends the binary with the Mac's own
+  Pi Durable (without its macOS Node and npm), bots runtime and harness files;
+  their packages are plain JavaScript and identical on both systems. The
+  target downloads the official Linux Node from nodejs.org and verifies that
+  SHA-256 before using it. The script downloads both Linux Node archives too,
+  so a build proves the recorded checksums. Release builds always build it;
+  Debug builds copy one already built. Maintenance moves the toolchain and SDK
+  together. A Linux machine receives a new binary only from an updated Mac app.
 - **Node** runs the two child processes, Pi Durable and the bots runtime, and
   the managed adapter tools. Select the newest stable release, including
   Current; do not restrict selection to LTS. Exclude nightlies and
@@ -115,6 +120,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   it: the versions Pi and Chord pin themselves are not overridden. A known
   vulnerability in one of those pins is reported at release time rather than
   patched inside the package.
+- **Claude Agent SDK** ships as its JavaScript library only. Its optional
+  per-platform packages, each a copy of the Claude Code executable, are never
+  installed (`npm ci --omit=optional`) or shipped. Pi Durable and the bots run
+  the machine's installed Claude Code (`claude` on the path) for queries and
+  for its sign-in, so the Claude subscription needs Claude Code installed there.
 - **Bots runtime** (`bots/`) declares the same Pi family, Chord, Claude Agent
   SDK and ws selections as `default-agent` for its type check and tests. At
   run time it never loads its own copy of the SDK packages: it resolves them from the copy Pi Durable runs on that machine
@@ -126,11 +136,12 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 ## SDK updates on installed apps
 
 Settings can update Pi Durable's SDK packages (`default-agent/src/sdk.mjs`):
-it installs their latest releases into a fresh folder in the server's data
-folder, checks that they load, and points `sdk/current` at it. Running
-sessions keep the packages they started with; new ones use the update. The
-update and the one before it are kept. The bots runtime on that machine uses
-the same copy. A failed update is discarded and leaves the working copy active.
+it installs their latest releases, without optional packages, into a fresh
+folder in the server's data folder, checks that they load, and points
+`sdk/current` at it. Running sessions keep the packages they started with;
+new ones use the update. The update and the one before it are kept. The bots
+runtime on that machine uses the same copy. A failed update is discarded and
+leaves the working copy active.
 
 Agent CLIs are the person's own native installs: Woven Matter installs a
 missing one with its vendor's official installer and updates it with the

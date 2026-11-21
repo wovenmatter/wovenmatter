@@ -58,18 +58,10 @@ export const runtimeConfigSchema = z.strictObject({
       .nullable(),
   }),
   /**
-   * This machine's Pi Durable (absolute paths): bots load the SDK copy it runs, with that
-   * copy's Claude binary (`pi-durable-sdk.ts`). The server always sends it.
+   * This machine's Pi Durable (absolute paths): bots load the SDK copy it runs
+   * (`pi-durable-sdk.ts`). The server always sends it.
    */
   piDurable: z.strictObject({ bundle: absolute, directory: absolute }).optional(),
-  /**
-   * A Claude runtime binary (absolute), for tests and checkouts without `piDurable`.
-   * Omitted: the SDK's own platform package, if installed.
-   */
-  claude: z.strictObject({ executable: absolute }).optional(),
-}).refine((value) => !(value.piDurable && value.claude), {
-  message: "piDurable supplies the Claude binary; omit claude",
-  path: ["claude"],
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema> & {

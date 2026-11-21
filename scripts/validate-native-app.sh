@@ -88,14 +88,11 @@ done
   'import { pathToFileURL } from "node:url"; await import(pathToFileURL(process.argv[1]));' \
   "${resources}/default-agent/src/agent.mjs"
 test -f "${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
-claude_arch="$(uname -m)"
-if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
-claude_binary="${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
-test -x "$claude_binary"
-codesign --verify --strict "$claude_binary"
+# No Claude engine anywhere: Pi Durable and the bots run the installed Claude Code.
+engines="$(find "$resources" -path '*/@anthropic-ai/claude-agent-sdk-*-*' -prune -print)"
+test -z "$engines" || { printf 'Claude engine packages in the app:\n%s\n' "$engines" >&2; exit 1; }
 # The bots runtime (Resources/bots): its sources and production dependencies only. It
-# loads the default agent's SDK copy and signed Claude binary above (prepare-bots.sh), so
-# it carries no copy of its own.
+# loads the default agent's SDK copy above (prepare-bots.sh), so it carries no copy of its own.
 bots="${resources}/bots"
 for file in package.json package-lock.json src/cli.ts helper/supervisor.mjs helper/agent.mjs image/Dockerfile; do
   test -f "$bots/$file"
@@ -113,27 +110,26 @@ test -f "${resources}/harnesses/woven-mcp.mjs"
 test -f "${resources}/default-agent/.node-version"
 
 # The Linux server this Mac installs over SSH (scripts/prepare-linux-server.sh): a
-# static woven-server and its resources for each architecture LinuxInstall accepts.
-python3 -I - "${resources}/linux-server" <<'PY'
-import gzip, pathlib, sys, tarfile
+# static woven-server for each architecture LinuxInstall accepts, and the Linux Node
+# the target downloads, as server/linux-build.json records it. Nothing else.
+python3 -I - "${resources}/linux-server" "${resources}/default-agent/.node-version" "$repo_root/server/linux-build.json" <<'PY'
+import json, pathlib, sys, tarfile
 root = pathlib.Path(sys.argv[1])
-MACHO = {bytes.fromhex(v) for v in ('feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}
+record = json.loads(pathlib.Path(sys.argv[3]).read_text())
+expected = {'version': pathlib.Path(sys.argv[2]).read_text().strip(),
+            'x86_64': record['nodeLinuxX64SHA256'], 'aarch64': record['nodeLinuxArm64SHA256']}
+assert json.loads((root / 'node.json').read_text()) == expected, 'linux-server/node.json does not match the recorded Linux Node'
+assert sorted(p.relative_to(root).as_posix() for p in root.rglob('*')) == \
+    ['linux-aarch64', 'linux-aarch64/woven-server.tar.xz', 'linux-x86_64', 'linux-x86_64/woven-server.tar.xz', 'node.json'], \
+    'linux-server holds more than the two servers and node.json'
 for arch, machine in (('x86_64', 0x3E), ('aarch64', 0xB7)):
-    release = root / f'linux-{arch}'
-    with gzip.open(release / 'woven-server.gz') as server:
-        header = server.read(20)
+    with tarfile.open(root / f'linux-{arch}' / 'woven-server.tar.xz') as archive:
+        members = archive.getmembers()
+        assert [(m.name, m.isfile()) for m in members] == [('woven-server', True)], \
+            f'linux-{arch}/woven-server.tar.xz holds more than woven-server'
+        header = archive.extractfile(members[0]).read(20)
     assert header[:4] == b'\x7fELF' and int.from_bytes(header[18:20], 'little') == machine, \
-        f'linux-{arch}/woven-server.gz is not a Linux {arch} executable'
-    with tarfile.open(release / 'resources.tar.gz') as resources:
-        names = set(resources.getnames())
-        # No Mach-O code: Linux never runs it, and Apple's notary rejects it unsigned.
-        for member in resources.getmembers():
-            if member.isfile() and member.size >= 4:
-                with resources.extractfile(member) as file:
-                    assert file.read(4) not in MACHO, f'linux-{arch}/resources.tar.gz carries Mach-O code: {member.name}'
-    for required in ('node/bin/node', 'default-agent/src/main.mjs',
-                     'default-agent/node_modules/@earendil-works/pi-durable/package.json', 'harnesses/catalog.json'):
-        assert required in names, f'linux-{arch}/resources.tar.gz lacks {required}'
+        f'linux-{arch}/woven-server is not a Linux {arch} executable'
 PY
 
 printf '%s\n' 'Native app validation passed.'

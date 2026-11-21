@@ -1,9 +1,11 @@
+import { accessSync, constants, statSync } from "node:fs";
 import { chmod, lstat, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type { ClaudeCredential } from "./provider.ts";
 
 /**
- * The Claude Agent SDK runtime: where Claude Code runs and with which environment. Credentials
+ * The Claude Agent SDK runtime: where Claude Code runs and with which environment. It runs the
+ * Claude Code installed on this machine, found on PATH at each request. Credentials
  * come from the server: for a Claude subscription, Claude Code's own sign-in on this machine with
  * its default configuration (the runtime never reads it); for an API key, the key through the
  * SDK's environment and a private configuration directory.
@@ -38,11 +40,25 @@ export type ClaudeAgentOptions = {
   readonly directory: string;
   /** Replace the SDK's `query` (tests inject a fake; no Claude Code process starts). */
   readonly query?: ClaudeSdkQuery;
-  /** `pathToClaudeCodeExecutable`; the SDK's bundled binary by default. */
-  readonly executable?: string;
   /** Idle timeout per SDK request. Default 180 s, like Woven. */
   readonly timeoutMs?: number;
 };
+
+/** The installed Claude Code: the first executable `claude` on `path`. */
+export function claudeExecutable(path = process.env.PATH ?? ""): string {
+  for (const folder of path.split(delimiter)) {
+    if (!folder) continue;
+    const candidate = join(folder, "claude");
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("Claude Code is not installed on this machine.");
+}
 
 /** Which variable carries a stored credential: `claude setup-token` tokens (sign-in or pasted), or an API key. */
 export function claudeCredentialEnv(key: string): Record<string, string> {
@@ -109,10 +125,8 @@ export class ClaudeAgentRuntime {
 
   async query(params: Parameters<ClaudeSdkQuery>[0]): Promise<ReturnType<ClaudeSdkQuery>> {
     if (this.options.query) return this.options.query(params);
+    const options = { ...params.options, pathToClaudeCodeExecutable: claudeExecutable(), mcpServersDelivery: "argv" };
     const sdk = await loadClaudeAgentSDK();
-    const options = this.options.executable
-      ? { ...params.options, pathToClaudeCodeExecutable: this.options.executable }
-      : params.options;
     return sdk.query({
       prompt: params.prompt,
       options,

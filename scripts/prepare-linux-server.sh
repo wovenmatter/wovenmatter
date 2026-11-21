@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds the Linux server release the Mac app carries and installs over SSH:
-# OUTPUT/linux-<arch>/woven-server.gz (statically linked, any distribution) and
-# OUTPUT/linux-<arch>/resources.tar.gz (Node, Pi Durable with its Linux
-# packages, the harness catalog and adapters, the bots runtime), for x86_64 and aarch64.
+# Builds the Linux server the Mac app carries and installs over SSH:
+# OUTPUT/linux-<arch>/woven-server.tar.xz (statically linked, any distribution),
+# for x86_64 and aarch64, and OUTPUT/node.json, the Linux Node release and its
+# SHA-256 for each, which the target downloads from nodejs.org at install.
 #
 # It cross-compiles on this Mac with the swift.org toolchain and its Static
 # Linux SDK (musl); Xcode's compiler cannot use that SDK. Every download is
@@ -26,7 +26,7 @@ copy_release() {
 }
 
 if "$prepared_only"; then
-  [ -d "$built/linux-x86_64" ] && copy_release || true
+  [ -f "$built/linux-x86_64/woven-server.tar.xz" ] && copy_release || true
   exit 0
 fi
 
@@ -47,6 +47,7 @@ fetch "$(field toolchainURL)" "$(field toolchainSHA256)" "$downloads/swift-toolc
 fetch "$(field staticSDKURL)" "$(field staticSDKSHA256)" "$downloads/static-sdk.tar.gz"
 fetch "$(field sqliteURL)" "$(field sqliteSHA256)" "$downloads/sqlite.zip"
 node_version="$(tr -d '[:space:]' < "$root/default-agent/.node-version")"
+# Downloaded here only to prove the recorded checksums the target verifies.
 fetch "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-x64.tar.gz" "$(field nodeLinuxX64SHA256)" "$downloads/node-linux-x64.tar.gz"
 fetch "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-arm64.tar.gz" "$(field nodeLinuxArm64SHA256)" "$downloads/node-linux-arm64.tar.gz"
 
@@ -80,13 +81,9 @@ sqlite="$work/sqlite"
 rm -rf "$sqlite"; mkdir -p "$sqlite"
 unzip -q -j "$downloads/sqlite.zip" '*/sqlite3.c' '*/sqlite3.h' -d "$sqlite"
 
-# Pi Durable's packages for Linux, installed with this Mac's verified Node.
-mac_node="$("$root/scripts/prepare-default-agent.sh" --print-node-bin)"
-
 staging="$cache/staging"
 rm -rf "$staging"; mkdir -p "$staging"
 for arch in x86_64 aarch64; do
-  case "$arch" in x86_64) node_arch=x64 ;; aarch64) node_arch=arm64 ;; esac
   # The features the library uses from SQLite (FTS5, JSON), compiled in.
   mkdir -p "$sqlite/$arch"
   "$bin/clang" --target="$arch-unknown-linux-musl" --sysroot="$musl/$arch" -O2 -fPIC \
@@ -99,42 +96,10 @@ for arch in x86_64 aarch64; do
     -Xcc "-I$sqlite" -Xlinker "-L$sqlite/$arch" -Xlinker -s
   release="$staging/linux-$arch"
   mkdir -p "$release"
-  gzip -9 -n -c "$work/build-$arch/release/woven-server" > "$release/woven-server.gz"
-
-  resources="$work/resources-$arch"
-  rm -rf "$resources"; mkdir -p "$resources/node" "$resources/default-agent"
-  tar -xzf "$downloads/node-linux-$node_arch.tar.gz" --strip-components=1 -C "$resources/node" \
-    "node-v$node_version-linux-$node_arch/bin" "node-v$node_version-linux-$node_arch/lib" "node-v$node_version-linux-$node_arch/LICENSE"
-  rsync -a --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store \
-    "$root/default-agent/" "$resources/default-agent/"
-  (
-    cd -P "$resources/default-agent"
-    PATH="$mac_node:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund --os=linux --cpu="$node_arch" --libc=glibc >/dev/null
-  )
-  find "$resources/default-agent/node_modules" -type f -name '*.map' -delete
-  rsync -a --exclude=.DS_Store "$root/harnesses/" "$resources/harnesses/"
-  # The bots runtime, so this machine can be the bots' host: its sources, the engine
-  # installer and its production packages for Linux, without its own copy of the SDK it
-  # loads from Pi Durable's (as prepare-bots.sh does for the Mac).
-  rsync -a --exclude=/node_modules --exclude=/test --exclude=.DS_Store --exclude='*.map' "$root/bots/" "$resources/bots/"
-  (
-    cd -P "$resources/bots"
-    PATH="$mac_node:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund --os=linux --cpu="$node_arch" --libc=glibc >/dev/null
-  )
-  find "$resources/bots/node_modules" -type f -name '*.map' -delete
-  python3 -I "$root/scripts/prune-bots-sdk.py" "$resources/bots"
-  # Packages such as pi-tui carry macOS prebuilds. A Linux machine never loads them,
-  # and Apple's notary rejects unsigned Mach-O code anywhere in the app, archives included.
-  python3 -I - "$resources" <<'PY'
-import pathlib, sys
-magic = {bytes.fromhex(v) for v in ("feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
-for path in pathlib.Path(sys.argv[1]).rglob("*"):
-    if path.is_file() and not path.is_symlink():
-        with path.open("rb") as source:
-            if source.read(4) in magic: path.unlink()
-PY
-  tar -czf "$release/resources.tar.gz" -C "$resources" node default-agent harnesses bots
+  /usr/bin/tar -cJf "$release/woven-server.tar.xz" --no-mac-metadata --no-xattrs -C "$work/build-$arch/release" woven-server
   echo "Built $release ($(du -sh "$release" | cut -f1))"
 done
+python3 -I -c 'import json,sys; print(json.dumps({"version": sys.argv[1], "x86_64": sys.argv[2], "aarch64": sys.argv[3]}))' \
+  "$node_version" "$(field nodeLinuxX64SHA256)" "$(field nodeLinuxArm64SHA256)" > "$staging/node.json"
 rm -rf "$built"; mv "$staging" "$built"
 copy_release
