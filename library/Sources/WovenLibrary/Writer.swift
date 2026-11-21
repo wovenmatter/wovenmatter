@@ -22,7 +22,7 @@ final class Writer {
 
   /// Reads this machine's identity, creating it on first start, and makes
   /// sure the machine has its row.
-  static func open(_ db: Connection, machineName: String) throws -> Writer {
+  static func open(_ db: Connection, machineName: String, platform: MachinePlatform) throws -> Writer {
     let existing = try db.query("SELECT * FROM this_machine LIMIT 1").first
     let machineID = existing?.text("id") ?? UUID().uuidString.lowercased()
     if existing == nil { try db.run("INSERT INTO this_machine (id) VALUES (?)", [.text(machineID)]) }
@@ -31,7 +31,7 @@ final class Writer {
                         counter: existing?.integer("changed") ?? 0)
     _ = try writer.transaction { writer in
       if try writer.row("machines", machineID) == nil {
-        try writer.put("machines", id: machineID, ["name": .text(machineName), "platform": .text(MachinePlatform.current.rawValue),
+        try writer.put("machines", id: machineID, ["name": .text(machineName), "platform": .text(platform.rawValue),
                                                  "created_at": .integer(Writer.now())])
       }
     }
@@ -197,9 +197,9 @@ final class Writer {
   }
 
   func setCursor(_ machineID: String, received: Int64) throws {
-    try db.run("INSERT INTO sync_cursors (machine_id, received) VALUES (?, ?) " +
-               "ON CONFLICT(machine_id) DO UPDATE SET received = excluded.received",
-               [.text(machineID), .integer(received)])
+    try db.run("INSERT INTO sync_cursors (machine_id, received, received_at) VALUES (?, ?, ?) " +
+               "ON CONFLICT(machine_id) DO UPDATE SET received = excluded.received, received_at = excluded.received_at",
+               [.text(machineID), .integer(received), .integer(Self.now())])
   }
 
   // MARK: Helpers

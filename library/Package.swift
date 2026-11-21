@@ -6,7 +6,7 @@ import PackageDescription
 // here can reach the server or the UI.
 let package = Package(
   name: "WovenLibrary",
-  platforms: [.macOS(.v26)],
+  platforms: [.macOS(.v26), .iOS(.v26)],
   products: [
     .library(name: "WovenLibrary", targets: ["WovenLibrary"])
   ],
@@ -26,7 +26,7 @@ let package = Package(
         .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))
       ],
       swiftSettings: [.enableUpcomingFeature("ExistentialAny")],
-      linkerSettings: [.linkedLibrary("sqlite3", .when(platforms: [.macOS]))]
+      linkerSettings: [.linkedLibrary("sqlite3", .when(platforms: [.macOS, .iOS]))]
     )
   ]
 )

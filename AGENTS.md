@@ -32,7 +32,8 @@
   on this Mac with `scripts/cut-release.sh build` and `ship`; GitHub only signs
   and notarizes them. Release preparation never reruns CI.
   For releases, use `.agents/skills/cut-release-wovenmatter/SKILL.md`.
-- `ios/` is not part of the build. Leave it alone.
+- `ios/` is the iPhone and iPad app and is part of the build; validate it with
+  `scripts/test-ios.sh`.
 
 ## Dependencies
 

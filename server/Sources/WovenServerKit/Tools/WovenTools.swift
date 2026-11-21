@@ -136,9 +136,13 @@ final class WovenTools: Sendable {
 
   func forward(_ call: ToolRequest, to owner: String) async throws -> ToolResult? {
     guard owner != machineID else { return nil }
-    let name = (try? await library.machine(owner))?.name ?? "That machine"
+    let machine = try? await library.machine(owner)
+    let name = machine?.name ?? "That machine"
     guard !call.forwarded else {
       throw ToolFailure("This call was forwarded to the wrong machine; \(name) owns it.")
+    }
+    if machine?.platform.isDevice == true {
+      throw ToolFailure(await notOwner(owner, "", library: library).message)
     }
     guard let client = await peers.client(for: owner) else {
       throw ToolFailure("\(name) is not reachable right now, so this cannot be done until it is back.")

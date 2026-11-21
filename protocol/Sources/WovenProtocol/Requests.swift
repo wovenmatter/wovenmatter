@@ -15,15 +15,17 @@ public struct Unsubscribe: Request {
 
 // MARK: Machines
 
-/// Every machine in the library, with what this server knows of it now.
+/// Every Mac and Linux machine in the library, with what this server knows
+/// of it now. This machine's own entry carries the tailnet address and port
+/// its server listens on, when it listens on the tailnet.
 public struct ListMachines: Request {
   public static let method = "machines.list"
   public typealias Reply = [MachineStatus]
   public init() {}
 }
 
-/// Removes another machine: deletes it, its sessions and its folders from
-/// every library. A machine cannot remove itself.
+/// Removes another machine or a device: deletes it, its sessions and its
+/// folders from every library. A machine cannot remove itself.
 public struct RemoveMachine: Request {
   public static let method = "machines.remove"
   public typealias Reply = Done
@@ -42,6 +44,14 @@ public struct RenameMachine: Request {
     self.name = name
     self.machineID = machineID
   }
+}
+
+/// Every device in the library. `machines.list` lists only Macs and Linux
+/// machines; `machines.remove` removes a device too.
+public struct ListDevices: Request {
+  public static let method = "devices.list"
+  public typealias Reply = [DeviceStatus]
+  public init() {}
 }
 
 // MARK: Sessions
@@ -332,6 +342,26 @@ public struct SyncPull: Request {
     self.after = after
     self.limit = limit
   }
+}
+
+/// How far this server has received the calling device's rows: the cursor
+/// the device pulls its own library after, for `sync.push`. Only a device
+/// asks, on the same release as the server.
+public struct SyncCursor: Request {
+  public static let method = "sync.cursor"
+  public typealias Reply = Int64
+  public init() {}
+}
+
+/// Rows of the calling device's library, as its own `pull` returned them.
+/// The server applies them as if it had pulled them and records `page.next`
+/// as its cursor for the device. Only a device sends it, on the same release
+/// as the server.
+public struct SyncPush: Request {
+  public static let method = "sync.push"
+  public typealias Reply = Done
+  public var page: SyncPage
+  public init(page: SyncPage) { self.page = page }
 }
 
 /// Puts a file into the server's content store, for attaching to a turn.

@@ -215,7 +215,7 @@ enum ScheduleBook {
       guard !draft.title.isEmpty, !draft.prompt.isEmpty else { throw ProtocolError(.badRequest, "A task needs a title and a prompt.") }
       if let sessionID = draft.sessionID, let session = try await library.session(sessionID) {
         guard session.machineID == here else {
-          throw ProtocolError(.notOwner, "That session runs on another machine.", machineID: session.machineID)
+          throw await notOwner(session.machineID, "That session runs on another machine.", library: library)
         }
         draft.runtime = draft.runtime ?? session.runtime
       }
@@ -236,7 +236,7 @@ enum ScheduleBook {
         throw ProtocolError(.notFound, "A timer or wake-up needs the session it is for.")
       }
       guard session.machineID == here else {
-        throw ProtocolError(.notOwner, "That session runs on another machine.", machineID: session.machineID)
+        throw await notOwner(session.machineID, "That session runs on another machine.", library: library)
       }
       if draft.title.isEmpty { draft.title = draft.kind == .timer ? "Timer" : "Wake-up" }
     }

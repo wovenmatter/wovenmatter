@@ -1,21 +1,44 @@
 import Foundation
 
-/// Which kind of machine it is.
+/// Which kind of machine it is. An iPhone or iPad is a device: it has the UI
+/// and a library but no server, and nothing can connect to it.
 public enum MachinePlatform: String, Codable, Sendable, Hashable {
   case mac
   case linux
+  case iPhone = "iphone"
+  case iPad = "ipad"
 
-  /// The platform this code runs on.
+  /// An iPhone or iPad.
+  public var isDevice: Bool { self == .iPhone || self == .iPad }
+
+  /// The platform this code runs on. On iOS it is the device's model, so an
+  /// iPhone app on an iPad says iPad.
   public static var current: MachinePlatform {
     #if os(Linux)
     .linux
+    #elseif os(iOS)
+    deviceModel.hasPrefix("iPad") ? .iPad : .iPhone
     #else
     .mac
     #endif
   }
+
+  #if os(iOS)
+  /// The model identifier, such as "iPhone17,1": the simulated one in the
+  /// Simulator, else the hardware's.
+  private static var deviceModel: String {
+    if let simulated = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] { return simulated }
+    var size = 0
+    guard sysctlbyname("hw.machine", nil, &size, nil, 0) == 0, size > 0 else { return "" }
+    var bytes = [CChar](repeating: 0, count: size)
+    guard sysctlbyname("hw.machine", &bytes, &size, nil, 0) == 0 else { return "" }
+    return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+  }
+  #endif
 }
 
-/// A Mac or Linux machine on the person's tailnet that runs the server.
+/// A machine in the library: a Mac or Linux machine on the person's tailnet
+/// that runs the server, or a device.
 public struct Machine: Codable, Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String
@@ -49,6 +72,18 @@ public struct MachineStatus: Codable, Sendable, Hashable {
     self.appVersion = appVersion
     self.address = address
     self.port = port
+  }
+}
+
+/// A device in the library, as one server sees it.
+public struct DeviceStatus: Codable, Sendable, Hashable {
+  public var device: Machine
+  /// When this server last received the device's rows, or nil if it never has.
+  public var lastSyncedAt: Date?
+
+  public init(device: Machine, lastSyncedAt: Date?) {
+    self.device = device
+    self.lastSyncedAt = lastSyncedAt
   }
 }
 

@@ -103,7 +103,9 @@ public final class WovenServer: Sendable {
                         scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
     let scheduler = Scheduler(library: library, sessions: sessions, now: options.schedulerClock)
     let peers = PeerSync(library: library, tailnet: options.tailnet, hello: hello, interval: options.discoveryInterval)
-    var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
+    let listening = Listening()
+    var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion,
+                            listening: listening)
     registerFolders(&routes, library: library, root: options.foldersRoot)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
     registerLocalModelServers(&routes, sessions: sessions, secrets: secrets)
@@ -150,13 +152,15 @@ public final class WovenServer: Sendable {
         })
       }
       if let listen = options.listen {
-        listeners.append(try await Listener.start(.tcp(host: listen.host, port: listen.port)) { transport, address in
+        let listener = try await Listener.start(.tcp(host: listen.host, port: listen.port)) { transport, address in
           guard let address, let name = await tailnet.caller(at: address) else {
             transport.close()
             return
           }
           await pending.accept(transport, origin: .tailnet(name: name), router: router, hello: hello)
-        })
+        }
+        listeners.append(listener)
+        listening.address.withLock { $0 = (listen.host, listener.port ?? listen.port) }
       }
     } catch {
       for listener in listeners { await listener.stop() }
@@ -268,6 +272,11 @@ public final class WovenServer: Sendable {
   }
 }
 
+/// Where this server listens on the tailnet, once it does.
+private final class Listening: Sendable {
+  let address = Mutex<(host: String, port: Int)?>(nil)
+}
+
 /// Lets listeners started before the server exists hand it connections.
 private final class PendingServer: Sendable {
   let server = Mutex<WovenServer?>(nil)
@@ -283,20 +292,44 @@ private final class PendingServer: Sendable {
 
 // MARK: Handlers
 
-private func makeRouter(library: Library, sessions: SessionManager, peers: PeerSync, appVersion: String) -> Router {
+private func makeRouter(library: Library, sessions: SessionManager, peers: PeerSync, appVersion: String,
+                        listening: Listening) -> Router {
   var router = Router()
   let thisMachine = library.machineID
+  /// Two machines on different app releases do not sync.
+  @Sendable func checkRelease(_ caller: Caller) throws {
+    guard caller.hello.appVersion == appVersion else {
+      throw ProtocolError(.versionMismatch, "This machine runs \(appVersion).", machineID: thisMachine)
+    }
+  }
+  /// The device on the other end, for the requests only a device makes.
+  @Sendable func device(_ caller: Caller) throws -> String {
+    guard caller.hello.role == .device, caller.hello.machine.id != thisMachine else {
+      throw ProtocolError(.refused, "Only an iPhone or iPad hands its rows to a server.")
+    }
+    try checkRelease(caller)
+    return caller.hello.machine.id
+  }
 
   router.on(ListMachines.self) { _, _ in
     let statuses = await peers.statuses
     return try await library.machines().map { machine in
       if machine.id == thisMachine {
-        return MachineStatus(machine: machine, isThisMachine: true, online: true, appVersion: appVersion)
+        let address = listening.address.withLock { $0 }
+        return MachineStatus(machine: machine, isThisMachine: true, online: true, appVersion: appVersion,
+                             address: address?.host, port: address?.port)
       }
       let status = statuses[machine.id]
       return MachineStatus(machine: machine, isThisMachine: false, online: status?.online ?? false,
                            appVersion: status?.appVersion, address: status?.machine.host, port: status?.machine.port)
     }
+  }
+  router.on(ListDevices.self) { _, _ in
+    var devices: [DeviceStatus] = []
+    for device in try await library.devices() {
+      devices.append(DeviceStatus(device: device, lastSyncedAt: try await library.lastReceived(from: device.id)))
+    }
+    return devices
   }
   router.on(RenameMachine.self) { request, _ in
     try await library.renameMachine(request.machineID ?? thisMachine, to: request.name)
@@ -385,11 +418,18 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     return (LibraryEvent(changed: first, tables: Schema.synced.map(\.name)), events.throwing)
   }
   router.on(SyncPull.self) { request, caller in
-    // Two machines on different app releases do not sync.
-    guard caller.hello.appVersion == appVersion else {
-      throw ProtocolError(.versionMismatch, "This machine runs \(appVersion).", machineID: thisMachine)
-    }
+    try checkRelease(caller)
     return try await library.pull(after: request.after, limit: min(max(request.limit, 1), 2000))
+  }
+  // A device cannot be dialed, so it hands its rows over its own connection.
+  // The server keeps the cursor, as it does for what it pulls, and announces
+  // what changed exactly as after a pull.
+  router.on(SyncCursor.self) { _, caller in
+    try await library.cursor(for: try device(caller))
+  }
+  router.on(SyncPush.self) { request, caller in
+    try await library.apply(request.page, from: try device(caller))
+    return Done()
   }
   router.on(PutContent.self) { request, _ in
     ContentRef(digest: try await library.storeContent(request.data), size: Int64(request.data.count))

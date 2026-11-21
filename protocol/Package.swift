@@ -6,7 +6,7 @@ import PackageDescription
 // can link it without reaching the library or the server.
 let package = Package(
   name: "WovenProtocol",
-  platforms: [.macOS(.v26)],
+  platforms: [.macOS(.v26), .iOS(.v26)],
   products: [
     .library(name: "WovenProtocol", targets: ["WovenProtocol"])
   ],

@@ -151,14 +151,15 @@ actor SessionManager {
   }
 
   /// The host of a session this machine owns. A session another machine
-  /// owns is refused with `notOwner`: its live view is on that machine.
+  /// owns is refused with `notOwner`: its live view is on that machine. One
+  /// a device owns cannot be reached at all.
   func host(for sessionID: String) async throws -> SessionHost {
     if let host = hosts[sessionID] { return host }
     guard let session = try await library.session(sessionID) else {
       throw ProtocolError(.notFound, "No session \(sessionID).")
     }
     guard session.machineID == library.machineID else {
-      throw ProtocolError(.notOwner, "This session runs on another machine.", machineID: session.machineID)
+      throw await notOwner(session.machineID, "This session runs on another machine.", library: library)
     }
     guard let runtime = runtimes[session.runtime] else {
       throw ProtocolError(.failed, "This machine has no \(session.runtime.rawValue) runtime.")
@@ -870,4 +871,17 @@ actor SessionHost {
   private func leaveSending() {
     if sendsWaiting.isEmpty { sending = false } else { sendsWaiting.removeFirst().resume() }
   }
+}
+
+/// The refusal of what only an owner can do, by a server that is not the
+/// owner. For a machine it is `notOwner`, naming it, so the caller asks that
+/// machine's server. A device listens on nothing, so for a device it is
+/// `ownerUnreachable`: what it owns is carried on there.
+func notOwner(_ ownerID: String, _ message: String, library: Library) async -> ProtocolError {
+  guard let owner = try? await library.machine(ownerID), owner.platform.isDevice else {
+    return ProtocolError(.notOwner, message, machineID: ownerID)
+  }
+  let kind = owner.platform == .iPad ? "an iPad" : "an iPhone"
+  return ProtocolError(.ownerUnreachable, "That is on \(owner.name), \(kind), which cannot be reached from here.",
+                       machineID: ownerID)
 }

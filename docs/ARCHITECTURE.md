@@ -2,17 +2,18 @@
 
 Woven Matter is three parts that are built and maintained separately.
 
-- **The Woven Matter library**: one SQLite database on each machine, and the
-  sync that keeps the machines' copies level.
+- **The Woven Matter library**: one SQLite database on each machine and each
+  device, and the sync that keeps their copies level.
 - **The Woven Matter background server**: one process on each Mac and Linux
   machine. It owns everything that runs on that machine and is the only thing
   that touches that machine's library.
 - **The Woven Matter UI**: a thin client. It draws what servers tell it and
-  sends what the person does. It holds no database and runs no agents.
+  sends what the person does. On a Mac it holds no database and runs no
+  agents.
 
 A Mac has the server, the library and the UI. A Linux machine has the server
-and the library. The iPhone and iPad app will be a UI client later; `ios/` is
-not part of the build.
+and the library. An iPhone or iPad has the UI and the library, with one
+in-app writer in place of a server; it runs Quick Chat and nothing else.
 
 Tailscale is the security boundary. Every machine on the person's own tailnet
 that runs the server is one of their Woven machines.
@@ -21,9 +22,10 @@ that runs the server is one of their Woven machines.
 
 These hold everywhere. A change that breaks one is wrong even if it works.
 
-1. The UI never opens SQLite and never imports the library. It asks a server.
-2. Each machine's library has exactly one writer: that machine's server, on one
-   serial write lane. No other process is given the file.
+1. The UI never opens SQLite and never imports the library. It asks a server,
+   or on a device the in-app writer.
+2. Each library has exactly one writer, on one serial write lane: a machine's
+   server, or a device's in-app writer. Nothing else is given the file.
 3. No SQL triggers. Whatever a write must also do, the writer does in the same
    transaction, in code.
 4. One sync mechanism for every synced table. No per-feature channel.
@@ -47,16 +49,17 @@ These hold everywhere. A change that breaks one is wrong even if it works.
 | Path | What it is | May depend on |
 | --- | --- | --- |
 | `protocol/` | The wire types every client and server speaks. Swift. | nothing |
-| `library/` | Schema, the writer, reads, sync. Swift, Mac and Linux. | `protocol/` |
+| `library/` | Schema, the writer, reads, sync. Swift, Mac, Linux and iOS. | `protocol/` |
 | `server/` | The background server. Swift, Mac and Linux. | `library/`, `protocol/` |
 | `app/` | The Mac UI, and the entry point that starts the server from the signed app. | `protocol/`; `server/` only at that entry point |
 | `default-agent/` | Pi Durable, run by the server as a Node child process. | |
 | `bots/` | The bots runtime, run by the server as a Node child process. | |
 | `harnesses/` | The harness catalog and adapters. | |
-| `ios/` | The old phone app. Untouched and not built. | |
+| `ios/` | The iPhone and iPad app: the UI, the in-app writer and Quick Chat. | `library/`, `protocol/` |
 
 The build enforces the dependency column. View code cannot reach the library
-because nothing it can import exposes it.
+because nothing it can import exposes it; on a device only the in-app writer
+imports it.
 
 Node is used only for the two child processes. There is no Node server.
 
@@ -72,8 +75,9 @@ where the person works on it: its agents, folders and sessions. Each machine
 has one; the **local workspace** is on the machine in use, and every other
 machine's is a **remote workspace**. The **host** is only the machine the bots
 run on. The **library** is the synced database, never a workspace. A
-**device** is only an iPhone or iPad. What a bot keeps in its container is its
-**files**.
+**device** is only an iPhone or iPad, and is never called a machine; in the
+code it is a row of `machines` whose platform is a device's. What a bot keeps
+in its container is its **files**.
 
 - **Joining is automatic.** A server looks at the tailnet's machine list, tries
   the Woven port on each, and treats those that answer as Woven machines.
@@ -103,6 +107,34 @@ both unit names. It stays off the tailnet unless it is given a port of its own
 (for example 47338); it then listens on that port, finds only servers on that
 port, and installs servers that use it.
 
+## Devices
+
+A device is a row of `machines`, so what it owns hangs off that row like a
+machine's. It has no server, no public key and no workspace, and it listens on
+nothing. To everything that needs a server behind a machine (the machine list,
+sealed secrets, the bots host, updates, installs) a device is not there;
+`devices.list` lists the devices and Remove removes one as it removes a
+machine.
+
+- **Connecting.** The person scans a QR code or types a short code that one of
+  their Macs shows. It carries only that Mac's tailnet address and port, so it
+  is not pairing: there is no secret to keep and nothing to approve, and
+  Tailscale still decides who may connect. The code is six characters, four
+  more for a port other than 47337, with check bits that catch a typo.
+- **Addresses.** From any server it reaches, a device learns every machine's
+  address (`machines.list`) and remembers them on the device, so it works with
+  whichever machines are online, the first Mac or not.
+- **Sync.** Everything happens over connections the device opens to servers. It
+  pulls with `sync.pull` as a server does, and hands its own rows over the same
+  connection with `sync.push`, after the cursor the server keeps for it
+  (`sync.cursor`). Rows pass on unchanged both ways, and a server announces
+  pushed rows as it announces pulled ones. A device on another release does
+  not sync.
+- **Quick Chat** is a Pi Durable session owned by the device. The device runs
+  the Pi Durable SDK in the app with its own provider sign-ins from its
+  Keychain, and writes each finished item once to its library. A machine shows
+  a device's session with its saved items and sending disabled.
+
 ## Connections
 
 One protocol, JSON messages over WebSocket, serves both UI-to-server and
@@ -112,7 +144,7 @@ events. Its types are defined once in `protocol/`.
 - On a Mac the UI reaches its own server over a Unix socket that only the
   person can open.
 - A server listens on its machine's Tailscale address, port 47337, for other
-  machines and for UIs on other machines.
+  machines, for UIs on other machines and for devices.
 - The UI connects to its own server for everything in the library, and
   **directly to the owning machine's server** for the live view of anything
   that runs there. Its own server does not relay live streams.
@@ -160,7 +192,7 @@ fetched by digest when needed.
 ### What syncs how
 
 - **Append-only**: session items, usage records, dictation history. Written
-  once by the owning machine, never edited.
+  once by the owning machine or device, never edited.
 - **Newest write wins**: machines, sessions (title, folder, archived), folders,
   settings, schedules, sealed secrets, database descriptions. Only the owning
   machine writes its `schedules` rows; a request about another machine's entry
@@ -174,8 +206,9 @@ fetched by digest when needed.
   session handles' process state, provider sign-ins, how far the harness
   histories have been read.
 
-Rows that belong to a machine (sessions, folders, databases, schedules) carry
-that machine's identifier in a column. Ownership is never held in a side table.
+Rows that belong to a machine or a device (sessions, folders, databases,
+schedules) carry its identifier in a column. Ownership is never held in a side
+table.
 
 ## Sessions
 
