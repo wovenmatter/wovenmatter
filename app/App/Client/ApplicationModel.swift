@@ -38,6 +38,7 @@ final class ApplicationModel {
 
     let navigation = NavigationStore()
     let machines = MachinesStore()
+    let devices = DevicesStore()
     let workspace = WorkspaceStore()
     let sessions = SessionsStore()
     let documents = DocumentsStore()
@@ -49,15 +50,18 @@ final class ApplicationModel {
     let settings = SettingsStore()
     let agentTools = AgentToolsStore()
     let connections = AgentSettingsStore()
+    #if os(macOS)
     let updates = UpdatesStore()
 
     /// The browser and document tabs of the asset pane. UI only.
     let workspaceAssets = WorkspaceAssetSession()
     /// Carries out this Mac's server's browser and computer calls.
     @ObservationIgnored private var uiTools: UIToolsStore?
+    #endif
 
     init() {}
 
+    #if os(macOS)
     func retry() {
         state = .ready
         Task { await connect() }
@@ -73,26 +77,50 @@ final class ApplicationModel {
             state = .failed(error.localizedDescription)
             return
         }
-        let server = ServerConnection(endpoint: .unix(path: ThisMachineServer.socketPath))
+        attach(ServerConnection(endpoint: .unix(path: ThisMachineServer.socketPath)))
+    }
+    #else
+    /// Connects to the device's own core, the UI's server on an iPhone or
+    /// iPad, and keeps the stores level with its library for as long as the app runs.
+    func connect(_ server: ServerConnection) {
+        guard self.server == nil else { return }
+        attach(server)
+    }
+
+    /// Records that the device's own core could not start.
+    func fail(_ message: String) {
+        state = .failed(message)
+    }
+    #endif
+
+    private func attach(_ server: ServerConnection) {
         self.server = server
         let machineConnections = MachineConnections(local: server)
         self.machineConnections = machineConnections
         machines.attach(machineConnections)
+        devices.attach(server)
         usage.attach(server, machines: machines)
         workspace.attach(server, machines: machines)
-        settings.attach(server); connections.attach(machines, settings: settings); updates.attach(machines)
+        settings.attach(server); connections.attach(machines, settings: settings)
+        #if os(macOS)
+        updates.attach(machines)
+        #endif
         sessions.attach(server, workspace: workspace)
         agentTools.attach(server, workspace: workspace, settings: settings)
         databases.attach(server, machines: machines)
         library.attach(server, machines: machines)
-        documents.attach(server, machines: machines, databases: databases)
+        documents.attach(server, machines: machines, devices: devices, databases: databases)
         bots.attach(machineConnections, machines: machines, settings: settings)
         calendar.attach(server, workspace: workspace, machines: machines)
         server.start()
+        #if os(macOS)
         uiTools = UIToolsStore(server: server, assets: workspaceAssets)
+        #endif
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] event in
+                #if os(macOS)
                 self?.restartIfAnotherRelease(server.remote)
+                #endif
                 self?.requestReload(event.tables)
             }, event: { [weak self] event in
                 self?.requestReload(event.tables)
@@ -123,7 +151,7 @@ final class ApplicationModel {
     /// Reads again only the areas whose tables changed.
     private func reload(_ tables: Set<String>) async {
         func any(_ names: String...) -> Bool { !tables.isDisjoint(with: names) }
-        if any("machines") { await machines.reload() }
+        if any("machines") { await machines.reload(); await devices.reload() }
         if any("machines", "sessions", "folders", "session_items", "artifacts") { await workspace.refresh() }
         if any("artifacts", "artifact_versions") { await documents.reload() }
         if any("databases") { await databases.refresh() }
@@ -132,6 +160,7 @@ final class ApplicationModel {
         if any("schedules", "sessions", "settings") { await agentTools.reload() }
     }
 
+    #if os(macOS)
     /// A server left running by another release of the app is restarted once,
     /// so this Mac's server is always the app's own program.
     private func restartIfAnotherRelease(_ remote: Hello?) {
@@ -142,4 +171,5 @@ final class ApplicationModel {
     }
 
     @ObservationIgnored private var restarted = false
+    #endif
 }

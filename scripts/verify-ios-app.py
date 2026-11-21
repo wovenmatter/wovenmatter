@@ -20,20 +20,15 @@ PROFILES = {
     'dev': ('Woven Matter Dev', 'com.wovenmatter.wovenmatter.dev'),
     'distribution': ('Woven Matter', 'com.wovenmatter.wovenmatter'),
 }
-# Only the TestFlight app answers wovenmatter:// pairing links opened outside the app.
+# Each app answers its own connection links (`…://connect/<code>`, from a Mac's
+# QR code): only the TestFlight app answers wovenmatter:// opened outside the app.
 URL_SCHEMES = {'dev': 'wovenmatter-dev', 'distribution': 'wovenmatter'}
 # Apple's CFBundleVersion/CFBundleShortVersionString: one to three
 # period-separated integers, without leading zeros.
 VERSION = re.compile(r'(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){0,2}')
-# Every UI-test environment lookup is compiled only in Debug builds (#if DEBUG). The
-# prefixes deliberately also match variants such as WOVENMATTER_UI_FIXTURE_NAMESPACE,
-# so any fixture plumbing in a distribution binary fails. The development tailnet
-# router, its pairing shortcuts and the device runtime smoke are Debug-only too.
-DEBUG_MARKERS = (
-    b'WOVENMATTER_UI_FIXTURE', b'WOVENMATTER_UI_SCENARIO', b'WOVENMATTER_UI_TAB',
-    b'WOVENMATTER_DEV_TAILNET', b'WOVENMATTER_DEV_PAIR_LINK', b'WOVENMATTER_DEV_TAB',
-    b'WOVENMATTER_DEVICE_RUNTIME_SMOKE',
-)
+# Launch-environment hooks compiled only in Debug builds (#if DEBUG): connecting
+# to a Mac's code at launch. Any of them in a distribution binary fails.
+DEBUG_MARKERS = (b'WOVENMATTER_CONNECT_CODE',)
 # The privacy manifest must declare exactly these required-reason APIs and data
 # types (ios/Config/PrivacyInfo.xcprivacy; audit notes in ios/README.md). A new
 # use of another required-reason API, or new data leaving the device, must be
@@ -47,8 +42,6 @@ COLLECTED_DATA = {
     # type: (linked to the user, purposes)
     'OtherUserContent': (True, ['AppFunctionality']),   # Quick Chat content to the chosen model provider.
     'SearchHistory': (True, ['AppFunctionality']),      # Web searches to the chosen search provider.
-    'UserID': (False, ['Analytics']),                   # Random library analytics ID, relayed by the Mac.
-    'ProductInteraction': (False, ['Analytics']),       # app_opened / app_active signals.
 }
 USAGE_DESCRIPTIONS = ('NSMicrophoneUsageDescription', 'NSCameraUsageDescription')
 ALLOWED_ENTITLEMENTS = {
@@ -164,7 +157,7 @@ def verify_bundle(app, profile, version=None, build=None):
     require(info.get('UIDeviceFamily') in (None, [1, 2]), 'The app must target iPhone and iPad')
     modes = info.get('UIBackgroundModes', [])
     require(isinstance(modes, list) and 'processing' not in modes, 'Quick Chat must not request continued processing')
-    require(not info.get('BGTaskSchedulerPermittedIdentifiers'), 'Retired phone scheduler is still packaged')
+    require(not info.get('BGTaskSchedulerPermittedIdentifiers'), 'The app must not schedule background tasks')
     for key in USAGE_DESCRIPTIONS:
         value = info.get(key)
         require(isinstance(value, str) and value.strip() and not unexpanded(value), f'Missing {key}')
@@ -172,9 +165,6 @@ def verify_bundle(app, profile, version=None, build=None):
     icon = icons.get('CFBundlePrimaryIcon') if isinstance(icons, dict) else None
     require(isinstance(icon, dict) and icon.get('CFBundleIconName') == 'AppIcon' and (app / 'Assets.car').is_file(),
             'The AppIcon asset catalog is not compiled into the bundle')
-    require(not any(app.rglob('*.wasm')), 'Embedded Python/WASM must not ship in Quick Chat')
-    require(not any('EmbeddedExecution' in path.name for path in app.rglob('*')),
-            'Retired embedded execution resources are still packaged')
     require((app / 'LUCIDE_LICENSE.txt').is_file(), 'Missing bundled icon license')
     check_privacy(load_plist(app / 'PrivacyInfo.xcprivacy', 'privacy manifest'))
     compliance = info.get('ITSAppUsesNonExemptEncryption')
@@ -185,7 +175,7 @@ def verify_bundle(app, profile, version=None, build=None):
         for path in macho_files(app):
             binary = path.read_bytes()
             found = [marker.decode() for marker in DEBUG_MARKERS if marker in binary]
-            require(not found, f'Debug-only fixtures are compiled into {path.relative_to(app)}: {", ".join(found)}')
+            require(not found, f'Debug-only hooks are compiled into {path.relative_to(app)}: {", ".join(found)}')
     else:
         require(compliance in (None, False), 'ITSAppUsesNonExemptEncryption must be false')
     return info

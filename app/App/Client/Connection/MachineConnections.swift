@@ -58,6 +58,15 @@ final class MachineConnections {
         }
     }
 
+    #if os(iOS)
+    /// Stops every other machine's connection, once the device has forgotten
+    /// where its machines are. Connecting again makes new ones.
+    func removeRemotes() {
+        for connection in remotes.values { connection.stop() }
+        remotes = [:]
+    }
+    #endif
+
     /// Calls `action` whenever a connection is added, replaced or removed, or
     /// one connects or disconnects.
     func whenChanged(_ action: @escaping @MainActor () -> Void) {

@@ -7,12 +7,24 @@ import WovenProtocol
 extension Library {
   // MARK: Machines
 
+  /// The Macs and Linux machines: each runs a server. Devices are rows of
+  /// `machines` too, but not machines to anything that needs a server.
   public func machines() async throws -> [Machine] {
+    try await allMachines().filter { !$0.platform.isDevice }
+  }
+
+  /// The iPhones and iPads.
+  public func devices() async throws -> [Machine] {
+    try await allMachines().filter(\.platform.isDevice)
+  }
+
+  private func allMachines() async throws -> [Machine] {
     try await read { db in
       try db.query("SELECT id, name, platform FROM machines WHERE deleted = 0 ORDER BY name, id").map(Self.machine)
     }
   }
 
+  /// A machine or a device, by its identifier.
   public func machine(_ id: String) async throws -> Machine? {
     try await read { db in
       try db.query("SELECT id, name, platform FROM machines WHERE id = ? AND deleted = 0", [.text(id)]).first.map(Self.machine)

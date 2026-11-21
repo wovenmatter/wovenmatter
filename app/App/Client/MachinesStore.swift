@@ -81,9 +81,11 @@ final class MachinesStore {
     func reload() async {
         guard let server else { return }
         do {
-            statuses = try await server.call(ListMachines())
+            // Unchanged, it is not set again, so nothing that shows it redraws.
+            let listed = try await server.call(ListMachines())
+            if listed != statuses { statuses = listed }
             connections?.update(statuses)
-            errorMessage = nil
+            if errorMessage != nil { errorMessage = nil }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -221,7 +223,9 @@ final class MachinesStore {
         busyMachineIDs.insert(machineID)
         defer { busyMachineIDs.remove(machineID) }
         if machineID == thisMachine?.id {
+            #if os(macOS)
             try await ThisMachineServer.start()
+            #endif
         } else {
             guard let server, server.isConnected else { throw ClientError.notConnected }
             _ = try await server.call(ControlServer(machineID: machineID, action: .start))

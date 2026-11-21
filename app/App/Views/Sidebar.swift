@@ -48,22 +48,6 @@ enum PinnedAgentsStore {
     }
 }
 
-struct FolderSections {
-    let pinned: [WorkspaceFolderRecord]
-    let unpinned: [WorkspaceFolderRecord]
-
-    init(folders: [WorkspaceFolderRecord]) {
-        let sorted = folders.sorted {
-            if $0.position != $1.position { return $0.position < $1.position }
-            let nameComparison = $0.name.localizedCaseInsensitiveCompare($1.name)
-            if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
-            return $0.id < $1.id
-        }
-        pinned = sorted.filter(\.isPinned)
-        unpinned = sorted.filter { !$0.isPinned }
-    }
-}
-
 struct SidebarActions {
     let onCollapse: (SidebarSide) -> Void
     let onMoveSingleRail: () -> Void
@@ -166,6 +150,7 @@ struct SidebarRail: View {
             runningConversationIDs: runningConversationIDs,
             agents: agents,
             machines: machines,
+            devices: model.devices.names,
             folders: folders,
             contentScopeID: selectedFolderID,
             selectedConversationID: selectedConversationID,
@@ -1503,6 +1488,8 @@ struct SidebarWorkspacePage: View {
     let runningConversationIDs: Set<String>
     let agents: [WorkspaceAgent]
     let machines: [Machine]
+    /// Each device's name by id, for the Quick Chats it owns.
+    var devices: [String: String] = [:]
     let folders: [WorkspaceFolderRecord]
     let contentScopeID: String?
     let selectedConversationID: String?
@@ -1640,6 +1627,7 @@ struct SidebarWorkspacePage: View {
             let notes = notes
             let agents = agents
             let machines = machines
+            let devices = devices
             let folders = folders
             let query = query
             let readFilter = readFilter
@@ -1650,6 +1638,7 @@ struct SidebarWorkspacePage: View {
                     notes: notes,
                     agents: agents,
                     machines: machines,
+                    devices: devices,
                     folders: folders,
                     query: query,
                     readFilter: readFilter
@@ -1676,6 +1665,7 @@ struct SidebarWorkspacePage: View {
             scopeID: contentScopeID,
             agents: agents,
             machines: machines,
+            devices: devices,
             folderRevisions: folders.map { "\($0.id):\($0.name)" }.joined(separator: ","),
             timeContext: ListTimeContext.current,
             query: query,
@@ -1880,6 +1870,7 @@ struct RightRailContentTaskID: Equatable {
     let scopeID: String?
     let agents: [WorkspaceAgent]
     let machines: [Machine]
+    let devices: [String: String]
     let folderRevisions: String
     let timeContext: String
     let query: String
@@ -1913,10 +1904,13 @@ struct ConversationListMeta: Equatable, Sendable {
         conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
         machine: Machine?,
+        deviceName: String? = nil,
         foldersByID: [String: WorkspaceFolderRecord]
     ) -> ConversationListMeta {
         let runtime = agent?.runtimeKind ?? conversation.runtimeKind
-        let agentLabel = agent.map(agentDisplayName) ?? conversation.runtimeName
+        // A device's chats are its Quick Chats, whatever runtime runs them.
+        let isDevice = machine == nil && deviceName != nil
+        let agentLabel = isDevice ? "Quick Chat" : agent.map(agentDisplayName) ?? conversation.runtimeName
 
         let folderLabel: String
         if let folderID = conversation.folderID,
@@ -1930,9 +1924,10 @@ struct ConversationListMeta: Equatable, Sendable {
         return ConversationListMeta(
             agentLabel: agentLabel,
             folderLabel: folderLabel,
-            locationLabel: machine?.name ?? "Unknown",
-            locationKind: machine?.isThisMachine == false ? .remoteWorkspace : .workspaceAgent,
-            runtimeLabel: runtime?.displayName ?? conversation.runtimeName,
+            locationLabel: machine?.name ?? deviceName ?? "Unknown",
+            locationKind: isDevice ? .device
+                : machine?.isThisMachine == false ? .remoteWorkspace : .workspaceAgent,
+            runtimeLabel: isDevice ? "Quick Chat" : runtime?.displayName ?? conversation.runtimeName,
             runtimeKind: runtime
         )
     }
@@ -1943,6 +1938,8 @@ enum ConversationLocationKind: Equatable, Sendable {
     case workspaceAgent
     /// Another machine.
     case remoteWorkspace
+    /// An iPhone or iPad, for its Quick Chats.
+    case device
 
     var glyph: LucideGlyph {
         switch self {
@@ -1950,6 +1947,8 @@ enum ConversationLocationKind: Equatable, Sendable {
             .panelsTopLeft
         case .remoteWorkspace:
             .container
+        case .device:
+            .smartphone
         }
     }
 }
@@ -2042,6 +2041,7 @@ final class ListPresentationCache: @unchecked Sendable {
         for conversation: WorkspaceConversationRecord,
         agent: WorkspaceAgent?,
         machine: Machine?,
+        deviceName: String? = nil,
         foldersByID: [String: WorkspaceFolderRecord],
         timeContext: String
     ) -> ConversationRowPresentation {
@@ -2050,6 +2050,7 @@ final class ListPresentationCache: @unchecked Sendable {
             conversation: conversation,
             agent: agent,
             machine: machine,
+            deviceName: deviceName,
             foldersByID: foldersByID
         )
         if let cached = conversations.object(forKey: key)?.value,
@@ -2126,6 +2127,7 @@ struct RightRailContent: Equatable, Sendable {
         notes: [WorkspaceNoteRecord],
         agents: [WorkspaceAgent],
         machines: [Machine] = [],
+        devices: [String: String] = [:],
         folders: [WorkspaceFolderRecord] = [],
         query: String,
         readFilter: ReadFilter?
@@ -2147,10 +2149,12 @@ struct RightRailContent: Equatable, Sendable {
 
             let agent = conversation.agentID.flatMap { agentsByID[$0] }
             let machine = machinesByID[conversation.machineID]
+            let deviceName = machine == nil ? devices[conversation.machineID] : nil
             let meta = ConversationListMeta.resolve(
                 conversation: conversation,
                 agent: agent,
                 machine: machine,
+                deviceName: deviceName,
                 foldersByID: foldersByID
             )
             guard query.isEmpty
@@ -2164,6 +2168,7 @@ struct RightRailContent: Equatable, Sendable {
                 for: conversation,
                 agent: agent,
                 machine: machine,
+                deviceName: deviceName,
                 foldersByID: foldersByID,
                 timeContext: timeContext
             )

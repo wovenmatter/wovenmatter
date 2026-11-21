@@ -33,15 +33,16 @@ public final class Library: Sendable {
 
   public var fileURL: URL { folder.appendingPathComponent("library.sqlite") }
 
-  /// Opens (or creates) `library.sqlite` in `folder`. `machineName` names this
-  /// machine the first time only. A library whose machine was removed is
-  /// erased here, with its content store, and begins again empty under a new
-  /// identifier.
-  public static func open(folder: URL, machineName: String) async throws -> Library {
+  /// Opens (or creates) `library.sqlite` in `folder`. `machineName` and
+  /// `platform` describe this machine the first time only; on a device the
+  /// in-app writer opens it with the device's platform. A library whose
+  /// machine was removed is erased here, with its content store, and begins
+  /// again empty under a new identifier.
+  public static func open(folder: URL, machineName: String, platform: MachinePlatform = .current) async throws -> Library {
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let path = folder.appendingPathComponent("library.sqlite").path
     let lane = WriteLane()
-    let (machineID, changed) = try await lane.open(path: path, machineName: machineName, erase: {
+    let (machineID, changed) = try await lane.open(path: path, machineName: machineName, platform: platform, erase: {
       for name in ["library.sqlite", "library.sqlite-wal", "library.sqlite-shm", "files"] {
         let url = folder.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
@@ -123,7 +124,8 @@ private final class WriteLane: @unchecked Sendable {
   private let queue = DispatchQueue(label: "woven.library.writer")
   private var writer: Writer?
 
-  func open(path: String, machineName: String, erase: @escaping @Sendable () throws -> Void) async throws -> (String, Int64) {
+  func open(path: String, machineName: String, platform: MachinePlatform,
+            erase: @escaping @Sendable () throws -> Void) async throws -> (String, Int64) {
     try await onQueue {
       func connect() throws -> Connection {
         let connection = try Connection(path: path, readOnly: false)
@@ -138,7 +140,7 @@ private final class WriteLane: @unchecked Sendable {
         try erase()
         connection = try connect()
       }
-      let writer = try Writer.open(connection!, machineName: machineName)
+      let writer = try Writer.open(connection!, machineName: machineName, platform: platform)
       self.writer = writer
       return (writer.machineID, writer.counter)
     }

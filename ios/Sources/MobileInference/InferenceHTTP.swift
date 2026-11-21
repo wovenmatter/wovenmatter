@@ -6,6 +6,7 @@ public protocol InferenceHTTPTransport: Sendable {
 }
 
 /// Redirects never forward API keys or device grants to a different endpoint.
+/// `@unchecked Sendable`: an `NSObject` delegate with no stored state.
 public final class InferenceURLSessionTransport: NSObject, InferenceHTTPTransport, URLSessionTaskDelegate, @unchecked Sendable {
   public override init() { super.init() }
   public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,

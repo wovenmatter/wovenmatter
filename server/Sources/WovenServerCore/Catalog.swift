@@ -1,0 +1,475 @@
+import Foundation
+import WovenLibrary
+import WovenProtocol
+
+// The one Woven tool catalog. Each entry is what an agent sees and how this
+// server carries it out. These are the tools every host offers; a machine
+// adds its own groups (databases, places, bots, the UI's, the scheduler's).
+
+/// The tools every host offers, in catalog order: sessions, visual replies,
+/// notes and the rest, and goals.
+package let coreTools = sessionTools + visualReplyTools + artifactTools
+package let goalTools = [goalMet]
+
+// MARK: Schema helpers
+
+package func schema(_ properties: [String: JSONValue], required: [String] = []) -> JSONValue {
+  .object(["type": .string("object"), "properties": .object(properties),
+           "required": .array(required.map(JSONValue.string)), "additionalProperties": .bool(false)])
+}
+
+package func text(_ description: String) -> JSONValue {
+  .object(["type": .string("string"), "description": .string(description)])
+}
+
+package func choice(_ values: [String], _ description: String) -> JSONValue {
+  .object(["type": .string("string"), "enum": .array(values.map(JSONValue.string)), "description": .string(description)])
+}
+
+package func integer(_ description: String) -> JSONValue {
+  .object(["type": .string("integer"), "description": .string(description)])
+}
+
+package func flag(_ description: String) -> JSONValue {
+  .object(["type": .string("boolean"), "description": .string(description)])
+}
+
+package func lines(_ values: [String]) -> ToolResult {
+  .text(values.isEmpty ? "(none)" : values.joined(separator: "\n"))
+}
+
+package func json<T: Encodable>(_ value: T) -> String {
+  (try? String(decoding: Wire.encoder.encode(value), as: UTF8.self)) ?? ""
+}
+
+extension WovenTools {
+  package func machineName(_ id: String) async -> String {
+    id == machineID ? "this machine" : ((try? await library.machine(id))?.name ?? id)
+  }
+
+  /// Waits, a few seconds at most, until sync has brought another
+  /// machine's new session here.
+  package func waitForSession(_ id: String) async {
+    for _ in 0..<400 {
+      if (try? await library.session(id)) != nil { return }
+      try? await Task.sleep(for: .milliseconds(25))
+    }
+  }
+
+  package func session(_ id: String) async throws -> Session {
+    guard let session = try await library.session(id) else { throw ToolFailure("No session \(id).") }
+    return session
+  }
+
+  /// What the sessions are doing now, which is live state on each owner:
+  /// this machine's, and those of each linked machine that answers; nil for
+  /// a machine that did not.
+  package func runStates(of machineIDs: Set<String>) async -> [String: [String: SessionRunState]] {
+    var others = machineIDs
+    others.remove(machineID)
+    var result = others.isEmpty ? [:] : await host?.runStates(of: others) ?? [:]
+    if machineIDs.contains(machineID) { result[machineID] = byID(sessions.board.current) }
+    return result
+  }
+
+  private func byID(_ states: [SessionRunState]) -> [String: SessionRunState] {
+    Dictionary(states.map { ($0.sessionID, $0) }, uniquingKeysWith: { first, _ in first })
+  }
+}
+
+/// A session's run state as an agent reads it; unknown while its machine
+/// does not answer.
+private func describe(_ session: Session, in states: [String: [String: SessionRunState]]) -> String {
+  guard let known = states[session.machineID] else { return "state unknown (its machine is not answering)" }
+  guard let state = known[session.id] else { return "idle" }
+  switch state.run {
+  case .running: return state.awaiting ? "running, waiting on the person" : "running"
+  case .nativeSessionGone: return "ended (its runtime no longer has it)"
+  case .idle: return state.awaiting ? "waiting on the person" : "idle"
+  }
+}
+
+// MARK: Sessions
+
+private let sessionTools: [WovenTool] = [
+  WovenTool(
+    name: "list_sessions",
+    description: "List agent sessions (chats) on every machine, newest first: id, title, runtime, machine, last activity, and whether a turn is running. Filter by machine or by words in the title.",
+    input: schema(["machineID": text("Only this machine's sessions."), "query": text("Words the title contains."),
+                   "includeArchived": flag("Include archived sessions.")]),
+    readOnly: true,
+    groups: [.history],
+    run: { call in
+      let tools = call.tools
+      var sessions = try await tools.library.sessions(machineID: call.arguments.optionalString("machineID"),
+                                                      includeArchived: call.arguments.bool("includeArchived") ?? false)
+      if let query = call.arguments.optionalString("query")?.lowercased(), !query.isEmpty {
+        sessions = sessions.filter { $0.title.lowercased().contains(query) }
+      }
+      var result: [String] = []
+      let shown = sessions.prefix(100)
+      let states = await tools.runStates(of: Set(shown.map(\.machineID)))
+      for session in shown {
+        let mine = session.id == call.caller.sessionID ? " (you)" : ""
+        result.append("\(session.id) | \(session.title)\(mine) | \(session.runtime.rawValue) | \(await tools.machineName(session.machineID)) | \(session.lastActivityAt.formatted(.iso8601)) | \(describe(session, in: states))")
+      }
+      return lines(result)
+    }),
+  WovenTool(
+    name: "read_session",
+    description: "Read a session's saved transcript: whether a turn is running, then messages and tool calls in order, each with its sequence number. Returns the last `limit` items, or those after `afterSequence`. Works for any machine's session, and for bot chats and the Forum.",
+    input: schema(["sessionID": text("The session."), "afterSequence": integer("Only items after this sequence number."),
+                   "limit": integer("At most this many items (default 40).")], required: ["sessionID"]),
+    readOnly: true,
+    groups: [.history],
+    run: { call in
+      let session = try await call.tools.session(try call.arguments.string("sessionID"))
+      let limit = min(max(call.arguments.int("limit") ?? 40, 1), 200)
+      var items = try await call.tools.library.items(sessionID: session.id, afterSequence: call.arguments.int("afterSequence") ?? 0)
+      if call.arguments.int("afterSequence") == nil { items = Array(items.suffix(limit)) } else { items = Array(items.prefix(limit)) }
+      let states = await call.tools.runStates(of: [session.machineID])
+      var result = ["Session \(session.id): \(session.title) (\(session.runtime.rawValue)) on "
+                    + "\(await call.tools.machineName(session.machineID)), \(describe(session, in: states))"]
+      for item in items {
+        let who = item.author?.name
+        switch item.content {
+        case .userMessage(let text, let attachments):
+          let files = attachments.isEmpty ? "" : " [attached: \(attachments.map(\.name).joined(separator: ", "))]"
+          result.append("#\(item.sequence) \(who ?? "person"): \(text)\(files)")
+        case .assistantMessage(let text):
+          result.append("#\(item.sequence) \(who ?? "agent"): \(text)")
+        case .toolCall(let tool):
+          guard tool.kind != .thinking else { continue }
+          let output = (tool.output ?? "").prefix(600)
+          result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : ""): \(output)")
+        case .notice(let notice):
+          result.append("#\(item.sequence) notice: \(notice.text)")
+        case .visualReply(let reply):
+          result.append("#\(item.sequence) visual reply shown in the chat: \(reply.title)")
+        }
+      }
+      return lines(result)
+    }),
+  WovenTool(
+    name: "start_session",
+    description: "Start a new agent session on a machine and give it a first message. It runs on that machine with the runtime given (from `list_places`). Use only when the work needs another agent; it does not report back by itself, so read it later with `read_session`, which says whether its turn is still running.",
+    input: schema(["runtime": text("The runtime, as `list_places` names it (codex, claudeCode, grokBuild, openCode, piDurable)."),
+                   "title": text("A short title."), "message": text("The first message: everything the agent needs."),
+                   "folderID": text("Work in this folder (it decides the machine)."),
+                   "machineID": text("Run on this machine when no folder is given; default this one.")],
+                  required: ["runtime", "title", "message"]),
+    forBots: true,
+    groups: [.sessions],
+    run: { call in
+      let tools = call.tools
+      var owner = call.arguments.optionalString("machineID") ?? tools.machineID
+      if let folderID = call.arguments.optionalString("folderID") {
+        guard let folder = try await tools.library.folder(folderID) else { throw ToolFailure("No folder \(folderID).") }
+        owner = folder.machineID
+      }
+      if let forwarded = try await call.forward(to: owner) {
+        // The caller addresses the session next from here: this machine holds it before it hears.
+        if let id = forwarded.meta?["sessionID"]?.string { await tools.waitForSession(id) }
+        return forwarded
+      }
+      let runtime = RuntimeKind(rawValue: try call.arguments.string("runtime"))
+      guard await tools.sessions.supports(runtime) else { throw ToolFailure("This machine has no \(runtime.rawValue) runtime.") }
+      let session = try await tools.sessions.create(runtime: runtime, title: try call.arguments.string("title"),
+                                                    folderID: call.arguments.optionalString("folderID"))
+      try await tools.sessions.host(for: session.id).send(try call.arguments.string("message"), attachments: [],
+                                                         author: try await tools.author(call.caller))
+      return ToolResult(content: [.text("Started session \(session.id) on \(await tools.machineName(session.machineID)).")],
+                        meta: .object(["sessionID": .string(session.id)]))
+    }),
+  WovenTool(
+    name: "send_to_session",
+    description: "Send a message to another agent session, on any machine; it starts a turn there, or joins the turn running there, and returns once that session took it. The message is marked as coming from you. Fails while its machine is offline.",
+    input: schema(["sessionID": text("The session to send to."), "text": text("The message.")], required: ["sessionID", "text"]),
+    groups: [.sessions],
+    run: { call in
+      let session = try await call.tools.session(try call.arguments.string("sessionID"))
+      guard session.id != call.caller.sessionID else { throw ToolFailure("That is your own session.") }
+      guard session.runtime != .bots else {
+        throw ToolFailure(call.caller.botID == nil ? "That is a bot chat; use `message_bot`." : "That is a bot chat, not an agent session.")
+      }
+      if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
+      try await call.tools.sessions.host(for: session.id).send(try call.arguments.string("text"), attachments: [],
+                                                              author: try await call.tools.author(call.caller))
+      return .text("Sent to \(session.title).")
+    }),
+  WovenTool(
+    name: "stop_session",
+    description: "Stop the running turn of an agent session you manage, on any machine, as the person's Stop does: one you started or have sent a message to. Never your own. The session stays, says you stopped it, and goes on with `send_to_session`. Fails while its machine is offline.",
+    input: schema(["sessionID": text("The session to stop.")], required: ["sessionID"]),
+    forBots: true,
+    groups: [.sessions],
+    run: { call in
+      let session = try await call.tools.session(try call.arguments.string("sessionID"))
+      guard session.id != call.caller.sessionID else { throw ToolFailure("That is your own session.") }
+      guard session.runtime != .bots else { throw ToolFailure("That is a bot chat, not an agent session.") }
+      if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
+      // Decided on the owning machine, from what is saved: the caller is an author in the session.
+      let author = try await call.tools.author(call.caller)
+      guard author.sessionID != nil || author.botID != nil,
+            try await call.tools.library.hasItem(in: session.id, from: author) else {
+        throw ToolFailure("You can stop only a session you started or have sent a message to.")
+      }
+      let running = try await call.tools.sessions.host(for: session.id).interrupt(by: author.name)
+      return .text(running ? "Stopped \(session.title)." : "Nothing was running in \(session.title).")
+    }),
+]
+
+extension WovenTools {
+  /// How a message from `caller` is marked in the session it reaches.
+  package func author(_ caller: ToolCaller) async throws -> ItemAuthor {
+    if let sessionID = caller.sessionID, let session = try await library.session(sessionID) {
+      return ItemAuthor(botID: nil, name: session.title, sessionID: sessionID)
+    }
+    if let botID = caller.botID {
+      let name = (try? await library.savedBots())?.bots.first { $0.id == botID }?.name
+      return ItemAuthor(botID: botID, name: name ?? "A bot")
+    }
+    return ItemAuthor(botID: nil, name: "An agent")
+  }
+}
+
+// MARK: Visual replies in the chat
+
+/// Always offered, whatever groups a session may use: it shows something in
+/// the caller's own chat and reaches nothing else.
+private let visualReplyTools: [WovenTool] = [
+  WovenTool(
+    name: "render_html",
+    description: """
+      Show a chart, table, diagram or anything interactive in this chat as a visual reply: one whole self-contained \
+      HTML document (styles and scripts inline; libraries may load over HTTPS). It appears above your text and stays \
+      in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; \
+      `height` is only where it starts, and `title` defaults to the document's own <title>. Absolute paths to local \
+      images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
+      fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
+      the person wants to keep and change, make an app with `create_artifact` instead.
+      """,
+    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters."),
+                   "title": text("A short title, at most 200 characters; default the document's <title>."),
+                   "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")],
+                  required: ["html"]),
+    run: { call in
+      let html = try call.arguments.string("html")
+      let given = call.arguments.optionalString("title")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let title = given.isEmpty ? VisualReplies.title(of: html) ?? "" : given
+      guard title.count <= 200 else { throw ToolFailure("Give a `title` of at most 200 characters.") }
+      let height = call.arguments.int("height") ?? 320
+      guard call.arguments["height"] == nil || call.arguments.int("height") != nil, (80...2000).contains(height) else {
+        throw ToolFailure("Give `height` from 80 to 2000, or leave it out.")
+      }
+      // A bot runs in its own machine: nothing on this one is read for it.
+      let fromBot = call.caller.botID != nil
+      let prepared = try VisualReplies.prepare(html, readingDisk: !fromBot)
+      guard fromBot || prepared.missingImages.isEmpty else {
+        throw ToolFailure("These local images are missing, unreadable or not images, so nothing was shown: "
+                          + prepared.missingImages.joined(separator: ", "))
+      }
+      guard call.caller.sessionID != nil || call.caller.botID != nil else {
+        throw ToolFailure("`render_html` shows a visual reply in a Woven Matter chat, and this caller is not in one.")
+      }
+      let tools = call.tools
+      let data = Data(prepared.html.utf8)
+      let published = VisualReply(title: title, height: height, digest: try await tools.library.storeContent(data),
+                               size: Int64(data.count))
+      let place = call.caller.inForum == true ? "the Forum" : "the chat"
+      let shown = title.isEmpty ? "Shown in \(place)." : "Shown in \(place): “\(title)”."
+      // A bot's chat and Forum seat are its runtime's own; the visual reply reaches it with the
+      // call's result, and from a seat the runtime posts it to the Forum.
+      guard let sessionID = call.caller.sessionID else {
+        let note = prepared.missingImages.isEmpty ? "" : " Local files are not embedded from a bot, so these stay as written "
+          + "and will not show: \(prepared.missingImages.joined(separator: ", ")). Put images in the HTML as data URIs."
+        return ToolResult(content: [.text(shown + note)], meta: .object(["wovenVisualReply": try JSONValue(encoding: published)]))
+      }
+      try await tools.sessions.host(for: sessionID).publish(published)
+      return .text(shown)
+    }),
+]
+
+// MARK: Notes, pages, sheets and apps
+
+private let artifactKinds: [String: NoteArtifactKind] = ["note": .note, "page": .canvas, "sheet": .spreadsheet, "app": .html]
+
+private func kindName(_ kind: NoteArtifactKind) -> String {
+  artifactKinds.first { $0.value == kind }?.key ?? kind.rawValue
+}
+
+/// A document is saved only when it is one this release can read whole.
+private func checked(_ document: NoteDocument) throws -> String {
+  let body = try document.encoded()
+  do { _ = try NoteDocument.editableDocument(from: body) } catch {
+    throw ToolFailure("That content cannot be saved: \(error.localizedDescription)")
+  }
+  if document.kind == .canvas, body.utf8.count > DocumentLimits.maximumBoardBytes { throw ToolFailure("The page would be too large.") }
+  return body
+}
+
+private let artifactTools: [WovenTool] = [
+  WovenTool(
+    name: "list_artifacts",
+    description: "List notes, pages, sheets and apps, most recently changed first: id, kind, title, a preview.",
+    input: schema(["kind": choice(["note", "page", "sheet", "app"], "Only this kind."), "query": text("Words the title or text contains.")]),
+    readOnly: true,
+    groups: [.notes],
+    run: { call in
+      var artifacts = try await call.tools.library.artifacts()
+      if let kind = call.arguments.optionalString("kind") {
+        guard let wanted = artifactKinds[kind] else { throw ToolFailure("kind is note, page, sheet or app.") }
+        artifacts = artifacts.filter { $0.kind == wanted }
+      }
+      if let query = call.arguments.optionalString("query")?.lowercased(), !query.isEmpty {
+        artifacts = artifacts.filter { $0.title.lowercased().contains(query) || $0.preview.lowercased().contains(query) }
+      }
+      return lines(artifacts.prefix(100).map {
+        "\($0.id) | \(kindName($0.kind)) | \($0.title.isEmpty ? "Untitled" : $0.title) | \($0.preview.prefix(80))"
+      })
+    }),
+  WovenTool(
+    name: "read_artifact",
+    description: "Read a note, page, sheet or app. Returns its title, its `basedOn` stamp for `edit_artifact`, and its content: a note's text, a page's components with their ids and revisions, a sheet's rows of cells, or an app's HTML and saved state.",
+    input: schema(["artifactID": text("The artifact.")], required: ["artifactID"]),
+    readOnly: true,
+    groups: [.notes],
+    run: { call in
+      let document = try await call.tools.library.artifact(try call.arguments.string("artifactID"))
+      let artifact = document.artifact
+      let body = NoteDocument.decode(document.body)
+      var result = ["\(kindName(artifact.kind)) \(artifact.id): \(artifact.title.isEmpty ? "Untitled" : artifact.title)",
+                    "basedOn: \(artifact.stamp)", ""]
+      switch artifact.kind {
+      case .note, .spreadsheet: result.append(DocumentText.text(of: body))
+      case .canvas: result.append(DocumentText.outline(of: body))
+      case .html:
+        result.append(body.html.isEmpty ? "(no HTML yet)" : body.html)
+        if let state = body.artifactState, !state.isEmpty { result += ["", "Saved state: " + json(state)] }
+      }
+      return lines(result)
+    }),
+  WovenTool(
+    name: "create_artifact",
+    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML document); a sheet cannot be created here. An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the app has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
+    input: schema(["kind": choice(["note", "page", "app"], "What to create."), "title": text("Its title."),
+                   "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
+                   "html": text("An app's whole HTML document."), "folderID": text("File it in this folder."),
+                   "databaseID": text("An app's linked database."), "query": text("The SELECT whose rows an app reads.")],
+                  required: ["kind", "title"]),
+    groups: [.notes],
+    run: { call in
+      guard let kind = call.arguments.optionalString("kind").flatMap({ artifactKinds[$0] }), kind != .spreadsheet else {
+        throw ToolFailure("kind is note, page or app.")
+      }
+      var document = NoteDocument(kind: kind)
+      if kind == .note, let text = call.arguments.optionalString("text") { document = DocumentText.note(text) }
+      if kind == .html { document.html = call.arguments.optionalString("html") ?? "" }
+      try await linkDatabase(call, into: &document)
+      let created = try await call.tools.library.createArtifact(kind: kind, title: try call.arguments.string("title"),
+                                                                folderID: call.arguments.optionalString("folderID"),
+                                                                body: try checked(document))
+      return .text("Created \(kindName(kind)) \(created.artifact.id). basedOn: \(created.artifact.stamp)")
+    }),
+  WovenTool(
+    name: "edit_artifact",
+    description: """
+      Change a note, page or app you have read, or rename a sheet. Pass the `basedOn` stamp from `read_artifact`. Give any of: `title`; \
+      a note's whole new `text`; an app's whole new `html`; `appState` edits; or `pageEdits` for a page. Each page \
+      edit is an object with `action` (add, update, move, remove, setPurpose), `id` and `expectedRevision` from the \
+      outline (for update, move and remove), `kind` (text, task or section, for add), `patch` (`text`, and for a \
+      task `status` todo|doing|blocked|done, `outcome`, `details`), `position` (`parentID`, `afterID` or `atStart`; \
+      add appends when omitted), `removal` (for a section: promoteChildren, or removeSubtree with the outline's \
+      `subtreeRevision` as `expectedSubtreeRevision`), `purpose`. \
+      `appState` edits are `{action: set|remove, key, value, expectedVersion}`. An app's `databaseID` and `query` \
+      change the database it reads as `window.wovenMatterData` (see `create_artifact`). Returns the new `basedOn`.
+      """,
+    input: schema(["artifactID": text("The artifact."), "basedOn": text("The stamp from when you read it."),
+                   "title": text("A new title."), "text": text("A note's whole new text."), "html": text("An app's whole new HTML."),
+                   "pageEdits": .object(["type": .string("array"), "items": .object(["type": .string("object")]),
+                                         "description": .string("Page component edits, applied in order.")]),
+                   "appState": .object(["type": .string("array"), "items": .object(["type": .string("object")]),
+                                        "description": .string("Edits to an app's saved state.")]),
+                   "databaseID": text("An app's linked database."), "query": text("The SELECT whose rows an app reads.")],
+                  required: ["artifactID", "basedOn"]),
+    groups: [.notes],
+    run: { call in
+      let library = call.tools.library
+      let id = try call.arguments.string("artifactID")
+      let current = try await library.artifact(id)
+      let kind = current.artifact.kind
+      if let edits = call.arguments["appState"], edits != .array([]) {
+        guard kind == .html else { throw ToolFailure("Only an app has saved state.") }
+        do { _ = try await library.editAppState(id, edits: try edits.decode([ArtifactStateEdit].self)) } catch {
+          throw ToolFailure("The state edit failed: \(error.localizedDescription)")
+        }
+      }
+      var body: String?
+      if let text = call.arguments.optionalString("text") {
+        guard kind == .note else { throw ToolFailure("`text` replaces a note's text; this is a \(kindName(kind)).") }
+        body = try checked(DocumentText.note(text))
+      }
+      if call.arguments.optionalString("html") != nil || call.arguments.optionalString("databaseID") != nil {
+        guard kind == .html else { throw ToolFailure("`html` and `databaseID` change an app; this is a \(kindName(kind)).") }
+        var document = try NoteDocument.editableDocument(from: (try await library.artifact(id)).body)
+        if let html = call.arguments.optionalString("html") { document.html = html }
+        try await linkDatabase(call, into: &document)
+        body = try checked(document)
+      }
+      if let edits = call.arguments["pageEdits"], edits != .array([]) {
+        guard kind == .canvas else { throw ToolFailure("`pageEdits` change a page; this is a \(kindName(kind)).") }
+        var document = try NoteDocument.editableDocument(from: current.body)
+        let decoded: [PageEdit]
+        do { decoded = try edits.decode([PageEdit].self) } catch { throw ToolFailure("A page edit could not be read: \(error)") }
+        for (index, edit) in decoded.enumerated() {
+          do { try document.applyPageEdit(edit) } catch {
+            throw ToolFailure("Page edit \(index + 1) failed, so nothing was changed: \(error.localizedDescription) Read the page again.")
+          }
+        }
+        body = try checked(document)
+      }
+      let title = call.arguments.optionalString("title")
+      guard title != nil || body != nil || call.arguments["appState"] != nil else { throw ToolFailure("Give something to change.") }
+      if title == nil && body == nil { return .text("Saved. basedOn: \(try await library.artifact(id).artifact.stamp)") }
+      let (written, replaced) = try await library.writeArtifact(id, basedOn: try call.arguments.string("basedOn"),
+                                                                title: title, body: body)
+      let note = replaced ? " It had changed since you read it; that version is kept in its history." : ""
+      return .text("Saved.\(note) basedOn: \(written.artifact.stamp)")
+    }),
+]
+
+/// Links the database `databaseID` names to an app, read through `query`.
+private func linkDatabase(_ call: ToolRequest, into document: inout NoteDocument) async throws {
+  guard let databaseID = call.arguments.optionalString("databaseID") else { return }
+  guard document.kind == .html else { throw ToolFailure("Only an app links a database here.") }
+  guard let query = call.arguments.optionalString("query"), !query.isEmpty else { throw ToolFailure("Give the `query` the app reads.") }
+  guard let database = try await call.tools.host?.databases().first(where: { $0.id == databaseID }) else {
+    throw ToolFailure("No database \(databaseID).")
+  }
+  document.databaseLink = DatabaseArtifactLink(sourceID: database.machineID, databaseID: database.id,
+                                               relativePath: "data.sqlite", sqliteQuery: query)
+}
+
+// MARK: Goals
+
+extension ToolRequest {
+  /// The calling session, which timers, wake-ups and goals are for.
+  package func callingSession() async throws -> Session {
+    guard let sessionID = caller.sessionID, let session = try await tools.library.session(sessionID) else {
+      throw ToolFailure("Only an agent session can use this.")
+    }
+    return session
+  }
+}
+
+private let goalMet = WovenTool(
+  name: "goal_met",
+  description: "Say that this session's goal is met, with what shows it. The goal is cleared and you are no longer asked to continue toward it. Only call it when the goal truly is met.",
+  input: schema(["evidence": text("What shows the goal is met.")], required: ["evidence"]),
+  forBots: false,
+  run: { call in
+    let session = try await call.callingSession()
+    if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
+    try await call.tools.sessions.host(for: session.id).goalMet(try call.arguments.string("evidence"))
+    return .text("The goal is marked met and cleared.")
+  })

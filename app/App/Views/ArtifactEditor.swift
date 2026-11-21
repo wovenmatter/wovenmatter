@@ -128,7 +128,9 @@ struct SpreadsheetFormattingBar: View {
             Toggle("Header row", isOn: Binding(get: { table.headerRowCount > 0 }, set: { on in
                 document.mutateSpreadsheetTable { $0.headerRowCount = on ? 1 : 0 }
             }))
+            #if os(macOS)
             .toggleStyle(.checkbox)
+            #endif
         }
         .font(.system(size: 12))
     }
@@ -166,7 +168,9 @@ extension NoteDocument {
     }
 }
 
-struct HTMLArtifactView: NSViewRepresentable {
+/// An App's live document in its sandboxed web view, configured the same on
+/// a Mac, an iPhone and an iPad.
+@MainActor struct HTMLArtifactView {
     @Environment(\.colorScheme) private var colorScheme
     let html: String
     let linkedDataJSON: String?
@@ -181,19 +185,18 @@ struct HTMLArtifactView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
-    func makeNSView(context: Context) -> WKWebView {
+    fileprivate func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.userContentController.add(context.coordinator, name: "wovenArtifactState")
+        configuration.userContentController.add(coordinator, name: "wovenArtifactState")
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
-        context.coordinator.webView = webView
+        webView.navigationDelegate = coordinator
+        coordinator.webView = webView
         return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        let coordinator = context.coordinator
+    fileprivate func update(_ webView: WKWebView, _ coordinator: Coordinator) {
         coordinator.parent = self
         let emptyAppearance = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? colorScheme : nil
         // A transient lifecycle pause must not reload the document: accepted
@@ -225,7 +228,7 @@ struct HTMLArtifactView: NSViewRepresentable {
         }
     }
 
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+    fileprivate static func dismantle(_ webView: WKWebView, _ coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "wovenArtifactState")
         webView.navigationDelegate = nil
         coordinator.webView = nil
@@ -347,6 +350,27 @@ struct HTMLArtifactView: NSViewRepresentable {
     }
 }
 
+#if os(macOS)
+extension HTMLArtifactView: NSViewRepresentable {
+    func makeNSView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
+    func updateNSView(_ webView: WKWebView, context: Context) { update(webView, context.coordinator) }
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) { dismantle(webView, coordinator) }
+}
+#else
+extension HTMLArtifactView: UIViewRepresentable {
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = makeWebView(context.coordinator)
+        webView.scrollView.showsVerticalScrollIndicator = false
+        webView.scrollView.showsHorizontalScrollIndicator = false
+        return webView
+    }
+    func updateUIView(_ webView: WKWebView, context: Context) { update(webView, context.coordinator) }
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) { dismantle(webView, coordinator) }
+}
+#endif
+
+// The database link editor is the Mac's; it uses the Mac's database views.
+#if os(macOS)
 struct DatabaseLinkControl: View {
     @Environment(\.wovenTheme) private var theme
     @Binding var document: NoteDocument
@@ -575,3 +599,4 @@ private struct DatabaseLinkPopover: View {
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
+#endif

@@ -197,7 +197,7 @@ extension BotsHost {
       if setting == thisMachine { throw ProtocolError(.busy, "The bots are already moving.") }
       throw ProtocolError(.notOwner, "This machine does not run the bots.", machineID: setting)
     }
-    guard target != thisMachine, let machine = try await library.machine(target) else {
+    guard target != thisMachine, let machine = try await library.machine(target), !machine.platform.isDevice else {
       throw ProtocolError(.badRequest, "Choose another of your machines.")
     }
     guard let client = await peers.client(for: target) else {
@@ -732,7 +732,7 @@ extension BotsHost {
       }
     }
     try await unknown()
-    let known = try await library.machine(machineID) != nil
+    let known = try await library.machine(machineID).map { !$0.platform.isDevice } ?? false
     guard machineID == thisMachine || known else {
       throw ProtocolError(.badRequest, "Choose one of your machines.")
     }

@@ -126,7 +126,7 @@ public enum Schema {
     // Newest write wins.
     Table("machines", .newestWins, [
       .text("name", ""),
-      // "mac" or "linux".
+      // "mac" or "linux", or "iphone" or "ipad" for a device.
       .text("platform", "mac"),
       // Sealed secrets for this machine are sealed with this key.
       .text("public_key"),
@@ -339,10 +339,12 @@ public enum Schema {
       .integer("changed", 0),
       .integer("removed", 0),
     ]),
-    // How far this library has received each other machine's rows.
+    // How far this library has received each other machine's rows, and when
+    // it last did.
     Table("sync_cursors", .local, [
       .key("machine_id"),
       .integer("received", 0),
+      .integer("received_at"),
     ]),
     // The runtime's own handle for each session this machine owns.
     Table("native_sessions", .local, [

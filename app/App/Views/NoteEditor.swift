@@ -17,22 +17,6 @@ private extension NSAttributedString.Key {
     static let noteTableDefinition = Self("wovenmatter.note.table-definition")
 }
 
-struct NoteTextStatistics: Equatable {
-    let words: Int
-    let characters: Int
-
-    init(document: NoteDocument) {
-        let text = document.plainText
-        var words = 0
-        text.enumerateSubstrings(in: text.startIndex..<text.endIndex,
-                                 options: [.byWords, .substringNotRequired]) { _, _, _, _ in
-            words += 1
-        }
-        self.words = words
-        characters = text.count
-    }
-}
-
 @MainActor
 @Observable
 final class NoteEditorController {

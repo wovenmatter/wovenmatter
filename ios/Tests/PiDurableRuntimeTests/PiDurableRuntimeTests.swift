@@ -2,467 +2,322 @@ import XCTest
 import MobileInference
 @testable import PiDurableRuntime
 
-private func json(_ value: Any) throws -> String {
-  String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
-}
-private func object(_ value: String) throws -> [String: Any] {
-  try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
-}
-private let testModel = """
-{"id":"test-model","name":"Controlled model","api":"openai-responses","provider":"controlled","baseUrl":"https://invalid.test","reasoning":false,"input":["text"],"contextWindow":100000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
+private let model = """
+{"id":"test-model","name":"Stand-in model","api":"openai-responses","provider":"stand-in","baseUrl":"https://invalid.test","reasoning":false,"input":["text"],"contextWindow":100000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}
 """
-private let testTools = """
-[{"name":"save_note","description":"Save a note on this device","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}}]
-"""
-private actor ControlledHost {
-  var inferenceCalls = 0
-  var toolCalls = 0
-  var activeTools = 0
-  var peakTools = 0
-  var toolsSeen: [String] = []
-  var requests: [String] = []
-  enum Mode: Sendable { case normal, subagent, code, checkpointThenWait, parallelCode, toolFanout }
-  var mode: Mode = .normal
-  func mode(_ value: Mode) { mode = value }
-  var holdTool = false
-  var toolStarted = false
+private let saveNote = PiToolDefinition(name: "save_note", description: "Save a note on this device",
+  parameters: #"{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}"#)
 
-  func inference(_ request: String, emit: @escaping @Sendable (String) -> Void) async throws {
-    inferenceCalls += 1; requests.append(request)
-    let payload = try object(request)
-    let context = payload["context"] as? [String: Any]
-    let messages = context?["messages"] as? [[String: Any]] ?? []
-    let finishedTool = messages.contains { $0["role"] as? String == "toolResult" }
-    let isChild = messages.contains { ($0["content"] as? String) == "delegated task" }
-    let call: [String: Any]
-    if mode == .subagent && !isChild {
-      call = ["type":"toolCall","id":"call-child","name":"subagent","arguments":["task":"delegated task","name":"Researcher"]]
-    } else if mode == .checkpointThenWait {
-      call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"store('phase', 'prepared'); await checkpoint(); await tools.save_note({text:'checkpointed'});"]]
-    } else if mode == .toolFanout {
-      call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"await Promise.all(Array.from({length:32},(_,i)=>tools.save_note({text:String(i)}))); store('completed',32); await checkpoint();"]]
-    } else if mode == .code {
-      call = ["type":"toolCall","id":"call-code","name":"codemode","arguments":["code":"const result = await tools.save_note({text:'café 🟩'}); text(result); store('saved', true);"]]
-    } else {
-      call = ["type":"toolCall","id":"call-native-note","name":"save_note","arguments":["text":"café 🟩"]]
-    }
-    let content: [[String: Any]] = finishedTool
-      ? [["type":"text","text":"Saved café 🟩 on this device."]] : mode == .parallelCode ? [
-        ["type":"toolCall","id":"code-first","name":"codemode","arguments":["code":"await new Promise(r=>setTimeout(r,150)); store('first',true); await checkpoint();"]],
-        ["type":"toolCall","id":"code-second","name":"codemode","arguments":["code":"store('second',true); await checkpoint();"]]
-      ] : [call]
-    let message: [String: Any] = ["role":"assistant","content":content,"api":"openai-responses","provider":"controlled","model":"test-model",
-      "usage":["input":10,"output":8,"cacheRead":0,"cacheWrite":0,"totalTokens":18,"cost":["input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0]],
-      "stopReason":finishedTool ? "stop" : "toolUse","timestamp":Date().timeIntervalSince1970 * 1000]
-    emit(try json(["type":"start","partial":message]))
-    emit(try json(["type":"done","reason":finishedTool ? "stop" : "toolUse","message":message]))
-  }
-  func tool(_ request: String) async throws -> String {
-    toolCalls += 1; toolStarted = true; toolsSeen.append(request)
-    activeTools += 1; peakTools = max(peakTools, activeTools)
-    defer { activeTools -= 1 }
-    if holdTool { try await Task.sleep(for: .seconds(120)) }
-    if mode == .toolFanout {
-      let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-      while toolCalls < 32 {
-        guard ContinuousClock.now < deadline else { throw CancellationError() }
-        try await Task.sleep(for: .milliseconds(10))
-      }
-    }
-    return try json(["content":[["type":"text","text":"Note saved: café 🟩"]]])
-  }
-  func hold() { holdTool = true }
-  func counts() -> (Int,Int) { (inferenceCalls,toolCalls) }
+private func json(_ value: Any) -> String {
+  String(decoding: try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
 }
 
-private struct IntegrationCredentials: InferenceCredentialReading {
-  func read(connectionID: String) async throws -> String? { "fixture-secret-kept-native" }
+/// One scripted model reply, emitted as pi-ai events.
+private final class Reply: @unchecked Sendable {
+  private let emit: @Sendable (String) -> Void
+  private var content: [[String: Any]] = []
+  private var stop = "stop"
+  var usage = ["input": 10, "output": 5, "cacheRead": 2, "cacheWrite": 0]
+
+  init(emit: @escaping @Sendable (String) -> Void) {
+    self.emit = emit
+    send(["type": "start"])
+  }
+
+  private var message: [String: Any] {
+    ["role": "assistant", "content": content, "api": "openai-responses", "provider": "stand-in", "model": "test-model",
+     "usage": usage.merging(["totalTokens": usage.values.reduce(0, +)]) { $1 }
+       .mapValues { $0 as Any }.merging(["cost": ["input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0]]) { $1 },
+     "stopReason": stop, "timestamp": Date().timeIntervalSince1970 * 1000]
+  }
+
+  private func send(_ event: [String: Any]) {
+    emit(json(event.merging(event["type"] as? String == "done" ? ["message": message] : ["partial": message]) { $1 }))
+  }
+
+  func text(_ pieces: String...) {
+    let index = content.count
+    content.append(["type": "text", "text": ""])
+    send(["type": "text_start", "contentIndex": index])
+    for piece in pieces {
+      content[index]["text"] = (content[index]["text"] as? String ?? "") + piece
+      send(["type": "text_delta", "contentIndex": index, "delta": piece])
+    }
+    send(["type": "text_end", "contentIndex": index, "content": content[index]["text"] ?? ""])
+  }
+
+  func toolCall(id: String, name: String, arguments: [String: Any]) {
+    let call: [String: Any] = ["type": "toolCall", "id": id, "name": name, "arguments": arguments]
+    content.append(call)
+    stop = "toolUse"
+    send(["type": "toolcall_start", "contentIndex": content.count - 1])
+    send(["type": "toolcall_end", "contentIndex": content.count - 1, "toolCall": call])
+  }
+
+  func done() { send(["type": "done", "reason": stop]) }
 }
-private actor ResponsesFixture: InferenceHTTPTransport {
-  var requests: [URLRequest] = []
-  func stream(_ request: URLRequest) async throws -> AsyncThrowingStream<InferenceHTTPEvent, Error> {
+
+/// A stand-in model: each request gets the next scripted reply, and is kept for the test to read.
+private actor StandIn {
+  typealias Step = @Sendable (Reply) async throws -> Void
+  private var script: [Step]
+  private(set) var requests: [String] = []
+
+  init(_ script: [Step]) { self.script = script }
+
+  func infer(_ request: String, emit: @escaping @Sendable (String) -> Void) async throws {
     requests.append(request)
-    let content: [[String:Any]] = requests.count == 1
-      ? [["type":"function_call","call_id":"native_tool_1","name":"save_note","arguments":"{\"text\":\"saved through native inference\"}"]]
-      : [["type":"message","role":"assistant","content":[["type":"output_text","text":"Saved using native inference."]]]]
-    let completion = try json(["type":"response.completed","response":["id":"fixture-response-\(requests.count)","status":"completed","output":content,"usage":["input_tokens":10,"output_tokens":8]]])
-    return AsyncThrowingStream { output in
-      output.yield(.response(200)); output.yield(.line("data: " + completion)); output.yield(.line("")); output.finish()
+    guard !script.isEmpty else { throw PiDurableError.failed("The stand-in model has no more replies.") }
+    let reply = Reply(emit: emit)
+    try await script.removeFirst()(reply)
+    reply.done()
+  }
+}
+
+private actor Gate {
+  private var open = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+  func wait() async {
+    if open { return }
+    await withCheckedContinuation { waiting.append($0) }
+  }
+  func release() {
+    open = true
+    for continuation in waiting { continuation.resume() }
+    waiting.removeAll()
+  }
+}
+
+/// Every event a session emits, as it comes.
+@MainActor
+private final class Recorder {
+  private(set) var events: [PiDurableEvent] = []
+
+  init(_ session: PiDurableSession) {
+    Task { for await event in session.events { self.events.append(event) } }
+  }
+
+  func until(_ condition: ([PiDurableEvent]) -> Bool) async throws {
+    let deadline = ContinuousClock.now + .seconds(20)
+    while !condition(events) {
+      guard ContinuousClock.now < deadline else { throw PiDurableError.failed("Timed out; events so far: \(events)") }
+      try await Task.sleep(for: .milliseconds(10))
     }
   }
+
+  func turnFinished() async throws { try await until { $0.contains(where: \.endsTurn) } }
+
+  /// The events, with streamed text and thinking left out.
+  var items: [PiDurableEvent] {
+    events.filter { if case .text = $0 { false } else if case .thinking = $0 { false } else { true } }
+  }
+
+  var text: String { events.map { if case .text(let delta) = $0 { delta } else { "" } }.joined() }
+}
+
+private extension PiDurableEvent {
+  var endsTurn: Bool { if case .turnFinished = self { true } else { false } }
 }
 
 @MainActor
 final class PiDurableRuntimeTests: XCTestCase {
-  private func directory() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("pi-ios-tests-" + UUID().uuidString) }
-  private func runtime(_ directory: URL, host: ControlledHost, events: @escaping PiDurableRuntime.Events = { _ in }) throws -> PiDurableRuntime {
-    try PiDurableRuntime(storageDirectory: directory,
-      configuration: .init(conversationID: "ios-conversation", modelJSON: testModel, toolsJSON: testTools, instructions: "Work on this device."),
-      inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) }, onEvents: events)
+  private var folder: URL!
+
+  override func setUp() async throws {
+    folder = FileManager.default.temporaryDirectory.appendingPathComponent("pi-durable-tests-" + UUID().uuidString)
   }
 
-  func testQuickChatRegistryKeepsNativeNotesButOmitsCodeAndSubagents() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost()
-    let runtime = try PiDurableRuntime(storageDirectory: path,
-      configuration: .init(conversationID: "quick-chat", modelJSON: testModel, toolsJSON: testTools, quickChat: true),
-      inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
-    try await runtime.open()
-    let receipt = try object(await runtime.submit(text: "Save a note", requestID: "quick-chat-input"))
-    _ = try await runtime.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
-    let calls = await host.toolCalls
-    XCTAssertEqual(calls, 1)
-    try await runtime.close()
+  override func tearDown() async throws {
+    try? FileManager.default.removeItem(at: folder)
   }
 
-  func testQuickChatCannotExecuteModelRequestedCodeOrSubagents() async throws {
-    for mode in [ControlledHost.Mode.code, .subagent] {
-      let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-      let host = ControlledHost(); await host.mode(mode)
-      let runtime = try PiDurableRuntime(storageDirectory: path,
-        configuration: .init(conversationID: "restricted", modelJSON: testModel, toolsJSON: testTools, quickChat: true),
-        inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
-      try await runtime.open()
-      let receipt = try object(await runtime.submit(text: "Attempt unsupported work", requestID: "restricted-input"))
-      _ = try await runtime.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
-      let calls = await host.toolCalls
-      XCTAssertEqual(calls, 0, "Unknown agent tools must not reach native effects")
-      try await runtime.close()
-    }
+  private func runtime(_ model: StandIn, tools: @escaping PiDurableRuntime.ToolExecutor = { _ in PiToolResult(output: "done") }) -> PiDurableRuntime {
+    PiDurableRuntime(directory: folder, inference: { try await model.infer($0, emit: $1) }, tools: tools)
   }
 
-  func testThinkingLevelReachesInferenceAndCanChangeBetweenTurns() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost()
-    let descriptor = testModel.replacingOccurrences(of: "\"reasoning\":false", with: "\"reasoning\":true")
-    let runtime = try PiDurableRuntime(storageDirectory: path,
-      configuration: .init(conversationID: "thinking", modelJSON: descriptor, toolsJSON: testTools, thinkingLevel: "high"),
-      inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
-    _ = try await runtime.open()
-    let first = try object(await runtime.submit(text: "Think carefully", requestID: "thinking-high"))
-    _ = try await runtime.wait(submissionID: XCTUnwrap(first["id"] as? Int))
-    let firstRequests = await host.requests
-    XCTAssertTrue(try firstRequests.allSatisfy { try (object($0)["options"] as? [String: Any])?["reasoning"] as? String == "high" })
-    try await runtime.configure(modelJSON: descriptor, thinkingLevel: "low")
-    let second = try object(await runtime.submit(text: "Continue", requestID: "thinking-low"))
-    _ = try await runtime.wait(submissionID: XCTUnwrap(second["id"] as? Int))
-    let secondRequests = await host.requests
-    XCTAssertEqual(try (object(XCTUnwrap(secondRequests.last))["options"] as? [String: Any])?["reasoning"] as? String, "low")
-    try await runtime.close()
+  private func start(_ id: String = "conversation", resume: Bool = false, tools: [PiToolDefinition] = []) -> PiDurableStart {
+    PiDurableStart(conversationID: id, resume: resume, modelJSON: model, instructions: "Work on this device.", tools: tools)
   }
 
-  func testRealSDKOwnsJournalAndRecoversTornTailWithoutDuplicatingSubmission() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost()
-    var events: [String] = []
-    let first = try runtime(path, host: host) { events.append($0) }
-    _ = try await first.open()
-    let competing = try runtime(path, host: host)
-    do { _ = try await competing.open(); XCTFail("Two SDK writers opened one journal") }
-    catch PiDurableRuntimeError.storageInUse { }
-    let accepted = try object(await first.submit(text: "Save this note", requestID: "stable-request"))
-    let id = try XCTUnwrap(accepted["id"] as? Int)
-    let settled = try object(await first.wait(submissionID: id))
-    XCTAssertEqual(settled["status"] as? String, "done")
-    let snapshot = try await first.snapshot()
-    XCTAssertTrue(snapshot.contains("Saved café 🟩 on this device."), snapshot)
-    XCTAssertTrue(events.contains { $0.contains("tool_execution_start") })
-    XCTAssertTrue(events.contains { $0.contains("message_end") })
-    try await first.close()
-    XCTAssertTrue(FileManager.default.fileExists(atPath: path.appendingPathComponent("main.jsonl").path))
-
-    let main = path.appendingPathComponent("main.jsonl")
-    let before = try Data(contentsOf: main)
-    var torn = before; torn.append(Data("{\"format\":1,\"type\":\"commit\"".utf8)); try torn.write(to: main)
-    let second = try runtime(path, host: host)
-    _ = try await second.open()
-    let after = try Data(contentsOf: main)
-    XCTAssertTrue(after.starts(with: before))
-    XCTAssertEqual(after.last, 10, "SDK removes an incomplete uncommitted tail")
-    let recoveredReceipt = try await second.submission(requestID: "stable-request")
-    XCTAssertEqual(try object(XCTUnwrap(recoveredReceipt))["id"] as? Int, id)
-    let missingReceipt = try await second.submission(requestID: "never-admitted")
-    XCTAssertNil(missingReceipt)
-    let history = try object(await second.history(limit: 2))
-    XCTAssertEqual((history["items"] as? [Any])?.count, 2)
-    let cursor = try json(XCTUnwrap(history["next"]))
-    let older = try object(await second.history(cursorJSON: cursor, limit: 2))
-    XCTAssertEqual((older["items"] as? [Any])?.count, 2)
-    let duplicate = try object(await second.submit(text: "Save this note", requestID: "stable-request"))
-    XCTAssertEqual(duplicate["id"] as? Int, id)
-    XCTAssertEqual(duplicate["status"] as? String, "done")
-    let restored = try await second.snapshot()
-    XCTAssertTrue(restored.contains("café 🟩"))
-    try await second.close()
-    let counts = await host.counts()
-    XCTAssertEqual(counts.0, 2, "One model turn requests a tool and one produces the final answer")
-    XCTAssertEqual(counts.1, 1, snapshot)
-    let toolsSeen = await host.toolsSeen
-    XCTAssertEqual(try object(XCTUnwrap(toolsSeen.first))["toolCallID"] as? String, "call-native-note")
-    let request = try object(await host.requests[0])
-    let scope = try XCTUnwrap(request["scope"] as? [String:Any])
-    XCTAssertTrue((scope["conversationID"] as? String)?.hasPrefix("ios-conversation:") == true)
-    XCTAssertTrue((scope["requestID"] as? String)?.hasPrefix("ios-conversation:") == true)
+  func testATurnStreamsTextAndEndsWithOneMessageAndItsUsage() async throws {
+    let standIn = StandIn([{ $0.text("Hel", "lo") }])
+    let session = try await runtime(standIn).open(start())
+    let recorder = Recorder(session)
+    try await session.send("hello")
+    try await recorder.turnFinished()
+    XCTAssertEqual(recorder.text, "Hello")
+    XCTAssertEqual(recorder.items, [
+      .userMessage(text: "hello"), .messageFinished(text: "Hello"),
+      .turnFinished(failure: nil, usage: PiTokenUsage(model: "stand-in/test-model", input: 10, output: 5, cacheRead: 2, cacheWrite: 0)),
+    ])
+    await session.close()
   }
 
-  func testSuspensionRecoversWithoutReplayingUnsafeTool() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.hold()
-    let first = try runtime(path, host: host)
-    _ = try await first.open()
-    let receipt = try object(await first.submit(text: "Save note", requestID: "interrupted"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    for _ in 0..<200 {
-      if await host.toolStarted { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    let toolStarted = await host.toolStarted
-    XCTAssertTrue(toolStarted)
-    try await first.close()
-
-    let second = try runtime(path, host: host)
-    let restored = try await second.open()
-    XCTAssertTrue(restored.contains("save_note"))
-    let countsBeforeResume = await host.counts()
-    XCTAssertEqual(countsBeforeResume.1, 1, "Opening a viewer must not execute pending tools")
-    try await second.resume()
-    let settled = try object(await second.wait(submissionID: id))
-    XCTAssertEqual(settled["status"] as? String, "done")
-    let snapshot = try await second.snapshot()
-    XCTAssertTrue(snapshot.contains("interrupted"), snapshot)
-    let counts = await host.counts()
-    XCTAssertEqual(counts.1, 1, "Side effect with unknown completion must not run again")
-    try await second.close()
-  }
-
-  func testExplicitStopIsPersistedAndDoesNotResume() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.hold()
-    let first = try runtime(path, host: host)
-    _ = try await first.open()
-    let receipt = try object(await first.submit(text: "Save note", requestID: "cancelled"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    for _ in 0..<200 {
-      if await host.toolStarted { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    try await first.abort()
-    let stopped = try object(await first.wait(submissionID: id))
-    XCTAssertEqual(stopped["status"] as? String, "unanswered")
-    try await first.close()
-    let count = await host.counts()
-    let second = try runtime(path, host: host)
-    _ = try await second.open()
-    try await second.resume()
-    let again = try object(await second.wait(submissionID: id))
-    XCTAssertEqual(again["status"] as? String, "unanswered")
-    XCTAssertEqual(again["reason"] as? String, stopped["reason"] as? String)
-    let after = await host.counts()
-    XCTAssertEqual(after.0,count.0); XCTAssertEqual(after.1,count.1)
-    try await second.close()
-  }
-
-  func testSDKThroughNativeInferenceServiceAndNativeToolsWithoutNetwork() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+  func testAToolCallStartsAndFinishesInOrderAndTheModelSeesItsResult() async throws {
     let fixture = ResponsesFixture()
-    let connection = InferenceConnection(id: "fixture-account", name: "Controlled inference", provider: "openai", route: .direct, modelID: "gpt-4.1")
-    let service = MobileInferenceService(connection: connection, credentials: IntegrationCredentials(), transport: fixture, model: InferenceModel(id: connection.modelID, name: "Offline fixture", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1"))
+    let connection = InferenceConnection(id: "fixture-account", name: "Fixture", provider: "openai", modelID: "gpt-4.1")
+    let service = MobileInferenceService(connection: connection, credentials: FixtureCredentials(), transport: fixture,
+      model: InferenceModel(id: connection.modelID, name: "Fixture", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1"))
     let descriptor = try await service.model().descriptorJSON()
-    let host = ControlledHost()
-    let engine = try PiDurableRuntime(storageDirectory: path,
-      configuration: .init(conversationID: "native-integration", modelJSON: descriptor, toolsJSON: testTools),
-      inference: { request,emit in try await service.stream(requestJSON: request, emit: emit) },
-      tool: { try await host.tool($0) })
-    _ = try await engine.open()
-    let receipt = try object(await engine.submit(text: "Save with native tools", requestID: "native-request"))
-    let settled = try object(await engine.wait(submissionID: XCTUnwrap(receipt["id"] as? Int)))
-    XCTAssertEqual(settled["status"] as? String, "done")
-    let history = try await engine.history()
-    XCTAssertTrue(history.contains("Saved using native inference."), history)
-    XCTAssertFalse(history.contains("fixture-secret-kept-native"))
-    let toolCount = await host.toolCalls
-    XCTAssertEqual(toolCount, 1)
-    let requests = await fixture.requests
+    let runtime = PiDurableRuntime(directory: folder, inference: { try await service.stream(requestJSON: $0, emit: $1) },
+                                   tools: { request in PiToolResult(output: "Note saved: " + request.arguments) })
+    let session = try await runtime.open(PiDurableStart(conversationID: "tools", resume: false, modelJSON: descriptor, tools: [saveNote]))
+    let recorder = Recorder(session)
+    try await session.send("save a note")
+    try await recorder.turnFinished()
+
+    guard case .toolStarted(let callID, "save_note", let input) = recorder.items[1],
+          case .toolFinished(callID, "save_note", input, let output, false) = recorder.items[2] else {
+      return XCTFail("Expected the tool call to start and finish: \(recorder.items)")
+    }
+    XCTAssertTrue(input.contains("saved through native inference"))
+    XCTAssertEqual(output, #"Note saved: {"text":"saved through native inference"}"#)
+    XCTAssertEqual(Array(recorder.items.dropFirst(3)), [.messageFinished(text: "Saved using native inference."),
+                                                       .turnFinished(failure: nil, usage: recorder.usage)])
+    let second = await fixture.bodies.last ?? ""
+    XCTAssertTrue(second.contains("Note saved"), "The model did not get the tool's result")
+    await session.close()
+  }
+
+  func testSteeringARunningTurnIsTakenInAndTheTurnEndsOnce() async throws {
+    let gate = Gate()
+    let standIn = StandIn([
+      { reply in reply.text("Looking"); await gate.wait() },
+      { $0.text("Cats too.") },
+    ])
+    let session = try await runtime(standIn).open(start())
+    let recorder = Recorder(session)
+    try await session.send("tell me about dogs")
+    try await recorder.until { _ in recorder.text == "Looking" }
+    let steered = try await session.steer("also cats")
+    XCTAssertTrue(steered)
+    await gate.release()
+    try await recorder.turnFinished()
+
+    let requests = await standIn.requests
     XCTAssertEqual(requests.count, 2)
-    let second = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(requests.last?.httpBody)) as? [String:Any])
-    let input = try XCTUnwrap(second["input"] as? [[String:Any]])
-    XCTAssertTrue(input.contains { $0["type"] as? String == "function_call_output" })
-    XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer fixture-secret-kept-native")
-    try await engine.close()
-    let files = try FileManager.default.contentsOfDirectory(at: path, includingPropertiesForKeys: nil)
-    for file in files where file.pathExtension == "jsonl" {
-      XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("fixture-secret-kept-native"))
+    XCTAssertTrue(requests[1].contains("also cats"))
+    XCTAssertEqual(recorder.items.dropLast(), [
+      .userMessage(text: "tell me about dogs"), .messageFinished(text: "Looking"),
+      .userMessage(text: "also cats"), .messageFinished(text: "Cats too."),
+    ])
+    XCTAssertEqual(recorder.events.filter(\.endsTurn).count, 1)
+    let late = try await session.steer("nothing is running")
+    XCTAssertFalse(late)
+    await session.close()
+  }
+
+  func testInterruptEndsTheTurnOnceWithWhatWasSaidSoFar() async throws {
+    let standIn = StandIn([{ reply in reply.text("Partial"); try await Task.sleep(for: .seconds(600)) }])
+    let session = try await runtime(standIn).open(start())
+    let recorder = Recorder(session)
+    try await session.send("write a long essay")
+    try await recorder.until { _ in recorder.text == "Partial" }
+    try await session.interrupt()
+    try await recorder.turnFinished()
+    try await Task.sleep(for: .milliseconds(200))
+
+    XCTAssertEqual(recorder.items.count, 3)
+    XCTAssertEqual(Array(recorder.items.prefix(2)), [.userMessage(text: "write a long essay"), .messageFinished(text: "Partial")])
+    guard case .turnFinished(nil, _) = recorder.items[2] else { return XCTFail("The turn did not end cleanly: \(recorder.items)") }
+    await session.close()
+  }
+
+  func testAQuestionWaitsForThePersonsAnswer() async throws {
+    let standIn = StandIn([
+      { $0.toolCall(id: "ask-1", name: "ask_user", arguments: ["question": "Which color?"]) },
+      { $0.text("Blue it is.") },
+    ])
+    let session = try await runtime(standIn).open(start(tools: [.askUser]))
+    let recorder = Recorder(session)
+    try await session.send("pick a color with me")
+    try await recorder.until { $0.contains(.prompt(id: "ask-1", question: "Which color?")) }
+    try session.answer(promptID: "ask-1", text: "Blue")
+    try await recorder.turnFinished()
+
+    XCTAssertTrue(recorder.items.contains(.promptResolved(id: "ask-1")))
+    XCTAssertTrue(recorder.items.contains(.toolFinished(callID: "ask-1", name: "ask_user", input: #"{"question":"Which color?"}"#,
+                                                        output: "Blue", failed: false)))
+    let requests = await standIn.requests
+    XCTAssertTrue(requests.last?.contains("Blue") == true)
+    await session.close()
+  }
+
+  func testReopeningAConversationContinuesIt() async throws {
+    let standIn = StandIn([{ $0.text("Noted.") }, { $0.text("It was 42.") }])
+    do {
+      _ = try await runtime(standIn).open(start("later", resume: true))
+      XCTFail("A conversation that was never started opened")
+    } catch PiDurableError.conversationGone {}
+
+    let first = try await runtime(standIn).open(start("later"))
+    let recorder = Recorder(first)
+    try await first.send("remember 42")
+    try await recorder.turnFinished()
+    await first.close()
+
+    let second = try await runtime(standIn).open(start("later", resume: true))
+    let again = Recorder(second)
+    try await second.send("which number?")
+    try await again.turnFinished()
+    let requests = await standIn.requests
+    XCTAssertEqual(requests.count, 2)
+    XCTAssertTrue(requests[1].contains("remember 42") && requests[1].contains("Noted."))
+    XCTAssertEqual(again.items.first, .userMessage(text: "which number?"))
+    await second.close()
+  }
+
+  func testATurnCutShortByClosingIsSettledWhenReopenedAndTheNextMessageStartsATurn() async throws {
+    let standIn = StandIn([{ _ in try await Task.sleep(for: .seconds(600)) }, { $0.text("Here now.") }])
+    let first = try await runtime(standIn).open(start("cut"))
+    let recorder = Recorder(first)
+    try await first.send("answer slowly")
+    try await recorder.until { _ in !recorder.items.isEmpty }
+    try await Task.sleep(for: .milliseconds(100))
+    await first.close()
+    try await recorder.turnFinished()
+    XCTAssertEqual(recorder.items, [.userMessage(text: "answer slowly"),
+                                    .turnFinished(failure: "The conversation was closed during the turn.", usage: nil)])
+
+    // The host saved that turn as stopped, so it does not run again by itself.
+    let second = try await runtime(standIn).open(start("cut", resume: true))
+    let reopened = Recorder(second)
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(reopened.items, [])
+    try await second.send("and now?")
+    try await reopened.turnFinished()
+    XCTAssertEqual(Array(reopened.items.prefix(2)), [.userMessage(text: "and now?"), .messageFinished(text: "Here now.")])
+    guard case .turnFinished(nil, _) = reopened.items.last else { return XCTFail("The new turn did not end: \(reopened.items)") }
+    let requests = await standIn.requests
+    XCTAssertEqual(requests.count, 2)
+    XCTAssertTrue(requests[1].contains("and now?"))
+    await second.close()
+  }
+}
+
+private extension Recorder {
+  var usage: PiTokenUsage? {
+    for case .turnFinished(_, let usage) in events { return usage }
+    return nil
+  }
+}
+
+private struct FixtureCredentials: InferenceCredentialReading {
+  func read(connectionID: String) async throws -> String? { "fixture-secret" }
+}
+
+/// OpenAI Responses over a stand-in transport: a tool call, then an answer.
+private actor ResponsesFixture: InferenceHTTPTransport {
+  private(set) var bodies: [String] = []
+  func stream(_ request: URLRequest) async throws -> AsyncThrowingStream<InferenceHTTPEvent, Error> {
+    bodies.append(String(decoding: request.httpBody ?? Data(), as: UTF8.self))
+    let output: [[String: Any]] = bodies.count == 1
+      ? [["type": "function_call", "call_id": "call_1", "name": "save_note", "arguments": #"{"text":"saved through native inference"}"#]]
+      : [["type": "message", "role": "assistant", "content": [["type": "output_text", "text": "Saved using native inference."]]]]
+    let completion = json(["type": "response.completed", "response": ["id": "response-\(bodies.count)", "status": "completed", "output": output,
+                                                                      "usage": ["input_tokens": 10, "output_tokens": 8]]])
+    return AsyncThrowingStream { stream in
+      stream.yield(.response(200)); stream.yield(.line("data: " + completion)); stream.yield(.line("")); stream.finish()
     }
   }
-
-  func testOwnedSubagentUsesSameModelAndIndependentProviderSession() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.subagent)
-    let engine = try runtime(path, host: host)
-    _ = try await engine.open()
-    let receipt = try object(await engine.submit(text: "Delegate the note", requestID: "parent-request"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    let settled = try object(await engine.wait(submissionID: id))
-    XCTAssertEqual(settled["status"] as? String, "done")
-    let conversations = try object(await engine.conversations())
-    XCTAssertEqual((conversations["items"] as? [Any])?.count, 2)
-    let counts = await host.counts()
-    XCTAssertEqual(counts.0, 4); XCTAssertEqual(counts.1, 1)
-    let usageBeforeCompaction = try await engine.tokenUsage()
-    XCTAssertEqual(usageBeforeCompaction, 72, "Include all four root and child model requests")
-    try await engine.compact(instructions: "Keep a concise summary")
-    let usageAfterCompaction = try await engine.tokenUsage()
-    XCTAssertGreaterThanOrEqual(try XCTUnwrap(usageAfterCompaction), 72, "Compaction cannot discard consumed tokens")
-    let requests = await host.requests
-    let scopes = try requests.map { try object($0)["scope"] as? [String:Any] }
-    XCTAssertEqual(Set(scopes.compactMap { $0?["conversationID"] as? String }).count, 2)
-    XCTAssertTrue(try requests.allSatisfy { (try object($0)["model"] as? [String:Any])?["id"] as? String == "test-model" })
-    let rootScope = scopes.first.flatMap { $0 }?["conversationID"] as? String
-    for request in requests {
-      let payload = try object(request)
-      let scope = payload["scope"] as? [String: Any]
-      let context = payload["context"] as? [String: Any]
-      var inventory = Set<String>()
-      for message in context?["messages"] as? [[String: Any]] ?? [] {
-        for tool in message["toolsRemoved"] as? [[String: Any]] ?? [] { if let name = tool["name"] as? String { inventory.remove(name) } }
-        for tool in message["toolsAdded"] as? [[String: Any]] ?? [] { if let name = tool["name"] as? String { inventory.insert(name) } }
-      }
-      XCTAssertEqual(inventory.contains("subagent"), scope?["conversationID"] as? String == rootScope, "Only the root can delegate")
-    }
-    try await engine.close()
-    let reopened = try runtime(path, host: host)
-    _ = try await reopened.open()
-    let reopenedUsage = try await reopened.tokenUsage()
-    XCTAssertEqual(reopenedUsage, usageAfterCompaction)
-    try await reopened.close()
-  }
-
-  func testCodeModePersistsNestedCallIdentityAndStoreBeyondFormerConcurrencyCeiling() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.toolFanout)
-    let engine = try runtime(path, host: host)
-    _ = try await engine.open()
-    let receipt = try object(await engine.submit(text: "Run the parallel tools", requestID: "tool-fanout"))
-    let settled = try object(await engine.wait(submissionID: XCTUnwrap(receipt["id"] as? Int)))
-    XCTAssertEqual(settled["status"] as? String, "done")
-    let requests = await host.toolsSeen
-    let peak = await host.peakTools
-    XCTAssertEqual(requests.count, 32)
-    XCTAssertEqual(peak, 32)
-    let ids = try requests.compactMap { try object($0)["toolCallID"] as? String }
-    XCTAssertEqual(Set(ids), Set((1...32).map { "call-code/nested/\($0)" }),
-      "Each nested SDK task retains its exact durable call identity")
-    let history = try await engine.history()
-    XCTAssertTrue(history.contains("woven.ios-codemode-store"), history)
-    XCTAssertTrue(history.contains("wovenNestedCall"), history)
-    try await engine.close()
-  }
-
-  func testStoppingCodeModeCancelsAllParallelSDKTools() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.toolFanout); await host.hold()
-    let engine = try runtime(path, host: host)
-    _ = try await engine.open()
-    _ = try await engine.submit(text: "Start parallel tools", requestID: "cancel-fanout")
-    let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-    while await host.toolCalls < 32 && ContinuousClock.now < deadline {
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    let started = await host.toolCalls
-    XCTAssertEqual(started, 32)
-    try await engine.abort()
-    try await engine.close()
-    let active = await host.activeTools
-    XCTAssertEqual(active, 0, "Stopping the parent must cancel every nested SDK-owned tool")
-  }
-
-  func testConcurrentCodeProgramsPreserveBothCheckpointKeys() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.parallelCode)
-    let engine = try runtime(path, host: host)
-    _ = try await engine.open()
-    let receipt = try object(await engine.submit(text: "Run both", requestID: "parallel-code"))
-    _ = try await engine.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
-    let page = try object(await engine.history())
-    let items = try XCTUnwrap(page["items"] as? [[String: Any]])
-    let stores = items.filter { $0["kind"] as? String == "woven.ios-codemode-store" }
-    XCTAssertTrue(stores.contains { item in
-      guard let data = item["data"] as? [String: Any] else { return false }
-      return data["first"] as? Bool == true && data["second"] as? Bool == true
-    }, String(describing: stores))
-    try await engine.close()
-  }
-
-  func testCodeCheckpointSurvivesInterruptedWorkerWithoutReplayingTool() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.checkpointThenWait); await host.hold()
-    let first = try runtime(path, host: host)
-    _ = try await first.open()
-    let receipt = try object(await first.submit(text: "Checkpoint before waiting", requestID: "checkpoint-request"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    for _ in 0..<300 {
-      if await host.toolStarted { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    let started = await host.toolStarted; XCTAssertTrue(started)
-    try await first.close()
-    let second = try runtime(path, host: host)
-    _ = try await second.open()
-    let recovered = try await second.history()
-    XCTAssertTrue(recovered.contains("woven.ios-codemode-store"), recovered)
-    XCTAssertTrue(recovered.contains("prepared"), recovered)
-    try await second.resume()
-    _ = try await second.wait(submissionID: id)
-    let toolCalls = await host.toolCalls; XCTAssertEqual(toolCalls, 1)
-    try await second.close()
-  }
-
-  func testCodeModeInterruptionDoesNotReplayNestedUnsafeEffect() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.code); await host.hold()
-    let first = try runtime(path, host: host)
-    _ = try await first.open()
-    let receipt = try object(await first.submit(text: "Code note", requestID: "interrupted-code"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    for _ in 0..<300 {
-      if await host.toolStarted { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    let started = await host.toolStarted; XCTAssertTrue(started)
-    try await first.close()
-    let second = try runtime(path, host: host)
-    _ = try await second.open(); try await second.resume()
-    _ = try await second.wait(submissionID: id)
-    let history = try await second.history()
-    XCTAssertTrue(history.contains("interrupted"), history)
-    let count = await host.toolCalls; XCTAssertEqual(count, 1)
-    try await second.close()
-  }
-
-  func testStoppingParentCancelsOwnedSubagentTool() async throws {
-    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
-    let host = ControlledHost(); await host.mode(.subagent); await host.hold()
-    let engine = try runtime(path, host: host)
-    _ = try await engine.open()
-    let receipt = try object(await engine.submit(text: "Delegate note", requestID: "stop-child"))
-    let id = try XCTUnwrap(receipt["id"] as? Int)
-    for _ in 0..<300 {
-      if await host.toolStarted { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    let started = await host.toolStarted; XCTAssertTrue(started)
-    try await engine.abort()
-    let stopped = try object(await engine.wait(submissionID: id))
-    XCTAssertEqual(stopped["status"] as? String, "unanswered")
-    let count = await host.toolCalls; XCTAssertEqual(count, 1)
-    try await engine.close()
-  }
-
-  func testCodeWorkerHasNoNetworkOrNativeHostAccessAndCanBeTerminated() async throws {
-    let executor = PiCodeModeExecutor()
-    let input = try json(["source":"let blocked = false; try { await fetch('https://example.invalid'); } catch { blocked = true; } text({blocked, window:typeof window, process:typeof process, host:typeof __wmNativeSync});", "tools":[], "state":[:]] as [String:Any])
-    let output = try await executor.run(requestJSON: input) { _,_ in XCTFail("Unexpected tool"); return "{}" }
-    XCTAssertTrue(output.contains("blocked")); XCTAssertTrue(output.contains("true")); XCTAssertTrue(output.contains("undefined"))
-  }
-
 }

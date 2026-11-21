@@ -17,6 +17,7 @@
 /* Begin PBXFileReference section */
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		37C9459F43D4462FD229B6B1 /* WovenMatter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WovenMatter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1300000000000000000000B /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
 		A1200000000000000000000A /* harnesses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ../harnesses; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -61,6 +62,7 @@
 			children = (
 				0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */,
 				A1200000000000000000000A /* harnesses */,
+				A1300000000000000000000B /* Version.xcconfig */,
 				C67C8CBF1B7E40CA0F37A274 /* App */,
 				9959D7D4FDC4FD024F490589 /* Products */,
 			);
@@ -204,6 +206,7 @@
 /* Begin XCBuildConfiguration section */
 		AAF9E2A637B256FBD0957737 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1300000000000000000000B /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = App/WovenMatter.entitlements;
@@ -224,7 +227,6 @@
 					"@executable_path/../Frameworks",
 				);
 				INFOPLIST_FILE = App/Info.plist;
-				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop;
 				PRODUCT_MODULE_NAME = WovenMatter;
 				PRODUCT_NAME = "Woven Matter";
@@ -234,6 +236,7 @@
 		};
 		D3D231F1BDF4B1791E2AEAA7 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1300000000000000000000B /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
 				CODE_SIGN_ENTITLEMENTS = App/WovenMatter.entitlements;
@@ -254,7 +257,6 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
 				WOVENMATTER_DEV_BUNDLE_ID = wovenmatter.desktop.dev;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(WOVENMATTER_DEV_BUNDLE_ID)";
 				PRODUCT_MODULE_NAME = WovenMatter;

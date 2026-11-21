@@ -8,44 +8,60 @@ settings:
 packages:
   Mobile:
     path: .
-  Shared:
-    path: ../shared
+  Protocol:
+    path: ../protocol
 targets:
   WovenMatter:
     productName: WovenMatter
     type: application
     platform: iOS
+    # The app's version is the Woven Matter app's: one file for the Mac and
+    # this app. A release build passes MARKETING_VERSION for both.
+    configFiles:
+      Debug: ../app/Version.xcconfig
+      Release: ../app/Version.xcconfig
     sources:
       - path: Sources/MobileApp
+      # The Mac UI's client layer: the stores, connections and presentation
+      # types. Its Mac-only corners stay out.
+      - path: ../app/App/Client
+        excludes:
+          - Connection/ThisMachineServer.swift
+          - UpdatesStore.swift
+          - UIToolsStore.swift
+      - path: ../app/App/Platform/DictationSession.swift
+      - path: ../app/App/Platform/AppleDictationEngine.swift
+      - path: ../app/App/Platform/DictationInsertion.swift
+      - path: ../app/App/Platform/DictationRecord.swift
+      - path: ../app/App/Platform/DictationTranscript.swift
       - path: ../app/App/Views/WovenStyle.swift
       - path: ../app/App/Views/WovenColors.swift
-      - path: ../app/App/Models/ConversationMarkdownDocument.swift
       - path: ../app/App/Views/ConversationResponse.swift
-      - path: ../app/App/Views/ConversationHTMLRenderView.swift
-      - path: ../app/Sources/WovenMatterCore/ConversationHTMLRender.swift
-      - path: ../app/Sources/WovenMatterCore/AgentRunActivity.swift
-      - path: ../app/Sources/WovenMatterCore/AssistantTranscriptProjection.swift
-      - path: ../app/Sources/WovenMatterCore/AssistantStreamingText.swift
-      - path: ../app/Sources/WovenMatterCore/ConversationWorkTimeline.swift
-      - path: ../app/Sources/WovenMatterCore/ProgramStatus.swift
-      - path: ../app/Sources/WovenMatterCore/WorkspaceHistory.swift
-      - path: ../app/App/Models/ConversationMessageLayout.swift
-      - path: ../app/App/Models/ConversationTranscriptState.swift
       - path: ../app/App/Views/ConversationWorkTranscript.swift
+      - path: ../app/App/Views/ConversationHTMLRenderView.swift
+      - path: ../app/App/Views/ConversationRunningDots.swift
+      - path: ../app/App/Views/ConversationMarkdown.swift
       - path: ../app/App/Views/ConversationSubagentRow.swift
+      - path: ../app/App/Views/ConversationMessageRow.swift
+      - path: ../app/App/Views/RemoteInteractionCard.swift
+      - path: ../app/App/Views/WorkspaceSessionActivity.swift
+      # The artifact editors both apps share: Sheets, Apps and their histories.
+      - path: ../app/App/Documents
+      - path: ../app/App/Views/ArtifactEditor.swift
+      - path: ../app/App/Views/ArtifactEditorModels.swift
+      - path: ../app/App/Views/ArtifactStateScript.swift
+      - path: ../app/App/Views/ArtifactStateSnapshot.swift
+      - path: ../app/App/Views/HTMLArtifactDocument.swift
+      - path: ../app/App/Views/PersistentArtifactView.swift
       - path: ../app/App/SharedAssets.xcassets
       - path: ../docs/assets/LUCIDE_LICENSE.txt
       - path: Config/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:
       - package: Mobile
-        product: LibraryClient
-      - package: Mobile
-        product: PiDurableRuntime
-      - package: Mobile
-        product: MobileInference
-      - package: Shared
-        product: WovenMatterShared
+        product: WovenDevice
+      - package: Protocol
+        product: WovenProtocol
     settings:
       base:
         PRODUCT_NAME: WovenMatter
@@ -53,42 +69,23 @@ targets:
         DEVELOPMENT_TEAM: 3M84Q9NAMN
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_FILE: Config/Info.plist
-        MARKETING_VERSION: 0.0.1
         # Dev default only. TestFlight archives stamp a UTC build number;
         # see scripts/prepare-ios-testflight.sh.
-        CURRENT_PROJECT_VERSION: 18
+        CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_STRICT_CONCURRENCY: complete
       # Debug is the simulator/local-device Dev app; Release is the TestFlight app.
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter.dev
           WOVENMATTER_DISPLAY_NAME: Woven Matter Dev
-          # Its own link scheme, so a pairing link opened outside the app goes to the TestFlight app.
+          # Its own link scheme, so a connection link opened outside the app goes to the TestFlight app.
           WOVENMATTER_URL_SCHEME: wovenmatter-dev
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter
           WOVENMATTER_DISPLAY_NAME: Woven Matter
           WOVENMATTER_URL_SCHEME: wovenmatter
-  MobileAppTests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: Tests/MobileAppTests
-    dependencies:
-      - target: WovenMatter
-      - package: Mobile
-        product: LibraryClient
-        link: false
-      - package: Shared
-        product: WovenMatterShared
-        link: false
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.wovenmatter.dev.apptests
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/WovenMatter.app/WovenMatter
-        BUNDLE_LOADER: $(TEST_HOST)
-        GENERATE_INFOPLIST_FILE: YES
   MobileUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -108,5 +105,4 @@ schemes:
         WovenMatter: all
     test:
       targets:
-        - MobileAppTests
         - MobileUITests

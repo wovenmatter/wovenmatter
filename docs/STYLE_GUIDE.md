@@ -42,30 +42,33 @@ when an intentional design change is accepted.
   selection stay visible. Keep the dictation microphone beside the text entry
   area above this row.
 - **Composer setup notices:** explain missing model configuration in a full-width
-  quiet action above the input. Use regular-weight secondary text, allow wrapping,
-  and open Pi Durable settings in the relevant workspace scope.
+  quiet action above the input. Use regular-weight secondary text at footnote
+  size, allow wrapping, and open Pi Durable settings in the relevant workspace
+  scope (on a device, Quick Chat's Subscriptions & API Keys).
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `WovenStyle.swift` and `DesktopDesign.swift`, and the page/row
   patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
 - **Mobile Quick Chat:** name the device conversation feature **Quick Chat**,
-  with **Powered by Pi Durable** in its setup explanation. Mac/Linux agents retain
-  their harness names. On the mobile home page and in the New Chat menu Quick
-  Chat comes first and the workspaces follow it, each once under its own name.
-  A message sent to a Mac or Linux session shows at once with quiet caption
-  progress ("Sending to …", "Starting on …"), never a spinner. Home, Folders, New Chat and Calendar list only
-  Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
-  every saved workspace with its connection state. Never add an "Unavailable
-  workspace" group: folders whose workspace is not listed stay in All Workspaces.
-  Web search keys (Exa, Brave Search, Firecrawl) live in Settings → Subscriptions & API Keys with
-  the model providers. Do not add data-sharing prompts:
-  connecting a provider is the user's choice to use it.
-  With no Mac reachable the app must still feel complete: no blocking screens, error banners or
-  "not reachable" wording. Home shows one "Connect your Mac" row with a
-  single caption saying what a Mac adds; Mac-only pages stay hidden until one is reachable. The
-  Quick Chat composer notice reads "Sign in to a model provider to use Quick Chat", then
-  "Add a web search key for answers from the web" until a key is saved.
+  with **Powered by Pi Durable** in its setup explanation, on the device and on a
+  Mac that shows a device's chats. Mac/Linux agents retain their harness names.
+  Quick Chat comes first in the New Chat chooser and in the Folders tab, and the
+  workspaces follow it, each once under its own name. Every machine is listed,
+  online or offline; an offline machine's agents are off and its saved chats stay
+  readable. Never add an "Unavailable workspace" group: folders whose workspace
+  is not listed stay in All Workspaces. A message sent to a Mac or Linux session
+  shows at once with quiet caption progress ("Sending to …", "Starting on …"),
+  never a spinner. A chat starts with its first message, wherever it is begun; a
+  chat not started yet already offers its model and thinking level. Quick Chat
+  uses only the device's own sign-ins, in Settings → Quick Chat → Subscriptions &
+  API Keys: model providers, web search keys (Exa, Brave Search, Firecrawl) and
+  model servers. Do not add data-sharing prompts: connecting a provider is the
+  user's choice to use it. Its composer notice reads "Sign in to a model
+  provider to use Quick Chat", then "Add a web search key for answers from the
+  web" until a key is saved. With no Mac the app is complete: Quick Chat, the
+  device's own folders and artifacts, Settings, and no blocking screens, error
+  banners or "not reachable" wording.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
@@ -144,7 +147,9 @@ when an intentional design change is accepted.
   Everything about bots is native and uses the
   components regular chats and Settings use: the shared transcript text, user bubble and
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
-  at 760 points and wider. Message actions appear on hover. Bots run on one machine.
+  at 760 points and wider. Message actions appear on hover. On iPhone and iPad they stay in
+  view under each bot's reply (copy, and Start thread or Reply in thread), a thread opens as
+  its own page, and the Bots tab lists the Forum and bots in the rail's order. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
   Linux machine), the chosen machine's row, Install on another machine, and a
   "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off
@@ -155,7 +160,7 @@ when an intentional design change is accepted.
   and teams, Resources, and that machine's Subscriptions & API Keys. Profiles and bots
   are summary rows that open for editing. Bots' Woven MCP access lives in Settings →
   Woven MCP, with no pause switch; Bots shows it as one summary link. Apple Devices
-  shows only a version status link to Updates. Bots use Subscriptions & API Keys on the
+  shows no versions. Bots use Subscriptions & API Keys on the
   machine they run on; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
@@ -323,6 +328,17 @@ when an intentional design change is accepted.
   menu, its agents, and Details; do not lay actions out as a strip of buttons.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
+- **Apple Devices:** Connect an iPhone or iPad has one sentence (scan or type the code;
+  both on the same tailnet), then this Mac's QR code on a plain white tile beside the
+  typed code in large monospace with Copy code. A development build's code opens the
+  development iPhone and iPad app. Without a tailnet address the section shows only
+  "This Mac is not on your tailnet." Your devices has one row per device: its name, then
+  iPhone or iPad and when it last synced with this Mac, and Remove…, which asks first
+  and says its Quick Chats and folders are deleted from every machine and the device
+  starts again empty. It is "Connect" and a "code", never pairing. The landing row
+  shows how many devices there are. On a Mac a device's Quick Chat appears in All
+  Workspaces and Recents under the device's name with its saved items, and its
+  composer is off under "Continue this Quick Chat on NAME."
 - **Machines:** every machine on your tailnet that runs the Woven server reaches all
   workspaces; do not add per-machine workspace permissions or
   execution-sharing switches.
@@ -446,8 +462,45 @@ logos, Green/Cognac/Dark palettes, radii, search field, segmented selectors, and
 primary/quiet/icon buttons.
 Do not copy the icon catalog or introduce a parallel mobile palette. Desktop
 runtime metadata and window-specific controls remain in `DesktopDesign.swift`.
+The app draws chats, replies, work and artifacts with the Mac's shared views.
 
-The iOS app keeps Dynamic Type and a 44-point minimum for shared touch controls;
-desktop sizing is unchanged. Dark uses the same shared palette on both platforms. Native sheets, pickers, switches, QR scanning and share controls retain
-iOS behavior. SF Symbols used by desktop for spreadsheet/HTML/file kinds, text
-formatting, and status controls remain deliberate exceptions to Lucide.
+- **Frame:** four destinations, Chat, Bots, Folders and Artifacts. On iPhone they
+  are an icon-only bottom bar on the page itself, with no plate or divider; the
+  selected icon sits on a soft capsule and content fades beneath it. A page's
+  composer sits directly above the bar, and the bar hides while the keyboard is
+  up. At regular width a leading rail lists the four by name with Settings at
+  its foot. Each destination keeps its own stack, scroll position and drafts;
+  choosing the one showing returns it to its root. Every root page starts with
+  the same header: the Settings gear at the leading edge (on iPhone), the title,
+  and one action at the trailing edge. Settings opens as a sheet (a form sheet on
+  iPad) with Done.
+- **Chat:** the open chat, or a new one. Tapping the title opens the chooser: New
+  Chat (Quick Chat, then each workspace's agents) and Recents with search. The
+  trailing action starts a new chat with the same agent. The header subtitle
+  says where the chat runs ("Claude Code · Mac name", "Quick Chat") and the
+  folder a new chat starts in.
+- **Bots:** the Forum and the bots in the rail's order; a row opens its channel and
+  its chevron its threads. At regular width the list sits beside the open
+  channel. With no machine running bots it says what bots are and that they are
+  set up on a Mac, with Connect your Mac while no machine is connected.
+- **Folders:** New Chat, New Artifact, All Workspaces, then This iPhone (or This
+  iPad) with Quick Chat and its folders, then each machine with its agents and
+  folders, then Trash and Recents, in a 760-point column. Headings fold. A
+  folder's page shows its details, its chats and artifacts, and New in its
+  header. With no machine yet, one "Connect your Mac" row and one caption saying
+  what a Mac adds take the machines' place.
+- **Artifacts:** every artifact with the type filter and search, or the open
+  artifact filling the page. Its title opens renaming, the other artifacts and
+  New Artifact; its header holds the kind's controls in the Notes order.
+- **Settings:** Machines, This iPhone, Quick Chat, Appearance and Dictation, then
+  the version. Machines is the connect screen until a Mac is connected (Scan code,
+  the typed code and Connect), then lists every machine with its status,
+  Connect with a new code, and Disconnect, which asks first. It is "Connect" and a
+  "code", never pairing.
+
+The iOS app keeps Dynamic Type, including the shared transcript and user bubble,
+and a 44-point minimum for shared touch controls; desktop sizing is unchanged.
+Dark uses the same shared palette on both platforms. Native sheets, pickers,
+switches, QR scanning and share controls retain iOS behavior. SF Symbols used by
+desktop for spreadsheet/HTML/file kinds, text formatting, and status controls
+remain deliberate exceptions to Lucide.

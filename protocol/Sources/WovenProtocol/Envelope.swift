@@ -23,6 +23,9 @@ public struct Hello: Codable, Sendable, Hashable {
   public enum Role: String, Codable, Sendable {
     case ui
     case server
+    /// An iPhone or iPad: the UI and the device's library, which syncs over
+    /// the connections the device opens.
+    case device
   }
 
   public var role: Role

@@ -529,3 +529,18 @@ struct UsagePriceState: Hashable, Sendable {
     var isLoading = false
     var error: String?
 }
+
+extension ProviderKind {
+    /// The provider's own page of what an account has used.
+    var usageDashboardURL: URL? {
+        switch self {
+        case .codex: URL(string: "https://chatgpt.com/codex/settings/usage")
+        case .claude: URL(string: "https://claude.ai/settings/usage")
+        case .grok: URL(string: "https://grok.com/?_s=usage")
+        case .cursor: URL(string: "https://cursor.com/dashboard?tab=usage")
+        case .openCodeGo: URL(string: "https://opencode.ai/auth")
+        case .openRouter: URL(string: "https://openrouter.ai/settings/credits")
+        case .unknown: nil
+        }
+    }
+}

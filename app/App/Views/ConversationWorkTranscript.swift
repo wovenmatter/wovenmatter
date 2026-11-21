@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 /// Display-only run values shared by the desktop and the machine's runtime.
 struct ConversationWorkRun {
@@ -97,16 +99,22 @@ struct ConversationWorkTranscript: View {
         let isRunning = run.status == .running
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                if content.failureMessage != nil {
-                    HStack(spacing: 7) {
-                        LucideIcon(glyph: .alertCircle, size: 13)
+                Group {
+                    if content.failureMessage != nil {
+                        HStack(spacing: 7) {
+                            LucideIcon(glyph: .alertCircle, size: 13)
+                            elapsedLabel
+                        }
+                        .foregroundStyle(WovenPalette.danger)
+                    } else {
                         elapsedLabel
+                            .foregroundStyle(WovenPalette.mutedForeground)
                     }
-                    .foregroundStyle(WovenPalette.danger)
-                } else {
-                    elapsedLabel
-                        .foregroundStyle(WovenPalette.mutedForeground)
                 }
+                #if os(iOS)
+                // Quieter than the reply's text, as the Mac's 13 points are beside its 15.
+                .font(.footnote)
+                #endif
 
                 // Failure belongs to the run, not to its optional work history.
                 // Keep it visible even when no tool or thinking event was supplied.
@@ -1561,6 +1569,7 @@ func formattedRunDuration(_ interval: TimeInterval) -> String {
     return "\(minutes)m \(seconds)s"
 }
 
+#if os(macOS)
 /// "Working for …" while a run is under way. It ticks once a second from its
 /// own timer and only repaints itself: its size never changes, so a tick
 /// never makes the transcript lay out again.
@@ -1627,3 +1636,16 @@ private final class RunningElapsedView: NSView {
     override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
     override func accessibilityValue() -> Any? { text }
 }
+#else
+/// "Working for …" while a run is under way, ticking once a second.
+private struct RunningElapsedLabel: View {
+    let startedAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            Text("Working for \(ConversationWorkTranscript.elapsed(context.date.timeIntervalSince(startedAt)))")
+                .monospacedDigit()
+        }
+    }
+}
+#endif

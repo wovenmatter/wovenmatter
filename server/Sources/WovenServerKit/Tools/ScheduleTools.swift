@@ -2,7 +2,7 @@ import Foundation
 import WovenLibrary
 import WovenProtocol
 
-// The scheduler's and goals' entries in the one Woven tool catalog.
+// The scheduler's entries in the one Woven tool catalog.
 // Bots keep their own schedules in the bots' database, so these are not
 // offered to them.
 
@@ -72,16 +72,6 @@ private func describe(_ entry: ScheduleEntry, here: String) -> String {
   }
   if !draft.prompt.isEmpty { parts.append("prompt: \(draft.prompt.prefix(200))") }
   return parts.joined(separator: " | ")
-}
-
-private extension ToolRequest {
-  /// The calling session, which timers, wake-ups and goals are for.
-  func callingSession() async throws -> Session {
-    guard let sessionID = caller.sessionID, let session = try await tools.library.session(sessionID) else {
-      throw ToolFailure("Only an agent session can use this.")
-    }
-    return session
-  }
 }
 
 let scheduleTools: [WovenTool] = [
@@ -204,16 +194,5 @@ let scheduleTools: [WovenTool] = [
                                 showsOnCalendar: false)
       let entry = try await ScheduleBook.save(nil, draft, by: session.id, library: tools.library, sessions: tools.sessions)
       return .text("Wake-up \(entry.id) at \(at.formatted(.iso8601)).")
-    }),
-  WovenTool(
-    name: "goal_met",
-    description: "Say that this session's goal is met, with what shows it. The goal is cleared and you are no longer asked to continue toward it. Only call it when the goal truly is met.",
-    input: schema(["evidence": text("What shows the goal is met.")], required: ["evidence"]),
-    forBots: false,
-    run: { call in
-      let session = try await call.callingSession()
-      if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
-      try await call.tools.sessions.host(for: session.id).goalMet(try call.arguments.string("evidence"))
-      return .text("The goal is marked met and cleared.")
     }),
 ]

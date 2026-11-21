@@ -55,7 +55,7 @@ final class ProviderModelCatalogTests: XCTestCase {
   }
   private func data(_ models: [InferenceModel]) throws -> Data { try JSONEncoder().encode(models) }
 
-  func testOpenCodeIsReadAtItsCurrentEndpointsAndEarlierOnesStayTrusted() throws {
+  func testOpenCodeIsReadAtItsCurrentEndpointsOnly() throws {
     func entry(_ provider: String, _ id: String, _ api: String, _ baseUrl: String) -> InferenceModel {
       var value = model(provider)
       value.id = id; value.api = api; value.baseUrl = baseUrl
@@ -74,14 +74,6 @@ final class ProviderModelCatalogTests: XCTestCase {
       entry("opencode", "claude", "anthropic-messages", "https://opencode.ai/inference/anthropic"),
     ]), provider: "opencode")
     XCTAssertEqual(zen.map(\.id), ["chat", "claude"])
-    // Conversations pinned before either move still open.
-    for (provider, api, baseUrl) in [
-      ("opencode-go", "openai-completions", "https://opencode.ai/inference/go/v1"), ("opencode-go", "anthropic-messages", "https://opencode.ai/inference/go"),
-      ("opencode-go", "openai-responses", "https://opencode.ai/zen/go/v1"), ("opencode-go", "anthropic-messages", "https://opencode.ai/zen/go"),
-      ("opencode", "openai-completions", "https://opencode.ai/zen/v1"), ("opencode", "anthropic-messages", "https://opencode.ai/zen"),
-    ] {
-      XCTAssertNoThrow(try InferenceModelPolicy.validate(entry(provider, "pinned", api, baseUrl), provider: provider), "\(provider) \(baseUrl)")
-    }
     // One provider's address is not the other's, and one API's is not another's.
     for (provider, api, baseUrl) in [
       ("opencode", "openai-completions", "https://opencode.ai/inference/go/openai/v1"), ("opencode-go", "openai-completions", "https://opencode.ai/inference/openai/v1"),
@@ -131,7 +123,7 @@ final class ProviderModelCatalogTests: XCTestCase {
     do { _ = try await restarted.load(provider: "openai"); XCTFail("Offline load succeeded") } catch {}
     let retained = await restarted.cached(provider: "openai")
     XCTAssertEqual(retained, cold)
-    let saved = InferenceConnection(name: "Saved", provider: "openai", route: .direct, modelID: cold[0].id, selectedModel: cold[0])
+    let saved = InferenceConnection(name: "Saved", provider: "openai", modelID: cold[0].id, selectedModel: cold[0])
     let persisted = try JSONDecoder().decode(InferenceConnection.self, from: JSONEncoder().encode(saved))
     let emptyCatalog = ProviderModelCatalog(directory: root(), transport: CatalogFixture([]))
     let service = MobileInferenceService(connection: persisted, catalogLoader: emptyCatalog)

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 import WovenProtocol
 
 /// A bots request the runtime or the host's server refused, in its own words.
@@ -23,7 +24,14 @@ final class BotsStore {
     @ObservationIgnored private(set) weak var library: ServerConnection?
     @ObservationIgnored private weak var connections: MachineConnections?
     /// The host's server, connected to directly; this Mac's until a host is known.
-    var server: ServerConnection? { connections?.connection(for: hostMachineID) ?? library }
+    var server: ServerConnection? {
+        #if os(iOS)
+        // A device never runs the bots: the host is always another machine, reached once its address is known.
+        hostMachineID.flatMap { connections?.remotes[$0] }
+        #else
+        connections?.connection(for: hostMachineID) ?? library
+        #endif
+    }
     @ObservationIgnored private weak var machines: MachinesStore?
     @ObservationIgnored private weak var settings: SettingsStore?
     @ObservationIgnored private var following: Task<Void, Never>?
@@ -40,7 +48,12 @@ final class BotsStore {
         following = Task { [weak self] in
             while !Task.isCancelled {
                 guard let server = self?.server else {
-                    try? await Task.sleep(for: .milliseconds(500))
+                    guard let self else { return }
+                    // A host with no address yet (on a device) is as unreachable as one that is offline.
+                    if let host = hostMachineID, state != .unreachable {
+                        apply(BotsStatus(hostMachineID: host, state: .unreachable), reload: true)
+                    }
+                    await Self.untilChanged { _ = self.server }
                     continue
                 }
                 let live = Task { [weak self] in
@@ -54,10 +67,28 @@ final class BotsStore {
                     if !server.isConnected, server !== library, let host = hostMachineID, state != .unreachable {
                         apply(BotsStatus(hostMachineID: host, state: .unreachable), reload: true)
                     }
-                    try? await Task.sleep(for: .milliseconds(500))
+                    await Self.untilChanged { _ = self.server; _ = server.isConnected; _ = self.state }
                 }
                 live.cancel()
             }
+        }
+    }
+
+    /// Returns once something `read` reads changes, or the task is cancelled.
+    /// Waiting this way does nothing while nothing changes, where a polling
+    /// loop would wake the app every half second for as long as it runs.
+    private static func untilChanged(_ read: @escaping @MainActor () -> Void) async {
+        final class Waiter: Sendable { let continuation = Mutex<CheckedContinuation<Void, Never>?>(nil) }
+        let waiter = Waiter()
+        let resume: @Sendable () -> Void = { waiter.continuation.withLock { $0.take() }?.resume() }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                waiter.continuation.withLock { $0 = continuation }
+                withObservationTracking(read, onChange: resume)
+                if Task.isCancelled { resume() }
+            }
+        } onCancel: {
+            resume()
         }
     }
 

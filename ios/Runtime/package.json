@@ -1,0 +1,9 @@
+{
+  "name": "wovenmatter-ios-runtime",
+  "private": true,
+  "type": "module",
+  "description": "Builds the on-device Pi Durable bundle from default-agent's locked SDK.",
+  "devDependencies": {
+    "esbuild": ">=0.28.2"
+  }
+}

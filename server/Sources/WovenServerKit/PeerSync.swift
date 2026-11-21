@@ -195,18 +195,15 @@ actor PeerSync {
     }
     clients[peerID] = client
     let changes = try await client.subscribe(SubscribeLibrary())
-    try await pull(from: client, machineID: peerID)
+    try await library.pull(from: client, machineID: peerID)
     for try await _ in changes.events {
-      try await pull(from: client, machineID: peerID)
+      try await library.pull(from: client, machineID: peerID)
     }
   }
+}
 
-  private func pull(from client: Client, machineID: String) async throws {
-    while true {
-      let cursor = try await library.cursor(for: machineID)
-      let page = try await client.call(SyncPull(after: cursor))
-      try await library.apply(page, from: machineID)
-      if !page.more { return }
-    }
+extension PeerSync: Peers {
+  func reached() -> [String: PeerStatus] {
+    statuses.mapValues { PeerStatus(online: $0.online, appVersion: $0.appVersion, address: $0.machine.host, port: $0.machine.port) }
   }
 }

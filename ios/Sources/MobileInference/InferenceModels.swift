@@ -1,48 +1,38 @@
 import Foundation
 import Darwin
 
-/// Every connection is `direct`: this device's own sign-in or key. `adapter`
-/// only decodes a connection saved for a Mac's inference host before v0.4.6;
-/// it never validates and is dropped when preferences load.
-public enum InferenceRoute: String, Codable, Sendable, CaseIterable { case direct, adapter }
-
 public struct InferenceProvider: Identifiable, Sendable {
   public let id: String
   public let name: String
-  public let defaultRoute: InferenceRoute
-  public let supportsDirect: Bool
   public let supportsOAuth: Bool
-  public init(id: String, name: String, defaultRoute: InferenceRoute, supportsDirect: Bool, supportsOAuth: Bool = false) {
-    self.id = id; self.name = name; self.defaultRoute = defaultRoute; self.supportsDirect = supportsDirect; self.supportsOAuth = supportsOAuth
+  public init(id: String, name: String, supportsOAuth: Bool = false) {
+    self.id = id; self.name = name; self.supportsOAuth = supportsOAuth
   }
 }
 
-/// Connection metadata is safe to persist with local preferences. Credentials are deliberately absent.
+/// This device's own sign-in or key for one provider. Connection metadata is safe to persist
+/// with local preferences. Credentials are deliberately absent.
 public struct InferenceConnection: Codable, Sendable, Identifiable, Equatable {
   public var id: String
   public var name: String
   public var provider: String
   public var accountID: String
-  public var route: InferenceRoute
   public var baseURL: String?
   public var modelID: String
   public var selectedModel: InferenceModel?
   public init(id: String = UUID().uuidString, name: String, provider: String, accountID: String = "default",
-              route: InferenceRoute = .direct, baseURL: String? = nil, modelID: String, selectedModel: InferenceModel? = nil) {
+              baseURL: String? = nil, modelID: String, selectedModel: InferenceModel? = nil) {
     self.id = id; self.name = name; self.provider = provider; self.accountID = accountID
-    self.route = route; self.baseURL = baseURL; self.modelID = modelID; self.selectedModel = selectedModel
+    self.baseURL = baseURL; self.modelID = modelID; self.selectedModel = selectedModel
   }
   public func validate() throws {
     guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           !accountID.isEmpty, !modelID.isEmpty, modelID.count <= 512 else { throw InferenceError.invalidConfiguration }
-    // This device holds no sign-in for a retired hosted connection.
-    guard route == .direct else { throw InferenceError.missingCredential }
     if provider.hasPrefix("local-server-") {
       guard let baseURL else { throw InferenceError.invalidEndpoint }
       _ = try InferenceURLPolicy.tailnet(baseURL)
     } else {
-      guard let definition = InferenceCatalog.providers.first(where: { $0.id == provider }), definition.supportsDirect
-      else { throw InferenceError.adapterRequired }
+      guard InferenceCatalog.providers.contains(where: { $0.id == provider }) else { throw InferenceError.invalidConfiguration }
       // Custom destinations must be explicit custom-server connections, never a cloud account override.
       guard baseURL == nil || baseURL == "" else { throw InferenceError.invalidEndpoint }
     }
@@ -65,7 +55,7 @@ public enum InferenceConnectionPolicy {
     }
   }
   public static func isAvailable(_ connection: InferenceConnection, in connections: [InferenceConnection]) -> Bool {
-    connection.route == .direct && (!isSingleSubscription(connection.provider) || connections.contains { $0.id == connection.id && $0.provider == connection.provider })
+    !isSingleSubscription(connection.provider) || connections.contains { $0.id == connection.id && $0.provider == connection.provider }
   }
   public static func validateSave(_ proposed: InferenceConnection, existing: [InferenceConnection]) throws {
     if isSingleSubscription(proposed.provider), existing.contains(where: { $0.provider == proposed.provider && $0.id != proposed.id }) {
@@ -180,28 +170,27 @@ public struct InferenceModel: Codable, Sendable, Identifiable, Equatable {
 
 public enum InferenceCatalog {
   public static let providers: [InferenceProvider] = [
-    .init(id: "openai-codex", name: "OpenAI · ChatGPT subscription", defaultRoute: .direct, supportsDirect: true, supportsOAuth: true),
-    .init(id: "openai", name: "OpenAI · API key", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "openrouter", name: "OpenRouter", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "opencode", name: "OpenCode Zen", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "opencode-go", name: "OpenCode Go", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "xai", name: "Grok subscription", defaultRoute: .direct, supportsDirect: true, supportsOAuth: true),
-    .init(id: "xai-api", name: "xAI · API key", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "claude-subscription", name: "Claude · Subscription", defaultRoute: .direct, supportsDirect: true, supportsOAuth: true),
-    .init(id: "anthropic", name: "Claude · API key", defaultRoute: .direct, supportsDirect: true),
-    .init(id: "local-server-openai", name: "Tailscale model server", defaultRoute: .direct, supportsDirect: true),
+    .init(id: "openai-codex", name: "OpenAI · ChatGPT subscription", supportsOAuth: true),
+    .init(id: "openai", name: "OpenAI · API key"),
+    .init(id: "openrouter", name: "OpenRouter"),
+    .init(id: "opencode", name: "OpenCode Zen"),
+    .init(id: "opencode-go", name: "OpenCode Go"),
+    .init(id: "xai", name: "Grok subscription", supportsOAuth: true),
+    .init(id: "xai-api", name: "xAI · API key"),
+    .init(id: "claude-subscription", name: "Claude · Subscription", supportsOAuth: true),
+    .init(id: "anthropic", name: "Claude · API key"),
+    .init(id: "local-server-openai", name: "Tailscale model server"),
   ]
 
 }
 
 public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
-  case invalidConfiguration, invalidEndpoint, adapterRequired, missingCredential, modelUnavailable, accountUnavailable, singleSubscriptionAccount
+  case invalidConfiguration, invalidEndpoint, missingCredential, modelUnavailable, accountUnavailable, singleSubscriptionAccount
   case malformedResponse, interrupted, responseTooLarge, http(Int), connectionFailed, unsupportedImageInput
   public var errorDescription: String? {
     switch self {
     case .invalidConfiguration: "Choose a connection, account, and model before starting this agent."
     case .invalidEndpoint: "Use the inference host's Tailscale address without embedded credentials, query parameters, or fragments."
-    case .adapterRequired: "Choose direct sign-in on this device for a supported subscription."
     case .missingCredential: "Add an API key or sign in to this subscription on this device in Settings."
     case .modelUnavailable: "The selected model is unavailable on this connection. Choose a model explicitly; no fallback was attempted."
     case .singleSubscriptionAccount: "Only one subscription connection is supported for this provider. Edit the saved connection to change its sign-in."

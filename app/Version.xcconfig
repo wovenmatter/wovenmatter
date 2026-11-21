@@ -1,0 +1,4 @@
+// The Woven Matter app's version, for the Mac app and the iPhone and iPad app.
+// Servers compare it exactly, so both apps must say the same. A release build
+// passes MARKETING_VERSION on the command line, which takes precedence.
+MARKETING_VERSION = 0.1.0

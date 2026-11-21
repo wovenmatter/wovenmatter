@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 import WovenLibrary
 import WovenProtocol
+@_exported import WovenServerCore
 #if canImport(Glibc)
 import Glibc
 #endif
@@ -59,14 +60,15 @@ public final class WovenServer: Sendable {
     }
   }
 
-  let library: Library
-  public let hello: Hello
+  private let core: ServerCore
+  var library: Library { core.library }
+  public var hello: Hello { core.hello }
   /// The TCP port other machines reach this server on, when it listens.
   public let port: Int?
   var secretsForTests: Secrets { secrets }
   /// This machine's permanent identifier.
   public var machineID: String { library.machineID }
-  private let sessions: SessionManager
+  private var sessions: SessionManager { core.sessions }
   private let peers: PeerSync
   private let secrets: Secrets
   private let github: GitHub
@@ -74,7 +76,6 @@ public final class WovenServer: Sendable {
   private let listeners: [Listener]
   private let endpoint: MCPEndpoint
   private let scheduler: Scheduler
-  private let titles: Titles
   private let keepAwake: KeepAwake
   private let usage: UsageScanner?
   private let connections = Mutex<[UUID: any MessageTransport]>([:])
@@ -95,22 +96,17 @@ public final class WovenServer: Sendable {
     let github = try await GitHub.start(library: library, secrets: secrets, dataFolder: options.dataFolder)
     let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion)
     let toolKeys = ToolKeys(socketPath: try SocketFolder.path("tools.sock", for: options.dataFolder))
-    let sessions = SessionManager(library: library, runtimes: options.runtimes,
-                                  scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true),
-                                  toolKeys: toolKeys)
+    let scratch = options.dataFolder.appendingPathComponent("scratch", isDirectory: true)
+    let sessions = SessionManager(library: library, runtimes: options.runtimes, scratch: scratch,
+                                  toolAccess: toolKeys.access)
     await sessions.start()
-    let titles = Titles(library: library, sessions: sessions, runtime: options.titleRuntime,
-                        scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
     let scheduler = Scheduler(library: library, sessions: sessions, now: options.schedulerClock)
     let peers = PeerSync(library: library, tailnet: options.tailnet, hello: hello, interval: options.discoveryInterval)
-    var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
-    registerFolders(&routes, library: library, root: options.foldersRoot)
+    var routes = Router()
+    registerDirectories(&routes)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
     registerLocalModelServers(&routes, sessions: sessions, secrets: secrets)
-    registerArtifacts(&routes, library: library, sessions: sessions)
-    registerLibraryItems(&routes, library: library)
     registerSchedules(&routes, library: library, sessions: sessions)
-    registerGoals(&routes, library: library, sessions: sessions)
     let databases = Databases(library: library, peers: peers,
                               folder: options.dataFolder.appendingPathComponent("databases", isDirectory: true))
     registerDatabases(&routes, databases: databases)
@@ -120,8 +116,11 @@ public final class WovenServer: Sendable {
                         instance: options.instance, hosting: options.botsHosting)
     registerBots(&routes, bots: bots, library: library, sessions: sessions)
     registerBotsTransfer(&routes, bots: bots)
-    let tools = WovenTools(library: library, sessions: sessions, databases: databases, peers: peers, bots: bots)
-    registerTools(&routes, tools: tools)
+    let ui = UIToolBroker()
+    let tools = WovenTools(library: library, sessions: sessions,
+                           catalog: wovenToolCatalog(databases: databases, peers: peers, bots: bots, ui: ui),
+                           host: MachineToolsHost(peers: peers, databaseList: databases))
+    registerTools(&routes, tools: tools, ui: ui)
     registerOutsideAgents(&routes, keys: toolKeys, library: library)
     await bots.offerTools(tools)
     let endpoint = MCPEndpoint(keys: toolKeys, tools: tools)
@@ -138,7 +137,8 @@ public final class WovenServer: Sendable {
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
     let usage = options.harnessHome.map { UsageScanner(library: library, home: $0) }
-    let router = routes
+    let core = ServerCore(library: library, hello: hello, sessions: sessions, peers: peers, scratch: scratch,
+                          foldersRoot: options.foldersRoot, titleRuntime: options.titleRuntime, routes: routes)
     let pending = PendingServer()
     let tailnet = options.tailnet
 
@@ -146,17 +146,19 @@ public final class WovenServer: Sendable {
     do {
       if let path = options.socketPath {
         listeners.append(try await Listener.start(.unix(path: path)) { transport, _ in
-          await pending.accept(transport, origin: .local, router: router, hello: hello)
+          await pending.accept(transport, origin: .local)
         })
       }
       if let listen = options.listen {
-        listeners.append(try await Listener.start(.tcp(host: listen.host, port: listen.port)) { transport, address in
+        let listener = try await Listener.start(.tcp(host: listen.host, port: listen.port)) { transport, address in
           guard let address, let name = await tailnet.caller(at: address) else {
             transport.close()
             return
           }
-          await pending.accept(transport, origin: .tailnet(name: name), router: router, hello: hello)
-        })
+          await pending.accept(transport, origin: .tailnet(name: name))
+        }
+        listeners.append(listener)
+        core.listening.address.withLock { $0 = (listen.host, listener.port ?? listen.port) }
       }
     } catch {
       for listener in listeners { await listener.stop() }
@@ -166,10 +168,10 @@ public final class WovenServer: Sendable {
       await library.close()
       throw error
     }
-    let server = WovenServer(library: library, dataFolder: options.dataFolder, socketPath: options.socketPath,
-                             hello: hello, port: listeners.compactMap(\.port).first,
-                             sessions: sessions, peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
-                             endpoint: endpoint, scheduler: scheduler, titles: titles, keepAwake: keepAwake, usage: usage)
+    let server = WovenServer(core: core, dataFolder: options.dataFolder, socketPath: options.socketPath,
+                             port: listeners.compactMap(\.port).first,
+                             peers: peers, secrets: secrets, github: github, bots: bots, listeners: listeners,
+                             endpoint: endpoint, scheduler: scheduler, keepAwake: keepAwake, usage: usage)
     pending.server.withLock { $0 = server }
     await peers.start()
     await bots.start()
@@ -180,20 +182,17 @@ public final class WovenServer: Sendable {
     return server
   }
 
-  private init(library: Library, dataFolder: URL, socketPath: String?, hello: Hello, port: Int?, sessions: SessionManager, peers: PeerSync, secrets: Secrets,
+  private init(core: ServerCore, dataFolder: URL, socketPath: String?, port: Int?, peers: PeerSync, secrets: Secrets,
                github: GitHub, bots: BotsHost, listeners: [Listener], endpoint: MCPEndpoint, scheduler: Scheduler,
-               titles: Titles, keepAwake: KeepAwake, usage: UsageScanner?) {
+               keepAwake: KeepAwake, usage: UsageScanner?) {
+    self.core = core
     self.keepAwake = keepAwake
     self.usage = usage
     self.dataFolder = dataFolder
     self.socketPath = socketPath
     self.endpoint = endpoint
     self.scheduler = scheduler
-    self.titles = titles
-    self.library = library
-    self.hello = hello
     self.port = port
-    self.sessions = sessions
     self.peers = peers
     self.secrets = secrets
     self.github = github
@@ -260,10 +259,10 @@ public final class WovenServer: Sendable {
     watcher.withLock { $0 = task }
   }
 
-  fileprivate func serve(_ transport: any MessageTransport, origin: Caller.Origin, router: Router, hello: Hello) async {
+  fileprivate func serve(_ transport: any MessageTransport, origin: Caller.Origin) async {
     let id = UUID()
     connections.withLock { $0[id] = transport }
-    await ServerConnection(transport: transport, router: router, origin: origin, hello: hello).run()
+    await core.serve(transport, origin: origin)
     _ = connections.withLock { $0.removeValue(forKey: id) }
   }
 }
@@ -272,138 +271,11 @@ public final class WovenServer: Sendable {
 private final class PendingServer: Sendable {
   let server = Mutex<WovenServer?>(nil)
 
-  func accept(_ transport: any MessageTransport, origin: Caller.Origin, router: Router, hello: Hello) async {
+  func accept(_ transport: any MessageTransport, origin: Caller.Origin) async {
     guard let server = server.withLock({ $0 }) else {
       transport.close()
       return
     }
-    await server.serve(transport, origin: origin, router: router, hello: hello)
+    await server.serve(transport, origin: origin)
   }
-}
-
-// MARK: Handlers
-
-private func makeRouter(library: Library, sessions: SessionManager, peers: PeerSync, appVersion: String) -> Router {
-  var router = Router()
-  let thisMachine = library.machineID
-
-  router.on(ListMachines.self) { _, _ in
-    let statuses = await peers.statuses
-    return try await library.machines().map { machine in
-      if machine.id == thisMachine {
-        return MachineStatus(machine: machine, isThisMachine: true, online: true, appVersion: appVersion)
-      }
-      let status = statuses[machine.id]
-      return MachineStatus(machine: machine, isThisMachine: false, online: status?.online ?? false,
-                           appVersion: status?.appVersion, address: status?.machine.host, port: status?.machine.port)
-    }
-  }
-  router.on(RenameMachine.self) { request, _ in
-    try await library.renameMachine(request.machineID ?? thisMachine, to: request.name)
-  }
-
-  router.on(ListSessions.self) { request, _ in
-    try await library.sessions(machineID: request.machineID, includeArchived: request.includeArchived)
-  }
-  router.on(CreateSession.self) { request, _ in
-    try await sessions.create(runtime: request.runtime, title: request.title, folderID: request.folderID)
-  }
-  router.on(UpdateSession.self) { request, _ in
-    let folder: String?? = request.removeFromFolder == true ? .some(nil) : request.folderID.map { .some($0) }
-    return try await library.updateSession(request.sessionID, title: request.title, archived: request.archived,
-                                           pinned: request.pinned, read: request.read, folderID: folder)
-  }
-  router.on(DeleteSession.self) { request, _ in
-    await sessions.close(request.sessionID)
-    try await library.deleteSession(request.sessionID)
-    return Done()
-  }
-  router.on(SessionItems.self) { request, _ in
-    // Every page stops once its size is large, with or without a limit.
-    try await library.items(sessionID: request.sessionID, afterSequence: request.afterSequence,
-                            beforeSequence: request.beforeSequence, limit: request.limit ?? .max)
-  }
-  router.subscription(SubscribeSession.self) { request, _ in
-    try await sessions.host(for: request.sessionID).subscribe()
-  }
-  router.subscription(SubscribeRunStates.self) { _, _ in
-    let (current, changes) = sessions.board.subscribe()
-    return (current, changes.throwing)
-  }
-  router.on(SendTurn.self) { request, _ in
-    // The person's open artifacts and tabs reach the runtime only; the text alone is saved.
-    let context = request.context.flatMap { $0.isEmpty ? nil : $0 }
-    if let context, context.utf16.count > SendTurn.maximumContextLength {
-      throw ProtocolError(.badRequest, "The message context is longer than \(SendTurn.maximumContextLength) characters.")
-    }
-    try await sessions.host(for: request.sessionID).send(request.text, attachments: request.attachments,
-                                                         delivered: context.map { "\($0)\n\n\(request.text)" })
-    return Done()
-  }
-  router.on(ConfigureSession.self) { request, _ in
-    try await sessions.host(for: request.sessionID).configure(
-      SessionChoices(model: request.model, thinking: request.thinking, permission: request.permission))
-  }
-  router.on(AnswerPrompt.self) { request, _ in
-    try await sessions.host(for: request.sessionID).answer(promptID: request.promptID, with: request.answer)
-    return Done()
-  }
-  router.on(InterruptTurn.self) { request, _ in
-    try await sessions.host(for: request.sessionID).interrupt()
-    return Done()
-  }
-  router.on(StopSession.self) { request, _ in
-    await sessions.close(request.sessionID)
-    return Done()
-  }
-
-  router.on(ListSettings.self) { _, _ in
-    try await library.settings()
-  }
-  router.on(SetSetting.self) { request, _ in
-    // Only `ChooseBotsHost` and a transfer write where the bots live.
-    guard request.key != botsHostSetting else {
-      throw ProtocolError(.badRequest, "The bots' host is chosen once, then changed by moving the bots.")
-    }
-    return try await library.setSetting(request.key, to: request.value)
-  }
-
-  router.subscription(SubscribeLibrary.self) { _, _ in
-    let changes = library.changes()
-    let (events, continuation) = AsyncStream<LibraryEvent>.makeStream(bufferingPolicy: .bufferingNewest(1))
-    let first = library.changed
-    let forward = Task {
-      var last = first
-      for await changed in changes {
-        let tables = (try? await library.tablesChanged(after: last)) ?? Schema.synced.map(\.name)
-        last = changed
-        continuation.yield(LibraryEvent(changed: changed, tables: tables))
-      }
-      continuation.finish()
-    }
-    continuation.onTermination = { _ in forward.cancel() }
-    return (LibraryEvent(changed: first, tables: Schema.synced.map(\.name)), events.throwing)
-  }
-  router.on(SyncPull.self) { request, caller in
-    // Two machines on different app releases do not sync.
-    guard caller.hello.appVersion == appVersion else {
-      throw ProtocolError(.versionMismatch, "This machine runs \(appVersion).", machineID: thisMachine)
-    }
-    return try await library.pull(after: request.after, limit: min(max(request.limit, 1), 2000))
-  }
-  router.on(PutContent.self) { request, _ in
-    ContentRef(digest: try await library.storeContent(request.data), size: Int64(request.data.count))
-  }
-  router.on(FetchContent.self) { request, caller in
-    if let chunk = try await library.content(request.digest, offset: request.offset, length: min(request.length, 16 << 20)) {
-      return chunk
-    }
-    // The local UI may ask for content another machine holds.
-    if case .local = caller.origin, await peers.fetchContent(request.digest),
-       let chunk = try await library.content(request.digest, offset: request.offset, length: min(request.length, 16 << 20)) {
-      return chunk
-    }
-    throw ProtocolError(.notFound, "No content \(request.digest).")
-  }
-  return router
 }

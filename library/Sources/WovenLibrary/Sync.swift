@@ -61,6 +61,66 @@ extension Library {
     }
   }
 
+  /// When this library last received rows from `machineID`, or nil if never.
+  public func lastReceived(from machineID: String) async throws -> Date? {
+    try await read { db in
+      try db.query("SELECT received_at FROM sync_cursors WHERE machine_id = ?", [.text(machineID)]).first?
+        .integer("received_at").map { Date(timeIntervalSince1970: Double($0) / 1000) }
+    }
+  }
+
+  // MARK: Over a connection
+
+  /// Pulls everything past this library's cursor for `machineID` from that
+  /// machine's server, a page at a time, until nothing is left.
+  public func pull(from client: Client, machineID: String) async throws {
+    while true {
+      let page = try await client.call(SyncPull(after: try await cursor(for: machineID)))
+      try await apply(page, from: machineID)
+      if !page.more { return }
+    }
+  }
+
+  /// Hands a server this library's rows past the cursor the server keeps for
+  /// it, a page at a time: how a device's rows reach a server, since nothing
+  /// can connect to a device. Only a device's connection may. A cursor
+  /// ahead of this library's counter (a library older than what the server
+  /// last received from it, such as one restored from a backup) means the
+  /// server has not seen this state: everything is handed over again, which
+  /// changes nothing the server already holds, and the cursor comes back in step.
+  public func push(to client: Client) async throws {
+    var cursor = try await client.call(SyncCursor())
+    if cursor > changed { cursor = 0 }
+    while true {
+      let page = try await pull(after: cursor)
+      if page.rows.isEmpty { return }
+      _ = try await client.call(SyncPush(page: page))
+      cursor = page.next
+      if !page.more { return }
+    }
+  }
+
+  /// Keeps a device's library and one server's level over the connection
+  /// the device opened and said hello on, until the connection closes or
+  /// this device is removed: pulls whenever the server announces a change
+  /// and pushes whenever this library changes. `machineID` is the server's.
+  public func follow(_ client: Client, machineID: String) async throws {
+    let announced = try await client.subscribe(SubscribeLibrary())
+    let changes = changes()
+    try await pull(from: client, machineID: machineID)
+    try await push(to: client)
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask {
+        for try await _ in announced.events { try await self.pull(from: client, machineID: machineID) }
+      }
+      group.addTask {
+        for await _ in changes { try await self.push(to: client) }
+      }
+      defer { group.cancelAll() }
+      try await group.next()
+    }
+  }
+
   /// Writes columns of a synced row by its table's rule. The typed
   /// operations are built on this; areas without typed operations yet use it.
   @discardableResult

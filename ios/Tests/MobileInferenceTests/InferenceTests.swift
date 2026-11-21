@@ -29,7 +29,7 @@ private actor FixtureTransport: InferenceHTTPTransport {
 
 @MainActor
 final class InferenceTests: XCTestCase {
-  let connection = InferenceConnection(id: "phone-key", name: "API", provider: "openai", route: .direct, modelID: "gpt-4")
+  let connection = InferenceConnection(id: "phone-key", name: "API", provider: "openai", modelID: "gpt-4")
   let model = InferenceModel(id: "gpt-4", name: "GPT", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
 
   func testResponsesRequestDetailedSummariesOnlyWhenReasoningIsEnabled() throws {
@@ -37,7 +37,7 @@ final class InferenceTests: XCTestCase {
       for capable in [false, true] {
         let model = InferenceModel(id: "fixture", name: "Fixture", provider: provider, api: api,
           baseUrl: InferenceModelPolicy.endpoints[provider]![api]!, reasoning: capable)
-        let connection = InferenceConnection(name: "Fixture", provider: provider, route: .direct, modelID: model.id)
+        let connection = InferenceConnection(name: "Fixture", provider: provider, modelID: model.id)
         for level in ["off", "high"] {
           let request = try InferenceRequestBuilder(connection: connection, model: model).request(
             ["context": ["messages": [["role": "user", "content": "hello"]]], "options": ["reasoning": level]], secret: "fixture", accountID: "fixture")
@@ -84,7 +84,7 @@ final class InferenceTests: XCTestCase {
     try decoder.consume(try inferenceJSONString(["choices": [["delta": ["reasoning_details": [["type": "reasoning.encrypted", "data": "opaque", "id": "r"]], "tool_calls": [["index": 0, "id": "call", "function": ["name": "read", "arguments": "{}"]]]]]]]))
     try decoder.consume(try inferenceJSONString(["choices": [["delta": [:], "finish_reason": "tool_calls"]]])); try decoder.consume("[DONE]")
     let message = inferenceObject(try XCTUnwrap(capture.events.last)["message"])
-    let connection = InferenceConnection(id: "route", name: "Router", provider: "openrouter", route: .direct, modelID: chat.id)
+    let connection = InferenceConnection(id: "route", name: "Router", provider: "openrouter", modelID: chat.id)
     let request = try InferenceRequestBuilder(connection: connection, model: chat).request(["context": ["messages": [message]]], secret: "fixture")
     let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
     XCTAssertEqual(inferenceObjects(inferenceObjects(body["messages"]).first?["reasoning_details"]).first?["data"] as? String, "opaque")
@@ -109,7 +109,7 @@ final class InferenceTests: XCTestCase {
   func testChatToolImageCompatibilitySeparatorPrecedesFollowingUserMessage() throws {
     var model = fixture("openrouter", api: "openai-completions")
     model.metadata["compat"] = .object(["requiresAssistantAfterToolResult": .bool(true), "requiresToolResultName": .bool(true)])
-    let connection = InferenceConnection(name: "Selected", provider: model.provider, route: .direct, modelID: model.id)
+    let connection = InferenceConnection(name: "Selected", provider: model.provider, modelID: model.id)
     let transcript = imageToolTranscript() + [["role": "user", "content": "Compare these."]]
     let request = try InferenceRequestBuilder(connection: connection, model: model).request(["context": ["messages": transcript]], secret: "fixture")
     let body = inferenceObject(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody))), messages = inferenceObjects(body["messages"])
@@ -118,25 +118,5 @@ final class InferenceTests: XCTestCase {
     XCTAssertEqual(messages[2]["name"] as? String, "read_image")
     XCTAssertEqual(inferenceObjects(messages[4]["content"]).filter { $0["type"] as? String == "image_url" }.count, 2)
     XCTAssertEqual(inferenceObjects(messages[5]["content"]).first?["text"] as? String, "Compare these.")
-  }
-  /// A connection a Mac hosted before v0.4.6 still decodes, but it used that
-  /// Mac's sign-in: it is never available and sends nothing.
-  func testLegacyHostedConnectionDecodesButIsNeverUsed() async throws {
-    let saved = """
-    {"id":"adapter","name":"Host","provider":"openai","accountID":"account-b","route":"adapter","baseURL":"https://host.example.ts.net","modelID":"m",
-     "hostScope":{"libraryID":"library","workspaceID":"workspace","deviceID":"phone","protocolVersion":3,"hostDeviceID":"a0000000-0000-4000-8000-00000000000a"}}
-    """
-    let connection = try JSONDecoder().decode(InferenceConnection.self, from: Data(saved.utf8))
-    XCTAssertEqual(connection.route, .adapter)
-    XCTAssertThrowsError(try connection.validate()) { XCTAssertEqual($0 as? InferenceError, .missingCredential) }
-    XCTAssertFalse(InferenceConnectionPolicy.isAvailable(connection, in: [connection]))
-    let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
-    let service = MobileInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
-    do {
-      try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai\"},\"context\":{\"messages\":[]}}", emit: { _ in })
-      XCTFail("A hosted connection was used")
-    } catch InferenceError.missingCredential {}
-    let requests = await transport.requests
-    XCTAssertTrue(requests.isEmpty)
   }
 }

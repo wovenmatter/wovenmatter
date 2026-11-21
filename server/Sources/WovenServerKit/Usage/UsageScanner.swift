@@ -7,13 +7,6 @@ import Glibc
 import Musl
 #endif
 
-extension RuntimeKind {
-  /// The harness keeps its own history, and its usage is counted only from
-  /// there, inside Woven Matter or not. A turn Woven Matter runs with it
-  /// writes no usage record of its own.
-  var usageFromHistory: Bool { [.codex, .claudeCode, .grokBuild, .openCode, .piCLI].contains(self) }
-}
-
 /// Reads the harness histories of this machine's account into the library:
 /// at start, then every two minutes. Each file is read on from where the last
 /// read stopped, so a pass over unchanged files only looks at their sizes.

@@ -19,9 +19,10 @@
   without building.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Validate: `scripts/test-changes.sh`. It runs the static checks, the server
-  package's tests (which cover `library/` and `protocol/`) and the Pi Durable
-  and bots tests. `--ci` runs the same on Linux in pull request CI, which is one
-  portable Linux check. `WOVEN_SWIFT_SCRATCH_PATH` gives a run its own Swift
+  package's tests (which cover `library/` and `protocol/`), on a Mac an iOS
+  build of the server's core and the `ios` package's tests, and the Pi Durable
+  and bots tests. `--ci` runs the same on Linux in pull request CI, which is
+  one portable Linux check. `WOVEN_SWIFT_SCRATCH_PATH` gives a run its own Swift
   build folder. Tests must not consume provider services.
 - Keep one-off audit reports, generated coverage inventories, and review evidence
   out of Git. Record results in PR descriptions or external build artifacts.
@@ -32,7 +33,8 @@
   on this Mac with `scripts/cut-release.sh build` and `ship`; GitHub only signs
   and notarizes them. Release preparation never reruns CI.
   For releases, use `.agents/skills/cut-release-wovenmatter/SKILL.md`.
-- `ios/` is not part of the build. Leave it alone.
+- `ios/` is the iPhone and iPad app and is part of the build; validate it with
+  `scripts/test-ios.sh`.
 
 ## Dependencies
 
