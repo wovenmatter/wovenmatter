@@ -2,7 +2,7 @@
 
 Woven Matter runs on your Macs and Linux machines. Each one runs its own Woven
 server and keeps a full copy of your library: chats, notes, pages, sheets, apps,
-schedules and settings. Every Mac and Linux computer on your Tailscale network
+schedules and settings. Every Mac and Linux machine on your Tailscale network
 that runs the server is one of your machines. Tailscale decides who may
 connect, and a machine shared in from someone else's tailnet is refused.
 
@@ -27,9 +27,9 @@ connected to the same tailnet. The Mac joins your machines on its own.
 
 ## Add a Linux machine
 
-Woven Matter installs the server on a Linux computer over SSH. You need:
+Woven Matter installs the server on a Linux machine over SSH. You need:
 
-- an x86_64 or arm64 Linux computer with systemd, on your tailnet
+- an x86_64 or arm64 Linux machine with systemd, on your tailnet
 - SSH access to it from this Mac with your own SSH setup; Woven Matter does
   not store SSH keys or ask for passwords
 

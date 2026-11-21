@@ -1,6 +1,6 @@
 import Foundation
 
-/// Which kind of computer a machine is.
+/// Which kind of machine it is.
 public enum MachinePlatform: String, Codable, Sendable, Hashable {
   case mac
   case linux
@@ -15,7 +15,7 @@ public enum MachinePlatform: String, Codable, Sendable, Hashable {
   }
 }
 
-/// A Mac or Linux computer on the person's tailnet that runs the server.
+/// A Mac or Linux machine on the person's tailnet that runs the server.
 public struct Machine: Codable, Sendable, Hashable, Identifiable {
   public var id: String
   public var name: String

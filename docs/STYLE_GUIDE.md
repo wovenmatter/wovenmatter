@@ -299,9 +299,10 @@ when an intentional design change is accepted.
 - **Sidebar foregrounds:** use `WovenPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
 - **Words:** use these the same way in the app, the docs, and everything an agent
   or a bot reads.
-  - **Machine:** a Mac or Linux computer on your tailnet that runs Woven Matter.
-    Say machine when the text is about the thing itself: adding or removing it,
-    updating, restarting, storage, the tailnet, sync, usage per machine.
+  - **Machine:** a Mac or Linux computer on your tailnet, with or without Woven
+    Matter. Say machine when the text is about the thing itself: adding or
+    removing it, updating, restarting, storage, the tailnet, sync, usage per
+    machine.
   - **Workspace:** the place you work on a machine: its agents, folders and
     sessions. Each machine has one. **Local workspace** is the one on this Mac; a
     **remote workspace** is one on any other machine, Mac or Linux. Say workspace

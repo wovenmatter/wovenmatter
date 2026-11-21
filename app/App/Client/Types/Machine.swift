@@ -1,7 +1,7 @@
 import Foundation
 import WovenProtocol
 
-/// A Mac or Linux computer on the person's tailnet that runs the Woven server.
+/// A Mac or Linux machine on the person's tailnet that runs the Woven server.
 /// This Mac is one of them. A machine that is switched off stays listed, offline.
 struct Machine: Identifiable, Hashable, Sendable {
     enum Platform: String, Hashable, Sendable {

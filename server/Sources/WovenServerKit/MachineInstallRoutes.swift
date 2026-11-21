@@ -2,18 +2,18 @@ import Foundation
 import WovenLibrary
 import WovenProtocol
 
-/// Finding Linux computers to add, installing and updating the Linux server over SSH, and
+/// Finding Linux machines to add, installing and updating the Linux server over SSH, and
 /// Remove, which uninstalls a Linux machine's server before deleting the
 /// machine from every library. `install` is nil where this server carries no
 /// Linux release (on Linux, and in tests); those requests are then refused.
 func registerMachineInstall(_ router: inout Router, library: Library, peers: PeerSync, tailnet: any Tailnet, install: LinuxInstall?) {
-  router.on(FindComputers.self) { _, _ in
-    let computers = try await tailnet.computers()
+  router.on(FindMachines.self) { _, _ in
+    let machinesToAdd = try await tailnet.machinesToAdd()
     var linked: Set<String> = []
     for machine in try await library.machines() {
       if let address = await peers.address(of: machine.id) { linked.insert(address.host) }
     }
-    return computers.filter { !linked.contains($0.address) }
+    return machinesToAdd.filter { !linked.contains($0.address) }
   }
 
   router.on(InspectMachine.self) { request, _ in

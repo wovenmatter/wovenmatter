@@ -14,7 +14,7 @@ let usage = """
     sign-out PROVIDER
     set-key PROVIDER [KEY]           set (or, without KEY, remove) an API key everywhere
     machines | sessions | folders | settings | folder-create NAME
-    computers                        tailnet computers without a Woven server
+    machines-to-add                  tailnet machines without a Woven server
     machine-install HOST [USER]      install the Linux server there over SSH
     machine-update MACHINE | remove MACHINE | rename NAME [MACHINE]
     server MACHINE start|stop|restart  control a machine's server, as Settings does (stop confirmed)
@@ -233,9 +233,9 @@ do {
       out("\(status.machine.id)\t\(status.machine.name)\t\(status.machine.platform.rawValue)\t\(status.online ? "online" : "offline")"
           + (status.isThisMachine ? "\tthis machine" : "\t\(status.appVersion ?? "-")\t\(status.address ?? "-"):\(status.port.map(String.init) ?? "-")"))
     }
-  case "computers":
-    for computer in try await client.call(FindComputers()) {
-      out("\(computer.name)\t\(computer.address)\t\(computer.platform?.rawValue ?? "-")")
+  case "machines-to-add":
+    for machine in try await client.call(FindMachines()) {
+      out("\(machine.name)\t\(machine.address)\t\(machine.platform?.rawValue ?? "-")")
     }
   case "machine-install":
     _ = try await client.call(InstallServer(host: argument(0, "HOST"), user: arguments.count > 1 ? arguments[1] : nil))

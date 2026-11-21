@@ -62,9 +62,9 @@ Node is used only for the two child processes. There is no Node server.
 
 ## Machines
 
-A machine is a Mac or Linux computer on the person's tailnet that runs the
-server. It has a permanent identifier, created on first start, and a name that
-starts as its tailnet name and can be renamed; the name syncs.
+A machine is a Mac or Linux computer on the person's tailnet, with or without
+the server. It has a permanent identifier, created on first start, and a name
+that starts as its tailnet name and can be renamed; the name syncs.
 
 The words for these things are fixed, in the code and in everything a person
 or an agent reads. A **machine** is the computer itself. Its **workspace** is
@@ -77,7 +77,7 @@ run on. The **library** is the synced database, never a workspace. A
 
 - **Joining is automatic.** A server looks at the tailnet's machine list, tries
   the Woven port on each, and treats those that answer as Woven machines.
-- **Add workspace** lists Linux computers on the tailnet without a server and
+- **Add workspace** lists Linux machines on the tailnet without a server and
   installs and starts one over SSH. The SSH host and user given at install
   are kept on the machine's row, so any Mac reaches it later exactly as the
   person's SSH settings say. Before each later command over SSH, the machine

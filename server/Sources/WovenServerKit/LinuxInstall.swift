@@ -4,7 +4,7 @@ import WovenProtocol
 import Glibc
 #endif
 
-/// Installs, updates and uninstalls the Linux server on another computer over
+/// Installs, updates and uninstalls the Linux server on another machine over
 /// SSH, with the person's own SSH setup. The server runs there as a systemd
 /// user unit, `woven-server` (a development instance appends its name), with
 /// everything under ~/.local/share/<unit>: the release (the static binary and
@@ -28,11 +28,11 @@ struct LinuxInstall: Sendable {
 
   var unit: String { Self.unitName(instance: instance) }
 
-  /// A computer reached over SSH: the host and user exactly as the person
+  /// A machine reached over SSH: the host and user exactly as the person
   /// gave them at install, so their own SSH settings for that host apply
   /// unchanged, and, for a machine already installed there, its id. Every
   /// command on an installed machine first checks that the server there is
-  /// that machine, so a host that now names another computer is never changed.
+  /// that machine, so a host that now names another machine is never changed.
   struct Target: Sendable, Equatable {
     var host: String
     var user: String?

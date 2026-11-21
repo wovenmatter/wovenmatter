@@ -5,7 +5,7 @@ import WovenProtocol
 /// Every Woven machine on the tailnet, this Mac first: whether it is online,
 /// what it can run, its harness inventory and sign-ins, its Mac permission
 /// status and its server. Commands rename and remove machines, find Linux
-/// computers and install the server over SSH, and install or update harnesses.
+/// machines and install the server over SSH, and install or update harnesses.
 ///
 /// Per-machine state is keyed by machine id. Harness and sign-in members are in
 /// `MachinesStore+Harnesses.swift`.
@@ -103,13 +103,13 @@ final class MachinesStore {
     private(set) var progress: String?
     var errorMessage: String?
 
-    // MARK: Linux computers to add
+    // MARK: Linux machines to add
 
-    /// Tailnet computers without a Woven server.
-    private(set) var tailnetComputers: [TailnetComputer] = []
-    private(set) var isFindingComputers = false
-    private(set) var hasSearchedComputers = false
-    private(set) var findComputersError: String?
+    /// Tailnet machines without a Woven server.
+    private(set) var tailnetMachines: [MachineToAdd] = []
+    private(set) var isFindingMachines = false
+    private(set) var hasSearchedMachines = false
+    private(set) var findMachinesError: String?
     private(set) var machinePreflights: [String: MachinePreflight] = [:]
     private(set) var inspectingHostnames: Set<String> = []
     private(set) var installingHostnames: Set<String> = []
@@ -302,30 +302,30 @@ final class MachinesStore {
         }
     }
 
-    // MARK: Linux computers to add
+    // MARK: Linux machines to add
 
-    /// Lists the tailnet's Linux computers without a Woven server, through this Mac's server.
-    func findComputers() {
-        guard !isFindingComputers else { return }
-        guard let server else { return findComputersError = ClientError.notConnected.localizedDescription }
-        isFindingComputers = true
+    /// Lists the tailnet's Linux machines without a Woven server, through this Mac's server.
+    func findMachines() {
+        guard !isFindingMachines else { return }
+        guard let server else { return findMachinesError = ClientError.notConnected.localizedDescription }
+        isFindingMachines = true
         Task {
             defer {
-                isFindingComputers = false
-                hasSearchedComputers = true
+                isFindingMachines = false
+                hasSearchedMachines = true
             }
             do {
-                tailnetComputers = try await server.call(FindComputers()).filter { $0.platform == .linux }.map { computer in
-                    TailnetComputer(id: computer.name, name: computer.name, hostName: computer.name, address: computer.address)
+                tailnetMachines = try await server.call(FindMachines()).filter { $0.platform == .linux }.map { machine in
+                    MachineToAdd(id: machine.name, name: machine.name, hostName: machine.name, address: machine.address)
                 }
-                findComputersError = nil
+                findMachinesError = nil
             } catch {
-                findComputersError = error.localizedDescription
+                findMachinesError = error.localizedDescription
             }
         }
     }
 
-    /// Looks at a Linux computer over SSH, through this Mac's server. Changes nothing.
+    /// Looks at a Linux machine over SSH, through this Mac's server. Changes nothing.
     func inspectMachine(hostName: String, userName: String?) {
         guard let server else { return machineErrors[hostName] = ClientError.notConnected.localizedDescription }
         guard !inspectingHostnames.contains(hostName) else { return }
@@ -358,7 +358,7 @@ final class MachinesStore {
             defer { installingHostnames.remove(hostName) }
             do {
                 _ = try await server.call(InstallServer(host: hostName, user: userName))
-                tailnetComputers.removeAll { $0.hostName == hostName }
+                tailnetMachines.removeAll { $0.hostName == hostName }
                 machinePreflights[hostName] = nil
                 await reload()
                 pendingHarnessSetupMachineIDs.formUnion(Set(machines.map(\.id)).subtracting(known))

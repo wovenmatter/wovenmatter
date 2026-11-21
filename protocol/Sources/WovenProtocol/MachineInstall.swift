@@ -1,11 +1,11 @@
 import Foundation
 
-// Finding tailnet computers without a Woven server, and installing, updating
+// Finding tailnet machines without a Woven server, and installing, updating
 // and uninstalling the server on them over SSH. Only a Mac's server does this,
 // with the Linux server it carries.
 
-/// A tailnet computer with no Woven server answering on the Woven port.
-public struct TailnetComputer: Codable, Sendable, Hashable, Identifiable {
+/// A tailnet machine with no Woven server answering on the Woven port.
+public struct MachineToAdd: Codable, Sendable, Hashable, Identifiable {
   /// Its tailnet host name, which SSH reaches it by.
   public var name: String
   /// Its Tailscale address.
@@ -21,14 +21,14 @@ public struct TailnetComputer: Codable, Sendable, Hashable, Identifiable {
   }
 }
 
-/// Tailnet computers without a Woven server.
-public struct FindComputers: Request {
-  public static let method = "computers.find"
-  public typealias Reply = [TailnetComputer]
+/// Tailnet machines without a Woven server.
+public struct FindMachines: Request {
+  public static let method = "machines.find"
+  public typealias Reply = [MachineToAdd]
   public init() {}
 }
 
-/// Installs the server on a Linux computer over SSH and starts it as a
+/// Installs the server on a Linux machine over SSH and starts it as a
 /// systemd user unit. Replies once it answers; it then joins on its own.
 /// `user` is the SSH user, nil for the one SSH chooses.
 public struct InstallServer: Request {
@@ -51,7 +51,7 @@ public struct UpdateServer: Request {
   public init(machineID: String) { self.machineID = machineID }
 }
 
-/// Looks at a Linux computer over SSH before the server is installed there.
+/// Looks at a Linux machine over SSH before the server is installed there.
 /// Changes nothing.
 public struct InspectMachine: Request {
   public static let method = "machines.inspect"

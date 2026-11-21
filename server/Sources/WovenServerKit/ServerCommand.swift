@@ -180,7 +180,7 @@ private struct AlsoOnThisMachine: Tailnet {
 
   func caller(at address: String) async -> String? { await base.caller(at: address) }
   func thisMachine() async throws -> TailnetMachine { try await base.thisMachine() }
-  func computers() async throws -> [TailnetComputer] { try await base.computers() }
+  func machinesToAdd() async throws -> [MachineToAdd] { try await base.machinesToAdd() }
 
   func machines() async throws -> [TailnetMachine] {
     let others = (try? await base.machines()) ?? []

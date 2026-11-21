@@ -77,7 +77,7 @@ struct SettingsWorkspacesView: View {
             if let selectedMachine {
                 model.refreshHarnesses(on: selectedMachine.id)
             } else {
-                model.findComputers()
+                model.findMachines()
             }
         }
     }
@@ -287,8 +287,8 @@ struct SettingsWorkspacesView: View {
         SettingsSection(title: "Machine", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
-                    let onlineMachines = model.tailnetComputers
-                    if onlineMachines.isEmpty, !model.isFindingComputers {
+                    let onlineMachines = model.tailnetMachines
+                    if onlineMachines.isEmpty, !model.isFindingMachines {
                         Text("No online machines discovered")
                             .font(.settingsSecondary)
                             .foregroundStyle(WovenPalette.mutedForeground)
@@ -307,11 +307,11 @@ struct SettingsWorkspacesView: View {
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
                     }
-                    Button(model.isFindingComputers ? "Discovering…" : "Refresh") {
-                        model.findComputers()
+                    Button(model.isFindingMachines ? "Discovering…" : "Refresh") {
+                        model.findMachines()
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isFindingComputers)
+                    .disabled(model.isFindingMachines)
                 }
             }
 

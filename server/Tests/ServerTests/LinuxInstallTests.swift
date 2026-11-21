@@ -5,7 +5,7 @@ import Testing
 /// SSH reaches an installed Linux machine with exactly the host and user given
 /// at install, overriding none of the person's SSH settings, and every command
 /// there first checks that the server there is that machine: a host that now
-/// names another computer, or one without the server, is refused unchanged.
+/// names another machine, or one without the server, is refused unchanged.
 @Test
 func sshUsesTheInstalledRouteAndRefusesAnotherMachine() async throws {
   let install = LinuxInstall(bundle: URL(fileURLWithPath: "/"), instance: "check", port: 0, appVersion: "0", standIn: false)
@@ -15,7 +15,7 @@ func sshUsesTheInstalledRouteAndRefusesAnotherMachine() async throws {
   #expect(arguments.contains("person"))
   #expect(!arguments.contains { $0.hasPrefix("HostName") })
 
-  // Runs the remote command here, with HOME standing in for the other computer.
+  // Runs the remote command here, with HOME standing in for the other machine.
   let home = FileManager.default.temporaryDirectory.appendingPathComponent("woven-ssh-\(UUID().uuidString)")
   defer { try? FileManager.default.removeItem(at: home) }
   let data = home.appendingPathComponent(".local/share/woven-server-check/data")

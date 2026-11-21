@@ -55,7 +55,7 @@ Woven Matter account and no hosted service in between.
 
 - **Mac app:** an Apple silicon Mac with macOS 26 or later. The app updates
   itself.
-- **Linux machines (optional):** x86_64 or arm64 computers on your tailnet with
+- **Linux machines (optional):** x86_64 or arm64 machines on your tailnet with
   systemd that this Mac can reach over SSH. The Mac app installs Woven Matter
   on them.
 - **Tailscale (only for more than one machine):** a single Mac needs nothing
@@ -80,7 +80,7 @@ the rest keep working.
   of your machines. It joins by itself: there is nothing to pair or approve.
 - A machine accepts a connection only from a machine of your tailnet. A machine
   shared in from someone else's tailnet is refused.
-- **Add workspace** lists the Linux computers on your tailnet that don't run
+- **Add workspace** lists the Linux machines on your tailnet that don't run
   Woven Matter yet and installs it on them over SSH. **Remove** takes a
   machine out of every library and, on Linux, uninstalls Woven Matter there.
 
