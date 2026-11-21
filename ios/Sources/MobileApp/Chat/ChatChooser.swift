@@ -79,6 +79,8 @@ struct ChatChooser: View {
     private func row(title: String, runtime: AgentRuntimeKind, identifier: String, action: @escaping () -> Void) -> some View {
         Button {
             action()
+            // Opened from another tab (Folders), the new chat shows in the Chat tab.
+            model.tab = .chat
             dismiss()
         } label: {
             HStack(spacing: 12) {

@@ -18,7 +18,7 @@ struct MobileShell: View {
             VStack(spacing: 0) {
                 tabs
                 if sizeClass != .regular && !keyboardVisible {
-                    MobileTabBar(selection: model.tab, fadesAbove: model.tab != .chat, select: model.select)
+                    MobileTabBar(selection: model.tab, fadesAbove: !model.showsComposerOnBar, select: model.select)
                 }
             }
         }
@@ -34,9 +34,8 @@ struct MobileShell: View {
                 .preferredColorScheme(theme.colorScheme)
                 .tint(theme.palette.themeAccent)
         }
-        .onChange(of: model.tab) { _, tab in
-            if tab != .chat { MobileDictation.shared.stop() }
-        }
+        // Dictation inserts into the composer it started in, so it ends when that page leaves.
+        .onChange(of: model.tab) { _, _ in MobileDictation.shared.stop() }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardVisible = true
         }

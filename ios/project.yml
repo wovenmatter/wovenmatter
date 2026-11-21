@@ -45,6 +45,14 @@ targets:
       - path: ../app/App/Views/ConversationMessageRow.swift
       - path: ../app/App/Views/RemoteInteractionCard.swift
       - path: ../app/App/Views/WorkspaceSessionActivity.swift
+      # The artifact editors both apps share: Sheets, Apps and their histories.
+      - path: ../app/App/Documents
+      - path: ../app/App/Views/ArtifactEditor.swift
+      - path: ../app/App/Views/ArtifactEditorModels.swift
+      - path: ../app/App/Views/ArtifactStateScript.swift
+      - path: ../app/App/Views/ArtifactStateSnapshot.swift
+      - path: ../app/App/Views/HTMLArtifactDocument.swift
+      - path: ../app/App/Views/PersistentArtifactView.swift
       - path: ../app/App/SharedAssets.xcassets
       - path: ../docs/assets/LUCIDE_LICENSE.txt
       - path: Config/PrivacyInfo.xcprivacy

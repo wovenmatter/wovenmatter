@@ -21,48 +21,6 @@ struct PanelControlButton: View {
     }
 }
 
-/// Someone a draft can "@": a name, and a word on what naming them does.
-struct ComposerMention: Equatable {
-    let name: String
-    var detail: String?
-
-    /// The text after the draft's last "@", when that "@" starts a word and the draft ends
-    /// in it: what is being typed toward a name. Nil when no mention is being typed.
-    static func query(in draft: String) -> String? {
-        guard let at = draft.lastIndex(of: "@") else { return nil }
-        if at > draft.startIndex {
-            let before = draft[draft.index(before: at)]
-            // An "@" inside a word (an email address) is not a mention.
-            if before.isLetter || before.isNumber || before == "_" { return nil }
-        }
-        let query = draft[draft.index(after: at)...]
-        return query.contains(where: \.isNewline) || query.count > 80 ? nil : String(query)
-    }
-
-    /// The names the typed text could still become, best first: names it starts, then names
-    /// with a later word it starts. Nothing once the text is one name in full and no other
-    /// fits, so Return then sends the message.
-    static func matching(_ draft: String, among mentions: [ComposerMention]) -> [ComposerMention] {
-        guard !mentions.isEmpty, let query = query(in: draft) else { return [] }
-        let needle = query.lowercased()
-        if needle.isEmpty { return mentions }
-        let starts = mentions.filter { $0.name.lowercased().hasPrefix(needle) }
-        let within = mentions.filter { mention in
-            let name = mention.name.lowercased()
-            return !name.hasPrefix(needle) && name.split(separator: " ").dropFirst().contains { $0.hasPrefix(needle) }
-        }
-        let found = starts + within
-        if found.count == 1, found[0].name.lowercased() == needle { return [] }
-        return found
-    }
-
-    /// The draft with what was typed after its last "@" written out as `mention`.
-    static func completing(_ draft: String, with mention: ComposerMention) -> String {
-        guard query(in: draft) != nil, let at = draft.lastIndex(of: "@") else { return draft }
-        return String(draft[..<at]) + "@\(mention.name) "
-    }
-}
-
 /// One row of the list that typing "/" or "@" opens above the composer's controls.
 private struct ComposerCompletion: Identifiable {
     enum Kind {

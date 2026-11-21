@@ -7,7 +7,6 @@ import UniformTypeIdentifiers
 /// row of controls. Sending while a turn runs steers it; Stop interrupts it.
 struct ChatComposer: View {
     @Bindable var model: MobileModel
-    @Environment(\.wovenTheme) private var theme
     @State private var focused = false
     @State private var dictationEditor = MobileDictationEditor()
     @State private var importingFiles = false
@@ -54,17 +53,7 @@ struct ChatComposer: View {
                 submission
             }
         }
-        .padding(.horizontal, 15)
-        .padding(.top, 13)
-        .padding(.bottom, 6)
-        .background {
-            // Opaque, so the transcript scrolling beneath never shows through.
-            RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
-                .fill(theme.palette.workspace)
-                .overlay(RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous).fill(theme.palette.themeWhisper))
-                .overlay(RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
-                    .stroke(theme.palette.border, lineWidth: 0.5))
-        }
+        .mobileComposerSurface()
         .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             attachFiles(urls)
@@ -100,22 +89,10 @@ struct ChatComposer: View {
             .accessibilityLabel("Stop run")
             .accessibilityIdentifier("chat-stop")
         }
-        Button {
+        MobileSendButton(enabled: canSend, label: isRunning ? "Steer run" : "Send message") {
             focused = isRunning && focused
             Task { await chat.send() }
-        } label: {
-            LucideIcon(glyph: .arrowUp, size: 20)
-                .foregroundStyle(WovenPalette.primaryForeground)
-                .frame(width: 40, height: 40)
-                .background(WovenPalette.primaryFill, in: Circle())
-                .overlay { if theme == .dark { Circle().stroke(theme.palette.themeRing, lineWidth: 1) } }
-                .opacity(canSend ? 1 : 0.4)
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
         }
-        .buttonStyle(.plain)
-        .disabled(!canSend)
-        .accessibilityLabel(isRunning ? "Steer run" : "Send message")
         .accessibilityIdentifier("chat-send")
     }
 
@@ -178,5 +155,52 @@ struct ChatComposer: View {
             }
             await chat.attach(files)
         }
+    }
+}
+
+/// The composer's surface: rounded theme-whisper over the page colour, opaque so
+/// the transcript scrolling beneath never shows through. Bot chats use it too.
+private struct MobileComposerSurface: ViewModifier {
+    @Environment(\.wovenTheme) private var theme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
+        content
+            .padding(.horizontal, 15)
+            .padding(.top, 13)
+            .padding(.bottom, 6)
+            .background {
+                shape.fill(theme.palette.workspace)
+                    .overlay(shape.fill(theme.palette.themeWhisper))
+                    .overlay(shape.stroke(theme.palette.border, lineWidth: 0.5))
+            }
+    }
+}
+
+extension View {
+    func mobileComposerSurface() -> some View { modifier(MobileComposerSurface()) }
+}
+
+/// The composer's round send button.
+struct MobileSendButton: View {
+    let enabled: Bool
+    let label: String
+    let action: () -> Void
+    @Environment(\.wovenTheme) private var theme
+
+    var body: some View {
+        Button(action: action) {
+            LucideIcon(glyph: .arrowUp, size: 20)
+                .foregroundStyle(WovenPalette.primaryForeground)
+                .frame(width: 40, height: 40)
+                .background(WovenPalette.primaryFill, in: Circle())
+                .overlay { if theme == .dark { Circle().stroke(theme.palette.themeRing, lineWidth: 1) } }
+                .opacity(enabled ? 1 : 0.4)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
     }
 }

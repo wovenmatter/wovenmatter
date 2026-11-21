@@ -77,8 +77,9 @@ final class BotChatStore {
     private func open() {
         close()
         loading = true
-        guard let bots, let server = bots.server else { return }
-        if bots.isConnected {
+        guard let bots else { return }
+        // The library's copy needs no host server: on a device there may be none while the host is away.
+        if bots.isConnected, let server = bots.server {
             var request: [String: JSONValue] = ["type": .string("conversation.open"), "botId": .string(key.botID)]
             if let conversationID = key.conversationID { request["conversationId"] = .integer(Int64(conversationID)) }
             following = Task { [weak self] in
@@ -298,8 +299,8 @@ final class ForumRoomStore {
     private func open() {
         close()
         loading = true
-        guard let bots, let server = bots.server else { return }
-        if bots.isConnected {
+        guard let bots else { return }
+        if bots.isConnected, let server = bots.server {
             var request: [String: JSONValue] = ["type": .string("forum.open")]
             if let roomID = key.conversationID { request["roomId"] = .integer(Int64(roomID)) }
             following = Task { [weak self] in

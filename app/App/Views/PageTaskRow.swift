@@ -394,19 +394,3 @@ extension BotTarget {
         self.init(machineID: parts[0], botID: parts[1], conversationID: Int(parts[2]))
     }
 }
-
-/// An App with no code yet. It is built from the chat beside it, like any
-/// other edit: the open App is shared with whichever agent the chat uses.
-struct AppBuildPrompt: View {
-    var body: some View {
-        VStack(spacing: 10) {
-            Text("Ask an agent to build this").font(.system(size: 17, weight: .semibold))
-            Text("Describe the app in the chat. The agent you have open builds it here and can connect it to live data.")
-                .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
-                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: 420)
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}

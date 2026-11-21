@@ -144,7 +144,9 @@ when an intentional design change is accepted.
   Everything about bots is native and uses the
   components regular chats and Settings use: the shared transcript text, user bubble and
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
-  at 760 points and wider. Message actions appear on hover. Bots run on one machine.
+  at 760 points and wider. Message actions appear on hover. On iPhone and iPad they stay in
+  view under each bot's reply (copy, and Start thread or Reply in thread), a thread opens as
+  its own page, and the Bots tab lists the Forum and bots in the rail's order. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
   Linux machine), the chosen machine's row, Install on another machine, and a
   "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off

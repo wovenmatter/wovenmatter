@@ -65,12 +65,20 @@ final class MobileModel {
         } catch {
             return app.fail(error.localizedDescription)
         }
+        // Each finished dictation is saved to the library, as on a Mac.
+        app.settings.configureDictationHistory()
         #if DEBUG
         // Development: connect to the Mac a connection code names at launch.
         if let text = ProcessInfo.processInfo.environment["WOVENMATTER_CONNECT_CODE"], let code = ConnectionCode(text) {
             try? await device.add(code)
         }
         #endif
+    }
+
+    /// The page showing has a composer on the bottom bar, which brings its own fade:
+    /// a chat, any page opened in the Bots tab, or an open artifact (its gutter).
+    var showsComposerOnBar: Bool {
+        tab == .chat || tab == .bots && paths[.bots]?.isEmpty == false || tab == .artifacts && artifactID != nil
     }
 
     /// Chooses a tab; choosing the one showing returns it to its root.
@@ -108,4 +116,6 @@ enum SettingsDestination: Hashable {
     case webSearch
     /// Connecting to the Mac a scanned or opened link names.
     case connect(ConnectionCode)
+    /// The connect screen, with no code yet.
+    case connectMachine
 }

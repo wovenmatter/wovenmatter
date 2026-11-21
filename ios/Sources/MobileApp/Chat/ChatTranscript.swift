@@ -178,8 +178,8 @@ struct ChatTranscript: View {
     }
 }
 
-/// Returns to the newest reply, floating over the transcript.
-private struct LatestReplyButton: View {
+/// Returns to the newest reply, floating over the transcript. Bot chats use it too.
+struct LatestReplyButton: View {
     @Environment(\.wovenTheme) private var theme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let action: () -> Void

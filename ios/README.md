@@ -1,71 +1,84 @@
-# Woven Matter iOS app
+# Woven Matter for iPhone and iPad
 
-The Woven Matter iOS app runs on iPhone and iPad; the Mac app is the Woven Matter
-desktop app. The iOS app is a TestFlight beta and is not generally available; to
-request access, email [trey@wovenmatter.com](mailto:trey@wovenmatter.com).
+The iPhone and iPad app is a Woven Matter device: the same thin UI as the Mac,
+the device's own library, and the server's portable core running inside the
+app, listening on nothing. The core is the only writer of the device's
+library, syncs it with the person's machines and runs Quick Chat, a Pi Durable
+session owned by the device. Everything else runs on the Macs and Linux
+machines, and the app reaches their servers directly. See
+[the architecture](../docs/ARCHITECTURE.md), "Devices", for the contract.
 
-Every Mac and Linux host keeps a full copy of the Woven Matter library. The phone
-is a signed member with its own offline replica and syncs with whichever Mac or
-Linux host answers; no single Mac is required. On the device, Quick Chat runs Pi
-Durable for notes, web search, simple questions, timers, reminders and calendar
-events; Mac and Linux workspace agents handle everything else. Inference uses provider
-connections signed in on that device, or a model server it adds on Tailscale.
-See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
+The app is a TestFlight beta and is not generally available; to request
+access, email [trey@wovenmatter.com](mailto:trey@wovenmatter.com).
 
-The app is complete without a Mac. A fresh install signs in to a model provider
-and adds a web search key in Settings → iPhone Connections, then uses Quick Chat,
-notes and folders, calendar, timers and reminders, and dictation on the phone.
-Nothing waits on a host: there are no connection banners or network retries,
-and analytics are not sent. Home offers "Connect your Mac" for workspaces, agents on
-your computers and sync; Mac-only pages (Scheduled tasks, Databases) appear once
-paired. Pairing later uploads everything made on the phone once: notes and
-folders, Quick Chat history, calendar events, timer reminders and dictations.
+The app is complete without a Mac. Quick Chat uses only sign-ins made on the
+device (Settings → Quick Chat → Subscriptions & API Keys), kept in its
+Keychain: ChatGPT, Claude and Grok subscriptions, API keys, a web search key
+(Exa, Brave Search or Firecrawl), or a model server on the tailnet.
+
+## Connecting
+
+One of the person's Macs shows a QR code and a short code in Settings → Apple
+Devices. Both carry only that Mac's tailnet address and port; there is no
+secret, nothing to approve and no pairing, and Tailscale decides who may
+connect. The phone must be on the same tailnet, with the Tailscale app running.
+In Settings → Machines the person scans the code or types it (any case, dashes
+optional, or the link). The core dials that Mac, learns every machine's
+address from it and remembers them, so it works with whichever machines are
+online. Disconnect forgets the machines; the device keeps its library.
+
+A link opened outside the app, `wovenmatter://connect/<code>`, opens Settings →
+Machines and connects.
+
+The app's version must match the Mac's: two machines on different releases do
+not sync, and Machines names the one that needs updating. Both apps take their
+version from [app/Version.xcconfig](../app/Version.xcconfig).
+
+## Source layout
+
+- `Sources/MobileApp`: the SwiftUI app. `App/` (the entry point, `MobileModel`,
+  and `DeviceCore`, the one place the UI touches the core), `Shell/` (the tabs,
+  the bottom bar and the iPad rail), `Chat/`, `Bots/`, `Folders/`, `Artifacts/`
+  and `Settings/`.
+- `Sources/WovenDevice`: the in-app host. It runs `WovenServerCore` over the
+  device's library, keeps the machines' addresses and links, hands the device's
+  rows and content to the servers, and answers sign-in requests from the
+  device's Keychain. Only it imports the library and the core.
+- `Sources/PiDurableRuntime`: Quick Chat's Pi Durable SDK, bundled and hosted by
+  JavaScriptCore; built from `Runtime/` (see [its README](Runtime/README.md)).
+- `Sources/MobileInference`: provider sign-ins, credentials, model catalogs,
+  web search and streaming inference.
+
+The UI shares the Mac's client layer: [project.yml](project.yml) compiles
+`app/App/Client` (the stores, connections and types) and the shared views and
+styles (`WovenStyle.swift`, the conversation views, the artifact editors) into
+the app, and bundles `app/App/SharedAssets.xcassets`. Follow
+[the style guide](../docs/STYLE_GUIDE.md). The Xcode project is generated from
+`project.yml`: run `xcodegen` in `ios/` after adding or moving files, and never
+edit `project.pbxproj` by hand.
 
 ## Build and validate
 
 ```sh
-scripts/build-ios.sh
-scripts/build-ios.sh --device-compile
-scripts/test-ios.sh --package
-scripts/test-ios.sh --all-devices
+scripts/build-ios.sh                    # the Debug app for the simulator
+scripts/build-ios.sh --device-compile   # the same for devices, unsigned
+scripts/test-ios.sh --package           # the ios/ package's tests
+scripts/test-ios.sh                     # those, then the UI tests on a throwaway simulator
 ```
 
-Open `WovenMatter.xcodeproj`, scheme `WovenMatter` (app target `WovenMatter`),
-to run from Xcode. Device installation uses existing local signing assets. The generated
-project comes from `project.yml`; regenerate it with `xcodegen` in `ios/` and
-never edit `project.pbxproj` by hand. Tests use synthetic stores and provider
-fixtures, never personal accounts or inference services.
+`scripts/test-changes.sh` also runs the package's tests and builds the server's
+core for the iOS Simulator. Tests use stand-ins and never call a provider.
 
-Debug builds are **Woven Matter Dev** (`com.wovenmatter.wovenmatter.dev`), for the
-simulator and occasional local device builds. Release builds are **Woven Matter**
-(`com.wovenmatter.wovenmatter`), the TestFlight app. The two install side by side.
+Debug builds are **Woven Matter Dev** (`com.wovenmatter.wovenmatter.dev`, links
+`wovenmatter-dev://`), for the simulator and local device builds. Release builds
+are **Woven Matter** (`com.wovenmatter.wovenmatter`, links `wovenmatter://`),
+the TestFlight app. The two install side by side, and a development Mac
+instance's code opens the Dev app.
 
-For the user's Mac acceptance build, use `scripts/build_and_run.sh` with its
-existing data. For a disposable Mac database, that same launcher accepts
-a separate instance (`--instance iphone-test`) and `WOVENMATTER_DEV_CACHE_DIR`.
-Do not substitute an empty variant for a requested personal dev build.
-Build/install does not authorize pairing, unpairing, or account sign-in.
-
-UI-only simulator fixtures use `WOVENMATTER_UI_FIXTURE=1` and a stable
-`WOVENMATTER_UI_FIXTURE_NAMESPACE`. Pairing and agent execution are disabled in
-that mode. Use a separate simulator without fixture variables for real pairing.
-`WOVENMATTER_UI_SCENARIO=standalone` is a fresh install that was never paired
-(`standalone-timer` adds a Quick Chat timer); `testFreshInstallWithoutPairingIsCompleteAndCalm`
-covers it.
-
-## Source layout
-
-- `MobileApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
-- `MobileInference`: provider connections, credentials and streaming.
-- `PiDurableRuntime`: Quick Chat's Pi Durable, the bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
-
-Both apps compile the desktop's `WovenStyle.swift` and bundle the same
-`SharedAssets.xcassets`. Follow [the style guide](../docs/STYLE_GUIDE.md).
-
-See [distributed architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),
-[device acceptance](../docs/DISTRIBUTED_CLIENT_TESTING.md), and
-[Quick Chat lifecycle](../docs/IOS_CONTINUED_EXECUTION.md) for the shared contracts
-and remaining hardware/provider checks.
+In Debug builds, `WOVENMATTER_CONNECT_CODE` set to a code or link in the launch
+environment connects to that Mac at launch. For a Mac to connect to, start a
+development instance on the tailnet: `scripts/build_and_run.sh --instance NAME
+--port PORT`.
 
 ## TestFlight
 
@@ -84,225 +97,101 @@ scripts/prepare-ios-testflight.sh --verify-export IPA    # check an exported IPA
 ```
 
 `DIR` must not exist yet; the script never overwrites earlier output. Each run
-keeps its Xcode logs (`build.log`, `archive.log`, `export.log`, `upload.log`)
-there. `--archive` and `--upload` stop before building if the Apple Distribution
-certificate is missing, and `--upload` also stops if the API key is missing.
+keeps its Xcode logs there. `--archive` and `--upload` stop before building if
+the Apple Distribution certificate is missing, and `--upload` also stops if the
+App Store Connect API key is missing.
 
-**iPhone and iPad only.** Apple offers iPhone apps on Apple silicon Macs and
-Apple Vision Pro unless told otherwise; Woven Matter is for iPhone and iPad
-only. TestFlight decides this per group, and new groups start with Macs and
-Vision Pro on. After every upload, and whenever you run `--ios-only-groups`, the
-script turns both off for every TestFlight group with the API key and lists each
-group. If that step fails after an upload, the build is uploaded; run
-`--ios-only-groups` to retry. The App Store has its own two checkboxes, which
-Apple's API does not expose: in App Store Connect, open the app → Distribution →
-Pricing and Availability and keep **iPhone and iPad Apps on Apple Silicon Macs**
-→ Make this app available, and **Apple Vision Pro** → Make this app available
-on Apple Vision Pro, unchecked.
+### Setup
+
+The bundle ID `com.wovenmatter.wovenmatter` is registered and its App Store
+Connect app record exists. Two things live on the Mac that builds:
+
+<a id="apple-distribution-certificate"></a>**Apple Distribution certificate.**
+Only the Account Holder or an Admin can create one. In Xcode, Settings →
+Accounts, select team `3M84Q9NAMN`, **Manage Certificates…**, **+**, **Apple
+Distribution**. Xcode puts the certificate and its private key in the login
+keychain; export it from Keychain Access as a `.p12` to build on another Mac.
+`--plan` then reports one distribution identity.
+
+<a id="app-store-connect-api-key"></a>**App Store Connect API key.** In App
+Store Connect, Users and Access → Integrations → App Store Connect API → Team
+Keys, create a key with the **Admin** role (it lets Xcode create the App Store
+signing profile, upload builds and change TestFlight groups) and download its
+`.p8` once. Put it at `~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8`
+(mode 600), and its key ID and issuer ID in
+`~/.appstoreconnect/woven-matter.env` (mode 600) as `ASC_KEY_ID=…` and
+`ASC_ISSUER_ID=…`. The script parses that file and never runs it;
+`ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH` in the environment take
+precedence, and `ASC_CONFIG` names another file. The `.p8` is the secret: never
+commit it or paste it anywhere, and revoke it on the same page if it leaks.
+
+### Each build
 
 **Version and build number.** The version is `MARKETING_VERSION` in
-[project.yml](project.yml). You never set a build number: every
-`--archive` and `--upload` stamps one from the UTC clock and prints it. The form
-is `YYYYMMDD.T`, where `T` is hour × 10000 + minute × 100 + second, so
-18:34:02 UTC on 11 November 2026 is `20261111.183402` and 09:05:07 is
-`20261111.90507`. Every build is unique and higher than the one before. To ship
-a new version, change `MARKETING_VERSION`, run `xcodegen` in `ios/`, and commit.
+`app/Version.xcconfig`, shared with the Mac app. You never set a build number:
+every `--archive` and `--upload` stamps one from the UTC clock, `YYYYMMDD.T`
+with `T` = hour × 10000 + minute × 100 + second (18:34:02 UTC on 11 November
+2026 is `20261111.183402`), so every build is unique and higher than the last.
 
-**What gets checked.** `scripts/verify-ios-app.sh` checks the archived app and the
-exported IPA before anything is uploaded:
+**iPhone and iPad only.** TestFlight offers iPhone apps on Apple silicon Macs
+and Apple Vision Pro per group, and new groups start with both on. After every
+upload, and whenever you run `--ios-only-groups`, the script turns both off for
+every group with the API key and lists each group; if that fails after an
+upload, the build is uploaded and `--ios-only-groups` retries. The App Store has
+its own two checkboxes, which Apple's API does not expose: in App Store Connect,
+the app → Distribution → Pricing and Availability, keep **iPhone and iPad Apps on
+Apple Silicon Macs** and **Apple Vision Pro** unchecked.
 
-- name, bundle ID, version and build number, with no unexpanded build settings;
-- the AppIcon catalog, iPhone and iPad support, and the camera and microphone
-  purpose strings;
-- the privacy manifest, exactly as described below;
-- `ITSAppUsesNonExemptEncryption` set to false;
-- no Debug-only UI fixtures or development hooks in any binary, and no
-  background processing;
-- in the IPA: one app only, an Apple Distribution signature for team
-  `3M84Q9NAMN`, an App Store provisioning profile that allows TestFlight and has
-  not expired, and only the expected entitlements, with debugging off.
-
-The tests are `scripts/test-support/test_verify_ios_app.py`; they use synthetic
-bundles and stubbed Apple tools, never a real build or Apple service.
+**What gets checked.** `scripts/verify-ios-app.sh` checks the Release app and
+the exported IPA before anything is uploaded: the name, bundle ID, URL scheme,
+version and build number, with no unexpanded build settings; iPhone and iPad
+support, the AppIcon catalog, the bundled icon license, and the camera and
+microphone purpose strings; no continued background processing; the privacy
+manifest, exactly as below; `ITSAppUsesNonExemptEncryption` set to false; no
+Debug-only fixture or development markers in any binary; and, in the IPA, one app with an
+Apple Distribution signature for team `3M84Q9NAMN`, an unexpired App Store
+provisioning profile that allows TestFlight, and only the expected
+entitlements, with debugging off. Its tests,
+`scripts/test-support/test_verify_ios_app.py`, use synthetic bundles and
+stubbed Apple tools.
 
 ### Privacy manifest
 
-[PrivacyInfo.xcprivacy](Config/PrivacyInfo.xcprivacy) is bundled in the app. It
-declares no tracking and the following, from an audit of the code linked into the
-app and of the symbols in the Release binary:
+[PrivacyInfo.xcprivacy](Config/PrivacyInfo.xcprivacy) is bundled in the app.
+It declares no tracking and:
 
 | Required-reason API | Reason | Where |
 | --- | --- | --- |
 | User defaults | `CA92.1`: this app's own preferences | `@AppStorage` settings, dictation preferences |
-| File timestamps | `C617.1`: files inside the app container | Pi Durable checkpoint listings, saved device files, images in rendered HTML |
+| File timestamps | `C617.1`: files inside the app container | Pi Durable checkpoints, saved files, images in rendered HTML |
 | System boot time | `35F9.1`: elapsed time within the app | `systemUptime` behind `performance.now()` in the Pi Durable runtime |
-
-Disk space and active keyboard APIs are not used.
 
 | Data sent off the device | Linked | Purpose | What and where |
 | --- | --- | --- | --- |
-| Other user content | yes | App functionality | Quick Chat messages, history, notes and tool output, to the model provider the user connects |
-| Search history | yes | App functionality | Quick Chat web searches, to the search provider the user connects (Exa, Brave Search or Firecrawl) |
-| User ID | no | Analytics | The random library analytics ID ([analytics](../docs/analytics/README.md)) |
-| Product interaction | no | Analytics | The six-hourly `app_opened` and `app_active` signals |
+| Other user content | yes | App functionality | Quick Chat messages, history, notes and tool output, to the model provider the person connects |
+| Search history | yes | App functionality | Quick Chat web searches, to the search provider the person connects |
 
-The phone sends analytics only to a Mac in its library, which forwards them to
-PostHog: its current library host when that is a Mac, otherwise another Mac
-member. Linux hosts do not accept analytics. Without a paired Mac nothing is
-sent: there is no analytics destination until the phone is paired, and
-unpairing stops the connection. Notes and chats synced to your own Mac or Linux
-host, and on-device dictation, are not collected by Woven Matter and are not
-declared. Answer App Store Connect's **App Privacy** questions the same way.
-
+Nothing else leaves the device for Woven Matter: there are no analytics. What
+syncs with the person's own machines, and on-device dictation, is not
+collected. Answer App Store Connect's **App Privacy** questions the same way.
 If the code starts using another required-reason API or sends new data, update
 the manifest and the lists in `scripts/verify-ios-app.py` together.
 
 ### Export compliance
 
-The app uses only exempt encryption: HTTPS through URLSession, Curve25519
-signatures that authenticate its requests, SHA-256 hashing, iOS Data Protection
-and the Keychain. It implements no encryption of its own. `Info.plist` therefore
-sets `ITSAppUsesNonExemptEncryption` to false, so App Store Connect does not ask
-the export compliance questions for each build. If the app ever adds other
-encryption, change that key and answer the questions in App Store Connect.
+The app uses only exempt encryption: HTTPS through URLSession, SHA-256 hashing,
+iOS Data Protection and the Keychain. Its connections to the person's machines
+are WebSocket over the tailnet, which Tailscale encrypts. It implements no
+encryption of its own, so `Info.plist` sets `ITSAppUsesNonExemptEncryption` to
+false and App Store Connect does not ask the export compliance questions for
+each build. If that changes, change the key and answer them.
 
-### Setup and first upload
+### Testers
 
-Do these once, in order. Steps 1 to 4 happen on Apple's websites or in Xcode;
-the script cannot do them.
-
-1. **Register the bundle ID.** (Done: `com.wovenmatter.wovenmatter` is registered.) At
-   [developer.apple.com/account](https://developer.apple.com/account), open
-   Certificates, Identifiers & Profiles → Identifiers → **+** → App IDs → App.
-   Description `Woven Matter`, explicit bundle ID `com.wovenmatter.wovenmatter`.
-   No capabilities are needed. Register.
-
-2. **Create the app record.** In [App Store Connect](https://appstoreconnect.apple.com),
-   open Apps → **+** → New App:
-   - Platform: iOS
-   - Name: `Woven Matter` (it must be unused on the App Store; if it is taken,
-     choose a variant here; the name under the home-screen icon stays Woven Matter)
-   - Primary language: English (U.S.)
-   - Bundle ID: `com.wovenmatter.wovenmatter`
-   - SKU: `wovenmatter-ios` (any private label; testers never see it)
-   - User access: Full Access
-
-3. <a id="apple-distribution-certificate"></a>**Apple Distribution certificate.**
-   Only the Account Holder or an Admin can create one. In Xcode, open
-   Settings → Accounts, select team `3M84Q9NAMN`, click **Manage
-   Certificates…**, click **+** and choose **Apple Distribution**. Xcode puts the
-   certificate and its private key in this Mac's login keychain. To build on
-   another Mac later, export it from Keychain Access (My Certificates) as a
-   `.p12`. Then run `scripts/prepare-ios-testflight.sh --plan`; it should report
-   one distribution identity.
-
-4. <a id="app-store-connect-api-key"></a>**App Store Connect API key.** In App
-   Store Connect, open Users and Access → Integrations → App Store Connect API →
-   Team Keys. (The first time, the Account Holder must request access.) Click
-   **+**, name it `Woven Matter TestFlight` and give it the **Admin** role. Admin
-   lets Xcode create and update the App Store signing profile with the key, as
-   well as upload builds and change TestFlight group settings; a narrower role
-   may be enough just to upload, but that has not been tried. Download the `.p8` file; Apple allows this only once. Then,
-   with your key ID in place of `KEYID`:
-
-   ```sh
-   mkdir -p ~/.appstoreconnect/private_keys
-   mv ~/Downloads/AuthKey_KEYID.p8 ~/.appstoreconnect/private_keys/
-   chmod 600 ~/.appstoreconnect/private_keys/AuthKey_KEYID.p8
-   ```
-
-   Save the key ID and the issuer ID (shown above the list of keys) next to the
-   key, in `~/.appstoreconnect/woven-matter.env`:
-
-   ```sh
-   printf 'ASC_KEY_ID=KEYID\nASC_ISSUER_ID=your-issuer-id\n' > ~/.appstoreconnect/woven-matter.env
-   chmod 600 ~/.appstoreconnect/woven-matter.env
-   ```
-
-   The script reads these two values from that file (it never runs the file).
-   `ASC_KEY_ID` and `ASC_ISSUER_ID` set in the environment take precedence, and
-   `ASC_CONFIG` points the script at a different file.
-
-   To keep the key somewhere else, also set `ASC_KEY_PATH` (in the environment or
-   that file) to the `.p8` file.
-   The `.p8` file is the secret: never commit it, paste it into a chat, or copy it
-   into this repository. If it leaks, revoke it on the same page.
-
-5. **First upload.** In a new terminal on this Mac:
-
-   ```sh
-   scripts/prepare-ios-testflight.sh --plan
-   scripts/prepare-ios-testflight.sh --upload ~/WovenMatterBuilds/testflight-$(date -u +%Y%m%d-%H%M%S)
-   ```
-
-   `--plan` should show one distribution identity and the API key as ready.
-   `--upload` archives the app (letting Xcode create the App Store profile with
-   the key), exports the IPA, checks it, and uploads exactly that IPA with:
-
-   ```sh
-   xcrun altool --upload-package IPA --api-key "$ASC_KEY_ID" --api-issuer "$ASC_ISSUER_ID" \
-     --p8-file-path KEY.p8 --output-format normal
-   ```
-
-   It then turns off testing on Macs and Apple Vision Pro for every TestFlight
-   group (see "iPhone and iPad only" above). Apple processes the build and
-   emails you when it appears under TestFlight in App Store Connect. Later
-   uploads are just step 5 again.
-
-### Internal testing
-
-Internal testers are people on the team in App Store Connect, up to 100. Their
-builds need no Apple review.
-
-1. In App Store Connect, open the app → TestFlight → Internal Testing → **+**,
-   and create a group such as `Team`. Turn on automatic distribution so each new
-   build reaches the group.
-2. Run `scripts/prepare-ios-testflight.sh --ios-only-groups` so the new group
-   offers builds only on iPhone and iPad. (The next upload also does this; in
-   App Store Connect it is the group's settings tab → Test iPhone and iPad apps
-   on Apple silicon Macs, and the Apple Vision Pro setting beside it.)
-3. Add yourself to the group.
-4. On the iPhone or iPad, install **TestFlight** from the App Store and sign in
-   with the same Apple Account. Open the invitation email, or open TestFlight
-   directly, and install Woven Matter. It sits next to Woven Matter Dev.
-
-### External testing
-
-External testers are anyone you invite by email or through a public link, up to
-10,000. The first build of each version goes through Beta App Review; later
-builds of the same version may not need a full review.
-
-1. TestFlight → **Test Information**:
-   - Beta App Description: what Woven Matter is and what to try.
-   - Feedback Email: where tester feedback should go.
-   - Privacy Policy URL: `https://wovenmatter.com/privacy`.
-   - Beta App Review contact: name, phone and email.
-   - Sign-in required: no. The app has no Woven Matter account.
-   - Review notes, for example:
-
-     > Woven Matter works on its own; pairing with a Mac is optional and not
-     > needed to review the app. Notes, folders, calendar and timers are stored
-     > on the device. To try Quick Chat: Settings → iPhone Connections (iPad Connections on iPad) → Claude ·
-     > API key (or OpenAI · API key), paste the test key below, then open Chats
-     > and ask a question, or ask it to create a note or a timer. Web search is
-     > optional: Settings → iPhone or iPad Connections → Web search.
-     >
-     > Test provider key: (paste here)
-
-     Put the test key only in this App Store Connect field, never in the
-     repository. Use a key with a low spending limit that you revoke after
-     review. Tapping "Sign in to a model provider to use Quick Chat" in an
-     empty chat opens the same Connections page.
-2. TestFlight → External Testing → **+**: create a group and add the build. It is
-   sent to Beta App Review. Run `scripts/prepare-ios-testflight.sh
-   --ios-only-groups` so the group offers builds only on iPhone and iPad.
-3. After approval, add testers by email, or turn on the group's **public link**
-   and share it. You can cap how many people may join through the link.
-
-### How often, and for how long
-
-There is no fixed schedule: every `--upload` makes a new build, and internal
-testers can install it as soon as Apple finishes processing it. External testers
-get it after review, when one is needed. A build can be tested for 90 days after
-upload; then TestFlight stops opening it, so upload a fresh build at least every
-couple of months while people are testing.
+Internal testers (people on the team in App Store Connect, up to 100) need no
+review: create a group under TestFlight → Internal Testing with automatic
+distribution, run `--ios-only-groups`, and add them. External testers (by email
+or a public link) need Beta App Review for the first build of each version; the
+review notes should say the app works without a Mac and how to try Quick Chat
+with a test provider key entered only in App Store Connect. A build can be
+tested for 90 days after upload.

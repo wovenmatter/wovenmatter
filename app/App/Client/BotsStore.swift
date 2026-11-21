@@ -23,7 +23,14 @@ final class BotsStore {
     @ObservationIgnored private(set) weak var library: ServerConnection?
     @ObservationIgnored private weak var connections: MachineConnections?
     /// The host's server, connected to directly; this Mac's until a host is known.
-    var server: ServerConnection? { connections?.connection(for: hostMachineID) ?? library }
+    var server: ServerConnection? {
+        #if os(iOS)
+        // A device never runs the bots: the host is always another machine, reached once its address is known.
+        hostMachineID.flatMap { connections?.remotes[$0] }
+        #else
+        connections?.connection(for: hostMachineID) ?? library
+        #endif
+    }
     @ObservationIgnored private weak var machines: MachinesStore?
     @ObservationIgnored private weak var settings: SettingsStore?
     @ObservationIgnored private var following: Task<Void, Never>?
@@ -40,6 +47,10 @@ final class BotsStore {
         following = Task { [weak self] in
             while !Task.isCancelled {
                 guard let server = self?.server else {
+                    // A host with no address yet (on a device) is as unreachable as one that is offline.
+                    if let self, let host = hostMachineID, state != .unreachable {
+                        apply(BotsStatus(hostMachineID: host, state: .unreachable), reload: true)
+                    }
                     try? await Task.sleep(for: .milliseconds(500))
                     continue
                 }

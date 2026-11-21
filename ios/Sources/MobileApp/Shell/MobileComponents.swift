@@ -7,6 +7,8 @@ struct TabRootHeader<Trailing: View>: View {
     let title: String
     var subtitle: String? = nil
     var onTitleTap: (() -> Void)? = nil
+    /// What tapping the title shows, for VoiceOver.
+    var titleHint = "Shows new chats and recent chats"
     @ViewBuilder var trailing: () -> Trailing
     @Environment(\.presentSettings) private var presentSettings
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -52,7 +54,7 @@ struct TabRootHeader<Trailing: View>: View {
             Button(action: onTitleTap) { label }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("tab-title")
-                .accessibilityHint("Shows new chats and recent chats")
+                .accessibilityHint(titleHint)
         } else {
             label.accessibilityAddTraits(.isHeader).accessibilityIdentifier("tab-title")
         }

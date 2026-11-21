@@ -42,3 +42,27 @@ struct PersistentArtifactView: View {
         .onChange(of: document.html) { _, _ in saveError = nil }
     }
 }
+
+/// An App with no code yet. It is built from the chat beside it, like any
+/// other edit: the open App is shared with whichever agent the chat uses.
+/// Where the chat is not beside it, `openChat` goes to it.
+struct AppBuildPrompt: View {
+    var openChat: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Ask an agent to build this").font(.system(size: 17, weight: .semibold))
+            Text("Describe the app in the chat. The agent you have open builds it here and can connect it to live data.")
+                .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            if let openChat {
+                Button("Open chat", action: openChat)
+                    .buttonStyle(WovenQuietButtonStyle())
+                    .accessibilityIdentifier("app-open-chat")
+            }
+        }
+        .frame(maxWidth: 420)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
