@@ -82,9 +82,9 @@ private func assistantTexts(_ items: [SessionItem]) -> [String] {
 @Test(.timeLimit(.minutes(1)))
 func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async throws {
   let gate = StandInRuntime.Gate()
-  let host = try await TestServer.start(runtime: StandInRuntime(gate: gate))
-  defer { host.server.stopLater() }
-  let early = try await host.connect()
+  let machine = try await TestServer.start(runtime: StandInRuntime(gate: gate))
+  defer { machine.server.stopLater() }
+  let early = try await machine.connect()
   let session = try await early.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let first = try await early.subscribe(SubscribeSession(sessionID: session.id))
   var earlyView = View(first.reply)
@@ -97,7 +97,7 @@ func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async thr
     if case .text = event { break }
   }
 
-  let late = try await host.connect()
+  let late = try await machine.connect()
   let second = try await late.subscribe(SubscribeSession(sessionID: session.id))
   var lateView = View(second.reply)
   #expect(lateView.items.map(\.content) == [.userMessage(text: "hello")])
@@ -126,9 +126,9 @@ func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async thr
 @Test(.timeLimit(.minutes(1)))
 func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
   let gate = StandInRuntime.Gate()
-  let host = try await TestServer.start(runtime: StandInRuntime(gate: gate))
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(runtime: StandInRuntime(gate: gate))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
   var events = subscription.events.makeAsyncIterator()
@@ -155,9 +155,9 @@ func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throws {
-  let host = try await TestServer.start(runtime: StandInRuntime(gate: StandInRuntime.Gate()))
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(runtime: StandInRuntime(gate: StandInRuntime.Gate()))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
   let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string("<title>Chart</title><p>bars</p>")])),
@@ -177,9 +177,9 @@ func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throw
 
 @Test(.timeLimit(.minutes(1)))
 func aTurnTheRuntimeStartsItselfRunsAndIsSavedWithoutAnotherMessage() async throws {
-  let host = try await TestServer.start(runtime: StandInRuntime())
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(runtime: StandInRuntime())
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
   _ = try await client.call(SendTurn(sessionID: session.id, text: "then more"))
@@ -196,9 +196,9 @@ func aTurnTheRuntimeStartsItselfRunsAndIsSavedWithoutAnotherMessage() async thro
 
 @Test(.timeLimit(.minutes(1)))
 func whatThePersonHasOpenReachesTheRuntimeButIsNotSaved() async throws {
-  let host = try await TestServer.start(runtime: StandInRuntime())
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(runtime: StandInRuntime())
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
   _ = try await client.call(SendTurn(sessionID: session.id, text: "hello", context: "Workspace snapshot: Plans"))

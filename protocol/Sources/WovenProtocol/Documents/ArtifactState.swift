@@ -7,7 +7,7 @@ public struct ArtifactStateEntry: Codable, Equatable, Sendable {
   public var value: JSONValue?
   /// At least 1, and it only ever increases for a key while its entry is retained.
   public var version: Int
-  /// Stamped by the writing host; no edit can supply it.
+  /// Stamped by the writing server; no edit can supply it.
   public var updatedAt: String
 
   public init(value: JSONValue?, version: Int, updatedAt: String) {
@@ -35,7 +35,7 @@ public struct ArtifactStateEntry: Codable, Equatable, Sendable {
 }
 
 /// One key's compare-and-swap. It names no document and carries no timestamp: the
-/// view binds the Artifact, and the host stamps the write.
+/// view binds the Artifact, and the server stamps the write.
 public struct ArtifactStateEdit: Codable, Equatable, Sendable {
   public enum Action: String, Codable, Sendable { case set, remove }
   public var action: Action

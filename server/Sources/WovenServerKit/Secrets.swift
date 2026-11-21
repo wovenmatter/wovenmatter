@@ -63,7 +63,7 @@ public final class FileSecretStore: SecretStore {
 }
 
 #if canImport(Security)
-/// Secrets as generic passwords in the login Keychain, kept on this device
+/// Secrets as generic passwords in the login Keychain, kept on this Mac
 /// only. `account` separates one data folder's machine from another's.
 public struct KeychainSecretStore: SecretStore {
   private let service = "Woven Matter"

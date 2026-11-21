@@ -4,7 +4,7 @@ public enum BoardItemRole: String, Codable, CaseIterable, Sendable { case conten
 public enum BoardTaskStatus: String, Codable, CaseIterable, Sendable { case todo, doing, blocked, done }
 public enum BoardReviewState: String, Codable, CaseIterable, Sendable { case needed, approved, dismissed }
 
-/// Attribution for people reading a Board. It is stamped by the writing host and
+/// Attribution for people reading a Board. It is stamped by the writing server and
 /// never authenticates anyone or grants any capability.
 public struct BoardActor: Codable, Equatable, Sendable {
   public enum Kind: String, Codable, Sendable { case user, session, outside }
@@ -119,7 +119,7 @@ public struct BoardTaskAssignee: Codable, Equatable, Identifiable, Sendable {
     }
   }
 
-  /// A conversation UUID that every host derives the same way from one assignment.
+  /// A conversation UUID that every machine derives the same way from one assignment.
   public static func conversationID(for assigneeID: String) -> String {
     var bytes = Array(SHA256.hash(data: Data("woven-page-task\u{0}\(assigneeID)".utf8)).prefix(16))
     bytes[6] = (bytes[6] & 0x0f) | 0x50; bytes[8] = (bytes[8] & 0x3f) | 0x80
@@ -222,7 +222,7 @@ public struct BoardItem: Codable, Equatable, Sendable {
 }
 
 /// Supplied fields change; omitted fields stay as they are. There are deliberately
-/// no provenance fields: the writing host stamps those from the actual caller.
+/// no provenance fields: the writing server stamps those from the actual caller.
 public struct BoardItemPatch: Codable, Equatable, Sendable {
   public var title: String?
   /// Replaces an inline text card's text. Linked assets are edited at their original.
@@ -232,7 +232,7 @@ public struct BoardItemPatch: Codable, Equatable, Sendable {
   public var status: BoardTaskStatus?
   public var outcome: String?
   public var details: String?
-  /// Replaces the task's assignees. Hosts check who may change which assignee.
+  /// Replaces the task's assignees. Servers check who may change which assignee.
   public var assignees: [BoardTaskAssignee]?
   public var clearTask: Bool?
   public var review: BoardReviewState?

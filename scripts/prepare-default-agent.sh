@@ -77,7 +77,7 @@ codesign --verify --strict "$claude_binary"
 mkdir -p "$output/bin"
 cp "$cache/bin/node" "$output/bin/node"
 cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"
-# SDK maintenance runs npm with the signed bundled Node, without relying on a host install.
+# SDK maintenance runs npm with the signed bundled Node, without relying on a system install.
 mkdir -p "$output/lib/npm"
 rsync -a --delete "${private_npm%/bin/npm}/lib/node_modules/npm/" "$output/lib/npm/"
 cp "$npm_provenance" "$output/lib/npm/woven-provenance.json"

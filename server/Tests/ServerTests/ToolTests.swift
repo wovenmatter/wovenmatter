@@ -55,9 +55,9 @@ private func messageFromAnotherSession(_ client: Client, in sessionID: String) a
 
 @Test(.timeLimit(.minutes(1)))
 func aSessionIsRefusedTheToolsOfAGroupItMayNotUse() async throws {
-  let host = try await TestServer.start(name: "Studio")
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(name: "Studio")
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let caller = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Planner"))
   let target = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
   _ = try await client.call(UpdateSession(sessionID: caller.id, tools: [.notes]))
@@ -98,9 +98,9 @@ func aToolForAnotherMachineIsForwardedToItsOwner() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func aUIToolFailsCleanlyWithNoUIConnected() async throws {
-  let host = try await TestServer.start(name: "Studio")
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(name: "Studio")
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Browsing"))
 
   let call = try await callTool(client, from: session.id, "browser", #"{"action":"tabs"}"#)
@@ -110,9 +110,9 @@ func aUIToolFailsCleanlyWithNoUIConnected() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func aPreviewIsCarriedOutByThisMacsUIAndFailsPlainlyWithoutIt() async throws {
-  let host = try await TestServer.start(name: "Studio")
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(name: "Studio")
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Charts"))
   let image = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).png")
   try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: image)

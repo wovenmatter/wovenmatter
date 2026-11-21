@@ -28,7 +28,7 @@ public protocol Tailnet: Sendable {
   func machines() async throws -> [TailnetMachine]
   /// This machine on the tailnet: its name and the address to listen on.
   func thisMachine() async throws -> TailnetMachine
-  /// The other computers of the tailnet that are online now, for Find Devices.
+  /// The other computers of the tailnet that are online now, for adding a workspace.
   func devices() async throws -> [TailnetDevice]
 }
 

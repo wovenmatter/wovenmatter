@@ -37,20 +37,20 @@ private func fakeRuntime(store: URL) throws -> ACPRuntime {
   }, statusCheck: { RuntimeStatus(runtime: .codex, name: "Fake", installed: true) }, installer: {})
 }
 
-private struct Host {
+private struct TestMachine {
   let server: WovenServer
   let folder: URL
   let socket: String
 
   static func start(folder: URL? = nil, runtime: any Runtime, tailnet: StandInTailnet = StandInTailnet(),
-                    listen: Bool = false) async throws -> Host {
+                    listen: Bool = false) async throws -> TestMachine {
     let folder = folder ?? FileManager.default.temporaryDirectory.appendingPathComponent("woven-runtime-\(UUID().uuidString)")
     let socket = "/tmp/wvr-\(UUID().uuidString.prefix(8)).sock"
     var options = WovenServer.Options(dataFolder: folder, socketPath: socket, listen: listen ? ("127.0.0.1", 0) : nil,
                                       appVersion: appVersion, machineName: "test", tailnet: tailnet, runtimes: [runtime],
                                       discoveryInterval: .seconds(3600))
     options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
-    return Host(server: try await WovenServer.start(options), folder: folder, socket: socket)
+    return TestMachine(server: try await WovenServer.start(options), folder: folder, socket: socket)
   }
 
   func connect() async throws -> Client {
@@ -87,9 +87,9 @@ private func assistantTexts(_ items: [SessionItem]) -> [String] {
 func acpProcessStaysAliveAcrossTurnsAndStreamsToolsAndApprovals() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
-  let host = try await Host.start(runtime: try fakeRuntime(store: store))
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestMachine.start(runtime: try fakeRuntime(store: store))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: .codex, title: "Chat"))
   #expect(!session.directory.isEmpty && FileManager.default.fileExists(atPath: session.directory))
 
@@ -113,7 +113,7 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsAndApprovals() async throws {
   #expect(Set(items.map(\.id)).count == items.count)
 
   // Codex keeps its own history, which is where its usage is counted from.
-  let usage = try await host.server.library.rows("usage_records", where: "session_id", is: .text(session.id))
+  let usage = try await machine.server.library.rows("usage_records", where: "session_id", is: .text(session.id))
   #expect(usage.isEmpty)
 }
 
@@ -121,9 +121,9 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsAndApprovals() async throws {
 func aRuntimesQuestionReachesTheChatAndItsAnswerReturns() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
-  let host = try await Host.start(runtime: try fakeRuntime(store: store))
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestMachine.start(runtime: try fakeRuntime(store: store))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: .codex, title: "Chat"))
 
   var asked: Prompt?
@@ -144,7 +144,7 @@ func acpSessionResumesAfterRestartAndSaysWhenTheRuntimeLostIt() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
   try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
   let runtime = try fakeRuntime(store: store)
-  let first = try await Host.start(runtime: runtime)
+  let first = try await TestMachine.start(runtime: runtime)
   let client = try await first.connect()
   let kept = try await client.call(CreateSession(runtime: .codex, title: "Kept"))
   let lost = try await client.call(CreateSession(runtime: .codex, title: "Lost"))
@@ -153,7 +153,7 @@ func acpSessionResumesAfterRestartAndSaysWhenTheRuntimeLostIt() async throws {
   await first.server.stop()
 
   // The runtime loses one native session while the server is down.
-  let second = try await Host.start(folder: first.folder, runtime: runtime)
+  let second = try await TestMachine.start(folder: first.folder, runtime: runtime)
   defer { second.server.stopLater() }
   let handle = try await second.server.library.nativeSession(for: lost.id)!.handle
   try FileManager.default.removeItem(at: store.appendingPathComponent(handle))
@@ -184,7 +184,7 @@ func acpSessionResumesAfterRestartAndSaysWhenTheRuntimeLostIt() async throws {
 @Test(.timeLimit(.minutes(1)))
 func serverStoppedMidTurnLeavesOneNotice() async throws {
   let store = StandInRuntime.NativeStore()
-  let first = try await Host.start(runtime: StandInRuntime(store: store, gate: StandInRuntime.Gate()))
+  let first = try await TestMachine.start(runtime: StandInRuntime(store: store, gate: StandInRuntime.Gate()))
   let client = try await first.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
@@ -192,7 +192,7 @@ func serverStoppedMidTurnLeavesOneNotice() async throws {
   for try await event in subscription.events { if case .text = event { break } }
   await first.server.stop()
 
-  let second = try await Host.start(folder: first.folder, runtime: StandInRuntime(store: store))
+  let second = try await TestMachine.start(folder: first.folder, runtime: StandInRuntime(store: store))
   defer { second.server.stopLater() }
   let items = try await (try await second.connect()).call(SessionItems(sessionID: session.id))
   let notices = items.compactMap { if case .notice(let notice) = $0.content { notice.kind } else { nil } }
@@ -211,8 +211,8 @@ func serverStoppedMidTurnLeavesOneNotice() async throws {
 @Test(.timeLimit(.minutes(1)))
 func apiKeyIsSealedForEachMachineAndContentIsFetchedByDigest() async throws {
   let tailnetA = StandInTailnet(), tailnetB = StandInTailnet()
-  let a = try await Host.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)
-  let b = try await Host.start(runtime: StandInRuntime(), tailnet: tailnetB, listen: true)
+  let a = try await TestMachine.start(runtime: StandInRuntime(), tailnet: tailnetA, listen: true)
+  let b = try await TestMachine.start(runtime: StandInRuntime(), tailnet: tailnetB, listen: true)
   defer { a.server.stopLater(); b.server.stopLater() }
   tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: b.server.port!)])
   tailnetB.setMachines([TailnetMachine(name: "a", host: "127.0.0.1", port: a.server.port!)])

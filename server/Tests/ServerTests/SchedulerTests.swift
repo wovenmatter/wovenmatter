@@ -99,9 +99,9 @@ func runsMissedWhileTheServerWasOffRunOnceLateThenCarryOn() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func aGoalContinuesUntilTheAgentSaysItIsMet() async throws {
-  let host = try await TestServer.start(store: StandInRuntime.NativeStore())
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(store: StandInRuntime.NativeStore())
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
   _ = try await client.call(SetGoal(sessionID: session.id, goal: "The page builds."))
 
@@ -112,9 +112,9 @@ func aGoalContinuesUntilTheAgentSaysItIsMet() async throws {
   #expect(try await continuations() >= 3)
 
   // The agent calls `goal_met`, as its runtime's MCP client would.
-  let server = try await host.connect(role: .server)
+  let server = try await machine.connect(role: .server)
   let result = try await server.call(CallTool(name: "goal_met", arguments: .object(["evidence": .string("It builds.")]),
-                                              caller: ToolCaller(machineID: host.server.machineID, sessionID: session.id)))
+                                              caller: ToolCaller(machineID: machine.server.machineID, sessionID: session.id)))
   #expect(!result.isError)
   try await Task.sleep(for: .milliseconds(300))
   let settled = try await client.call(SessionItems(sessionID: session.id)).count

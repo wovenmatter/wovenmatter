@@ -154,7 +154,7 @@ public extension NoteDocument {
 
 
   /// Converts an older spatial Board deterministically: the same document always gives
-  /// the same order and IDs on every host. Purely additive to the stored layout, so
+  /// the same order and IDs on every machine. Purely additive to the stored layout, so
   /// `canvas`, `canvasSections` and `canvasConnections` stay available as references.
   func materializedPage() -> NoteDocument {
     guard kind == .canvas, pageNodes == nil else { return self }

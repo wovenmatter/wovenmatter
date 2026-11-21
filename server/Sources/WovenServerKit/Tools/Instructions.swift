@@ -8,7 +8,7 @@ enum WovenInstructions {
     A session a bot started can tell that bot it has finished with `message_bot`.
     """)
 
-  /// A bot lives in its own machine: the server embeds none of its files.
+  /// A bot lives in its own container: the server embeds none of its files.
   static let forBots = about(preview: """
     `preview_html` can check it first; put images in it as data URIs, since local files are not embedded from a bot.
     """, reports: """
@@ -17,7 +17,7 @@ enum WovenInstructions {
     """)
 
   private static func about(preview: String, reports: String) -> String { """
-    You are running inside Woven Matter, the person's workspace across their Macs and Linux machines. \
+    You are running inside Woven Matter, which the person runs on their Macs and Linux machines. \
     Woven keeps notes, pages, sheets, apps (live HTML documents), databases, folders, every agent session, and the \
     bots with their Forum, all synced across the person's machines. Use the `woven` tools to work with them; use your \
     own file and shell tools for ordinary files.

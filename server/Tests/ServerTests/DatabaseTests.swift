@@ -81,9 +81,9 @@ func writeWhileTheOwnerIsUnreachableFailsClearly() async throws {
 
 @Test(.timeLimit(.minutes(1)))
 func writesCannotEscapeTheirDatabaseAndQueriesCannotWrite() async throws {
-  let host = try await TestServer.start(name: "Studio")
-  defer { host.server.stopLater() }
-  let client = try await host.connect()
+  let machine = try await TestServer.start(name: "Studio")
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
   let database = try await client.call(CreateDatabase(name: "Readings"))
   _ = try await client.call(ExecuteDatabase(databaseID: database.id, sql: "CREATE TABLE t (n INTEGER); INSERT INTO t VALUES (1)"))
 

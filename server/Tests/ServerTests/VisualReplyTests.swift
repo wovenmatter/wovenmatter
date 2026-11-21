@@ -56,12 +56,12 @@ func everyRuntimesReportOfTheCallIsKeptWithoutTheVisualReply() {
 
 @Test(.timeLimit(.minutes(1)))
 func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsVisualReply() async throws {
-  let host = try await VisualReplyServer.start(tailnet: StandInTailnet())
-  defer { host.server.stopLater() }
-  let tools = try #require(await host.server.bots.toolsForTests)
+  let machine = try await VisualReplyServer.start(tailnet: StandInTailnet())
+  defer { machine.server.stopLater() }
+  let tools = try #require(await machine.server.bots.toolsForTests)
   let offered = tools.listing(forBots: true).compactMap { $0["name"]?.string }
   #expect(["render_html", "preview_html", "browser", "computer"].allSatisfy(offered.contains))
-  let bot = ToolCaller(machineID: host.server.machineID, botID: "b1")
+  let bot = ToolCaller(machineID: machine.server.machineID, botID: "b1")
   #expect(await tools.call("list_bots", arguments: .object([:]), caller: bot) == .error("Bots cannot use list_bots."))
 
   let image = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).png")
@@ -69,7 +69,7 @@ func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsVisualReply() asyn
   defer { try? FileManager.default.removeItem(at: image) }
   let html = "<p>Hi</p><img src=\"\(image.path)\">"
 
-  let ui = try await host.connect()
+  let ui = try await machine.connect()
   let calls = try await ui.subscribe(SubscribeUITools())
   let asked = Task { () -> UIToolCall? in
     for try await call in calls.events {
@@ -87,7 +87,7 @@ func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsVisualReply() asyn
   let result = await tools.call("render_html", arguments: .object(["html": .string(html)]), caller: bot)
   #expect(!result.isError)
   let digest = try #require(result.meta?["wovenVisualReply"]?["digest"]?.string)
-  #expect(try await host.server.library.content(digest)?.data == Data(html.utf8))
+  #expect(try await machine.server.library.content(digest)?.data == Data(html.utf8))
 }
 
 private struct VisualReplyServer {

@@ -2,7 +2,7 @@ import Foundation
 import WovenLibrary
 import WovenProtocol
 
-/// Find Devices, installing and updating the Linux server over SSH, and
+/// Finding Linux computers to add, installing and updating the Linux server over SSH, and
 /// Remove, which uninstalls a Linux machine's server before deleting the
 /// machine from every library. `install` is nil where this server carries no
 /// Linux release (on Linux, and in tests); those requests are then refused.

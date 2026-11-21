@@ -154,7 +154,7 @@ public enum ServerCommand {
   }
 }
 
-/// This computer's host name without a domain. Never waits on the network,
+/// This machine's host name without a domain. Never waits on the network,
 /// as `ProcessInfo.hostName` can under launchd.
 private func localHostName() -> String {
   var buffer = [CChar](repeating: 0, count: 256)

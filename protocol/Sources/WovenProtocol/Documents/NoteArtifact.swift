@@ -2,7 +2,7 @@ import Foundation
 
 /// A durable pointer from a note artifact to data inside a registered database.
 /// Source and database IDs remain path-free so documents can move between Macs
-/// without persisting an absolute host path.
+/// without persisting an absolute path on a machine.
 public struct DatabaseArtifactLink: Codable, Equatable, Sendable {
   public var sourceID: String
   public var databaseID: String
