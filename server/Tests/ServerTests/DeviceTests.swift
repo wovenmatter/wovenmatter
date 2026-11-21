@@ -113,6 +113,8 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   let created = toolCall(in: try await turn(#"woven create_artifact {"kind":"note","title":"Groceries","text":"Milk"}"#))
   #expect(created?.failed == false)
   #expect(try await phone.artifacts().map(\.title) == ["Groceries"])
+  // The bots' saved chats are read from the device's own library.
+  #expect(try await ui.call(ListSavedBots()).bots.isEmpty)
   #expect(try await phone.session(chat.id)?.machineID == phone.machineID)
 
   let device = try #require(try await phone.machine(phone.machineID))

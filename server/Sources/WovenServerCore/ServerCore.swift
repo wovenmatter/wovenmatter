@@ -207,6 +207,11 @@ private func registerCore(_ router: inout Router, library: Library, sessions: Se
     return Done()
   }
 
+  // The bots' chats and Forum as saved in the library, for reading while
+  // their host is away.
+  router.on(ListSavedBots.self) { _, _ in
+    try await library.savedBots()
+  }
   router.on(ListSettings.self) { _, _ in
     try await library.settings()
   }

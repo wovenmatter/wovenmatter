@@ -638,9 +638,6 @@ func registerBots(_ router: inout Router, bots: BotsHost, library: Library, sess
   router.subscription(SubscribeBots.self) { request, caller in
     try await bots.subscribe(open: request.open, caller: caller)
   }
-  router.on(ListSavedBots.self) { _, _ in
-    try await library.savedBots()
-  }
   // A bot chat's title is the runtime's (the bot's name, a thread's title),
   // so renaming one goes to the runtime, and its next push brings the title
   // here. Other changes are the library's alone. Replaces the general handler.
