@@ -12,16 +12,16 @@ runs and the harnesses installed on each, and updates them. The first row of
   restarts it, and its server with it.
 - **Update everything**, **Update just Woven Matter** and **Update just the
   harnesses**, for all your machines at once.
-- **Your devices**: each machine, this Mac first. Open one to update everything
-  on it, just Woven Matter (the Woven server on a Linux computer), or a single
+- **Your machines**: each machine, this Mac first. Open one to update everything
+  on it, just Woven Matter (the Woven server on a Linux machine), or a single
   harness. A machine that is offline shows the last version it reported.
 
 ## How machines are updated
 
 - **This Mac** updates itself with the release you install from the window
   that opens.
-- **A Linux computer** gets the server release this Mac carries. When a newer
-  release is out, update this Mac first; then update the Linux computer.
+- **A Linux machine** gets the server release this Mac carries. When a newer
+  release is out, update this Mac first; then update the Linux machine.
 - **Another Mac** updates Woven Matter on that Mac itself.
 - **Harnesses** are updated on each online machine.
 

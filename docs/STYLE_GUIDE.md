@@ -97,13 +97,13 @@ when an intentional design change is accepted.
     release is out, **Update this Mac**, the page's one primary button.
   - **Three rows with a compact Update each:** "Update everything", "Update
     just Woven Matter", and "Update just the harnesses", each subtitled with
-    what it covers across your devices. No full-width buttons, and never
+    what it covers across your machines. No full-width buttons, and never
     "fleet".
-  - **Your devices:** no subtitle. One expandable row per device, named as on
+  - **Your machines:** no subtitle. One expandable row per machine, named as on
     the tailnet, this Mac first, then other Macs, then remote workspaces. The
     closed row shows only its name, its Woven Matter or Woven server version,
-    **Bots** on the one device that runs bots, and a status; it has no Update
-    button. Opened, it lists "Update everything on this device", "Update just
+    **Bots** on the one machine that runs bots, and a status; it has no Update
+    button. Opened, it lists "Update everything on this machine", "Update just
     Woven Matter", "Update just the bots" where they run, then each harness,
     each with its own **Update**. Bots never show a version of their own.
   - **Updates run side by side:** starting one never disables the others. Only
@@ -146,7 +146,7 @@ when an intentional design change is accepted.
   composer, and Settings sections and rows. A thread sits beside its bot's main channel
   at 760 points and wider. Message actions appear on hover. Bots run on one machine.
   **Settings → Bots** holds one "Run bots on" choice (Off, This Mac, or another Mac or
-  Linux machine), the chosen machine's row, Install on another device, and a
+  Linux machine), the chosen machine's row, Install on another machine, and a
   "Versions don't match" link to Settings → Updates. Choosing a machine asks first, then turns bots off
   everywhere else; bots and their files stay where they were made. Below it, for the
   chosen machine: a "Your name" row, and a Forum section with a Pause switch and a
@@ -168,7 +168,7 @@ when an intentional design change is accepted.
   provider is one summary row showing what is connected. Choose the web search
   provider on its row, beside its key. A new account offers Choose chat models, and
   connecting one on this Mac turns on its limit checks. Keep the "Sign in on"
-  selector visible: every device keeps its own sign-ins, and each must stay
+  selector visible: every machine keeps its own sign-ins, and each must stay
   reachable. Native harnesses sign in on their own agent pages.
 - **GitHub:** one SSH key and git identity for agents and bots on every
   machine; there is no per-bot, per-workspace or per-harness GitHub key. The SSH
@@ -178,7 +178,7 @@ when an intentional design change is accepted.
   existing private key follow. The private key is never shown after saving. Git
   identity is a Name and Email form with Save identity; blank fields keep each
   machine's own git settings. With a key, Where the key goes lists New places get
-  the key, then each machine (This Mac first, other Macs, Linux workspaces) with
+  the key, then each machine (This Mac first, other Macs, Linux machines) with
   its bots indented beneath it, each with a switch on the right; a machine turned
   off turns off its bots. One note says a place turned off stops at its next git
   command, and an offline one when it's next online. There is no How it works
@@ -189,15 +189,15 @@ when an intentional design change is accepted.
   models opens the provider catalog with its filters and paging in a sheet. Guided
   setup opens that sheet after a successful sign-in or key addition.
 - **Usage:** account setup lives in Subscriptions & API Keys, linked from Limits. A
-  fixed header holds the title, the Analytics/Limits switch, and refresh. Device
+  fixed header holds the title, the Analytics/Limits switch, and refresh. Machine
   analytics never depends on limits-account switches or credentials.
   No rule lines separate the header, filter column, and report; spacing does that.
   While a range has no data yet, the page keeps its full layout with muted placeholders
   and never reads as zero. Analytics keeps a fixed filter column to the left of its scrolling report: search,
-  range, device rows, provider rows, then compact Model, Harness, and Reasoning
-  dropdowns. Device and provider rows are an intentional exception to switches for
+  range, machine rows, provider rows, then compact Model, Harness, and Reasoning
+  dropdowns. Machine and provider rows are an intentional exception to switches for
   multi-select toggles: click a row to show or hide it; a hidden row keeps its place
-  with a hollow swatch and muted text. Provider rows are the graph's legend. A device
+  with a hollow swatch and muted text. Provider rows are the graph's legend. A machine
   whose usage may be missing or old says why in its row, never showing zero. The report runs graph, breakdown
   numbers, by provider, by model, sessions, then collapsed source coverage. Sections
   stay borderless with hairline rows. Provider colors follow the provider, never rank;
@@ -215,7 +215,7 @@ when an intentional design change is accepted.
   agents; agent pages show one Woven MCP summary row for their own defaults.
 - **Permissions & Access:** Keychain and every macOS permission Woven Matter uses
   live on this one Settings page, directly after General. It opens with one sentence:
-  agents on this Mac or the user's other devices stop at a prompt here without
+  agents on this Mac or the user's other machines stop at a prompt here without
   these permissions. Everything is one section: a header with how many are not
   allowed yet and one **Allow all** button, then one row per permission with its
   System Settings name, one line saying only what it does (no instructions), and a
@@ -233,7 +233,7 @@ when an intentional design change is accepted.
   Installed harnesses are available automatically in local and remote workspaces.
   Do not add harness enable/disable, Use harness, or per-harness sidebar visibility
   controls. Installation, sign-in, and connection status communicate readiness.
-  Save remote agents in the workspace database when installed and show them on
+  Save remote agents in the library when installed and show them on
   launch, including while disconnected or awaiting sign-in. Background readiness
   checks gate execution, never sidebar membership.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
@@ -254,7 +254,7 @@ when an intentional design change is accepted.
   account"), Software, then Defaults for new chats, using the same layout for every harness. Pages have one Applies to
   selector, hidden when there is no remote workspace or local override. Keep Use shared
   chat settings inside Defaults for new chats. Changing chat inheritance must not
-  change credential selection. Pi Durable uses the sign-ins of the device it runs on,
+  change credential selection. Pi Durable uses the sign-ins of the machine it runs on,
   managed in Subscriptions & API Keys; show their labels. Explain native
   harness capability differences under How it works: reusable API keys are not the
   same as automatic credential sync, and native subscription sign-ins stay with their
@@ -297,19 +297,33 @@ when an intentional design change is accepted.
   Racing Green, lighter green, royal blue, purple, red, pink, orange, yellow, and
   black. Choices persist and may be reused across categories.
 - **Sidebar foregrounds:** use `WovenPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
-- **Workspace naming:** use Local workspace and Remote workspaces in the sidebar,
-  and Workspaces and Apple Devices for Settings pages.
-  Describe local workspaces as agents and files on this Mac, remote workspaces as
-  agents and files on remote Linux machines, and Apple devices as Macs, iPhones,
-  and iPads that share the library.
-- **Workspaces:** one list with the local workspace as a status row, remote workspaces
-  as rows that open their detail, and workspaces from other devices. Forms for adding
+- **Words:** use these the same way in the app, the docs, and everything an agent
+  or a bot reads.
+  - **Machine:** a Mac or Linux computer on your tailnet that runs Woven Matter.
+    Say machine when the text is about the thing itself: adding or removing it,
+    updating, restarting, storage, the tailnet, sync, usage per machine.
+  - **Workspace:** the place you work on a machine: its agents, folders and
+    sessions. Each machine has one. **Local workspace** is the one on this Mac; a
+    **remote workspace** is one on any other machine, Mac or Linux. Say workspace
+    when the text is about working there: the sidebar, where a session, folder or
+    database lives, which agents are available. Add workspace picks and inspects
+    a machine, then creates the workspace on it.
+  - **Host:** only the machine the bots run on, "the bots' host". Never a machine
+    in general, and never a verb: a machine runs agents.
+  - **Library:** the database that holds everything and syncs across machines.
+    Never a workspace.
+  - **Device:** only an iPhone or iPad (Settings → Apple Devices). Never a machine.
+  - **A bot's files:** what a bot keeps in its container. Never its workspace.
+  - Keep "This Mac" where the text is about the Mac itself, and All Workspaces as
+    the no-folder choice.
+- **Workspaces:** one list with the local workspace as a status row and remote workspaces
+  as rows that open their detail. Forms for adding
   a workspace open from Add workspace. A remote workspace shows status with a Manage
   menu, its agents, and Details; do not lay actions out as a strip of buttons.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
-- **Devices:** every machine on your tailnet that runs the Woven server reaches all
-  workspaces; do not add per-device workspace permissions or
+- **Machines:** every machine on your tailnet that runs the Woven server reaches all
+  workspaces; do not add per-machine workspace permissions or
   execution-sharing switches.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
@@ -356,7 +370,7 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
-- **Artifacts:** call everything people create in a workspace an **artifact**:
+- **Artifacts:** call everything people create in the library an **artifact**:
   Notes, Pages, Sheets and Apps. Never call them assets in the interface. Label the
   creation picker **New Artifact** and the Library's general saved-output
   collection **Saved Artifacts**. New Artifact lists Note, Page, Sheet, App, each

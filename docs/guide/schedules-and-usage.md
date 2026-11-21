@@ -10,7 +10,7 @@ set any of these up with the Woven tools; agents can also list, change and
 delete them.
 
 Each entry belongs to the machine that will run it, and only that machine's
-Woven server fires it. A Linux computer keeps running its entries while your
+Woven server fires it. A Linux machine keeps running its entries while your
 Macs are off. On a Mac, entries fire while its Woven server is running.
 
 If a machine was off when an entry came due, the entry runs once when the

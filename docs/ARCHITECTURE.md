@@ -66,9 +66,18 @@ A machine is a Mac or Linux computer on the person's tailnet that runs the
 server. It has a permanent identifier, created on first start, and a name that
 starts as its tailnet name and can be renamed; the name syncs.
 
+The words for these things are fixed, in the code and in everything a person
+or an agent reads. A **machine** is the computer itself. Its **workspace** is
+where the person works on it: its agents, folders and sessions. Each machine
+has one; the **local workspace** is on the machine in use, and every other
+machine's is a **remote workspace**. The **host** is only the machine the bots
+run on. The **library** is the synced database, never a workspace. A
+**device** is only an iPhone or iPad. What a bot keeps in its container is its
+**files**.
+
 - **Joining is automatic.** A server looks at the tailnet's machine list, tries
   the Woven port on each, and treats those that answer as Woven machines.
-- **Find Devices** lists Linux machines on the tailnet without a server and
+- **Add workspace** lists Linux computers on the tailnet without a server and
   installs and starts one over SSH. The SSH host and user given at install
   are kept on the machine's row, so any Mac reaches it later exactly as the
   person's SSH settings say. Before each later command over SSH, the machine
@@ -391,7 +400,7 @@ transfer.
   chats, memories, the Forum, schedules) and the model profiles. Nothing in it
   is tied to that machine. Each bot's files are a volume in that machine's
   container engine and can be written out and read back as an archive.
-- What hosts the bots (the engine, the Mac's virtual machine, sockets, logs) is
+- What runs the bots (the engine, the Mac's virtual machine, sockets, logs) is
   kept outside the bots folder and is never moved.
 - **Transfer** moves the bots to another machine, in this order: the old host
   stops the bots (running turns are interrupted); writes each bot's files out

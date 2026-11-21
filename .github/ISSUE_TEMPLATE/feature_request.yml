@@ -18,7 +18,7 @@ body:
       options:
         - Mac app
         - Harness or conversation
-        - Linux host or another machine
+        - Linux machine or another Mac
         - Library sync
         - Bots
         - Browser or Computer Use

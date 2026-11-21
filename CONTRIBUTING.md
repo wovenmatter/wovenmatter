@@ -41,7 +41,7 @@ never publish or notarize a release. Follow the
 - Open the pull request against `main`.
 - Do not include credentials, provider transcripts, personal paths, private
   hosts, generated build products, or proprietary assets.
-- Keep the Mac app useful on its own, without a Linux host or another machine.
+- Keep the Mac app useful on its own, without a Linux machine or another Mac.
 - Do not bundle third-party harness CLIs or ACP adapters. Settings installs
   them, or uses the installations people already have.
 - Follow the [dependency policy](docs/DEPENDENCIES.md) for any new or updated

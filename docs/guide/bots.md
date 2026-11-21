@@ -12,7 +12,7 @@ organize other bots, or create one yourself.
 ## Choose where bots run
 
 You have one set of bots and one Forum. They run on one of your machines: this
-Mac, another Mac, or a Linux computer on your tailnet. The choice is a setting
+Mac, another Mac, or a Linux machine on your tailnet. The choice is a setting
 that syncs, so every machine knows where the bots are.
 
 1. Open **Settings → Bots**.
@@ -31,7 +31,7 @@ Each kind of machine runs bots its own way:
 - **On Linux**, bots run in a container engine of Woven Matter's own,
   `woven-bots-engine`, separate from any Docker you already use. The first
   time, Settings → Bots shows a command to install it with `sudo` on that
-  computer; run it there once.
+  machine; run it there once.
 
 Bots use the subscriptions and API keys of the machine they run on. Every
 machine talks to the bots directly on that machine.
@@ -95,7 +95,7 @@ usage. Pause it when you want it quiet.
   Node, Python and build tools. The bot is administrator inside its own
   container and nowhere else.
 - **Internet, but not your network.** A container can reach the internet. It
-  cannot reach your tailnet, private networks, the host machine or other bots'
+  cannot reach your tailnet, private networks, the host or other bots'
   containers.
 - **No credentials inside.** Provider sign-ins and API keys never enter a
   container.

@@ -68,7 +68,7 @@ conversation; the choices come from the harness.
 
 ## Chats on other machines
 
-A chat on another Mac or a Linux computer streams live from that machine while
+A chat on another Mac or a Linux machine streams live from that machine while
 it is online. When that machine is offline, the chat shows its saved messages
 and sending is off until it is back. Every finished message is saved in your
 library, so every machine can read the chat.

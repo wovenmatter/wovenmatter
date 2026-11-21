@@ -40,7 +40,7 @@ beside your chats as your work grows.
 
 ## Add more machines
 
-Woven Matter works on one Mac by itself. Any other Mac or Linux computer on
+Woven Matter works on one Mac by itself. Any other Mac or Linux machine on
 your Tailscale network that runs Woven Matter joins your machines by itself,
 and Woven Matter can install its server on a Linux computer for you over SSH.
 See [Your machines](machines.md).

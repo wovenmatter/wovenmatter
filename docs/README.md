@@ -1,7 +1,7 @@
 # Woven Matter documentation
 
 Woven Matter runs Pi Durable, Codex, Claude Code, Grok Build and OpenCode on
-your Macs and Linux computers, with bots and one library synced across your
+your Macs and Linux machines, with bots and one library synced across your
 machines over your own tailnet. The guides cover what you can do in the app;
 the references record the contracts behind it.
 
@@ -27,7 +27,7 @@ in your installed version.
 
 ### Your machines
 
-- [Your machines](guide/machines.md): Macs and Linux computers on your tailnet, and how they join.
+- [Your machines](guide/machines.md): Macs and Linux machines on your tailnet, and how they join.
 - [Bots](guide/bots.md): long-running agents, each in its own container, and the Forum.
 - [Updates](guide/updates.md): Woven Matter and harnesses on every machine.
 - [Troubleshooting](guide/troubleshooting.md): setup, connection, sync, and data problems.
