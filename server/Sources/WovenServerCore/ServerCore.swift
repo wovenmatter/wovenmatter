@@ -46,6 +46,7 @@ public final class ServerCore: Sendable {
   public let hello: Hello
   package let sessions: SessionManager
   package let listening = Listening()
+  private let announcements = Announcements()
   private let router: Router
   private let titles: Titles
 
@@ -80,7 +81,8 @@ public final class ServerCore: Sendable {
     self.hello = hello
     self.sessions = sessions
     var all = Router()
-    registerCore(&all, library: library, sessions: sessions, peers: peers, appVersion: hello.appVersion,
+    registerCore(&all, library: library, sessions: sessions, peers: peers, announcements: announcements,
+                 appVersion: hello.appVersion,
                  listening: listening)
     registerFolders(&all, library: library, root: foldersRoot)
     registerArtifacts(&all, library: library, sessions: sessions)
@@ -91,6 +93,15 @@ public final class ServerCore: Sendable {
     all.add(routes)
     router = all
     titles = Titles(library: library, sessions: sessions, runtime: titleRuntime, scratch: scratch)
+  }
+
+  /// Tells every `library.subscribe` subscriber that what these tables'
+  /// requests report has changed although the library has not: on a
+  /// device, `machines` when it learns a machine's address. The event
+  /// carries the current `changed`, so a server that pulls on it finds
+  /// nothing new.
+  public func announce(_ tables: [String]) {
+    announcements.announce(tables)
   }
 
   /// Serves one connection until it closes: the client's hello, then its
@@ -110,6 +121,7 @@ public final class ServerCore: Sendable {
 /// The routes every host serves the same way: the library, sessions on this
 /// host, sync and content.
 private func registerCore(_ router: inout Router, library: Library, sessions: SessionManager, peers: any Peers,
+                          announcements: Announcements,
                           appVersion: String, listening: Listening) {
   let thisMachine = library.machineID
   /// Two machines on different app releases do not sync.
@@ -227,16 +239,32 @@ private func registerCore(_ router: inout Router, library: Library, sessions: Se
     let changes = library.changes()
     let (events, continuation) = AsyncStream<LibraryEvent>.makeStream(bufferingPolicy: .bufferingNewest(1))
     let first = library.changed
+    // A commit and an announcement both wake the one loop, which folds
+    // whatever came since it last told the subscriber into one event.
+    let (wakes, wake) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let listening = Task {
+      for await _ in changes { wake.yield() }
+      wake.finish()
+    }
+    let announced = announcements.listen { wake.yield() }
     let forward = Task {
       var last = first
-      for await changed in changes {
-        let tables = (try? await library.tablesChanged(after: last)) ?? Schema.synced.map(\.name)
+      for await _ in wakes {
+        let changed = library.changed
+        var tables = changed > last ? (try? await library.tablesChanged(after: last)) ?? Schema.synced.map(\.name) : []
         last = changed
+        tables += announced.take().subtracting(tables).sorted()
+        guard !tables.isEmpty else { continue }
+        // An announcement moves no counter: a server that pulls on it finds nothing new.
         continuation.yield(LibraryEvent(changed: changed, tables: tables))
       }
       continuation.finish()
     }
-    continuation.onTermination = { _ in forward.cancel() }
+    continuation.onTermination = { _ in
+      forward.cancel()
+      listening.cancel()
+      announcements.stop(announced)
+    }
     return (LibraryEvent(changed: first, tables: Schema.synced.map(\.name)), events.throwing)
   }
   router.on(SyncPull.self) { request, caller in
@@ -266,5 +294,40 @@ private func registerCore(_ router: inout Router, library: Library, sessions: Se
       return chunk
     }
     throw ProtocolError(.notFound, "No content \(request.digest).")
+  }
+}
+
+/// The `library.subscribe` subscribers' announced tables, each waiting to be told.
+private final class Announcements: Sendable {
+  final class Listener: Sendable {
+    let id = UUID()
+    let wake: @Sendable () -> Void
+    private let tables = Mutex<Set<String>>([])
+
+    init(wake: @escaping @Sendable () -> Void) { self.wake = wake }
+
+    func add(_ names: [String]) { tables.withLock { $0.formUnion(names) } }
+    /// The tables announced since the last take.
+    func take() -> Set<String> { tables.withLock { tables in defer { tables = [] }; return tables } }
+  }
+
+  private let listeners = Mutex<[UUID: Listener]>([:])
+
+  func listen(_ wake: @escaping @Sendable () -> Void) -> Listener {
+    let listener = Listener(wake: wake)
+    listeners.withLock { $0[listener.id] = listener }
+    return listener
+  }
+
+  func stop(_ listener: Listener) {
+    _ = listeners.withLock { $0.removeValue(forKey: listener.id) }
+  }
+
+  func announce(_ tables: [String]) {
+    guard !tables.isEmpty else { return }
+    for listener in listeners.withLock({ Array($0.values) }) {
+      listener.add(tables)
+      listener.wake()
+    }
   }
 }

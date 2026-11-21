@@ -81,6 +81,12 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   Task { await core.serve(coreEnd, origin: .local) }
   let ui = Client(transport: uiEnd)
   _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: appVersion))
+  // What `machines.list` reports can change with no library write; the host says so.
+  let library = try await ui.subscribe(SubscribeLibrary())
+  core.announce(["machines"])
+  var heard = library.events.makeAsyncIterator()
+  #expect(try await heard.next() == LibraryEvent(changed: library.reply.changed, tables: ["machines"]))
+  try await ui.unsubscribe(library.id)
   let chat = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Quick Chat"))
   let watching = try await ui.subscribe(SubscribeSession(sessionID: chat.id))
   var events = watching.events.makeAsyncIterator()
