@@ -111,18 +111,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Maintenance checks Cua's non-nightly release channel (upstream marks plain
   SemVer driver releases as GitHub prereleases; they are stable) and refreshes
   every record and notice together.
-- **Pi family and Chord** must resolve to one release. Pi Durable's
-  `package.json` carries consumer-scoped minimum-only overrides that raise
-  pinned dependencies to tested security or compatibility floors: `undici`,
-  `minimatch` and `brace-expansion` under Pi Coding Agent; the OpenAI,
-  Anthropic, Google GenAI, Bedrock and Smithy clients under Pi AI (needed for
-  current provider APIs); and `ws` under Chord, shared with the app's own
-  `ws`. Review each override on every Pi or Chord refresh and remove it once
-  upstream itself selects an equal or newer release.
+- **Pi family and Chord** must resolve to one release, taken as upstream ships
+  it: the versions Pi and Chord pin themselves are not overridden. A known
+  vulnerability in one of those pins is reported at release time rather than
+  patched inside the package.
 - **Bots runtime** (`bots/`) declares the same Pi family, Chord, Claude Agent
-  SDK and ws selections as `default-agent`, with the same overrides, for its
-  type check and tests. At run time it never loads its own copy of the SDK
-  packages: it resolves them from the copy Pi Durable runs on that machine
+  SDK and ws selections as `default-agent` for its type check and tests. At
+  run time it never loads its own copy of the SDK packages: it resolves them from the copy Pi Durable runs on that machine
   (`bots/src/pi-durable-sdk.ts`), and packaging removes bots' own copy
   (`scripts/prune-bots-sdk.py`). One SDK update covers both. The bot base
   image and toolchain image build through the Engine API from `bots/image`

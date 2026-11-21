@@ -19,7 +19,7 @@ jobs:
     name: CI
     runs-on: ubuntu-latest
     # The Swift release recorded in server/linux-build.json.
-    container: swift:6.4.2-noble
+    container: swift:6.4.3-noble
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@main
