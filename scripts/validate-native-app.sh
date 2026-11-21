@@ -106,7 +106,8 @@ test ! -e "$bots/node_modules/typescript"
 test -f "$bots/node_modules/zod/package.json"
 test ! -e "$bots/node_modules/@anthropic-ai"
 test ! -e "$bots/node_modules/@earendil-works"
-test "$("${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$bots/package.json")"
+# The bundled Node runs the bots CLI (bots have no version of their own).
+"${resources}/default-agent/bin/node" "$bots/src/cli.ts" --help | grep '^Usage: ' >/dev/null
 test -f "${resources}/harnesses/catalog.json"
 test -f "${resources}/harnesses/woven-mcp.mjs"
 test -f "${resources}/default-agent/.node-version"
