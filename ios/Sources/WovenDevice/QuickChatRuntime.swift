@@ -39,13 +39,13 @@ final class QuickChatRuntime: Runtime {
   func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
     let settings = await settings
     let offered = await providers.offered(settings: settings)
-    guard !offered.isEmpty else { throw RuntimeError.failed(signInFirst) }
+    guard !offered.isEmpty else { throw RuntimeError.unavailable(signInFirst) }
     let model = offered.first { $0.reference == start.choices.model }
       ?? offered.first { $0.reference == settings["defaultModel"]?.string } ?? offered[0]
     let platform = (try? await library.machine(library.machineID))?.platform ?? .iPhone
     let session = QuickChatSession(
       conversationID: start.nativeHandle ?? start.sessionID, runtime: self, tools: start.sessionTools,
-      instructions: QuickChatTools.instructions(device: platform, woven: nil),
+      instructions: QuickChatTools.instructions(device: platform),
       model: model, thinking: Self.thinking(start.choices.thinking, for: model), offered: offered)
     do {
       try await session.open(resume: start.nativeHandle != nil)
@@ -129,11 +129,9 @@ final class QuickChatSession: RuntimeSession {
   // MARK: Opening
 
   /// Quick Chat's own tools and the Woven tools the session may use now.
-  /// Session management stays out: from a device it reaches only the
-  /// device's own chats, which is not what Quick Chat is for.
   private func currentTools() async -> [PiToolDefinition] {
     let offered = await woven?.definitions() ?? []
-    return QuickChatTools.definitions + offered.filter { !QuickChatTools.leftOut.contains($0.name) }.map {
+    return QuickChatTools.definitions + offered.map {
       PiToolDefinition(name: $0.name, description: $0.description,
                        parameters: String(decoding: (try? JSONEncoder().encode($0.input)) ?? Data("{}".utf8), as: UTF8.self),
                        replaySafe: $0.readOnly)

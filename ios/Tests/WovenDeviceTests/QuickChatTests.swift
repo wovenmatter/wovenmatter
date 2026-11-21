@@ -8,10 +8,10 @@ import WovenProtocol
 // connection, with a scripted model in place of a provider, an in-memory
 // store in place of the Keychain, and a stand-in model catalog.
 
-private let appVersion = "test"
+let appVersion = "test"
 
 /// One scripted model reply, emitted as pi-ai events.
-private final class Reply: @unchecked Sendable {
+final class Reply: @unchecked Sendable {
   private let emit: @Sendable (String) -> Void
   private var content: [[String: Any]] = []
   private var stop = "stop"
@@ -56,7 +56,7 @@ private final class Reply: @unchecked Sendable {
 }
 
 /// The stand-in model: each request gets the next scripted reply and is kept.
-private actor Model {
+actor Model {
   typealias Step = @Sendable (Reply) async throws -> Void
   private var script: [Step] = []
   private(set) var requests: [String] = []
@@ -87,7 +87,7 @@ private actor Gate {
 }
 
 /// The device's Keychain, in memory, signed in to OpenAI with a key.
-private actor Credentials: InferenceCredentialUpdating {
+actor Credentials: InferenceCredentialUpdating {
   nonisolated let credentialStoreID = "test"
   private var secrets = ["openai": "test-key"]
   func read(connectionID: String) -> String? { secrets[connectionID] }
@@ -101,7 +101,7 @@ private actor Credentials: InferenceCredentialUpdating {
 }
 
 /// OpenAI's model catalog: one stand-in model.
-private struct Catalog: CatalogHTTPTransport {
+struct Catalog: CatalogHTTPTransport {
   func fetch(_ request: URLRequest) async throws -> CatalogHTTPResponse {
     let model: [String: Any] = ["id": "stand-in", "name": "Stand-in", "provider": "openai", "api": "openai-responses",
                                 "baseUrl": "https://api.openai.com/v1", "contextWindow": 100_000, "maxTokens": 4096,
@@ -111,7 +111,7 @@ private struct Catalog: CatalogHTTPTransport {
 }
 
 /// Every event of one session subscription, as it comes.
-private actor Recorder {
+actor Recorder {
   private(set) var events: [SessionEvent] = []
   private var task: Task<Void, Never>?
 
@@ -137,21 +137,23 @@ private actor Recorder {
   var text: String { events.map { if case .text(_, let delta) = $0 { delta } else { "" } }.joined() }
 }
 
-private struct Device {
+struct Device {
   let device: WovenDevice
   let ui: Client
   let folder: URL
 
   static func start(_ model: Model, folder: URL = FileManager.default.temporaryDirectory
-                      .appendingPathComponent("woven-device-\(UUID().uuidString)")) async throws -> Device {
-    var options = WovenDevice.Options(dataFolder: folder, deviceName: "Phone", appVersion: appVersion)
+                      .appendingPathComponent("woven-device-\(UUID().uuidString)"),
+                    release: String = appVersion, dial: Machines.Dial? = nil) async throws -> Device {
+    var options = WovenDevice.Options(dataFolder: folder, deviceName: "Phone", appVersion: release)
+    options.dial = dial
     options.platform = .iPhone
     options.credentials = Credentials()
     options.catalogTransport = Catalog()
     options.inference = { _, request, emit in try await model.infer(request, emit: emit) }
     let device = try await WovenDevice.start(options)
     let ui = Client(transport: device.connect())
-    _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI", platform: .iPhone), appVersion: appVersion))
+    _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI", platform: .iPhone), appVersion: release))
     return Device(device: device, ui: ui, folder: folder)
   }
 
@@ -176,7 +178,7 @@ private func tools(_ request: String) -> Set<String> {
   return offered
 }
 
-private func content(_ items: [SessionItem]) -> [String] {
+func content(_ items: [SessionItem]) -> [String] {
   items.map { item in
     switch item.content {
     case .userMessage(let text, _): "user: \(text)"

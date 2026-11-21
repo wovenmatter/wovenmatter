@@ -118,7 +118,7 @@ public final class WovenDevice: Sendable {
     let machines = Machines(library: library, appVersion: options.appVersion, folder: folder,
                             dial: options.dial ?? { host, port in try await SocketTransport.connect(.tcp(host: host, port: port)) })
     let core = try await ServerCore.start(library: library, appVersion: options.appVersion, runtimes: [quickChat],
-                                          dataFolder: folder, peers: machines, titleRuntime: .piDurable,
+                                          dataFolder: folder, peers: machines, titleRuntime: nil,
                                           routes: signInRoutes(providers, oauth: { InferenceOAuthSession() }))
     await machines.start()
     return Running(library: library, core: core, machines: machines)

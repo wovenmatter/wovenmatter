@@ -30,7 +30,7 @@ actor ModelServers {
     var trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
     while trimmed.hasSuffix("/") { trimmed.removeLast() }
     guard (try? InferenceURLPolicy.tailnet(trimmed)) != nil else {
-      throw ProtocolError(.badRequest, "Use the model server's Tailscale address, such as http://100.101.102.103:32100/v1.")
+      throw ProtocolError(.badRequest, "Use the model server's Tailscale address and port, with a path ending in /v1.")
     }
     let id = replacing ?? Self.prefix + UUID().uuidString.lowercased()
     var secret = key.trimmingCharacters(in: .whitespacesAndNewlines)
