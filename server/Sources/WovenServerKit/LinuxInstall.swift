@@ -137,6 +137,8 @@ struct LinuxInstall: Sendable {
         rm -rf "$node"
         mv "$root/node.next" "$node"
       fi
+      # Node must run here (a bare system can lack a library it needs) before the running server is replaced.
+      "$node/bin/node" --version >/dev/null
       # Resources.npm finds Node's npm beside the resources.
       ln -s "$node" "$root/release.next/resources/node"
       systemctl --user stop \(unit).service 2>/dev/null || true
