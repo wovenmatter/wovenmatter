@@ -3,7 +3,7 @@ import WovenLibrary
 import WovenProtocol
 
 /// The library page: files, photos and links from every chat in the library.
-func registerLibraryItems(_ router: inout Router, library: Library) {
+package func registerLibraryItems(_ router: inout Router, library: Library) {
   router.on(ListLibraryItems.self) { request, _ in
     let all = try await library.libraryItems()
     let search = request.search.trimmingCharacters(in: .whitespacesAndNewlines)

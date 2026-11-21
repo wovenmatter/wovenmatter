@@ -122,21 +122,21 @@ public enum RuntimeEvent: Sendable {
 
 /// How much of one tool call's input or output is kept, in characters: the start and the
 /// end, with a plain line saying how much was left out between them.
-enum ToolOutput {
-  static let limit = 256 << 10
+package enum ToolOutput {
+  package static let limit = 256 << 10
 
-  static func capped(_ text: String) -> String {
+  package static func capped(_ text: String) -> String {
     let scalars = text.unicodeScalars
     guard text.utf8.count > limit, scalars.count > limit else { return text }
     let keep = limit / 2
     return joined(head: String(scalars.prefix(keep)), tail: String(scalars.suffix(keep)), omitted: scalars.count - 2 * keep)
   }
 
-  static func joined(head: String, tail: String, omitted: Int) -> String {
+  package static func joined(head: String, tail: String, omitted: Int) -> String {
     head + "\n\n[\(omitted) characters left out]\n\n" + tail
   }
 
-  static func capped(_ call: ToolCall) -> ToolCall {
+  package static func capped(_ call: ToolCall) -> ToolCall {
     var call = call
     call.input = capped(call.input)
     call.output = call.output.map(capped)
@@ -156,6 +156,44 @@ public enum RuntimeError: Error, Sendable, CustomStringConvertible {
     case .failed(let message): message
     }
   }
+}
+
+/// How a runtime reaches the Woven MCP: a stdio MCP server it starts, which is
+/// a bridge to this server's tool socket, and Woven's instructions for its
+/// own instruction mechanism.
+public struct ToolAccess: Sendable, Hashable {
+  public var command: String
+  public var arguments: [String]
+  public var environment: [String: String]
+  public var instructions: String
+
+  package init(command: String, arguments: [String], environment: [String: String], instructions: String) {
+    self.command = command
+    self.arguments = arguments
+    self.environment = environment
+    self.instructions = instructions
+  }
+
+  /// As ACP's `mcpServers` lists a stdio server.
+  package var acpServer: JSONValue {
+    .object(["name": .string("woven"), "command": .string(command), "args": .array(arguments.map(JSONValue.string)),
+             "env": .array(environment.sorted { $0.key < $1.key }.map {
+               .object(["name": .string($0.key), "value": .string($0.value)])
+             })])
+  }
+}
+
+/// Who a connection to the tool socket speaks for. A bridge says its key
+/// first; the key was given only to that runtime, in memory, by this server.
+package enum ToolGrant: Sendable, Hashable {
+  /// One session.
+  case session(String)
+  /// A runtime that serves several sessions through one bridge (OpenCode),
+  /// naming the native session in each call.
+  case runtime(RuntimeKind)
+  /// An agent outside Woven Matter on this machine; its bridge says no key.
+  /// It is answered only while outside agents are turned on.
+  case outside
 }
 
 public protocol Runtime: Sendable {
@@ -205,4 +243,11 @@ public protocol RuntimeSession: Sendable {
   func interrupt() async throws
   /// Ends the process. The native session stays for a later resume.
   func stop() async
+}
+
+extension RuntimeKind {
+  /// The harness keeps its own history, and its usage is counted only from
+  /// there, inside Woven Matter or not. A turn Woven Matter runs with it
+  /// writes no usage record of its own.
+  package var usageFromHistory: Bool { [.codex, .claudeCode, .grokBuild, .openCode, .piCLI].contains(self) }
 }

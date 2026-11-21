@@ -13,13 +13,13 @@ import WovenProtocol
 // - It does not continue after an interrupted or failed turn, nor while a
 //   question or approval waits. The person's next message resumes it.
 
-enum Goals {
-  static let author = ItemAuthor(botID: nil, name: "Goal", source: .goal)
+package enum Goals {
+  package static let author = ItemAuthor(botID: nil, name: "Goal", source: .goal)
 
   /// What the chat shows for a turn that continues toward the goal.
-  static let continuedText = "Continue toward the goal."
+  package static let continuedText = "Continue toward the goal."
 
-  static func start(_ goal: String) -> String {
+  package static func start(_ goal: String) -> String {
     """
     Work toward this goal until it is met:
 
@@ -30,7 +30,7 @@ enum Goals {
     """
   }
 
-  static func continuation(_ goal: String) -> String {
+  package static func continuation(_ goal: String) -> String {
     """
     Continue working toward the goal:
 
@@ -42,7 +42,7 @@ enum Goals {
 
   /// Sets or clears a session's goal on its owner; a goal set while the
   /// session is idle starts a turn toward it.
-  static func set(_ sessionID: String, goal: String?, sessions: SessionManager, library: Library) async throws -> Session {
+  package static func set(_ sessionID: String, goal: String?, sessions: SessionManager, library: Library) async throws -> Session {
     let host = try await sessions.host(for: sessionID)
     let goal = goal?.trimmingCharacters(in: .whitespacesAndNewlines)
     let value = goal?.isEmpty == false ? goal : nil
@@ -59,7 +59,7 @@ enum Goals {
   }
 }
 
-func registerGoals(_ router: inout Router, library: Library, sessions: SessionManager) {
+package func registerGoals(_ router: inout Router, library: Library, sessions: SessionManager) {
   router.on(SetGoal.self) { request, _ in
     try await Goals.set(request.sessionID, goal: request.goal, sessions: sessions, library: library)
   }

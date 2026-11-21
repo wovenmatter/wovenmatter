@@ -4,7 +4,7 @@ import WovenProtocol
 
 /// Notes, pages, sheets and apps. Any server writes any artifact in its own
 /// library; sync carries the write to every other machine.
-func registerArtifacts(_ router: inout Router, library: Library, sessions: SessionManager) {
+package func registerArtifacts(_ router: inout Router, library: Library, sessions: SessionManager) {
   let tasks = PageTasks(library: library, sessions: sessions)
 
   router.on(ListArtifacts.self) { request, _ in

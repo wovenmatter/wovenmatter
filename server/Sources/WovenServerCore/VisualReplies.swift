@@ -1,26 +1,32 @@
 import Foundation
 import WovenProtocol
 
+/// A failure the agent reads as the tool's result.
+package struct ToolFailure: Error, CustomStringConvertible {
+  package let description: String
+  package init(_ description: String) { self.description = description }
+}
+
 /// A visual reply's HTML as an agent wrote it, made ready to show: its local
 /// images embedded.
-struct PreparedVisualReply: Sendable, Hashable {
-  var html: String
+package struct PreparedVisualReply: Sendable, Hashable {
+  package var html: String
   /// Absolute local image paths the HTML refers to that were not embedded
   /// (missing, unreadable, too large, not images, or not read at all), each
   /// once, in the order met.
-  var missingImages: [String]
+  package var missingImages: [String]
 }
 
 /// The visual replies agents publish in a chat (`render_html`) and check
 /// first (`preview_html`), on the machine where the session runs. A visual
 /// reply is not a Page artifact.
-enum VisualReplies {
+package enum VisualReplies {
   /// The most authored HTML may be, in UTF-16 code units.
-  static let authoredLimit = 512_000
+  package static let authoredLimit = 512_000
   /// The largest local image that is embedded.
-  static let imageLimit = 10 << 20
+  package static let imageLimit = 10 << 20
   /// The largest HTML once its images are embedded, in UTF-8 bytes.
-  static let embeddedLimit = 25 << 20
+  package static let embeddedLimit = 25 << 20
 
   /// Absolute local image paths: in quotes (HTML attributes, CSS, JavaScript
   /// strings and backticks), or bare in CSS `url(...)`. A path that starts
@@ -40,7 +46,7 @@ enum VisualReplies {
   /// `readingDisk` false (a bot, whose files are in its own machine, not this
   /// one) reads nothing: the HTML stays as authored and every local path is
   /// in `missingImages`.
-  static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedVisualReply {
+  package static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedVisualReply {
     guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("Give `html`.") }
     guard html.utf16.count <= authoredLimit else {
       throw ToolFailure("The visual reply is longer than 512,000 characters.")
@@ -79,7 +85,7 @@ enum VisualReplies {
   /// argument becomes its length, and the call is marked `.visualReply` so
   /// the chat shows the visual reply, not the call. Every runtime's tool calls pass here
   /// (`SessionHost`, and the bots' mirror) before they are shown or saved.
-  static func withoutVisualReply(_ call: ToolCall) -> ToolCall {
+  package static func withoutVisualReply(_ call: ToolCall) -> ToolCall {
     guard publishes(call) else { return call }
     var call = call
     call.kind = .visualReply
@@ -99,7 +105,7 @@ enum VisualReplies {
   /// `mcp.woven.render_html`, OpenCode and the bots `woven_render_html`,
   /// `woven/render_html`, `woven: render_html`). Another server's
   /// `render_html` is not Woven's.
-  static func publishes(_ call: ToolCall) -> Bool {
+  package static func publishes(_ call: ToolCall) -> Bool {
     [call.name, call.title ?? ""].contains { name in
       name.trimmingCharacters(in: .whitespaces).lowercased()
         .wholeMatch(of: #/(?:(?:.*[^a-z0-9])?woven(?:__|[_.\/:]\s*|\s+))?render_html/#) != nil
@@ -107,7 +113,7 @@ enum VisualReplies {
   }
 
   /// The HTML's own `<title>`, when it has a non-empty one, in one line.
-  static func title(of html: String) -> String? {
+  package static func title(of html: String) -> String? {
     guard let match = html.firstMatch(of: #/(?is)<title\b[^>]*>(.*?)</title\s*>/#) else { return nil }
     let text = String(match.1).split(whereSeparator: \.isWhitespace).joined(separator: " ")
       .replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&lt;", with: "<")
@@ -140,7 +146,7 @@ enum VisualReplies {
   }
 
   /// The image type the bytes' signature says, or nil when they are not an image.
-  static func imageType(_ data: Data) -> String? {
+  package static func imageType(_ data: Data) -> String? {
     let bytes = [UInt8](data.prefix(12))
     func starts(_ prefix: [UInt8], at offset: Int = 0) -> Bool {
       bytes.count >= offset + prefix.count && Array(bytes[offset..<offset + prefix.count]) == prefix

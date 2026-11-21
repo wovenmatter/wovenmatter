@@ -3,11 +3,13 @@
 import PackageDescription
 
 // The background server. Depends on the library and the protocol. The Mac
-// app links `WovenServerKit` only at its server entry point.
+// app links `WovenServerKit` only at its server entry point; an iPhone or
+// iPad runs `WovenServerCore` in the app.
 let package = Package(
   name: "WovenServer",
-  platforms: [.macOS(.v26)],
+  platforms: [.macOS(.v26), .iOS(.v26)],
   products: [
+    .library(name: "WovenServerCore", targets: ["WovenServerCore"]),
     .library(name: "WovenServerKit", targets: ["WovenServerKit"]),
     .executable(name: "woven-server", targets: ["woven-server"]),
     .executable(name: "woven-probe", targets: ["woven-probe"])
@@ -21,9 +23,22 @@ let package = Package(
     .package(url: "https://github.com/apple/swift-crypto.git", "5.1.2"..<"1000.0.0")
   ],
   targets: [
+    // The portable core: serving connections, the routes over the library,
+    // and session hosting behind the runtime interface. Mac, Linux and iOS.
+    .target(
+      name: "WovenServerCore",
+      dependencies: [
+        .product(name: "WovenProtocol", package: "protocol"),
+        .product(name: "WovenLibrary", package: "library")
+      ],
+      swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+    ),
+    // Everything that needs a machine: listeners, the tailnet, peers, child
+    // processes, bots, secrets, installs. Mac and Linux.
     .target(
       name: "WovenServerKit",
       dependencies: [
+        "WovenServerCore",
         .product(name: "WovenProtocol", package: "protocol"),
         .product(name: "WovenLibrary", package: "library"),
         .product(name: "NIOCore", package: "swift-nio"),

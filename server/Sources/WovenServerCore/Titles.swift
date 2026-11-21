@@ -4,11 +4,11 @@ import WovenLibrary
 import WovenProtocol
 
 /// Hears the person's first message in each session.
-final class FirstMessageHook: Sendable {
+package final class FirstMessageHook: Sendable {
   private let action = Mutex<(@Sendable (String, String) -> Void)?>(nil)
 
-  func set(_ value: @escaping @Sendable (_ sessionID: String, _ text: String) -> Void) { action.withLock { $0 = value } }
-  func tell(_ sessionID: String, _ text: String) { action.withLock { $0 }?(sessionID, text) }
+  package func set(_ value: @escaping @Sendable (_ sessionID: String, _ text: String) -> Void) { action.withLock { $0 = value } }
+  package func tell(_ sessionID: String, _ text: String) { action.withLock { $0 }?(sessionID, text) }
 }
 
 /// Names a new chat from the person's first message, the same way for every
@@ -16,19 +16,19 @@ final class FirstMessageHook: Sendable {
 /// title runtime (Codex, with `titles.model` and `titles.thinking`) is asked
 /// for a short title, which replaces the chat's own unless it was renamed in
 /// the meantime.
-final class Titles: Sendable {
-  static let enabledKey = "titles.enabled"
-  static let modelKey = "titles.model"
-  static let thinkingKey = "titles.thinking"
+package final class Titles: Sendable {
+  package static let enabledKey = "titles.enabled"
+  package static let modelKey = "titles.model"
+  package static let thinkingKey = "titles.thinking"
   /// How long the title runtime may take.
-  static let limit = Duration.seconds(90)
+  package static let limit = Duration.seconds(90)
 
   private let library: Library
   private let sessions: SessionManager
   private let runtime: RuntimeKind
   private let scratch: URL
 
-  init(library: Library, sessions: SessionManager, runtime: RuntimeKind, scratch: URL) {
+  package init(library: Library, sessions: SessionManager, runtime: RuntimeKind, scratch: URL) {
     self.library = library
     self.sessions = sessions
     self.runtime = runtime
@@ -85,7 +85,7 @@ final class Titles: Sendable {
 
   /// The title from the runtime's reply: its JSON `title`, else its first
   /// line, without quotes or a closing full stop, at most 50 characters.
-  static func sanitize(_ raw: String) -> String {
+  package static func sanitize(_ raw: String) -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     func title(_ text: Substring) -> String? {
       guard let data = text.data(using: .utf8),
@@ -104,7 +104,7 @@ final class Titles: Sendable {
     return String(normalized.prefix(47)).trimmingCharacters(in: .whitespaces) + "…"
   }
 
-  static let instructions = """
+  package static let instructions = """
     Generate a short title that helps the user recognize this conversation later.
     Return only JSON in this form: {"title":"..."}.
     Aim for 3 to 8 words and fewer than 40 characters.

@@ -8,37 +8,6 @@ import Darwin
 import Glibc
 #endif
 
-/// How a runtime reaches the Woven MCP: a stdio MCP server it starts, which is
-/// a bridge to this server's tool socket, and Woven's instructions for its
-/// own instruction mechanism.
-public struct ToolAccess: Sendable, Hashable {
-  public var command: String
-  public var arguments: [String]
-  public var environment: [String: String]
-  public var instructions: String
-
-  /// As ACP's `mcpServers` lists a stdio server.
-  var acpServer: JSONValue {
-    .object(["name": .string("woven"), "command": .string(command), "args": .array(arguments.map(JSONValue.string)),
-             "env": .array(environment.sorted { $0.key < $1.key }.map {
-               .object(["name": .string($0.key), "value": .string($0.value)])
-             })])
-  }
-}
-
-/// Who a connection to the tool socket speaks for. A bridge says its key
-/// first; the key was given only to that runtime, in memory, by this server.
-enum ToolGrant: Sendable, Hashable {
-  /// One session.
-  case session(String)
-  /// A runtime that serves several sessions through one bridge (OpenCode),
-  /// naming the native session in each call.
-  case runtime(RuntimeKind)
-  /// An agent outside Woven Matter on this machine; its bridge says no key.
-  /// It is answered only while outside agents are turned on.
-  case outside
-}
-
 /// The keys of this server's tool socket.
 final class ToolKeys: Sendable {
   let socketPath: String

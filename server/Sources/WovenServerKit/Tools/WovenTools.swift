@@ -51,12 +51,6 @@ struct Arguments: Sendable {
   subscript(_ key: String) -> JSONValue? { value[key] }
 }
 
-/// A failure the agent reads as the tool's result.
-struct ToolFailure: Error, CustomStringConvertible {
-  let description: String
-  init(_ description: String) { self.description = description }
-}
-
 /// The Woven MCP on this server: the one catalog, carried out here, with the
 /// calls that concern another machine forwarded to that machine's server and
 /// the browser and computer-use calls handed to this Mac's UI.

@@ -13,29 +13,41 @@ public struct Caller: Sendable {
 
   public var origin: Origin
   public var hello: Hello
+
+  package init(origin: Origin, hello: Hello) {
+    self.origin = origin
+    self.hello = hello
+  }
 }
 
 /// Handlers by method. Adding a request is one `on` call.
-struct Router: Sendable {
+package struct Router: Sendable {
   /// Encoded events of one subscription. The connection pulls them only as
   /// fast as it can send them; whoever produces them bounds what waits.
-  typealias Events = AsyncThrowingStream<JSONValue, any Error>
+  package typealias Events = AsyncThrowingStream<JSONValue, any Error>
 
-  enum Outcome: Sendable {
+  package enum Outcome: Sendable {
     case reply(JSONValue)
     case subscription(JSONValue, Events)
   }
 
-  typealias Handler = @Sendable (JSONValue, Caller) async throws -> Outcome
+  package typealias Handler = @Sendable (JSONValue, Caller) async throws -> Outcome
   private var handlers: [String: Handler] = [:]
 
-  mutating func on<R: Request>(_ type: R.Type, _ handle: @escaping @Sendable (R, Caller) async throws -> R.Reply) {
+  package init() {}
+
+  /// Adds `other`'s handlers; one for a method already here replaces it.
+  package mutating func add(_ other: Router) {
+    handlers.merge(other.handlers) { _, replacement in replacement }
+  }
+
+  package mutating func on<R: Request>(_ type: R.Type, _ handle: @escaping @Sendable (R, Caller) async throws -> R.Reply) {
     handlers[R.method] = { params, caller in
       .reply(try JSONValue(encoding: try await handle(try Self.decode(R.self, params), caller)))
     }
   }
 
-  mutating func subscription<S: Subscription>(
+  package mutating func subscription<S: Subscription>(
     _ type: S.Type, _ handle: @escaping @Sendable (S, Caller) async throws -> (S.Reply, AsyncThrowingStream<S.Event, any Error>)
   ) {
     handlers[S.method] = { params, caller in
@@ -46,7 +58,7 @@ struct Router: Sendable {
     }
   }
 
-  func handle(_ method: String, _ params: JSONValue, _ caller: Caller) async throws -> Outcome {
+  package func handle(_ method: String, _ params: JSONValue, _ caller: Caller) async throws -> Outcome {
     guard let handler = handlers[method] else { throw ProtocolError(.unknownMethod, "No method \(method).") }
     return try await handler(params, caller)
   }
@@ -67,7 +79,7 @@ private final class IteratorBox<Element: Sendable>: @unchecked Sendable {
 
 extension AsyncStream where Element: Sendable {
   /// The same events as a stream that never fails.
-  var throwing: AsyncThrowingStream<Element, any Error> {
+  package var throwing: AsyncThrowingStream<Element, any Error> {
     let box = PlainIteratorBox(makeAsyncIterator())
     return AsyncThrowingStream(unfolding: { await box.next() })
   }
@@ -81,7 +93,7 @@ private final class PlainIteratorBox<Element: Sendable>: @unchecked Sendable {
 
 extension ProtocolError {
   /// Any error as the protocol reports it.
-  init(_ error: any Error) {
+  package init(_ error: any Error) {
     switch error {
     case let error as ProtocolError:
       self = error
@@ -103,9 +115,9 @@ extension ProtocolError {
 /// The server's side of one connection: waits for the hello, answers it, then
 /// serves requests concurrently and forwards subscription events, each only
 /// as fast as the connection takes them.
-actor ServerConnection {
+package actor ServerConnection {
   /// How long a new connection may take to say hello.
-  static let helloLimit = Duration.seconds(10)
+  package static let helloLimit = Duration.seconds(10)
 
   private let transport: any MessageTransport
   private let router: Router
@@ -114,7 +126,7 @@ actor ServerConnection {
   private var caller: Caller?
   private var tasks: [String: Task<Void, Never>] = [:]
 
-  init(transport: any MessageTransport, router: Router, origin: Caller.Origin, hello: Hello) {
+  package init(transport: any MessageTransport, router: Router, origin: Caller.Origin, hello: Hello) {
     self.transport = transport
     self.router = router
     self.origin = origin
@@ -122,7 +134,7 @@ actor ServerConnection {
   }
 
   /// Serves until the connection closes.
-  func run() async {
+  package func run() async {
     let transport = transport
     let timer = Task {
       try await Task.sleep(for: Self.helloLimit)

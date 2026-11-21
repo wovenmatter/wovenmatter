@@ -35,6 +35,12 @@ private struct TestServer {
   }
 }
 
+/// A device's core with no servers reached.
+private struct NoPeers: Peers {
+  func reached() async -> [String: PeerStatus] { [:] }
+  func fetchContent(_ digest: String) async -> Bool { false }
+}
+
 /// The protocol error `body` failed with, or nil when it did not fail with one.
 private func refusal(_ body: () async throws -> Void) async -> ProtocolError? {
   do {
@@ -64,13 +70,29 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   await a.server.discoverMachines()
   await b.server.discoverMachines()
 
-  // A Quick Chat saved on the device, by the device's own writer.
+  // The device runs the server's core in the app, listening on nothing; its
+  // UI talks to it over an in-memory connection and holds a Quick Chat there.
   let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-device-\(UUID().uuidString)")
   let phone = try await Library.open(folder: folder, machineName: "Phone", platform: .iPhone)
-  defer { Task { await phone.close(); try? FileManager.default.removeItem(at: folder) } }
-  let chat = try await phone.createSession(runtime: .piDurable, title: "Quick Chat")
-  _ = try await phone.appendItem(sessionID: chat.id, content: .userMessage(text: "hello"))
-  _ = try await phone.appendItem(sessionID: chat.id, content: .assistantMessage(text: "hi"))
+  let core = try await ServerCore.start(library: phone, appVersion: appVersion, runtimes: [StandInRuntime()],
+                                        dataFolder: folder, peers: NoPeers())
+  defer { Task { await core.stop(); await phone.close(); try? FileManager.default.removeItem(at: folder) } }
+  let (uiEnd, coreEnd) = InMemoryTransport.pair()
+  Task { await core.serve(coreEnd, origin: .local) }
+  let ui = Client(transport: uiEnd)
+  _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: appVersion))
+  let chat = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Quick Chat"))
+  let watching = try await ui.subscribe(SubscribeSession(sessionID: chat.id))
+  _ = try await ui.call(SendTurn(sessionID: chat.id, text: "hello"))
+  var announced: [String] = []
+  for try await event in watching.events {
+    if case .itemFinished(let item) = event { announced.append(item.id) }
+    if event == .runState(.idle) { break }
+  }
+  // Each finished item is announced once and saved once, in order.
+  #expect(try await phone.items(sessionID: chat.id).map(\.id) == announced)
+  #expect(announced.count == 3)
+  #expect(try await phone.session(chat.id)?.machineID == phone.machineID)
 
   let device = try #require(try await phone.machine(phone.machineID))
   let toA = try await a.dial(Hello(role: .device, machine: device, appVersion: appVersion))
@@ -78,8 +100,8 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   defer { following.cancel() }
 
   // The device's chat reaches A, and from A a second server.
-  #expect(try await eventually { try await a.server.library.items(sessionID: chat.id).count == 2 })
-  #expect(try await eventually { try await b.server.library.items(sessionID: chat.id).count == 2 })
+  #expect(try await eventually { try await a.server.library.items(sessionID: chat.id).count == 3 })
+  #expect(try await eventually { try await b.server.library.items(sessionID: chat.id).count == 3 })
   #expect(try await b.server.library.session(chat.id)?.machineID == phone.machineID)
 
   // A note written on a server reaches the device.

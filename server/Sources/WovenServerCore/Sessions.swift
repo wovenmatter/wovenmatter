@@ -4,13 +4,14 @@ import WovenLibrary
 import WovenProtocol
 
 /// A subscriber fell too far behind; its subscription ends so it can subscribe again.
-struct SubscriberTooSlow: Error, CustomStringConvertible {
-  var description: String { "This subscriber fell too far behind. Subscribe again." }
+package struct SubscriberTooSlow: Error, CustomStringConvertible {
+  package var description: String { "This subscriber fell too far behind. Subscribe again." }
+  package init() {}
 }
 
 /// What this machine's sessions are doing, for lists: every session that is
 /// not idle, and the subscribers that hear each change.
-final class RunBoard: Sendable {
+package final class RunBoard: Sendable {
   private struct State {
     var states: [String: SessionRunState] = [:]
     var subscribers: [UUID: AsyncStream<SessionRunState>.Continuation] = [:]
@@ -18,7 +19,7 @@ final class RunBoard: Sendable {
 
   private let state = Mutex(State())
 
-  func set(_ value: SessionRunState) {
+  package func set(_ value: SessionRunState) {
     let subscribers = state.withLock { state -> [AsyncStream<SessionRunState>.Continuation] in
       let idle = value.run == .idle && !value.awaiting
       guard state.states[value.sessionID] != value, !(idle && state.states[value.sessionID] == nil) else { return [] }
@@ -29,9 +30,9 @@ final class RunBoard: Sendable {
   }
 
   /// Every session that is not idle now.
-  var current: [SessionRunState] { state.withLock { Array($0.states.values) } }
+  package var current: [SessionRunState] { state.withLock { Array($0.states.values) } }
 
-  func subscribe() -> ([SessionRunState], AsyncStream<SessionRunState>) {
+  package func subscribe() -> ([SessionRunState], AsyncStream<SessionRunState>) {
     let (stream, continuation) = AsyncStream<SessionRunState>.makeStream(bufferingPolicy: .bufferingNewest(4096))
     let id = UUID()
     let current = state.withLock { state in
@@ -45,19 +46,19 @@ final class RunBoard: Sendable {
 
 /// The configuration each runtime last reported on this machine: what a new
 /// session with it can choose from before its process has started.
-final class RuntimeConfigurations: Sendable {
+package final class RuntimeConfigurations: Sendable {
   private let known: Mutex<[RuntimeKind: SessionConfiguration]>
   /// Kept on disk, so Settings can offer a runtime's options after a restart.
   private let file: URL?
 
-  init(file: URL? = nil) {
+  package init(file: URL? = nil) {
     self.file = file
     let saved = file.flatMap { try? Data(contentsOf: $0) }
       .flatMap { try? JSONDecoder().decode([String: SessionConfiguration].self, from: $0) } ?? [:]
     known = Mutex(Dictionary(saved.map { (RuntimeKind(rawValue: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first }))
   }
 
-  func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
+  package func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
     guard !configuration.models.isEmpty || !configuration.permissionModes.isEmpty else { return }
     var configuration = configuration
     configuration.goal = nil
@@ -71,37 +72,38 @@ final class RuntimeConfigurations: Sendable {
     try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
   }
 
-  func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
+  package func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
 }
 
 /// The sessions this machine owns, each with its host while it is in use.
-actor SessionManager {
+package actor SessionManager {
   private let library: Library
   private let runtimes: [RuntimeKind: any Runtime]
   private let scratch: URL
-  private let toolKeys: ToolKeys?
+  /// The Woven MCP a runtime is given for each grant, where this host offers it.
+  private let toolAccess: (@Sendable (ToolGrant) -> ToolAccess?)?
   private var hosts: [String: SessionHost] = [:]
   private var watcher: Task<Void, Never>?
-  nonisolated let board = RunBoard()
-  nonisolated let configurations: RuntimeConfigurations
+  package nonisolated let board = RunBoard()
+  package nonisolated let configurations: RuntimeConfigurations
   /// Told of the person's first message in each session, for its title.
-  nonisolated let firstMessages = FirstMessageHook()
+  package nonisolated let firstMessages = FirstMessageHook()
 
-  init(library: Library, runtimes: [any Runtime], scratch: URL, toolKeys: ToolKeys? = nil) {
-    self.toolKeys = toolKeys
+  package init(library: Library, runtimes: [any Runtime], scratch: URL, toolAccess: (@Sendable (ToolGrant) -> ToolAccess?)? = nil) {
+    self.toolAccess = toolAccess
     self.library = library
     self.runtimes = Dictionary(runtimes.map { ($0.kind, $0) }, uniquingKeysWith: { first, _ in first })
     self.scratch = scratch
     configurations = RuntimeConfigurations(file: scratch.appendingPathComponent("runtime-options.json"))
   }
 
-  func supports(_ kind: RuntimeKind) -> Bool { runtimes[kind] != nil }
-  var allRuntimes: [any Runtime] { Array(runtimes.values) }
-  func runtime(_ kind: RuntimeKind) -> (any Runtime)? { runtimes[kind] }
+  package func supports(_ kind: RuntimeKind) -> Bool { runtimes[kind] != nil }
+  package var allRuntimes: [any Runtime] { Array(runtimes.values) }
+  package func runtime(_ kind: RuntimeKind) -> (any Runtime)? { runtimes[kind] }
 
   /// Says in each chat whose turn was cut short by the last stop that it was,
   /// then watches the library for sessions deleted elsewhere.
-  func start() async {
+  package func start() async {
     for sessionID in (try? await library.sessionsStoppedMidTurn()) ?? [] {
       try? await library.setTurnRunning(sessionID, false)
       guard (try? await library.session(sessionID)) != nil else { continue }
@@ -117,7 +119,7 @@ actor SessionManager {
   /// Creates a session on this machine, in `directory`, its folder's
   /// directory or a scratch directory of its own, and opens its runtime so
   /// the composer has the runtime's options.
-  func create(runtime kind: RuntimeKind, title: String, folderID: String?, directory chosen: String? = nil) async throws -> Session {
+  package func create(runtime kind: RuntimeKind, title: String, folderID: String?, directory chosen: String? = nil) async throws -> Session {
     guard runtimes[kind] != nil else { throw ProtocolError(.badRequest, "This machine has no \(kind.rawValue) runtime.") }
     let id = UUID().uuidString.lowercased()
     let directory: String
@@ -153,7 +155,7 @@ actor SessionManager {
   /// The host of a session this machine owns. A session another machine
   /// owns is refused with `notOwner`: its live view is on that machine. One
   /// a device owns cannot be reached at all.
-  func host(for sessionID: String) async throws -> SessionHost {
+  package func host(for sessionID: String) async throws -> SessionHost {
     if let host = hosts[sessionID] { return host }
     guard let session = try await library.session(sessionID) else {
       throw ProtocolError(.notFound, "No session \(sessionID).")
@@ -168,18 +170,18 @@ actor SessionManager {
     if let host = hosts[sessionID] { return host }
     let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
                            configurations: configurations,
-                           tools: toolKeys?.access(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)),
+                           tools: toolAccess?(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)),
                            firstMessages: firstMessages)
     hosts[sessionID] = host
     return host
   }
 
   /// Stops a session's process and forgets its host.
-  func close(_ sessionID: String) async {
+  package func close(_ sessionID: String) async {
     await hosts.removeValue(forKey: sessionID)?.stop()
   }
 
-  func closeAll() async {
+  package func closeAll() async {
     watcher?.cancel()
     let all = hosts.values
     hosts.removeAll()
@@ -200,13 +202,13 @@ actor SessionManager {
 /// item once, in the same step that announces it. Every entry point runs one
 /// at a time, in order, so a subscriber's snapshot and the events after it
 /// never overlap or leave a gap.
-actor SessionHost {
+package actor SessionHost {
   /// Events a subscriber may fall behind by before its subscription ends.
-  static let subscriberBuffer = 4096
+  package static let subscriberBuffer = 4096
   /// The most finished items a snapshot carries; older ones are paged in.
-  static let snapshotItems = 200
+  package static let snapshotItems = 200
   /// Goal turns in a row that do nothing before the goal stops continuing.
-  static let idleGoalTurnLimit = 3
+  package static let idleGoalTurnLimit = 3
 
   private let sessionID: String
   private let library: Library
@@ -247,7 +249,7 @@ actor SessionHost {
   private var overflow: [String: (head: String, tail: String, omitted: Int)] = [:]
   private let firstMessages: FirstMessageHook?
 
-  init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
+  package init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
        configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil) {
     self.firstMessages = firstMessages
     self.tools = tools
@@ -261,7 +263,7 @@ actor SessionHost {
 
   // MARK: Entry points
 
-  func subscribe() async throws -> (SessionSnapshot, AsyncThrowingStream<SessionEvent, any Error>) {
+  package func subscribe() async throws -> (SessionSnapshot, AsyncThrowingStream<SessionEvent, any Error>) {
     await enter()
     defer { leave() }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }
@@ -287,7 +289,7 @@ actor SessionHost {
   /// is what the runtime is sent in place of `text`, which is what is saved.
   /// A message sent while a turn runs steers that turn; with `steers` false
   /// it is refused as busy instead.
-  func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil,
+  package func send(_ text: String, attachments: [Attachment], author: ItemAuthor? = nil, delivered override: String? = nil,
             steers: Bool = true) async throws {
     // Sends go one at a time, through their saves, while a steer frees the
     // lane for the runtime's reply.
@@ -389,7 +391,7 @@ actor SessionHost {
   }
 
   /// The agent said the goal is met: it is cleared, and the chat says so.
-  func goalMet(_ evidence: String) async throws {
+  package func goalMet(_ evidence: String) async throws {
     await enter()
     defer { leave() }
     guard let goal = try await library.session(sessionID)?.goal else { throw ProtocolError(.notFound, "This session has no goal.") }
@@ -403,7 +405,7 @@ actor SessionHost {
   /// Saves a visual reply the agent published (`render_html`) where it came:
   /// after the text so far, which is finished as its own item, and before what
   /// the turn says next. Its content is already in the content store.
-  func publish(_ reply: VisualReply) async throws {
+  package func publish(_ reply: VisualReply) async throws {
     await enter()
     defer { leave() }
     turnActed = true
@@ -425,7 +427,7 @@ actor SessionHost {
     }
   }
 
-  func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
+  package func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
     await enter()
     defer { leave() }
     guard run != .nativeSessionGone else { throw Self.goneError }
@@ -435,7 +437,7 @@ actor SessionHost {
     return configuration
   }
 
-  func answer(promptID: String, with answer: PromptAnswer) async throws {
+  package func answer(promptID: String, with answer: PromptAnswer) async throws {
     await enter()
     defer { leave() }
     guard let live, prompts.contains(where: { $0.id == promptID }) else {
@@ -449,7 +451,7 @@ actor SessionHost {
   /// bot, is named in a notice once the turn has ended. Returns whether a
   /// turn was running.
   @discardableResult
-  func interrupt(by stopper: String? = nil) async throws -> Bool {
+  package func interrupt(by stopper: String? = nil) async throws -> Bool {
     await enter()
     defer { leave() }
     let running = run == .running
@@ -463,7 +465,7 @@ actor SessionHost {
 
   /// Stops the runtime's process; the next turn resumes the native session.
   /// A reply it cuts short is saved as far as it got, with a notice.
-  func stop() async {
+  package func stop() async {
     await enter()
     defer { leave() }
     let wasRunning = run == .running
@@ -476,7 +478,7 @@ actor SessionHost {
   }
 
   /// The session was deleted: stop the process and end every subscription.
-  func end() async {
+  package func end() async {
     await enter()
     defer { leave() }
     await shutDown()
@@ -678,7 +680,7 @@ actor SessionHost {
   }
 
   /// Tells every open view the session's goal now.
-  func goalChanged(_ goal: String?) {
+  package func goalChanged(_ goal: String?) {
     guard goal != configuration.goal else { return }
     configuration.goal = goal
     broadcast(.configuration(configuration))
@@ -877,7 +879,7 @@ actor SessionHost {
 /// owner. For a machine it is `notOwner`, naming it, so the caller asks that
 /// machine's server. A device listens on nothing, so for a device it is
 /// `ownerUnreachable`: what it owns is carried on there.
-func notOwner(_ ownerID: String, _ message: String, library: Library) async -> ProtocolError {
+package func notOwner(_ ownerID: String, _ message: String, library: Library) async -> ProtocolError {
   guard let owner = try? await library.machine(ownerID), owner.platform.isDevice else {
     return ProtocolError(.notOwner, message, machineID: ownerID)
   }

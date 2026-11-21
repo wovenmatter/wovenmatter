@@ -6,14 +6,15 @@ Woven Matter is three parts that are built and maintained separately.
   device, and the sync that keeps their copies level.
 - **The Woven Matter background server**: one process on each Mac and Linux
   machine. It owns everything that runs on that machine and is the only thing
-  that touches that machine's library.
+  that touches that machine's library. Its portable core also runs inside the
+  iPhone and iPad app.
 - **The Woven Matter UI**: a thin client. It draws what servers tell it and
-  sends what the person does. On a Mac it holds no database and runs no
-  agents.
+  sends what the person does. It holds no database and runs no agents.
 
 A Mac has the server, the library and the UI. A Linux machine has the server
-and the library. An iPhone or iPad has the UI and the library, with one
-in-app writer in place of a server; it runs Quick Chat and nothing else.
+and the library. An iPhone or iPad has the UI, the library and the server's
+core, run in the app and listening on nothing; it runs Quick Chat and
+nothing else.
 
 Tailscale is the security boundary. Every machine on the person's own tailnet
 that runs the server is one of their Woven machines.
@@ -22,10 +23,11 @@ that runs the server is one of their Woven machines.
 
 These hold everywhere. A change that breaks one is wrong even if it works.
 
-1. The UI never opens SQLite and never imports the library. It asks a server,
-   or on a device the in-app writer.
+1. The UI never opens SQLite and never imports the library. It asks a server;
+   on a device, the server's core in the app.
 2. Each library has exactly one writer, on one serial write lane: a machine's
-   server, or a device's in-app writer. Nothing else is given the file.
+   server, or on a device the server's core in the app. Nothing else is given
+   the file.
 3. No SQL triggers. Whatever a write must also do, the writer does in the same
    transaction, in code.
 4. One sync mechanism for every synced table. No per-feature channel.
@@ -50,16 +52,16 @@ These hold everywhere. A change that breaks one is wrong even if it works.
 | --- | --- | --- |
 | `protocol/` | The wire types every client and server speaks. Swift. | nothing |
 | `library/` | Schema, the writer, reads, sync. Swift, Mac, Linux and iOS. | `protocol/` |
-| `server/` | The background server. Swift, Mac and Linux. | `library/`, `protocol/` |
+| `server/` | The background server. Swift. Its core (`WovenServerCore`: connections, the routes over the library, sessions behind the runtime interface) builds for Mac, Linux and iOS; the rest (`WovenServerKit`) for Mac and Linux. | `library/`, `protocol/` |
 | `app/` | The Mac UI, and the entry point that starts the server from the signed app. | `protocol/`; `server/` only at that entry point |
 | `default-agent/` | Pi Durable, run by the server as a Node child process. | |
 | `bots/` | The bots runtime, run by the server as a Node child process. | |
 | `harnesses/` | The harness catalog and adapters. | |
-| `ios/` | The iPhone and iPad app: the UI, the in-app writer and Quick Chat. | `library/`, `protocol/` |
+| `ios/` | The iPhone and iPad app: the UI, and the host that runs the server's core and Quick Chat in the app. | `protocol/`; `library/` and the server's core only in that host |
 
 The build enforces the dependency column. View code cannot reach the library
-because nothing it can import exposes it; on a device only the in-app writer
-imports it.
+because nothing it can import exposes it; on a device only the in-app host
+(`ios/Sources/WovenDevice/`) imports the library and the core.
 
 Node is used only for the two child processes. There is no Node server.
 
@@ -130,10 +132,16 @@ machine.
   (`sync.cursor`). Rows pass on unchanged both ways, and a server announces
   pushed rows as it announces pulled ones. A device on another release does
   not sync.
-- **Quick Chat** is a Pi Durable session owned by the device. The device runs
-  the Pi Durable SDK in the app with its own provider sign-ins from its
-  Keychain, and writes each finished item once to its library. A machine shows
-  a device's session with its saved items and sending disabled.
+- **The core in the app.** The device runs the server's core, the same code a
+  machine's server is built on, listening on nothing. Its UI connects to it
+  over an in-memory connection exactly as the Mac UI connects to its own
+  server, and to other machines over WebSocket. The core hosts the device's
+  sessions and is the only writer of its library.
+- **Quick Chat** is a Pi Durable session owned by the device. The core runs
+  it through the one adapter interface, with the Pi Durable SDK in the app and
+  the device's own provider sign-ins from its Keychain, and saves each
+  finished item once, as on a machine. A machine shows a device's session with
+  its saved items and sending disabled.
 
 ## Connections
 

@@ -201,3 +201,9 @@ actor PeerSync {
     }
   }
 }
+
+extension PeerSync: Peers {
+  func reached() -> [String: PeerStatus] {
+    statuses.mapValues { PeerStatus(online: $0.online, appVersion: $0.appVersion, address: $0.machine.host, port: $0.machine.port) }
+  }
+}

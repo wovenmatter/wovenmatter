@@ -5,7 +5,7 @@ import WovenProtocol
 /// Folders: a name plus a directory on the machine that owns it. A folder is
 /// created by the server of the machine that will own it, so a new blank
 /// directory is made on that machine's own disk.
-func registerFolders(_ router: inout Router, library: Library, root: URL) {
+package func registerFolders(_ router: inout Router, library: Library, root: URL) {
   router.on(ListFolders.self) { request, _ in
     try await library.folders(machineID: request.machineID)
   }
@@ -40,9 +40,6 @@ func registerFolders(_ router: inout Router, library: Library, root: URL) {
     }
     try await library.deleteFolder(request.folderID)
     return Done()
-  }
-  router.on(ListDirectories.self) { request, _ in
-    try listDirectories(request.path)
   }
 }
 
@@ -79,29 +76,4 @@ private func makeDirectory(named name: String, in root: URL) throws -> URL {
     }
   }
   throw ProtocolError(.failed, "Could not make a directory for \(name) in \(root.path).")
-}
-
-/// At most this many directories are listed.
-private let directoryLimit = 500
-
-private func listDirectories(_ path: String?) throws -> DirectoryListing {
-  let home = FileManager.default.homeDirectoryForCurrentUser
-  let given = path?.trimmingCharacters(in: .whitespacesAndNewlines)
-  guard given.map({ $0.isEmpty || $0.hasPrefix("/") }) ?? true else {
-    throw ProtocolError(.badRequest, "\(given ?? "") is not an absolute path.")
-  }
-  let url = (given.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) } ?? home).standardizedFileURL
-  var isDirectory: ObjCBool = false
-  guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-    throw ProtocolError(.notFound, "There is no directory \(url.path) on this machine.")
-  }
-  let contents = try FileManager.default.contentsOfDirectory(
-    at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-  let directories = contents
-    .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-    .map { DirectoryListing.Entry(name: $0.lastPathComponent, path: $0.standardizedFileURL.path) }
-    .sorted { ($0.name.lowercased(), $0.name) < ($1.name.lowercased(), $1.name) }
-  let parent = url.path == "/" ? nil : url.deletingLastPathComponent().standardizedFileURL.path
-  return DirectoryListing(path: url.path, parent: parent, directories: Array(directories.prefix(directoryLimit)),
-                          truncated: directories.count > directoryLimit)
 }
