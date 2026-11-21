@@ -117,6 +117,7 @@ test -f "${resources}/default-agent/.node-version"
 python3 -I - "${resources}/linux-server" <<'PY'
 import gzip, pathlib, sys, tarfile
 root = pathlib.Path(sys.argv[1])
+MACHO = {bytes.fromhex(v) for v in ('feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}
 for arch, machine in (('x86_64', 0x3E), ('aarch64', 0xB7)):
     release = root / f'linux-{arch}'
     with gzip.open(release / 'woven-server.gz') as server:
@@ -125,6 +126,11 @@ for arch, machine in (('x86_64', 0x3E), ('aarch64', 0xB7)):
         f'linux-{arch}/woven-server.gz is not a Linux {arch} executable'
     with tarfile.open(release / 'resources.tar.gz') as resources:
         names = set(resources.getnames())
+        # No Mach-O code: Linux never runs it, and Apple's notary rejects it unsigned.
+        for member in resources.getmembers():
+            if member.isfile() and member.size >= 4:
+                with resources.extractfile(member) as file:
+                    assert file.read(4) not in MACHO, f'linux-{arch}/resources.tar.gz carries Mach-O code: {member.name}'
     for required in ('node/bin/node', 'default-agent/src/main.mjs',
                      'default-agent/node_modules/@earendil-works/pi-durable/package.json', 'harnesses/catalog.json'):
         assert required in names, f'linux-{arch}/resources.tar.gz lacks {required}'

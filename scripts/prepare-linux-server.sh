@@ -123,6 +123,16 @@ for arch in x86_64 aarch64; do
   )
   find "$resources/bots/node_modules" -type f -name '*.map' -delete
   python3 -I "$root/scripts/prune-bots-sdk.py" "$resources/bots"
+  # Packages such as pi-tui carry macOS prebuilds. A Linux machine never loads them,
+  # and Apple's notary rejects unsigned Mach-O code anywhere in the app, archives included.
+  python3 -I - "$resources" <<'PY'
+import pathlib, sys
+magic = {bytes.fromhex(v) for v in ("feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
+for path in pathlib.Path(sys.argv[1]).rglob("*"):
+    if path.is_file() and not path.is_symlink():
+        with path.open("rb") as source:
+            if source.read(4) in magic: path.unlink()
+PY
   tar -czf "$release/resources.tar.gz" -C "$resources" node default-agent harnesses bots
   echo "Built $release ($(du -sh "$release" | cut -f1))"
 done
