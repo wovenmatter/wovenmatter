@@ -13,15 +13,6 @@ public enum InferenceModelPolicy {
     "opencode-go": ["openai-completions": "https://opencode.ai/inference/go/openai/v1", "openai-responses": "https://opencode.ai/inference/go/openai/v1", "anthropic-messages": "https://opencode.ai/inference/go/anthropic"],
     "xai-api": ["openai-responses": "https://api.x.ai/v1"],
   ]
-  // OpenCode has moved its endpoints. Existing caches and pinned conversations keep the
-  // destination they were reviewed with.
-  private static let legacyEndpoints: [String: [[String: String]]] = [
-    "opencode": [["openai-completions": "https://opencode.ai/zen/v1", "openai-responses": "https://opencode.ai/zen/v1", "anthropic-messages": "https://opencode.ai/zen"]],
-    "opencode-go": [
-      ["openai-completions": "https://opencode.ai/inference/go/v1", "openai-responses": "https://opencode.ai/inference/go/v1", "anthropic-messages": "https://opencode.ai/inference/go"],
-      ["openai-completions": "https://opencode.ai/zen/go/v1", "openai-responses": "https://opencode.ai/zen/go/v1", "anthropic-messages": "https://opencode.ai/zen/go"],
-    ],
-  ]
   static func sourceProvider(_ provider: String) -> String { provider == "xai-api" ? "xai" : provider == "claude-subscription" ? "anthropic" : provider }
   public static func validate(_ model: InferenceModel, provider: String) throws {
     guard model.provider == provider, !model.id.isEmpty, model.id.utf8.count <= 512,
@@ -44,9 +35,7 @@ public enum InferenceModelPolicy {
       guard case .object = cost, validCost(cost) else { throw InferenceError.malformedResponse }
     }
     guard let endpoint = endpoints[provider]?[model.api] else { throw InferenceError.modelUnavailable }
-    let trustedEndpoint = model.baseUrl == endpoint
-      || (legacyEndpoints[provider] ?? []).contains { $0[model.api] == model.baseUrl }
-    guard trustedEndpoint, model.metadata["headers"] == nil else { throw InferenceError.invalidEndpoint }
+    guard model.baseUrl == endpoint, model.metadata["headers"] == nil else { throw InferenceError.invalidEndpoint }
   }
   static func parse(_ data: Data, provider: String) throws -> [InferenceModel] {
     guard data.count <= ProviderModelCatalog.byteLimit else { throw InferenceError.responseTooLarge }

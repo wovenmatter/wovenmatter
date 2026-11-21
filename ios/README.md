@@ -56,12 +56,8 @@ covers it.
 ## Source layout
 
 - `MobileApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
-- `LibraryClient`: durable local data, offline mutations, owner journal and
-  library membership; the desktop app uses its stream and transport types too.
 - `MobileInference`: provider connections, credentials and streaming.
-- `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
-- `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
-- `../shared`: portable note types and versioned wire contracts.
+- `PiDurableRuntime`: Quick Chat's Pi Durable, the bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
 
 Both apps compile the desktop's `WovenStyle.swift` and bundle the same
 `SharedAssets.xcassets`. Follow [the style guide](../docs/STYLE_GUIDE.md).
@@ -121,7 +117,7 @@ exported IPA before anything is uploaded:
 - the privacy manifest, exactly as described below;
 - `ITSAppUsesNonExemptEncryption` set to false;
 - no Debug-only UI fixtures or development hooks in any binary, and no
-  Python/WASM, embedded execution or background processing;
+  background processing;
 - in the IPA: one app only, an Apple Distribution signature for team
   `3M84Q9NAMN`, an App Store provisioning profile that allows TestFlight and has
   not expired, and only the expected entitlements, with debugging off.

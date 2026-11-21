@@ -12,7 +12,7 @@ public actor InferenceOAuthCredentialResolver {
     self.now = now; client = .init(transport: transport, now: now, sleep: { try await Task.sleep(for: .seconds($0)) })
   }
   public func resolve(connection: InferenceConnection, credentials: any InferenceCredentialReading) async throws -> InferenceOAuthCredential {
-    guard connection.route == .direct, InferenceOAuthSession.supports(connection.provider) else { throw InferenceOAuthError.unsupportedProvider }
+    guard InferenceOAuthSession.supports(connection.provider) else { throw InferenceOAuthError.unsupportedProvider }
     guard let raw = try await credentials.read(connectionID: connection.id) else { throw InferenceOAuthError.signInRequired }
     let saved = try InferenceOAuthCredential.decode(raw)
     guard saved.provider == connection.provider, saved.accountID == connection.accountID else { throw InferenceOAuthError.accountChanged }

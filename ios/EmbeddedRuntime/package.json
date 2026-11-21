@@ -1,9 +1,0 @@
-{
-  "name": "wovenmatter-ios-embedded-runtime",
-  "private": true,
-  "version": "1.0.0",
-  "dependencies": {
-    "pyodide": ">=314.0.8",
-    "esbuild": ">=0.28.2"
-  }
-}

@@ -105,7 +105,7 @@ final class InferenceOAuthTests: XCTestCase {
     try .init(provider: provider, access: provider == "openai-codex" ? fixtureJWT() : "fixture-access", refresh: "fixture-refresh", expires: expires, accountID: "fixture-account", bindingID: "fixture-binding")
   }
   private func connection(_ provider: String = "openai-codex") -> InferenceConnection {
-    .init(id: "fixture-key", name: "On this phone", provider: provider, accountID: "fixture-account", route: .direct, modelID: "fixture-model")
+    .init(id: "fixture-key", name: "On this phone", provider: provider, accountID: "fixture-account", modelID: "fixture-model")
   }
   private func model(_ provider: String) -> InferenceModel {
     let api = provider == "openai-codex" ? "openai-codex-responses" : provider == "claude-subscription" ? "anthropic-messages" : "openai-responses"

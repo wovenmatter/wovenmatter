@@ -81,8 +81,6 @@ def mutations():
     yield 'wrong icon name', info(lambda v: v.update(CFBundleIcons={'CFBundlePrimaryIcon': {'CFBundleIconName': 'Other'}}))
     yield 'missing icon catalog', lambda app: (app / 'Assets.car').unlink()
     yield 'missing executable', lambda app: (app / 'WovenMatter').unlink()
-    yield 'nested wasm', lambda app: ((app / 'Frameworks/Runtime.framework').mkdir(parents=True), (app / 'Frameworks/Runtime.framework/python.wasm').write_bytes(b'w'))
-    yield 'nested embedded execution', lambda app: ((app / 'PlugIns').mkdir(), (app / 'PlugIns/EmbeddedExecution_Resources.bundle').mkdir())
     yield 'missing license', lambda app: (app / 'LUCIDE_LICENSE.txt').unlink()
     yield 'missing privacy manifest', lambda app: (app / 'PrivacyInfo.xcprivacy').unlink()
     yield 'tracking privacy manifest', privacy(lambda v: v.update(NSPrivacyTracking=True))

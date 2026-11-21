@@ -4,6 +4,8 @@ import Darwin
 /// Private JSONL checkpoint filesystem. Virtual paths never expose or escape the selected
 /// conversation directory; native tools receive their own, separately scoped file access.
 final class DurableFileSystem {
+  /// The SDK's JSONL storage keeps its commit log in this file of the directory.
+  static let log = "main.jsonl"
   private let directory: URL
   private var lockDescriptor: Int32 = -1
   private let manager = FileManager.default
@@ -23,7 +25,7 @@ final class DurableFileSystem {
     guard descriptor >= 0 else { throw posixError() }
     guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
       Darwin.close(descriptor)
-      throw PiDurableRuntimeError.storageInUse
+      throw PiDurableError.inUse
     }
     lockDescriptor = descriptor
   }
@@ -31,23 +33,23 @@ final class DurableFileSystem {
     if lockDescriptor >= 0 { flock(lockDescriptor, LOCK_UN); Darwin.close(lockDescriptor); lockDescriptor = -1 }
   }
   func perform(_ operation: String, arguments: [Any]) throws -> Any {
-    guard lockDescriptor >= 0 else { throw PiDurableRuntimeError.closed }
+    guard lockDescriptor >= 0 else { throw PiDurableError.closed }
     func path(_ index: Int = 0) throws -> URL {
       guard arguments.indices.contains(index), let path = arguments[index] as? String else {
-        throw PiDurableRuntimeError.unavailable("Missing durable path")
+        throw PiDurableError.failed("Missing durable path")
       }
       return try resolve(path)
     }
     func content(_ index: Int = 1) throws -> Data {
-      guard arguments.indices.contains(index) else { throw PiDurableRuntimeError.unavailable("Missing file content") }
+      guard arguments.indices.contains(index) else { throw PiDurableError.failed("Missing file content") }
       if let text = arguments[index] as? String { return Data(text.utf8) }
       if let bytes = arguments[index] as? [UInt8] { return Data(bytes) }
-      throw PiDurableRuntimeError.unavailable("Invalid file content")
+      throw PiDurableError.failed("Invalid file content")
     }
     switch operation {
     case "absolutePath": return virtual(try path())
     case "joinPath":
-      guard let parts = arguments.first as? [String] else { throw PiDurableRuntimeError.unavailable("Invalid joined path") }
+      guard let parts = arguments.first as? [String] else { throw PiDurableError.failed("Invalid joined path") }
       return virtual(try resolve(parts.joined(separator: "/")))
     case "createDir": try manager.createDirectory(at: path(), withIntermediateDirectories: true)
     case "appendFile": try write(content(), to: path(), append: true)
@@ -60,7 +62,7 @@ final class DurableFileSystem {
       defer { Darwin.close(descriptor) }
       guard fsync(descriptor) == 0 else { throw posixError() }
     case "truncateFile":
-      guard arguments.count > 1, let size = arguments[1] as? Int, size >= 0 else { throw PiDurableRuntimeError.unavailable("Invalid file length") }
+      guard arguments.count > 1, let size = arguments[1] as? Int, size >= 0 else { throw PiDurableError.failed("Invalid file length") }
       let descriptor = Darwin.open(try path().path, O_WRONLY | O_NOFOLLOW)
       guard descriptor >= 0 else { throw posixError() }
       defer { Darwin.close(descriptor) }
@@ -77,19 +79,19 @@ final class DurableFileSystem {
         let values = try url.resourceValues(forKeys: [.isDirectoryKey,.fileSizeKey,.contentModificationDateKey])
         return ["name": url.lastPathComponent, "path": virtual(url), "kind": values.isDirectory == true ? "directory" : "file", "size": values.fileSize ?? 0, "mtimeMs": (values.contentModificationDate?.timeIntervalSince1970 ?? 0) * 1000]
       }
-    default: throw PiDurableRuntimeError.unavailable("Unsupported durable filesystem operation")
+    default: throw PiDurableError.failed("Unsupported durable filesystem operation")
     }
     return NSNull()
   }
   private func resolve(_ path: String) throws -> URL {
     let components = path.split(separator: "/").map(String.init)
     guard !components.contains(".."), !path.contains("\0") else {
-      throw PiDurableRuntimeError.unavailable("Durable paths cannot escape their conversation")
+      throw PiDurableError.failed("Durable paths cannot escape their conversation")
     }
     let url = components.filter { $0 != "." }.reduce(directory) { $0.appendingPathComponent($1) }.standardizedFileURL
     let canonical = url.resolvingSymlinksInPath().path
     guard canonical == directory.path || canonical.hasPrefix(directory.path + "/") else {
-      throw PiDurableRuntimeError.unavailable("Durable symlinks cannot escape their conversation")
+      throw PiDurableError.failed("Durable symlinks cannot escape their conversation")
     }
     return url
   }

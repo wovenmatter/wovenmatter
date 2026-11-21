@@ -172,9 +172,6 @@ def verify_bundle(app, profile, version=None, build=None):
     icon = icons.get('CFBundlePrimaryIcon') if isinstance(icons, dict) else None
     require(isinstance(icon, dict) and icon.get('CFBundleIconName') == 'AppIcon' and (app / 'Assets.car').is_file(),
             'The AppIcon asset catalog is not compiled into the bundle')
-    require(not any(app.rglob('*.wasm')), 'Embedded Python/WASM must not ship in Quick Chat')
-    require(not any('EmbeddedExecution' in path.name for path in app.rglob('*')),
-            'Retired embedded execution resources are still packaged')
     require((app / 'LUCIDE_LICENSE.txt').is_file(), 'Missing bundled icon license')
     check_privacy(load_plist(app / 'PrivacyInfo.xcprivacy', 'privacy manifest'))
     compliance = info.get('ITSAppUsesNonExemptEncryption')

@@ -1,125 +1,47 @@
 # On-device Pi Durable
 
-The app bundles the actual `@earendil-works/pi-durable`, `pi-ai`, `chord`, and `pi-telemetry`
-packages locked in `default-agent/package-lock.json`, the same release as the
-desktop runtime. It does not ship Node, run a remote agent loop, or download
-executable SDK code, so SDK updates reach iOS only in a new app build (currently
-a TestFlight beta). Rebuild
-with `node scripts/build-ios-pi-runtime.mjs`; use `--check` to verify committed
-resources match the reviewed sources and installed locked dependencies.
+Quick Chat runs the real `@earendil-works/pi-durable` SDK inside the app, in
+JavaScriptCore. The bundle (`ios/Sources/PiDurableRuntime/Resources/pi-durable.js`)
+is built from the release `default-agent/package-lock.json` locks, the same one
+the server's Pi Durable runs. The app ships no Node and downloads no code, so
+an SDK update reaches the device only in a new app build.
 
-`PiDurableRuntime` serializes the SDK on JavaScriptCore. Swift provides secure
-random bytes, UTF-8, schema URL resolution, monotonic timing, timers, a private filesystem, and
-asynchronous inference/tool capabilities. The filesystem exposes only that
-conversation's directory, excludes symlink escapes, takes an exclusive writer
-lock, and fsyncs journal files and directory entries before exposing commits.
-Upstream `JsonlStorage` owns transaction markers, torn-write recovery,
-checkpoint replay, and interrupted-tool behavior.
+```sh
+(cd default-agent && ../scripts/with-pinned-node.sh npm ci)
+(cd ios/Runtime && ../../scripts/with-pinned-node.sh npm ci)   # esbuild
+scripts/with-pinned-node.sh node scripts/build-ios-pi-runtime.mjs [--check]
+```
 
-## Native contracts
+The script writes the bundle, `provenance.json` (the SDK release and the
+packages bundled), the notices' heading and `MobileInference/PiSDKVersion.swift`.
+`--check` verifies the committed files match.
 
-The Swift `Inference` closure receives normalized pi-ai `{model, context,
-options, scope}` JSON and emits normalized `AssistantMessageEvent` JSON.
-The native provider service owns credentials and HTTP. Secrets never enter
-Pi Durable's JavaScript heap or persisted transcript. Inference scope combines
-the SDK's persisted provider session identity with a digest of the exact request;
-children and compaction do not share a mutable request scope. SDK streaming
-and tool execution remain on the device.
+## Sources
 
-The Swift `Tool` closure receives `{name, arguments, conversationID,
-nativeConversationID, taskID, toolCallID}` and returns upstream
-`ToolExecutionResult` JSON. App tools must enforce grants/approvals and honor
-Swift task cancellation. They default to unsafe replay: interrupted side
-effects are reported as interrupted, not blindly repeated.
+- `entry.js`: one conversation per context. It opens the SDK's stock JSONL
+  storage over the conversation's directory, registers the host's tools, and
+  drives turns: send, steer (the SDK's own mid-turn input, `whenBusy: "steer"`),
+  interrupt (`abort`), configure and close.
+- `turns.js`: folds what the conversation shows into the host's events. It
+  runs `default-agent/src/projection.mjs`, the server's own projection of a
+  Pi Durable conversation, unchanged, and finishes each message, thinking
+  block and tool call once, in order.
+- `platform.js`: the Web APIs the SDK needs (timers, URL, TextEncoder, crypto,
+  AbortController), backed by Swift.
+- `inference-stream.js`: hands pi-ai's stream to the native inference closure
+  and ends it with an error if the closure fails.
 
-Woven capabilities use the shared `WovenMCPCatalog` names and structured schemas.
-The app registers those definitions directly with Pi Durable and dispatches them
-natively against the phone's offline library replica, which syncs with the other
-members. Quick Chat registers only a fixed subset (`QuickChatCapabilities`):
-notes and `woven_context`, timers and reminders, and calendar, plus native web
-search and reading, `ask_user` and `clock`. It refuses any `target` other than
-the phone, so it has no host-routed, browser or computer tools. The app has no
-Woven command-line bridge or Python; the confined Python package in
-`ios/Sources/EmbeddedExecution` is a test package that the app does not link.
+Node built-ins the shared `default-agent` modules import in code the bundle
+never reaches stay external; the build fails if any survives tree shaking.
 
-`open()` is a read-only execution viewer after its migration/configuration
-commits; it does not schedule saved work. `resume()` explicitly enables the
-scheduler. `submit(text:requestID:)` durably admits input and returns its receipt.
-A caller must persist its request ID **before** submitting and recover a lost
-acknowledgement through `submission(requestID:)`; retrying an existing request
-ID never submits twice. `wait` returns a settled receipt for both successful
-and unanswered runs. Both `submit` (including a deduplicated request) and `wait`
-enable SDK scheduling; use `submission` for read-only receipt recovery.
-`unanswered` must not be presented as completed.
+## Host contract
 
-`abort()` is a durable user Stop and cascades through owned children.
-`close()` suspends pending work without cancelling the durable run; reopen a
-new instance to view/resume it. App suspension and explicit user Stop are
-separate operations. No mobile background execution guarantee is made.
-
-`snapshot()` is active UI context, which can omit compacted/reset history.
-`conversations()` and paginated `history(nativeConversationID:cursorJSON:)`
-provide the complete immutable records for library synchronization, including
-children and old context. Runtime checkpoint files stay on the execution device.
-
-## Subagents and code mode
-
-The package provides both tools and its tests exercise them; the app does not
-enable them. Quick Chat opens every runtime with `quickChat: true`, which
-installs neither tool and refuses code execution. The rest of this section
-describes the package.
-
-The built-in `subagent` tool creates a real SDK task-owned conversation. It
-inherits the parent's exact inference model/account and native tools, returns
-its final result to the parent, cannot spawn further children, and stops with
-the parent. Ownership and stable request IDs recover the same child after a
-restart. Four children may execute concurrently.
-
-The built-in `codemode` tool runs model-authored JavaScript in a separate WebKit
-Web Worker. It never evaluates that code in the privileged SDK JavaScriptCore
-context. An ephemeral WebView has no navigation or network access (CSP blocks
-connections, frames, images, forms and external scripts). Only allowlisted
-native tools cross the message bridge. Each nested tool is admitted as a real
-SDK ToolTask before its side effects execute. Worker cancellation/timeout
-terminates the worker and settles nested work. The default total limit is two
-minutes; model code has no process or direct filesystem capability.
-
-Code mode supplies `tools`, `ALL_TOOLS`, `text()`, `store()` and `load()`.
-Stored JSON is committed to the conversation after a successful invocation.
-The code tool is not replay-safe; a process death during execution cannot
-re-run unknown side effects. Output and tool argument sizes are bounded.
-
-## Reviewed SDK generation
-
-The locked SDK retains the upstream JSONL storage implementation and its
-ascending/descending cursor contract. Native history keeps the default
-newest-first entry order and passes each opaque cursor back unchanged. No host
-adapter uses the changed `TaskRuntime.context` cutoff signature. Tool execution
-timing uses native system uptime rather than the adjustable wall clock. The
-same model/tool bridge runs the updated SDK context retention and system-message
-ordering; credentials and execution ownership retain their native boundaries.
-
-The 1.2 tool bridge maps the native/classic `content` result to Durable's new
-`output` field and tags manually created tool tasks as model-issued calls.
-Stored transcript messages retain their `content` shape. Nested code-mode
-ownership, replay policy, cancellation, and output visibility retain their
-existing behavior.
-
-After updating the SDK declarations and npm lockfile, maintenance regenerates
-this bundle with `node scripts/build-ios-pi-runtime.mjs`. Its version, provenance,
-notice headings, and provider-catalog version constant derive from the locked SDK rather than
-separate handwritten version strings. esbuild is an explicit build dependency;
-it is omitted from the shipped desktop/server runtime.
-
-## Verification
-
-`swift test --package-path ios --filter PiDurableRuntimeTests` runs the actual
-JSC SDK and isolated WebKit code worker on macOS without provider services.
-Checks cover native tool and inference integration, durable receipt recovery,
-unsafe-tool interruption, persisted user Stop, ownership locking, torn journal
-recovery, subagent inference isolation, nested durable tools, blocked worker
-network/native access, and termination of an infinite loop.
-
-The iOS app includes the same package/resources. Simulator/device builds and
-app-level acceptance are separate from portable runtime tests. Real provider
-acceptance uses the user's explicitly selected configured account.
+`PiDurableRuntime` (Swift) opens a `PiDurableSession` per conversation, under
+`<directory>/<conversation id>/`. The SDK's log there is the conversation's
+native log; reopening continues it, and a run a relaunch cut short continues on
+open. The directory takes an exclusive lock, and its files are fsynced before a
+commit is published. Credentials never enter JavaScript or the log: the
+inference closure receives pi-ai's `{model, context, options, scope}` and emits
+pi-ai events. Tools are the host's closure, except `ask_user`, which surfaces
+as a prompt the person answers. Tests (`swift test --package-path ios`) use a
+stand-in model and never call a provider.
