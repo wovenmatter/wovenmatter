@@ -98,6 +98,8 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   // Each finished item is announced once and saved once, in order.
   #expect(try await phone.items(sessionID: chat.id).map(\.id) == announced)
   #expect(announced.count == 3)
+  // With no title runtime, the chat is named from its first message.
+  #expect(try await eventually { try await phone.session(chat.id)?.title == "hello" })
 
   // The runtime calls a Woven tool in the app, with no bridge, and only
   // while the session may use the tool's group.

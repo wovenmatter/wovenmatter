@@ -140,8 +140,10 @@ machine.
 - **Quick Chat** is a Pi Durable session owned by the device. The core runs
   it through the one adapter interface, with the Pi Durable SDK in the app and
   the device's own provider sign-ins from its Keychain, and saves each
-  finished item once, as on a machine. A machine shows a device's session with
-  its saved items and sending disabled.
+  finished item once, as on a machine. It is named from the first line of its
+  first message, with no model asked. It is not given the session tools by
+  default, since a device reaches only its own sessions. A machine shows a
+  device's session with its saved items and sending disabled.
 
 ## Connections
 

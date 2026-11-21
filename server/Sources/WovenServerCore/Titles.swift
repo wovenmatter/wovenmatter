@@ -25,10 +25,12 @@ package final class Titles: Sendable {
 
   private let library: Library
   private let sessions: SessionManager
-  private let runtime: RuntimeKind
+  private let runtime: RuntimeKind?
   private let scratch: URL
 
-  package init(library: Library, sessions: SessionManager, runtime: RuntimeKind, scratch: URL) {
+  /// With no `runtime`, as on a device, a chat is named from the first line
+  /// of its first message, with no model asked.
+  package init(library: Library, sessions: SessionManager, runtime: RuntimeKind?, scratch: URL) {
     self.library = library
     self.sessions = sessions
     self.runtime = runtime
@@ -40,6 +42,12 @@ package final class Titles: Sendable {
   }
 
   private func name(_ sessionID: String, from text: String) async {
+    guard let runtime else {
+      let title = Self.firstLine(text)
+      guard !title.isEmpty, let session = try? await library.session(sessionID), session.runtime != .bots else { return }
+      _ = try? await library.updateSession(sessionID, title: title)
+      return
+    }
     guard case .bool(true)? = try? await library.setting(Self.enabledKey)?.value,
           let session = try? await library.session(sessionID), session.runtime != .bots,
           let runtime = await sessions.runtime(runtime) else { return }
@@ -81,6 +89,15 @@ package final class Titles: Sendable {
     let raw = await reply.value
     await live.stop()
     return Self.sanitize(raw)
+  }
+
+  /// The first line of a message with its spaces collapsed, at most 50
+  /// characters.
+  package static func firstLine(_ text: String) -> String {
+    let line = text.split(whereSeparator: \.isNewline).first { !$0.allSatisfy(\.isWhitespace) } ?? ""
+    let normalized = line.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    guard normalized.count > 50 else { return normalized }
+    return String(normalized.prefix(47)).trimmingCharacters(in: .whitespaces) + "…"
   }
 
   /// The title from the runtime's reply: its JSON `title`, else its first

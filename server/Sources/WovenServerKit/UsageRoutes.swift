@@ -6,29 +6,16 @@ import Synchronization
 import WovenLibrary
 import WovenProtocol
 
-/// Usage totals and dictation history from the library, provider limits from
-/// this machine's own sign-ins, and the list-price table.
+/// Provider limits from this machine's own sign-ins, and the list-price
+/// table. Usage totals and dictation history are the core's.
 func registerUsage(_ router: inout Router, library: Library, secrets: Secrets) {
   let prices = PriceTable()
 
-  router.on(ReadUsage.self) { request, _ in
-    guard request.end > request.start else { throw ProtocolError(.badRequest, "The range ends before it starts.") }
-    return try await library.usage(from: request.start, to: request.end, periodSeconds: request.periodSeconds)
-  }
   router.on(ReadUsageLimits.self) { _, _ in
     await ProviderLimits.read(secrets: secrets)
   }
   router.on(ReadModelPrices.self) { request, _ in
     try await prices.read(refresh: request.refresh)
-  }
-  router.on(SaveDictation.self) { request, _ in
-    let text = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !request.id.isEmpty, !text.isEmpty else { throw ProtocolError(.badRequest, "A dictation needs an id and text.") }
-    try await library.saveDictation(id: request.id, text: text, recordedAt: request.recordedAt)
-    return Done()
-  }
-  router.on(ListDictations.self) { request, _ in
-    try await library.dictations(limit: min(request.limit, 500), offset: request.offset)
   }
 }
 

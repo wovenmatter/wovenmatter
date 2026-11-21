@@ -20,8 +20,9 @@
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Validate: `scripts/test-changes.sh`. It runs the static checks, the server
   package's tests (which cover `library/` and `protocol/`), on a Mac an iOS
-  build of the server's core, and the Pi Durable and bots tests. `--ci` runs the same on Linux in pull request CI, which is one
-  portable Linux check. `WOVEN_SWIFT_SCRATCH_PATH` gives a run its own Swift
+  build of the server's core and the `ios` package's tests, and the Pi Durable
+  and bots tests. `--ci` runs the same on Linux in pull request CI, which is
+  one portable Linux check. `WOVEN_SWIFT_SCRATCH_PATH` gives a run its own Swift
   build folder. Tests must not consume provider services.
 - Keep one-off audit reports, generated coverage inventories, and review evidence
   out of Git. Record results in PR descriptions or external build artifacts.

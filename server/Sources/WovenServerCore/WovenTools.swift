@@ -129,16 +129,26 @@ package final class WovenTools: Sendable {
 
   /// The groups a session may use: its own choice, else its runtime's
   /// defaults for new chats on this machine or every machine, else the
-  /// defaults for every new chat.
+  /// defaults for every new chat. A device's session is given the groups in
+  /// `ToolGroup.notOnDevices` only when it or its own device's defaults
+  /// choose them.
   package func enabledGroups(sessionID: String) async -> Set<ToolGroup> {
     guard let session = try? await library.session(sessionID) else { return [] }
     if let tools = session.tools { return tools }
     let runtime = session.runtime.rawValue
     let own = try? await library.setting("agentDefaults.\(runtime).\(session.machineID)")
     let shared = try? await library.setting("agentDefaults.\(runtime)")
-    if let names = (own ?? shared)?.value["tools"]?.array { return Self.groups(names) }
-    if let names = (try? await library.setting(ToolGroup.defaultsSetting))?.value.array { return Self.groups(names) }
-    return ToolGroup.standard
+    let defaults: Set<ToolGroup>
+    if let names = (own ?? shared)?.value["tools"]?.array {
+      if own?.value["tools"] != nil { return Self.groups(names) }
+      defaults = Self.groups(names)
+    } else if let names = (try? await library.setting(ToolGroup.defaultsSetting))?.value.array {
+      defaults = Self.groups(names)
+    } else {
+      defaults = ToolGroup.standard
+    }
+    guard (try? await library.machine(session.machineID))?.platform.isDevice == true else { return defaults }
+    return defaults.subtracting(ToolGroup.notOnDevices)
   }
 
   package static func allowed(_ tool: WovenTool, _ enabled: Set<ToolGroup>?) -> Bool {

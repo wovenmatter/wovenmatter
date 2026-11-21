@@ -99,6 +99,11 @@ public enum ToolGroup: String, Codable, Sendable, Hashable, CaseIterable, Identi
   /// What a session may use when neither it nor any setting says otherwise.
   public static let standard: Set<ToolGroup> = Set(allCases).subtracting([.computer])
 
+  /// The groups a device's sessions are not given by default: a device
+  /// reaches only its own sessions. A session, or that device's own defaults
+  /// for its runtime, may still choose them.
+  public static let notOnDevices: Set<ToolGroup> = [.sessions]
+
   /// The synced setting holding the groups new chats may use, as an array of names.
   public static let defaultsSetting = "tools.defaults"
 }

@@ -47,7 +47,7 @@ public final class ServerCore: Sendable {
   package let sessions: SessionManager
   package let listening = Listening()
   private let router: Router
-  private let titles: Titles?
+  private let titles: Titles
 
   /// Starts the core alone, as a device runs it. `library` is opened by the
   /// caller (on a device with the device's platform) and closed by it after
@@ -87,9 +87,10 @@ public final class ServerCore: Sendable {
     registerLibraryItems(&all, library: library)
     registerGoals(&all, library: library, sessions: sessions)
     registerRuntimeList(&all, sessions: sessions)
+    registerUsageHistory(&all, library: library)
     all.add(routes)
     router = all
-    titles = titleRuntime.map { Titles(library: library, sessions: sessions, runtime: $0, scratch: scratch) }
+    titles = Titles(library: library, sessions: sessions, runtime: titleRuntime, scratch: scratch)
   }
 
   /// Serves one connection until it closes: the client's hello, then its

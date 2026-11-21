@@ -641,6 +641,8 @@ package actor SessionHost {
         try await nativeSessionGone()
         throw Self.goneError
       }
+    } catch RuntimeError.unavailable(let message) {
+      throw ProtocolError(.failed, message)
     } catch {
       throw ProtocolError(.failed, "\(runtime.kind.rawValue) could not start: \(error)")
     }

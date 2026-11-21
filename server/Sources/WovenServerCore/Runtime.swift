@@ -190,11 +190,14 @@ public enum RuntimeError: Error, Sendable, CustomStringConvertible {
   /// fresh one in its place.
   case nativeSessionGone
   case failed(String)
+  /// It cannot run now, for a reason the person can act on, said for them
+  /// (for example that nothing is signed in). The chat shows it as said.
+  case unavailable(String)
 
   public var description: String {
     switch self {
     case .nativeSessionGone: "The runtime no longer has this session."
-    case .failed(let message): message
+    case .failed(let message), .unavailable(let message): message
     }
   }
 }
