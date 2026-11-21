@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Pre-release dependency report, run on a maintainer Mac (never on GitHub).
+"""Pre-release dependency report for a desktop release, run on a maintainer Mac
+(never on GitHub).
 
-Lists what is behind upstream stable releases (the npm lockfiles, the Swift
-package graphs, and the runtime records: Node, npm, CEF, Sparkle, Cua Driver,
-the Mac VM guest, and the Swift toolchain and SQLite the Linux server is built
-with) and known vulnerabilities in what ships (npm audit of production
-dependencies, OSV for Swift packages, newer Node security releases). Changes
-nothing; prints a Markdown report.
+Lists every top-level package the Mac app ships or builds with that is behind
+its upstream stable release: the direct npm dependencies of each project, the
+directly declared Swift packages, and the runtime records (Node, npm, CEF,
+Sparkle, Cua Driver, Docker Engine, the bot images' Ubuntu, Node and
+Playwright, the Mac VM guest, the Swift toolchain and SQLite the Linux server
+is built with, Lucide, and the exact-pinned GitHub Actions). Packages are
+taken as upstream ships them, so what they pin themselves is not listed.
+Also lists known vulnerabilities in what ships (npm audit of production
+dependencies, OSV for Swift packages, newer Node security releases), and
+copies of one selection that disagree. iPhone-only packages (`ios/`) are out
+of scope. Changes nothing; prints a Markdown report.
 """
 import json
 from pathlib import Path
@@ -17,6 +23,8 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 LOCKFILES = ['default-agent', 'bots', 'harnesses/npm-runtime']
 SWIFT_GRAPHS = ['app/Package.resolved', 'server/Package.resolved', 'library/Package.resolved']
+SWIFT_MANIFESTS = ['server/Package.swift', 'library/Package.swift']
+PINNED_ACTIONS = ['.github/workflows/release.yml', '.github/workflows/pr-author.yml']
 
 def get(url, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
@@ -68,10 +76,12 @@ def npm_section(outdated, vulnerable):
                               f'{"; ".join(titles) or "via " + ", ".join(map(str, item.get("via", [])))} — {remedy}')
 
 def swift_section(outdated, vulnerable):
+    direct = {url.removesuffix('.git').lower() for manifest in SWIFT_MANIFESTS
+              for url in re.findall(r'\.package\(url: "([^"]+)"', (ROOT / manifest).read_text())}
     pins = {}
     for graph in SWIFT_GRAPHS:
         for pin in record(graph)['pins']:
-            if pin['state'].get('version'):
+            if pin['state'].get('version') and pin['location'].removesuffix('.git').lower() in direct:
                 pins.setdefault((pin['identity'], pin['state']['version']), (pin['location'], []))[1].append(graph)
     queries = []
     for (identity, version), (url, graphs) in sorted(pins.items()):
@@ -116,7 +126,10 @@ def mac_section(outdated, vulnerable):
     if numeric(sparkle) < numeric(newest):
         outdated.append(f'Sparkle (bundled): {sparkle} → {newest}')
     cua = record('app/Automation/cua-version.json')['version']
-    stable = tags('https://github.com/trycua/cua.git', r'cua-driver-rs-v(\d+\.\d+\.\d+)')
+    # A published release with the universal executable, not a bare tag: tags appear before their assets.
+    stable = [m[1] for r in fetch('https://api.github.com/repos/trycua/cua/releases?per_page=100')
+              if not r['draft'] and (m := re.fullmatch(r'cua-driver-rs-v(\d+\.\d+\.\d+)', r['tag_name']))
+              and any(a['name'] == f'cua-driver-rs-{m[1]}-darwin-universal-binary.tar.gz' for a in r['assets'])]
     newest = max(stable, key=numeric) if stable else cua
     if numeric(cua) < numeric(newest):
         outdated.append(f'Cua Driver (bundled): {cua} → {newest}')
@@ -148,9 +161,69 @@ def linux_server_section(outdated, vulnerable):
     if published and int(max(published)) > int(current):
         outdated.append(f'SQLite (Linux server): {current} → {max(published)}')
 
+def latest_release(repo):
+    """Newest stable release tag of a GitHub repository and the commit it names."""
+    found = {}
+    for line in subprocess.run(['git', 'ls-remote', '--tags', f'https://github.com/{repo}.git'],
+                               capture_output=True, text=True).stdout.splitlines():
+        sha, ref = line.split('\t')
+        name = ref.removeprefix('refs/tags/')
+        if name.endswith('^{}'):
+            found[name[:-3]] = sha
+        else:
+            found.setdefault(name, sha)
+    stable = [t for t in found if re.fullmatch(r'v\d+\.\d+\.\d+', t)]
+    newest = max(stable, key=numeric)
+    return newest, found[newest]
+
+def records_section(outdated, vulnerable):
+    engine = (ROOT / 'bots/engine/bots-engine.py').read_text()
+    docker = re.search(r"DOCKER_VERSION = '([^']+)'", engine)[1]
+    published = re.findall(r'docker-(\d+\.\d+\.\d+)\.tgz', text('https://download.docker.com/linux/static/stable/x86_64/'))
+    newest = max(published, key=numeric) if published else docker
+    if numeric(docker) < numeric(newest):
+        outdated.append(f'Docker Engine (Linux bot engines, `bots/engine/bots-engine.py`): {docker} → {newest}')
+    guest = record('app/VMHelper/guest-version.json')['docker']['dockerCE']
+    if not guest.split(':')[-1].startswith(docker + '-'):
+        outdated.append(f'Mac VM `docker-ce` {guest} does not match the Docker Engine release {docker}')
+
+    images = {path: (ROOT / path).read_text() for path in ('bots/image/Dockerfile', 'bots/image/toolchain/Dockerfile')}
+    ubuntu = {re.search(r'^FROM ubuntu:(\S+)', body, re.M)[1] for body in images.values()}
+    releases = re.findall(r'^Version: (\d+\.\d+)', text('https://changelogs.ubuntu.com/meta-release'), re.M)
+    newest = max(releases, key=numeric) if releases else max(ubuntu)
+    for current in sorted(ubuntu):
+        if numeric(current) < numeric(newest):
+            outdated.append(f'Ubuntu (bot images): {current} → {newest}')
+    toolchain = images['bots/image/toolchain/Dockerfile']
+    node = (ROOT / 'default-agent/.node-version').read_text().strip()
+    image_node = re.search(r'ARG NODE_VERSION=(\S+)', toolchain)[1]
+    if image_node != node:
+        outdated.append(f'Node (bot toolchain image): {image_node} → {node} (`default-agent/.node-version`)')
+    playwright = fetch('https://registry.npmjs.org/playwright-core/latest')['version']
+    image_playwright = re.search(r'ARG PLAYWRIGHT_VERSION=(\S+)', toolchain)[1]
+    if numeric(image_playwright) < numeric(playwright):
+        outdated.append(f'Playwright (bot toolchain image): {image_playwright} → {playwright}')
+
+    lucide = record('docs/assets/lucide-provenance.json')['version']
+    newest = fetch('https://registry.npmjs.org/lucide-static/latest')['version']
+    if numeric(lucide) < numeric(newest):
+        outdated.append(f'Lucide icons (`docs/assets/lucide-provenance.json`): {lucide} → {newest}')
+
+    for workflow in PINNED_ACTIONS:
+        for repo, sha, tag in re.findall(r'uses: ([\w-]+/[\w-]+)@([0-9a-f]{40}) # (\S+)', (ROOT / workflow).read_text()):
+            newest, commit = latest_release(repo)
+            if commit != sha:
+                outdated.append(f'GitHub Action `{repo}` in `{workflow}`: {tag} → {newest}')
+
+    swift = record('server/linux-build.json')['swiftVersion']
+    container = re.search(r'container: swift:(\S+?)-', (ROOT / '.github/workflows/ci.yml').read_text())[1]
+    if container != swift:
+        outdated.append(f'PR CI Swift container {container} does not match the Linux server toolchain {swift}')
+
 def main():
     outdated, vulnerable = [], []
-    for section in (npm_section, swift_section, node_section, mac_section, vm_guest_section, linux_server_section):
+    for section in (npm_section, swift_section, node_section, mac_section, vm_guest_section,
+                    linux_server_section, records_section):
         try:
             section(outdated, vulnerable)
         except Exception as error:  # report a lookup failure instead of a false all-clear

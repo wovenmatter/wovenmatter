@@ -16,12 +16,12 @@
     "test": "node test/require-node.mjs && tsc -p tsconfig.json && vitest run"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.3.329",
-    "@earendil-works/chord": ">=1.5.2",
-    "@earendil-works/pi-ai": ">=1.5.2",
-    "@earendil-works/pi-durable": ">=1.5.2",
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.330",
+    "@earendil-works/chord": ">=1.6.0",
+    "@earendil-works/pi-ai": ">=1.6.0",
+    "@earendil-works/pi-durable": ">=1.6.0",
     "typebox": ">=1.4.7",
-    "undici": ">=8.12.4",
+    "undici": ">=8.13.1",
     "ws": ">=8.23.0",
     "zod": ">=4.6.7"
   },
@@ -30,18 +30,5 @@
     "@types/ws": ">=8.18.2",
     "typescript": ">=7.0.2",
     "vitest": ">=5.1.1"
-  },
-  "overrides": {
-    "@earendil-works/pi-ai": {
-      "openai": ">=7.60.0",
-      "@anthropic-ai/sdk": ">=1.10.0",
-      "@google/genai": ">=3.6.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1171.0",
-      "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1171.0"
-    },
-    "@earendil-works/chord": {
-      "ws": "$ws"
-    }
   }
 }

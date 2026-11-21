@@ -5,18 +5,42 @@ description: Cut, prepare, verify, and publish a WovenMatter macOS release.
 
 A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
 
-1. **Check and update.** Run `scripts/release-check.py`. It reports what is behind
-   upstream stable releases (the npm lockfiles in `default-agent`, `bots` and
-   `harnesses/npm-runtime`; the Swift package graphs; the Node, npm, CEF, Sparkle,
-   Cua Driver and VM guest records; and the Swift toolchain and SQLite in
-   `server/linux-build.json`) and known vulnerabilities in shipped code. If
-   anything is outdated, update all of it to current stable releases, majors
+1. **Check and update.** A release is a desktop (Mac) release. Never touch
+   anything under `ios/`: no iPhone lockfiles, no regenerating the iPhone's
+   embedded Pi runtime (`scripts/build-ios-pi-runtime.mjs`), no iPhone tests.
+   iPhone releases are separate.
+
+   Run `scripts/release-check.py`. It reports which top-level packages are behind
+   their current upstream release, and known vulnerabilities in shipped code.
+   The top-level set is everything the repo itself declares or records:
+   - the direct npm dependencies in `default-agent`, `bots` and
+     `harnesses/npm-runtime` (the Pi family and Chord on one release, the Claude
+     Agent SDK, Playwright, ws, undici and so on);
+   - the direct Swift packages (swift-nio, swift-crypto, Sparkle);
+   - the runtime records: Node, the bundled npm, CEF/Chromium, Cua Driver, Docker
+     Engine, the bot images' Ubuntu base and their Node and Playwright copies, the
+     Mac VM guest, the Swift toolchain, Static Linux SDK and SQLite for the Linux
+     server (`server/linux-build.json`), Lucide, and the exact-pinned GitHub
+     Actions.
+
+   Coding CLIs and ACP connectors already install latest at run time and have no
+   recorded selection, so there is nothing to bump for them.
+
+   Update top-level packages only, as we use them, and do not go inside them.
+   Take each package as upstream ships it, with the versions it pins itself (Pi's
+   own exact pins of openai, @anthropic-ai/sdk, undici and minimatch, for
+   example). Do not add or keep overrides that raise a package's internal
+   dependencies, and do not bump transitive packages individually; they change
+   only as a consequence of updating a top-level package.
+
+   If anything is outdated, update all of it to current upstream releases, majors
    included, following `docs/DEPENDENCIES.md` (lockfiles, records, checksums,
    notices and generated resources together), validate it with
    `scripts/test-changes.sh`, and open one PR. Give Trey the PR link and a short
    report on each known vulnerability: severity, whether it ships, and what you
-   recommend (update, hold a version, replace, or accept). If nothing is
-   outdated, there is no PR; give the report alone.
+   recommend (update, hold a version, replace, or accept). A vulnerability inside
+   a top-level package's own pins is reported this way, not patched inside the
+   package. If nothing is outdated, there is no PR; give the report alone.
 2. **Go-ahead.** Wait for Trey. He merges the PR and says go, or you work through
    the findings together first.
 3. **Build and describe, in parallel.** Run `scripts/cut-release.sh build X.Y.Z`

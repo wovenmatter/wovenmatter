@@ -95,7 +95,7 @@ for arch in x86_64 aarch64; do
   "$bin/llvm-ar" rcs "$sqlite/$arch/libsqlite3.a" "$sqlite/$arch/sqlite3.o"
   rm -f "$work/build-$arch/release/woven-server"
   "$bin/swift" build -c release --package-path "$work/src/server" --scratch-path "$work/build-$arch" \
-    --force-resolved-versions --swift-sdks-path "$sdks" --swift-sdk "$arch-swift-linux-musl" --product woven-server \
+    --force-resolved-versions --swift-sdks-path "$sdks" --swift-sdk "$sdk_id" --triple "$arch-swift-linux-musl" --product woven-server \
     -Xcc "-I$sqlite" -Xlinker "-L$sqlite/$arch" -Xlinker -s
   release="$staging/linux-$arch"
   mkdir -p "$release"

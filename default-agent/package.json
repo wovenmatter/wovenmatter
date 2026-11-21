@@ -9,33 +9,15 @@
     "test": "node --test --test-concurrency=1 test/*.test.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.3.329",
-    "@earendil-works/chord": ">=1.5.2",
-    "@earendil-works/pi-ai": ">=1.5.2",
-    "@earendil-works/pi-coding-agent": ">=1.5.2",
-    "@earendil-works/pi-durable": ">=1.5.2",
-    "@earendil-works/pi-mcp": ">=1.5.2",
-    "@earendil-works/pi-schema": ">=1.5.2",
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.330",
+    "@earendil-works/chord": ">=1.6.0",
+    "@earendil-works/pi-ai": ">=1.6.0",
+    "@earendil-works/pi-coding-agent": ">=1.6.0",
+    "@earendil-works/pi-durable": ">=1.6.0",
+    "@earendil-works/pi-mcp": ">=1.6.0",
+    "@earendil-works/pi-schema": ">=1.6.0",
     "playwright-core": ">=1.65.1",
     "ws": ">=8.23.0"
-  },
-  "overrides": {
-    "@earendil-works/pi-coding-agent": {
-      "undici": ">=8.12.4",
-      "minimatch": ">=11.0.9",
-      "brace-expansion": ">=5.0.13"
-    },
-    "@earendil-works/pi-ai": {
-      "openai": ">=7.60.0",
-      "@anthropic-ai/sdk": ">=1.10.0",
-      "@google/genai": ">=3.6.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1171.0",
-      "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1171.0"
-    },
-    "@earendil-works/chord": {
-      "ws": "$ws"
-    }
   },
   "description": "Pi Durable for Woven Matter: an ACP agent the server runs per session."
 }
