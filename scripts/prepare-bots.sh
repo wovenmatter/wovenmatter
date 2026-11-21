@@ -34,7 +34,7 @@ case "$arch" in
 esac
 
 node_version="$("$node" --version)"
-lock_hash="$(shasum -a 256 "$source_root/package-lock.json" | cut -d ' ' -f1)-node-$node_version-darwin-$node_arch"
+lock_hash="$(shasum -a 256 "$source_root/package-lock.json" | cut -d ' ' -f1)-node-$node_version-darwin-$node_arch-omit-optional"
 # Keep installed dependencies outside a possibly cloud-synced checkout, keyed by
 # the committed lockfile and toolchain, as the default agent's are.
 dependency_root="${TMPDIR:-/tmp}/wovenmatter-bots-dependencies-$lock_hash"
@@ -43,7 +43,7 @@ if [ ! -f "$dependency_root/node_modules/.woven-lock" ] || [ "$(cat "$dependency
   cp "$source_root/package.json" "$source_root/package-lock.json" "$dependency_root/"
   (
     cd -P "$dependency_root"
-    PATH="$(dirname "$node"):$PATH" "$node" "$npm_cli" ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    PATH="$(dirname "$node"):$PATH" "$node" "$npm_cli" ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund \
       --cpu="$node_arch" --os=darwin
   )
   printf '%s' "$lock_hash" > "$dependency_root/node_modules/.woven-lock"
@@ -56,15 +56,12 @@ rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 find "$output/node_modules" -type f -name '*.map' -delete
 
 # Bots load the Pi Durable SDK copy the default agent runs (its active SDK update, or
-# Resources/default-agent), with that copy's signed Claude binary (bots/src/pi-durable-sdk.ts).
+# Resources/default-agent), and the installed Claude Code (bots/src/pi-durable-sdk.ts).
 # Their own copy of those packages, and what only they depend on, is dropped here, so the
 # runtime cannot load a different one. Nothing under Resources/bots is signed by the
 # build, so no native code may remain; a new native dependency has to be removed or
 # signed explicitly before it can ship (validate-release-code.py checks every image).
 python3 -I "$repo_root/scripts/prune-bots-sdk.py" "$output"
-shared_claude="$agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
-test -x "$shared_claude"
-codesign --verify --strict "$shared_claude"
 unexpected="$(python3 - "$output/node_modules" <<'PY'
 import pathlib, sys
 magic = {bytes.fromhex(v) for v in ("feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}

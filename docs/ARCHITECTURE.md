@@ -90,7 +90,12 @@ run on. The **library** is the synced database, never a workspace. A
   machine of this tailnet. A machine shared in from another tailnet is refused.
 
 On Linux the server is a systemd user unit, `woven-server`, installed over SSH
-with everything under `~/.local/share/woven-server`. The installer turns on
+with everything under `~/.local/share/woven-server`. The Mac sends the static
+`woven-server` for that machine's architecture with its own copy of Pi Durable,
+the bots runtime and the harness files in one archive. The Linux machine
+downloads the official Node for Linux from nodejs.org and checks it against
+the SHA-256 the Mac app carries. It needs `tar`, `gzip`, `sha256sum`, and
+`curl` or `wget`. The installer turns on
 lingering for the account, so the server keeps running after the person logs
 out. The bots' container engine is a system unit, `woven-bots-engine`,
 installed once with sudo. A development instance appends its instance name to

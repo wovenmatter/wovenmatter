@@ -8,12 +8,15 @@ import Glibc
 /// SSH, with the person's own SSH setup. The server runs there as a systemd
 /// user unit, `woven-server` (a development instance appends its name), with
 /// everything under ~/.local/share/<unit>: the release (the static binary and
-/// the resources its child processes need: Node, Pi Durable, the harness
-/// catalog and adapters) and the data folder, which an update keeps.
+/// the resources its child processes need: Pi Durable, the bots runtime, the
+/// harness catalog and adapters), Node, and the data folder, which an update keeps.
 ///
-/// The release comes from `bundle`: `linux-<arch>/woven-server.gz` and
-/// `linux-<arch>/resources.tar.gz`, which the Mac app carries, so nothing is
-/// downloaded on the target.
+/// The release is put together at install from this Mac: the static
+/// `woven-server` for the target's architecture, which the app carries in
+/// `bundle` (`linux-<arch>/woven-server.tar.xz`), and this Mac's own copy of
+/// the resources, without its Node and npm. The target downloads the official
+/// Linux Node that `bundle/node.json` names from nodejs.org and checks it
+/// against the SHA-256 recorded there.
 struct LinuxInstall: Sendable {
   struct Failure: Error, CustomStringConvertible {
     let description: String
@@ -25,6 +28,8 @@ struct LinuxInstall: Sendable {
   var appVersion: String
   /// A development instance offers the stand-in runtime there too.
   var standIn: Bool
+  /// Where Pi Durable, the bots runtime and the harness files come from.
+  var resources: URL = Resources.root
 
   var unit: String { Self.unitName(instance: instance) }
 
@@ -65,24 +70,26 @@ struct LinuxInstall: Sendable {
     // It goes into the unit file, so only a plain one-line PATH is used.
     let path = reported.contains(where: { $0.isNewline || $0 == "%" || $0 == "\\" }) ? "" : reported
 
-    let release = bundle.appendingPathComponent("linux-\(arch)", isDirectory: true)
-    for file in ["woven-server.gz", "resources.tar.gz"] where !FileManager.default.fileExists(atPath: release.appendingPathComponent(file).path) {
+    // The Linux Node release and its SHA-256 for this architecture.
+    guard let record = try? Data(contentsOf: bundle.appendingPathComponent("node.json")),
+          let node = try? JSONDecoder().decode([String: String].self, from: record),
+          let nodeVersion = node["version"], let nodeSHA256 = node[arch],
+          !nodeVersion.isEmpty, Self.isPlain(nodeVersion, extra: "."), nodeSHA256.count == 64, Self.isPlain(nodeSHA256, extra: "") else {
       throw Failure(description: "This Mac does not carry the Linux server for \(arch).")
     }
-    // One tar on SSH's standard input: the two files, unpacked there.
     let staging = FileManager.default.temporaryDirectory.appendingPathComponent("woven-install-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: staging) }
-    let upload = staging.appendingPathComponent("release.tar")
-    let packed = await ChildProcess.run("/usr/bin/tar", ["-cf", upload.path, "-C", release.path, "woven-server.gz", "resources.tar.gz"])
-    guard packed.status == 0 else { throw Failure(description: "Could not pack the Linux server: \(packed.output)") }
+    let upload = try await payload(arch: arch, in: staging)
 
     let root = "$HOME/.local/share/\(unit)"
+    let nodeFolder = "node/v\(nodeVersion)"
+    let nodeName = "node-v\(nodeVersion)-linux-\(arch == "x86_64" ? "x64" : "arm64")"
     var arguments = ["%h/.local/share/\(unit)/data", "--port", String(port), "--app-version", appVersion]
     // A development instance keeps its new folders with its data, not in ~/Woven Matter.
     if let instance { arguments += ["--instance", instance, "--folders", "%h/.local/share/\(unit)/folders"] }
     if standIn { arguments.append("--stand-in-runtime") }
-    let resources = "%h/.local/share/\(unit)/release/resources"
+    let resourcesFolder = "%h/.local/share/\(unit)/release/resources"
     let unitText = """
       [Unit]
       Description=Woven Matter server\(instance.map { " (\($0))" } ?? "")
@@ -90,9 +97,9 @@ struct LinuxInstall: Sendable {
 
       [Service]
       ExecStart=%h/.local/share/\(unit)/release/woven-server \(arguments.joined(separator: " "))
-      Environment=WOVEN_RESOURCES=\(resources)
-      Environment=WOVEN_NODE=\(resources)/node/bin/node
-      Environment=PATH=\(path.isEmpty ? "/usr/local/bin:/usr/bin:/bin" : path):\(resources)/node/bin
+      Environment=WOVEN_RESOURCES=\(resourcesFolder)
+      Environment=WOVEN_NODE=%h/.local/share/\(unit)/\(nodeFolder)/bin/node
+      Environment=PATH=\(path.isEmpty ? "/usr/local/bin:/usr/bin:/bin" : path):%h/.local/share/\(unit)/\(nodeFolder)/bin
       StandardOutput=append:%h/.local/share/\(unit)/data/server.log
       StandardError=append:%h/.local/share/\(unit)/data/server.log
       Restart=on-failure
@@ -109,15 +116,35 @@ struct LinuxInstall: Sendable {
       mkdir -p "$root/data" "$HOME/.config/systemd/user"
       rm -rf "$root/release.next"
       mkdir -p "$root/release.next/resources"
-      cd "$root/release.next"
-      tar -xf -
-      gunzip woven-server.gz
-      chmod 0755 woven-server
-      tar -xzf resources.tar.gz -C resources
-      rm resources.tar.gz
+      tar -xzf - -C "$root/release.next/resources"
+      mv "$root/release.next/resources/woven-server" "$root/release.next/woven-server"
+      chmod 0755 "$root/release.next/woven-server"
+      # Node from nodejs.org, checked against the SHA-256 this Mac carries.
+      node="$root/\(nodeFolder)"
+      if [ ! -x "$node/bin/node" ]; then
+        rm -rf "$root/node.next"
+        mkdir -p "$root/node.next" "$root/node"
+        url="https://nodejs.org/dist/v\(nodeVersion)/\(nodeName).tar.gz"
+        if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 -o "$root/node.next/node.tar.gz" "$url"
+        elif command -v wget >/dev/null 2>&1; then wget -q -O "$root/node.next/node.tar.gz" "$url"
+        else echo "Downloading Node needs curl or wget." >&2; exit 1
+        fi
+        [ "$(sha256sum "$root/node.next/node.tar.gz" | cut -d ' ' -f 1)" = "\(nodeSHA256)" ] \\
+          || { echo "The Node download from nodejs.org does not match its SHA-256." >&2; exit 1; }
+        tar -xzf "$root/node.next/node.tar.gz" --strip-components=1 -C "$root/node.next" \\
+          "\(nodeName)/bin" "\(nodeName)/lib" "\(nodeName)/LICENSE"
+        rm "$root/node.next/node.tar.gz"
+        rm -rf "$node"
+        mv "$root/node.next" "$node"
+      fi
+      # Node must run here (a bare system can lack a library it needs) before the running server is replaced.
+      "$node/bin/node" --version >/dev/null
+      # Resources.npm finds Node's npm beside the resources.
+      ln -s "$node" "$root/release.next/resources/node"
       systemctl --user stop \(unit).service 2>/dev/null || true
       rm -rf "$root/release"
       mv "$root/release.next" "$root/release"
+      for other in "$root/node"/*; do [ "$other" = "$node" ] || rm -rf "$other"; done
       cat > "$HOME/.config/systemd/user/\(unit).service" <<'WOVEN_UNIT'
       \(unitText)
       WOVEN_UNIT
@@ -136,6 +163,29 @@ struct LinuxInstall: Sendable {
     let machineID = installed.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !machineID.isEmpty else { throw Failure(description: "The server on \(host) did not start.") }
     return machineID
+  }
+
+  /// One gzip tar for SSH's standard input, unpacked there into the release's
+  /// resources: `woven-server` for `arch` and, from `resources`, Pi Durable
+  /// without this Mac's Node and npm, the bots runtime and the harness files.
+  /// No Claude engine package and no tests, so a source checkout sends the same.
+  func payload(arch: String, in staging: URL) async throws -> URL {
+    let server = bundle.appendingPathComponent("linux-\(arch)/woven-server.tar.xz")
+    guard FileManager.default.fileExists(atPath: server.path) else {
+      throw Failure(description: "This Mac does not carry the Linux server for \(arch).")
+    }
+    let unpacked = await ChildProcess.run("/usr/bin/tar", ["-xf", server.path, "-C", staging.path, "woven-server"])
+    guard unpacked.status == 0 else { throw Failure(description: "Could not unpack the Linux server: \(unpacked.output)") }
+    let upload = staging.appendingPathComponent("release.tar.gz")
+    // `^` anchors at the top, so the packages' own lib, bin and test folders stay.
+    let excluded = ["^default-agent/bin", "^default-agent/lib", "^default-agent/test", "^bots/test",
+                    "@anthropic-ai/claude-agent-sdk-*-*", ".DS_Store"]
+    let packed = await ChildProcess.run("/usr/bin/tar", ["-czf", upload.path, "--no-mac-metadata", "--no-xattrs"]
+                                          + excluded.flatMap { ["--exclude", $0] }
+                                          + ["-C", staging.path, "woven-server", "-C", resources.path, "default-agent", "bots", "harnesses"],
+                                        timeout: .seconds(600))
+    guard packed.status == 0 else { throw Failure(description: "Could not pack the Linux server: \(packed.output)") }
+    return upload
   }
 
   /// Stops and disables the unit and deletes everything it had there, its

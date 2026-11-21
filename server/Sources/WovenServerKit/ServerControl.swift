@@ -122,7 +122,7 @@ extension LinuxInstall {
     var problems: [String] = []
     if !["x86_64", "aarch64"].contains(arch) {
       problems.append("\(host) is \(arch); the server runs on x86_64 and aarch64.")
-    } else if !FileManager.default.fileExists(atPath: bundle.appendingPathComponent("linux-\(arch)/woven-server.gz").path) {
+    } else if !FileManager.default.fileExists(atPath: bundle.appendingPathComponent("linux-\(arch)/woven-server.tar.xz").path) {
       problems.append("This Mac does not carry the Linux server for \(arch).")
     }
     if lines[1] != "systemd" { problems.append("\(host) has no systemd to run the server.") }

@@ -48,7 +48,8 @@ A release runs in four steps, all on this Mac; GitHub only signs and notarizes.
    compiles the production Release app here (ad-hoc signed; a Debug app is never
    a distribution artifact). That compile also builds everything the app
    carries: the Linux `woven-server` for x86_64 and aarch64, Pi Durable, the
-   bots runtime, the VM helper, Cua and the browser. It then
+   bots runtime, the VM helper, Cua and the browser. No Claude engine is
+   bundled, and Linux machines get Node from nodejs.org at install. It then
    checks the app and uploads nothing. Meanwhile draft the release description
    and go over it with Trey. Ship the moment both the build and the approval are
    done.

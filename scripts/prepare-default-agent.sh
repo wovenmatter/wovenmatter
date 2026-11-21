@@ -30,7 +30,7 @@ private_npm="$(node "$repo_root/harnesses/prepare-npm.mjs" "$npm_selection")"
 export PATH="${private_npm%/npm}:$PATH"
 npm_provenance="${private_npm%/bin/npm}/provenance.json"
 tooling_hash="$(shasum -a 256 "$npm_provenance" | cut -d ' ' -f1)"
-lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch-npm-$tooling_hash"
+lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch-npm-$tooling_hash-omit-optional"
 # Keep reproducible dependencies outside a possibly cloud-synced checkout.
 # Copying node_modules from Desktop can block on File Provider hydration (and
 # include conflict copies) even when every package version is already locked.
@@ -42,7 +42,8 @@ if [ ! -f "$dependency_root/node_modules/.woven-lock" ] || [ "$(cat "$dependency
     # npm must see the physical working directory on macOS, where TMPDIR
     # commonly begins with the /var symlink to /private/var.
     cd -P "$dependency_root"
-    npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cpu="$node_arch" --os=darwin
+    # Optional packages are only the Claude Agent SDK's engines; the installed Claude Code runs instead.
+    npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund --cpu="$node_arch" --os=darwin
   )
   printf '%s' "$lock_hash" > "$dependency_root/node_modules/.woven-lock"
 fi
@@ -70,10 +71,6 @@ done
 # Leave executable code, declarations, licenses, and vendor signatures intact.
 find "$output/node_modules" -type f -name '*.map' -delete
 
-claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
-test -x "$claude_binary"
-# Preserve Anthropic's signed, unmodified runtime. Never re-sign or patch it.
-codesign --verify --strict "$claude_binary"
 mkdir -p "$output/bin"
 cp "$cache/bin/node" "$output/bin/node"
 cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"

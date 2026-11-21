@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { accessSync, constants, statSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
@@ -10,22 +10,27 @@ import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai/u
 import { humanMessage } from './rpc.mjs';
 
 // The Claude subscription is the Claude Code sign-in on this machine, used
-// through the Claude Agent SDK with its default configuration. Claude keeps
-// its own tokens. Pi keeps the agent loop and runs the tools: each model
-// request replays the transcript into a fresh SDK query that may make exactly
-// one model request, and the tools are declared through an inventory server
-// that refuses to run them.
+// through the Claude Agent SDK with its default configuration and the Claude
+// Code installed here. Claude keeps its own tokens. Pi keeps the agent loop
+// and runs the tools: each model request replays the transcript into a fresh
+// SDK query that may make exactly one model request, and the tools are
+// declared through an inventory server that refuses to run them.
 
 export const claudeProvider = 'claude-subscription';
 const api = 'claude-agent-sdk';
 const prefix = 'mcp__woven__';
 const inventoryProgram = fileURLToPath(new URL('./claude-inventory.mjs', import.meta.url));
 const execute = promisify(execFile);
-const require = createRequire(import.meta.url);
 const zeroCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 
-export function claudeExecutable() {
-  return join(dirname(require.resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`)), 'claude');
+// The installed Claude Code: the first executable `claude` on PATH, looked up at each use.
+export function claudeExecutable(path = process.env.PATH ?? '') {
+  for (const folder of path.split(delimiter)) {
+    if (!folder) continue;
+    const candidate = join(folder, 'claude');
+    try { if (statSync(candidate).isFile()) { accessSync(candidate, constants.X_OK); return candidate; } } catch {}
+  }
+  throw new Error('Claude Code is not installed on this machine.');
 }
 
 // The caller's environment, without anything that would switch Claude away from its own sign-in.
@@ -35,15 +40,17 @@ function claudeEnvironment(extra = {}) {
 }
 
 async function sdkQuery(options) {
+  const pathToClaudeCodeExecutable = claudeExecutable();
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
-  return query(options);
+  return query({ ...options, options: { ...options.options, pathToClaudeCodeExecutable, mcpServersDelivery: 'argv' } });
 }
 
 // Whether Claude Code on this machine is signed in with a Claude subscription.
 export async function claudeStatus() {
-  let stdout;
+  let executable, stdout;
+  try { executable = claudeExecutable(); } catch { return { signedIn: false }; }
   try {
-    ({ stdout } = await execute(claudeExecutable(), ['auth', 'status', '--json'], { env: claudeEnvironment(), timeout: 10000, maxBuffer: 65536 }));
+    ({ stdout } = await execute(executable, ['auth', 'status', '--json'], { env: claudeEnvironment(), timeout: 10000, maxBuffer: 65536 }));
   } catch (error) {
     if (!error.stdout) return { signedIn: false };
     stdout = error.stdout;

@@ -30,9 +30,11 @@ export function useInstalledSDK(data) {
   });
 }
 
+// The npm that ships beside Pi Durable: the Mac app's `default-agent/lib/npm`, then Linux Node's own.
 function npmCommand() {
-  const bundled = join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  return existsSync(bundled) ? [process.execPath, [bundled]] : ['npm', []];
+  const bundled = [fileURLToPath(new URL('../lib/npm/bin/npm-cli.js', import.meta.url)),
+    join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')].find(existsSync);
+  return bundled ? [process.execPath, [bundled]] : ['npm', []];
 }
 
 export async function updateSDK(data) {
@@ -43,7 +45,7 @@ export async function updateSDK(data) {
   try {
     await writeFile(join(target, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
     const [command, prefix] = npmCommand();
-    await run(command, [...prefix, 'install', '--no-audit', '--no-fund', '--omit=dev', '--prefix', target, ...sdkPackages.map(name => `${name}@latest`)],
+    await run(command, [...prefix, 'install', '--no-audit', '--no-fund', '--omit=dev', '--omit=optional', '--prefix', target, ...sdkPackages.map(name => `${name}@latest`)],
       { timeout: 10 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
     // The packages must load before sessions are pointed at them.
     await run(process.execPath, ['--input-type=module', '-e', "await import('@earendil-works/pi-durable'); await import('@earendil-works/pi-coding-agent');"], { cwd: target, timeout: 60000 });

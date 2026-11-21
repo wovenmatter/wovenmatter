@@ -4,17 +4,41 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
+import zipfile
 
 MAGIC = {bytes.fromhex(value) for value in (
     "feedface", "cefaedfe", "feedfacf", "cffaedfe",
     "cafebabe", "bebafeca", "cafebabf", "bfbafeca",
 )}
 
+ARCHIVES = (".tar", ".tar.gz", ".tgz", ".tar.xz", ".zip")
+
+def archived_mach_o(path):
+    """Mach-O members of an archive: Apple's notary scans inside archives, and they cannot be signed there."""
+    if path.name.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.infolist():
+                if not member.is_dir():
+                    with archive.open(member) as source:
+                        if source.read(4) in MAGIC:
+                            yield member.filename
+        return
+    with tarfile.open(path) as archive:
+        for member in archive:
+            if member.isfile():
+                with archive.extractfile(member) as source:
+                    if source.read(4) in MAGIC:
+                        yield member.name
+
 def validate(bundle):
     failures = []
     count = 0
     for path in sorted(bundle.rglob("*")):
         if path.is_symlink() or not path.is_file():
+            continue
+        if path.name.endswith(ARCHIVES):
+            failures += [f"{path.relative_to(bundle)}: archive holds Mach-O {name}" for name in archived_mach_o(path)]
             continue
         with path.open("rb") as source:
             if source.read(4) not in MAGIC:

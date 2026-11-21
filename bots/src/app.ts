@@ -166,10 +166,7 @@ export async function startRuntime(
     const live = options.models
       ? undefined
       : createBotModels(credentials, {
-          claude: {
-            directory: config.paths.claude,
-            ...(config.claude?.executable ? { executable: config.claude.executable } : {}),
-          },
+          claude: { directory: config.paths.claude },
           catalog: {
             store: new FileModelsStore(join(config.paths.dataDir, "provider-models")),
             ...(options.catalog ?? {}),
