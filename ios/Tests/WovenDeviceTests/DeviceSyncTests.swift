@@ -15,6 +15,14 @@ private struct NoPeers: Peers {
   func fetchContent(_ digest: String) async -> Bool { false }
 }
 
+/// The library events a UI hears.
+private actor Announcements {
+  private(set) var events: [LibraryEvent] = []
+  func start(_ stream: AsyncThrowingStream<LibraryEvent, any Error>) {
+    Task { do { for try await event in stream { self.events.append(event) } } catch {} }
+  }
+}
+
 /// Whether the stand-in Mac answers.
 private final class Reachable: Sendable {
   let on = Mutex(true)
@@ -76,6 +84,16 @@ func aDeviceSyncsWithTheMacItAddsAndStartsAgainWhenRemoved() async throws {
   #expect(try await eventually { (try? await phone.device.library.artifact(note.artifact.id)) != nil })
   let listed = try await phone.ui.call(ListMachines())
   #expect(listed.map(\.machine.id) == [mac.machineID] && listed.first?.online == true)
+
+  // Forgetting the Mac and learning its address again is announced to the UI
+  // as a change of the machine list, though nothing in the library changed.
+  let before = phone.device.library.changed
+  let announced = Announcements()
+  await announced.start(try await phone.ui.subscribe(SubscribeLibrary()).events)
+  await phone.device.disconnect()
+  try await phone.device.add(code)
+  #expect(try await eventually { await announced.events.count >= 2 })
+  #expect(await announced.events.allSatisfy { $0.tables == ["machines"] && $0.changed == before })
 
   // A device on another release is refused, naming the machine.
   let stale = try await Device.start(Model(), release: "older", dial: dial)

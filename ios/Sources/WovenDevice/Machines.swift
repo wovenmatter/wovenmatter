@@ -22,6 +22,11 @@ actor Machines: Peers {
   private var statuses: [String: PeerStatus] = [:]
   private var active = true
   private var watcher: Task<Void, Never>?
+  /// One element each time what `machines.list` reports changes in a way the
+  /// UI acts on: a machine learned, readdressed or forgotten. Being reached or
+  /// not is not one: the UI follows that on its own connections.
+  nonisolated let listChanged: AsyncStream<Void>
+  private let tell: AsyncStream<Void>.Continuation
 
   init(library: Library, appVersion: String, folder: URL, dial: @escaping Dial) {
     self.library = library
@@ -29,6 +34,7 @@ actor Machines: Peers {
     self.dial = dial
     book = AddressBook(file: folder.appendingPathComponent("machines.json"))
     handOff = ContentHandOff(library: library, file: folder.appendingPathComponent("content-handed.json"))
+    (listChanged, tell) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
   }
 
   /// Dials every machine in the address book, and forgets one the library
@@ -43,6 +49,7 @@ actor Machines: Peers {
 
   func stop() {
     watcher?.cancel()
+    tell.finish()
     unlinkAll()
   }
 
@@ -76,8 +83,8 @@ actor Machines: Peers {
     guard remote.appVersion == appVersion else {
       throw DeviceConnectionError.otherRelease(machineName: remote.machine.name, appVersion: remote.appVersion)
     }
-    book.set(remote.machine.id, .init(name: remote.machine.name, host: code.address, port: code.port,
-                                      appVersion: remote.appVersion))
+    if book.set(remote.machine.id, .init(name: remote.machine.name, host: code.address, port: code.port,
+                                         appVersion: remote.appVersion)) { tell.yield() }
     await learn(from: client)
     for id in book.entries.keys { link(id) }
   }
@@ -86,6 +93,7 @@ actor Machines: Peers {
   func forgetAll() async {
     unlinkAll()
     for id in book.entries.keys { await handOff.forget(id) }
+    if !book.entries.isEmpty { tell.yield() }
     book.removeAll()
     statuses.removeAll()
   }
@@ -179,8 +187,8 @@ actor Machines: Peers {
     }
     // Another machine answers there now: remember it, and look for this one again.
     guard remote.machine.id == id else {
-      book.set(remote.machine.id, .init(name: remote.machine.name, host: entry.host, port: entry.port,
-                                        appVersion: remote.appVersion))
+      if book.set(remote.machine.id, .init(name: remote.machine.name, host: entry.host, port: entry.port,
+                                           appVersion: remote.appVersion)) { tell.yield() }
       link(remote.machine.id)
       throw ConnectionClosed()
     }
@@ -255,7 +263,10 @@ actor Machines: Peers {
       let known = book.entries[status.machine.id]
       let entry = AddressBook.Entry(name: status.machine.name, host: host, port: port,
                                     appVersion: known?.appVersion ?? status.appVersion)
-      if book.set(status.machine.id, entry) { link(status.machine.id) }
+      if book.set(status.machine.id, entry) {
+        tell.yield()
+        link(status.machine.id)
+      }
     }
   }
 
@@ -267,6 +278,7 @@ actor Machines: Peers {
       if let client = clients.removeValue(forKey: id) { await client.close() }
       statuses[id] = nil
       book.remove(id)
+      tell.yield()
       await handOff.forget(id)
     }
   }

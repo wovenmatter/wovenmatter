@@ -121,6 +121,11 @@ public final class WovenDevice: Sendable {
                                           dataFolder: folder, peers: machines, titleRuntime: nil,
                                           routes: signInRoutes(providers, oauth: { InferenceOAuthSession() }))
     await machines.start()
+    // The UI reads the machine list again when the core says it changed.
+    let changes = machines.listChanged
+    Task {
+      for await _ in changes { core.announce(["machines"]) }
+    }
     return Running(library: library, core: core, machines: machines)
   }
 
