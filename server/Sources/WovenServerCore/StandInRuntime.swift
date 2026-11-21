@@ -14,8 +14,8 @@ import WovenProtocol
 /// A turn whose text starts with "then " is followed by one the stand-in
 /// starts by itself, answering "On my own: <text>".
 /// A turn `woven NAME {arguments}` instead calls that Woven tool through the
-/// session's tool socket, as a runtime's MCP client would, and reports its
-/// result. With a gate, that call waits until a message is steered into the
+/// session's tool socket, as a runtime's MCP client would, or in this process
+/// where the host has no socket, and reports its result. With a gate, that call waits until a message is steered into the
 /// turn, and the steer is answered only once the call returns, as a runtime
 /// that takes mid-turn input at the end of a tool round would.
 public final class StandInRuntime: Runtime {
@@ -94,9 +94,9 @@ public final class StandInRuntime: Runtime {
   public func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
     if let handle = start.nativeHandle {
       guard store.resume(handle) else { throw RuntimeError.nativeSessionGone }
-      return StandInSession(handle: handle, store: store, gate: gate, tools: start.tools)
+      return StandInSession(handle: handle, store: store, gate: gate, tools: start.tools, sessionTools: start.sessionTools)
     }
-    return StandInSession(handle: store.start(), store: store, gate: gate, tools: start.tools)
+    return StandInSession(handle: store.start(), store: store, gate: gate, tools: start.tools, sessionTools: start.sessionTools)
   }
 }
 
@@ -112,9 +112,12 @@ private final class StandInSession: RuntimeSession {
   /// A `woven` turn's tool call while it is out.
   private let toolRound = Mutex<Task<Void, Never>?>(nil)
   private let tools: ToolAccess?
+  private let sessionTools: SessionTools?
 
-  init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?) {
+  init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?,
+       sessionTools: SessionTools?) {
     self.tools = tools
+    self.sessionTools = sessionTools
     nativeHandle = handle
     (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
     self.store = store
@@ -134,11 +137,13 @@ private final class StandInSession: RuntimeSession {
     let gate = gate
     if text.hasPrefix("woven ") {
       let tools = tools
+      let sessionTools = sessionTools
       let parts = text.dropFirst(6).split(separator: " ", maxSplits: 1)
       let name = String(parts.first ?? "")
       let arguments = parts.count > 1 ? String(parts[1]) : "{}"
       let call = Task {
         await gate?.wait()
+        if let sessionTools { return await Self.callTool(name, arguments: arguments, in: sessionTools) }
         return await Self.callTool(name, arguments: arguments, tools: tools)
       }
       toolRound.withLock { $0 = Task { _ = await call.value } }
@@ -186,6 +191,14 @@ private final class StandInSession: RuntimeSession {
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
     emit.yield(.promptResolved(id: promptID))
+  }
+
+  /// One call in this process.
+  private static func callTool(_ name: String, arguments: String, in tools: SessionTools) async -> (text: String, failed: Bool) {
+    let value = (try? JSONDecoder().decode(JSONValue.self, from: Data(arguments.utf8))) ?? .object([:])
+    let result = await tools.call(name, arguments: value)
+    let text = result.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined(separator: "\n")
+    return (text, result.isError)
   }
 
   /// One MCP `tools/call` over the tool socket: the key, then the request.

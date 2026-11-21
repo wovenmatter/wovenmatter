@@ -83,15 +83,34 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: appVersion))
   let chat = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Quick Chat"))
   let watching = try await ui.subscribe(SubscribeSession(sessionID: chat.id))
-  _ = try await ui.call(SendTurn(sessionID: chat.id, text: "hello"))
-  var announced: [String] = []
-  for try await event in watching.events {
-    if case .itemFinished(let item) = event { announced.append(item.id) }
-    if event == .runState(.idle) { break }
+  var events = watching.events.makeAsyncIterator()
+  /// Sends a turn and returns the items announced until the session is idle again.
+  func turn(_ text: String) async throws -> [SessionItem] {
+    _ = try await ui.call(SendTurn(sessionID: chat.id, text: text))
+    var finished: [SessionItem] = []
+    while let event = try await events.next() {
+      if case .itemFinished(let item) = event { finished.append(item) }
+      if event == .runState(.idle) { break }
+    }
+    return finished
   }
+  let announced = try await turn("hello").map(\.id)
   // Each finished item is announced once and saved once, in order.
   #expect(try await phone.items(sessionID: chat.id).map(\.id) == announced)
   #expect(announced.count == 3)
+
+  // The runtime calls a Woven tool in the app, with no bridge, and only
+  // while the session may use the tool's group.
+  func toolCall(in items: [SessionItem]) -> ToolCall? {
+    items.lazy.compactMap { if case .toolCall(let call) = $0.content { call } else { nil } }.first
+  }
+  _ = try await ui.call(UpdateSession(sessionID: chat.id, tools: [.history]))
+  let refused = toolCall(in: try await turn(#"woven create_artifact {"kind":"note","title":"Groceries","text":"Milk"}"#))
+  #expect(refused?.failed == true)
+  _ = try await ui.call(UpdateSession(sessionID: chat.id, tools: [.notes]))
+  let created = toolCall(in: try await turn(#"woven create_artifact {"kind":"note","title":"Groceries","text":"Milk"}"#))
+  #expect(created?.failed == false)
+  #expect(try await phone.artifacts().map(\.title) == ["Groceries"])
   #expect(try await phone.session(chat.id)?.machineID == phone.machineID)
 
   let device = try #require(try await phone.machine(phone.machineID))
@@ -100,13 +119,13 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   defer { following.cancel() }
 
   // The device's chat reaches A, and from A a second server.
-  #expect(try await eventually { try await a.server.library.items(sessionID: chat.id).count == 3 })
-  #expect(try await eventually { try await b.server.library.items(sessionID: chat.id).count == 3 })
+  #expect(try await eventually { try await a.server.library.items(sessionID: chat.id).count == 7 })
+  #expect(try await eventually { try await b.server.library.items(sessionID: chat.id).count == 7 })
   #expect(try await b.server.library.session(chat.id)?.machineID == phone.machineID)
 
   // A note written on a server reaches the device.
   let onB = try await b.connect()
-  let note = try await onB.call(CreateArtifact(kind: .note, title: "Groceries"))
+  let note = try await onB.call(CreateArtifact(kind: .note, title: "Plans"))
   #expect(try await eventually { (try? await phone.artifact(note.artifact.id)) != nil })
 
   // A device is not a machine: it is listed only as a device, and what it

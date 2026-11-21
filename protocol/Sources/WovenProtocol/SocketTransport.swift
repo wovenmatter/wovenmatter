@@ -1,15 +1,15 @@
+#if canImport(Network)
 import Foundation
 import Network
 import Synchronization
-import WovenProtocol
 
 /// Where a server is: this Mac's over its Unix socket, another machine's at
 /// its tailnet address.
-enum ServerEndpoint: Hashable, Sendable, CustomStringConvertible {
+public enum ServerEndpoint: Hashable, Sendable, CustomStringConvertible {
     case unix(path: String)
     case tcp(host: String, port: Int)
 
-    var description: String {
+    public var description: String {
         switch self {
         case .unix(let path): path
         case .tcp(let host, let port): "\(host):\(port)"
@@ -20,8 +20,8 @@ enum ServerEndpoint: Hashable, Sendable, CustomStringConvertible {
 /// One WebSocket connection to a server, carrying protocol messages as text
 /// frames. Network.framework's own WebSocket does not run over a Unix socket,
 /// so this speaks the small client side of RFC 6455 over a plain stream.
-final class SocketTransport: MessageTransport, Sendable {
-    let incoming: AsyncThrowingStream<String, any Error>
+public final class SocketTransport: MessageTransport, Sendable {
+    public let incoming: AsyncThrowingStream<String, any Error>
 
     private struct State {
         var buffer = Data()
@@ -48,7 +48,7 @@ final class SocketTransport: MessageTransport, Sendable {
 
     /// Connects, upgrades to WebSocket and starts reading. Fails within
     /// `timeout` when nothing answers.
-    static func connect(_ endpoint: ServerEndpoint, timeout: Duration = .seconds(5)) async throws -> SocketTransport {
+    public static func connect(_ endpoint: ServerEndpoint, timeout: Duration = .seconds(5)) async throws -> SocketTransport {
         let target: NWEndpoint = switch endpoint {
         case .unix(let path): .unix(path: path)
         case .tcp(let host, let port): .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(integerLiteral: UInt16(port)))
@@ -71,12 +71,12 @@ final class SocketTransport: MessageTransport, Sendable {
         }
     }
 
-    func send(_ text: String) throws {
+    public func send(_ text: String) throws {
         guard !state.withLock({ $0.isClosed }) else { throw ConnectionClosed() }
         connection.send(content: Self.frame(opcode: 0x1, payload: Data(text.utf8)), completion: .contentProcessed { _ in })
     }
 
-    func close() {
+    public func close() {
         guard !state.withLock({ $0.isClosed }) else { return }
         connection.send(content: Self.frame(opcode: 0x8, payload: Data([0x03, 0xE8])), isComplete: true,
                         completion: .contentProcessed { [connection] _ in connection.cancel() })
@@ -84,7 +84,7 @@ final class SocketTransport: MessageTransport, Sendable {
     }
 
     /// Returns once the connection has closed, from either side.
-    func closed() async {
+    public func closed() async {
         await withCheckedContinuation { continuation in
             let done = state.withLock { state in
                 if state.isClosed { return true }
@@ -296,3 +296,4 @@ final class SocketTransport: MessageTransport, Sendable {
         return Data(data[end.upperBound...])
     }
 }
+#endif

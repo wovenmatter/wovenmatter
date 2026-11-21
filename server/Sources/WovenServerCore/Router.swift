@@ -5,7 +5,8 @@ import WovenProtocol
 /// Who is on the other end of a connection.
 public struct Caller: Sendable {
   public enum Origin: Sendable {
-    /// The Unix socket: the UI on this machine.
+    /// The UI on this host: over the Unix socket, or on a device over the
+    /// in-memory connection.
     case local
     /// A machine of the tailnet, by its tailnet name.
     case tailnet(name: String)
@@ -21,7 +22,7 @@ public struct Caller: Sendable {
 }
 
 /// Handlers by method. Adding a request is one `on` call.
-package struct Router: Sendable {
+public struct Router: Sendable {
   /// Encoded events of one subscription. The connection pulls them only as
   /// fast as it can send them; whoever produces them bounds what waits.
   package typealias Events = AsyncThrowingStream<JSONValue, any Error>
@@ -34,20 +35,20 @@ package struct Router: Sendable {
   package typealias Handler = @Sendable (JSONValue, Caller) async throws -> Outcome
   private var handlers: [String: Handler] = [:]
 
-  package init() {}
+  public init() {}
 
   /// Adds `other`'s handlers; one for a method already here replaces it.
   package mutating func add(_ other: Router) {
     handlers.merge(other.handlers) { _, replacement in replacement }
   }
 
-  package mutating func on<R: Request>(_ type: R.Type, _ handle: @escaping @Sendable (R, Caller) async throws -> R.Reply) {
+  public mutating func on<R: Request>(_ type: R.Type, _ handle: @escaping @Sendable (R, Caller) async throws -> R.Reply) {
     handlers[R.method] = { params, caller in
       .reply(try JSONValue(encoding: try await handle(try Self.decode(R.self, params), caller)))
     }
   }
 
-  package mutating func subscription<S: Subscription>(
+  public mutating func subscription<S: Subscription>(
     _ type: S.Type, _ handle: @escaping @Sendable (S, Caller) async throws -> (S.Reply, AsyncThrowingStream<S.Event, any Error>)
   ) {
     handlers[S.method] = { params, caller in

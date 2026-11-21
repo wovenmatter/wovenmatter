@@ -4,12 +4,12 @@ import WovenProtocol
 /// Artifacts as an agent reads and writes them: a note as plain lines, an
 /// app as its HTML, a page as an outline of components with their ids and
 /// revisions.
-enum DocumentText {
+package enum DocumentText {
   // MARK: Notes
 
   /// A note from plain text: `# ` to `###### ` headings, `- ` or `* `
   /// bullets, `1. ` numbered items, and a paragraph per other line.
-  static func note(_ text: String) -> NoteDocument {
+  package static func note(_ text: String) -> NoteDocument {
     var blocks: [NoteBlock] = []
     for raw in text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false) {
       var line = String(raw)
@@ -44,7 +44,7 @@ enum DocumentText {
   }
 
   /// A note's text in the same form `note(_:)` reads; tables as rows of cells.
-  static func text(of document: NoteDocument) -> String {
+  package static func text(of document: NoteDocument) -> String {
     var number = 0
     return document.blocks.map { block -> String in
       switch block {
@@ -77,7 +77,7 @@ enum DocumentText {
   /// A page as an outline: each component on its own line with its kind,
   /// id and revision (and a section's subtree revision), indented by depth,
   /// then its text.
-  static func outline(of document: NoteDocument) -> String {
+  package static func outline(of document: NoteDocument) -> String {
     let page = document.materializedPage()
     var lines: [String] = []
     if let purpose = page.boardPurpose, !purpose.isEmpty { lines.append("Purpose: \(purpose)") }

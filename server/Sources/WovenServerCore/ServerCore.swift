@@ -53,18 +53,23 @@ public final class ServerCore: Sendable {
   /// caller (on a device with the device's platform) and closed by it after
   /// `stop`. Scratch directories and new folders go in `dataFolder`. With
   /// `titleRuntime`, new chats are named by that runtime when titles are on.
+  /// `routes` are the host's own, served on top of the core's: one for a
+  /// method the core also serves replaces the core's, as on a machine.
   public static func start(library: Library, appVersion: String, runtimes: [any Runtime], dataFolder: URL,
-                           peers: any Peers, titleRuntime: RuntimeKind? = nil) async throws -> ServerCore {
+                           peers: any Peers, titleRuntime: RuntimeKind? = nil,
+                           routes: Router = Router()) async throws -> ServerCore {
     guard let machine = try await library.machine(library.machineID) else {
       throw ProtocolError(.failed, "The library has no row for this machine.")
     }
     let scratch = dataFolder.appendingPathComponent("scratch", isDirectory: true)
     let sessions = SessionManager(library: library, runtimes: runtimes, scratch: scratch)
+    // No bridge here: each session's runtime takes the core's tools in this process.
+    sessions.inProcessTools.attach(WovenTools(library: library, sessions: sessions, catalog: coreTools + goalTools, host: nil))
     await sessions.start()
     return ServerCore(library: library, hello: Hello(role: .server, machine: machine, appVersion: appVersion),
                       sessions: sessions, peers: peers, scratch: scratch,
                       foldersRoot: dataFolder.appendingPathComponent("folders", isDirectory: true),
-                      titleRuntime: titleRuntime, routes: Router())
+                      titleRuntime: titleRuntime, routes: routes)
   }
 
   /// The core with `routes`, a machine's own, served beside the core's. A
@@ -81,6 +86,7 @@ public final class ServerCore: Sendable {
     registerArtifacts(&all, library: library, sessions: sessions)
     registerLibraryItems(&all, library: library)
     registerGoals(&all, library: library, sessions: sessions)
+    registerRuntimeList(&all, sessions: sessions)
     all.add(routes)
     router = all
     titles = titleRuntime.map { Titles(library: library, sessions: sessions, runtime: $0, scratch: scratch) }

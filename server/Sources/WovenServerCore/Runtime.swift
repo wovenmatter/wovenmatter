@@ -34,14 +34,55 @@ public struct RuntimeStart: Sendable {
   /// The Woven MCP and Woven's instructions, which the runtime hands its
   /// native session in its own way; nil when this machine cannot offer them.
   public var tools: ToolAccess?
+  /// Where the host has no bridge (a device), the Woven tools this session
+  /// is offered, for a runtime in this process to take as its own tools.
+  public var sessionTools: SessionTools?
 
   public init(sessionID: String, directory: String, nativeHandle: String?, choices: SessionChoices = SessionChoices(),
-              tools: ToolAccess? = nil) {
+              tools: ToolAccess? = nil, sessionTools: SessionTools? = nil) {
     self.sessionID = sessionID
     self.directory = directory
     self.nativeHandle = nativeHandle
     self.choices = choices
     self.tools = tools
+    self.sessionTools = sessionTools
+  }
+}
+
+/// The Woven tools one session is offered, for a runtime that runs in this
+/// process and gives them to its model as its own tools. A call goes the way
+/// a call through the bridge goes: the same groups, the session as its
+/// author, visual replies saved in its chat.
+public struct SessionTools: Sendable {
+  /// One tool as the model is shown it.
+  public struct Definition: Sendable, Hashable {
+    public var name: String
+    public var description: String
+    /// The JSON Schema of its arguments.
+    public var input: JSONValue
+    /// It changes nothing.
+    public var readOnly: Bool
+  }
+
+  public let sessionID: String
+  private let catalog: WovenTools
+
+  package init(_ catalog: WovenTools, sessionID: String) {
+    self.catalog = catalog
+    self.sessionID = sessionID
+  }
+
+  /// The tools this session may use now. The groups it may use can change
+  /// between turns, so ask before each turn.
+  public func definitions() async -> [Definition] {
+    catalog.offered(enabled: await catalog.enabledGroups(sessionID: sessionID)).map {
+      Definition(name: $0.name, description: $0.description, input: $0.input, readOnly: $0.readOnly)
+    }
+  }
+
+  /// Carries out one call as this session. A failure comes back as an error result.
+  public func call(_ name: String, arguments: JSONValue) async -> ToolResult {
+    await catalog.call(name, arguments: arguments, caller: ToolCaller(machineID: catalog.machineID, sessionID: sessionID))
   }
 }
 

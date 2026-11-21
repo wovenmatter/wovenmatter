@@ -86,6 +86,9 @@ package actor SessionManager {
   private var watcher: Task<Void, Never>?
   package nonisolated let board = RunBoard()
   package nonisolated let configurations: RuntimeConfigurations
+  /// The catalog a session's runtime is given in its own process, where the
+  /// host offers no bridge.
+  package nonisolated let inProcessTools = ToolsLink()
   /// Told of the person's first message in each session, for its title.
   package nonisolated let firstMessages = FirstMessageHook()
 
@@ -171,6 +174,7 @@ package actor SessionManager {
     let host = SessionHost(sessionID: sessionID, library: library, runtime: runtime, gone: gone, board: board,
                            configurations: configurations,
                            tools: toolAccess?(runtime.sharesToolBridge ? .runtime(runtime.kind) : .session(sessionID)),
+                           sessionTools: toolAccess == nil ? inProcessTools.current.map { SessionTools($0, sessionID: sessionID) } : nil,
                            firstMessages: firstMessages)
     hosts[sessionID] = host
     return host
@@ -216,6 +220,7 @@ package actor SessionHost {
   private let board: RunBoard
   private let configurations: RuntimeConfigurations
   private let tools: ToolAccess?
+  private let sessionTools: SessionTools?
   private var live: (any RuntimeSession)?
   private var generation = 0
   private var run: RunState
@@ -250,7 +255,9 @@ package actor SessionHost {
   private let firstMessages: FirstMessageHook?
 
   package init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
-       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, firstMessages: FirstMessageHook? = nil) {
+       configurations: RuntimeConfigurations, tools: ToolAccess? = nil, sessionTools: SessionTools? = nil,
+       firstMessages: FirstMessageHook? = nil) {
+    self.sessionTools = sessionTools
     self.firstMessages = firstMessages
     self.tools = tools
     self.sessionID = sessionID
@@ -624,12 +631,12 @@ package actor SessionHost {
     let opened: any RuntimeSession
     do {
       opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: native?.handle,
-                                                   choices: choices, tools: tools))
+                                                   choices: choices, tools: tools, sessionTools: sessionTools))
     } catch RuntimeError.nativeSessionGone {
       // Nothing was ever said in this chat, so a new native session loses nothing.
       if try await library.hasItems(sessionID) == false {
         opened = try await runtime.open(RuntimeStart(sessionID: sessionID, directory: directory, nativeHandle: nil, choices: choices,
-                                                     tools: tools))
+                                                     tools: tools, sessionTools: sessionTools))
       } else {
         try await nativeSessionGone()
         throw Self.goneError

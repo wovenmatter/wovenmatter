@@ -380,6 +380,10 @@ window holds, and returns a screenshot; it saves nothing.
   says a key the server gave that runtime in memory, so the server knows who
   is calling. The bots runtime asks for the tools over its own connection to
   the server.
+- On a device nothing runs the bridge. The core hands each session's runtime,
+  in the app, the tools that session is offered and a call that goes the way
+  a bridged call goes. A device offers the tools that need no machine: sessions,
+  visual replies, notes and the rest, and goals.
 - The tools are in groups, and each session is offered only the groups it may
   use. A tool in no group (goals, places, `render_html`, `preview_html`) is
   always offered to sessions. Bots are offered only the tools meant for them,

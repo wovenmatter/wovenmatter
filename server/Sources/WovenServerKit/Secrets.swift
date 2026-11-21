@@ -269,14 +269,7 @@ actor Secrets {
   /// `piDurable`, with `defaultModel` from the defaults for new chats
   /// (`agentDefaults.piDurable[.<machineID>]`) and this machine's model servers.
   func piSettings() async -> JSONValue {
-    func setting(_ key: String) async -> JSONValue? { (try? await library.setting(key))?.value }
-    let own = library.machineID
-    var settings = await setting("piDurable.\(own)")
-    if settings == nil { settings = await setting("piDurable") }
-    var defaults = await setting("agentDefaults.piDurable.\(own)")
-    if defaults == nil { defaults = await setting("agentDefaults.piDurable") }
-    guard case .object(var fields) = settings ?? .object([:]) else { return .object([:]) }
-    fields["defaultModel"] = defaults?["model"]
+    guard var fields = await library.piDurableSettings() else { return .object([:]) }
     fields["localServers"] = piLocalServers()
     return .object(fields)
   }
