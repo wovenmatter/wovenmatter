@@ -83,9 +83,14 @@ extension Library {
 
   /// Hands a server this library's rows past the cursor the server keeps for
   /// it, a page at a time: how a device's rows reach a server, since nothing
-  /// can connect to a device. Only a device's connection may.
+  /// can connect to a device. Only a device's connection may. A cursor
+  /// ahead of this library's counter (a library older than what the server
+  /// last received from it, such as one restored from a backup) means the
+  /// server has not seen this state: everything is handed over again, which
+  /// changes nothing the server already holds, and the cursor comes back in step.
   public func push(to client: Client) async throws {
     var cursor = try await client.call(SyncCursor())
+    if cursor > changed { cursor = 0 }
     while true {
       let page = try await pull(after: cursor)
       if page.rows.isEmpty { return }

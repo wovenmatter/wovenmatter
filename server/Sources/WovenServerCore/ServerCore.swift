@@ -131,12 +131,22 @@ private func registerCore(_ router: inout Router, library: Library, sessions: Se
     }
   }
   /// The device on the other end, for the requests only a device makes.
-  @Sendable func device(_ caller: Caller) throws -> String {
-    guard caller.hello.role == .device, caller.hello.machine.id != thisMachine else {
+  /// The cursors are kept by machine identifier, the same ones the server's
+  /// own pulls use, so the caller must be a device and its identifier must
+  /// not name a machine, or a device that was removed.
+  @Sendable func device(_ caller: Caller) async throws -> String {
+    let id = caller.hello.machine.id
+    guard caller.hello.role == .device, caller.hello.machine.platform.isDevice, id != thisMachine else {
       throw ProtocolError(.refused, "Only an iPhone or iPad hands its rows to a server.")
     }
+    if let row = try await library.row("machines", id: id) {
+      guard !row.deleted else { throw ProtocolError(.refused, "This iPhone or iPad was removed. Connect it again.") }
+      guard case .text(let platform)? = row.values["platform"], MachinePlatform(rawValue: platform)?.isDevice == true else {
+        throw ProtocolError(.refused, "That identifier is a machine's, not an iPhone's or iPad's.")
+      }
+    }
     try checkRelease(caller)
-    return caller.hello.machine.id
+    return id
   }
 
   router.on(ListMachines.self) { _, _ in
@@ -275,10 +285,20 @@ private func registerCore(_ router: inout Router, library: Library, sessions: Se
   // The server keeps the cursor, as it does for what it pulls, and announces
   // what changed exactly as after a pull.
   router.on(SyncCursor.self) { _, caller in
-    try await library.cursor(for: try device(caller))
+    try await library.cursor(for: try await device(caller))
   }
   router.on(SyncPush.self) { request, caller in
-    try await library.apply(request.page, from: try device(caller))
+    let id = try await device(caller)
+    // A page is what `pull(after:)` returned: its `next` is the counter of
+    // its last row, so with rows it is at least their count, and an empty
+    // page (nothing left) never moves the cursor forward. A page may move it
+    // back, as a device does that hands everything over again.
+    let page = request.page
+    let honest = page.rows.isEmpty ? page.next <= (try await library.cursor(for: id)) : page.next >= Int64(page.rows.count)
+    guard honest, !page.rows.isEmpty || !page.more else {
+      throw ProtocolError(.refused, "That page's cursor does not match its rows.")
+    }
+    try await library.apply(page, from: id)
     return Done()
   }
   router.on(PutContent.self) { request, _ in

@@ -158,6 +158,24 @@ func aDeviceAndTheServersConvergeOverTheConnectionTheDeviceOpens() async throws 
   let empty = SyncPage(rows: [], next: 0, more: false)
   #expect(await refusal { _ = try await onA.call(SyncPush(page: empty)) }?.code == .refused)
 
+  // A caller cannot move the cursor a server keeps for a machine, nor jump
+  // a device's cursor with a page that carries nothing.
+  let far = SyncPage(rows: [], next: 1_000_000, more: false)
+  for claimed in [Machine(id: b.server.machineID, name: "Laptop", platform: .iPhone),
+                  Machine(id: b.server.machineID, name: "Laptop", platform: .mac)] {
+    let impostor = try await a.dial(Hello(role: .device, machine: claimed, appVersion: appVersion))
+    #expect(await refusal { _ = try await impostor.call(SyncPush(page: far)) }?.code == .refused)
+  }
+  #expect(try await a.server.library.cursor(for: b.server.machineID) < far.next)
+  #expect(await refusal { _ = try await toA.call(SyncPush(page: far)) }?.code == .refused)
+
+  // A server that holds a cursor ahead of the device's counter (a library
+  // restored from an older backup) is handed everything again.
+  _ = try await a.server.library.apply(far, from: phone.machineID)
+  let later = try await phone.createArtifact(kind: .note, title: "After the restore", folderID: nil, body: nil)
+  #expect(try await eventually { (try? await a.server.library.artifact(later.artifact.id)) != nil })
+  #expect(try await a.server.library.cursor(for: phone.machineID) <= phone.changed)
+
   // Removing the device reaches its library, which then starts afresh, and
   // takes its chat from every library.
   _ = try await onB.call(RemoveMachine(machineID: phone.machineID))
