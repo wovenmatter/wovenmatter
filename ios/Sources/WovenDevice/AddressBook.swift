@@ -7,6 +7,8 @@ struct AddressBook: Sendable {
     var name: String
     var host: String
     var port: Int
+    /// The release it last said it runs, once it has been reached.
+    var appVersion: String?
   }
 
   let file: URL

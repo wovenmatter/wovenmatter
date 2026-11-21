@@ -76,7 +76,8 @@ actor Machines: Peers {
     guard remote.appVersion == appVersion else {
       throw DeviceConnectionError.otherRelease(machineName: remote.machine.name, appVersion: remote.appVersion)
     }
-    book.set(remote.machine.id, .init(name: remote.machine.name, host: code.address, port: code.port))
+    book.set(remote.machine.id, .init(name: remote.machine.name, host: code.address, port: code.port,
+                                      appVersion: remote.appVersion))
     await learn(from: client)
     for id in book.entries.keys { link(id) }
   }
@@ -91,7 +92,19 @@ actor Machines: Peers {
 
   // MARK: Peers
 
-  func reached() -> [String: PeerStatus] { statuses }
+  /// Every remembered machine, online or not, at its address, so the UI can
+  /// reach it directly and keep trying while it is offline. A machine not
+  /// reached since launch has the release it last said it runs; one never
+  /// reached is taken to run this one, so nothing claims an update is needed
+  /// before anything is known.
+  func reached() -> [String: PeerStatus] {
+    book.entries.reduce(into: [:]) { result, item in
+      let (id, entry) = item
+      result[id] = PeerStatus(online: statuses[id]?.online ?? false,
+                              appVersion: statuses[id]?.appVersion ?? entry.appVersion ?? appVersion,
+                              address: entry.host, port: entry.port)
+    }
+  }
 
   /// Fetches a file from whichever linked server has it, a piece at a time,
   /// checks its digest and stores it.
@@ -166,11 +179,16 @@ actor Machines: Peers {
     }
     // Another machine answers there now: remember it, and look for this one again.
     guard remote.machine.id == id else {
-      book.set(remote.machine.id, .init(name: remote.machine.name, host: entry.host, port: entry.port))
+      book.set(remote.machine.id, .init(name: remote.machine.name, host: entry.host, port: entry.port,
+                                        appVersion: remote.appVersion))
       link(remote.machine.id)
       throw ConnectionClosed()
     }
     statuses[id] = PeerStatus(online: false, appVersion: remote.appVersion, address: entry.host, port: entry.port)
+    var reached = entry
+    reached.name = remote.machine.name
+    reached.appVersion = remote.appVersion
+    book.set(id, reached)
     // Two machines on different app releases do not sync.
     guard remote.appVersion == appVersion else {
       throw ProtocolError(.versionMismatch, "\(remote.machine.name) runs \(remote.appVersion).", machineID: id)
@@ -234,7 +252,10 @@ actor Machines: Peers {
     guard let listed = try? await client.call(ListMachines(), timeout: .seconds(20)) else { return }
     for status in listed {
       guard let host = status.address, let port = status.port, !status.machine.platform.isDevice else { continue }
-      if book.set(status.machine.id, .init(name: status.machine.name, host: host, port: port)) { link(status.machine.id) }
+      let known = book.entries[status.machine.id]
+      let entry = AddressBook.Entry(name: status.machine.name, host: host, port: port,
+                                    appVersion: known?.appVersion ?? status.appVersion)
+      if book.set(status.machine.id, entry) { link(status.machine.id) }
     }
   }
 

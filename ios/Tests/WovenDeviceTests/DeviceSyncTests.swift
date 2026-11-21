@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import WovenLibrary
 import WovenProtocol
@@ -12,6 +13,11 @@ import WovenServerCore
 private struct NoPeers: Peers {
   func reached() async -> [String: PeerStatus] { [:] }
   func fetchContent(_ digest: String) async -> Bool { false }
+}
+
+/// Whether the stand-in Mac answers.
+private final class Reachable: Sendable {
+  let on = Mutex(true)
 }
 
 private func eventually(_ check: () async throws -> Bool) async throws -> Bool {
@@ -33,7 +39,11 @@ func aDeviceSyncsWithTheMacItAddsAndStartsAgainWhenRemoved() async throws {
     Task { await core.serve(theirs, origin: origin) }
     return ours
   }
-  let dial: Machines.Dial = { _, _ in connect(.tailnet(name: "phone")) }
+  let reachable = Reachable()
+  let dial: Machines.Dial = { _, _ in
+    guard reachable.on.withLock({ $0 }) else { throw ConnectionClosed() }
+    return connect(.tailnet(name: "phone"))
+  }
   let model = Model()
   await model.then(
     { $0.toolCall(id: "call-1", name: "render_html", arguments: ["html": "<html><body>Hi</body></html>", "title": "Hi"]) },
@@ -41,7 +51,7 @@ func aDeviceSyncsWithTheMacItAddsAndStartsAgainWhenRemoved() async throws {
   let phone = try await Device.start(model, dial: dial)
   defer {
     Task {
-      await phone.device.stop(); await core.stop(); await mac.close()
+      await core.stop(); await mac.close()
       try? FileManager.default.removeItem(at: phone.folder); try? FileManager.default.removeItem(at: macFolder)
     }
   }
@@ -74,10 +84,25 @@ func aDeviceSyncsWithTheMacItAddsAndStartsAgainWhenRemoved() async throws {
     try await stale.device.add(code)
   }
 
+  // Started again while the Mac does not answer, the device still lists it
+  // where it was last reached, offline, so the UI can keep trying it.
+  await phone.device.stop()
+  reachable.on.withLock { $0 = false }
+  let again = try await Device.start(model, folder: phone.folder, dial: dial)
+  defer { Task { await again.device.stop() } }
+  let remembered = try await again.ui.call(ListMachines())
+  #expect(remembered.map(\.machine.id) == [mac.machineID])
+  #expect(remembered.first.map { [$0.address, $0.port.map(String.init), $0.appVersion] }
+            == [code.address, String(code.port), appVersion])
+  #expect(remembered.first?.online == false)
+  reachable.on.withLock { $0 = true }
+  await again.device.setActive(false)
+  await again.device.setActive(true)
+
   // Removed from the Mac, the device starts again empty and forgets the Mac.
-  let removed = phone.device.library.machineID
+  let removed = again.device.library.machineID
   try await mac.removeMachine(removed)
-  #expect(try await eventually { phone.device.library.machineID != removed })
-  #expect(try await phone.device.library.sessions().isEmpty)
+  #expect(try await eventually { again.device.library.machineID != removed })
+  #expect(try await again.device.library.sessions().isEmpty)
   #expect(!FileManager.default.fileExists(atPath: phone.folder.appendingPathComponent("machines.json").path))
 }
