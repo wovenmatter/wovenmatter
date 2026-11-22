@@ -71,7 +71,8 @@ import { createInterface } from 'node:readline';
 const lines = createInterface({ input: process.stdin });
 lines.on('line', () => {
   const claudeSignedIn = JSON.parse(readFileSync(new URL('./claude', import.meta.url), 'utf8'));
-  process.stdout.write(JSON.stringify({ result: { providers: [{ id: 'claude-subscription', name: 'Claude', kind: 'subscription' }], claudeSignedIn } }) + '\\n');
+  const claudeAccount = claudeSignedIn ? 'person@example.com' : null;
+  process.stdout.write(JSON.stringify({ result: { providers: [{ id: 'claude-subscription', name: 'Claude', kind: 'subscription' }], claudeSignedIn, claudeAccount } }) + '\\n');
   process.exit(0);
 });
 """
@@ -98,7 +99,10 @@ func claudeSubscriptionFollowsClaudeCodesOwnSignInWithoutAClick() async throws {
 
   func listed(_ claudeSignedIn: String) async throws -> Bool? {
     try claudeSignedIn.write(to: claude, atomically: true, encoding: .utf8)
-    return try await client.call(ListSignIns()).first?.connected
+    let signIn = try await client.call(ListSignIns()).first
+    // The account shown is the one Claude Code names when it answers.
+    #expect(signIn?.account == (claudeSignedIn == "true" ? "person@example.com" : nil))
+    return signIn?.connected
   }
   let marker = { try FileSecretStore(file: secrets).read("sign-in/claude-subscription") }
 

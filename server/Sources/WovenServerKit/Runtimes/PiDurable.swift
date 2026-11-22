@@ -119,7 +119,9 @@ public final class PiDurableRuntime: Runtime {
       guard let id = provider["id"]?.string else { continue }
       let kind: SignIn.Kind = provider["kind"]?.string == "subscription" ? .subscription : .apiKey
       let connected = kind == .apiKey ? keys[id] != nil : ((try? await secrets?.subscription(id)) ?? nil) != nil
-      list.append(SignIn(provider: id, name: provider["name"]?.string ?? id, kind: kind, connected: connected))
+      // Claude's account is the one Claude Code names now, never a saved copy.
+      let account = id == Self.claude && connected ? result["claudeAccount"]?.string : nil
+      list.append(SignIn(provider: id, name: provider["name"]?.string ?? id, kind: kind, connected: connected, account: account))
     }
     return list
   }

@@ -1,9 +1,8 @@
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { claudeExecutable, claudeProvider, claudeStatus } from './claude.mjs';
+import { claudeStatus } from './claude.mjs';
 import { ServerCredentials, toWire } from './credentials.mjs';
 import { catalog, createModels, probeLocalServer, providerList, registerLocalServers, subscriptions } from './models.mjs';
 import { humanMessage } from './rpc.mjs';
@@ -52,13 +51,17 @@ async function perform(request, { data, write, ask, closed }) {
   const models = await createModels({ dataDirectory: data, credentials });
   const { runtime } = models;
   registerLocalServers(runtime, request.localServers);
-  // With the providers, whether Claude Code is signed in here (null when it gave no answer), so
-  // the server's Claude sign-in follows Claude Code's own.
-  if (request.action === 'providers') return { providers: providerList(runtime), claudeSignedIn: (await claudeStatus()).signedIn ?? null };
+  // With the providers, whether Claude Code is signed in here (null when it gave no answer) and
+  // as whom, so the server's Claude sign-in follows Claude Code's own.
+  if (request.action === 'providers') {
+    const claude = await claudeStatus();
+    return { providers: providerList(runtime), claudeSignedIn: claude.signedIn ?? null, claudeAccount: claude.signedIn ? claude.account ?? null : null };
+  }
   if (request.action === 'models') return { models: await catalog(models, { refresh: request.refresh === true }) };
   if (request.action !== 'login') throw new Error(`Unknown action ${request.action}.`);
   if (!subscriptions.some(provider => provider.id === request.provider)) throw new Error('That provider does not sign in with a subscription.');
-  if (request.provider === claudeProvider) return { credential: await claudeLogin({ write, ask, closed }) };
+  // Claude is Claude Code's own sign-in, which the server runs.
+  if (request.provider === 'claude-subscription') throw new Error('Claude signs in through Claude Code.');
   const deviceID = await installationID(data);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000);
@@ -85,29 +88,4 @@ async function installationID(data) {
   const id = randomUUID();
   await writeFile(file, id, { mode: 0o600 });
   return id;
-}
-
-// Claude keeps its own sign-in. When Claude Code is not signed in, run its own
-// login, passing the link out and the code the person copies back in.
-async function claudeLogin({ write, ask, closed }) {
-  if ((await claudeStatus()).signedIn) return { type: 'native' };
-  const child = spawn(claudeExecutable(), ['auth', 'login', '--claudeai'], { env: { ...process.env, BROWSER: '/usr/bin/true' }, stdio: ['pipe', 'pipe', 'pipe'] });
-  const seen = new Set();
-  const consume = line => {
-    for (const match of line.matchAll(/https:\/\/[^\s<>"]+/g)) {
-      let url;
-      try { url = new URL(match[0]); } catch { continue; }
-      if (!/(^|\.)(claude\.ai|claude\.com|anthropic\.com)$/.test(url.hostname) || !url.pathname.includes('oauth') || seen.has(url.href)) continue;
-      seen.add(url.href);
-      void write({ event: { url: url.href, instructions: 'Open this link to sign in to Claude, then paste the code it shows.' } });
-      void ask('Paste the code from the Claude sign-in page.').then(code => child.stdin.write(code.trim() + '\n'));
-    }
-  };
-  for (const stream of [child.stdout, child.stderr]) createInterface({ input: stream, crlfDelay: Infinity }).on('line', consume);
-  const timer = setTimeout(() => child.kill('SIGTERM'), 10 * 60 * 1000);
-  void closed.then(() => child.kill('SIGTERM'));
-  const code = await new Promise(resolve => { child.once('close', resolve); child.once('error', () => resolve(-1)); });
-  clearTimeout(timer);
-  if (code !== 0 || !(await claudeStatus()).signedIn) throw new Error('Claude sign-in did not complete. Try again.');
-  return { type: 'native' };
 }
