@@ -138,7 +138,8 @@ struct ConversationWorkTranscript: View {
                         .padding(.top, 8)
                 }
 
-                if content.hasVisibleActivities {
+                // The divider sits under the header from the moment the turn works.
+                if content.hasVisibleActivities || isRunning {
                     Divider()
                         .overlay(WovenPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
@@ -189,7 +190,8 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
-                if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
+                // A folded turn shows only the dots below.
+                if isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
                         Image(systemName: "brain").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
