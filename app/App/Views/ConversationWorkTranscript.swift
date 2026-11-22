@@ -69,6 +69,9 @@ struct ConversationWorkTranscript: View {
     @Environment(\.conversationTranscriptState) private var transcriptState
     @Environment(\.conversationReaderAtLiveEdge) private var readerAtLiveEdge
     @State private var localWorkExpanded = false
+    /// Seen running here and not yet settled: the reader's position decides
+    /// the fold, read in the same render that first sees the turn complete.
+    @State private var settlingLive = false
 
     init(
         run: ConversationWorkRun,
@@ -115,7 +118,7 @@ struct ConversationWorkTranscript: View {
         let foldable = ConversationWorkTimeline.foldsWork(status: run.status, hasResponse: hasFollowingResponse)
             && timeline.hasFoldableEntries
         let workExpanded = workDisclosure
-        let folded = foldable && !workExpanded.wrappedValue
+        let folded = foldable && !workExpanded.wrappedValue && !(settlingLive && !readerAtLiveEdge())
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
                 if content.failureMessage != nil {
@@ -131,6 +134,7 @@ struct ConversationWorkTranscript: View {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .semibold))
                                 .rotationEffect(.degrees(workExpanded.wrappedValue ? 90 : 0))
+                                .accessibilityHidden(true)
                         }
                         .contentShape(Rectangle())
                     }
@@ -220,11 +224,16 @@ struct ConversationWorkTranscript: View {
                     ConversationRunningDots().padding(.top, 6)
                 }
             }
-            .onChange(of: run.status) { before, after in
+            .onChange(of: run.status, initial: true) { before, after in
+                if after == .running {
+                    settlingLive = true
+                    return
+                }
+                guard settlingLive else { return }
+                settlingLive = false
                 // Folding above a reply the reader is partway through would
                 // move it under them. Leave that turn open; the header folds it.
-                guard before == .running, after == .completed, !readerAtLiveEdge() else { return }
-                setWorkExpanded(true)
+                if before == .running, after == .completed, !readerAtLiveEdge() { setWorkExpanded(true) }
             }
         }
     }
@@ -394,6 +403,7 @@ private struct ConversationWorkGroupRow: View {
                             .font(.system(size: 10, weight: .semibold))
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
                             .foregroundStyle(WovenPalette.mutedForeground)
+                            .accessibilityHidden(true)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(group.hasFailure ? Color.red.opacity(0.8)
