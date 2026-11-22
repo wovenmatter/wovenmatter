@@ -116,7 +116,9 @@ export function offeredModels(available, settings = {}) {
 
 // Every model of the providers the credentials reach, for the settings' catalog.
 export async function catalog(models, { refresh = false } = {}) {
-  if (refresh) await refreshCatalogs(models);
+  // Claude's list comes from Claude Code, so a refresh asks it again.
+  const claude = refresh && (await models.credentials.providers()).includes('claude-subscription');
+  if (refresh) await Promise.all([refreshCatalogs(models), claude ? models.claude.loadModels({ refresh: true }) : undefined]);
   return (await availableModels(models)).map(model => ({
     id: modelReference(model), name: model.name ?? model.id, provider: model.provider,
     providerName: models.runtime.getProvider(model.provider)?.name ?? model.provider,

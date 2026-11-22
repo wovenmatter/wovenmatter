@@ -157,20 +157,24 @@ struct SettingsConnectionsView: View {
         let stored = connections.accounts[id] ?? []
         let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
         return VStack(alignment: .leading, spacing: 6) {
-            SettingsRow(title: title, detail: connections.connectionLabel(id)) {
+            SettingsRow(title: title, detail: id == "claude-subscription" && !accounts.isEmpty
+                        ? "Signed in with Claude Code" : connections.connectionLabel(id)) {
                 if accounts.isEmpty {
                     Button(id == "claude-subscription" ? "Sign in with Claude" : "Sign in") { agent.signIn(id, on: target) }
                         .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                 }
             }
-            ForEach(accounts) { account in
-                SettingsRow(title: account.label) {
-                    Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, on: target) } }
-                    Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, on: target) } }
-                }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
-            }
+            // Claude is Claude Code's own sign-in on that machine, shown as Claude Code reports
+            // it; it signs out with Claude Code.
             if id == "claude-subscription" {
-                SettingsNote("Claude signs in on each machine.")
+                SettingsNote("Claude uses the Claude Code sign-in on each machine.")
+            } else {
+                ForEach(accounts) { account in
+                    SettingsRow(title: account.label) {
+                        Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, on: target) } }
+                        Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, on: target) } }
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
+                }
             }
             signInStatus(id)
         }

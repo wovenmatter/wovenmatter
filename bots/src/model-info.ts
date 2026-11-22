@@ -52,16 +52,8 @@ const BUNDLED_CATALOG: Readonly<Record<string, Readonly<Record<string, { cost: P
   "opencode-go": OPENCODE_GO_MODELS,
 };
 
-/**
- * `claude-subscription` (claude/provider.ts) serves pi-ai's `anthropic` entries under the same
- * model ids, so its prices are Anthropic's API prices for that exact id.
- */
-const CATALOG_ALIASES: Readonly<Record<string, string>> = {
-  "claude-subscription": "anthropic",
-};
-
 /** Providers whose list Pi's live catalog adds to (models.ts registers them that way). */
-const LIVE_CATALOGS = new Set([...Object.keys(CATALOG_ENDPOINTS), "xai-api", "claude-subscription"]);
+const LIVE_CATALOGS = new Set([...Object.keys(CATALOG_ENDPOINTS), "xai-api"]);
 
 const ACCESS: Readonly<Record<string, ModelAccess>> = {
   "claude-subscription": { kind: "subscription", label: "Claude subscription" },
@@ -141,8 +133,7 @@ const sameCost = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
  * entry came from (Pi's live catalog, or a provider registered some other way).
  */
 export function pricingSource(provider: string, modelId: string, cost: unknown): string {
-  const catalog = CATALOG_ALIASES[provider] ?? provider;
-  const entry = BUNDLED_CATALOG[catalog]?.[modelId];
+  const entry = BUNDLED_CATALOG[provider]?.[modelId];
   if (!entry || !sameCost(entry.cost, cost)) {
     // A price pi-ai did not ship came with the list the model is in: Pi's live catalog for the
     // providers that have one, else whatever registered the provider.
@@ -151,8 +142,7 @@ export function pricingSource(provider: string, modelId: string, cost: unknown):
       : `${provider} provider's own model list (not a verified price list)`;
   }
   const { version, generatedAt } = catalogProvenance();
-  const base = `pi-ai${version ? ` ${version}` : ""} bundled ${catalog} catalog${generatedAt ? `, generated ${generatedAt}` : ""}`;
-  return catalog === provider ? base : `${base} (Anthropic API prices for the same model id)`;
+  return `pi-ai${version ? ` ${version}` : ""} bundled ${provider} catalog${generatedAt ? `, generated ${generatedAt}` : ""}`;
 }
 
 const rates = (cost: PriceRates): PriceRates => ({

@@ -52,7 +52,9 @@ async function perform(request, { data, write, ask, closed }) {
   const models = await createModels({ dataDirectory: data, credentials });
   const { runtime } = models;
   registerLocalServers(runtime, request.localServers);
-  if (request.action === 'providers') return { providers: providerList(runtime) };
+  // With the providers, whether Claude Code is signed in here (null when it gave no answer), so
+  // the server's Claude sign-in follows Claude Code's own.
+  if (request.action === 'providers') return { providers: providerList(runtime), claudeSignedIn: (await claudeStatus()).signedIn ?? null };
   if (request.action === 'models') return { models: await catalog(models, { refresh: request.refresh === true }) };
   if (request.action !== 'login') throw new Error(`Unknown action ${request.action}.`);
   if (!subscriptions.some(provider => provider.id === request.provider)) throw new Error('That provider does not sign in with a subscription.');

@@ -433,6 +433,13 @@ transfer.
 - Harness CLIs keep their own sign-ins on each machine.
 - Subscription sign-ins (ChatGPT, Claude, Grok) are per machine and stay in the
   Keychain on a Mac or a private file on Linux. They are never in the library.
+- The Claude subscription is the sign-in of the Claude Code installed on that
+  machine, for Pi Durable and bots alike. The server keeps only a marker for
+  it, which follows what Claude Code reports whenever sign-ins are listed.
+  Signing in runs Claude Code's own `claude auth login`, with its link and
+  pasted code shown in the app, so it works on a machine without a browser.
+  A Claude API key is the separate Anthropic provider, which never runs
+  Claude Code.
 - API keys for Pi Durable and bots, and the GitHub key, sync. Each is sealed
   separately for each machine with that machine's public key, so only that
   machine can open its copy.

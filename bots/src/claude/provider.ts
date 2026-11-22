@@ -3,20 +3,23 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AnyModel,
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
   createAssistantMessageEventStream,
   type Message,
   type Model,
+  type ModelsStoreEntry,
   type Provider,
+  type RefreshModelsContext,
   type Usage,
 } from "@earendil-works/pi-ai";
 import { createProvider } from "@earendil-works/pi-ai/models";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { ErrorIssue } from "../issues.ts";
 import { CLAUDE_AGENT_API } from "../compaction/native.ts";
+import { CATALOG_REFRESH_MS } from "../model-catalog.ts";
 import { type ClaudeRateLimitInfo, claudeLimit, type LimitClass } from "../limits.ts";
 import {
   type ClaudeAgentOptions,
@@ -66,18 +69,6 @@ const zeroUsage = (): Usage => ({
 });
 
 class ClaudeAgentError extends Error {}
-
-export type ClaudeCredential = {
-  /** Claude Code's own sign-in on this machine, with its default configuration. */
-  readonly native?: true;
-  /** A setup token or API key handed to Claude Code through its environment. */
-  readonly key?: string;
-};
-
-/** The server's credential: Claude Code's own sign-in, or a plain key. */
-export function claudeCredential(key: string): ClaudeCredential {
-  return key === NATIVE_KEY ? { native: true } : { key };
-}
 
 function nativeToolId(value: string): string {
   if (!value) throw new ClaudeAgentError("This conversation has an invalid tool call id.");
@@ -191,6 +182,7 @@ const EFFORT: Record<string, string> = {
   medium: "medium",
   high: "high",
   xhigh: "xhigh",
+  max: "max",
 };
 
 export class ClaudeAgentStream {
@@ -242,16 +234,15 @@ export class ClaudeAgentStream {
     message: ClaudeCompactedMessage,
     stream: AssistantMessageEventStream,
   ): Promise<void> {
-    const key = options.apiKey;
-    if (typeof key !== "string" || !key) {
+    // The server's credential is only a marker: Claude Code keeps its own sign-in.
+    if (options.apiKey !== NATIVE_KEY) {
       throw new ClaudeAgentError(
-        "No Claude connection. Connect Claude in Woven Matter Settings → Subscriptions & API Keys.",
+        "No Claude connection. Sign in with Claude in Woven Matter Settings → Subscriptions & API Keys.",
       );
     }
-    const credential = claudeCredential(key);
     const compact = options.botCompact;
     const request = claudeRequest(messages, model, compact !== undefined);
-    const { config, workspace } = await this.#runtime.directories(credential.native === true);
+    const workspace = await this.#runtime.workspace();
     const scratch = await mkdtemp(join(workspace, "request-"));
     const toolsFile = join(scratch, "tools.json");
     await writeFile(toolsFile, JSON.stringify(request.inventory), { mode: 0o600 });
@@ -391,7 +382,7 @@ export class ClaudeAgentStream {
         prompt: input(),
         options: {
           cwd: workspace,
-          env: this.#runtime.environment(config, credential),
+          env: this.#runtime.environment(),
           model: model.id,
           tools: [],
           skills: [],
@@ -532,37 +523,149 @@ export class ClaudeAgentStream {
   }
 }
 
-/** One of Anthropic's models as the Claude subscription runs it: through the Claude Agent SDK. */
-export function claudeAgentModel<T extends { provider: string }>(model: T): T {
+/** A model Claude Code offers its sign-in: an entry of the SDK's `supportedModels()`. */
+export type ClaudeCodeModel = {
+  readonly value: string;
+  readonly displayName: string;
+  readonly resolvedModel?: string;
+  readonly supportedEffortLevels?: readonly string[];
+};
+
+const isClaudeCodeModel = (entry: unknown): entry is ClaudeCodeModel =>
+  typeof (entry as ClaudeCodeModel)?.value === "string" && typeof (entry as ClaudeCodeModel).displayName === "string";
+
+/** "Opus 5.5" for `opus` resolving to claude-opus-5-5, as Pi Durable names it; else Claude Code's own name. */
+function modelName(model: ClaudeCodeModel): string {
+  const base = model.value.replace(/\[1m\]$/, "").replace(/^claude-/, "");
+  const family = base.match(/^[a-z]+/i)?.[0];
+  if (!family || base === "default") return model.displayName;
+  const title = family[0]?.toUpperCase() + family.slice(1).toLowerCase();
+  const resolved = typeof model.resolvedModel === "string" ? model.resolvedModel : model.value;
+  const number = resolved.match(
+    new RegExp(`^claude-${family}-(\\d+(?:[-.]\\d{1,2})?)(?:-\\d{8})?(?:\\[1m\\])?$`, "i"),
+  )?.[1];
+  return number ? `${title} ${number.replace("-", ".")}` : model.displayName;
+}
+
+/** A Claude Code model as pi-ai lists it, defined as Pi Durable defines it (`default-agent/src/claude.mjs`). */
+export function claudeCodeModel(model: ClaudeCodeModel): Model<Api> & { readonly resolvedModel?: string } {
+  const levels = model.supportedEffortLevels ?? [];
   return {
-    ...model,
+    id: model.value,
+    name: modelName(model),
     api: CLAUDE_AGENT_API,
     provider: CLAUDE_SUBSCRIPTION_PROVIDER,
     baseUrl: CLAUDE_AGENT_BASE_URL,
-  };
+    reasoning: levels.length > 0,
+    input: ["text", "image"],
+    thinkingLevelMap: Object.fromEntries(
+      ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((level) => [
+        level,
+        level === "off" || levels.includes(level) ? level : null,
+      ]),
+    ),
+    contextWindow: 200_000,
+    maxTokens: 32_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
+  } as unknown as Model<Api> & { readonly resolvedModel?: string };
 }
 
-/** The `claude-subscription` provider: Anthropic's catalog, served through Claude Code. */
-export function claudeAgentProvider(options: ClaudeAgentOptions): Provider {
-  const agent = new ClaudeAgentStream(new ClaudeAgentRuntime(options));
+/** Claude Code's models in a stored catalog, or undefined when it holds none of them. */
+function storedModels(stored: Readonly<ModelsStoreEntry> | undefined): ClaudeCodeModel[] | undefined {
+  const entries = stored?.models as readonly unknown[] | undefined;
+  return entries?.length && entries.every(isClaudeCodeModel) ? [...entries] : undefined;
+}
+
+export type ClaudeAgentProvider = {
+  readonly provider: Provider;
+  /** Show a stored list. Starts no Claude Code. */
+  readonly restore: (stored: Readonly<ModelsStoreEntry> | undefined) => void;
+};
+
+/**
+ * The `claude-subscription` provider: the models Claude Code offers its sign-in on this machine,
+ * served through Claude Code. `Models.refresh()` restores the stored list, and asks Claude Code
+ * again when there is none, it is older than the live catalogs' four hours, or the refresh is
+ * forced. pi-ai runs that only with a Claude sign-in.
+ */
+export function claudeAgentProvider(options: ClaudeAgentOptions): ClaudeAgentProvider {
+  const runtime = new ClaudeAgentRuntime(options);
+  const agent = new ClaudeAgentStream(runtime);
   const stream = (model: Model<Api>, context: { messages: Message[] }, request?: object) =>
     agent.stream(model, context, request as Record<string, unknown>);
-  return createProvider({
+  const base = createProvider({
     id: CLAUDE_SUBSCRIPTION_PROVIDER,
     name: "Claude (Claude Agent SDK)",
     baseUrl: CLAUDE_AGENT_BASE_URL,
     auth: {
-      // The server supplies the credential: Claude Code's own sign-in (no token material), or an
-      // API key. Sign-in belongs to Woven settings.
+      // The server supplies a marker for Claude Code's own sign-in (no token material).
       apiKey: {
         name: "Claude (Woven connection)",
         resolve: async (input: { credential?: { key?: string } }) =>
-          input.credential?.key
-            ? { auth: { apiKey: input.credential.key }, source: "Woven connection" }
+          input.credential?.key === NATIVE_KEY
+            ? { auth: { apiKey: NATIVE_KEY }, source: "Claude Code" }
             : undefined,
       },
     },
-    models: anthropicProvider().getModels().map(claudeAgentModel),
+    models: [],
     api: { stream, streamSimple: stream },
   } as unknown as Parameters<typeof createProvider>[0]);
+  let listed: readonly Model<Api>[] = [];
+  const show = (models: readonly ClaudeCodeModel[] | undefined) => {
+    if (models) listed = models.map(claudeCodeModel);
+  };
+  const provider = {
+    ...base,
+    getModels: () => listed,
+    getAllModels: () => listed,
+    refreshModels: async (context: RefreshModelsContext) => {
+      const stored = storedModels(context.stored);
+      const shown = await context.publish({ update: () => show(stored) });
+      if (!shown || !context.allowNetwork || context.signal.aborted) return;
+      const age = Date.now() - (context.stored?.checkedAt ?? 0);
+      if (stored && !context.force && age >= 0 && age < CATALOG_REFRESH_MS) return;
+      const found = await discoverModels(runtime);
+      await context.publish({
+        persist: { models: found as unknown as AnyModel[], checkedAt: Date.now() },
+        update: () => show(found),
+      });
+    },
+  } as Provider;
+  return { provider, restore: (stored) => show(storedModels(stored)) };
+}
+
+/** Claude Code's models for its sign-in: an empty streaming input starts it without a model request. */
+async function discoverModels(runtime: ClaudeAgentRuntime): Promise<ClaudeCodeModel[]> {
+  const workspace = await runtime.workspace();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  async function* input(): AsyncGenerator<ClaudeSdkFrame> {
+    await new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
+  }
+  const session = await runtime.query({
+    prompt: input(),
+    options: {
+      cwd: workspace,
+      env: runtime.environment(),
+      tools: [],
+      settingSources: [],
+      strictMcpConfig: true,
+      mcpServers: {},
+      persistSession: false,
+      abortController: controller,
+      stderr: () => {},
+    },
+  });
+  try {
+    const models = await session.supportedModels?.();
+    if (!Array.isArray(models) || !models.length || !models.every(isClaudeCodeModel)) {
+      throw new ClaudeAgentError("Claude Code did not list its models.");
+    }
+    return models;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    session.close?.();
+  }
 }
