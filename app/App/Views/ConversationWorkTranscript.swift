@@ -138,54 +138,56 @@ struct ConversationWorkTranscript: View {
                         .padding(.top, 8)
                 }
 
-                let entries = folded ? timeline.entriesOutsideFold : timeline.entries
-                if content.hasVisibleActivities && !entries.isEmpty {
+                if content.hasVisibleActivities {
                     Divider()
                         .overlay(WovenPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
-                    let tailID = timeline.entries.last?.id
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(entries) { entry in
-                            switch entry.content {
-                            case .commentary(let activity):
-                                ConversationResponse(
-                                    content: activity.content ?? "",
-                                    isStreaming: false,
-                                    showsCopyButton: false
-                                )
-                            case .group(let group):
-                                ConversationWorkGroupRow(
-                                    group: group,
-                                    runID: run.id,
-                                    runStatus: run.status,
-                                    isTail: entry.id == tailID && !hasFollowingResponse
-                                )
-                            case .activity(let activity):
-                                if activity.kind == .thought {
-                                    ConversationThinkingBlock(activity: activity, runID: run.id,
-                                        isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
-                                } else if let reference = activity.htmlRender {
-                                    ConversationHTMLRenderView(reference: reference)
-                                } else if let children = activity.subagents, !children.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        ForEach(children) { child in
-                                            ConversationSubagentRow(child: child)
-                                        }
-                                    }
-                                } else {
-                                    ConversationActivityRow(
-                                        activity: activity,
+                    let entries = folded ? timeline.entriesOutsideFold : timeline.entries
+                    if !entries.isEmpty {
+                        let tailID = timeline.entries.last?.id
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(entries) { entry in
+                                switch entry.content {
+                                case .commentary(let activity):
+                                    ConversationResponse(
+                                        content: activity.content ?? "",
+                                        isStreaming: false,
+                                        showsCopyButton: false
+                                    )
+                                case .group(let group):
+                                    ConversationWorkGroupRow(
+                                        group: group,
                                         runID: run.id,
                                         runStatus: run.status,
-                                        showsProgress: activity.workTimelineShowsProgress
+                                        isTail: entry.id == tailID && !hasFollowingResponse
                                     )
+                                case .activity(let activity):
+                                    if activity.kind == .thought {
+                                        ConversationThinkingBlock(activity: activity, runID: run.id,
+                                            isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
+                                    } else if let reference = activity.htmlRender {
+                                        ConversationHTMLRenderView(reference: reference)
+                                    } else if let children = activity.subagents, !children.isEmpty {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            ForEach(children) { child in
+                                                ConversationSubagentRow(child: child)
+                                            }
+                                        }
+                                    } else {
+                                        ConversationActivityRow(
+                                            activity: activity,
+                                            runID: run.id,
+                                            runStatus: run.status,
+                                            showsProgress: activity.workTimelineShowsProgress
+                                        )
+                                    }
                                 }
                             }
                         }
+                        .padding(.top, 14)
+                        .transition(reduceMotion ? .identity : .opacity)
                     }
-                    .padding(.top, 14)
-                    .transition(reduceMotion ? .identity : .opacity)
                 }
                 if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
