@@ -237,11 +237,21 @@ extension OpenCodeProjection {
       let initial = field["default"]
       return PromptField(id: field["key"]?.string ?? "", title: field["title"]?.string ?? field["key"]?.string ?? "",
                          detail: field["description"]?.string, kind: kind, required: field["required"]?.bool ?? false,
-                         options: options, initial: initial == .null ? nil : initial,
+                         options: options, ownAnswer: field["custom"]?.bool ?? false, initial: initial == .null ? nil : initial,
                          placeholder: field["placeholder"]?.string, multiline: field["type"]?.string == "textarea",
                          minimum: field["minimum"]?.double, maximum: field["maximum"]?.double)
     }
     return PromptForms.prompt(id: form["id"]?.string ?? "", message: form["title"]?.string ?? "", fields: fields)
+  }
+
+  /// The request that answers a form of a session: a reply with the
+  /// person's values, or a cancel when they declined.
+  static func formAnswer(sessionID: String, form: JSONValue, answer: PromptAnswer) throws
+    -> (method: String, path: String, body: JSONValue?)
+  {
+    let path = "/api/session/" + OpenCodeClient.segment(sessionID) + "/form/" + OpenCodeClient.segment(form["id"]?.string ?? "")
+    if answer == .declined { return ("DELETE", path, nil) }
+    return ("POST", path + "/reply", try formReply(form, answer: answer))
   }
 
   /// The body of a reply to a form, from the answer for its fields.

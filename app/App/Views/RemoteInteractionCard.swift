@@ -128,8 +128,10 @@ private struct SessionQuestionCard: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    TextField("Other response", text: customAnswerBinding(for: question.id))
-                        .textFieldStyle(.roundedBorder)
+                    if question.acceptsOwnAnswer {
+                        TextField("Other response", text: customAnswerBinding(for: question.id))
+                            .textFieldStyle(.roundedBorder)
+                    }
                 }
             }
 
@@ -146,20 +148,25 @@ private struct SessionQuestionCard: View {
 
     private var canSubmit: Bool {
         questions.allSatisfy { question in
-            nonemptyString(customAnswers[question.id]) != nil || selections[question.id]?.isEmpty == false
+            ownAnswer(for: question) != nil || selections[question.id]?.isEmpty == false
         }
     }
 
+    /// The runtime checks answers against the options' ids, never their labels.
     private var answers: [String: SessionQuestionAnswer] {
         questions.reduce(into: [:]) { result, question in
-            if let customAnswer = nonemptyString(customAnswers[question.id]) {
-                result[question.id] = .single(customAnswer)
+            if let answer = ownAnswer(for: question) {
+                result[question.id] = .text(answer)
                 return
             }
             let selectedIDs = selections[question.id] ?? []
-            let labels = question.options.compactMap { selectedIDs.contains($0.id) ? $0.label : nil }
-            result[question.id] = question.allowsMultiple ? .multiple(labels) : .single(labels.first ?? "")
+            let ids = question.options.map(\.id).filter { selectedIDs.contains($0) }
+            result[question.id] = .options(question.allowsMultiple ? ids : Array(ids.prefix(1)))
         }
+    }
+
+    private func ownAnswer(for question: SessionQuestion) -> String? {
+        question.acceptsOwnAnswer ? nonemptyString(customAnswers[question.id]) : nil
     }
 
     private func toggle(option: SessionChoice, for question: SessionQuestion) {
@@ -193,6 +200,8 @@ private struct SessionFormCard: View {
     @State private var text: [String: String] = [:]
     @State private var flags: [String: Bool] = [:]
     @State private var selections: [String: Set<String>] = [:]
+    /// A choice answered in the person's own words, where the field takes them.
+    @State private var ownAnswers: [String: String] = [:]
     @State private var initialized = false
 
     var body: some View {
@@ -217,8 +226,12 @@ private struct SessionFormCard: View {
                 included.insert(field.id)
                 switch value {
                 case .string(let value):
-                    if field.kind == .singleChoice { selections[field.id] = [value] } else { text[field.id] = value }
-                case .strings(let values): selections[field.id] = Set(values)
+                    if field.kind != .singleChoice { text[field.id] = value }
+                    else if field.options.contains(where: { $0.id == value }) { selections[field.id] = [value] }
+                    else { ownAnswers[field.id] = value }
+                case .strings(let values):
+                    selections[field.id] = Set(values.filter { value in field.options.contains { $0.id == value } })
+                    ownAnswers[field.id] = values.first { value in !field.options.contains { $0.id == value } }
                 case .number(let value): text[field.id] = String(value)
                 case .boolean(let value): flags[field.id] = value
                 }
@@ -260,6 +273,7 @@ private struct SessionFormCard: View {
                     else { selected.insert(option.id) }
                     included.insert(field.id)
                     selections[field.id] = selected
+                    if field.kind == .singleChoice { ownAnswers[field.id] = nil }
                 } label: {
                     HStack(alignment: .top, spacing: 7) {
                         Image(systemName: selections[field.id]?.contains(option.id) == true ? "checkmark.circle.fill" : "circle")
@@ -270,6 +284,10 @@ private struct SessionFormCard: View {
                         Spacer(minLength: 0)
                     }.font(.system(size: 12.5)).contentShape(Rectangle())
                 }.buttonStyle(.plain)
+            }
+            if field.acceptsOwnAnswer {
+                TextField(field.placeholder ?? "Other response", text: ownAnswerBinding(field))
+                    .textFieldStyle(.roundedBorder)
             }
         case .text, .number, .integer:
             if field.multiline {
@@ -285,6 +303,15 @@ private struct SessionFormCard: View {
         Binding(get: { text[id] ?? "" }, set: { included.insert(id); text[id] = $0 })
     }
 
+    /// Typing an own answer to a single choice replaces the option picked.
+    private func ownAnswerBinding(_ field: SessionFormField) -> Binding<String> {
+        Binding(get: { ownAnswers[field.id] ?? "" }, set: { value in
+            included.insert(field.id)
+            ownAnswers[field.id] = value
+            if field.kind == .singleChoice, nonemptyString(value) != nil { selections[field.id] = [] }
+        })
+    }
+
     private var values: [String: SessionFormValue]? {
         var result: [String: SessionFormValue] = [:]
         for field in fields where field.required || included.contains(field.id) {
@@ -296,10 +323,11 @@ private struct SessionFormCard: View {
                 value = .number(number)
             case .boolean: value = .boolean(flags[field.id] ?? false)
             case .singleChoice:
-                guard let choice = selections[field.id]?.first else { return nil }
+                guard let choice = nonemptyString(ownAnswers[field.id]) ?? selections[field.id]?.first else { return nil }
                 value = .string(choice)
             case .multipleChoice:
-                value = .strings(field.options.filter { selections[field.id]?.contains($0.id) == true }.map(\.id))
+                let picked = field.options.filter { selections[field.id]?.contains($0.id) == true }.map(\.id)
+                value = .strings(picked + [nonemptyString(ownAnswers[field.id])].compactMap { $0 })
             }
             guard field.accepts(value) else { return nil }
             result[field.id] = value

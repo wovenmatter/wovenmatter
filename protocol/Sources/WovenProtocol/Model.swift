@@ -433,9 +433,11 @@ public struct PromptOption: Codable, Sendable, Hashable, Identifiable {
 public struct PromptField: Codable, Sendable, Hashable, Identifiable {
   public enum Kind: String, Codable, Sendable, Hashable {
     case text
-    /// One of `options`; the value is an option's `id`.
+    /// One of `options`; the value is an option's `id`, or the person's own
+    /// words when `ownAnswer` is set.
     case choice
-    /// Any of `options`; the value is an array of option ids.
+    /// Any of `options`; the value is an array of option ids, which may
+    /// hold the person's own words when `ownAnswer` is set.
     case choices
     case number
     case integer
@@ -449,6 +451,9 @@ public struct PromptField: Codable, Sendable, Hashable, Identifiable {
   public var kind: Kind
   public var required: Bool
   public var options: [PromptOption]
+  /// For a choice or choices, whether an answer in the person's own words
+  /// is taken as well as the options.
+  public var ownAnswer: Bool
   /// The value the field starts with.
   public var initial: JSONValue?
   public var placeholder: String?
@@ -458,14 +463,15 @@ public struct PromptField: Codable, Sendable, Hashable, Identifiable {
   public var maximum: Double?
 
   public init(id: String, title: String, detail: String? = nil, kind: Kind = .text, required: Bool = true,
-              options: [PromptOption] = [], initial: JSONValue? = nil, placeholder: String? = nil, multiline: Bool = false,
-              minimum: Double? = nil, maximum: Double? = nil) {
+              options: [PromptOption] = [], ownAnswer: Bool = false, initial: JSONValue? = nil, placeholder: String? = nil,
+              multiline: Bool = false, minimum: Double? = nil, maximum: Double? = nil) {
     self.id = id
     self.title = title
     self.detail = detail
     self.kind = kind
     self.required = required
     self.options = options
+    self.ownAnswer = ownAnswer
     self.initial = initial
     self.placeholder = placeholder
     self.multiline = multiline
@@ -504,7 +510,8 @@ public struct Prompt: Codable, Sendable, Hashable, Identifiable {
 public enum PromptAnswer: Codable, Sendable, Hashable {
   /// One of the prompt's options, by `id`.
   case option(String)
-  /// Free text, for a question without options.
+  /// Free text, for a question without options or one that takes the
+  /// person's own answer.
   case text(String)
   /// A form's values, by field `id`.
   case values([String: JSONValue])

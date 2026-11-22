@@ -483,11 +483,10 @@ private actor ACPState {
     case (.form(_, let fields), .values(let values)):
       try PromptForms.check(values, against: fields)
       result = .object(["action": .string("accept"), "content": .object(values)])
-    case (.form(_, let fields), .option(let value)) where fields.count == 1:
+    case (.form(_, let fields), .option(let value)) where fields.count == 1,
+         (.form(_, let fields), .text(let value)) where fields.count == 1:
       try PromptForms.check([fields[0].id: .string(value)], against: fields)
       result = .object(["action": .string("accept"), "content": .object([fields[0].id: .string(value)])])
-    case (.form(_, let fields), .text(let text)) where fields.count == 1 && fields[0].kind == .text:
-      result = .object(["action": .string("accept"), "content": .object([fields[0].id: .string(text)])])
     case (.form, .declined):
       result = .object(["action": .string("decline")])
     default:

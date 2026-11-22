@@ -228,8 +228,10 @@ final class SessionStore {
         case .option(let id): answer = .option(id)
         case .answers(let answers):
             switch answers.values.first {
-            case .single(let id): answer = .option(id)
-            case .multiple(let ids): answer = .values([prompt.fields.first?.id ?? "answer": .array(ids.map(JSONValue.string))])
+            case .options(let ids) where prompt.fields.first?.kind == .choices:
+                answer = .values([prompt.fields.first?.id ?? Self.freeTextField: .array(ids.map(JSONValue.string))])
+            case .options(let ids): answer = ids.first.map(PromptAnswer.option) ?? .declined
+            case .text(let text): answer = .text(text)
             case nil: answer = .declined
             }
         case .formValues(let values):
@@ -288,7 +290,8 @@ final class SessionStore {
         case .question where !prompt.options.isEmpty:
             request = .questions(title: nil, questions: [SessionQuestion(id: prompt.fields.first?.id ?? Self.freeTextField,
                                                                          prompt: prompt.text, options: choices(prompt.options),
-                                                                         allowsMultiple: false)])
+                                                                         allowsMultiple: false,
+                                                                         acceptsOwnAnswer: prompt.fields.first?.ownAnswer ?? false)])
         case .question, .form:
             let fields = prompt.fields.isEmpty
                 ? [PromptField(id: Self.freeTextField, title: "Answer", multiline: true)] : prompt.fields
@@ -304,7 +307,8 @@ final class SessionStore {
                 let counted = field.kind == .text || field.kind == .choices
                 return SessionFormField(
                     id: field.id, title: field.title, detail: field.detail, kind: kind, required: field.required,
-                    options: choices(field.options), initialValue: Self.formValue(field.initial), placeholder: field.placeholder,
+                    options: choices(field.options), acceptsOwnAnswer: field.ownAnswer,
+                    initialValue: Self.formValue(field.initial), placeholder: field.placeholder,
                     multiline: field.multiline, minimum: counted ? nil : field.minimum, maximum: counted ? nil : field.maximum,
                     minimumLength: counted ? field.minimum.map { Int($0) } : nil,
                     maximumLength: counted ? field.maximum.map { Int($0) } : nil)
