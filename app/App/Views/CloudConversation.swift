@@ -177,7 +177,6 @@ struct CloudConversation: View {
                     scrollPosition = ScrollPosition(idType: String.self)
                     scrollState.setNearBottom(false)
                 }
-                .environment(\.conversationReaderAtLiveEdge) { followsBottom }
                 .environment(\.conversationActivityDetails) { runID, activityID in
                     guard let session else { return nil }
                     return try await session.activityDetails(runID: runID, activityID: activityID)

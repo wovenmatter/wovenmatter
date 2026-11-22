@@ -25,13 +25,6 @@ private struct ConversationActivityDetailsKey: EnvironmentKey {
     static let defaultValue: (@MainActor (_ runID: String, _ activityID: String) async throws -> AgentRunActivity?)? = nil
 }
 
-/// Whether the reader is following the conversation's live edge. A turn that
-/// finishes while the reader is elsewhere stays open, so the reply they are
-/// reading does not move up under them when its work folds.
-private struct ConversationReaderAtLiveEdgeKey: EnvironmentKey {
-    static let defaultValue: @MainActor () -> Bool = { true }
-}
-
 extension EnvironmentValues {
     var conversationTranscriptInteraction: @MainActor () -> Void {
         get { self[ConversationTranscriptInteractionKey.self] }
@@ -42,17 +35,12 @@ extension EnvironmentValues {
         get { self[ConversationActivityDetailsKey.self] }
         set { self[ConversationActivityDetailsKey.self] = newValue }
     }
-
-    var conversationReaderAtLiveEdge: @MainActor () -> Bool {
-        get { self[ConversationReaderAtLiveEdgeKey.self] }
-        set { self[ConversationReaderAtLiveEdgeKey.self] = newValue }
-    }
 }
 
 /// A run's work, inline and in order: commentary, thoughts, and tool groups.
 /// While the run streams, thinking and commentary stay visible and tool lists
-/// fold at the next event boundary. Once it completes with a reply, all of its
-/// work folds behind the elapsed header, which reopens it.
+/// fold at the next event boundary. The elapsed header folds all of it at any
+/// time, and the turn folds itself when it ends.
 struct ConversationWorkTranscript: View {
     let run: ConversationWorkRun
     let presentation: ConversationWorkPresentation?
@@ -67,11 +55,8 @@ struct ConversationWorkTranscript: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
-    @Environment(\.conversationReaderAtLiveEdge) private var readerAtLiveEdge
     @State private var localWorkExpanded = false
-    /// Seen running here and not yet settled: the reader's position decides
-    /// the fold, read in the same render that first sees the turn complete.
-    @State private var settlingLive = false
+    @State private var localRunningFolded = false
 
     init(
         run: ConversationWorkRun,
@@ -115,22 +100,16 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         )
         let isRunning = run.status == .running
-        let foldable = ConversationWorkTimeline.foldsWork(status: run.status, hasResponse: hasFollowingResponse)
-            && timeline.hasFoldableEntries
+        let foldable = timeline.hasFoldableEntries
         let workExpanded = workDisclosure
-        let folded = foldable && !workExpanded.wrappedValue && !(settlingLive && !readerAtLiveEdge())
+        let folded = foldable && !workExpanded.wrappedValue
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                if content.failureMessage != nil {
-                    HStack(spacing: 7) {
-                        LucideIcon(glyph: .alertCircle, size: 13)
-                        elapsedLabel
-                    }
-                    .foregroundStyle(WovenPalette.danger)
-                } else if foldable {
+                let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
+                if foldable {
                     Button { workExpanded.wrappedValue.toggle() } label: {
                         HStack(spacing: 6) {
-                            elapsedLabel
+                            headerLabel(failed: content.failureMessage != nil)
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .semibold))
                                 .rotationEffect(.degrees(workExpanded.wrappedValue ? 90 : 0))
@@ -139,13 +118,13 @@ struct ConversationWorkTranscript: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(ConversationElapsedButtonStyle())
-                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .foregroundStyle(headerStyle)
                     .accessibilityValue(workExpanded.wrappedValue ? "Expanded" : "Collapsed")
                     .accessibilityHint(workExpanded.wrappedValue ? "Hides this turn's work" : "Shows this turn's thinking and tool calls")
                     .accessibilityIdentifier("work-turn:" + run.id)
                 } else {
-                    elapsedLabel
-                        .foregroundStyle(WovenPalette.mutedForeground)
+                    headerLabel(failed: content.failureMessage != nil)
+                        .foregroundStyle(headerStyle)
                 }
 
                 // Failure belongs to the run, not to its optional work history.
@@ -165,50 +144,48 @@ struct ConversationWorkTranscript: View {
                         .overlay(WovenPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
-                    Group {
-                        let tailID = timeline.entries.last?.id
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(entries) { entry in
-                                switch entry.content {
-                                case .commentary(let activity):
-                                    ConversationResponse(
-                                        content: activity.content ?? "",
-                                        isStreaming: false,
-                                        showsCopyButton: false
-                                    )
-                                case .group(let group):
-                                    ConversationWorkGroupRow(
-                                        group: group,
+                    let tailID = timeline.entries.last?.id
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(entries) { entry in
+                            switch entry.content {
+                            case .commentary(let activity):
+                                ConversationResponse(
+                                    content: activity.content ?? "",
+                                    isStreaming: false,
+                                    showsCopyButton: false
+                                )
+                            case .group(let group):
+                                ConversationWorkGroupRow(
+                                    group: group,
+                                    runID: run.id,
+                                    runStatus: run.status,
+                                    isTail: entry.id == tailID && !hasFollowingResponse
+                                )
+                            case .activity(let activity):
+                                if activity.kind == .thought {
+                                    ConversationThinkingBlock(activity: activity, runID: run.id,
+                                        isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
+                                } else if let reference = activity.htmlRender {
+                                    ConversationHTMLRenderView(reference: reference)
+                                } else if let children = activity.subagents, !children.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        ForEach(children) { child in
+                                            ConversationSubagentRow(child: child)
+                                        }
+                                    }
+                                } else {
+                                    ConversationActivityRow(
+                                        activity: activity,
                                         runID: run.id,
                                         runStatus: run.status,
-                                        isTail: entry.id == tailID && !hasFollowingResponse
+                                        showsProgress: activity.workTimelineShowsProgress
                                     )
-                                case .activity(let activity):
-                                    if activity.kind == .thought {
-                                        ConversationThinkingBlock(activity: activity, runID: run.id,
-                                            isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
-                                    } else if let reference = activity.htmlRender {
-                                        ConversationHTMLRenderView(reference: reference)
-                                    } else if let children = activity.subagents, !children.isEmpty {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            ForEach(children) { child in
-                                                ConversationSubagentRow(child: child)
-                                            }
-                                        }
-                                    } else {
-                                        ConversationActivityRow(
-                                            activity: activity,
-                                            runID: run.id,
-                                            runStatus: run.status,
-                                            showsProgress: activity.workTimelineShowsProgress
-                                        )
-                                    }
                                 }
                             }
                         }
-                        .padding(.top, 14)
-                        .transition(reduceMotion ? .identity : .opacity)
                     }
+                    .padding(.top, 14)
+                    .transition(reduceMotion ? .identity : .opacity)
                 }
                 if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
@@ -224,31 +201,31 @@ struct ConversationWorkTranscript: View {
                     ConversationRunningDots().padding(.top, 6)
                 }
             }
-            .onChange(of: run.status, initial: true) { before, after in
-                if after == .running {
-                    settlingLive = true
-                    return
-                }
-                guard settlingLive else { return }
-                settlingLive = false
-                // Folding above a reply the reader is partway through would
-                // move it under them. Leave that turn open; the header folds it.
-                if before == .running, after == .completed, !readerAtLiveEdge() { setWorkExpanded(true) }
-            }
         }
     }
 
-    /// The turn's fold, kept per conversation in the transcript state.
+    /// Whether the turn's work shows: open while it runs, folded once it ends,
+    /// and flipped by the header. A fold made while it runs is its own choice,
+    /// so the end of the turn folds it whether or not it was open.
     private var workDisclosure: Binding<Bool> {
-        conversationDisclosure(transcriptState, runID: run.id, itemID: "turn",
-            local: $localWorkExpanded, interaction: transcriptInteraction)
+        let running = run.status == .running
+        let flipped = conversationDisclosure(transcriptState, runID: run.id,
+            itemID: running ? "turn:running" : "turn",
+            local: running ? $localRunningFolded : $localWorkExpanded,
+            interaction: transcriptInteraction)
+        return Binding(get: { flipped.wrappedValue != running }, set: { flipped.wrappedValue = $0 != running })
     }
 
-    private func setWorkExpanded(_ expanded: Bool) {
-        if let transcriptState {
-            transcriptState.setExpanded(ConversationTranscriptState.disclosureKey(runID: run.id, itemID: "turn"), expanded)
+    /// The elapsed label, after an alert icon when the turn failed.
+    @ViewBuilder
+    private func headerLabel(failed: Bool) -> some View {
+        if failed {
+            HStack(spacing: 7) {
+                LucideIcon(glyph: .alertCircle, size: 13)
+                elapsedLabel
+            }
         } else {
-            localWorkExpanded = expanded
+            elapsedLabel
         }
     }
 

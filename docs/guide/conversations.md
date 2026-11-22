@@ -30,11 +30,9 @@ still need your answer in every mode.
 ## Following the work
 
 While an agent works, its thinking, tool calls and messages appear in the chat
-as they happen. When the turn finishes with a reply, they fold under **Done
-after …** and only the reply stays; select it to see everything again. A
-proposed plan or a visual reply stays in view. A turn that failed or was
-stopped stays open, and so does one that finishes while you are reading
-further up the chat.
+as they happen. Select the turn's header to fold or unfold them at any time.
+When the turn ends, they fold under its header, such as **Done after …**, and
+the reply stays.
 
 ## Woven tools
 

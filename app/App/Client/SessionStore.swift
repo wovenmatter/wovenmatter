@@ -597,8 +597,6 @@ final class SessionStore {
                     runs[runs.count - 1].status = .failed
                     runs[runs.count - 1].error = notice.text
                 } else {
-                    // A stopped turn is cancelled, not done: its work stays open.
-                    if notice.kind == .interrupted, !runs.isEmpty { runs[runs.count - 1].status = .cancelled }
                     messages.append(WorkspaceMessageRecord(id: entry.id, conversationID: sessionID, role: .system,
                                                            content: notice.text, status: .complete, createdAt: entry.date))
                 }

@@ -413,13 +413,11 @@ when an intentional design change is accepted.
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
   work-group headers, reasoning indicators, or tool-detail loading. While a turn
   runs, thinking and assistant messages stream visibly in chronological order.
-  When it completes with a reply, its thinking, commentary and tool calls fold
-  behind the elapsed header ("Done after …" with a chevron), leaving only the
-  reply; the header reopens them. Failed, cancelled and replyless turns stay
-  open, proposed plans and inline pages stay outside the fold, and a turn that
-  finishes while the reader is away from the live edge stays open so the reply
-  does not move. Live tool calls append as separate rows in the conversation; never
-  replace the preceding tool with the latest call. A new thinking, commentary,
+  The elapsed header (with a chevron) folds its thinking, commentary and tool
+  calls at any time, and the turn folds them itself when it ends, leaving the
+  reply, an error, a proposed plan or an inline page in view. Live tool calls append as
+  separate rows in the conversation; never replace the preceding tool with the
+  latest call. A new thinking, commentary,
   or other standalone event condenses only the preceding tool list into a
   reopenable disclosure. Show supplied subagent rows at their event position.
   Preserve the reader's position; follow new work

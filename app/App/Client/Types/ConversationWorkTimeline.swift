@@ -171,16 +171,10 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
   }
 }
 
-/// A finished turn folds its work behind the elapsed header and leaves only
-/// the reply below it, as T3 Code's "Worked for" fold does. The work streams
-/// in full while the turn runs; the fold is derived, never stored.
+/// A turn's work folds behind its elapsed header, as T3 Code's "Worked for"
+/// fold does. It streams open while the turn runs and folds when it ends; the
+/// header toggles it either way.
 extension ConversationWorkTimeline {
-  /// Only a completed turn with a reply folds. A running turn, a failure, a
-  /// cancellation or a turn without reply text keeps its work open.
-  static func foldsWork(status: RunStatus, hasResponse: Bool) -> Bool {
-    status == .completed && hasResponse
-  }
-
   /// What a folded turn still shows: a proposed plan waits on the reader, and
   /// an inline page is part of the reply rather than a record of the work.
   var entriesOutsideFold: [ConversationWorkTimelineEntry] {
