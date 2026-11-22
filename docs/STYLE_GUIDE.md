@@ -411,10 +411,13 @@ when an intentional design change is accepted.
   this is not distributed live editing.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
-  work-group headers, reasoning indicators, or tool-detail loading. Thinking and
-  assistant messages stay visible in chronological order, including after a run
-  completes. Live tool calls append as separate rows in the conversation; never
-  replace the preceding tool with the latest call. A new thinking, commentary,
+  work-group headers, reasoning indicators, or tool-detail loading. While a turn
+  runs, thinking and assistant messages stream visibly in chronological order.
+  The elapsed header (with a chevron) folds its thinking, commentary and tool
+  calls at any time, and the turn folds them itself when it ends, leaving the
+  reply, an error, a proposed plan or an inline page in view. Live tool calls append as
+  separate rows in the conversation; never replace the preceding tool with the
+  latest call. A new thinking, commentary,
   or other standalone event condenses only the preceding tool list into a
   reopenable disclosure. Show supplied subagent rows at their event position.
   Preserve the reader's position; follow new work

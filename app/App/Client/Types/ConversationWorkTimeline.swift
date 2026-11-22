@@ -171,6 +171,29 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
   }
 }
 
+/// A turn's work folds behind its elapsed header, as T3 Code's "Worked for"
+/// fold does. It streams open while the turn runs and folds when it ends; the
+/// header toggles it either way.
+extension ConversationWorkTimeline {
+  /// What a folded turn still shows: a proposed plan waits on the reader, and
+  /// an inline page is part of the reply rather than a record of the work.
+  var entriesOutsideFold: [ConversationWorkTimelineEntry] {
+    entries.filter(\.staysOutsideFold)
+  }
+
+  /// Whether a fold would hide anything at all.
+  var hasFoldableEntries: Bool {
+    entries.contains { !$0.staysOutsideFold }
+  }
+}
+
+extension ConversationWorkTimelineEntry {
+  var staysOutsideFold: Bool {
+    guard case .activity(let activity) = content else { return false }
+    return activity.htmlRender != nil || (activity.kind == .plan && activity.planKind == "proposal")
+  }
+}
+
 public struct ConversationWorkTimelineEntry: Equatable, Identifiable, Sendable {
   public enum Content: Equatable, Sendable {
     /// Frozen assistant commentary preceding later work.

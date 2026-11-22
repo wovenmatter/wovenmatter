@@ -38,8 +38,9 @@ extension EnvironmentValues {
 }
 
 /// A run's work, inline and in order: commentary, thoughts, and tool groups.
-/// Thinking and commentary remain visible throughout the run and after it
-/// settles. Only tool lists fold at the next event boundary.
+/// While the run streams, thinking and commentary stay visible and tool lists
+/// fold at the next event boundary. The elapsed header folds all of it at any
+/// time, and the turn folds itself when it ends.
 struct ConversationWorkTranscript: View {
     let run: ConversationWorkRun
     let presentation: ConversationWorkPresentation?
@@ -52,6 +53,10 @@ struct ConversationWorkTranscript: View {
     /// `body` when absent.
     let timeline: ConversationWorkTimeline?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var localWorkExpanded = false
+    @State private var localRunningFolded = false
 
     init(
         run: ConversationWorkRun,
@@ -95,17 +100,31 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         )
         let isRunning = run.status == .running
+        let foldable = timeline.hasFoldableEntries
+        let workExpanded = workDisclosure
+        let folded = foldable && !workExpanded.wrappedValue
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                if content.failureMessage != nil {
-                    HStack(spacing: 7) {
-                        LucideIcon(glyph: .alertCircle, size: 13)
-                        elapsedLabel
+                let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
+                if foldable {
+                    Button { workExpanded.wrappedValue.toggle() } label: {
+                        HStack(spacing: 6) {
+                            headerLabel(failed: content.failureMessage != nil)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .rotationEffect(.degrees(workExpanded.wrappedValue ? 90 : 0))
+                                .accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .foregroundStyle(WovenPalette.danger)
+                    .buttonStyle(ConversationElapsedButtonStyle())
+                    .foregroundStyle(headerStyle)
+                    .accessibilityValue(workExpanded.wrappedValue ? "Expanded" : "Collapsed")
+                    .accessibilityHint(workExpanded.wrappedValue ? "Hides this turn's work" : "Shows this turn's thinking and tool calls")
+                    .accessibilityIdentifier("work-turn:" + run.id)
                 } else {
-                    elapsedLabel
-                        .foregroundStyle(WovenPalette.mutedForeground)
+                    headerLabel(failed: content.failureMessage != nil)
+                        .foregroundStyle(headerStyle)
                 }
 
                 // Failure belongs to the run, not to its optional work history.
@@ -119,12 +138,13 @@ struct ConversationWorkTranscript: View {
                         .padding(.top, 8)
                 }
 
-                if content.hasVisibleActivities {
+                // The divider sits under the header from the moment the turn works.
+                if content.hasVisibleActivities || isRunning {
                     Divider()
                         .overlay(WovenPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
-                    let entries = timeline.entries
+                    let entries = folded ? timeline.entriesOutsideFold : timeline.entries
                     if !entries.isEmpty {
                         let tailID = timeline.entries.last?.id
                         VStack(alignment: .leading, spacing: 12) {
@@ -170,7 +190,8 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
-                if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
+                // A folded turn shows only the dots below.
+                if isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
                         Image(systemName: "brain").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
@@ -184,6 +205,31 @@ struct ConversationWorkTranscript: View {
                     ConversationRunningDots().padding(.top, 6)
                 }
             }
+        }
+    }
+
+    /// Whether the turn's work shows: open while it runs, folded once it ends,
+    /// and flipped by the header. A fold made while it runs is its own choice,
+    /// so the end of the turn folds it whether or not it was open.
+    private var workDisclosure: Binding<Bool> {
+        let running = run.status == .running
+        let flipped = conversationDisclosure(transcriptState, runID: run.id,
+            itemID: running ? "turn:running" : "turn",
+            local: running ? $localRunningFolded : $localWorkExpanded,
+            interaction: transcriptInteraction)
+        return Binding(get: { flipped.wrappedValue != running }, set: { flipped.wrappedValue = $0 != running })
+    }
+
+    /// The elapsed label, after an alert icon when the turn failed.
+    @ViewBuilder
+    private func headerLabel(failed: Bool) -> some View {
+        if failed {
+            HStack(spacing: 7) {
+                LucideIcon(glyph: .alertCircle, size: 13)
+                elapsedLabel
+            }
+        } else {
+            elapsedLabel
         }
     }
 
@@ -338,6 +384,7 @@ private struct ConversationWorkGroupRow: View {
                             .font(.system(size: 10, weight: .semibold))
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
                             .foregroundStyle(WovenPalette.mutedForeground)
+                            .accessibilityHidden(true)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(group.hasFailure ? Color.red.opacity(0.8)

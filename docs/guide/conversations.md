@@ -27,6 +27,13 @@ supports appear:
 Pi Durable and OpenCode always run in Full Access. Questions and sign-in steps
 still need your answer in every mode.
 
+## Following the work
+
+While an agent works, its thinking, tool calls and messages appear in the chat
+as they happen. Select the turn's header to fold or unfold them at any time.
+When the turn ends, they fold under its header, such as **Done after …**, and
+the reply stays.
+
 ## Woven tools
 
 Every agent reaches Woven Matter through the Woven MCP. With it, agents can
