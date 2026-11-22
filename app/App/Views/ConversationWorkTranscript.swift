@@ -25,6 +25,13 @@ private struct ConversationActivityDetailsKey: EnvironmentKey {
     static let defaultValue: (@MainActor (_ runID: String, _ activityID: String) async throws -> AgentRunActivity?)? = nil
 }
 
+/// Whether the reader is following the conversation's live edge. A turn that
+/// finishes while the reader is elsewhere stays open, so the reply they are
+/// reading does not move up under them when its work folds.
+private struct ConversationReaderAtLiveEdgeKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Bool = { true }
+}
+
 extension EnvironmentValues {
     var conversationTranscriptInteraction: @MainActor () -> Void {
         get { self[ConversationTranscriptInteractionKey.self] }
@@ -35,11 +42,17 @@ extension EnvironmentValues {
         get { self[ConversationActivityDetailsKey.self] }
         set { self[ConversationActivityDetailsKey.self] = newValue }
     }
+
+    var conversationReaderAtLiveEdge: @MainActor () -> Bool {
+        get { self[ConversationReaderAtLiveEdgeKey.self] }
+        set { self[ConversationReaderAtLiveEdgeKey.self] = newValue }
+    }
 }
 
 /// A run's work, inline and in order: commentary, thoughts, and tool groups.
-/// Thinking and commentary remain visible throughout the run and after it
-/// settles. Only tool lists fold at the next event boundary.
+/// While the run streams, thinking and commentary stay visible and tool lists
+/// fold at the next event boundary. Once it completes with a reply, all of its
+/// work folds behind the elapsed header, which reopens it.
 struct ConversationWorkTranscript: View {
     let run: ConversationWorkRun
     let presentation: ConversationWorkPresentation?
@@ -52,6 +65,10 @@ struct ConversationWorkTranscript: View {
     /// `body` when absent.
     let timeline: ConversationWorkTimeline?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @Environment(\.conversationReaderAtLiveEdge) private var readerAtLiveEdge
+    @State private var localWorkExpanded = false
 
     init(
         run: ConversationWorkRun,
@@ -95,6 +112,10 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         )
         let isRunning = run.status == .running
+        let foldable = ConversationWorkTimeline.foldsWork(status: run.status, hasResponse: hasFollowingResponse)
+            && timeline.hasFoldableEntries
+        let workExpanded = workDisclosure
+        let folded = foldable && !workExpanded.wrappedValue
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
                 if content.failureMessage != nil {
@@ -103,6 +124,21 @@ struct ConversationWorkTranscript: View {
                         elapsedLabel
                     }
                     .foregroundStyle(WovenPalette.danger)
+                } else if foldable {
+                    Button { workExpanded.wrappedValue.toggle() } label: {
+                        HStack(spacing: 6) {
+                            elapsedLabel
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .rotationEffect(.degrees(workExpanded.wrappedValue ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(ConversationElapsedButtonStyle())
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .accessibilityValue(workExpanded.wrappedValue ? "Expanded" : "Collapsed")
+                    .accessibilityHint(workExpanded.wrappedValue ? "Hides this turn's work" : "Shows this turn's thinking and tool calls")
+                    .accessibilityIdentifier("work-turn:" + run.id)
                 } else {
                     elapsedLabel
                         .foregroundStyle(WovenPalette.mutedForeground)
@@ -119,13 +155,13 @@ struct ConversationWorkTranscript: View {
                         .padding(.top, 8)
                 }
 
-                if content.hasVisibleActivities {
+                let entries = folded ? timeline.entriesOutsideFold : timeline.entries
+                if content.hasVisibleActivities && !entries.isEmpty {
                     Divider()
                         .overlay(WovenPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
-                    let entries = timeline.entries
-                    if !entries.isEmpty {
+                    Group {
                         let tailID = timeline.entries.last?.id
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(entries) { entry in
@@ -184,6 +220,26 @@ struct ConversationWorkTranscript: View {
                     ConversationRunningDots().padding(.top, 6)
                 }
             }
+            .onChange(of: run.status) { before, after in
+                // Folding above a reply the reader is partway through would
+                // move it under them. Leave that turn open; the header folds it.
+                guard before == .running, after == .completed, !readerAtLiveEdge() else { return }
+                setWorkExpanded(true)
+            }
+        }
+    }
+
+    /// The turn's fold, kept per conversation in the transcript state.
+    private var workDisclosure: Binding<Bool> {
+        conversationDisclosure(transcriptState, runID: run.id, itemID: "turn",
+            local: $localWorkExpanded, interaction: transcriptInteraction)
+    }
+
+    private func setWorkExpanded(_ expanded: Bool) {
+        if let transcriptState {
+            transcriptState.setExpanded(ConversationTranscriptState.disclosureKey(runID: run.id, itemID: "turn"), expanded)
+        } else {
+            localWorkExpanded = expanded
         }
     }
 
