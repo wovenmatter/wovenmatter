@@ -232,9 +232,12 @@ actor OpenCodeHost {
     process.currentDirectoryURL = folder
     var environment = environment(password: password)
     if let tools {
+      // Woven's tools are offered as tools of their own, as on the other
+      // runtimes, not behind OpenCode's Code Mode, where the model must search
+      // for them and calls them from code (a visual reply then shows as code).
       let config: JSONValue = .object(["mcp": .object(["woven": .object([
         "type": .string("local"), "command": .array(([tools.command] + tools.arguments).map(JSONValue.string)),
-        "environment": .object(tools.environment.mapValues(JSONValue.string)),
+        "environment": .object(tools.environment.mapValues(JSONValue.string)), "codemode": .bool(false),
       ])])])
       environment["OPENCODE_CONFIG_CONTENT"] = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
     }

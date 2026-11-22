@@ -44,6 +44,125 @@ import WovenProtocol
   #expect(finished != nil && finished?.failure == nil)
 }
 
+/// The transcript a session saves from runtime events, in the order it saves
+/// them: text runs until a tool call or the message's end, and every item
+/// takes its place when it finishes (`Sessions.handle`).
+private func savedTranscript(_ events: [RuntimeEvent]) -> [String] {
+  var saved: [String] = []
+  var text = ""
+  var output: [String: String] = [:]
+  func flush() {
+    if !text.isEmpty { saved.append("text: " + text) }
+    text = ""
+  }
+  for event in events {
+    switch event {
+    case .text(let delta): text += delta
+    case .messageFinished: flush()
+    case .toolOutput(let id, let delta): output[id, default: ""] += delta
+    case .tool(let id, let call, let finished):
+      flush()
+      if finished {
+        let shown = (call.output ?? "").isEmpty ? output[id] ?? "" : call.output ?? ""
+        saved.append(call.kind == .thinking ? "thinking: " + shown : "tool: " + call.name)
+      }
+    case .turnFinished: flush()
+    default: break
+    }
+  }
+  return saved
+}
+
+private func project(_ frames: [String]) -> [RuntimeEvent] {
+  var projection = OpenCodeProjection()
+  return frames.flatMap { projection.receive(try! OpenCodeSSEParser.decode(Data($0.utf8))) }
+}
+
+/// OpenCode ends a step's reasoning only when the step's stream ends, after
+/// its text and tool calls began (as its own history of a chat shows). The
+/// reasoning still keeps its place before them, and the reply stays whole.
+@Test func openCodeReasoningKeepsItsPlaceBeforeTheStepsText() {
+  let events = project([
+    #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m1"}}"#,
+    #"{"type":"session.reasoning.started","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0}}"#,
+    #"{"type":"session.reasoning.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"Search "}}"#,
+    #"{"type":"session.reasoning.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"first."}}"#,
+    #"{"type":"session.text.started","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0}}"#,
+    #"{"type":"session.text.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"Looking "}}"#,
+    #"{"type":"session.text.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"it up."}}"#,
+    #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"websearch"}}"#,
+    #"{"type":"session.tool.input.delta","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","delta":"{\"query\""}}"#,
+    #"{"type":"session.reasoning.ended","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"text":"Search first."}}"#,
+    #"{"type":"session.text.ended","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"text":"Looking it up."}}"#,
+    #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","input":{"query":"q"}}}"#,
+    #"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","content":[{"type":"text","text":"found"}]}}"#,
+    #"{"type":"session.step.ended","data":{"sessionID":"s","assistantMessageID":"m1"}}"#,
+    #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m2"}}"#,
+    #"{"type":"session.reasoning.started","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0}}"#,
+    #"{"type":"session.reasoning.delta","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"delta":"Now answer."}}"#,
+    #"{"type":"session.text.started","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0}}"#,
+    #"{"type":"session.text.delta","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"delta":"Here is the answer, "}}"#,
+    #"{"type":"session.reasoning.ended","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"text":"Now answer."}}"#,
+    #"{"type":"session.text.delta","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"delta":"whole."}}"#,
+    #"{"type":"session.text.ended","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"text":"Here is the answer, whole."}}"#,
+    #"{"type":"session.step.ended","data":{"sessionID":"s","assistantMessageID":"m2"}}"#,
+    #"{"type":"session.execution.succeeded","data":{"sessionID":"s"}}"#,
+  ])
+  #expect(savedTranscript(events) == [
+    "thinking: Search first.", "text: Looking it up.", "tool: websearch",
+    "thinking: Now answer.", "text: Here is the answer, whole.",
+  ])
+  // Reasoning streams as deltas, and the tool's input shows once complete.
+  let calls = events.compactMap { if case .tool(_, let call, false) = $0 { call } else { nil } }
+  #expect(calls.map(\.name) == ["thinking", "websearch", "websearch", "thinking"])
+  #expect(calls.first { $0.kind == .thinking }?.title == "Thinking")
+  #expect(events.filter { if case .toolOutput = $0 { true } else { false } }.count == 3)
+}
+
+/// Reasoning a step streams again after its text began shows as its own
+/// item after that text, and a tool that reports its own failure failed.
+@Test func openCodeResumedReasoningAndToolErrorsShow() {
+  let events = project([
+    #"{"type":"session.reasoning.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"First."}}"#,
+    #"{"type":"session.text.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"Partly. "}}"#,
+    #"{"type":"session.reasoning.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"delta":"Second."}}"#,
+    #"{"type":"session.reasoning.ended","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"text":"First.Second."}}"#,
+    #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"execute"}}"#,
+    #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","input":{"code":"x"}}}"#,
+    #"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","metadata":{"error":true},"content":[{"type":"text","text":"SyntaxError"}]}}"#,
+    #"{"type":"session.execution.succeeded","data":{"sessionID":"s"}}"#,
+  ])
+  #expect(savedTranscript(events) == ["thinking: First.", "text: Partly. ", "thinking: Second.", "tool: execute"])
+  let tool = events.compactMap { if case .tool(_, let call, true) = $0, call.name == "execute" { call } else { nil } }.first
+  #expect(tool?.failed == true && tool?.kind == .execute)
+}
+
+/// Reasoning without text shows nothing, and a turn that ends mid-reasoning
+/// keeps what was streamed.
+@Test func openCodeReasoningWithoutTextIsNotShown() {
+  let events = project([
+    #"{"type":"session.reasoning.started","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0}}"#,
+    #"{"type":"session.reasoning.ended","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":0,"text":""}}"#,
+    #"{"type":"session.reasoning.started","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":2}}"#,
+    #"{"type":"session.reasoning.delta","data":{"sessionID":"s","assistantMessageID":"m1","ordinal":2,"delta":"Half"}}"#,
+    #"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"user"}}"#,
+  ])
+  #expect(savedTranscript(events) == ["thinking: Half"])
+}
+
+/// A running command's output, reported whole as it grows, streams as what
+/// is new.
+@Test func openCodeToolProgressStreamsWhatIsNew() {
+  let events = project([
+    #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"bash"}}"#,
+    #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","input":{"command":"ls"}}}"#,
+    #"{"type":"session.tool.progress","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","metadata":{"output":"a\n"}}}"#,
+    #"{"type":"session.tool.progress","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","metadata":{"output":"a\nb\n"}}}"#,
+  ])
+  let deltas = events.compactMap { if case .toolOutput(_, let delta) = $0 { delta } else { nil } }
+  #expect(deltas == ["a\n", "b\n"])
+}
+
 /// OpenCode's web search question as its websearch tool asks it: one untitled
 /// field whose options have ids apart from their labels and no own answer.
 private let webSearchForm = try! OpenCodeSSEParser.decode(Data(#"""

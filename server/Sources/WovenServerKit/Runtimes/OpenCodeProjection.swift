@@ -2,20 +2,39 @@ import Foundation
 import WovenProtocol
 
 /// Turns one OpenCode session's events into runtime events: text deltas,
-/// tool calls with their whole state, reasoning and to-dos, and closes
-/// whatever is open when the turn ends. Its usage is counted from OpenCode's
-/// own history.
+/// tool calls, reasoning and to-dos, and closes whatever is open when the turn
+/// ends. Its usage is counted from OpenCode's own history.
+///
+/// Reasoning and streamed output travel as deltas, as on the ACP runtimes.
+/// OpenCode ends a step's reasoning only when the step's stream ends, after
+/// the step's text and tool calls began, so the reasoning is ended as soon as
+/// anything else of the step starts: it keeps its place before them.
 struct OpenCodeProjection: Sendable {
   private var texts: [String: String] = [:]
   private var openCalls: [String] = []
   private var calls: [String: ToolCall] = [:]
   private var stepFailure: String?
+  /// The reasoning part being streamed now and the item it shows as, once
+  /// it has text.
+  private var thinking: (part: String, item: String)?
+  /// How often each reasoning part was ended here. Its late end is ignored;
+  /// reasoning it streams after all shows as an item of its own.
+  private var endedThinking: [String: Int] = [:]
 
   /// The events `event` makes. It is one of this session's own.
   mutating func receive(_ event: JSONValue) -> [RuntimeEvent] {
-    let data = event["data"] ?? .null
+    let type = event["type"]?.string ?? ""
+    // What starts the step's text or a tool call. A tool's later events are
+    // not: a tool running on can report while the next step reasons.
+    let ending = type.hasPrefix("session.text.") || type == "session.tool.input.started" || type == "session.tool.called"
+      || type == "session.step.ended"
+    let ended = ending ? endThinking() : []
+    return ended + project(type, event["data"] ?? .null)
+  }
+
+  private mutating func project(_ type: String, _ data: JSONValue) -> [RuntimeEvent] {
     let message = data["assistantMessageID"]?.string ?? ""
-    switch event["type"]?.string {
+    switch type {
     case "session.step.failed":
       stepFailure = data["error"]?["message"]?.string
       return []
@@ -38,31 +57,41 @@ struct OpenCodeProjection: Sendable {
       return events
 
     case "session.reasoning.started":
-      return update(reasoningID(data, message)) { _ in
-        ToolCall(name: "reasoning", input: "", output: "", kind: .thinking)
-      }
+      return startThinking(reasoningID(data, message))
     case "session.reasoning.delta":
-      return update(reasoningID(data, message)) { call in
-        var call = call ?? ToolCall(name: "reasoning", input: "", output: "", kind: .thinking)
-        call.output = (call.output ?? "") + (data["delta"]?.string ?? "")
-        return call
-      }
+      let delta = data["delta"]?.string ?? ""
+      guard !delta.isEmpty else { return [] }
+      var events = startThinking(reasoningID(data, message))
+      guard let item = thinking?.item else { return events }
+      if calls[item] == nil { events += update(item) { _ in Self.thought("") } }
+      let streamed = calls[item]?.output ?? ""
+      calls[item]?.output = streamed + delta
+      return events + [.toolOutput(callID: item, delta: delta)]
     case "session.reasoning.ended":
-      return update(reasoningID(data, message), finished: true) { call in
-        var call = call ?? ToolCall(name: "reasoning", input: "", kind: .thinking)
-        call.output = data["text"]?.string ?? ""
-        return call
+      let part = reasoningID(data, message)
+      guard let current = thinking, current.part == part else {
+        // Ended here already, or never streamed: its whole text shows once.
+        guard endedThinking[part] == nil, let text = data["text"]?.string, !text.isEmpty else { return [] }
+        endedThinking[part] = 1
+        return update(part, finished: true) { _ in Self.thought(text) }
       }
+      thinking = nil
+      endedThinking[part, default: 0] += 1
+      // The part's whole text, unless only a later stretch of it shows here.
+      let final = data["text"]?.string ?? ""
+      let text = current.item == part && !final.isEmpty ? final : calls[current.item]?.output ?? ""
+      guard calls[current.item] != nil || !text.isEmpty else { return [] }
+      return update(current.item, finished: true) { _ in Self.thought(text) }
 
     case "session.tool.input.started":
       let name = data["name"]?.string ?? ""
       return update(data["id"]?.string ?? "") { _ in ToolCall(name: name, input: "", kind: Self.kind(name)) }
     case "session.tool.input.delta":
-      return update(data["id"]?.string ?? "") { call in
-        var call = call ?? ToolCall(name: "tool", input: "")
-        call.input += data["delta"]?.string ?? ""
-        return call
-      }
+      // The input shows whole once it is complete, as on the ACP runtimes,
+      // rather than resending the call for every piece of it.
+      guard let id = data["id"]?.string, calls[id] != nil else { return [] }
+      calls[id]?.input += data["delta"]?.string ?? ""
+      return []
     case "session.tool.input.ended":
       return update(data["id"]?.string ?? "") { call in
         var call = call ?? ToolCall(name: "tool", input: "")
@@ -79,19 +108,29 @@ struct OpenCodeProjection: Sendable {
         return call
       }
     case "session.tool.progress":
-      return update(data["id"]?.string ?? "") { call in
+      let id = data["id"]?.string ?? ""
+      let title = data["metadata"]?["title"]?.string
+      let output = data["metadata"]?["output"]?.string
+      // Output that grows travels as what is new.
+      if let call = calls[id], title == nil || title == call.title, let output, output.hasPrefix(call.output ?? "") {
+        let delta = String(output.dropFirst((call.output ?? "").count))
+        calls[id]?.output = output
+        return delta.isEmpty ? [] : [.toolOutput(callID: id, delta: delta)]
+      }
+      return update(id) { call in
         var call = call ?? ToolCall(name: "tool", input: "")
-        call.title = data["metadata"]?["title"]?.string ?? call.title
-        if let output = data["metadata"]?["output"]?.string { call.output = output }
+        call.title = title ?? call.title
+        if let output { call.output = output }
         return call
       }
     case "session.tool.success", "session.tool.failed":
-      let failed = event["type"]?.string == "session.tool.failed"
+      let failed = type == "session.tool.failed"
       return update(data["id"]?.string ?? "", finished: true) { call in
         var call = call ?? ToolCall(name: "tool", input: "")
         let content = Self.content(data["content"] ?? .null)
         call.output = failed ? [data["error"]?["message"]?.string ?? "", content].filter { !$0.isEmpty }.joined(separator: "\n") : content
-        call.failed = failed
+        // A tool that reports its own failure succeeds with `metadata.error`.
+        call.failed = failed || data["metadata"]?["error"]?.bool == true
         call.title = data["metadata"]?["title"]?.string ?? call.title
         return call
       }
@@ -110,7 +149,8 @@ struct OpenCodeProjection: Sendable {
 
   /// Ends every open item, then the turn.
   mutating func finishTurn(failure: String?, interrupted: Bool = false) -> [RuntimeEvent] {
-    var events: [RuntimeEvent] = []
+    var events = endThinking()
+    endedThinking.removeAll()
     if texts.values.contains(where: { !$0.isEmpty }) { events.append(.messageFinished) }
     texts.removeAll()
     for id in openCalls {
@@ -123,6 +163,28 @@ struct OpenCodeProjection: Sendable {
     events.append(.turnFinished(failure: failure, usage: nil))
     stepFailure = nil
     return events
+  }
+
+  /// Makes `part` the reasoning being streamed, ending any other.
+  private mutating func startThinking(_ part: String) -> [RuntimeEvent] {
+    guard thinking?.part != part else { return [] }
+    let ended = endThinking()
+    let times = endedThinking[part] ?? 0
+    thinking = (part, times == 0 ? part : part + ":again:" + String(times))
+    return ended
+  }
+
+  /// Ends the reasoning being streamed, with the text it has so far.
+  private mutating func endThinking() -> [RuntimeEvent] {
+    guard let current = thinking else { return [] }
+    thinking = nil
+    endedThinking[current.part, default: 0] += 1
+    guard let call = calls[current.item] else { return [] }
+    return update(current.item, finished: true) { _ in call }
+  }
+
+  private static func thought(_ text: String) -> ToolCall {
+    ToolCall(name: "thinking", input: "", output: text, title: "Thinking", kind: .thinking)
   }
 
   private mutating func update(_ id: String, finished: Bool = false, _ change: (ToolCall?) -> ToolCall) -> [RuntimeEvent] {
@@ -160,7 +222,7 @@ struct OpenCodeProjection: Sendable {
     switch name.lowercased() {
     case "read": .read
     case "edit", "write", "patch", "apply_patch", "multiedit": .edit
-    case "bash", "shell": .execute
+    case "bash", "shell", "execute": .execute
     case "grep", "glob", "list", "find", "codesearch", "websearch": .search
     case "webfetch", "fetch": .fetch
     case "todowrite", "todoread", "todo": .plan
