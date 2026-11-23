@@ -279,7 +279,7 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
 /// The state of one ACP session: its configuration, the turn in progress
 /// and what the agent is waiting on. Every message from the agent is handled
 /// here in the order it arrived.
-private actor ACPState {
+actor ACPState {
   private let connection: ACPConnection
   private let profile: ACPProfile
   private let emit: AsyncStream<RuntimeEvent>.Continuation
@@ -784,7 +784,13 @@ private actor ACPState {
 
   /// Takes what an update says about a tool call. Returns output streamed
   /// a piece at a time, which is not added to the call.
-  private static func merge(_ update: JSONValue, into call: inout ToolCall) -> String? {
+  ///
+  /// A script an agent runs in code mode says so in `_meta`:
+  /// `wovenKind: "code"`, its source in `rawInput.code`, and `wovenCalls`, the
+  /// tool calls it made so far in order, each `{ name, input, status, error }`
+  /// with `input` its arguments (an object, or text when cut short) and
+  /// `status` `running`, `ok` or `error` (`cancelled` counts as failed).
+  static func merge(_ update: JSONValue, into call: inout ToolCall) -> String? {
     if let title = update["title"]?.string { call.title = title }
     if let kind = update["kind"]?.string {
       call.name = kind
@@ -802,6 +808,11 @@ private actor ACPState {
     }
     if update["_meta"]?["wovenKind"]?.string == "task" { call.kind = .task }
     if let input = update["rawInput"], input != .null { call.input = ToolOutput.capped(text(input)) }
+    if update["_meta"]?["wovenKind"]?.string == "code" {
+      call.kind = .code
+      if let source = update["rawInput"]?["code"]?.string { call.input = ToolOutput.capped(source) }
+      if let calls = update["_meta"]?["wovenCalls"]?.array { call.calls = calls.map(codeCall) }
+    }
     var parts: [String] = []
     for item in update["content"]?.array ?? [] {
       switch item["type"]?.string {
@@ -827,6 +838,26 @@ private actor ACPState {
       }
     }
     return nil
+  }
+
+  /// One tool call a script made, from `_meta.wovenCalls`: its output nil
+  /// while it runs, empty once it succeeded, its error once it failed.
+  private static func codeCall(_ value: JSONValue) -> ToolCall {
+    let input: String = switch value["input"] {
+    case .string(let text)?: text
+    case let arguments?: CodeCalls.input(arguments)
+    case nil: ""
+    }
+    let status = value["status"]?.string
+    let failed = ["error", "failed", "cancelled"].contains(status)
+    let output: String? = if failed {
+      value["error"]?.string ?? (status == "cancelled" ? "Cancelled." : "Failed.")
+    } else if ["ok", "completed"].contains(status) {
+      ""
+    } else {
+      nil
+    }
+    return ToolCall(name: value["name"]?.string ?? "", input: input, output: output, failed: failed)
   }
 
   private static func text(_ value: JSONValue) -> String {

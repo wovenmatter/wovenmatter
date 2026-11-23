@@ -156,11 +156,16 @@ enum VisualReplies {
     return text.isEmpty ? nil : String(text.prefix(200))
   }
 
+  /// Each `html` string as its length. One that already is (a runtime that
+  /// keeps pages from crossing to the server sends it so) stays as it is.
   private static func withoutHTML(_ value: JSONValue) -> JSONValue {
     switch value {
     case .object(let fields):
       .object(fields.mapValues(withoutHTML).merging(
-        fields["html"]?.string.map { ["html": .string("(\($0.utf16.count) characters, shown in the chat)")] } ?? [:],
+        fields["html"]?.string.map { html in
+          ["html": .string(html.wholeMatch(of: #/\((?:\d+ characters|the visual reply), shown in the chat\)/#) != nil
+            ? html : "(\(html.utf16.count) characters, shown in the chat)")]
+        } ?? [:],
         uniquingKeysWith: { _, shown in shown }))
     case .array(let values): .array(values.map(withoutHTML))
     default: value

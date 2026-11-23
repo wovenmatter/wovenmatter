@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 // it. Each process resolves that link once, at start, so running sessions keep
 // the packages they started with and new ones use the update.
 export const sdkPackages = ['@earendil-works/pi-durable', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent', '@earendil-works/chord',
-  '@earendil-works/pi-mcp', '@earendil-works/pi-schema', '@anthropic-ai/claude-agent-sdk'];
+  '@earendil-works/pi-codemode', '@earendil-works/pi-mcp', '@earendil-works/pi-schema', '@anthropic-ai/claude-agent-sdk'];
 const source = pathToFileURL(fileURLToPath(new URL('.', import.meta.url))).href;
 const run = promisify(execFile);
 
@@ -48,7 +48,7 @@ export async function updateSDK(data) {
     await run(command, [...prefix, 'install', '--no-audit', '--no-fund', '--omit=dev', '--omit=optional', '--prefix', target, ...sdkPackages.map(name => `${name}@latest`)],
       { timeout: 10 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
     // The packages must load before sessions are pointed at them.
-    await run(process.execPath, ['--input-type=module', '-e', "await import('@earendil-works/pi-durable'); await import('@earendil-works/pi-coding-agent');"], { cwd: target, timeout: 60000 });
+    await run(process.execPath, ['--input-type=module', '-e', "await import('@earendil-works/pi-durable'); await import('@earendil-works/pi-durable/codemode'); await import('@earendil-works/pi-codemode'); await import('@earendil-works/pi-coding-agent');"], { cwd: target, timeout: 60000 });
   } catch (error) {
     await rm(target, { recursive: true, force: true });
     throw new Error(`The SDK update failed: ${error.stderr?.toString().trim().split('\n').at(-1) || error.message}`);
