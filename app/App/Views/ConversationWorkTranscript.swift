@@ -450,6 +450,7 @@ private struct ConversationBoundedWorkList: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.conversationReasoningAtLiveEdge,
                     !restoringScroll && !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
+                .environment(\.conversationInBoundedList, true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
         .scrollIndicators(.never)
@@ -809,7 +810,7 @@ private struct ConversationActivityDetails: View {
             if let calls = field(\.codeCalls) {
                 // A script: its source folded away, the tools it called, then what it printed.
                 ConversationCodeScript(source: field(\.rawInputJSON))
-                ForEach(calls) { call in ConversationCodeCallRow(call: call) }
+                ConversationCodeCallList(calls: calls)
                 rawBlock("Output", field(\.rawOutputJSON))
             } else if activity.kind != .thought {
                 rawBlock("Input", field(\.rawInputJSON))
@@ -934,14 +935,62 @@ private struct ConversationCodeScript: View {
 
     var body: some View {
         if let source, !source.isEmpty {
-            DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
-                ConversationPagedText(text: source, style: .raw).padding(.top, 5)
-            } label: {
-                Text("Script").font(.system(size: 11.5, weight: .medium))
+            VStack(alignment: .leading, spacing: 5) {
+                // Its chevron follows the label, as on every other disclosure here.
+                Button {
+                    transcriptInteraction()
+                    expanded.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Script").font(.system(size: 11.5, weight: .medium))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                if expanded { ConversationPagedText(text: source, style: .raw) }
             }
-            .font(.system(size: 11.5))
-            .foregroundStyle(WovenPalette.mutedForeground)
         }
+    }
+}
+
+/// The tools a script called. A long list scrolls within a bounded height,
+/// as an expanded work group does, so one script never pushes the rest of
+/// the transcript far down.
+private struct ConversationCodeCallList: View {
+    static let maximumHeight: CGFloat = 320
+    /// About one row, for the first layout before the rows are measured.
+    private static let rowEstimate: CGFloat = 24
+    let calls: [AgentRunCodeCall]
+    @Environment(\.conversationInBoundedList) private var inBoundedList
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        if inBoundedList {
+            // The group scrolls; a second scroll area inside it would only trap the pointer.
+            rows
+        } else {
+            let height = contentHeight ?? CGFloat(calls.count) * Self.rowEstimate
+            ScrollView(.vertical) {
+                rows.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }
+            .scrollIndicators(.never)
+            .scrollDisabled(height <= Self.maximumHeight)
+            .frame(height: min(Self.maximumHeight, max(1, height)))
+            .defaultScrollAnchor(.top, for: .initialOffset)
+        }
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(calls) { call in ConversationCodeCallRow(call: call) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -952,11 +1001,13 @@ private struct ConversationCodeCallRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // The note of calls left out is not a call, so it has no icon.
                 Image(systemName: call.status == .failed ? "exclamationmark.triangle"
                     : call.status == .shownInChat ? "rectangle.on.rectangle" : "wrench.and.screwdriver")
                     .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(call.status == .failed ? Color.red.opacity(0.8) : WovenPalette.mutedForeground)
+                    .foregroundStyle(call.status == .failed ? WovenPalette.danger : WovenPalette.mutedForeground)
                     .frame(width: 14)
+                    .opacity(call.status == nil ? 0 : 1)
                 Text(call.name)
                     .font(.system(size: 12.5, weight: call.status == nil ? .regular : .medium))
                     .foregroundStyle(call.status == nil ? WovenPalette.mutedForeground : WovenPalette.foreground.opacity(0.72))
@@ -1174,6 +1225,10 @@ private extension EnvironmentValues {
         get { self[ConversationReasoningAtLiveEdgeKey.self] }
         set { self[ConversationReasoningAtLiveEdgeKey.self] = newValue }
     }
+
+    /// Inside an expanded work group, which already scrolls within its own
+    /// bounded height.
+    @Entry var conversationInBoundedList = false
 }
 
 private struct ConversationReasoningTextKey: PreferenceKey {
