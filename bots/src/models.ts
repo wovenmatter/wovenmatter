@@ -1,9 +1,7 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
-  Api,
   CredentialStore,
-  Model,
   ModelsStore,
   MutableModels,
   Provider,
@@ -15,7 +13,7 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
-import { claudeAgentModel, claudeAgentProvider } from "./claude/provider.ts";
+import { claudeAgentProvider } from "./claude/provider.ts";
 import type { ClaudeAgentOptions } from "./claude/runtime.ts";
 import type { ModelRef } from "./config.ts";
 import { type LiveCatalog, type LiveCatalogOptions, liveCatalog } from "./model-catalog.ts";
@@ -53,7 +51,8 @@ function xaiApiProvider(): Provider {
 
 /**
  * pi-ai models for every bot. Request auth resolves through `credentials` (asked of the server:
- * provider connections in Woven settings). `claude-subscription` is Claude through the Claude Agent SDK.
+ * provider connections in Woven settings). `claude-subscription` is Claude through the Claude Agent SDK,
+ * with the models Claude Code offers.
  * With `catalog`, every provider also lists Pi's live catalog once `refreshBotModels` has loaded it.
  */
 export function createBotModels(
@@ -80,20 +79,17 @@ export function createBotModels(
   models.setProvider(live(anthropicProvider()));
   models.setProvider(live(openrouterProvider()));
   models.setProvider(live(xaiProvider()));
-  // The key-only connection and the Claude subscription read another provider's catalog.
+  // The key-only connection reads another provider's catalog.
   models.setProvider(live(xaiApiProvider(), { source: "xai" }));
   models.setProvider(live(opencodeGoProvider()));
-  models.setProvider(
-    live(
-      claudeAgentProvider({
-        ...options.claude,
-        directory:
-          options.claude?.directory ??
-          join(tmpdir(), `woven-bots-claude-agent-${process.getuid?.() ?? "user"}`),
-      }),
-      { source: "anthropic", adapt: (model: Model<Api>) => claudeAgentModel(model) },
-    ),
-  );
+  // The Claude subscription lists the models Claude Code offers its sign-in, as in Pi chats.
+  const claude = claudeAgentProvider({
+    ...options.claude,
+    directory:
+      options.claude?.directory ?? join(tmpdir(), `woven-bots-claude-agent-${process.getuid?.() ?? "user"}`),
+  });
+  models.setProvider(claude.provider);
+  if (catalog) restores.set(claude.provider.id, claude.restore);
   if (catalog) catalogs.set(models, { store: catalog.store, restores });
   return models;
 }

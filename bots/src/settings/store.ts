@@ -21,6 +21,25 @@ export async function writePrivateFile(path: string, text: string): Promise<void
   }
 }
 
+/**
+ * Bots listed Anthropic's model ids for the Claude subscription; they now list Claude Code's, as
+ * Pi chats do. When the settings are opened, a saved Anthropic id of an Opus, Sonnet or Haiku model
+ * becomes Claude Code's model of that family (`opus`, `sonnet`, `haiku`), and any other Claude
+ * model becomes the id Claude Code lists it under, with its 1M context (`claude-fable-5-2[1m]`).
+ */
+function claudeCodeReferences(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value
+      .replace(/^claude-subscription\/claude-(opus|sonnet|haiku)-\d[\w.-]*$/, "claude-subscription/$1")
+      .replace(/^(claude-subscription\/claude-[a-z]+-\d[\w.-]*)$/, "$1[1m]");
+  }
+  if (Array.isArray(value)) return value.map(claudeCodeReferences);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, claudeCodeReferences(item)]));
+  }
+  return value;
+}
+
 export function parseSettings(input: unknown, source = "settings"): RawSettings {
   const result = settingsSchema.safeParse(input);
   if (!result.success) {
@@ -55,9 +74,10 @@ export class SettingsStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const settings = parseSettings(text === undefined ? {} : JSON.parse(text), path);
-    const store = new SettingsStore(settings, path);
-    if (text === undefined) await store.update((value) => value);
+    const saved: unknown = text === undefined ? {} : JSON.parse(text);
+    const converted = claudeCodeReferences(saved);
+    const store = new SettingsStore(parseSettings(converted, path), path);
+    if (text === undefined || JSON.stringify(converted) !== JSON.stringify(saved)) await store.update((value) => value);
     return store;
   }
 

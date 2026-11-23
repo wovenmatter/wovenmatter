@@ -126,12 +126,15 @@ public struct SignIn: Codable, Sendable, Hashable {
   public var name: String
   public var kind: Kind
   public var connected: Bool
+  /// The signed-in account, when the provider names it (Claude Code's email).
+  public var account: String?
 
-  public init(provider: String, name: String, kind: Kind, connected: Bool) {
+  public init(provider: String, name: String, kind: Kind, connected: Bool, account: String? = nil) {
     self.provider = provider
     self.name = name
     self.kind = kind
     self.connected = connected
+    self.account = account
   }
 }
 

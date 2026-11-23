@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { claudeExecutable } from '../src/claude.mjs';
+import { claudeExecutable, claudeStatus } from '../src/claude.mjs';
 import { startAgent } from './fixtures/client.mjs';
 
 async function folders(t) {
@@ -105,4 +105,23 @@ test('Claude runs the first executable claude on PATH, or says it is not install
   await chmod(join(installed, 'claude'), 0o755);
   assert.equal(claudeExecutable([none, plain, installed].join(delimiter)), join(installed, 'claude'));
   assert.throws(() => claudeExecutable([none, plain].join(delimiter)), { message: 'Claude Code is not installed on this machine.' });
+});
+
+test("Claude's sign-in is what Claude Code reports: signed in, signed out, or no answer", async t => {
+  const { cwd } = await folders(t);
+  const path = process.env.PATH;
+  t.after(() => { process.env.PATH = path; });
+  const status = async script => {
+    await writeFile(join(cwd, 'claude'), `#!/bin/sh\n${script}\n`);
+    await chmod(join(cwd, 'claude'), 0o755);
+    process.env.PATH = cwd;
+    return claudeStatus();
+  };
+  assert.deepEqual(await status(`echo '{"loggedIn":true,"authMethod":"claude.ai","email":"person@example.com"}'`), { signedIn: true, account: 'person@example.com' });
+  // Signed out, Claude Code exits 1 and still prints its status.
+  assert.deepEqual(await status(`echo '{"loggedIn":false,"authMethod":"none"}'; exit 1`), { signedIn: false, account: undefined });
+  assert.deepEqual(await status(`echo '{"loggedIn":true,"authMethod":"api_key"}'`), { signedIn: false, account: undefined });
+  assert.deepEqual(await status('echo starting; exit 2'), {});
+  process.env.PATH = join(cwd, 'none');
+  assert.deepEqual(await claudeStatus(), { signedIn: false });
 });

@@ -60,6 +60,8 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
       try await harnessSignOut(runtime, credential: request.credential)
       return Done()
     }
+    // The Claude subscription is Claude Code's own sign-in: signing out signs Claude Code out.
+    if request.provider == PiDurableRuntime.claude { try await harnessSignOut(.claudeCode, credential: nil) }
     try await secrets.setSubscription(request.provider, nil)
     return Done()
   }
@@ -68,6 +70,41 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
       throw ProtocolError(.notFound, "That sign-in is not waiting for an answer.")
     }
     return Done()
+  }
+  /// The Claude subscription's sign-in: Claude Code's own, the one its harness row runs, so
+  /// signing in again switches the account. The Settings row asks for the code the sign-in
+  /// page shows; the marker is saved when Claude Code finishes.
+  @Sendable func claudeSignIn(_ pi: PiDurableRuntime) throws -> (String, AsyncThrowingStream<SignInEvent, any Error>) {
+    let flowID = UUID().uuidString.lowercased()
+    let events = try harnessSignIn(StartSignIn(runtime: .claudeCode, signInMethod: "claude-account"), answers: flows.open(flowID))
+    let (relayed, continuation) = AsyncThrowingStream<SignInEvent, any Error>.makeStream(bufferingPolicy: .bufferingNewest(64))
+    let relay = Task {
+      defer { flows.close(flowID) }
+      var asked = false
+      do {
+        for try await event in events {
+          switch event {
+          case .open:
+            continuation.yield(event)
+            if !asked {
+              asked = true
+              continuation.yield(.prompt(id: "code", message: "Paste the code from the Claude sign-in page."))
+            }
+          case .finished:
+            try await secrets.setSubscription(PiDurableRuntime.claude, .object(["type": .string("native")]))
+            let signIn = await pi.signIns()?.first { $0.provider == PiDurableRuntime.claude }
+            continuation.yield(.finished(signIn ?? SignIn(provider: PiDurableRuntime.claude, name: "Claude", kind: .subscription, connected: true)))
+          default:
+            continuation.yield(event)
+          }
+        }
+      } catch {
+        if !Task.isCancelled { continuation.yield(.failed(message: "\(error)")) }
+      }
+      continuation.finish()
+    }
+    continuation.onTermination = { _ in relay.cancel() }
+    return (flowID, relayed)
   }
   router.subscription(StartSignIn.self) { request, _ in
     if request.runtime != nil {
@@ -85,6 +122,7 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
     guard let pi = await sessions.runtime(.piDurable) as? PiDurableRuntime else {
       throw ProtocolError(.badRequest, "This machine has no Pi Durable runtime.")
     }
+    if request.provider == PiDurableRuntime.claude { return try claudeSignIn(pi) }
     guard PiDurableRuntime.subscriptions.contains(request.provider) else {
       throw ProtocolError(.badRequest, "\(request.provider) does not sign in with a subscription.")
     }

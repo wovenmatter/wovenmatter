@@ -18,7 +18,8 @@ final class PiCredentialSource: Sendable {
 public final class PiDurableRuntime: Runtime {
   public var kind: RuntimeKind { .piDurable }
   /// The subscriptions Pi Durable signs in to, whose credentials stay on this machine.
-  static let subscriptions = ["openai-codex", "claude-subscription", "xai"]
+  static let subscriptions = ["openai-codex", claude, "xai"]
+  static let claude = "claude-subscription"
 
   let data: URL
   let credentials = PiCredentialSource()
@@ -106,13 +107,21 @@ public final class PiDurableRuntime: Runtime {
     guard let result = try? await control(.object(["action": .string("providers")]), events: { _ in }, answers: nil),
           let providers = result["providers"]?.array else { return nil }
     let secrets = credentials.current
+    // The Claude subscription is Claude Code's own sign-in on this machine. Its saved
+    // marker follows what Claude Code says, and stays when Claude Code gave no answer.
+    if let secrets, let signedIn = result["claudeSignedIn"]?.bool {
+      let saved = ((try? await secrets.subscription(Self.claude)) ?? nil) != nil
+      if signedIn != saved { try? await secrets.setSubscription(Self.claude, signedIn ? .object(["type": .string("native")]) : nil) }
+    }
     let keys = (try? await secrets?.apiKeys()) ?? [:]
     var list: [SignIn] = []
     for provider in providers {
       guard let id = provider["id"]?.string else { continue }
       let kind: SignIn.Kind = provider["kind"]?.string == "subscription" ? .subscription : .apiKey
       let connected = kind == .apiKey ? keys[id] != nil : ((try? await secrets?.subscription(id)) ?? nil) != nil
-      list.append(SignIn(provider: id, name: provider["name"]?.string ?? id, kind: kind, connected: connected))
+      // Claude's account is the one Claude Code names now, never a saved copy.
+      let account = id == Self.claude && connected ? result["claudeAccount"]?.string : nil
+      list.append(SignIn(provider: id, name: provider["name"]?.string ?? id, kind: kind, connected: connected, account: account))
     }
     return list
   }

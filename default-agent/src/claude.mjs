@@ -22,6 +22,9 @@ const prefix = 'mcp__woven__';
 const inventoryProgram = fileURLToPath(new URL('./claude-inventory.mjs', import.meta.url));
 const execute = promisify(execFile);
 const zeroCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+// Claude Code's own failure when it has no sign-in ("Not logged in · Please run /login").
+const notSignedIn = /not logged in|please run \/login|authentication_failed/i;
+const notSignedInMessage = 'Claude Code is not signed in on this machine. Sign in with Claude in Settings → Subscriptions & API Keys.';
 
 // The installed Claude Code: the first executable `claude` on PATH, looked up at each use.
 export function claudeExecutable(path = process.env.PATH ?? '') {
@@ -35,7 +38,7 @@ export function claudeExecutable(path = process.env.PATH ?? '') {
 
 // The caller's environment, without anything that would switch Claude away from its own sign-in.
 function claudeEnvironment(extra = {}) {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(ANTHROPIC_|CLAUDECODE$|CLAUDE_CODE_ENTRYPOINT$)/.test(key)));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(ANTHROPIC_|CLAUDECODE$|CLAUDE_CODE_ENTRYPOINT$|CLAUDE_CODE_OAUTH_TOKEN$)/.test(key)));
   return { ...env, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', ...extra };
 }
 
@@ -45,20 +48,23 @@ async function sdkQuery(options) {
   return query({ ...options, options: { ...options.options, pathToClaudeCodeExecutable, mcpServersDelivery: 'argv' } });
 }
 
-// Whether Claude Code on this machine is signed in with a Claude subscription.
+// Whether Claude Code on this machine is signed in with a Claude subscription. `signedIn` is
+// undefined when Claude Code gave no answer (it timed out or printed something unreadable),
+// which says nothing either way.
 export async function claudeStatus() {
   let executable, stdout;
   try { executable = claudeExecutable(); } catch { return { signedIn: false }; }
   try {
     ({ stdout } = await execute(executable, ['auth', 'status', '--json'], { env: claudeEnvironment(), timeout: 10000, maxBuffer: 65536 }));
   } catch (error) {
-    if (!error.stdout) return { signedIn: false };
+    // Signed out, it exits 1 and still prints its status.
+    if (!error.stdout) return {};
     stdout = error.stdout;
   }
   try {
     const value = JSON.parse(stdout);
     return { signedIn: value.loggedIn === true && value.authMethod === 'claude.ai', account: typeof value.email === 'string' ? value.email : undefined };
-  } catch { return { signedIn: false }; }
+  } catch { return {}; }
 }
 
 function modelName(model) {
@@ -94,14 +100,19 @@ export function registerClaude(runtime, { dataDirectory, credentials }) {
     getModels: definitions, getAllModels: definitions, stream, streamSimple: stream,
   });
   return {
-    // The models Claude Code offers this sign-in, cached in the data folder.
-    loadModels() {
-      if (state.models.length) return Promise.resolve();
+    // The models Claude Code offers this sign-in, cached in the data folder. `refresh` asks
+    // Claude Code again; a list it could not give keeps the one there was.
+    async loadModels({ refresh = false } = {}) {
+      // A refresh asks Claude Code itself, after any load already on its way.
+      if (refresh) await state.loading;
+      if (state.models.length && !refresh) return;
       state.loading ??= (async () => {
-        try {
-          const saved = JSON.parse(await readFile(cacheFile, 'utf8'));
-          if (Array.isArray(saved) && saved.length) { state.models = saved; return; }
-        } catch {}
+        if (!refresh) {
+          try {
+            const saved = JSON.parse(await readFile(cacheFile, 'utf8'));
+            if (Array.isArray(saved) && saved.length) { state.models = saved; return; }
+          } catch {}
+        }
         try {
           state.models = await discoverModels(workspace);
           await writeFile(cacheFile, JSON.stringify(state.models), { mode: 0o600 });
@@ -236,6 +247,7 @@ function claudeStream(model, context, options, workspace) {
         }
       }
       controller.signal.throwIfAborted();
+      if (!response.complete && failure && notSignedIn.test(failure)) throw new Error(notSignedInMessage);
       if (!response.complete) throw new Error(failure || 'Claude stopped before completing its response.');
       finish();
     } finally {

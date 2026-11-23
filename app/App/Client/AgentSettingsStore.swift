@@ -243,7 +243,7 @@ final class AgentSettingsStore {
             var connections = MachineProviderConnections(localServers: try await server.call(ListLocalModelServers()))
             for signIn in list {
                 connections.accounts[signIn.provider] = signIn.connected
-                    ? [ProviderAccount(id: signIn.provider, label: signIn.name, createdAt: nil, isSelected: true)] : []
+                    ? [ProviderAccount(id: signIn.provider, label: signIn.account ?? signIn.name, createdAt: nil, isSelected: true)] : []
                 connections.providers.append(ProviderStatus(id: signIn.provider, connected: signIn.connected))
             }
             machineConnections[machineID] = connections
