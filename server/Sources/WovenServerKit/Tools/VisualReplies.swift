@@ -34,6 +34,42 @@ enum VisualReplies {
   private static let viewportHeights = try! NSRegularExpression(
     pattern: #"(?<![\w.-])\d*\.?\d+\s*[sld]?(?:vh|vmin|vmax)\b"#, options: [.caseInsensitive])
 
+  /// The HTML a `render_html` or `preview_html` call gives: its `html`, or
+  /// the HTML file at its `path`, which the agent wrote with its own tools
+  /// (a large page, kept out of a script). Exactly one of them. A bot's
+  /// files are on another machine, so a bot gives only `html`.
+  static func authored(_ arguments: Arguments, fromBot: Bool) throws -> String {
+    let html = arguments.optionalString("html").flatMap { $0.isEmpty ? nil : $0 }
+    let path = arguments.optionalString("path").flatMap { $0.isEmpty ? nil : $0 }
+    switch (html, path) {
+    case (let html?, nil):
+      return html
+    case (nil, let path?):
+      guard !fromBot else { throw ToolFailure("A bot's files are not on this machine, so give the HTML itself as `html`.") }
+      return try file(path)
+    case (nil, nil):
+      throw ToolFailure("Give `html`, or the `path` of an HTML file.")
+    case (_?, _?):
+      throw ToolFailure("Give `html` or `path`, not both.")
+    }
+  }
+
+  /// A local HTML file's text, refused when it cannot be a visual reply.
+  private static func file(_ path: String) throws -> String {
+    let expanded = (path as NSString).expandingTildeInPath
+    guard expanded.hasPrefix("/") else { throw ToolFailure("Give `path` as an absolute path; \(path) is not one.") }
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),
+          attributes[.type] as? FileAttributeType == .typeRegular,
+          let size = (attributes[.size] as? NSNumber)?.intValue else {
+      throw ToolFailure("There is no file at \(path).")
+    }
+    // At most three UTF-8 bytes stand for one character of the limit.
+    guard size <= authoredLimit * 3 else { throw ToolFailure("The visual reply is longer than 512,000 characters.") }
+    guard let data = FileManager.default.contents(atPath: expanded) else { throw ToolFailure("\(path) could not be read.") }
+    guard let html = String(data: data, encoding: .utf8) else { throw ToolFailure("\(path) is not UTF-8 text.") }
+    return html
+  }
+
   /// Embeds each local image the HTML refers to as a data URI. A path read
   /// once is embedded everywhere it appears. Fails when the HTML is empty or
   /// too long, uses viewport-height lengths, or would be over `embeddedLimit`.
@@ -41,7 +77,7 @@ enum VisualReplies {
   /// one) reads nothing: the HTML stays as authored and every local path is
   /// in `missingImages`.
   static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedVisualReply {
-    guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("Give `html`.") }
+    guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("The visual reply is empty.") }
     guard html.utf16.count <= authoredLimit else {
       throw ToolFailure("The visual reply is longer than 512,000 characters.")
     }

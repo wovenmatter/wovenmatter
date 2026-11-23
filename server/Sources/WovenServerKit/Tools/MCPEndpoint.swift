@@ -56,8 +56,10 @@ final class ToolKeys: Sendable {
       return key
     }
     let bridge = bridge
+    // OpenCode offers MCP tools only in its Code Mode, to scripts.
+    let instructions = grant == .runtime(.openCode) ? WovenInstructions.forCodeMode : WovenInstructions.text
     return ToolAccess(command: bridge[0], arguments: Array(bridge.dropFirst()),
-                      environment: ["WOVEN_MCP_KEY": key], instructions: WovenInstructions.text)
+                      environment: ["WOVEN_MCP_KEY": key], instructions: instructions)
   }
 
   /// Node, the bridge and this socket.
@@ -77,7 +79,7 @@ final class ToolKeys: Sendable {
 /// The tool socket: a Unix socket only this machine's user can open, speaking
 /// MCP as newline-delimited JSON-RPC after the bridge's key.
 final class MCPEndpoint: Sendable {
-  private let keys: ToolKeys
+  let keys: ToolKeys
   private let tools: WovenTools
   private let listener = Mutex<Int32>(-1)
 

@@ -38,6 +38,31 @@ func localImagesInAVisualReplyAreEmbeddedOnceAndAMissingOneIsNamed() throws {
   #expect(throws: ToolFailure.self) { try VisualReplies.prepare("<style>main{height:calc(50dvh - 2px)}</style>") }
 }
 
+/// A large page can come from a file the agent wrote on this machine instead
+/// of its HTML; exactly one of them, and never from a bot, whose files are
+/// elsewhere. A script's call keeps the path.
+@Test
+func aVisualReplyCanComeFromAFileOnThisMachine() throws {
+  let page = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).html")
+  try Data("<h1>Sales</h1>".utf8).write(to: page)
+  defer { try? FileManager.default.removeItem(at: page) }
+  func authored(_ fields: [String: JSONValue], fromBot: Bool = false) -> String {
+    do { return try VisualReplies.authored(Arguments(value: .object(fields)), fromBot: fromBot) } catch { return "\(error)" }
+  }
+  #expect(authored(["path": .string(page.path)]) == "<h1>Sales</h1>")
+  #expect(authored(["html": .string("<p>Hi</p>"), "path": .string("")]) == "<p>Hi</p>")
+  #expect(authored(["path": .string(page.path)], fromBot: true).contains("give the HTML itself as `html`"))
+  #expect(authored(["html": .string("<p>Hi</p>"), "path": .string(page.path)]) == "Give `html` or `path`, not both.")
+  #expect(authored([:]) == "Give `html`, or the `path` of an HTML file.")
+  #expect(authored(["path": .string("page.html")]).contains("absolute"))
+  #expect(authored(["path": .string(page.path + ".gone")]).hasPrefix("There is no file"))
+
+  let input = #"{"path":"\#(page.path)","title":"Sales"}"#
+  let call = VisualReplies.withoutVisualReply(ToolCall(name: "execute", input: "", kind: .code,
+                                                       calls: [ToolCall(name: "woven.render_html", input: input)]))
+  #expect(call.calls == [ToolCall(name: "woven.render_html", input: input, kind: .visualReply)])
+}
+
 @Test
 func everyRuntimesReportOfTheCallIsKeptWithoutTheVisualReply() {
   let input = #"{"html":"<h1>Sales</h1>","title":"Sales"}"#

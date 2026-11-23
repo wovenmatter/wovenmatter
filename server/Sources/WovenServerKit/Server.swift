@@ -68,6 +68,7 @@ public final class WovenServer: Sendable {
   /// The TCP port other machines reach this server on, when it listens.
   public let port: Int?
   var secretsForTests: Secrets { secrets }
+  var toolKeysForTests: ToolKeys { endpoint.keys }
   /// This machine's permanent identifier.
   public var machineID: String { library.machineID }
   private let sessions: SessionManager

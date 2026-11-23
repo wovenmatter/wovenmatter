@@ -1,5 +1,11 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Testing
+import WovenLibrary
 import WovenProtocol
 @testable import WovenServerKit
 
@@ -134,7 +140,106 @@ private func project(_ frames: [String]) -> [RuntimeEvent] {
   ])
   #expect(savedTranscript(events) == ["thinking: First.", "text: Partly. ", "thinking: Second.", "tool: execute"])
   let tool = events.compactMap { if case .tool(_, let call, true) = $0, call.name == "execute" { call } else { nil } }.first
-  #expect(tool?.failed == true && tool?.kind == .execute)
+  #expect(tool?.failed == true && tool?.kind == .code && tool?.input == "x")
+}
+
+// MARK: Code Mode
+
+/// A Code Mode script's frames as OpenCode 2.3.2 sends them (recorded from
+/// its server with a stand-in model and MCP server): its source, the tool
+/// calls it made so far, whole each time, then its result.
+private func scriptFrames(_ code: String, progress: [String], end: String) -> [String] {
+  let source = String(decoding: try! Wire.encoder.encode(JSONValue.string(code)), as: UTF8.self)
+  let text = String(decoding: try! Wire.encoder.encode(JSONValue.string(#"{"code":\#(source)}"#)), as: UTF8.self)
+  return [
+    #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"call_1","name":"execute"}}"#,
+    #"{"type":"session.tool.input.ended","data":{"sessionID":"s","assistantMessageID":"m1","id":"call_1","text":\#(text)}}"#,
+    #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"call_1","input":{"code":\#(source)},"executed":false}}"#,
+  ] + progress.map {
+    #"{"type":"session.tool.progress","data":{"sessionID":"s","assistantMessageID":"m1","id":"call_1","metadata":{"toolCalls":\#($0)}}}"#
+  } + [#"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m1","id":"call_1",\#(end),"executed":false}}"#]
+}
+
+private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finished: ToolCall?) {
+  var open: [ToolCall] = []
+  var finished: ToolCall?
+  for case .tool("call_1", let call, let done) in events {
+    if done { finished = call } else { open.append(call) }
+  }
+  return (open, finished)
+}
+
+/// A script is one `.code` call: its source, its output, and the tool calls
+/// it made as each one runs and ends. A progress report that changes nothing
+/// sends nothing.
+@Test func openCodeScriptIsOneCodeCallWithTheToolsItCalled() throws {
+  let code = "const a = await tools.woven.slow({});\nconst b = await tools.woven.echo({text: \"after\"});\nconst c = await tools.woven.slow({});\nreturn [a, b, c];\n"
+  let done = #"[{"tool":"woven.slow","status":"completed"},{"tool":"woven.echo","status":"completed","input":{"text":"after"}},{"tool":"woven.slow","status":"completed"}]"#
+  let events = project(scriptFrames(code, progress: [
+    #"[{"tool":"woven.slow","status":"running"}]"#,
+    #"[{"tool":"woven.slow","status":"running"}]"#,
+    #"[{"tool":"woven.slow","status":"completed"}]"#,
+    #"[{"tool":"woven.slow","status":"completed"},{"tool":"woven.echo","status":"completed","input":{"text":"after"}},{"tool":"woven.slow","status":"running"}]"#,
+    done,
+  ], end: #""content":[{"type":"text","text":"[\"slept\",\"echo:after\",\"slept\"]"}],"metadata":{"toolCalls":\#(done),"truncated":false}"#))
+
+  let (open, finished) = scriptCalls(events)
+  // Started, its input whole, called, then four changes of its calls.
+  #expect(open.count == 7)
+  #expect(open.allSatisfy { $0.kind == .code })
+  #expect(open[2].input == code && open[3].calls == [ToolCall(name: "woven.slow", input: "{}")])
+  #expect(open[4].calls?.first?.output == "")
+  let call = try #require(finished)
+  #expect(call.kind == .code && call.input == code && !call.failed && call.title == nil)
+  #expect(call.output == #"["slept","echo:after","slept"]"#)
+  #expect(call.calls == [ToolCall(name: "woven.slow", input: "{}", output: ""),
+                         ToolCall(name: "woven.echo", input: #"{"text":"after"}"#, output: ""),
+                         ToolCall(name: "woven.slow", input: "{}", output: "")])
+}
+
+/// A script that fails is a failed call, also when OpenCode reports it as a
+/// success with `metadata.error`; a tool call it made that failed says so,
+/// and one still out when the turn is stopped ended with it.
+@Test func openCodeScriptFailuresShow() throws {
+  let thrown = project(scriptFrames("await tools.woven.echo({text: \"first\"});\nawait tools.woven.fail({});\n", progress: [
+    #"[{"tool":"woven.echo","status":"running","input":{"text":"first"}}]"#,
+  ], end: #""content":[{"type":"text","text":"boom from tool"}],"metadata":{"toolCalls":[{"tool":"woven.echo","status":"completed","input":{"text":"first"}},{"tool":"woven.fail","status":"error"}],"error":true,"truncated":false}"#))
+  let failed = try #require(scriptCalls(thrown).finished)
+  #expect(failed.failed && failed.output == "boom from tool")
+  #expect(failed.calls == [ToolCall(name: "woven.echo", input: #"{"text":"first"}"#, output: ""),
+                           ToolCall(name: "woven.fail", input: "{}", output: OpenCodeProjection.nestedFailure, failed: true)])
+
+  let syntax = project(scriptFrames("await tools.woven.render_html({ html: `<p>unterminated\n", progress: [],
+    end: #""content":[{"type":"text","text":"SyntaxError: Unterminated template. Code must be plain JavaScript written as a program body. (line 1, col 40)"}],"metadata":{"toolCalls":[],"error":true,"truncated":false}"#))
+  let broken = try #require(scriptCalls(syntax).finished)
+  #expect(broken.failed && broken.calls == [] && broken.output?.hasPrefix("SyntaxError") == true)
+
+  var frames = scriptFrames("await tools.woven.slow({});", progress: [#"[{"tool":"woven.slow","status":"running"}]"#], end: "")
+  frames[frames.count - 1] = #"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"user"}}"#
+  let stopped = try #require(scriptCalls(project(frames)).finished)
+  #expect(stopped.failed && stopped.calls?.first?.failed == true && stopped.calls?.first?.output != nil)
+}
+
+/// Images a script's tool calls returned reach the model as file parts of
+/// the result; the call keeps only their type, never their data.
+@Test func openCodeScriptImagesStayOutOfItsOutput() throws {
+  let events = project(scriptFrames("const image = await tools.woven.preview_html({ path: \"/tmp/a.html\" });\nreturn image;", progress: [],
+    end: #""content":[{"type":"text","text":"{\"contentHeight\":120}"},{"type":"file","uri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==","mime":"image/png"}],"metadata":{"toolCalls":[{"tool":"woven.preview_html","status":"completed","input":{"path":"/tmp/a.html"}}],"truncated":false}"#))
+  let call = try #require(scriptCalls(events).finished)
+  #expect(call.output == "{\"contentHeight\":120}\n[image/png]")
+  #expect(call.calls?.first?.input == #"{"path":"/tmp/a.html"}"#)
+}
+
+/// A tool a script calls asks for permission as itself, for the script's
+/// call; the prompt is answered like any other.
+@Test func openCodeScriptsToolAsksAsItself() throws {
+  let asked = try OpenCodeSSEParser.decode(Data(#"""
+    {"id":"per_1","sessionID":"ses_1","action":"woven_render_html","resources":["*"],"save":["*"],
+     "metadata":{"input":{"title":"Sales"}},"source":{"type":"tool","messageID":"msg_1","id":"call_1"}}
+    """#.utf8))
+  let prompt = OpenCodeProjection.permissionPrompt(asked)
+  #expect(prompt.id == "per_1" && prompt.kind == .approval && prompt.text == "woven_render_html")
+  #expect(OpenCodeProjection.permissionReply(.option("once")) == .object(["decision": .string("once")]))
 }
 
 /// Reasoning without text shows nothing, and a turn that ends mid-reasoning
@@ -242,4 +347,263 @@ private let questionToolForm = try! OpenCodeSSEParser.decode(Data(#"""
 private func failure(_ body: () throws -> Any) -> String? {
   do { _ = try body() } catch RuntimeError.failed(let message) { return message } catch { return "\(error)" }
   return nil
+}
+
+// MARK: Woven's tools from OpenCode's scripts
+
+/// MCP over the tool socket as OpenCode's bridge speaks it: the key, then
+/// one request at a time, each naming the native session in `_meta`.
+private final class ToolSocket: @unchecked Sendable {
+  private let fd: Int32
+  private var buffer = Data()
+  private var nextID = 0
+
+  init(_ access: ToolAccess) throws {
+    #if canImport(Glibc)
+    fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+    #else
+    fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    #endif
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array((access.arguments.last ?? "").utf8)
+    withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+      for (index, byte) in bytes.prefix(buffer.count - 1).enumerated() { buffer[index] = byte }
+    }
+    let connected = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard connected == 0 else { throw ToolFailure("The tool socket is not there.") }
+    send(.object(["key": .string(access.environment["WOVEN_MCP_KEY"] ?? "")]))
+  }
+
+  deinit { close(fd) }
+
+  /// The result of one request, read on a thread of its own.
+  func request(_ method: String, _ params: JSONValue) async -> JSONValue? {
+    nextID += 1
+    let id = nextID
+    send(.object(["jsonrpc": .string("2.0"), "id": .integer(Int64(id)), "method": .string(method), "params": params]))
+    return await withCheckedContinuation { continuation in
+      Thread.detachNewThread { continuation.resume(returning: self.line()?["result"]) }
+    }
+  }
+
+  func call(_ name: String, _ arguments: JSONValue, session: String) async -> (text: String, failed: Bool) {
+    let result = await request("tools/call", .object([
+      "name": .string(name), "arguments": arguments, "_meta": .object(["ai.opencode/sessionID": .string(session)]),
+    ]))
+    let text = (result?["content"]?.array ?? []).compactMap { $0["text"]?.string }.joined(separator: "\n")
+    return (result == nil ? "No answer." : text, result?["isError"]?.bool ?? true)
+  }
+
+  private func send(_ value: JSONValue) {
+    let bytes = Array((try! Wire.encoder.encode(value)) + [10])
+    _ = bytes.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+  }
+
+  private func line() -> JSONValue? {
+    var chunk = [UInt8](repeating: 0, count: 65536)
+    while !buffer.contains(10) {
+      let count = read(fd, &chunk, chunk.count)
+      if count <= 0 { return nil }
+      buffer.append(contentsOf: chunk[0..<count])
+    }
+    let end = buffer.firstIndex(of: 10)!
+    defer { buffer.removeSubrange(buffer.startIndex...end) }
+    return try? Wire.decoder.decode(JSONValue.self, from: Data(buffer[buffer.startIndex..<end]))
+  }
+}
+
+/// OpenCode as Woven's server meets it, without a model: one process for
+/// every session, which reaches the Woven MCP through one bridge. Each turn
+/// replays a script's recorded frames through the OpenCode projection and,
+/// where the script called a Woven tool, calls it over that bridge naming
+/// its native session, as OpenCode's Code Mode does.
+private final class RecordedOpenCode: Runtime {
+  /// The frames before the script's tool call, the call, and the frames after.
+  let script: (before: [String], tool: String, arguments: JSONValue, after: [String])?
+
+  init(script: (before: [String], tool: String, arguments: JSONValue, after: [String])? = nil) { self.script = script }
+
+  var kind: RuntimeKind { .openCode }
+  var sharesToolBridge: Bool { true }
+
+  func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
+    RecordedOpenCodeSession(handle: start.nativeHandle ?? "ses_" + UUID().uuidString.lowercased(), tools: start.tools,
+                            script: script)
+  }
+}
+
+private final class RecordedOpenCodeSession: RuntimeSession {
+  let nativeHandle: String
+  let events: AsyncStream<RuntimeEvent>
+  private let emit: AsyncStream<RuntimeEvent>.Continuation
+  private let tools: ToolAccess?
+  private let script: (before: [String], tool: String, arguments: JSONValue, after: [String])?
+
+  init(handle: String, tools: ToolAccess?, script: (before: [String], tool: String, arguments: JSONValue, after: [String])?) {
+    nativeHandle = handle
+    self.tools = tools
+    self.script = script
+    (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
+  }
+
+  var configuration: SessionConfiguration { SessionConfiguration() }
+
+  func send(_ turn: Turn) async throws {
+    guard let script, let tools else { throw RuntimeError.failed("Nothing recorded.") }
+    let emit = emit, handle = nativeHandle
+    Task {
+      var projection = OpenCodeProjection()
+      func replay(_ frames: [String]) {
+        for frame in frames {
+          for event in projection.receive(try! OpenCodeSSEParser.decode(Data(frame.utf8))) { emit.yield(event) }
+        }
+      }
+      replay(script.before)
+      if let socket = try? ToolSocket(tools) { _ = await socket.call(script.tool, script.arguments, session: handle) }
+      replay(script.after)
+    }
+  }
+
+  func steer(_ turn: Turn) async throws -> Bool { false }
+  func configure(_ choices: SessionChoices) async throws -> SessionConfiguration { configuration }
+  func answer(promptID: String, with answer: PromptAnswer) async throws {}
+  func interrupt() async throws {}
+  func stop() async {
+    emit.yield(.exited)
+    emit.finish()
+  }
+}
+
+private func startServer(_ openCode: RecordedOpenCode) async throws -> (server: WovenServer, ui: Client) {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
+  let socket = "/tmp/wvt-\(UUID().uuidString.prefix(8)).sock"
+  var options = WovenServer.Options(
+    dataFolder: folder, socketPath: socket, listen: nil, appVersion: "test", machineName: "Studio",
+    tailnet: StandInTailnet(), runtimes: [StandInRuntime(), openCode], discoveryInterval: .seconds(3600))
+  options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
+  let server = try await WovenServer.start(options)
+  let ui = Client(transport: try await connectWebSocket(.unix(path: socket)))
+  _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: "test"))
+  return (server, ui)
+}
+
+/// A script in OpenCode that publishes a visual reply: the visual reply is
+/// saved in its place, then the script as one call holding the tool call,
+/// and no copy of the page is shown or saved anywhere else.
+@Test(.timeLimit(.minutes(1)))
+func anOpenCodeScriptThatPublishesAVisualReplyIsSavedAsTheVisualReplyAndOneScript() async throws {
+  let html = "<!doctype html><title>Sales</title><h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 400)
+  let code = "const shown = await tools.woven.render_html({ title: \"Sales\", html: `\(html)` });\nreturn shown;\n"
+  let input = String(decoding: try Wire.encoder.encode(JSONValue.object(["title": .string("Sales"), "html": .string(html)])),
+                     as: UTF8.self)
+  let frames = scriptFrames(code, progress: [#"[{"tool":"woven.render_html","status":"running","input":\#(input)}]"#],
+    end: #""content":[{"type":"text","text":"Shown in the chat: “Sales”."}],"metadata":{"toolCalls":[{"tool":"woven.render_html","status":"completed","input":\#(input)}],"truncated":false}"#)
+    + [#"{"type":"session.execution.succeeded","data":{"sessionID":"s"}}"#]
+  let openCode = RecordedOpenCode(script: (before: Array(frames.prefix(4)), tool: "render_html",
+                                           arguments: .object(["title": .string("Sales"), "html": .string(html)]),
+                                           after: Array(frames.dropFirst(4))))
+  let (server, ui) = try await startServer(openCode)
+  defer { server.stopLater() }
+  let session = try await ui.call(CreateSession(runtime: .openCode, title: "Sales"))
+  _ = try await ui.call(UpdateSession(sessionID: session.id, tools: []))
+
+  let subscription = try await ui.subscribe(SubscribeSession(sessionID: session.id))
+  _ = try await ui.call(SendTurn(sessionID: session.id, text: "Chart the sales."))
+  var shown: [String] = []
+  for try await event in subscription.events {
+    shown.append(String(decoding: try Wire.encoder.encode(event), as: UTF8.self))
+    if event == .runState(.idle) { break }
+  }
+
+  let items = try await ui.call(SessionItems(sessionID: session.id))
+  guard items.count == 3, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
+    Issue.record("Expected the message, the visual reply, then the script: \(items.map(\.content))")
+    return
+  }
+  #expect(reply.digest == Library.digest(of: Data(html.utf8)) && reply.title == "Sales")
+  #expect(call.kind == .code && !call.failed && call.output == "Shown in the chat: “Sales”.")
+  #expect(call.calls?.map(\.kind) == [.visualReply] && call.calls?.first?.output == "")
+  for text in shown + [String(decoding: try Wire.encoder.encode(items), as: UTF8.self)] {
+    #expect(!text.contains("Quarterly sales"))
+  }
+}
+
+/// Every Woven tool answers a script in OpenCode, which names its native
+/// session in each call over the one bridge the whole process shares: the
+/// call is the session's own. Each is listed under a name a script can
+/// write and with arguments OpenCode's catalog renders, and Woven's
+/// instructions to OpenCode give each one's exact call.
+@Test(.timeLimit(.minutes(2)))
+func everyWovenToolAnswersAnOpenCodeScriptAsItsSession() async throws {
+  let (server, ui) = try await startServer(RecordedOpenCode())
+  defer { server.stopLater() }
+  let session = try await ui.call(CreateSession(runtime: .openCode, title: "Planner"))
+  _ = try await ui.call(UpdateSession(sessionID: session.id, tools: Set(ToolGroup.allCases)))
+  try await server.library.setNativeSession(session.id, runtime: .openCode, handle: "ses_planner")
+  let builder = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
+  let page = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).html")
+  let html = "<!doctype html><title>Plan</title><p>From a file</p>"
+  try Data(html.utf8).write(to: page)
+  defer { try? FileManager.default.removeItem(at: page) }
+
+  let access = try #require(server.toolKeysForTests.access(.runtime(.openCode)))
+  let socket = try ToolSocket(access)
+  let listed = await socket.request("tools/list", .object([:]))?["tools"]?.array ?? []
+  let catalog = wovenToolCatalog()
+  #expect(listed.compactMap { $0["name"]?.string } == catalog.map(\.name))
+  for tool in catalog {
+    #expect(tool.name.wholeMatch(of: /[A-Za-z_$][A-Za-z0-9_$]*/) != nil, "\(tool.name)")
+    let call = try #require(WovenInstructions.signature(tool, namespace: "woven"), "\(tool.name)")
+    #expect(access.instructions.contains("- " + call + " // "), "\(tool.name)")
+  }
+
+  let when = "2030-01-01T09:00:00Z"
+  // Minimal arguments for each tool, and whether it succeeds with them.
+  let calls: [(String, JSONValue, Bool)] = [
+    ("list_sessions", .object([:]), true),
+    ("read_session", .object(["sessionID": .string(session.id)]), true),
+    ("start_session", .object(["runtime": .string(StandInRuntime.kind.rawValue), "title": .string("Helper"), "message": .string("Hello")]), true),
+    ("send_to_session", .object(["sessionID": .string(builder.id), "text": .string("Hi")]), true),
+    ("stop_session", .object(["sessionID": .string(builder.id)]), true),
+    ("render_html", .object(["path": .string(page.path)]), true),
+    ("list_artifacts", .object([:]), true),
+    ("read_artifact", .object(["artifactID": .string("missing")]), false),
+    ("create_artifact", .object(["kind": .string("note"), "title": .string("Plan"), "text": .string("# Plan")]), true),
+    ("edit_artifact", .object(["artifactID": .string("missing"), "basedOn": .string("x"), "title": .string("Plan")]), false),
+    ("describe_database", .object([:]), true),
+    ("query_database", .object(["databaseID": .string("missing"), "sql": .string("SELECT 1")]), false),
+    ("execute_database", .object(["databaseID": .string("missing"), "sql": .string("CREATE TABLE t (a)")]), false),
+    ("create_database", .object(["name": .string("Scores")]), true),
+    ("list_places", .object([:]), true),
+    ("search_library", .object([:]), true),
+    ("list_bots", .object([:]), true),
+    ("message_bot", .object(["botID": .string("missing"), "text": .string("Hi")]), false),
+    ("browser", .object(["action": .string("tabs")]), false),
+    ("computer", .object(["action": .string("status")]), false),
+    ("preview_html", .object(["path": .string(page.path)]), false),
+    ("list_schedules", .object([:]), true),
+    ("create_scheduled_task", .object(["title": .string("Daily"), "prompt": .string("Check"), "startsAt": .string(when),
+                                       "runtime": .string(StandInRuntime.kind.rawValue)]), true),
+    ("change_scheduled_task", .object(["scheduleID": .string("missing")]), false),
+    ("delete_schedule", .object(["scheduleID": .string("missing")]), false),
+    ("set_timer", .object(["afterSeconds": .integer(3600), "instruction": .string("Check")]), true),
+    ("set_wake_up", .object(["at": .string(when), "message": .string("Check")]), true),
+    ("goal_met", .object(["evidence": .string("Done")]), false),
+  ]
+  #expect(calls.map(\.0) == catalog.map(\.name))
+  for (name, arguments, succeeds) in calls {
+    let result = await socket.call(name, arguments, session: "ses_planner")
+    #expect(!result.text.contains("not one Woven Matter runs") && !result.text.contains("has no tool"), "\(name): \(result.text)")
+    #expect(result.failed == !succeeds, "\(name): \(result.text)")
+    if name == "list_sessions" { #expect(result.text.contains("Planner (you)")) }
+  }
+  // The page from the file is this session's visual reply.
+  let items = try await ui.call(SessionItems(sessionID: session.id))
+  let reply = items.compactMap { if case .visualReply(let reply) = $0.content { reply } else { nil } }.first
+  #expect(reply?.digest == Library.digest(of: Data(html.utf8)) && reply?.title == "Plan")
+  // A native session Woven Matter does not run is refused.
+  #expect(await socket.call("list_sessions", .object([:]), session: "ses_other").text.contains("not one Woven Matter runs"))
 }

@@ -99,7 +99,7 @@ private func describe(_ session: Session, in states: [String: [String: SessionRu
 private let sessionTools: [WovenTool] = [
   WovenTool(
     name: "list_sessions",
-    description: "List agent sessions (chats) on every machine, newest first: id, title, runtime, machine, last activity, and whether a turn is running. Filter by machine or by words in the title.",
+    description: "List agent sessions (chats) on every machine, newest first: id, title, runtime, machine, last activity, and whether a turn is running.\nFilter by machine or by words in the title.",
     input: schema(["machineID": text("Only this machine's sessions."), "query": text("Words the title contains."),
                    "includeArchived": flag("Include archived sessions.")]),
     readOnly: true,
@@ -122,7 +122,7 @@ private let sessionTools: [WovenTool] = [
     }),
   WovenTool(
     name: "read_session",
-    description: "Read a session's saved transcript: whether a turn is running, then messages and tool calls in order, each with its sequence number. Returns the last `limit` items, or those after `afterSequence`. Works for any machine's session, and for bot chats and the Forum.",
+    description: "Read a session's saved transcript: whether a turn is running, then messages and tool calls in order, each with its sequence number.\nReturns the last `limit` items, or those after `afterSequence`. Works for any machine's session, and for bot chats and the Forum.",
     input: schema(["sessionID": text("The session."), "afterSequence": integer("Only items after this sequence number."),
                    "limit": integer("At most this many items (default 40).")], required: ["sessionID"]),
     readOnly: true,
@@ -160,7 +160,7 @@ private let sessionTools: [WovenTool] = [
     }),
   WovenTool(
     name: "start_session",
-    description: "Start a new agent session on a machine and give it a first message. It runs on that machine with the runtime given (from `list_places`). Use only when the work needs another agent; it does not report back by itself, so read it later with `read_session`, which says whether its turn is still running.",
+    description: "Start a new agent session on a machine and give it a first message.\nIt runs on that machine with the runtime given (from `list_places`). Use only when the work needs another agent; it does not report back by itself, so read it later with `read_session`, which says whether its turn is still running.",
     input: schema(["runtime": text("The runtime, as `list_places` names it (codex, claudeCode, grokBuild, openCode, piDurable)."),
                    "title": text("A short title."), "message": text("The first message: everything the agent needs."),
                    "folderID": text("Work in this folder (it decides the machine)."),
@@ -191,7 +191,7 @@ private let sessionTools: [WovenTool] = [
     }),
   WovenTool(
     name: "send_to_session",
-    description: "Send a message to another agent session, on any machine; it starts a turn there, or joins the turn running there, and returns once that session took it. The message is marked as coming from you. Fails while its machine is offline.",
+    description: "Send a message to another agent session, on any machine: it starts a turn there, or joins the one running.\nIt returns once that session took it. The message is marked as coming from you. Fails while its machine is offline.",
     input: schema(["sessionID": text("The session to send to."), "text": text("The message.")], required: ["sessionID", "text"]),
     groups: [.sessions],
     run: { call in
@@ -207,7 +207,7 @@ private let sessionTools: [WovenTool] = [
     }),
   WovenTool(
     name: "stop_session",
-    description: "Stop the running turn of an agent session you manage, on any machine, as the person's Stop does: one you started or have sent a message to. Never your own. The session stays, says you stopped it, and goes on with `send_to_session`. Fails while its machine is offline.",
+    description: "Stop the running turn of an agent session you manage (one you started or sent a message to), on any machine.\nIt stops as the person's Stop does. Never your own. The session stays, says you stopped it, and goes on with `send_to_session`. Fails while its machine is offline.",
     input: schema(["sessionID": text("The session to stop.")], required: ["sessionID"]),
     forBots: true,
     groups: [.sessions],
@@ -250,19 +250,20 @@ private let visualReplyTools: [WovenTool] = [
     name: "render_html",
     description: """
       Show a chart, table, diagram or anything interactive in this chat as a visual reply: one whole self-contained \
-      HTML document (styles and scripts inline; libraries may load over HTTPS). It appears above your text and stays \
+      HTML document, given as `html` or as the `path` of an HTML file you wrote.
+      Styles and scripts go inline; libraries may load over HTTPS. It appears above your text and stays \
       in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; \
       `height` is only where it starts, and `title` defaults to the document's own <title>. Absolute paths to local \
       images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
       fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
       the person wants to keep and change, make an app with `create_artifact` instead.
       """,
-    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters."),
+    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters. Give this or `path`."),
+                   "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
                    "title": text("A short title, at most 200 characters; default the document's <title>."),
-                   "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")],
-                  required: ["html"]),
+                   "height": integer("Where its height starts, 80 to 2000 pixels; default 320.")]),
     run: { call in
-      let html = try call.arguments.string("html")
+      let html = try VisualReplies.authored(call.arguments, fromBot: call.caller.botID != nil)
       let given = call.arguments.optionalString("title")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       let title = given.isEmpty ? VisualReplies.title(of: html) ?? "" : given
       guard title.count <= 200 else { throw ToolFailure("Give a `title` of at most 200 characters.") }
@@ -338,7 +339,7 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "read_artifact",
-    description: "Read a note, page, sheet or app. Returns its title, its `basedOn` stamp for `edit_artifact`, and its content: a note's text, a page's components with their ids and revisions, a sheet's rows of cells, or an app's HTML and saved state.",
+    description: "Read a note, page, sheet or app: its title, its content and the `basedOn` stamp `edit_artifact` needs.\nThe content is a note's text, a page's components with their ids and revisions, a sheet's rows of cells, or an app's HTML and saved state.",
     input: schema(["artifactID": text("The artifact.")], required: ["artifactID"]),
     readOnly: true,
     groups: [.notes],
@@ -359,7 +360,7 @@ private let artifactTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_artifact",
-    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML document); a sheet cannot be created here. An app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the app has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
+    description: "Create a note (plain text), a page (empty, then add components with `edit_artifact`) or an app (a whole HTML document); a sheet cannot be created here.\nAn app can link a database: give `databaseID` and `query`. The rows (an array of objects) arrive as `window.wovenMatterData`, often after the app has loaded, and each arrival fires a `wovenmatterdatachange` event on `window`, so render on that event too. Returns its id and `basedOn` stamp.",
     input: schema(["kind": choice(["note", "page", "app"], "What to create."), "title": text("Its title."),
                    "text": text("A note's text: `# ` headings, `- ` and `1. ` lists, a paragraph per line."),
                    "html": text("An app's whole HTML document."), "folderID": text("File it in this folder."),
@@ -382,7 +383,8 @@ private let artifactTools: [WovenTool] = [
   WovenTool(
     name: "edit_artifact",
     description: """
-      Change a note, page or app you have read, or rename a sheet. Pass the `basedOn` stamp from `read_artifact`. Give any of: `title`; \
+      Change a note, page or app you have read, or rename a sheet, with the `basedOn` stamp from `read_artifact`.
+      Give any of: `title`; \
       a note's whole new `text`; an app's whole new `html`; `appState` edits; or `pageEdits` for a page. Each page \
       edit is an object with `action` (add, update, move, remove, setPurpose), `id` and `expectedRevision` from the \
       outline (for update, move and remove), `kind` (text, task or section, for add), `patch` (`text`, and for a \
@@ -463,7 +465,7 @@ private func linkDatabase(_ call: ToolRequest, into document: inout NoteDocument
 private let databaseTools: [WovenTool] = [
   WovenTool(
     name: "describe_database",
-    description: "Without `databaseID`, list every database (id, name, owning machine, description). With it, its tables, columns and row counts.",
+    description: "List every database, or with `databaseID` describe one: its tables, columns and row counts.\nThe list gives each database's id, name, owning machine and description.",
     input: schema(["databaseID": text("The database.")]),
     readOnly: true,
     groups: [.notes],
@@ -485,18 +487,20 @@ private let databaseTools: [WovenTool] = [
     }),
   WovenTool(
     name: "query_database",
-    description: "Run one read-only SQL statement (SELECT) on a database and get the rows as JSON. Reads the latest copy when another machine owns it.",
+    description: "Run one read-only SQL statement (SELECT) on a database and get the rows as JSON.\nWhen another machine owns the database, they come from its latest copy here.",
     input: schema(["databaseID": text("The database."), "sql": text("One SQLite SELECT statement.")], required: ["databaseID", "sql"]),
     readOnly: true,
     groups: [.notes],
     run: { call in
       let rows = try await call.tools.databases.query(QueryDatabase(databaseID: try call.arguments.string("databaseID"),
                                                                     sql: try call.arguments.string("sql")))
-      return .text(rows.json + (rows.fromCopy ? "\n(from the latest copy)" : ""))
+      // The rows alone, so a script gets them parsed; the description says
+      // where they come from.
+      return .text(rows.json)
     }),
   WovenTool(
     name: "execute_database",
-    description: "Run SQL that changes a database: CREATE TABLE, INSERT, UPDATE, DELETE. It is carried out by the machine that owns the database and fails while that machine is offline.",
+    description: "Run SQL that changes a database: CREATE TABLE, INSERT, UPDATE, DELETE.\nIt is carried out by the machine that owns the database and fails while that machine is offline.",
     input: schema(["databaseID": text("The database."), "sql": text("SQLite statements.")], required: ["databaseID", "sql"]),
     groups: [.notes],
     run: { call in
@@ -508,7 +512,7 @@ private let databaseTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_database",
-    description: "Create an empty database that notes, pages, sheets and apps can link to. It belongs to the machine given (default this one).",
+    description: "Create an empty database that notes, pages, sheets and apps can link to.\nIt belongs to the machine given (default this one).",
     input: schema(["name": text("Its name."), "description": text("What it holds."),
                    "machineID": text("The machine that owns it.")], required: ["name"]),
     groups: [.notes],
@@ -526,7 +530,7 @@ private let databaseTools: [WovenTool] = [
 private let placeTools: [WovenTool] = [
   WovenTool(
     name: "list_places",
-    description: "The person's machines (id, name, online, the runtimes `start_session` can use there) with each one's folders (id, name, path, and other directories its agents may use). Use the ids with `start_session` and `create_database`.",
+    description: "The person's machines (id, name, online, the runtimes `start_session` can use there) with each one's folders (id, name, path, and other directories its agents may use).\nUse the ids with `start_session` and `create_database`.",
     input: schema([:]),
     readOnly: true,
     run: { call in
@@ -579,7 +583,7 @@ private let placeTools: [WovenTool] = [
 private let botTools: [WovenTool] = [
   WovenTool(
     name: "list_bots",
-    description: "The person's bots: id, name, role. Their chats and the Forum are sessions you can read with `read_session` (see `list_sessions`).",
+    description: "The person's bots: id, name, role.\nTheir chats and the Forum are sessions you can read with `read_session` (see `list_sessions`).",
     input: schema([:]),
     readOnly: true,
     forBots: false,
@@ -590,7 +594,7 @@ private let botTools: [WovenTool] = [
     }),
   WovenTool(
     name: "message_bot",
-    description: "Send a message to a bot's main chat (or a new thread). The bot answers in its own time; read its chat later. Fails while the machine that runs the bots is offline.",
+    description: "Send a message to a bot's main chat (or a new thread).\nThe bot answers in its own time; read its chat later. Fails while the machine that runs the bots is offline.",
     input: schema(["botID": text("The bot."), "text": text("The message."), "newThread": flag("Start a new thread for it.")],
                   required: ["botID", "text"]),
     forBots: false,
@@ -632,8 +636,8 @@ private let uiTools: [WovenTool] = [
   WovenTool(
     name: "browser",
     description: """
-      Use the browser in the Woven Matter window on this Mac; the person sees your tabs. Start with `tabs` or `open` \
-      (url), then `snapshot` a tab before acting on it. Every action but tabs and open needs `tabId`. Actions: \
+      Use the browser in the Woven Matter window on this Mac, which the person sees: open pages, read them, act on them.
+      Start with `tabs` or `open` (url), then `snapshot` a tab before acting on it. Every action but tabs and open needs `tabId`. Actions: \
       navigate (url), snapshot, screenshot, click (selector, or x and y in CSS pixels; button, clickCount), fill \
       (selector, text), type (text, selector), press (key, selector), scroll (x, y), hover (selector or x, y), select \
       (selector, value), check (selector, checked), drag (selector, destination), evaluate (code), upload (selector, \
@@ -657,8 +661,8 @@ private let uiTools: [WovenTool] = [
   WovenTool(
     name: "computer",
     description: """
-      Control this Mac's apps, when the person has given Woven Matter Screen Recording and Accessibility (you cannot \
-      grant them; `status` says). Start with apps, then windows (pid), then snapshot (pid, windowID) for the \
+      Control this Mac's apps, when the person has given Woven Matter Screen Recording and Accessibility.
+      You cannot grant them; `status` says. Start with apps, then windows (pid), then snapshot (pid, windowID) for the \
       accessibility tree with element tokens and an image. Act with click, type (text), press (key such as Return or \
       cmd+a), scroll (x, y, direction, amount), drag (x, y, toX, toY), move (x, y), each with pid and windowID; prefer \
       elementToken to x and y, and give click the captureID of its snapshot. Input goes to the window in the \
@@ -686,18 +690,21 @@ private let uiTools: [WovenTool] = [
   WovenTool(
     name: "preview_html",
     description: """
-      Check a visual reply before publishing it with `render_html`. Returns a PNG of it as the chat shows it, its \
-      console messages, its content height, and `missingImages`: local image paths it refers to that are missing, \
+      Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.
+      Give the same `html` or `path`. With the image come its console messages, its content height, and \
+      `missingImages`: local image paths it refers to that are missing, \
       unreadable or not images. Width defaults to 728 CSS pixels; use 390 for a phone. Appearance defaults to dark. \
       Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.
       """,
-    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters."),
+    input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters. Give this or `path`."),
+                   "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
                    "width": integer("240 to 1600 CSS pixels; default 728."),
-                   "appearance": choice(["light", "dark"], "Default dark.")], required: ["html"]),
+                   "appearance": choice(["light", "dark"], "Default dark.")]),
     readOnly: true,
     run: { call in
       // A bot runs in its own machine: nothing on this one is read for it.
-      let prepared = try VisualReplies.prepare(call.arguments.optionalString("html") ?? "", readingDisk: call.caller.botID == nil)
+      let fromBot = call.caller.botID != nil
+      let prepared = try VisualReplies.prepare(try VisualReplies.authored(call.arguments, fromBot: fromBot), readingDisk: !fromBot)
       let width = call.arguments.int("width") ?? 728
       guard call.arguments["width"] == nil || call.arguments.int("width") != nil, (240...1600).contains(width) else {
         throw ToolFailure("Give `width` from 240 to 1600.")

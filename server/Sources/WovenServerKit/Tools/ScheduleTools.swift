@@ -102,7 +102,7 @@ let scheduleTools: [WovenTool] = [
     }),
   WovenTool(
     name: "create_scheduled_task",
-    description: "Schedule a prompt to run in an agent session at a time, once or repeating. Each run continues the task's session (or starts a new one with `newSessionEachRun`). It runs on the folder's machine, or `machineID`, even while no one has the app open.",
+    description: "Schedule a prompt to run in an agent session at a time, once or repeating.\nEach run continues the task's session (or starts a new one with `newSessionEachRun`). It runs on the folder's machine, or `machineID`, even while no one has the app open.",
     input: schema(taskFields, required: ["title", "prompt", "startsAt", "runtime"]),
     forBots: false,
     groups: [.calendar],
@@ -128,7 +128,7 @@ let scheduleTools: [WovenTool] = [
     }),
   WovenTool(
     name: "change_scheduled_task",
-    description: "Change a scheduled task: give its id and only the fields to change. Its machine cannot change; delete it and create it again instead.",
+    description: "Change a scheduled task: give its id and only the fields to change.\nIts machine cannot change; delete it and create it again instead.",
     input: schema(taskFields.filter { $0.key != "machineID" && $0.key != "folderID" }
       .merging(["scheduleID": text("The task, from `list_schedules`.")]) { first, _ in first }, required: ["scheduleID"]),
     forBots: false,
@@ -155,7 +155,7 @@ let scheduleTools: [WovenTool] = [
     }),
   WovenTool(
     name: "delete_schedule",
-    description: "Delete a scheduler entry (a scheduled task, event, timer or wake-up) by its id from `list_schedules`. Sessions it already ran stay.",
+    description: "Delete a scheduler entry (a scheduled task, event, timer or wake-up) by its id from `list_schedules`.\nSessions it already ran stay.",
     input: schema(["scheduleID": text("The entry.")], required: ["scheduleID"]),
     forBots: false,
     groups: [.calendar, .timers],
@@ -169,7 +169,7 @@ let scheduleTools: [WovenTool] = [
     }),
   WovenTool(
     name: "set_timer",
-    description: "Have this session prompted again after a delay, with an instruction to yourself. Repeats when `repeatMinutes` is given. Cancel it with `delete_schedule`.",
+    description: "Have this session prompted again after a delay, with an instruction to yourself.\nRepeats when `repeatMinutes` is given. Cancel it with `delete_schedule`.",
     input: schema(["afterSeconds": integer("Seconds from now until it fires."), "instruction": text("What you will be told when it fires."),
                    "repeatMinutes": integer("Fire again every this many minutes."), "title": text("A short name for it.")],
                   required: ["afterSeconds", "instruction"]),
@@ -190,7 +190,7 @@ let scheduleTools: [WovenTool] = [
     }),
   WovenTool(
     name: "set_wake_up",
-    description: "Have this session woken at a time with a message to yourself, e.g. to check on something later. Cancel it with `delete_schedule`.",
+    description: "Have this session woken at a time with a message to yourself, e.g. to check on something later.\nCancel it with `delete_schedule`.",
     input: schema(["at": text("When, as ISO 8601 with a time zone offset."), "message": text("What you will be told then.")],
                   required: ["at", "message"]),
     forBots: false,
@@ -207,7 +207,7 @@ let scheduleTools: [WovenTool] = [
     }),
   WovenTool(
     name: "goal_met",
-    description: "Say that this session's goal is met, with what shows it. The goal is cleared and you are no longer asked to continue toward it. Only call it when the goal truly is met.",
+    description: "Say that this session's goal is met, with what shows it.\nThe goal is cleared and you are no longer asked to continue toward it. Only call it when the goal truly is met.",
     input: schema(["evidence": text("What shows the goal is met.")], required: ["evidence"]),
     forBots: false,
     run: { call in

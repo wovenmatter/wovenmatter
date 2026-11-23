@@ -95,13 +95,20 @@ struct OpenCodeProjection: Sendable {
     case "session.tool.input.ended":
       return update(data["id"]?.string ?? "") { call in
         var call = call ?? ToolCall(name: "tool", input: "")
-        call.input = data["text"]?.string ?? ""
+        let text = data["text"]?.string ?? ""
+        // A script's input is its source, sent as `{code}` or, by a freeform
+        // provider, as the code itself.
+        call.input = call.kind == .code ? Self.script(text) : text
         return call
       }
     case "session.tool.called":
       return update(data["id"]?.string ?? "") { call in
         var call = call ?? ToolCall(name: "tool", input: "")
         let input = data["input"] ?? .null
+        if call.kind == .code {
+          call.input = Self.script(input)
+          return call
+        }
         call.input = Self.compactText(input)
         call.title = Self.title(input) ?? call.title
         if call.kind == .plan { call.plan = Self.plan(input) }
@@ -109,6 +116,17 @@ struct OpenCodeProjection: Sendable {
       }
     case "session.tool.progress":
       let id = data["id"]?.string ?? ""
+      // A script reports the tool calls it has made so far, all of them
+      // each time, often unchanged.
+      if let made = Self.nested(data["metadata"]?["toolCalls"]) {
+        // Progress may come after the end; it never reopens a call.
+        guard let open = calls[id], open.calls != made else { return [] }
+        return update(id) { _ in
+          var call = Self.asScript(open)
+          call.calls = made
+          return call
+        }
+      }
       let title = data["metadata"]?["title"]?.string
       let output = data["metadata"]?["output"]?.string
       // Output that grows travels as what is new.
@@ -127,11 +145,20 @@ struct OpenCodeProjection: Sendable {
       let failed = type == "session.tool.failed"
       return update(data["id"]?.string ?? "", finished: true) { call in
         var call = call ?? ToolCall(name: "tool", input: "")
-        let content = Self.content(data["content"] ?? .null)
+        let metadata = data["metadata"] ?? .null
+        if let made = Self.nested(metadata["toolCalls"]) {
+          call = Self.asScript(call)
+          call.calls = made
+        }
+        var content = Self.content(data["content"] ?? .null)
+        if metadata["truncated"]?.bool == true, let path = metadata["outputPath"]?.string {
+          content += "\n(OpenCode cut this output short; the whole of it is in \(path).)"
+        }
         call.output = failed ? [data["error"]?["message"]?.string ?? "", content].filter { !$0.isEmpty }.joined(separator: "\n") : content
-        // A tool that reports its own failure succeeds with `metadata.error`.
-        call.failed = failed || data["metadata"]?["error"]?.bool == true
-        call.title = data["metadata"]?["title"]?.string ?? call.title
+        // A tool that reports its own failure, or a script that failed,
+        // succeeds with `metadata.error`.
+        call.failed = failed || metadata["error"]?.bool == true
+        call.title = call.kind == .code ? call.title : metadata["title"]?.string ?? call.title
         return call
       }
 
@@ -155,7 +182,17 @@ struct OpenCodeProjection: Sendable {
     texts.removeAll()
     for id in openCalls {
       guard var call = calls[id] else { continue }
-      if (interrupted || failure != nil) && call.kind != .thinking { call.failed = true }
+      if (interrupted || failure != nil) && call.kind != .thinking {
+        call.failed = true
+        // A script's calls still out ended with it.
+        call.calls = call.calls?.map { nested in
+          guard nested.output == nil else { return nested }
+          var nested = nested
+          nested.output = "It stopped with the turn."
+          nested.failed = true
+          return nested
+        }
+      }
       events.append(.tool(callID: id, call: call, finished: true))
     }
     openCalls.removeAll()
@@ -222,7 +259,9 @@ struct OpenCodeProjection: Sendable {
     switch name.lowercased() {
     case "read": .read
     case "edit", "write", "patch", "apply_patch", "multiedit": .edit
-    case "bash", "shell", "execute": .execute
+    case "bash", "shell": .execute
+    // Code Mode's tool: a script that calls MCP tools.
+    case "execute": .code
     case "grep", "glob", "list", "find", "codesearch", "websearch": .search
     case "webfetch", "fetch": .fetch
     case "todowrite", "todoread", "todo": .plan
@@ -249,10 +288,55 @@ struct OpenCodeProjection: Sendable {
     }
   }
 
+  /// A result's text. A file part (an image a tool returned, which reaches
+  /// the model) shows as its name or type; its data is never kept.
   private static func content(_ content: JSONValue) -> String {
     (content.array ?? []).map { part in
-      part["type"]?.string == "file" ? (part["name"]?.string ?? part["uri"]?.string ?? "") : (part["text"]?.string ?? "")
+      guard part["type"]?.string == "file" else { return part["text"]?.string ?? "" }
+      if let name = part["name"]?.string, !name.isEmpty { return "[\(name)]" }
+      if let uri = part["uri"]?.string, !uri.hasPrefix("data:") { return "[\(uri)]" }
+      return "[\(part["mime"]?.string ?? "file")]"
     }.joined(separator: "\n")
+  }
+
+  /// A Code Mode script's source from its input: `{code}`, as JSON text or
+  /// a value, or the code itself.
+  private static func script(_ input: JSONValue) -> String {
+    if let code = input["code"]?.string { return code }
+    return input.string ?? compactText(input)
+  }
+
+  private static func script(_ text: String) -> String {
+    guard text.hasPrefix("{"), let input = try? OpenCodeSSEParser.decode(Data(text.utf8)), let code = input["code"]?.string else {
+      return text
+    }
+    return code
+  }
+
+  /// A call that turned out to be a script, from what it reported.
+  private static func asScript(_ call: ToolCall) -> ToolCall {
+    guard call.kind != .code else { return call }
+    var call = call
+    call.kind = .code
+    call.input = script(call.input)
+    call.title = nil
+    return call
+  }
+
+  /// What a script's own failed tool call says. OpenCode reports only that
+  /// it failed; the script's output often has its error.
+  static let nestedFailure = "OpenCode did not say why it failed."
+
+  /// The tool calls a script made, from Code Mode's `metadata.toolCalls`:
+  /// each `{tool, status, input?}`, in order. Nil when there are none to read.
+  static func nested(_ value: JSONValue?) -> [ToolCall]? {
+    guard let entries = value?.array else { return nil }
+    return entries.map { entry in
+      let status = entry["status"]?.string
+      let failed = status == "error"
+      return ToolCall(name: entry["tool"]?.string ?? "tool", input: CodeCalls.input(entry["input"] ?? .object([:])),
+                      output: failed ? nestedFailure : status == "completed" ? "" : nil, failed: failed)
+    }
   }
 }
 
@@ -265,9 +349,10 @@ extension OpenCodeProjection {
     PromptOption(id: "reject", name: "Reject"),
   ]
 
-  /// A `permission.asked` event's request as a prompt.
+  /// A `permission.asked` event's request as a prompt. A tool a script
+  /// calls asks as itself (`woven_render_html`), for any resource (`*`).
   static func permissionPrompt(_ request: JSONValue) -> Prompt {
-    let resources = (request["resources"]?.array ?? []).compactMap(\.string).joined(separator: ", ")
+    let resources = (request["resources"]?.array ?? []).compactMap(\.string).filter { $0 != "*" }.joined(separator: ", ")
     let text = request["message"]?.string ?? [request["action"]?.string ?? "", resources].filter { !$0.isEmpty }.joined(separator: ": ")
     return Prompt(id: request["id"]?.string ?? "", kind: .approval, text: text, options: permissionOptions)
   }

@@ -218,9 +218,10 @@ behind one adapter interface in the server and are treated alike:
   written into a script is not kept.
 - An agent shows a chart, a table or anything interactive as a visual reply,
   with the Woven tool `render_html`: one self-contained HTML document, at most
-  512,000 characters, with its absolute local image paths embedded (each a real
-  image of at most 10 MiB, the whole at most 25 MiB) on the machine the session
-  runs on. A visual reply is not a Page: it belongs to its chat only, is not in
+  512,000 characters, given as its text or as an HTML file the agent wrote on
+  the machine the session runs on (never from a bot), with its absolute local
+  image paths embedded (each a real image of at most 10 MiB, the whole at most
+  25 MiB) on that machine. A visual reply is not a Page: it belongs to its chat only, is not in
   the Library and is never edited. Its HTML is stored once, in the content
   store; the session gets one small item, `visualReply` (title, starting
   height, digest), saved when the tool is called, after the text so far. The
@@ -352,8 +353,10 @@ window holds, and returns a screenshot; it saves nothing.
   that speaks MCP over standard input and output and passes it to the server's
   tool socket, a Unix socket that only the person can open. The bridge first
   says a key the server gave that runtime in memory, so the server knows who
-  is calling. The bots runtime asks for the tools over its own connection to
-  the server.
+  is calling. OpenCode serves all its sessions through one bridge and names
+  the session in each call. It offers the tools only in its Code Mode, to
+  scripts, so its instructions list each tool's exact call. The bots runtime
+  asks for the tools over its own connection to the server.
 - The tools are in groups, and each session is offered only the groups it may
   use. A tool in no group (goals, places, `render_html`, `preview_html`) is
   always offered to sessions. Bots are offered only the tools meant for them,
