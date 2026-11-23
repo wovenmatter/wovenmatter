@@ -88,6 +88,7 @@ function codemodeGuide(input, codemode, mcp) {
     `Scripts call these tools as \`tools.<identifier>\`, exactly as the codemode section declares them, for example \`await tools.${example.name}({})\`; each keeps its normal permissions.`,
     'Such a tool resolves to its text, or to `{ text, images }` when it returned images (a screenshot from `preview_html`, `browser` or `computer`): show one with `image(result.images[0])`. It rejects with its error text when it fails.',
     'A visual reply that `render_html` publishes from a script is shown in the chat as from a direct call.',
+    'To show or check a large page, write it to an HTML file with your own tools and give `render_html` or `preview_html` its absolute `path` instead of `html`, rather than writing the page into the script.',
   ].join(' ');
 }
 

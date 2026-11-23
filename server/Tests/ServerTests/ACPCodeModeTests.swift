@@ -91,3 +91,24 @@ func anACPToolCallWithoutCodeMetaIsUnchanged() throws {
   #expect(call.calls == nil)
   #expect(call.input == #"{"query":"notes"}"#)
 }
+
+/// Pi Durable's code mode tests run against a copy of Woven's tool catalog
+/// (`default-agent/test/fixtures/woven-catalog.json`), so it must be the
+/// catalog as it is. `WOVEN_WRITE_TOOL_CATALOG=1` writes it afresh.
+@Test
+func piDurablesCopyOfTheToolCatalogIsTheCatalog() throws {
+  let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent()
+    .appending(path: "default-agent/test/fixtures/woven-catalog.json")
+  let catalog = JSONValue.array(wovenToolCatalog().map { tool in
+    .object(["name": .string(tool.name), "description": .string(tool.description), "inputSchema": tool.input,
+             "readOnly": .bool(tool.readOnly)])
+  })
+  if ProcessInfo.processInfo.environment["WOVEN_WRITE_TOOL_CATALOG"] == "1" {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    try (encoder.encode(catalog) + Data("\n".utf8)).write(to: file)
+  }
+  let copy = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: file))
+  #expect(copy == catalog, "Run this test with WOVEN_WRITE_TOOL_CATALOG=1 to write the catalog afresh.")
+}
