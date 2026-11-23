@@ -77,9 +77,13 @@ enum VisualReplies {
   /// saved once, as its own item, when `render_html` runs; every runtime also
   /// reports the call, and that report is kept without its HTML: each `html`
   /// argument becomes its length, and the call is marked `.visualReply` so
-  /// the chat shows the visual reply, not the call. Every runtime's tool calls pass here
-  /// (`SessionHost`, and the bots' mirror) before they are shown or saved.
+  /// the chat shows the visual reply, not the call. A script's tool calls
+  /// (`.code`) are kept the same way, and the script without its long
+  /// literals, so a page written into it is not kept either (`CodeCalls`).
+  /// Every runtime's tool calls pass here (`SessionHost`, and the bots'
+  /// mirror) before they are shown or saved.
   static func withoutVisualReply(_ call: ToolCall) -> ToolCall {
+    if call.kind == .code { return CodeCalls.prepared(call) }
     guard publishes(call) else { return call }
     var call = call
     call.kind = .visualReply
@@ -97,6 +101,7 @@ enum VisualReplies {
   /// `woven` server and whatever separator the runtime puts between them
   /// (Claude Code and Pi Durable `mcp__woven__render_html`, Codex
   /// `mcp.woven.render_html`, OpenCode and the bots `woven_render_html`,
+  /// OpenCode's scripts `woven.render_html`,
   /// `woven/render_html`, `woven: render_html`). Another server's
   /// `render_html` is not Woven's.
   static func publishes(_ call: ToolCall) -> Bool {

@@ -211,6 +211,11 @@ behind one adapter interface in the server and are treated alike:
   turn is stopped, what was said so far is saved as the finished item.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
+- A script a harness runs in code mode, calling tools from JavaScript, is
+  one tool call: its source, its output, and the tool calls it made, at most
+  100, each with its input cut to about 1,000 characters. Its string and
+  template literals over 2,000 characters keep only their length, so a page
+  written into a script is not kept.
 - An agent shows a chart, a table or anything interactive as a visual reply,
   with the Woven tool `render_html`: one self-contained HTML document, at most
   512,000 characters, with its absolute local image paths embedded (each a real

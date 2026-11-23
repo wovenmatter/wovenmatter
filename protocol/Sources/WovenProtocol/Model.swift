@@ -232,6 +232,11 @@ public struct ToolKind: RawRepresentable, Codable, Sendable, Hashable {
   public static let plan = ToolKind(rawValue: "plan")
   /// A child task (subagent); `output` is its result.
   public static let task = ToolKind(rawValue: "task")
+  /// A script the model wrote that calls tools (a harness's code mode).
+  /// `input` is the script's source as plain text, `output` what the script
+  /// printed or returned, `failed` how it ended, and `calls` the tool calls
+  /// it made.
+  public static let code = ToolKind(rawValue: "code")
   /// Woven's `render_html`: the visual reply it published is its own item
   /// (`ItemContent.visualReply`), and the call does not carry it.
   public static let visualReply = ToolKind(rawValue: "visualReply")
@@ -267,9 +272,19 @@ public struct ToolCall: Codable, Sendable, Hashable {
   public var kind: ToolKind?
   /// The entries, when this is a plan or to-do update.
   public var plan: [PlanEntry]?
+  /// The tool calls a `.code` script made, in the order it made them. Each
+  /// has its `name` and its arguments as compact JSON in `input`, cut to
+  /// about 1,000 characters. Its `output` is nil while it runs, empty once
+  /// it succeeded, and its error when it `failed`; a runtime that cannot
+  /// tell when a call ends leaves it nil. So once the script has finished,
+  /// a call with no output that has not failed succeeded.
+  /// At most 100 are kept: past that, the first 99, then one last entry with
+  /// no name whose `title` says how many more there were ("37 more tool
+  /// calls").
+  public var calls: [ToolCall]?
 
   public init(name: String, input: String, output: String? = nil, failed: Bool = false, title: String? = nil,
-              kind: ToolKind? = nil, plan: [PlanEntry]? = nil) {
+              kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil) {
     self.name = name
     self.input = input
     self.output = output
@@ -277,6 +292,7 @@ public struct ToolCall: Codable, Sendable, Hashable {
     self.title = title
     self.kind = kind
     self.plan = plan
+    self.calls = calls
   }
 }
 

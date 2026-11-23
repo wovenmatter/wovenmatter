@@ -471,13 +471,46 @@ final class SessionStore {
     }
 
     private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
-        AgentRunActivity(
+        let script = call.kind == .code
+        let calls = script ? codeCalls(call.calls ?? [], live: live) : nil
+        return AgentRunActivity(
             id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
-            title: call.title ?? call.name, status: live ? "running" : call.failed ? "failed" : "completed",
+            title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code") : call.title ?? call.name,
+            // The tools it called, each once.
+            detail: calls.flatMap { calls in
+                let names = calls.filter { $0.status != nil }.map(\.name).reduce(into: [String]()) { names, name in
+                    if !names.contains(name) { names.append(name) }
+                }
+                return names.isEmpty ? nil : names.joined(separator: ", ")
+            },
+            status: live ? "running" : call.failed ? "failed" : "completed",
             toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
-            subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil)
+            subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil,
+            codeCalls: calls)
+    }
+
+    /// A script's tool calls as its card lists them. One without output that
+    /// has not failed is running while the script runs, and done after.
+    private static func codeCalls(_ calls: [ToolCall], live: Bool) -> [AgentRunCodeCall] {
+        calls.enumerated().map { index, call in
+            // The entry that says how many more calls there were has no name.
+            guard !call.name.isEmpty else { return AgentRunCodeCall(id: index, name: call.title ?? "", status: nil) }
+            let status: AgentRunCodeCall.Status = call.failed ? .failed : live && call.output == nil ? .running
+                : call.kind == .visualReply ? .shownInChat : .completed
+            return AgentRunCodeCall(id: index, name: readableToolName(call.name), status: status,
+                                    error: call.failed ? call.output : nil)
+        }
+    }
+
+    /// A tool's name without the Woven server's prefix, as a script calls
+    /// it (`woven.render_html`, `mcp__woven__render_html`).
+    private static func readableToolName(_ name: String) -> String {
+        for prefix in ["mcp__woven__", "mcp.woven.", "woven.", "woven_", "woven/"] where name.lowercased().hasPrefix(prefix) {
+            return String(name.dropFirst(prefix.count))
+        }
+        return name
     }
 
     private static let timestamps = ISO8601DateFormatter()

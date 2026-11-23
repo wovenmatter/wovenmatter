@@ -146,7 +146,10 @@ private let sessionTools: [WovenTool] = [
         case .toolCall(let tool):
           guard tool.kind != .thinking else { continue }
           let output = (tool.output ?? "").prefix(600)
-          result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : ""): \(output)")
+          // A script names the tools it called.
+          let called = (tool.calls ?? []).map { $0.name.isEmpty ? $0.title ?? "" : $0.name + ($0.failed ? " (failed)" : "") }
+          result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : "")"
+                        + (called.isEmpty ? "" : " calling \(called.joined(separator: ", "))") + ": \(output)")
         case .notice(let notice):
           result.append("#\(item.sequence) notice: \(notice.text)")
         case .visualReply(let reply):

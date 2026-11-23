@@ -136,6 +136,31 @@ public struct AgentRunSubagentActivity: Codable, Equatable, Identifiable, Sendab
   public let status: String?
 }
 
+/// One tool call a script made, as the script's card lists it.
+public struct AgentRunCodeCall: Codable, Equatable, Identifiable, Sendable {
+  public enum Status: String, Codable, Sendable {
+    case running
+    case completed
+    case failed
+    /// It published a visual reply, which the chat shows.
+    case shownInChat
+  }
+
+  public let id: Int
+  /// The tool's name, without Woven's prefix; or what stands for calls left out.
+  public let name: String
+  /// Nil for the entry that says how many more calls there were.
+  public let status: Status?
+  public let error: String?
+
+  public init(id: Int, name: String, status: Status?, error: String? = nil) {
+    self.id = id
+    self.name = name
+    self.status = status
+    self.error = error
+  }
+}
+
 public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public enum Kind: String, Codable, Sendable {
     case assistant
@@ -178,6 +203,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public let planKind: String?
   public let planOperation: String?
   public let subagents: [AgentRunSubagent]?
+  /// The tool calls a script made, when this is a script (code mode);
+  /// `rawInputJSON` is then its source.
+  public let codeCalls: [AgentRunCodeCall]?
 
   public init(
     id: String,
@@ -203,7 +231,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     detailStamp: Int64? = nil,
     planKind: String? = nil,
     planOperation: String? = nil,
-    htmlRender: ConversationHTMLRenderReference? = nil
+    htmlRender: ConversationHTMLRenderReference? = nil,
+    codeCalls: [AgentRunCodeCall]? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -229,6 +258,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.planKind = planKind
     self.planOperation = planOperation
     self.subagents = subagents
+    self.codeCalls = codeCalls
   }
 
   public func scoped(to runID: String) -> Self {
@@ -238,7 +268,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       planEntries: planEntries, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON,
       rawPayloadJSON: rawPayloadJSON, subagents: subagents,
       detailsAvailable: detailsAvailable, detailStamp: detailStamp,
-      planKind: planKind, planOperation: planOperation, htmlRender: htmlRender)
+      planKind: planKind, planOperation: planOperation, htmlRender: htmlRender, codeCalls: codeCalls)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -287,7 +317,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       detailStamp: update.detailStamp ?? detailStamp,
       planKind: update.planKind ?? planKind,
       planOperation: update.planOperation ?? planOperation,
-      htmlRender: update.htmlRender ?? htmlRender
+      htmlRender: update.htmlRender ?? htmlRender,
+      codeCalls: update.codeCalls ?? codeCalls
     )
   }
 

@@ -18,6 +18,8 @@ import WovenProtocol
 /// result. With a gate, that call waits until a message is steered into the
 /// turn, and the steer is answered only once the call returns, as a runtime
 /// that takes mid-turn input at the end of a tool round would.
+/// `code woven NAME {arguments}` makes that call from a script, as a
+/// harness's code mode does: one `.code` call that holds it.
 public final class StandInRuntime: Runtime {
   public static let kind = RuntimeKind(rawValue: "standIn")
   public var kind: RuntimeKind { Self.kind }
@@ -132,9 +134,10 @@ private final class StandInSession: RuntimeSession {
     let number = store.nextTurn(nativeHandle)
     let emit = emit
     let gate = gate
-    if text.hasPrefix("woven ") {
+    let script = text.hasPrefix("code woven ")
+    if script || text.hasPrefix("woven ") {
       let tools = tools
-      let parts = text.dropFirst(6).split(separator: " ", maxSplits: 1)
+      let parts = text.dropFirst(script ? 11 : 6).split(separator: " ", maxSplits: 1)
       let name = String(parts.first ?? "")
       let arguments = parts.count > 1 ? String(parts[1]) : "{}"
       let call = Task {
@@ -142,10 +145,18 @@ private final class StandInSession: RuntimeSession {
         return await Self.callTool(name, arguments: arguments, tools: tools)
       }
       toolRound.withLock { $0 = Task { _ = await call.value } }
+      let source = "const result = await tools.woven.\(name)(\(arguments));\nconsole.log(result);"
+      if script {
+        emit.yield(.tool(callID: "woven-\(number)", call: ToolCall(
+          name: "execute", input: source, kind: .code, calls: [ToolCall(name: "woven." + name, input: arguments)]), finished: false))
+      }
       turn.withLock { $0 = Task {
         let result = await call.value
-        emit.yield(.tool(callID: "woven-\(number)", call: ToolCall(name: name, input: arguments, output: result.text,
-                                                                  failed: result.failed), finished: true))
+        let made = ToolCall(name: name, input: arguments, output: result.text, failed: result.failed)
+        emit.yield(.tool(callID: "woven-\(number)", call: !script ? made : ToolCall(
+          name: "execute", input: source, output: result.text, failed: result.failed, kind: .code,
+          calls: [ToolCall(name: "woven." + name, input: arguments, output: result.failed ? result.text : "",
+                           failed: result.failed)]), finished: true))
         self.toolRound.withLock { $0 = nil }
         emit.yield(.turnFinished(failure: nil, usage: nil))
       } }

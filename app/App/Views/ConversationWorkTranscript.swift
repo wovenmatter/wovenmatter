@@ -806,7 +806,12 @@ private struct ConversationActivityDetails: View {
             }
             // Reasoning disclosures contain supplied reasoning, not the ACP
             // envelope that carried it. Tool details retain their raw fields.
-            if activity.kind != .thought {
+            if let calls = field(\.codeCalls) {
+                // A script: its source folded away, the tools it called, then what it printed.
+                ConversationCodeScript(source: field(\.rawInputJSON))
+                ForEach(calls) { call in ConversationCodeCallRow(call: call) }
+                rawBlock("Output", field(\.rawOutputJSON))
+            } else if activity.kind != .thought {
                 rawBlock("Input", field(\.rawInputJSON))
                 rawBlock("Output", field(\.rawOutputJSON))
                 rawBlock("Event", field(\.rawPayloadJSON))
@@ -917,6 +922,72 @@ private struct ConversationActivityDetails: View {
                     .foregroundStyle(WovenPalette.mutedForeground)
                 ConversationPagedText(text: value, style: .raw)
             }
+        }
+    }
+}
+
+/// A script's source, folded away until asked for.
+private struct ConversationCodeScript: View {
+    let source: String?
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @State private var expanded = false
+
+    var body: some View {
+        if let source, !source.isEmpty {
+            DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
+                ConversationPagedText(text: source, style: .raw).padding(.top, 5)
+            } label: {
+                Text("Script").font(.system(size: 11.5, weight: .medium))
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(WovenPalette.mutedForeground)
+        }
+    }
+}
+
+/// One tool a script called: its name, how it went, and its error when it failed.
+private struct ConversationCodeCallRow: View {
+    let call: AgentRunCodeCall
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: call.status == .failed ? "exclamationmark.triangle"
+                    : call.status == .shownInChat ? "rectangle.on.rectangle" : "wrench.and.screwdriver")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(call.status == .failed ? Color.red.opacity(0.8) : WovenPalette.mutedForeground)
+                    .frame(width: 14)
+                Text(call.name)
+                    .font(.system(size: 12.5, weight: call.status == nil ? .regular : .medium))
+                    .foregroundStyle(call.status == nil ? WovenPalette.mutedForeground : WovenPalette.foreground.opacity(0.72))
+                    .lineLimit(1).truncationMode(.middle)
+                if let label {
+                    Text(label)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                }
+                Spacer(minLength: 0)
+            }
+            if let error = call.error?.nonempty {
+                Text(error)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(WovenPalette.danger)
+                    .textSelection(.enabled)
+                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 22)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var label: String? {
+        switch call.status {
+        case .running: "Running"
+        case .completed: "Done"
+        case .failed: "Failed"
+        case .shownInChat: "Shown in the chat"
+        case nil: nil
         }
     }
 }
@@ -1166,6 +1237,7 @@ private extension ConversationToolAction {
     var systemImage: String {
         switch self {
         case .command: "terminal"
+        case .code: "curlybraces"
         case .read: "doc.text"
         case .edit: "pencil.and.outline"
         case .codeSearch: "magnifyingglass"

@@ -117,6 +117,10 @@ func describe(_ content: ItemContent) -> String {
     else if !call.input.isEmpty { line += " input=\(call.input.prefix(200))" }
     if let output = call.output, !output.isEmpty { line += " → \(output.replacingOccurrences(of: "\n", with: " ⏎ ").prefix(300))" }
     if call.failed { line += " (failed)" }
+    if let calls = call.calls, !calls.isEmpty {
+      line += " calls: " + calls.map { $0.name.isEmpty ? $0.title ?? "" : $0.name + ($0.failed ? " (failed)" : "") }
+        .joined(separator: ", ")
+    }
     return line
   case .notice(let notice):
     return "notice \(notice.kind.rawValue): \(notice.text)"
