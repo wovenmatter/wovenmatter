@@ -884,12 +884,7 @@ struct NewFolderPopover: View {
     @State private var name = ""
     @State private var linksExistingDirectory = false
     @State private var externalRoot: URL?
-    @State private var machineDirectoryPath = ""
-    @State private var machineDirectoryFilter = ""
-    @State private var machineDirectoryListing: MachineDirectoryListing?
-    @State private var loadingMachineDirectories = false
-    @State private var machineDirectoryError: String?
-    @State private var machineDirectoryRequest = UUID()
+    @State private var browsingMachine = false
     @FocusState private var nameFocused: Bool
 
     private var ownerIsAvailable: Bool {
@@ -904,11 +899,36 @@ struct NewFolderPopover: View {
 
     /// Another machine's directories are browsed through its server; this
     /// Mac's through the open panel.
-    private var nativeMachine: Machine? {
+    private var otherMachine: Machine? {
         machine.flatMap { $0.isThisMachine ? nil : $0 }
     }
 
     var body: some View {
+        Group {
+            if browsingMachine, let otherMachine {
+                MachineDirectoryBrowser(
+                    workspaceTitle: workspaceTitle,
+                    load: { try await workspace.directories(on: otherMachine.id, path: $0) },
+                    initialPath: externalRoot?.path,
+                    onChoose: { path in
+                        externalRoot = URL(fileURLWithPath: path)
+                        if name.isEmpty { name = externalRoot?.lastPathComponent ?? "" }
+                        browsingMachine = false
+                    },
+                    onBack: { browsingMachine = false }
+                )
+            } else {
+                form
+            }
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(WovenPalette.foreground)
+        .padding(16)
+        .frame(width: 340)
+        .formFocusDismissal { nameFocused = false }
+    }
+
+    private var form: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New Folder").font(.system(size: 14, weight: .semibold))
             Text(workspaceTitle)
@@ -926,13 +946,12 @@ struct NewFolderPopover: View {
                 .quietTextInput()
                 .onSubmit { if canCreate { create() } }
             if linksExistingDirectory {
-                if nativeMachine != nil { machineDirectoryBrowser }
-                else {
-                    Button(externalRoot?.path ?? "Choose directory…", action: chooseDirectory)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Button(externalRoot?.path ?? "Choose directory…") {
+                    if otherMachine == nil { chooseDirectory() } else { browsingMachine = true }
                 }
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Text("Woven uses this directory as the project root. Existing files are preserved.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(WovenPalette.mutedForeground)
@@ -954,79 +973,8 @@ struct NewFolderPopover: View {
                     .disabled(!canCreate)
             }
         }
-        .font(.system(size: 13))
-        .foregroundStyle(WovenPalette.foreground)
-        .padding(16)
-        .frame(width: 340)
-        .formFocusDismissal { nameFocused = false }
+        // Runs each time the form shows, so returning from the browser focuses the name again.
         .task { nameFocused = true }
-        .task(id: linksExistingDirectory) {
-            if linksExistingDirectory, nativeMachine != nil, machineDirectoryListing == nil {
-                await browseMachineDirectory(nil)
-            }
-        }
-    }
-
-    private var machineDirectoryBrowser: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Absolute directory in this workspace", text: $machineDirectoryPath)
-                .quietTextInput()
-                .onSubmit { Task { await browseMachineDirectory(machineDirectoryPath) } }
-            HStack {
-                Button("Up") { Task { await browseMachineDirectory(machineDirectoryListing?.parent) } }
-                    .disabled(machineDirectoryListing?.parent == nil || loadingMachineDirectories)
-                Button("Browse") { Task { await browseMachineDirectory(machineDirectoryPath) } }
-                    .disabled(loadingMachineDirectories || !machineDirectoryPath.hasPrefix("/"))
-                Spacer()
-                if loadingMachineDirectories { ProgressView().controlSize(.small) }
-            }
-            if let listing = machineDirectoryListing {
-                TextField("Find a directory here", text: $machineDirectoryFilter).quietTextInput()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(listing.directories.filter { machineDirectoryFilter.isEmpty || $0.name.localizedCaseInsensitiveContains(machineDirectoryFilter) }) { directory in
-                            Button(directory.name) { Task { await browseMachineDirectory(directory.path) } }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                }.scrollIndicators(.never).frame(maxHeight: 150)
-                if listing.truncated {
-                    Text("More directories are available. Enter a more specific path to browse them.")
-                        .font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
-                }
-                Button("Use this directory") {
-                    externalRoot = URL(fileURLWithPath: listing.path)
-                    if name.isEmpty { name = externalRoot?.lastPathComponent ?? "" }
-                }.disabled(loadingMachineDirectories)
-            }
-            if let externalRoot {
-                Text("Selected: \(externalRoot.path)").font(.system(size: 11.5)).textSelection(.enabled)
-            }
-            if let machineDirectoryError {
-                Text(machineDirectoryError).font(.system(size: 11.5)).foregroundStyle(WovenPalette.danger)
-            }
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-    }
-
-    @MainActor
-    private func browseMachineDirectory(_ path: String?) async {
-        guard let nativeMachine else { return }
-        let request = UUID()
-        machineDirectoryRequest = request
-        loadingMachineDirectories = true
-        machineDirectoryError = nil
-        defer { if machineDirectoryRequest == request { loadingMachineDirectories = false } }
-        do {
-            let listing = try await workspace.directories(on: nativeMachine.id, path: path)
-            guard machineDirectoryRequest == request, !Task.isCancelled else { return }
-            machineDirectoryListing = listing
-            machineDirectoryPath = listing.path
-            machineDirectoryFilter = ""
-        } catch {
-            guard machineDirectoryRequest == request, !Task.isCancelled else { return }
-            machineDirectoryError = error.localizedDescription
-        }
     }
 
     private func create() {

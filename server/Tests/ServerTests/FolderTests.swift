@@ -34,3 +34,34 @@ func deletingAFolderDeletesTheDirectoryTheServerMadeAndNeverALinkedOne() async t
   #expect(!FileManager.default.fileExists(atPath: made.path))
   #expect(try await client.call(ListFolders()).isEmpty)
 }
+
+@Test(.timeLimit(.minutes(1)), .enabled(if: getuid() != 0))
+func listingADirectoryWovenMayNotOpenSaysSoInWords() async throws {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
+  let socket = "/tmp/wvt-\(UUID().uuidString.prefix(8)).sock"
+  var options = WovenServer.Options(dataFolder: folder, socketPath: socket, listen: nil, appVersion: "test",
+                                    machineName: "test", tailnet: StandInTailnet(), runtimes: [StandInRuntime()],
+                                    foldersRoot: folder.appendingPathComponent("Folders", isDirectory: true))
+  options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
+  let server = try await WovenServer.start(options)
+  defer { server.stopLater() }
+  let client = Client(transport: try await connectWebSocket(.unix(path: socket)))
+  _ = try await client.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: "test"))
+
+  let parent = folder.appendingPathComponent("Projects", isDirectory: true)
+  for name in ["beta", "Alpha", ".hidden", "Locked"] {
+    try FileManager.default.createDirectory(at: parent.appendingPathComponent(name), withIntermediateDirectories: true)
+  }
+  let listing = try await client.call(ListDirectories(path: parent.path))
+  #expect(listing.directories.map(\.name) == ["Alpha", "beta", "Locked"])
+  #expect(listing.parent == folder.standardizedFileURL.path)
+
+  let locked = parent.appendingPathComponent("Locked", isDirectory: true)
+  try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+  defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+  let error = await #expect(throws: ProtocolError.self) {
+    _ = try await client.call(ListDirectories(path: locked.path))
+  }
+  #expect(error?.code == .refused)
+  #expect(error?.message == "Woven is not allowed to open \(locked.standardizedFileURL.path).")
+}

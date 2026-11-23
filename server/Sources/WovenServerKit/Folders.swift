@@ -15,7 +15,7 @@ func registerFolders(_ router: inout Router, library: Library, root: URL) {
     if let given = request.path {
       var isDirectory: ObjCBool = false
       guard FileManager.default.fileExists(atPath: given, isDirectory: &isDirectory), isDirectory.boolValue else {
-        throw ProtocolError(.notFound, "There is no directory \(given) on this machine.")
+        throw ProtocolError(.notFound, "There is no directory \(given).")
       }
       return try await library.createFolder(name: name, path: given)
     }
@@ -93,10 +93,16 @@ private func listDirectories(_ path: String?) throws -> DirectoryListing {
   let url = (given.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) } ?? home).standardizedFileURL
   var isDirectory: ObjCBool = false
   guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-    throw ProtocolError(.notFound, "There is no directory \(url.path) on this machine.")
+    throw ProtocolError(.notFound, "There is no directory \(url.path).")
   }
-  let contents = try FileManager.default.contentsOfDirectory(
-    at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+  let contents: [URL]
+  do {
+    contents = try FileManager.default.contentsOfDirectory(
+      at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+  } catch CocoaError.fileReadNoPermission {
+    // macOS privacy protection (Desktop, Documents, Downloads) and file permissions.
+    throw ProtocolError(.refused, "Woven is not allowed to open \(url.path).")
+  }
   let directories = contents
     .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
     .map { DirectoryListing.Entry(name: $0.lastPathComponent, path: $0.standardizedFileURL.path) }
