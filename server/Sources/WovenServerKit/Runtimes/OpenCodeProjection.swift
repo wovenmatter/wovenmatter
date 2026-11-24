@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import WovenProtocol
 
 /// Turns one OpenCode session's events into runtime events: text deltas,
@@ -10,6 +11,8 @@ import WovenProtocol
 /// the step's text and tool calls began, so the reasoning is ended as soon as
 /// anything else of the step starts: it keeps its place before them.
 struct OpenCodeProjection: Sendable {
+  /// The OpenCode session, whose failed Woven calls fill in its scripts' failures.
+  var session = ""
   private var texts: [String: String] = [:]
   private var openCalls: [String] = []
   private var calls: [String: ToolCall] = [:]
@@ -20,6 +23,9 @@ struct OpenCodeProjection: Sendable {
   /// How often each reasoning part was ended here. Its late end is ignored;
   /// reasoning it streams after all shows as an item of its own.
   private var endedThinking: [String: Int] = [:]
+  /// The error of each failed call in a script, by the script's call and
+  /// the call's place in it, once claimed.
+  private var nestedErrors: [String: [Int: String]] = [:]
 
   /// The events `event` makes. It is one of this session's own.
   mutating func receive(_ event: JSONValue) -> [RuntimeEvent] {
@@ -118,7 +124,7 @@ struct OpenCodeProjection: Sendable {
       let id = data["id"]?.string ?? ""
       // A script reports the tool calls it has made so far, all of them
       // each time, often unchanged.
-      if let made = Self.nested(data["metadata"]?["toolCalls"]) {
+      if let made = nested(data["metadata"]?["toolCalls"], in: id) {
         // Progress may come after the end; it never reopens a call.
         guard let open = calls[id], open.calls != made else { return [] }
         return update(id) { _ in
@@ -143,10 +149,12 @@ struct OpenCodeProjection: Sendable {
       }
     case "session.tool.success", "session.tool.failed":
       let failed = type == "session.tool.failed"
-      return update(data["id"]?.string ?? "", finished: true) { call in
+      let id = data["id"]?.string ?? ""
+      let metadata = data["metadata"] ?? .null
+      let made = nested(metadata["toolCalls"], in: id)
+      return update(id, finished: true) { call in
         var call = call ?? ToolCall(name: "tool", input: "")
-        let metadata = data["metadata"] ?? .null
-        if let made = Self.nested(metadata["toolCalls"]) {
+        if let made {
           call = Self.asScript(call)
           call.calls = made
         }
@@ -197,6 +205,8 @@ struct OpenCodeProjection: Sendable {
     }
     openCalls.removeAll()
     calls.removeAll()
+    nestedErrors.removeAll()
+    OpenCodeToolFailures.shared.forget(session: session)
     events.append(.turnFinished(failure: failure, usage: nil))
     stepFailure = nil
     return events
@@ -323,21 +333,66 @@ struct OpenCodeProjection: Sendable {
     return call
   }
 
-  /// What a script's own failed tool call says. OpenCode reports only that
-  /// it failed; the script's output often has its error.
+  /// What a failed call in a script says when Woven did not answer it.
+  /// OpenCode reports only that it failed; the script's output often has
+  /// its error.
   static let nestedFailure = "OpenCode did not say why it failed."
 
   /// The tool calls a script made, from Code Mode's `metadata.toolCalls`:
   /// each `{tool, status, input?}`, in order. Nil when there are none to read.
-  static func nested(_ value: JSONValue?) -> [ToolCall]? {
+  /// A failed call of a Woven tool says the error Woven answered it with.
+  mutating func nested(_ value: JSONValue?, in callID: String) -> [ToolCall]? {
     guard let entries = value?.array else { return nil }
-    return entries.map { entry in
+    return entries.enumerated().map { index, entry in
       let status = entry["status"]?.string
       let failed = status == "error"
-      return ToolCall(name: entry["tool"]?.string ?? "tool", input: CodeCalls.input(entry["input"] ?? .object([:])),
-                      output: failed ? nestedFailure : status == "completed" ? "" : nil, failed: failed)
+      let name = entry["tool"]?.string ?? "tool"
+      var output: String? = status == "completed" ? "" : nil
+      if failed {
+        if let known = nestedErrors[callID]?[index] {
+          output = known
+        } else {
+          let claimed = name.hasPrefix("woven.")
+            ? OpenCodeToolFailures.shared.claim(session: session, tool: String(name.dropFirst(6)), input: entry["input"]) : nil
+          if let claimed { nestedErrors[callID, default: [:]][index] = claimed }
+          output = claimed ?? Self.nestedFailure
+        }
+      }
+      return ToolCall(name: name, input: CodeCalls.input(entry["input"] ?? .object([:])), output: output, failed: failed)
     }
   }
+}
+
+/// The errors Woven answered OpenCode's calls with, by OpenCode session,
+/// until that session's projection shows them. OpenCode's Code Mode says
+/// only that a call in a script failed; Woven answered the call, so it
+/// knows why. A turn's end forgets the session's.
+final class OpenCodeToolFailures: Sendable {
+  static let shared = OpenCodeToolFailures()
+  private struct Failure { var tool: String; var input: JSONValue; var message: String }
+  private let recorded = Mutex<[String: [Failure]]>([:])
+
+  func record(session: String, tool: String, input: JSONValue, message: String) {
+    recorded.withLock { all in
+      var failures = all[session, default: []]
+      failures.append(Failure(tool: tool, input: input, message: message))
+      all[session] = Array(failures.suffix(100))
+    }
+  }
+
+  /// The oldest failure of `tool`, with this input when OpenCode said it.
+  func claim(session: String, tool: String, input: JSONValue?) -> String? {
+    recorded.withLock { all in
+      guard var failures = all[session],
+            let index = failures.firstIndex(where: { $0.tool == tool && $0.input == input })
+              ?? failures.firstIndex(where: { $0.tool == tool }) else { return nil }
+      let message = failures.remove(at: index).message
+      all[session] = failures.isEmpty ? nil : failures
+      return message
+    }
+  }
+
+  func forget(session: String) { _ = recorded.withLock { $0.removeValue(forKey: session) } }
 }
 
 // MARK: Prompts

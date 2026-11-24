@@ -79,8 +79,9 @@ private func savedTranscript(_ events: [RuntimeEvent]) -> [String] {
   return saved
 }
 
-private func project(_ frames: [String]) -> [RuntimeEvent] {
+private func project(_ frames: [String], session: String = "") -> [RuntimeEvent] {
   var projection = OpenCodeProjection()
+  projection.session = session
   return frames.flatMap { projection.receive(try! OpenCodeSSEParser.decode(Data($0.utf8))) }
 }
 
@@ -208,6 +209,16 @@ private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finishe
   #expect(failed.failed && failed.output == "boom from tool")
   #expect(failed.calls == [ToolCall(name: "woven.echo", input: #"{"text":"first"}"#, output: ""),
                            ToolCall(name: "woven.fail", input: "{}", output: OpenCodeProjection.nestedFailure, failed: true)])
+
+  // Woven answered that call, so the call says Woven's error; a turn's end forgets what was not shown.
+  let native = "ses_\(UUID().uuidString)"
+  OpenCodeToolFailures.shared.record(session: native, tool: "fail", input: .object([:]), message: "No artifact missing.")
+  OpenCodeToolFailures.shared.record(session: native, tool: "other", input: .object([:]), message: "Unclaimed.")
+  let answered = project(scriptFrames("await tools.woven.fail({});\n", progress: [#"[{"tool":"woven.fail","status":"error"}]"#],
+    end: #""content":[{"type":"text","text":"No artifact missing."}],"metadata":{"toolCalls":[{"tool":"woven.fail","status":"error"}],"error":true,"truncated":false}"#)
+    + [#"{"type":"session.execution.succeeded","data":{"sessionID":"s"}}"#], session: native)
+  #expect(try #require(scriptCalls(answered).finished).calls == [ToolCall(name: "woven.fail", input: "{}", output: "No artifact missing.", failed: true)])
+  #expect(OpenCodeToolFailures.shared.claim(session: native, tool: "other", input: nil) == nil)
 
   let syntax = project(scriptFrames("await tools.woven.render_html({ html: `<p>unterminated\n", progress: [],
     end: #""content":[{"type":"text","text":"SyntaxError: Unterminated template. Code must be plain JavaScript written as a program body. (line 1, col 40)"}],"metadata":{"toolCalls":[],"error":true,"truncated":false}"#))
@@ -599,6 +610,8 @@ func everyWovenToolAnswersAnOpenCodeScriptAsItsSession() async throws {
     #expect(!result.text.contains("not one Woven Matter runs") && !result.text.contains("has no tool"), "\(name): \(result.text)")
     #expect(result.failed == !succeeds, "\(name): \(result.text)")
     if name == "list_sessions" { #expect(result.text.contains("Planner (you)")) }
+    // A failure is kept for the session's projection to show in the script's card.
+    if !succeeds { #expect(OpenCodeToolFailures.shared.claim(session: "ses_planner", tool: name, input: arguments) == result.text, "\(name)") }
   }
   // The page from the file is this session's visual reply.
   let items = try await ui.call(SessionItems(sessionID: session.id))

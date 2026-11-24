@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { claudeExecutable, claudeStatus } from '../src/claude.mjs';
+import { claudeExecutable, claudeRequest, claudeStatus } from '../src/claude.mjs';
 import { startAgent } from './fixtures/client.mjs';
 
 async function folders(t) {
@@ -124,4 +124,17 @@ test("Claude's sign-in is what Claude Code reports: signed in, signed out, or no
   assert.deepEqual(await status('echo starting; exit 2'), {});
   process.env.PATH = join(cwd, 'none');
   assert.deepEqual(await claudeStatus(), { signedIn: false });
+});
+
+test('Claude sees each tool under the name Pi gives it, and calls come back under it', () => {
+  const tool = (name) => ({ name, description: name, parameters: { type: 'object', properties: {} } });
+  const messages = [
+    { role: 'system', content: 'Use mcp__woven__list_sessions.', toolsAdded: [tool('mcp__woven__list_sessions'), tool('read'), tool('codemode')] },
+    { role: 'user', content: 'Which chats?' },
+    { role: 'assistant', api: 'claude-agent-sdk', model: 'sonnet', content: [{ type: 'toolCall', id: 'call_1', name: 'mcp__woven__list_sessions', arguments: {} }] },
+    { role: 'toolResult', toolCallId: 'call_1', content: [{ type: 'text', text: '{"sessions":[]}' }] },
+  ];
+  const request = claudeRequest({ messages }, { id: 'sonnet' });
+  assert.deepEqual(request.inventory.map(entry => entry.name), ['mcp__woven__list_sessions', 'read', 'codemode']);
+  assert.equal(request.frames[1].message.content[0].name, 'mcp__woven__list_sessions');
 });

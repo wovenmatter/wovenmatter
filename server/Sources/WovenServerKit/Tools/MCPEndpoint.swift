@@ -190,7 +190,7 @@ private final class MCPConnection: @unchecked Sendable {
       result = .object([
         "protocolVersion": params["protocolVersion"] ?? .string("2025-06-18"),
         "capabilities": .object(["tools": .object(["listChanged": .bool(false)])]),
-        "serverInfo": .object(["name": .string("woven"), "title": .string("Woven Matter"), "version": .string("1")]),
+        "serverInfo": .object(["name": .string("woven"), "title": .string("Woven Matter"), "version": .string("current")]),
       ])
     case "ping":
       result = .object([:])
@@ -216,7 +216,13 @@ private final class MCPConnection: @unchecked Sendable {
                 let group = tool.groups.min(by: { $0.rawValue < $1.rawValue }) {
         outcome = .error("\(group.title) is not exposed to outside agents.")
       } else if let caller = await caller(grant, params) {
-        outcome = await tools.call(name, arguments: params["arguments"] ?? .object([:]), caller: caller)
+        let arguments = params["arguments"] ?? .object([:])
+        outcome = await tools.call(name, arguments: arguments, caller: caller)
+        // OpenCode's Code Mode keeps a failure's text from the script's call list; its projection shows it from here.
+        if outcome.isError, grant == .runtime(.openCode), let native = params["_meta"]?["ai.opencode/sessionID"]?.string {
+          let message = outcome.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined(separator: "\n")
+          OpenCodeToolFailures.shared.record(session: native, tool: name, input: arguments, message: message)
+        }
       } else {
         outcome = .error("This session is not one Woven Matter runs, so it cannot use Woven tools.")
       }

@@ -393,6 +393,7 @@ final class OpenCodeSession: RuntimeSession {
     self.host = host
     self.generation = generation
     (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
+    state.withLock { $0.projection.session = handle }
   }
 
   var configuration: SessionConfiguration {
