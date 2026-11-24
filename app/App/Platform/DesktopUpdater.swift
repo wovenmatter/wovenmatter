@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import WovenProtocol
 #if canImport(Sparkle)
 import Sparkle
 #endif
@@ -12,6 +13,11 @@ final class DesktopUpdater: NSObject {
     private(set) var errorMessage: String?
     private(set) var isInstalling = false
     private(set) var hasStagedUpdate = false
+    /// Tells this Mac's server an updater step, with the release it is for,
+    /// for its anonymous usage statistics.
+    @ObservationIgnored var report: ((AppEvent, String?) -> Void)?
+    /// The release being installed, for a failure, which names none.
+    @ObservationIgnored private var installingVersion: String?
 
     #if canImport(Sparkle)
     @ObservationIgnored private var controller: SPUStandardUpdaterController?
@@ -49,6 +55,7 @@ final class DesktopUpdater: NSObject {
             return "Only the installed Woven Matter app updates itself."
         }
         errorMessage = nil
+        report?(.updateCheckClicked, nil)
         controller.checkForUpdates(nil)
         return nil
         #else
@@ -59,6 +66,18 @@ final class DesktopUpdater: NSObject {
 
 #if canImport(Sparkle)
 extension DesktopUpdater: SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        report?(.updateDownloadStarted, item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        report?(.updateDownloadCompleted, item.displayVersionString)
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: any Error) {
+        report?(.updateDownloadFailed, item.displayVersionString)
+    }
+
     func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
         pendingInstallHandler = installHandler
         // Enter installation outside the Swift task/main dispatch queue, so
@@ -79,9 +98,12 @@ extension DesktopUpdater: SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         isInstalling = true
+        installingVersion = item.displayVersionString
+        report?(.updateInstallStarted, item.displayVersionString)
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        let wasInstalling = isInstalling
         pendingInstallHandler = nil
         isInstalling = false
         hasStagedUpdate = false
@@ -89,6 +111,8 @@ extension DesktopUpdater: SPUUpdaterDelegate {
         let expected = failure.domain == SUSparkleErrorDomain &&
             [Int(SUError.noUpdateError.rawValue), Int(SUError.installationCanceledError.rawValue)].contains(failure.code)
         errorMessage = expected ? nil : error.localizedDescription
+        if wasInstalling, !expected { report?(.updateInstallFailed, installingVersion) }
+        installingVersion = nil
     }
 }
 #endif

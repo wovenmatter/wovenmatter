@@ -25,6 +25,13 @@ actor PeerSync {
   private var links: [TailnetMachine: Task<Void, Never>] = [:]
   private var clients: [String: Client] = [:]
   private(set) var statuses: [String: Status] = [:]
+  /// The machines the first look at the tailnet found and has not yet
+  /// pulled from or failed to reach; nil before that look.
+  private var firstRound: Set<TailnetMachine>?
+  /// The first look at the tailnet has run, and every machine it found has
+  /// been pulled from once or could not be: the library holds what the other
+  /// machines had when this server started.
+  private(set) var firstRoundDone = false
 
   init(library: Library, tailnet: any Tailnet, hello: Hello, interval: Duration) {
     self.library = library
@@ -57,15 +64,28 @@ actor PeerSync {
   /// drops links to addresses the tailnet no longer lists (a renamed or
   /// readdressed machine), so no dead duplicate stays behind.
   func discover() async {
-    guard let machines = try? await tailnet.machines() else { return }
+    guard let machines = try? await tailnet.machines() else {
+      if firstRound == nil { firstRound = [] }
+      reached(nil)
+      return
+    }
     let listed = Set(machines)
     for (machine, task) in links where !listed.contains(machine) {
       task.cancel()
       links[machine] = nil
     }
-    for machine in machines where links[machine] == nil {
+    let new = machines.filter { links[$0] == nil }
+    for machine in new {
       links[machine] = Task { [weak self] in await self?.link(machine) }
     }
+    if firstRound == nil { firstRound = Set(new) }
+    reached(nil)
+  }
+
+  /// That machine has been pulled from once, or could not be.
+  private func reached(_ machine: TailnetMachine?) {
+    if let machine { firstRound?.remove(machine) }
+    if firstRound?.isEmpty == true { firstRoundDone = true }
   }
 
   /// The connection to another machine's server, while it is linked.
@@ -147,12 +167,15 @@ actor PeerSync {
         try await follow(machine)
         delay = .seconds(1)
       } catch is SelfLink {
+        reached(machine)
         return
       } catch is DuplicateLink {
         // The other link serves that machine; discovery may try this address again later.
+        reached(machine)
         unlinked(machine)
         return
       } catch {}
+      reached(machine)
       try? await Task.sleep(for: delay)
       delay = min(delay * 2, .seconds(60))
     }
@@ -196,6 +219,7 @@ actor PeerSync {
     clients[peerID] = client
     let changes = try await client.subscribe(SubscribeLibrary())
     try await pull(from: client, machineID: peerID)
+    reached(machine)
     for try await _ in changes.events {
       try await pull(from: client, machineID: peerID)
     }

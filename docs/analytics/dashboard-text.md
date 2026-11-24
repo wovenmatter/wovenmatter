@@ -1,5 +1,5 @@
 ## Measurement definitions
-The current app sends no product analytics. DAU, WAU, MAU, app-open and daily activity tiles show only events sent by earlier releases: distinct library IDs with sampled signals in whole rolling 24-hour, 7-day and 30-day UTC windows, never summed from daily counts.
+DAU, WAU and MAU count distinct anonymous library IDs with `app_active` signals in whole rolling 24-hour, 7-day and 30-day UTC windows, never summed from daily counts. Each machine sends `app_opened` and `app_active` at most once every six hours, so app opens are sampled, not every launch. Releases 0.4.7 to 0.4.8 sent nothing.
 
 Installer downloads count DMGs from website, direct GitHub and updater traffic, including repeats and internal downloads. Supporting-file downloads are excluded. Website clicks and redirects measure intent. Downloads are not installations or people.
 

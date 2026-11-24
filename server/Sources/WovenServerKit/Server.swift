@@ -42,6 +42,10 @@ public final class WovenServer: Sendable {
     /// The home folder whose harness histories (Codex, Claude Code, Grok
     /// Build, OpenCode, the Pi CLI) this server counts usage from; nil for none.
     public var harnessHome: URL?
+    /// It sends anonymous usage statistics. Only a release server does.
+    public var sendsAnalytics = false
+    /// Where those statistics go; tests give a stand-in.
+    var analyticsDelivery: (any AnalyticsDelivery)?
 
     public init(dataFolder: URL, socketPath: String?, listen: (host: String, port: Int)?, appVersion: String,
                 machineName: String, tailnet: any Tailnet, runtimes: [any Runtime], discoveryInterval: Duration = .seconds(30),
@@ -138,6 +142,11 @@ public final class WovenServer: Sendable {
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
     let usage = options.harnessHome.map { UsageScanner(library: library, home: $0) }
+    let analytics = Analytics(library: library,
+                              delivery: options.analyticsDelivery ?? (options.sendsAnalytics ? PostHogDelivery() : nil),
+                              appVersion: options.appVersion, settled: { await peers.firstRoundDone })
+    registerAnalytics(&routes, analytics: analytics)
+    routes.handled = { method, params, caller in analytics.handled(method, params, caller) }
     let router = routes
     let pending = PendingServer()
     let tailnet = options.tailnet
@@ -176,6 +185,7 @@ public final class WovenServer: Sendable {
     await scheduler.start()
     await keepAwake.start(board: sessions.board)
     await usage?.start()
+    await analytics.start()
     server.watchLibrary()
     return server
   }

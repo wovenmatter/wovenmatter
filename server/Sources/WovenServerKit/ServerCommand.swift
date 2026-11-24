@@ -117,6 +117,11 @@ public enum ServerCommand {
     options.instance = instance
     options.offersStandIn = standIn
     options.harnessHome = FileManager.default.homeDirectoryForCurrentUser
+    // Only a release server sends usage statistics: never a debug build or a development instance.
+    #if !DEBUG
+    let release = appVersion.split(separator: ".", omittingEmptySubsequences: false)
+    options.sendsAnalytics = instance == nil && release.count == 3 && release.allSatisfy { UInt16($0) != nil }
+    #endif
     let server = try await WovenServer.start(options)
     // Which machine this data folder is, for a Mac reaching it over SSH to
     // check it has the machine it means before changing anything.

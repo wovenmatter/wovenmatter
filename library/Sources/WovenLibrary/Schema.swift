@@ -414,6 +414,13 @@ public enum Schema {
       .text("session_id"),
       .text("error"),
     ]),
+    // What anonymous usage statistics keep on this machine: when each
+    // rate-limited signal was last attempted (`signal:<event>`, in ms) and
+    // the release this server last ran (`version`).
+    Table("analytics", .local, [
+      .key("key"),
+      .text("value", ""),
+    ]),
     // The content store's index: files this machine holds, by digest.
     Table("files", .local, [
       .key("digest"),

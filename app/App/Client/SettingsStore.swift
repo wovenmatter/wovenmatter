@@ -124,6 +124,21 @@ final class SettingsStore {
         }
     }
 
+    // MARK: Anonymous usage statistics
+
+    /// On unless the person turned them off; the choice applies to every machine.
+    var analyticsEnabled: Bool { bool(AnalyticsSettings.enabled) ?? true }
+    private(set) var analyticsError: String?
+
+    func setAnalyticsEnabled(_ enabled: Bool) async {
+        do {
+            try await set(AnalyticsSettings.enabled, to: .bool(enabled))
+            analyticsError = nil
+        } catch {
+            analyticsError = error.localizedDescription
+        }
+    }
+
     // MARK: GitHub (in SettingsStore+GitHub.swift)
 
     var github: GitHubSettings?
