@@ -12,6 +12,8 @@ struct MachineDirectoryBrowser: View {
     @State private var typedPath = ""
     @State private var filter = ""
     @State private var loading = false
+    /// The directory being loaded, when it was asked for by path.
+    @State private var pending: String?
     @State private var error: String?
     @State private var request = UUID()
     @FocusState private var focusedField: Field?
@@ -41,23 +43,6 @@ struct MachineDirectoryBrowser: View {
             Text(workspaceTitle)
                 .font(.system(size: 11.5))
                 .foregroundStyle(WovenPalette.mutedForeground)
-            HStack(spacing: 6) {
-                Button { Task { await open(listing?.parent) } } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: 26, idleFill: false))
-                .accessibilityLabel("Up")
-                .disabled(listing?.parent == nil || loading)
-                Text(listing?.path ?? "")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                    .textSelection(.enabled)
-            }
             TextField("Go to a directory, such as /srv/projects", text: $typedPath)
                 .focused($focusedField, equals: .path)
                 .quietTextInput()
@@ -69,6 +54,7 @@ struct MachineDirectoryBrowser: View {
                     if shownDirectories.count == 1 { Task { await open(shownDirectories[0].path) } }
                 }
                 .disabled(listing == nil)
+            pathRow
             directoryList
             if listing != nil, let error {
                 Text(error)
@@ -93,6 +79,44 @@ struct MachineDirectoryBrowser: View {
             await open(initialPath)
             // A directory that is gone starts the browser at home instead.
             if listing == nil, initialPath != nil { await open(nil) }
+        }
+    }
+
+    /// Where the browser is, with the arrow that leaves it for the enclosing
+    /// directory. While a directory is loading the arrow stays usable and gives
+    /// up on it, since macOS can hold a listing until someone answers a privacy
+    /// prompt on that machine's screen.
+    private var pathRow: some View {
+        let path = loading ? pending ?? listing?.path : listing?.path
+        let destination = loading && pending != nil ? listing?.path : listing?.parent
+        return HStack(spacing: 6) {
+            Button { Task { await goToEnclosingDirectory() } } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: 26, idleFill: false))
+            .accessibilityLabel("Enclosing directory")
+            .help(destination.map { "Go to \($0)" } ?? "")
+            .disabled(destination == nil)
+            Text(path ?? "")
+                .font(.system(size: 11.5))
+                .foregroundStyle(WovenPalette.mutedForeground)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func goToEnclosingDirectory() async {
+        if loading, pending != nil {
+            // Give up on the directory that is still loading and stay where we were.
+            request = UUID()
+            loading = false
+            pending = nil
+        } else {
+            await open(listing?.parent)
         }
     }
 
@@ -161,8 +185,9 @@ struct MachineDirectoryBrowser: View {
         let id = UUID()
         request = id
         loading = true
+        pending = path
         error = nil
-        defer { if request == id { loading = false } }
+        defer { if request == id { loading = false; pending = nil } }
         do {
             let next = try await load(path)
             guard request == id, !Task.isCancelled else { return false }
