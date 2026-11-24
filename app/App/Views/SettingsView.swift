@@ -279,7 +279,7 @@ struct SettingsView: View {
         case .workspaces(let id): id.flatMap { model.machines.machine(id: $0)?.name } ?? "Workspaces"
         case .backgroundServer: "Background Server"
         case .dictation: "Dictation"
-        case .analytics: "Analytics"
+        case .analytics: "Analytics and Privacy"
         case .bots: "Bots"
         case .botsMachine(let id): machineTitle(id)
         case .botsSection(_, let section): section.title
@@ -387,8 +387,8 @@ struct SettingsView: View {
                     action: { route = .dictation }
                 )
                 SettingsDestinationRow(
-                    title: "Analytics",
-                    detail: "The anonymous usage analytics Woven Matter sends, and turning them off.",
+                    title: "Analytics and Privacy",
+                    detail: "How Woven Matter handles app analytics.",
                     icon: { LucideIcon(glyph: .chartLine, size: 15) },
                     action: { route = .analytics }
                 )

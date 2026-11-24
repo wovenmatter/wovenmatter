@@ -37,5 +37,5 @@ public enum AnalyticsSettings {
   public static let candidatePrefix = "analytics.id."
   /// Where the statistics are described, and who answers questions about them.
   public static let policy = URL(string: "https://wovenmatter.com/privacy")!
-  public static let contact = URL(string: "mailto:privacy@wovenmatter.com")!
+  public static let contact = URL(string: "mailto:support@wovenmatter.com")!
 }

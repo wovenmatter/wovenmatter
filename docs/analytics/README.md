@@ -18,9 +18,9 @@ PostHog; it tells its own Mac's server about what only it sees, with
   that launch sends nothing. Linux servers never make one. Nothing is sent
   without one.
 - **Choice.** On by default. The switch at the bottom of **Settings ›
-  Analytics** writes the synced setting `analytics.enabled`, so it applies to
-  every machine. Each server reads it before every send. That page is a short
-  form of [the privacy policy](https://wovenmatter.com/privacy); change them
+  Analytics and Privacy** writes the synced setting `analytics.enabled`, so it applies to
+  every machine. Each server reads it before every send. That page is the app
+  part of [the privacy policy](https://wovenmatter.com/privacy); change them
   together.
 - **Only release servers send.** Never a debug build, a development instance
   (`--instance`), or a server without a release version. Tests use a stand-in.
