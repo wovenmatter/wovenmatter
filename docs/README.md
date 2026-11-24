@@ -42,7 +42,7 @@ in your installed version.
 - [Chat and note menus](CHAT_MENU_ACTIONS.md): pin, rename, export, Trash and Restore.
 - [Document previews](DOCUMENT_PREVIEWS.md): Quick Look tabs and files in replies.
 - [Embedded browser and Computer Use](design/embedded-browser.md): the browser, the `browser` and `computer` tools, and CEF maintenance.
-- [Analytics](analytics/README.md): the GitHub analytics workflow and the PostHog dashboard.
+- [Analytics](analytics/README.md): the app's anonymous usage statistics, the GitHub analytics workflow and the PostHog dashboard.
 
 ## Build and contribute
 

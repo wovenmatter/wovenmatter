@@ -88,7 +88,7 @@ when an intentional design change is accepted.
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
   the app. Order the main Settings page as General, Updates, Permissions & Access,
   Subscriptions & API Keys, GitHub, Agents, Bots, Woven MCP, Workspaces, Apple
-  Devices, Background Server, then Dictation. Subscriptions & API Keys, Permissions &
+  Devices, Background Server, Dictation, then Analytics and Privacy. Subscriptions & API Keys, Permissions &
   Access, Woven MCP, Bots, and Updates return to the page whose link opened them.
 - **Updates:** the one home for versions and updates.
   - **The top row:** "This Mac · Woven Matter X" ("Woven Matter development
@@ -117,10 +117,15 @@ when an intentional design change is accepted.
   show only a "Versions don't match" link here.
 - **General:** the Woven Matter version first (no heading), as one whole-row link
   that highlights on hover and opens Updates, with one line saying updates live
-  there. Then Appearance, Conversation titles, and Privacy. Other
+  there. Then Appearance and Conversation titles. Other
   settings live on the page for what they affect. Summary rows whose value would be
   unclear before opening (Sidebar sections, Agent icons) show a one-line description
   instead. Conversation titles show the Codex account they use and link to its page.
+- **Analytics and Privacy:** the last Settings page. It is the app part of the
+  privacy policy at wovenmatter.com/privacy in the policy's own words, without
+  the website parts, then the contact and policy links, and at the bottom the
+  one switch, which applies to the library. Change the page and the policy
+  together.
 - **Bots:** the Bots section sits above New chat in the navigation rail, using the
   rail's own disclosure headings and rows. There is one "Bots" heading, for the one
   machine that runs bots; machines still running bots from before that rule are named

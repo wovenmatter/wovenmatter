@@ -28,6 +28,8 @@ struct Router: Sendable {
 
   typealias Handler = @Sendable (JSONValue, Caller) async throws -> Outcome
   private var handlers: [String: Handler] = [:]
+  /// Told of each request from a connection that succeeded, after its reply.
+  var handled: (@Sendable (String, JSONValue, Caller) -> Void)?
 
   mutating func on<R: Request>(_ type: R.Type, _ handle: @escaping @Sendable (R, Caller) async throws -> R.Reply) {
     handlers[R.method] = { params, caller in
@@ -162,6 +164,7 @@ actor ServerConnection {
       switch try await router.handle(method, params, caller) {
       case .reply(let value):
         reply(id, .success(value))
+        router.handled?(method, params, caller)
       case .subscription(let value, let events):
         reply(id, .success(value))
         do {

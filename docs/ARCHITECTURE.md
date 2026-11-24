@@ -293,6 +293,16 @@ machine reads its own library and so shows every machine.
   of heavy use stays a few thousand rows per machine. The page includes this
   machine's hour in progress.
 
+## Usage statistics
+
+Anonymous usage statistics are sent by servers, never by the UI. A server
+counts a person as active when a deliberate request from a UI connection
+succeeds. The UI tells its own server only what the server cannot see: the
+app opening and the updater's steps. The library's anonymous identifier and
+the on/off choice are ordinary synced settings. Throttle times and the last
+release run stay in a local table. Only a release server sends. See
+[Analytics](analytics/README.md).
+
 ## Folders and the sidebar
 
 A folder is a name plus a directory on one machine. It belongs to that machine.

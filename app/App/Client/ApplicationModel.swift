@@ -90,9 +90,13 @@ final class ApplicationModel {
         calendar.attach(server, workspace: workspace, machines: machines)
         server.start()
         uiTools = UIToolsStore(server: server, assets: workspaceAssets)
+        DesktopUpdater.shared.report = { [weak server] event, version in
+            _ = try? await server?.call(RecordAppEvent(event, targetVersion: version))
+        }
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] event in
                 self?.restartIfAnotherRelease(server.remote)
+                self?.reportOpened(server)
                 self?.requestReload(event.tables)
             }, event: { [weak self] event in
                 self?.requestReload(event.tables)
@@ -142,4 +146,15 @@ final class ApplicationModel {
     }
 
     @ObservationIgnored private var restarted = false
+
+    /// Tells this Mac's server once per launch that the app opened, for its
+    /// anonymous usage statistics: the app's own release, not one about to be restarted.
+    private func reportOpened(_ server: ServerConnection) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        guard !reportedOpening, server.remote?.appVersion == version else { return }
+        reportedOpening = true
+        Task { _ = try? await server.call(RecordAppEvent(.opened)) }
+    }
+
+    @ObservationIgnored private var reportedOpening = false
 }
