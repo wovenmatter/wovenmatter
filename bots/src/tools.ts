@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { BotManager } from "./bots.ts";
 import type { Forum } from "./forum.ts";
 import { describeProfile, type ProfileStore } from "./profiles.ts";
+import { REASONING } from "./reasoning.ts";
 import type { SettingsService } from "./settings/service.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { displayEntry } from "./transcript.ts";
@@ -452,7 +453,7 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
     defineTool({
       name: "list_profiles",
       description:
-        "List the model profiles (main model, its ordered fallbacks, memory extraction model, model pool with optional notes, model preferences), which is the default, and which profile each bot runs.",
+        "List the model profiles (main model, its reasoning level, its ordered fallbacks, memory extraction model, model pool with optional notes, model preferences), which is the default, and which profile each bot runs.",
       parameters: Type.Object({}),
       replay: "safe",
       execute: () =>
@@ -473,11 +474,17 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
     }),
     defineTool({
       name: "save_profile",
-      description: `Create (create: true) or replace a model profile. main runs the main channel and threads of every bot on it; fallbacks (optional, ordered, at most 5) are main models to switch to when main hits a usage limit or runs out of credits (none: the bot is out of usage until the limit resets); pool lists additional models for subagents (run_subagent; the main model can always run subagents on itself, so pool may be empty); guidance is the model preferences: the user's own words about the models (e.g. "Opus writes nicer code", "double-check Astra"), weighed by the main model, never enforced; memoryModel (optional) is the memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory on the extraction schedule and when idle; omit it to use the active main model. It never affects chat or subagents. Models must be listed by settings_status. Changes apply from each bot's next reply. ${confirm}`,
+      description: `Create (create: true) or replace a model profile. main runs the main channel and threads of every bot on it; reasoning (optional; new profiles: high) is the reasoning level of main and its fallbacks, each running its nearest supported level; omit it to keep the current one; fallbacks (optional, ordered, at most 5) are main models to switch to when main hits a usage limit or runs out of credits (none: the bot is out of usage until the limit resets); pool lists additional models for subagents (run_subagent; the main model can always run subagents on itself, so pool may be empty); guidance is the model preferences: the user's own words about the models (e.g. "Opus writes nicer code", "double-check Astra"), weighed by the main model, never enforced; memoryModel (optional) is the memory extraction model, which reviews new conversation messages and saves useful facts into the bot's memory on the extraction schedule and when idle; omit it to use the active main model. It never affects chat or subagents. Models must be listed by settings_status. Changes apply from each bot's next reply. ${confirm}`,
       parameters: Type.Object({
         id: Type.String({ description: "lowercase letters, digits, - and _" }),
         name: Type.String(),
         main: Type.String({ description: "provider/model-id" }),
+        reasoning: Type.Optional(
+          Type.Union(
+            REASONING.map((level) => Type.Literal(level)),
+            { description: "Reasoning level of main and its fallbacks" },
+          ),
+        ),
         fallbacks: Type.Optional(
           Type.Array(Type.String({ description: "provider/model-id" }), {
             maxItems: 5,
@@ -512,6 +519,7 @@ function profileTools(platform: BotPlatform, settings: () => SettingsService) {
               id: args.id,
               name: args.name,
               main: args.main,
+              ...(args.reasoning ? { reasoning: args.reasoning } : {}),
               ...(args.fallbacks ? { fallbacks: args.fallbacks } : {}),
               pool: args.pool,
               ...(args.memoryModel ? { memoryModel: args.memoryModel } : {}),

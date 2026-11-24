@@ -267,6 +267,7 @@
         "id": "default",
         "name": "Default",
         "main": "openai-codex/gpt-6-sol",
+        "reasoning": "high",
         "fallbacks": [
           "anthropic/claude-opus-5"
         ],
@@ -391,7 +392,9 @@
       "minimal",
       "low",
       "medium",
-      "high"
+      "high",
+      "xhigh",
+      "max"
     ]
   },
   "AccountsSummary": {
@@ -917,6 +920,7 @@
       "id": "default",
       "name": "Default",
       "main": "openai-codex/gpt-6-sol",
+      "reasoning": "high",
       "fallbacks": [
         "anthropic/claude-opus-5"
       ],
@@ -938,6 +942,7 @@
         "id": "default",
         "name": "Default",
         "main": "openai-codex/gpt-6-sol",
+        "reasoning": "high",
         "fallbacks": [
           "anthropic/claude-opus-5"
         ],
@@ -960,6 +965,7 @@
         "id": "default",
         "name": "Default",
         "main": "openai-codex/gpt-6-sol",
+        "reasoning": "high",
         "fallbacks": [
           "anthropic/claude-opus-5"
         ],
@@ -982,6 +988,7 @@
         "id": "default",
         "name": "Default",
         "main": "openai-codex/gpt-6-sol",
+        "reasoning": "high",
         "fallbacks": [
           "anthropic/claude-opus-5"
         ],
@@ -1004,6 +1011,7 @@
         "id": "default",
         "name": "Default",
         "main": "openai-codex/gpt-6-sol",
+        "reasoning": "high",
         "fallbacks": [
           "anthropic/claude-opus-5"
         ],
@@ -1271,7 +1279,9 @@
       "minimal",
       "low",
       "medium",
-      "high"
+      "high",
+      "xhigh",
+      "max"
     ]
   },
   "reply.models.setRoles": {

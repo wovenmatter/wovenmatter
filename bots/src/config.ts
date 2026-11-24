@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import { isCronExpression } from "./cron.ts";
-import { TITLE_REASONING } from "./titles.ts";
+import { DEFAULT_REASONING, REASONING, type Reasoning } from "./reasoning.ts";
 
 /** `provider/model-id`, e.g. `openai/gpt-6-sol`. The model id may contain further slashes. */
 export type ModelRef = { readonly provider: string; readonly modelId: string };
@@ -131,6 +131,8 @@ export const settingsSchema = z.strictObject({
         name: z.string().trim().min(1).max(80),
         // Unset until the user picks one: no model is assumed for a provider they may not have.
         main: modelRef.optional(),
+        // The main model's and fallbacks' reasoning level.
+        reasoning: z.enum(REASONING).default(DEFAULT_REASONING),
         fallbacks: z.array(modelRef).max(5, "at most 5 fallbacks").default([]),
         memoryModel: modelRef.optional(),
         guidance: z.string().max(4000).optional(),
@@ -143,6 +145,7 @@ export const settingsSchema = z.strictObject({
     .default({
       default: {
         name: "Default",
+        reasoning: DEFAULT_REASONING,
         fallbacks: [],
         pool: [],
       },
@@ -151,7 +154,7 @@ export const settingsSchema = z.strictObject({
     .strictObject({
       // Unset: the default profile's main model titles threads.
       model: modelRef.optional(),
-      reasoning: z.enum(TITLE_REASONING).default("high"),
+      reasoning: z.enum(REASONING).default(DEFAULT_REASONING),
     })
     .prefault({}),
   extraction: z
@@ -208,6 +211,8 @@ export type Profile = {
   readonly name: string;
   /** `provider/model-id` of the main channel and every thread; unset until the user picks one. */
   readonly main?: string;
+  /** The reasoning level of the main model and its fallbacks (each runs its nearest supported level). */
+  readonly reasoning: Reasoning;
   /** Ordered main-model fallbacks for usage limits (0–5); none: the bot is out of usage at a limit. */
   readonly fallbacks?: readonly string[];
   /** Memory extraction model. Unset: the main model the bot runs at that moment. */
@@ -240,6 +245,7 @@ export function normalizeProfiles(raw: RawSettings): ProfileSet {
     id,
     name: value.name,
     ...(value.main ? { main: value.main } : {}),
+    reasoning: value.reasoning,
     ...(value.fallbacks.length ? { fallbacks: checkFallbacks(id, value.main, value.fallbacks) } : {}),
     ...(value.memoryModel ? { memoryModel: value.memoryModel } : {}),
     ...(value.guidance?.trim() ? { guidance: value.guidance.trim() } : {}),
@@ -262,6 +268,7 @@ export function profilesToRaw(set: ProfileSet): Pick<RawSettings, "defaultProfil
         {
           name: profile.name,
           ...(profile.main ? { main: profile.main } : {}),
+          reasoning: profile.reasoning,
           fallbacks: [...(profile.fallbacks ?? [])],
           ...(profile.memoryModel ? { memoryModel: profile.memoryModel } : {}),
           ...(profile.guidance ? { guidance: profile.guidance } : {}),

@@ -3,14 +3,16 @@ import SwiftUI
 struct BotSettingsProfileEditor: View {
     let profile: PiBotProfile?
     let providers: [PiBotProviderModels]
+    let reasoningLevels: [String]
     let onSave: (PiBotProfileDraft) async -> Bool
     let onCancel: () -> Void
     @State private var draft: PiBotProfileDraft
     @State private var saving = false
 
-    init(profile: PiBotProfile?, providers: [PiBotProviderModels],
+    init(profile: PiBotProfile?, providers: [PiBotProviderModels], reasoningLevels: [String],
          onSave: @escaping (PiBotProfileDraft) async -> Bool, onCancel: @escaping () -> Void) {
-        self.profile = profile; self.providers = providers; self.onSave = onSave; self.onCancel = onCancel
+        self.profile = profile; self.providers = providers; self.reasoningLevels = reasoningLevels
+        self.onSave = onSave; self.onCancel = onCancel
         _draft = State(initialValue: PiBotProfileDraft(profile: profile))
     }
 
@@ -25,9 +27,12 @@ struct BotSettingsProfileEditor: View {
                     TextField("e.g. coding", text: $draft.id).wovenInput().frame(width: 260).accessibilityLabel("Id")
                 }
             }
-            BotSettingsEditorSection(title: "Main model", summary: draft.main.isEmpty ? "Not set" : draft.main, open: true) {
+            BotSettingsEditorSection(title: "Main model", summary: draft.main.isEmpty ? "Not set" : "\(draft.main) · \(draft.reasoning.capitalized)", open: true) {
                 SettingsNote("Runs the main channel and every thread.")
                 BotSettingsModelPicker(providers: providers, selection: $draft.main, label: "Main model")
+                SettingsRow(title: "Reasoning") {
+                    SettingsPicker("Main model reasoning", selection: $draft.reasoning, options: reasoningLevels) { $0.capitalized }
+                }
             }
             fallbacks
             memory

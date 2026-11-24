@@ -4,7 +4,7 @@ import { LIMIT_LABELS, type LimitEntry } from "../limits.ts";
 import { newestFirst } from "../model-catalog.ts";
 import { modelAccess, modelFacts } from "../model-info.ts";
 import type { AccountStatus, AccountsSummary, ModelCatalog, ProviderModels, Roles } from "../protocol.ts";
-import { TITLE_REASONING } from "../titles.ts";
+import { isReasoning, REASONING } from "../reasoning.ts";
 import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
 import type { SettingsStore } from "./store.ts";
 
@@ -130,7 +130,7 @@ export class SettingsService {
       ...provider,
       models: newestFirst(provider.models),
     }));
-    return { providers, roles: this.roles(), reasoningLevels: [...TITLE_REASONING] };
+    return { providers, roles: this.roles(), reasoningLevels: [...REASONING] };
   }
 
   roles(): Roles {
@@ -143,7 +143,7 @@ export class SettingsService {
     if (roles.titles) this.checkModel(roles.titles);
     if (
       roles.titlesReasoning !== undefined &&
-      !(TITLE_REASONING as readonly string[]).includes(roles.titlesReasoning)
+      !isReasoning(roles.titlesReasoning)
     ) {
       throw new SettingsError(`unknown reasoning level "${roles.titlesReasoning}"`);
     }
@@ -151,7 +151,7 @@ export class SettingsService {
       ...current,
       titles: {
         model: roles.titles === undefined ? current.titles.model : roles.titles || undefined,
-        reasoning: (roles.titlesReasoning ?? current.titles.reasoning) as typeof current.titles.reasoning,
+        reasoning: isReasoning(roles.titlesReasoning) ? roles.titlesReasoning : current.titles.reasoning,
       },
     }));
     return this.roles();

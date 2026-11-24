@@ -1,9 +1,6 @@
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { ModelRef } from "./config.ts";
-
-/** `[models.titles]` reasoning levels (pi-ai's simple-stream levels). */
-export const TITLE_REASONING = ["minimal", "low", "medium", "high", "xhigh"] as const;
-export type TitleReasoning = (typeof TITLE_REASONING)[number];
+import { type Reasoning, reasoningFor } from "./reasoning.ts";
 
 /**
  * Woven Matter's title prompt, verbatim
@@ -80,7 +77,7 @@ export type TitleGeneratorOptions = {
    */
   readonly model: ModelRef | undefined | (() => ModelRef | undefined);
   /** `[models.titles].reasoning`. */
-  readonly reasoning: TitleReasoning | (() => TitleReasoning);
+  readonly reasoning: Reasoning | (() => Reasoning);
   /** Per-request timeout; titles are best-effort. */
   readonly timeoutMs?: number;
 };
@@ -116,6 +113,11 @@ export class TitleGenerator {
     const model: Model<Api> | undefined = models.getModel(provider, modelId);
     if (!model) throw new TitleError(`unknown title model ${provider}/${modelId}`);
     const timeout = AbortSignal.timeout(this.#options.timeoutMs ?? 60_000);
+    const wanted =
+      typeof this.#options.reasoning === "function"
+        ? this.#options.reasoning()
+        : this.#options.reasoning;
+    const reasoning = reasoningFor(model, wanted);
     const reply = await models
       .streamSimple(
         model,
@@ -125,10 +127,7 @@ export class TitleGenerator {
           ],
         },
         {
-          reasoning:
-            typeof this.#options.reasoning === "function"
-              ? this.#options.reasoning()
-              : this.#options.reasoning,
+          ...(reasoning ? { reasoning } : {}),
           signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         },
       )

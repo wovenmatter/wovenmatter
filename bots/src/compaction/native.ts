@@ -6,6 +6,7 @@ import type {
   Models,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import type { Reasoning } from "../reasoning.ts";
 
 /**
  * Provider-native context compaction, ported from Woven Matter's
@@ -119,6 +120,7 @@ export async function captureRequest(
     readonly fetch?: FetchFunction;
     readonly signal?: AbortSignal;
     readonly transform?: (payload: Json) => Json;
+    readonly reasoning?: Reasoning;
   } = {},
 ): Promise<CapturedRequest> {
   let payload: Json | undefined;
@@ -152,6 +154,7 @@ export async function captureRequest(
         fetch: capture,
         maxRetries: 0,
         transport: "sse",
+        ...(options.reasoning ? { reasoning: options.reasoning } : {}),
         onPayload: (value) => {
           const body = structuredClone(value) as Json;
           payload = options.transform ? options.transform(body) : body;
@@ -266,6 +269,8 @@ export type CompactRequest = {
   /** The route's previous window, when the covered range starts at one. */
   readonly prior?: NativeWindow;
   readonly instructions?: string;
+  /** The conversation's reasoning level; undefined for a model without levels. */
+  readonly reasoning?: Reasoning;
   readonly fetch?: FetchFunction;
   readonly signal?: AbortSignal;
 };
@@ -279,6 +284,7 @@ export async function compactNative(request: CompactRequest): Promise<NativeOutc
     ...(request.fetch ? { fetch: request.fetch } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
     ...(request.prior ? { transform: (payload) => applyWindow(payload, request.prior) } : {}),
+    ...(request.reasoning ? { reasoning: request.reasoning } : {}),
   });
   const endpoint = endpointOf(captured.url);
   const route: NativeRoute = {
@@ -324,6 +330,7 @@ async function claudeAgentCompact(request: CompactRequest): Promise<NativeOutcom
   }
   const options = {
     ...(request.signal ? { signal: request.signal } : {}),
+    ...(request.reasoning ? { reasoning: request.reasoning } : {}),
     botCompact: request.instructions ? { instructions: request.instructions } : {},
   };
   const result = (await request.models.stream(model, { messages }, options).result()) as {

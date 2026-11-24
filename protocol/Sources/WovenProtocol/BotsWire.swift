@@ -143,6 +143,7 @@ public enum BotsWire {
     public var id: String
     public var name: String
     public var main: String
+    public var reasoning: String
     public var fallbacks: [String]?
     public var memoryModel: String?
     public var guidance: String?

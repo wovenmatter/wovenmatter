@@ -20,22 +20,12 @@ import {
   modelAccess,
   modelFacts,
 } from "./model-info.ts";
+import { REASONING, reasoningFor } from "./reasoning.ts";
 
 export const SUBAGENT_EXTENSION = "bot-subagent";
 
 /** The `run_subagent` model name for the model the calling conversation runs right now. */
 export const SELF = "self";
-
-/** Reasoning levels `run_subagent` accepts (Pi Durable's thinking levels). */
-export const SUBAGENT_REASONING = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
 
 export type SubagentLog = (event: {
   readonly phase: "start" | "done" | "failed";
@@ -224,6 +214,7 @@ export async function poolSection(
   }
   lines.push(
     "Pick the model and reasoning level for each task yourself, from the user's preferences, the task, the models' capabilities and their cost.",
+    "Reasoning: low for lookups and mechanical work, medium for routine tasks, high for judgment, design, research or debugging; xhigh or max only for the hardest problems. A level a model lacks runs at its nearest supported one.",
     'If a subagent fails, or its model hit a usage limit, ran out of credits or is rate limited, quietly use another listed model (or do the work yourself) and tell the user in one short line, e.g. "I couldn\'t use <model>, so I used <other model> instead." Say only what the error said; do not guess when a limit resets.',
   );
   if (options.botMessaging) {
@@ -257,13 +248,9 @@ export function subagentExtension(options: SubagentOptions): Extension {
           model: Type.String({
             description: '"self", or a pool model listed in your prompt (provider/model-id)',
           }),
-          reasoning: Type.Optional(
-            Type.Union(
-              SUBAGENT_REASONING.map((level) => Type.Literal(level)),
-              {
-                description: "Reasoning level (default: the model's default)",
-              },
-            ),
+          reasoning: Type.Union(
+            REASONING.map((level) => Type.Literal(level)),
+            { description: "Reasoning level for this task" },
           ),
           task: Type.String({ description: "The complete task, with all context it needs" }),
         }),
@@ -282,12 +269,16 @@ export function subagentExtension(options: SubagentOptions): Extension {
             );
           }
           const model = parseModelRef(choice.model);
+          const reasoning = reasoningFor(
+            options.models?.().getModel(model.provider, model.modelId),
+            args.reasoning,
+          );
           const log = (phase: "start" | "done" | "failed", detail?: string) =>
             options.log?.({
               phase,
               model: choice.model,
               ...(choice.self ? { self: true } : {}),
-              ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+              ...(reasoning ? { reasoning } : {}),
               ...(detail ? { detail } : {}),
             });
           log("start");
@@ -307,7 +298,7 @@ export function subagentExtension(options: SubagentOptions): Extension {
               });
               await configure(tx, created.id, {
                 model,
-                thinkingLevel: args.reasoning ?? null,
+                thinkingLevel: reasoning ?? null,
                 instructions: CHILD_INSTRUCTIONS,
                 extensions: { remove: [extension, ...(options.removeFromChild ?? [])] },
               });
@@ -318,6 +309,7 @@ export function subagentExtension(options: SubagentOptions): Extension {
                 conversationId: child,
                 model: choice.model,
                 ...(choice.self ? { self: true } : {}),
+                ...(reasoning ? { reasoning } : {}),
               },
               context,
             );

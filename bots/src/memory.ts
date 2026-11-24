@@ -2,8 +2,12 @@ import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai
 import type { BotManager } from "./bots.ts";
 import { parseModelRef } from "./config.ts";
 import { type CronSchedule, parseCron, zonedParts } from "./cron.ts";
+import { type Reasoning, reasoningFor } from "./reasoning.ts";
 import { DELIVERY_KIND } from "./storage/forum.ts";
 import { displayEntry } from "./transcript.ts";
+
+/** Memory extraction's reasoning level: background work, on whichever model extracts. */
+const MEMORY_REASONING: Reasoning = "medium";
 
 /** Facts kept per bot; the oldest are dropped beyond this. */
 export const MAX_FACTS = 200;
@@ -316,12 +320,16 @@ export class MemoryExtractor {
         continue;
       }
       const timeout = AbortSignal.timeout(this.#options.timeoutMs ?? 120_000);
+      const reasoning = reasoningFor(model, MEMORY_REASONING);
       try {
         const reply = await models
           .streamSimple(
             model,
             { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
-            { signal: AbortSignal.any([this.#abort.signal, timeout]) },
+            {
+              ...(reasoning ? { reasoning } : {}),
+              signal: AbortSignal.any([this.#abort.signal, timeout]),
+            },
           )
           .result();
         if (reply.stopReason === "error" || reply.stopReason === "aborted") {

@@ -386,6 +386,7 @@ class Connection {
             id: profile.id,
             name: profile.name,
             main: profile.main,
+            ...(profile.reasoning ? { reasoning: profile.reasoning } : {}),
             ...(profile.fallbacks ? { fallbacks: profile.fallbacks } : {}),
             ...(profile.memoryModel ? { memoryModel: profile.memoryModel } : {}),
             pool: profile.pool,
