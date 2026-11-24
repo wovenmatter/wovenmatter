@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WovenProtocol
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
@@ -45,7 +44,6 @@ struct SettingsGeneralView: View {
             versionSection
             appearanceSection
             SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
-            privacySection
         }
         .onChange(of: storedTheme) { _, _ in
             model.settings.persistMacSurfaceProfileFromUserDefaults()
@@ -84,25 +82,6 @@ struct SettingsGeneralView: View {
                     ), options: CodexLogoStyle.allCases) { $0.displayName }
                 }
             }
-        }
-    }
-
-    private var privacySection: some View {
-        SettingsSection(title: "Privacy") {
-            SettingsToggleRow(
-                title: "Share anonymous usage statistics",
-                detail: "App opens, active use and updates. No content is sent.",
-                isOn: Binding(
-                    get: { model.settings.analyticsEnabled },
-                    set: { value in Task { await model.settings.setAnalyticsEnabled(value) } })
-            )
-            .disabled(!model.settings.isLoaded)
-            if let error = model.settings.analyticsError {
-                SettingsError(error)
-            }
-            Link("Privacy policy", destination: AnalyticsSettings.policy)
-                .font(.settingsBody.weight(.medium))
-                .foregroundStyle(WovenPalette.success)
         }
     }
 

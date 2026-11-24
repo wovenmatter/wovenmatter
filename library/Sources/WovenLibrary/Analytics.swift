@@ -24,15 +24,28 @@ extension Library {
     }
   }
 
-  /// Records `version` as the release this server runs, and returns the one
-  /// recorded before it (nil the first time).
-  public func exchangeAnalyticsVersion(_ version: String) async throws -> String? {
+  /// Stores `value` under `key` (removes it for nil) and returns what was
+  /// there before: the last release this server ran (`version`), or the
+  /// release an update was installing (`installing`).
+  public func exchangeAnalyticsValue(_ key: String, to value: String?) async throws -> String? {
     try await write { writer in
-      let previous = try writer.db.query("SELECT value FROM analytics WHERE key = 'version'").first?.text("value")
-      try writer.db.run("""
-        INSERT INTO analytics (key, value) VALUES ('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """, [.text(version)])
+      let previous = try writer.db.query("SELECT value FROM analytics WHERE key = ?", [.text(key)]).first?.text("value")
+      if let value {
+        try writer.db.run("""
+          INSERT INTO analytics (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value
+          """, [.text(key), .text(value)])
+      } else {
+        try writer.db.run("DELETE FROM analytics WHERE key = ?", [.text(key)])
+      }
       return previous
+    }
+  }
+
+  /// When this machine first opened the library.
+  public func machineCreated() async throws -> Date? {
+    let id = machineID
+    return try await read { db in
+      try db.query("SELECT created_at FROM machines WHERE id = ?", [.text(id)]).first?.date("created_at")
     }
   }
 }

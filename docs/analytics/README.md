@@ -17,9 +17,11 @@ PostHog; it tells its own Mac's server about what only it sees, with
   hears the library's identifier and choice; if that takes over a minute,
   that launch sends nothing. Linux servers never make one. Nothing is sent
   without one.
-- **Choice.** On by default. **Settings › General › Privacy** writes the
-  synced setting `analytics.enabled`, so it applies to every machine. Each
-  server reads it before every send.
+- **Choice.** On by default. The switch at the bottom of **Settings ›
+  Analytics** writes the synced setting `analytics.enabled`, so it applies to
+  every machine. Each server reads it before every send. That page is a short
+  form of [the privacy policy](https://wovenmatter.com/privacy); change them
+  together.
 - **Only release servers send.** Never a debug build, a development instance
   (`--instance`), or a server without a release version. Tests use a stand-in.
 - **Delivery.** One attempt, five-second timeout, at most four at once.
@@ -27,7 +29,7 @@ PostHog; it tells its own Mac's server about what only it sees, with
 
 Every event has `distinct_id`, `source: app`, `platform` (`macos` or
 `linux`), `app_version`, `os_major` (Mac only), `qualifying_activity` and
-`$process_person_profile: false`. Nothing else is sent: no content, names,
+`$process_person_profile: false`; a Linux server's also has `$geoip_disable`. Nothing else is sent: no content, names,
 paths, accounts, errors, models, or which action it was.
 
 | Event | Sent by | When |
@@ -36,21 +38,28 @@ paths, accounts, errors, models, or which action it was.
 | `app_active` | Mac or Linux | A deliberate request from a person's UI succeeded: creating a session, sending or answering in one, setting a goal, creating, editing, renaming, moving, trashing or restoring a note, page, sheet or app, dispatching a page task, adding a folder or schedule, saving dictation, or messaging, posting to or creating bots. Reading, browsing, settings and agents' own work never count. `qualifying_activity: true`. |
 | `update_check_clicked` | Mac | Update was clicked in Settings › Updates. |
 | `update_download_started`, `_completed`, `_failed` | Mac | Sparkle's download steps, with `target_version`. |
-| `update_install_started`, `_failed` | Mac | Sparkle began installing, or failed to (not cancelled), with `target_version`. Both happen as the app quits, so they often do not arrive; `update_install_completed` is the reliable end of an update. |
-| `update_install_completed` | Mac | The server started on a release other than the one it ran before, however it was installed. It carries `from_version` and `target_version`. |
+| `update_install_started` | Mac | The person chose to install, with `target_version`. The app waits up to three seconds for it to go before Sparkle quits it. |
+| `update_install_failed` | Mac | Sparkle reported an install error, or the app next opened on another release than the one being installed. With `target_version`. |
+| `update_install_cancelled` | Mac | The person cancelled the install, with `target_version`. |
+| `update_install_completed` | Mac | The app opened after its server started on a release other than the one it ran before, however it was installed, with `from_version` and `target_version`. A machine already in the library with no release noted (the first start after 0.4.8) sends it without `from_version`. |
 
 `app_opened` and `app_active` are each attempted at most once per machine
 every six hours. The attempt counts even if delivery fails, so a failure does
 not make every later action retry. Six-hour sampling makes DAU approximate at
 the window's edge. Several machines of one library can each send within the
 same window; distinct-ID counts are unaffected. Each server keeps its own
-throttle times and the release it last ran in its library's local
-`analytics` table, which never syncs.
+throttle times, the release it last ran and the one being installed in its
+library's local `analytics` table, which never syncs.
 
 `country-only.hog` is the PostHog transformation that drops IP and precise
 location fields, keeps only the country, and turns off person profiles.
-Country is the sending machine's network, so a Linux server elsewhere can add
-a second country for one library.
+Country is a Mac's network. Linux servers send `$geoip_disable`, so one
+elsewhere adds no second country; active use counted on Linux falls in the
+country tile's empty row.
+
+Two Macs opened for the very first time within moments of each other, before
+either hears of the other, each make a candidate and can send under both IDs
+until they sync; from then on the earliest is used everywhere.
 
 ## GitHub
 

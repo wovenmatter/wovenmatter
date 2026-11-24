@@ -22,6 +22,7 @@ struct LucideGlyph: Hashable, Sendable {
     static let libraryBig = Self("library-big")
     static let database = Self("database")
     static let barChart = Self("bar-chart-3")
+    static let chartLine = Self("chart-line")
     static let settings = Self("settings")
     static let plug = Self("plug")
     static let plus = Self("plus")

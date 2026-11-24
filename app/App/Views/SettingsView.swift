@@ -33,6 +33,7 @@ private enum SettingsRoute: Equatable {
     case workspaces(String?)
     case backgroundServer
     case dictation
+    case analytics
     case bots
     case botsMachine(String)
     case botsSection(machineID: String, PiBotSettingsSection)
@@ -147,6 +148,8 @@ struct SettingsView: View {
                 SettingsDictationView(model: model,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing },
                     onOpenPermissions: { open(.permissions, .permissions, from: .dictation) })
+            case .analytics:
+                SettingsAnalyticsView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .bots:
                 SettingsBotsView(
                     model: model,
@@ -236,6 +239,7 @@ struct SettingsView: View {
         case "pi-durable": route = harnessRoute(.defaultAgent, machineID: nil, origin: .agents)
         case "github": route = .github
         case "dictation": route = .dictation
+        case "analytics": route = .analytics
         case "workspaces": route = .workspaces(nil)
         case "background-server": route = .backgroundServer
         #endif
@@ -275,6 +279,7 @@ struct SettingsView: View {
         case .workspaces(let id): id.flatMap { model.machines.machine(id: $0)?.name } ?? "Workspaces"
         case .backgroundServer: "Background Server"
         case .dictation: "Dictation"
+        case .analytics: "Analytics"
         case .bots: "Bots"
         case .botsMachine(let id): machineTitle(id)
         case .botsSection(_, let section): section.title
@@ -380,6 +385,12 @@ struct SettingsView: View {
                     detail: "Language and your previous dictations.",
                     icon: { LucideIcon(glyph: .mic, size: 15) },
                     action: { route = .dictation }
+                )
+                SettingsDestinationRow(
+                    title: "Analytics",
+                    detail: "The anonymous usage analytics Woven Matter sends, and turning them off.",
+                    icon: { LucideIcon(glyph: .chartLine, size: 15) },
+                    action: { route = .analytics }
                 )
             }
         }

@@ -42,6 +42,11 @@ final class Analytics: Sendable {
   static let maximumInFlight = 4
   /// How long an opening waits for the first sync with the other machines.
   static let settleLimit = Duration.seconds(60)
+  /// Local keys: the release this server last ran, the one an update was
+  /// installing, and the release a finished update came from, until reported.
+  static let versionKey = "version"
+  static let installingKey = "installing"
+  static let updatedKey = "updated-from"
 
   private let library: Library
   private let delivery: (any AnalyticsDelivery)?
@@ -64,26 +69,53 @@ final class Analytics: Sendable {
   }
 
   /// At start: a release different from the one this Mac's server ran
-  /// before is a finished update, whichever way it was installed. The
-  /// release is noted even while nothing is sent, so turning the statistics
-  /// on later reports no old update.
+  /// before is a finished update, whichever way it was installed. With no
+  /// release noted, a machine that was already in the library ran one from
+  /// before the note was kept, which is unknown (kept as ""). The update is
+  /// reported when the app next opens, once the library has its identifier.
+  /// The release is noted even while nothing is sent, so turning the
+  /// statistics on later reports no old update.
   func start() async {
-    guard let previous = try? await library.exchangeAnalyticsVersion(appVersion), previous != appVersion,
-          MachinePlatform.current == .mac else { return }
-    send("update_install_completed", ["from_version": .string(previous), "target_version": .string(appVersion)])
+    let started = now()
+    let previous: String?
+    do { previous = try await library.exchangeAnalyticsValue(Self.versionKey, to: appVersion) } catch { return }
+    guard MachinePlatform.current == .mac, previous != appVersion else { return }
+    if previous == nil {
+      guard let created = try? await library.machineCreated(), created < started.addingTimeInterval(-600) else { return }
+    }
+    _ = try? await library.exchangeAnalyticsValue(Self.updatedKey, to: previous ?? "")
   }
 
-  /// What the UI reported.
+  /// What the UI reported. Replies once the event has gone, so the app can
+  /// wait for an update's report before it quits to install.
   func record(_ event: RecordAppEvent) async {
-    if event.event == .opened {
+    let properties: [String: JSONValue] = event.targetVersion.map { ["target_version": .string($0)] } ?? [:]
+    switch event.event {
+    case .opened:
+      // The app opening on another release than the one being installed
+      // means the install failed, however it ended.
+      if let target = try? await library.exchangeAnalyticsValue(Self.installingKey, to: nil), target != appVersion {
+        await send(AppEvent.updateInstallFailed.rawValue, ["target_version": .string(target)])
+      }
       // A Mac that has just joined first hears what the library holds: its
       // identifier, and whether the person turned the statistics off.
       guard delivery != nil, await waitUntilSettled() else { return }
       // The app opening on a Mac is where a library first gets its identifier.
       await ensureCandidate()
+      if let from = try? await library.exchangeAnalyticsValue(Self.updatedKey, to: nil) {
+        var finished: [String: JSONValue] = ["target_version": .string(appVersion)]
+        if !from.isEmpty { finished["from_version"] = .string(from) }
+        await send("update_install_completed", finished)
+      }
       await signal(AppEvent.opened.rawValue, [:])
-    } else {
-      send(event.event.rawValue, event.targetVersion.map { ["target_version": .string($0)] } ?? [:])
+    case .updateInstallStarted:
+      if let target = event.targetVersion { _ = try? await library.exchangeAnalyticsValue(Self.installingKey, to: target) }
+      await send(event.event.rawValue, properties)
+    case .updateInstallFailed, .updateInstallCancelled:
+      _ = try? await library.exchangeAnalyticsValue(Self.installingKey, to: nil)
+      await send(event.event.rawValue, properties)
+    default:
+      await send(event.event.rawValue, properties)
     }
   }
 
@@ -121,12 +153,12 @@ final class Analytics: Sendable {
     guard delivery != nil, await enabled(), await identifier() != nil,
           (try? await library.claimAnalyticsSignal(event, now: time, interval: Self.signalInterval)) == true else { return }
     claimed.withLock { $0[event] = time }
-    send(event, properties)
+    await send(event, properties)
   }
 
-  /// Sends one event in the background, when the statistics are on and the
-  /// library has its identifier.
-  private func send(_ event: String, _ properties: [String: JSONValue]) {
+  /// Sends one event, when the statistics are on and the library has its
+  /// identifier.
+  private func send(_ event: String, _ properties: [String: JSONValue]) async {
     guard let delivery else { return }
     let reserved = inFlight.withLock { count in
       guard count < Self.maximumInFlight else { return false }
@@ -134,12 +166,10 @@ final class Analytics: Sendable {
       return true
     }
     guard reserved else { return }
+    defer { inFlight.withLock { $0 -= 1 } }
     let timestamp = now()
-    Task {
-      defer { inFlight.withLock { $0 -= 1 } }
-      guard await enabled(), let id = await identifier() else { return }
-      await delivery.deliver([Self.event(event, id: id, at: timestamp, appVersion: appVersion, properties)])
-    }
+    guard await enabled(), let id = await identifier() else { return }
+    await delivery.deliver([Self.event(event, id: id, at: timestamp, appVersion: appVersion, properties)])
   }
 
   static func event(_ name: String, id: String, at timestamp: Date, appVersion: String,
@@ -150,9 +180,12 @@ final class Analytics: Sendable {
     values["source"] = .string("app")
     values["platform"] = .string(MachinePlatform.current == .mac ? "macos" : "linux")
     values["app_version"] = .string(appVersion)
-    // On Linux this would be the kernel's, so it is left out there.
     if MachinePlatform.current == .mac {
       values["os_major"] = .string(String(ProcessInfo.processInfo.operatingSystemVersion.majorVersion))
+    } else {
+      // A Linux machine can be anywhere, so the country comes only from the
+      // person's Macs; and a kernel version says nothing.
+      values["$geoip_disable"] = .bool(true)
     }
     if values["qualifying_activity"] == nil { values["qualifying_activity"] = .bool(false) }
     return .object([

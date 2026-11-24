@@ -12,6 +12,7 @@ public enum AppEvent: String, Codable, Sendable, Hashable {
   case updateDownloadFailed = "update_download_failed"
   case updateInstallStarted = "update_install_started"
   case updateInstallFailed = "update_install_failed"
+  case updateInstallCancelled = "update_install_cancelled"
 }
 
 /// Tells this machine's server something the UI saw, for anonymous usage
@@ -34,6 +35,7 @@ public enum AnalyticsSettings {
   /// One machine's candidate for the library's anonymous identifier, as
   /// `{"id": …, "created": ms}`. The earliest candidate is the identifier.
   public static let candidatePrefix = "analytics.id."
-  /// Where the statistics are described.
+  /// Where the statistics are described, and who answers questions about them.
   public static let policy = URL(string: "https://wovenmatter.com/privacy")!
+  public static let contact = URL(string: "mailto:privacy@wovenmatter.com")!
 }

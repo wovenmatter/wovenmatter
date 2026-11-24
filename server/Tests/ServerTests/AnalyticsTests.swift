@@ -73,21 +73,33 @@ func usageStatisticsCountOpensAndDeliberateUseUnderTheLibrarysEarliestIdentifier
 
 // Only a Mac's server reports its updates.
 @Test(.timeLimit(.minutes(1)), .enabled(if: MachinePlatform.current == .mac))
-func aServerStartingOnANewReleaseReportsTheFinishedUpdateOnce() async throws {
+func updatesAreReportedFailedWhenTheAppReopensOnTheOldReleaseAndFinishedOnceWhenItOpensOnTheNewOne() async throws {
   let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
   let delivery = RecordingDelivery()
   var (server, client) = try await start(folder, version: "1.0.0", delivery: delivery)
   _ = try await client.call(RecordAppEvent(.opened))
   #expect(try await delivery.wait(for: 1) == ["app_opened"])
-  await server.stop()
 
-  (server, _) = try await start(folder, version: "1.0.1", delivery: delivery)
-  #expect(try await delivery.wait(for: 2).last == "update_install_completed")
+  // The reply comes once the event has gone, so the app can wait for it before quitting.
+  _ = try await client.call(RecordAppEvent(.updateInstallStarted, targetVersion: "1.0.1"))
+  #expect(delivery.names == ["app_opened", "update_install_started"])
+  _ = try await client.call(RecordAppEvent(.opened))
+  #expect(try await delivery.wait(for: 3).last == "update_install_failed")
+  #expect(delivery.last("update_install_failed")?["target_version"]?.string == "1.0.1")
+
+  // A started install that brought this release is no failure; the finished
+  // update goes when the app opens on it.
+  _ = try await client.call(RecordAppEvent(.updateInstallStarted, targetVersion: "1.0.1"))
+  await server.stop()
+  (server, client) = try await start(folder, version: "1.0.1", delivery: delivery)
+  _ = try await client.call(RecordAppEvent(.opened))
   let completed = try #require(delivery.last("update_install_completed"))
   #expect(completed["from_version"]?.string == "1.0.0" && completed["target_version"]?.string == "1.0.1")
   await server.stop()
 
-  let (again, _) = try await start(folder, version: "1.0.1", delivery: delivery)
-  defer { again.stopLater() }
-  #expect(try await delivery.wait(for: 3).count == 2)
+  (server, client) = try await start(folder, version: "1.0.1", delivery: delivery)
+  defer { server.stopLater() }
+  _ = try await client.call(RecordAppEvent(.opened))
+  #expect(try await delivery.wait(for: 6) == ["app_opened", "update_install_started", "update_install_failed",
+                                              "update_install_started", "update_install_completed"])
 }

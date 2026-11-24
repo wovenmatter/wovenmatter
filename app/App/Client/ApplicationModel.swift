@@ -91,7 +91,7 @@ final class ApplicationModel {
         server.start()
         uiTools = UIToolsStore(server: server, assets: workspaceAssets)
         DesktopUpdater.shared.report = { [weak server] event, version in
-            Task { _ = try? await server?.call(RecordAppEvent(event, targetVersion: version)) }
+            _ = try? await server?.call(RecordAppEvent(event, targetVersion: version))
         }
         following = Task { [weak self] in
             await server.follow(SubscribeLibrary(), reply: { [weak self] event in
