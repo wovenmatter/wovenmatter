@@ -113,8 +113,10 @@ starts it again, with its files, browser profile and restart list.
 In Settings → Bots, choose the machine under **Where bots run** to open its
 page:
 
-- **Profiles**: the main model for a bot's conversation and threads, fallback
-  models, a pool of models for subagents, and the model that names threads.
+- **Profiles**: the main model for a bot's conversation and threads and its
+  reasoning level (High unless you pick another), fallback models, a pool of
+  models for subagents, and the model that names threads. The main model picks
+  each subagent's model and reasoning level.
 - **Bots and teams**: each bot's name, profile and optional team. A manager
   hands work to the bots on its team, and an optional orchestrator oversees
   every bot. This page also has each bot's memory, **Rebuild**, and deleted

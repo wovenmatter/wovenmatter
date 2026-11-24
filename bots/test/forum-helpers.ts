@@ -163,7 +163,7 @@ export async function openForumTest(dir: string, options: ForumTestOptions = {})
           models,
           profile: () =>
             options.main
-              ? { id: "default", name: "Default", main: options.main(), pool: [] }
+              ? { id: "default", name: "Default", main: options.main(), reasoning: "high", pool: [] }
               : profileOf(FAUX_MODEL),
           platform,
         }),

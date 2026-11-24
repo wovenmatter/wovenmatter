@@ -319,7 +319,8 @@ extension PiBotRoles {
 extension PiBotProfile {
     static func list(_ list: BotsWire.ProfilesList) -> [PiBotProfile] {
         list.profiles.map { profile in
-            PiBotProfile(id: profile.id, name: profile.name, main: profile.main, fallbacks: profile.fallbacks ?? [],
+            PiBotProfile(id: profile.id, name: profile.name, main: profile.main, reasoning: profile.reasoning,
+                         fallbacks: profile.fallbacks ?? [],
                          memoryModel: profile.memoryModel, guidance: profile.guidance,
                          pool: profile.pool.map { PoolModel(model: $0.model, useFor: $0.useFor) },
                          isDefault: profile.default == true || profile.id == list.defaultId)
@@ -334,6 +335,7 @@ extension PiBotProfileDraft {
             "id": .string(id.trimmingCharacters(in: .whitespacesAndNewlines)),
             "name": .string(name.trimmingCharacters(in: .whitespacesAndNewlines)),
             "main": .string(main),
+            "reasoning": .string(reasoning),
             "pool": .array(pool.filter { !$0.model.isEmpty }.map { entry in
                 var item: [String: JSONValue] = ["model": .string(entry.model)]
                 let useFor = entry.useFor.trimmingCharacters(in: .whitespacesAndNewlines)

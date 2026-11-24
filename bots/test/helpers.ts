@@ -20,7 +20,13 @@ export const FAUX_MODEL = { provider: "faux", modelId: "faux-1" } as const;
 
 /** A one-off profile with `main` as its main model. */
 export function profileOf(main: ModelRef, pool: Profile["pool"] = []): Profile {
-  return { id: "default", name: "Default", main: `${main.provider}/${main.modelId}`, pool };
+  return {
+    id: "default",
+    name: "Default",
+    main: `${main.provider}/${main.modelId}`,
+    reasoning: "high",
+    pool,
+  };
 }
 
 /** Settings as the runtime reads them from settings.json, with normalized profiles. */

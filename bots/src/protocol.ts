@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_EDITED_FACT_CHARS } from "./memory.ts";
 import { MAX_CONTEXT_LENGTH } from "./message-context.ts";
+import { REASONING } from "./reasoning.ts";
 import type { DisplayEntry } from "./transcript.ts";
 
 const botId = z.string().uuid();
@@ -102,6 +103,8 @@ export const requestSchema = z.discriminatedUnion("type", [
       id: z.string().max(40),
       name: z.string().max(80),
       main: modelRefText,
+      /** The main model's and fallbacks' reasoning level; omitted: unchanged (new: high). */
+      reasoning: z.enum(REASONING).optional(),
       fallbacks: z.array(modelRefText).max(5).optional(),
       /** Memory extraction model; omitted or null: the active main model. */
       memoryModel: modelRefText.nullable().optional(),
@@ -367,6 +370,8 @@ export type ProfileSummary = {
   id: string;
   name: string;
   main: string;
+  /** The main model's and fallbacks' reasoning level. */
+  reasoning: string;
   /** Ordered main-model fallbacks for usage limits (absent: none). */
   fallbacks?: string[];
   /** Memory extraction model (absent: the active main model). */

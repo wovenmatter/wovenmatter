@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
 import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
@@ -10,6 +10,7 @@ import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.mo
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
 import { LIMIT_LABELS, type LimitEntry } from "./limits.ts";
 import { CATALOG_ENDPOINTS } from "./model-catalog.ts";
+import { REASONING } from "./reasoning.ts";
 
 /**
  * What the runtime knows about a model, for the main model's subagent choices and Settings' model pool.
@@ -31,12 +32,10 @@ export type ModelFacts = {
   /** Input modalities, e.g. ["text", "image"]. */
   readonly input?: readonly string[];
   readonly reasoning?: boolean;
-  /** Reasoning levels the model rejects (the catalog maps them to null). */
+  /** Reasoning levels the model lacks (a request for one runs at its nearest supported level). */
   readonly unsupportedReasoning?: readonly string[];
   readonly pricing: ModelPricing;
 };
-
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /**
  * pi-ai's bundled static catalogs (as shipped, without the live catalog) of the providers the runtime
@@ -184,9 +183,9 @@ export function modelFacts(ref: string, model: Model<Api> | undefined): ModelFac
       };
     }
   }
-  const map = model.thinkingLevelMap as Record<string, unknown> | undefined;
+  const supported: readonly string[] = getSupportedThinkingLevels(model);
   const unsupported = model.reasoning
-    ? THINKING_LEVELS.filter((level) => map?.[level] === null)
+    ? REASONING.filter((level) => !supported.includes(level))
     : [];
   return {
     ref,

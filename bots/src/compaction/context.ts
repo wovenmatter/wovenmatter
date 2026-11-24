@@ -12,6 +12,7 @@ import {
   type JsonObject,
   type Registry,
 } from "@earendil-works/pi-durable";
+import { isReasoning, type Reasoning } from "../reasoning.ts";
 import {
   applyWindow,
   compactNative,
@@ -89,6 +90,18 @@ export class HarnessRef {
 type Compaction = Parameters<
   NonNullable<import("@earendil-works/pi-durable").CompactionHooks["beforeCompact"]>
 >[0];
+
+/** The conversation's own reasoning level, for its compaction; undefined for a model without levels. */
+async function conversationReasoning(
+  conversation: Conversation,
+  ctx: HookContext,
+): Promise<Reasoning | undefined> {
+  const { thinkingLevel } = await conversation.agent(ctx);
+  return isReasoning(thinkingLevel) ? thinkingLevel : undefined;
+}
+
+const withReasoning = (reasoning: Reasoning | undefined) => (reasoning ? { reasoning } : {});
+
 type HookContext = Parameters<
   NonNullable<import("@earendil-works/pi-durable").CompactionHooks["beforeCompact"]>
 >[2];
@@ -222,11 +235,15 @@ export class NativeCompaction {
     return [...prefix, ...withoutSystem(own)];
   }
 
+  /** The portable summary, at the conversation's own reasoning level. */
   async #portable(
+    conversation: Conversation,
     model: Model<Api>,
     messages: readonly Message[],
+    ctx: HookContext,
     instructions?: string,
   ): Promise<string> {
+    const reasoning = await conversationReasoning(conversation, ctx);
     const now = Date.now();
     const reply = await this.models().completeSimple(
       model,
@@ -247,7 +264,7 @@ export class NativeCompaction {
           },
         ],
       },
-      { maxRetries: 0 },
+      { maxRetries: 0, ...withReasoning(reasoning) },
     );
     const text = reply.content
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -312,6 +329,7 @@ export class NativeCompaction {
           messages: [...(system ? [system] : []), ...covered],
           ...(continues && active?.window ? { prior: active.window } : {}),
           ...(compaction.instructions ? { instructions: compaction.instructions } : {}),
+          ...withReasoning(await conversationReasoning(conversation, ctx)),
           ...(this.#options.fetch ? { fetch: this.#options.fetch } : {}),
           signal: ctx.abortSignal,
         });
@@ -341,8 +359,10 @@ export class NativeCompaction {
       ctx,
     );
     const summary = await this.#portable(
+      conversation,
       model,
       [...(system ? [system] : []), ...original],
+      ctx,
       compaction.instructions,
     );
     await conversation.commit(async (tx) => {
@@ -454,6 +474,7 @@ export class NativeCompaction {
         models: this.models(),
         model,
         messages,
+        ...withReasoning(await conversationReasoning(conversation, ctx)),
         ...(this.#options.fetch ? { fetch: this.#options.fetch } : {}),
         signal: ctx.abortSignal,
       });
@@ -463,7 +484,7 @@ export class NativeCompaction {
     next ??= {
       id: active.id,
       route: { ...active.route, provider: model.provider, modelId: model.id, api: model.api },
-      summary: await this.#portable(model, messages),
+      summary: await this.#portable(conversation, model, messages, ctx),
     };
     const saved = next;
     await conversation.commit(async (tx) => {

@@ -1,4 +1,5 @@
 import { type PoolModel, PROFILE_ID, type Profile, type ProfileSet, parseModelRef } from "./config.ts";
+import { DEFAULT_REASONING, isReasoning, REASONING } from "./reasoning.ts";
 
 export class ProfileError extends Error {}
 
@@ -11,6 +12,8 @@ export type ProfileInput = {
   readonly name: string;
   /** Omitted or "": no main model yet. */
   readonly main?: string;
+  /** The main model's and fallbacks' reasoning level; omitted: unchanged (high for a new profile). */
+  readonly reasoning?: string;
   /** Ordered main-model fallbacks for usage limits, at most 5. */
   readonly fallbacks?: readonly string[];
   /** Memory extraction model; omitted, null or "": the active main model. */
@@ -79,8 +82,9 @@ export class ProfileStore {
   /** Create (`create: true`, the id must be new) or replace a profile. */
   save(input: ProfileInput, options: { readonly create?: boolean } = {}): Promise<Profile> {
     return this.#change((set) => {
-      const profile = this.#validate(input);
-      const exists = set.profiles.some((entry) => entry.id === profile.id);
+      const current = set.profiles.find((entry) => entry.id === input.id.trim());
+      const profile = this.#validate(input, current?.reasoning ?? DEFAULT_REASONING);
+      const exists = current !== undefined;
       if (options.create && exists)
         throw new ProfileError(`profile "${profile.id}" already exists`);
       if (!options.create && !exists) throw new ProfileError(`no profile "${profile.id}"`);
@@ -112,7 +116,7 @@ export class ProfileStore {
     });
   }
 
-  #validate(input: ProfileInput): Profile {
+  #validate(input: ProfileInput, currentReasoning: Profile["reasoning"]): Profile {
     const id = input.id.trim();
     if (!PROFILE_ID.test(id)) {
       throw new ProfileError(
@@ -131,6 +135,10 @@ export class ProfileStore {
     };
     const main = input.main?.trim() || undefined;
     if (main) check(main);
+    const reasoning = input.reasoning ?? currentReasoning;
+    if (!isReasoning(reasoning)) {
+      throw new ProfileError(`unknown reasoning level "${reasoning}": ${REASONING.join(", ")}`);
+    }
     const fallbacks: string[] = [];
     for (const ref of input.fallbacks ?? []) {
       if (!main) throw new ProfileError("choose a main model before adding fallbacks");
@@ -159,6 +167,7 @@ export class ProfileStore {
       id,
       name,
       ...(main ? { main } : {}),
+      reasoning,
       ...(fallbacks.length ? { fallbacks } : {}),
       ...(memoryModel ? { memoryModel } : {}),
       ...(guidance ? { guidance } : {}),
@@ -187,6 +196,7 @@ export function describeProfile(profile: Profile, defaultId: string) {
     id: profile.id,
     name: profile.name,
     main: profile.main ?? "",
+    reasoning: profile.reasoning,
     ...(profile.fallbacks?.length ? { fallbacks: [...profile.fallbacks] } : {}),
     ...(profile.memoryModel ? { memoryModel: profile.memoryModel } : {}),
     ...(profile.guidance ? { guidance: profile.guidance } : {}),

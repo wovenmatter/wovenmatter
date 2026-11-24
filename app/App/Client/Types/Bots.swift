@@ -411,6 +411,7 @@ struct PiBotProfile: Equatable, Identifiable, Sendable {
     let id: String
     let name: String
     let main: String
+    let reasoning: String
     let fallbacks: [String]
     let memoryModel: String?
     let guidance: String?
@@ -438,6 +439,7 @@ struct PiBotProfileDraft: Equatable, Sendable {
     var id = ""
     var name = ""
     var main = ""
+    var reasoning = "high"
     var fallbacks: [Fallback] = []
     var memoryModel = ""
     var guidance = ""
@@ -445,7 +447,7 @@ struct PiBotProfileDraft: Equatable, Sendable {
 
     init(profile: PiBotProfile? = nil) {
         guard let profile else { return }
-        id = profile.id; name = profile.name; main = profile.main
+        id = profile.id; name = profile.name; main = profile.main; reasoning = profile.reasoning
         fallbacks = profile.fallbacks.map { Fallback(model: $0) }
         memoryModel = profile.memoryModel ?? ""
         guidance = profile.guidance ?? ""

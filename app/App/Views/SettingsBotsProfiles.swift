@@ -11,7 +11,7 @@ struct BotSettingsProfiles: View {
     var body: some View {
         Group {
             if let profiles, let catalog {
-                profilesSection(profiles, providers: catalog.providers)
+                profilesSection(profiles, providers: catalog.providers, reasoningLevels: catalog.reasoningLevels)
                 titlesSection(catalog)
                 availableSection(catalog.providers)
             } else { SettingsEmpty("Loading…") }
@@ -36,14 +36,14 @@ struct BotSettingsProfiles: View {
         await state.bots.refreshOnboarding(onError: { state.error = $0 })
     }
 
-    private func profilesSection(_ profiles: [PiBotProfile], providers: [PiBotProviderModels]) -> some View {
+    private func profilesSection(_ profiles: [PiBotProfile], providers: [PiBotProviderModels], reasoningLevels: [String]) -> some View {
         SettingsSection(title: "Profiles", detail: "New bots use the default. Changes apply from each bot's next reply.") {
             ForEach(profiles) { profile in
                 if editing == profile.id {
-                    editor(profile, providers: providers)
+                    editor(profile, providers: providers, reasoningLevels: reasoningLevels)
                 } else { profileRow(profile) }
             }
-            if editing == "" { editor(nil, providers: providers) }
+            if editing == "" { editor(nil, providers: providers, reasoningLevels: reasoningLevels) }
             else {
                 Button { editing = "" } label: { BotSettingsActionLabel(title: "New profile", glyph: .plus) }
                     .disabled(editing != nil)
@@ -54,8 +54,8 @@ struct BotSettingsProfiles: View {
         }
     }
 
-    private func editor(_ profile: PiBotProfile?, providers: [PiBotProviderModels]) -> some View {
-        BotSettingsProfileEditor(profile: profile, providers: providers, onSave: { draft in
+    private func editor(_ profile: PiBotProfile?, providers: [PiBotProviderModels], reasoningLevels: [String]) -> some View {
+        BotSettingsProfileEditor(profile: profile, providers: providers, reasoningLevels: reasoningLevels, onSave: { draft in
             await state.run {
                 profiles = try await state.bots.saveProfile(draft, create: profile == nil)
                 editing = nil
@@ -68,6 +68,7 @@ struct BotSettingsProfiles: View {
         let users = live.filter { $0.profileId == profile.id }.map(\.name)
         let fallbacks = profile.fallbacks
         return SettingsSummaryRow(profile.name, value: (profile.isDefault ? "Default · " : "") + (profile.main.isEmpty ? "No model yet" : profile.main)) {
+            SettingsValueRow(label: "Reasoning", value: profile.reasoning.capitalized)
             SettingsValueRow(label: "Fallbacks", value: fallbacks.isEmpty ? "None" : fallbacks.joined(separator: " → "))
             SettingsValueRow(label: "Model pool", value: profile.pool.isEmpty ? "Main model only" : "Main model + " + profile.pool.map(\.model).joined(separator: ", "))
             SettingsValueRow(label: "Memory extraction", value: profile.memoryModel ?? "Active main model")

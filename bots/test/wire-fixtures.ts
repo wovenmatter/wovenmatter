@@ -184,6 +184,7 @@ const profile = {
   id: "default",
   name: "Default",
   main: "openai-codex/gpt-6-sol",
+  reasoning: "high",
   fallbacks: ["anthropic/claude-opus-5"],
   memoryModel: "openai/gpt-6-mini",
   guidance: "Prefer the cheaper model for research.",
@@ -256,7 +257,7 @@ const catalog = {
     },
   ],
   roles: { titles: "openai/gpt-6-mini", titlesReasoning: "high" },
-  reasoningLevels: ["minimal", "low", "medium", "high"],
+  reasoningLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
 } satisfies ModelCatalog;
 
 const accounts = {
