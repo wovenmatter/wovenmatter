@@ -1,7 +1,6 @@
 import AppKit
 private typealias ResponseFont = NSFont
 private let responseAbsolute = NSTextBlock.ValueType.absoluteValueType
-private let responsePercentage = NSTextBlock.ValueType.percentageValueType
 import SwiftUI
 
 /// One selectable text surface and one copy action for the complete response.
@@ -21,7 +20,6 @@ struct ConversationResponse: View {
     }
 
     let content: String
-    var document: ConversationMarkdownDocument? = nil
     let isStreaming: Bool
     var showsCopyButton = true
     /// While the turn runs, its dots hold the row Copy takes once it ends.
@@ -33,7 +31,7 @@ struct ConversationResponse: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ConversationResponseText(content: content, document: document, isStreaming: isStreaming, style: style) { url in
+            ConversationResponseText(content: content, isStreaming: isStreaming, style: style) { url in
                 // Page links only work where a handler routes them (bot chats).
                 if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
@@ -91,7 +89,6 @@ private struct ConversationResponseText: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     let content: String
-    let document: ConversationMarkdownDocument?
     let isStreaming: Bool
     let style: ConversationResponse.Style
     let onOpenLink: (URL) -> Void
@@ -105,8 +102,7 @@ private struct ConversationResponseText: NSViewRepresentable {
         let textView = viewport.textView
         textView.onOpenLink = onOpenLink
         textView.onPressWhileGrowing = isStreaming ? transcriptInteraction : nil
-        if textView.apply(content: content, document: document, isStreaming: isStreaming, style: style,
-                          colorScheme: colorScheme) {
+        if textView.apply(content: content, isStreaming: isStreaming, style: style, colorScheme: colorScheme) {
             viewport.invalidateIntrinsicContentSize()
         }
     }
@@ -186,10 +182,13 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     private var appliedColorScheme: ColorScheme?
     private var appliedStyle: ConversationResponse.Style?
     private var measuredSize: CGSize?
-    private var decorations: [(key: NSAttributedString.Key, range: NSRange)] = []
-    /// While streaming: the source before the last stable cut, the length of
-    /// its rendering at the start of the text storage, and its last block.
-    private var stable: (source: String, length: Int, last: ConversationMarkdownDocument.Block?)?
+    /// The width tables were sized for.
+    private var layoutWidth = ConversationMetrics.measure
+    private var decorations: [(key: NSAttributedString.Key, range: NSRange, block: ResponseBlockDecoration?)] = []
+    /// While streaming: the source's length in UTF-8 before the last stable
+    /// cut, the length of its rendering at the start of the text storage, and
+    /// its last block.
+    private var stable: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?)?
 
     init() {
         let storage = NSTextStorage()
@@ -216,7 +215,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     @discardableResult
-    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool,
+    func apply(content: String, isStreaming: Bool,
                style: ConversationResponse.Style = .reply, colorScheme: ColorScheme = .light) -> Bool {
         guard appliedContent != content || appliedStreaming != isStreaming
             || appliedColorScheme != colorScheme || appliedStyle != style else { return false }
@@ -232,27 +231,53 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         // and laid out again, so a chunk costs its own length, not the reply's.
         // The cut stays valid while the reply only grows past what was applied,
         // through the last chunk when it settles.
-        let kept: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?)
-        let tail: NSAttributedString
-        if document == nil, let stable, samePresentation, let appliedContent,
+        var kept: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?) = (0, 0, nil)
+        var tail: NSAttributedString
+        if let stable, samePresentation, let appliedContent,
            content.utf8.starts(with: appliedContent.utf8), stable.length <= textStorage.length {
-            kept = (stable.source.utf8.count, stable.length, stable.last)
+            kept = stable
             tail = renderStreaming(content, keeping: kept, style: style)
-        } else if isStreaming, document == nil {
-            kept = (0, 0, nil)
+            // Nothing after the kept part: its last line break, which the
+            // whole reply would drop, must not stay.
+            if tail.length == 0, kept.length > 0 {
+                kept = (0, 0, nil)
+                tail = renderStreaming(content, keeping: kept, style: style)
+            }
+        } else if isStreaming {
             tail = renderStreaming(content, keeping: kept, style: style)
         } else {
             stable = nil
-            kept = (0, 0, nil)
-            tail = ConversationResponseAttributedText.render(document ?? ConversationMarkdownDocument(content), style: style)
+            tail = ConversationResponseAttributedText.render(ConversationMarkdownDocument(content).blocks, after: nil,
+                                                             endsResponse: true, style: style, width: layoutWidth)
         }
         textStorage.replaceCharacters(in: NSRange(location: kept.length, length: textStorage.length - kept.length), with: tail)
         measuredSize = nil
         decorations.removeAll { $0.range.location >= kept.length }
-        for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider, .responseTable] {
-            tail.enumerateAttribute(key, in: NSRange(location: 0, length: tail.length)) { value, range, _ in
-                if value != nil { decorations.append((key, NSRange(location: range.location + kept.length, length: range.length))) }
+        // Inline code last: it draws over code boxes and table fills.
+        let whole = NSRange(location: 0, length: tail.length)
+        for key in [NSAttributedString.Key.responseCode, .responseDivider, .responseTable] {
+            tail.enumerateAttribute(key, in: whole) { value, range, _ in
+                if let block = value as? ResponseBlockDecoration {
+                    decorations.append((key, NSRange(location: range.location + kept.length, length: range.length), block))
+                }
             }
+        }
+        // Nested quotes overlap: each keeps its own range and bar.
+        var quotes: [(block: ResponseBlockDecoration, range: NSRange)] = []
+        tail.enumerateAttribute(.responseQuote, in: whole) { value, range, _ in
+            for block in value as? [ResponseBlockDecoration] ?? [] {
+                if let index = quotes.firstIndex(where: { $0.block === block }) {
+                    quotes[index].range = NSUnionRange(quotes[index].range, range)
+                } else {
+                    quotes.append((block, range))
+                }
+            }
+        }
+        for quote in quotes {
+            decorations.append((.responseQuote, NSRange(location: quote.range.location + kept.length, length: quote.range.length), quote.block))
+        }
+        tail.enumerateAttribute(.responseInlineCode, in: whole) { value, range, _ in
+            if value != nil { decorations.append((.responseInlineCode, NSRange(location: range.location + kept.length, length: range.length), nil)) }
         }
         // Streaming appends keep the selection; once the selected text itself
         // changes (a replacement, or a rerendered prefix), it no longer
@@ -263,7 +288,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
             return end <= previous.length && end <= rendered.length
                 && previous.substring(to: end) == rendered.substring(to: end)
         } ?? false
-        setSelectedRange(selectionUnchanged ? selection : NSRange(location: 0, length: 0))
+        setSelectedRange(selectionUnchanged ? selection : NSRange(location: textRange.location, length: 0))
         appliedContent = content
         appliedStreaming = isStreaming
         return true
@@ -275,17 +300,25 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     private func renderStreaming(_ content: String, keeping kept: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?),
                                  style: ConversationResponse.Style) -> NSAttributedString {
         let start = content.utf8.index(content.startIndex, offsetBy: kept.source)
-        let source = content[start...]
-        let (blocks, cut) = ConversationMarkdownDocument.blocks(cutting: source)
-        let settledCount = cut?.blockCount ?? 0
-        let settled = ConversationResponseAttributedText.render(Array(blocks[..<settledCount]), after: kept.last,
-                                                                endsResponse: false, style: style)
-        let last = settledCount > 0 ? blocks[settledCount - 1] : kept.last
-        let tail = NSMutableAttributedString(attributedString: settled)
-        tail.append(ConversationResponseAttributedText.render(Array(blocks[settledCount...]), after: last,
-                                                              endsResponse: true, style: style))
-        let end = cut.map { source.utf8.index(source.startIndex, offsetBy: $0.offset) } ?? start
-        stable = (String(content[..<end]), kept.length + settled.length, last)
+        let (blocks, cut) = ConversationMarkdownDocument.blocks(cutting: content[start...])
+        func render(cutAt settledCount: Int) -> (settled: NSAttributedString, rest: NSAttributedString, last: ConversationMarkdownDocument.Block?) {
+            let last = settledCount > 0 ? blocks[settledCount - 1] : kept.last
+            return (ConversationResponseAttributedText.render(Array(blocks[..<settledCount]), after: kept.last,
+                                                               endsResponse: false, style: style, width: layoutWidth),
+                    ConversationResponseAttributedText.render(Array(blocks[settledCount...]), after: last,
+                                                              endsResponse: true, style: style, width: layoutWidth), last)
+        }
+        var cutOffset = cut?.offset ?? 0
+        var parts = render(cutAt: cut?.blockCount ?? 0)
+        // A cut with nothing visible after it would keep the settled blocks'
+        // last line break, which the whole reply drops: don't cut there yet.
+        if parts.rest.length == 0, parts.settled.length > 0 {
+            cutOffset = 0
+            parts = render(cutAt: 0)
+        }
+        let tail = NSMutableAttributedString(attributedString: parts.settled)
+        tail.append(parts.rest)
+        stable = (kept.source + cutOffset, kept.length + parts.settled.length, parts.last)
         return tail
     }
 
@@ -293,6 +326,16 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         let width = max(1, width)
         guard let textContainer, let layoutManager else { return CGSize(width: width, height: 1) }
         if let measuredSize, measuredSize.width == width { return measuredSize }
+        // Tables share out the width they are given: lay them out again for a new one.
+        if width != layoutWidth {
+            layoutWidth = width
+            if decorations.contains(where: { $0.key == .responseTable }), let content = appliedContent,
+               let isStreaming = appliedStreaming, let style = appliedStyle {
+                stable = nil
+                appliedContent = nil
+                apply(content: content, isStreaming: isStreaming, style: style, colorScheme: appliedColorScheme ?? .light)
+            }
+        }
         if textContainer.size.width != width {
             textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         }
@@ -323,8 +366,12 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
             let visibleCharacters = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
             let text = textStorage.string as NSString
             for decoration in decorations where NSIntersectionRange(decoration.range, visibleCharacters).length > 0 {
-                guard let block = textStorage.attribute(decoration.key, at: decoration.range.location,
-                                                        effectiveRange: nil) as? ResponseBlockDecoration else { continue }
+                if decoration.key == .responseInlineCode {
+                    drawInlineCode(decoration.range, within: visibleGlyphs, layoutManager: layoutManager,
+                                   textContainer: textContainer, text: textStorage)
+                    continue
+                }
+                guard let block = decoration.block else { continue }
                 let glyphs = layoutManager.glyphRange(forCharacterRange: decoration.range, actualCharacterRange: nil)
                 guard glyphs.length > 0 else { continue }
                 // Used rects leave out the spacing above a line, and keep the
@@ -341,11 +388,20 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
                                  yRadius: ConversationMetrics.blockRadius).fill()
                 case .responseQuote:
                     let end = NSMaxRange(decoration.range) - 1
-                    let trailing = text.character(at: end) == 0x0A
-                        ? (textStorage.attribute(.paragraphStyle, at: end, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
-                        : 0
-                    WovenColors.foreground.withAlphaComponent(0.16).setFill()
-                    NSRect(x: block.indent, y: top, width: Prose.quoteBar, height: lastLine.maxY - trailing - top).fill()
+                    let endStyle = textStorage.attribute(.paragraphStyle, at: end, effectiveRange: nil) as? NSParagraphStyle
+                    let bottom: CGFloat
+                    if let cell = endStyle?.textBlocks.last {
+                        // A quoted table ends at its last row, whichever cell is tallest.
+                        let paragraph = layoutManager.glyphRange(forCharacterRange: text.paragraphRange(for: NSRange(location: end, length: 0)),
+                                                                 actualCharacterRange: nil)
+                        bottom = layoutManager.boundsRect(for: cell, glyphRange: paragraph).maxY
+                    } else {
+                        bottom = lastLine.maxY - (text.character(at: end) == 0x0A ? endStyle?.lineSpacing ?? 0 : 0)
+                    }
+                    // The full height of the quote's lines, a little past their text.
+                    WovenColors.foreground.withAlphaComponent(0.24).setFill()
+                    NSRect(x: block.indent, y: top - ConversationMetrics.hair, width: Prose.quoteBar,
+                           height: bottom - top + 2 * ConversationMetrics.hair).fill()
                 case .responseDivider:
                     WovenColors.foreground.withAlphaComponent(0.16).setFill()
                     NSRect(x: block.indent, y: top, width: width, height: 1).fill()
@@ -372,6 +428,60 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         super.draw(dirtyRect)
     }
 
+    /// Inline code's background, one rounded box per line around its glyphs:
+    /// never the indent before a wrapped line or the space after it.
+    /// Only the lines in `visible` are walked, however long the span.
+    private func drawInlineCode(_ range: NSRange, within visible: NSRange, layoutManager: NSLayoutManager,
+                                textContainer: NSTextContainer, text: NSTextStorage) {
+        let characters = text.string as NSString
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let shown = NSIntersectionRange(glyphs, visible)
+        guard shown.length > 0 else { return }
+        var index = shown.location
+        let end = NSMaxRange(shown)
+        WovenColors.primary.withAlphaComponent(0.075).setFill()
+        while index < end {
+            var line = NSRange()
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: index, effectiveRange: &line)
+            index = NSMaxRange(line)
+            var piece = layoutManager.characterRange(forGlyphRange: NSIntersectionRange(line, glyphs), actualGlyphRange: nil)
+            while piece.length > 0, let scalar = UnicodeScalar(characters.character(at: NSMaxRange(piece) - 1)),
+                  CharacterSet.whitespacesAndNewlines.contains(scalar) { piece.length -= 1 }
+            guard piece.length > 0, let font = text.attribute(.font, at: piece.location, effectiveRange: nil) as? NSFont else { continue }
+            let pieceGlyphs = layoutManager.glyphRange(forCharacterRange: piece, actualCharacterRange: nil)
+            let bounds = layoutManager.boundingRect(forGlyphRange: pieceGlyphs, in: textContainer)
+            let baseline = fragment.minY + layoutManager.location(forGlyphAt: pieceGlyphs.location).y
+            // Around the code's own line box, so stacked lines never touch,
+            // and never past the text's left edge, where it would be cut off.
+            let minX = max(0, bounds.minX - ConversationMetrics.hair)
+            let rect = NSRect(x: minX, y: baseline - font.ascender - 1,
+                              width: bounds.maxX + ConversationMetrics.hair - minX, height: font.ascender - font.descender + 2)
+            NSBezierPath(roundedRect: rect, xRadius: ConversationMetrics.tight, yRadius: ConversationMetrics.tight).fill()
+        }
+    }
+
+    /// The text without the characters only layout needs.
+    private var textRange: NSRange {
+        guard let textStorage, textStorage.length > 0 else { return NSRange(location: 0, length: 0) }
+        var range = NSRange(location: 0, length: textStorage.length)
+        if textStorage.attribute(.responseLayoutOnly, at: 0, effectiveRange: nil) != nil { range.location = 1; range.length -= 1 }
+        if range.length > 0, textStorage.attribute(.responseLayoutOnly, at: textStorage.length - 1, effectiveRange: nil) != nil {
+            range.length -= 1
+        }
+        return range
+    }
+
+    override func selectionRange(forProposedRange proposedCharRange: NSRange, granularity: NSSelectionGranularity) -> NSRange {
+        let range = super.selectionRange(forProposedRange: proposedCharRange, granularity: granularity)
+        let text = textRange
+        let start = min(max(range.location, text.location), NSMaxRange(text))
+        return NSRange(location: start, length: max(0, min(NSMaxRange(range), NSMaxRange(text)) - start))
+    }
+
+    override func selectAll(_ sender: Any?) {
+        setSelectedRange(textRange)
+    }
+
     override func mouseDown(with event: NSEvent) {
         // A transcript following the live edge scrolls each new chunk under
         // the held pointer, so a selection would run on to the newest text.
@@ -393,7 +503,10 @@ private extension NSAttributedString.Key {
     static let responseQuote = Self("WovenMatterResponseQuote")
     static let responseDivider = Self("WovenMatterResponseDivider")
     static let responseTable = Self("WovenMatterResponseTable")
-    static let responseScaledFont = Self("WovenMatterResponseScaledFont")
+    static let responseInlineCode = Self("WovenMatterResponseInlineCode")
+    /// Characters only layout needs: the spacer above a box that opens the
+    /// text and the line break kept after one that ends it. Selection skips them.
+    static let responseLayoutOnly = Self("WovenMatterResponseLayoutOnly")
 }
 
 /// Where a box or bar is drawn: from the indent of the block that owns it.
@@ -416,9 +529,9 @@ private enum ConversationResponseAttributedText {
         let end: CGFloat
     }
 
-    static func render(_ document: ConversationMarkdownDocument, style: ConversationResponse.Style) -> NSAttributedString {
-        render(document.blocks, after: nil, endsResponse: true, style: style)
-    }
+    private enum MarkerKind { case bullet, number, task }
+
+    private static let emptyParagraph = Block.paragraph(.init(""))
 
     /// `values` rendered on their own, after `previous` (nil at the start of
     /// the response). Every gap is spacing above a block's first line, chosen
@@ -427,8 +540,9 @@ private enum ConversationResponseAttributedText {
     /// chunk, after the last block before the cut, so pieces rendered apart
     /// join exactly as the whole renders. Blocks that do not end the response
     /// keep their last line break.
+    /// `width` is the text's width, which tables share out among their columns.
     static func render(_ values: [Block], after previous: Block?, endsResponse: Bool,
-                       style responseStyle: ConversationResponse.Style) -> NSAttributedString {
+                       style responseStyle: ConversationResponse.Style, width: CGFloat) -> NSAttributedString {
         let output = NSMutableAttributedString(string: "")
         // Streaming is conveyed by work activity; answer ink stays stable as
         // paragraphs arrive and the run settles.
@@ -458,7 +572,7 @@ private enum ConversationResponseAttributedText {
                 if intent.contains(.stronglyEmphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .boldFontMask) }
                 if intent.contains(.emphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .italicFontMask) }
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
-                if intent.contains(.code) { attributes[.backgroundColor] = WovenColors.primary.withAlphaComponent(0.075) }
+                if intent.contains(.code) { attributes[.responseInlineCode] = true }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
                 if let link = run.link, ConversationMarkdownDocument.isLiveLink(link) { attributes[.link] = link }
                 result.append(NSAttributedString(string: String(text.rendered[run.range].characters), attributes: attributes))
@@ -477,9 +591,10 @@ private enum ConversationResponseAttributedText {
             let first = (paragraph.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
             if first.length < paragraph.length {
                 let continuation = style.mutableCopy() as! NSMutableParagraphStyle
+                // A list item's marker stops belong to its first line only.
+                if style.firstLineHeadIndent != style.headIndent { continuation.tabStops = NSParagraphStyle.default.tabStops }
                 continuation.firstLineHeadIndent = style.headIndent
                 continuation.paragraphSpacingBefore = 0
-                continuation.tabStops = []
                 paragraph.addAttribute(.paragraphStyle, value: continuation,
                     range: NSRange(location: first.length, length: paragraph.length - first.length))
             }
@@ -504,8 +619,13 @@ private enum ConversationResponseAttributedText {
 
         func decorate(_ key: NSAttributedString.Key, from start: Int, indent: CGFloat) {
             guard output.length > start else { return }
-            output.addAttribute(key, value: ResponseBlockDecoration(indent: indent),
-                                range: NSRange(location: start, length: output.length - start))
+            let range = NSRange(location: start, length: output.length - start)
+            let block = ResponseBlockDecoration(indent: indent)
+            guard key == .responseQuote else { return output.addAttribute(key, value: block, range: range) }
+            // A quote inside a quote keeps its own bar: each range lists every quote around it.
+            output.enumerateAttribute(.responseQuote, in: range) { value, part, _ in
+                output.addAttribute(.responseQuote, value: (value as? [ResponseBlockDecoration] ?? []) + [block], range: part)
+            }
         }
 
         /// `values` in order. The first block's gap is `firstBefore` when a
@@ -514,14 +634,21 @@ private enum ConversationResponseAttributedText {
                       inItem: Bool, marker: Marker? = nil) {
             var previous = previous
             for (index, block) in values.enumerated() {
-                let before = index == 0 ? firstBefore ?? spacing(after: previous, before: block, inItem: inItem)
-                    : spacing(after: previous, before: block, inItem: inItem)
-                emit(block, indent: indent, before: before, inItem: inItem, marker: index == 0 ? marker : nil)
+                let chosen = index == 0 ? firstBefore : nil
+                emit(block, indent: indent, before: chosen ?? spacing(after: previous, before: block, inItem: inItem),
+                     inItem: inItem, marker: index == 0 ? marker : nil)
                 previous = block
             }
         }
 
         func emit(_ block: Block, indent: CGFloat, before: CGFloat, inItem: Bool, marker: Marker?) {
+            var before = before
+            // A block that cannot start with the marker gets a line of its own for it.
+            if let marker, leadsWithMarkerLine(block) {
+                appendInline(.init(""), font: body, style: paragraphStyle(indent: indent, before: before), marker: marker)
+                before = spacing(after: emptyParagraph, before: block, inItem: true)
+            }
+            let marker = leadsWithMarkerLine(block) ? nil : marker
             switch block {
             case .paragraph(let content):
                 appendInline(content, font: body, style: paragraphStyle(indent: indent, before: before), marker: marker)
@@ -531,11 +658,19 @@ private enum ConversationResponseAttributedText {
                              marker: marker)
             case .list(let items):
                 let gap = items.contains { $0.blocks.count > 1 } ? Prose.looseListGap : Prose.tightListGap
-                // Nesting steps by level, however many spaces the source used.
-                let depths = Set(items.map(\.depth)).sorted()
+                // Nesting steps by level, however many spaces the source used,
+                // decided in source order so a later item never moves an earlier one.
+                var indents: [Int] = []
                 var previousItem: Block?
+                var topKind: MarkerKind?
                 for (index, item) in items.enumerated() {
-                    let level = CGFloat(min(depths.firstIndex(of: item.depth) ?? 0, 6))
+                    while let last = indents.last, last > item.depth { indents.removeLast() }
+                    if indents.last != item.depth { indents.append(item.depth) }
+                    let level = CGFloat(min(indents.count - 1, 6))
+                    let kind: MarkerKind = item.checked != nil ? .task : item.marker == "•" ? .bullet : .number
+                    // A different kind of list straight after one reads as a list of its own.
+                    let startsList = level == 0 && topKind != nil && topKind != kind
+                    if level == 0 { topKind = kind }
                     let markerEnd = indent + Prose.markerColumn + level * Prose.nestedListStep
                     let text: NSAttributedString = if let checked = item.checked {
                         NSAttributedString(string: checked ? "☑" : "☐", attributes: [
@@ -544,15 +679,20 @@ private enum ConversationResponseAttributedText {
                         NSAttributedString(string: item.marker, attributes: [.font: body, .foregroundColor: foreground])
                     }
                     let first = index == 0 ? before
-                        : max(0, gap + topOverhang(item.blocks.first) - bottomSlack(previousItem))
+                        : max(0, (startsList ? Prose.looseListGap : gap) + itemTopOverhang(item) - bottomSlack(previousItem))
+                    let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
+                    if item.blocks.isEmpty {
+                        appendInline(.init(""), font: body,
+                                     style: paragraphStyle(indent: markerEnd + Prose.markerGap, before: first), marker: itemMarker)
+                    }
                     sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, inItem: true,
-                             marker: Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd))
-                    previousItem = item.blocks.last ?? previousItem
+                             marker: itemMarker)
+                    previousItem = item.blocks.last ?? emptyParagraph
                 }
             case .quote(let quoted):
                 let start = output.length
                 sequence(quoted, indent: indent + Prose.quoteBar + Prose.quoteGap, after: nil, firstBefore: before,
-                         inItem: inItem)
+                         inItem: inItem, marker: marker)
                 decorate(.responseQuote, from: start, indent: indent)
             case .code(let language, let content):
                 let start = output.length
@@ -583,15 +723,22 @@ private enum ConversationResponseAttributedText {
                                font: font(13, rowIndex == 0 ? .semibold : .regular))
                     }
                 }
-                // Columns as wide as their content; a table too wide for the
-                // text shrinks in proportion and wraps.
-                let widths = table.header.indices.map { column in
-                    min(Prose.tableColumnLimit, max(1, rows.map { ceil($0[column].size().width) + 1 }.max() ?? 1))
+                // Columns as wide as their content. A table too wide for the
+                // text keeps its short columns at their width (up to a limit)
+                // and gives the rest to its widest column, which wraps.
+                let natural = table.header.indices.map { column in
+                    max(1, rows.map { ceil($0[column].size().width) + 1 }.max() ?? 1)
+                }
+                let available = width - indent
+                let fits = natural.reduce(0) { $0 + $1 + 2 * Prose.cellPaddingHorizontal } <= available
+                let flexible = fits ? nil : natural.indices.max { natural[$0] < natural[$1] }
+                let widths: [CGFloat?] = natural.indices.map { column in
+                    column == flexible ? nil : fits ? natural[column] : min(natural[column], Prose.tableShortColumnLimit)
                 }
                 for (rowIndex, cells) in rows.enumerated() {
                     for (column, text) in cells.enumerated() {
                         let cell = NSTextTableBlock(table: nativeTable, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
-                        cell.setValue(widths[column], type: responseAbsolute, for: .width)
+                        if let width = widths[column] { cell.setValue(width, type: responseAbsolute, for: .width) }
                         cell.setWidth(Prose.cellPaddingHorizontal, type: responseAbsolute, for: .padding, edge: .minX)
                         cell.setWidth(Prose.cellPaddingHorizontal, type: responseAbsolute, for: .padding, edge: .maxX)
                         cell.setWidth(Prose.cellPaddingVertical, type: responseAbsolute, for: .padding, edge: .minY)
@@ -627,7 +774,8 @@ private enum ConversationResponseAttributedText {
             let lead = NSMutableParagraphStyle()
             lead.minimumLineHeight = 0.01
             lead.maximumLineHeight = 0.01
-            output.append(NSAttributedString(string: "\n", attributes: [.font: ResponseFont.systemFont(ofSize: 1), .paragraphStyle: lead]))
+            output.append(NSAttributedString(string: "\n", attributes: [.font: ResponseFont.systemFont(ofSize: 1), .paragraphStyle: lead,
+                                                                        .responseLayoutOnly: true]))
         }
         sequence(values, indent: 0, after: previous, firstBefore: nil, inItem: false)
         guard endsResponse, output.length > 0 else { return output }
@@ -636,7 +784,11 @@ private enum ConversationResponseAttributedText {
         let end = output.length - 1
         let endsInBox = output.attribute(.responseCode, at: end, effectiveRange: nil) != nil
             || (output.attribute(.paragraphStyle, at: end, effectiveRange: nil) as? NSParagraphStyle)?.textBlocks.isEmpty == false
-        if !endsInBox { output.deleteCharacters(in: NSRange(location: end, length: 1)) }
+        if endsInBox {
+            output.addAttribute(.responseLayoutOnly, value: true, range: NSRange(location: end, length: 1))
+        } else {
+            output.deleteCharacters(in: NSRange(location: end, length: 1))
+        }
         return output
     }
 
@@ -654,9 +806,29 @@ private enum ConversationResponseAttributedText {
         if case .heading(let level, _) = block { return level <= 2 ? Prose.majorHeadingGap : Prose.minorHeadingGap }
         if isRule(previous) || isRule(block) { return Prose.ruleGap }
         if isBox(previous) || isBox(block) { return Prose.paragraphGap }
-        if case .list = previous { return Prose.paragraphGap }
+        if case .list = previous { return isList(block) ? Prose.looseListGap : Prose.paragraphGap }
         if case .list = block { return Prose.looseListGap }
         return inItem ? Prose.looseListGap : Prose.paragraphGap
+    }
+
+    private static func isList(_ block: Block) -> Bool {
+        if case .list = block { return true }
+        return false
+    }
+
+    /// Whether a list item's marker needs a line of its own before this block.
+    private static func leadsWithMarkerLine(_ block: Block) -> Bool {
+        switch block {
+        case .paragraph, .heading: false
+        case .quote(let quoted): quoted.first.map(leadsWithMarkerLine) ?? true
+        default: true
+        }
+    }
+
+    /// An item's top overhang: none when its marker has a line of its own.
+    private static func itemTopOverhang(_ item: ConversationMarkdownDocument.ListItem) -> CGFloat {
+        guard let first = item.blocks.first, !leadsWithMarkerLine(first) else { return 0 }
+        return topOverhang(first)
     }
 
     private static func isRule(_ block: Block) -> Bool {
@@ -676,7 +848,7 @@ private enum ConversationResponseAttributedText {
         switch block {
         case .code: Prose.codePadding
         case .quote(let quoted): topOverhang(quoted.first)
-        case .list(let items): topOverhang(items.first?.blocks.first)
+        case .list(let items): items.first.map(itemTopOverhang) ?? 0
         default: 0
         }
     }
@@ -688,7 +860,7 @@ private enum ConversationResponseAttributedText {
         case nil, .table, .divider: 0
         case .code: Prose.codeLineSpacing - Prose.codePadding
         case .quote(let quoted): quoted.last.map(bottomSlack) ?? 0
-        case .list(let items): bottomSlack(items.last?.blocks.last)
+        case .list(let items): items.last.map { bottomSlack($0.blocks.last ?? emptyParagraph) } ?? 0
         case .paragraph, .heading: Prose.lineSpacing
         }
     }

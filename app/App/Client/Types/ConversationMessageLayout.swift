@@ -120,16 +120,12 @@ struct ConversationScrollState: Equatable {
     }
 }
 
-/// Work groups follow new rows only from their existing live edge. Replacing
+/// A live reasoning list follows new text only from its existing live edge. Replacing
 /// content, settling a tool, or opening its details must preserve reading position.
 struct ConversationWorkScrollState: Equatable {
     private(set) var isAtBottom = true
 
     mutating func setAtBottom(_ value: Bool) { isAtBottom = value }
-
-    func shouldFollowAppend(from before: [String], to after: [String], wasAtBottom: Bool? = nil) -> Bool {
-        (wasAtBottom ?? isAtBottom) && after.count > before.count && after.starts(with: before)
-    }
 
     func shouldFollowTextAppend(from before: String, to after: String, wasAtBottom: Bool? = nil) -> Bool {
         (wasAtBottom ?? isAtBottom) && after.utf16.count > before.utf16.count && after.utf16.starts(with: before.utf16)

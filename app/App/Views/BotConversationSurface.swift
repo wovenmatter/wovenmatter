@@ -486,16 +486,9 @@ private struct BotConversationPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .overlay(alignment: .bottomTrailing) {
-                if !following {
-                    Button("Latest reply", systemImage: "arrow.down") {
-                        following = true
-                        jumpToEnd(proxy)
-                    }
-                    .buttonStyle(WovenQuietButtonStyle())
-                    .padding(.trailing, 32)
-                    .padding(.bottom, bottomClearance)
-                }
+            .conversationBottomEdge(stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest reply") {
+                following = true
+                jumpToEnd(proxy)
             }
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
@@ -903,10 +896,11 @@ private struct BotStreamingMessage: View {
                 .foregroundStyle(WovenPalette.foreground)
             if let text, !text.isEmpty {
                 ConversationResponse(content: text, isStreaming: true, showsCopyButton: false)
+                ConversationRunningDots()
             } else {
                 ConversationThinkingLabel(text: "Thinking…")
+                ConversationRunningDots().padding(.leading, ConversationMetrics.textInset)
             }
-            ConversationRunningDots()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

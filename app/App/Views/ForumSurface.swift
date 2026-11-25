@@ -305,16 +305,9 @@ private struct ForumPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .overlay(alignment: .bottomTrailing) {
-                if !following {
-                    Button("Latest post", systemImage: "arrow.down") {
-                        following = true
-                        jumpToEnd(proxy)
-                    }
-                    .buttonStyle(WovenQuietButtonStyle())
-                    .padding(.trailing, 32)
-                    .padding(.bottom, bottomClearance)
-                }
+            .conversationBottomEdge(stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest post") {
+                following = true
+                jumpToEnd(proxy)
             }
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
@@ -393,7 +386,7 @@ private struct ForumPane: View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
             VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
                 ConversationThinkingLabel(text: text)
-                ConversationRunningDots()
+                ConversationRunningDots().padding(.leading, ConversationMetrics.textInset)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)

@@ -420,7 +420,8 @@ when an intentional design change is accepted.
   runs, thinking and assistant messages stream visibly in chronological order.
   The elapsed header (with a chevron) folds its thinking, commentary and tool
   calls at any time, and the turn folds them itself when it ends, leaving the
-  reply, an error, a proposed plan or an inline page in view. Live tool calls append as
+  reply, an error, a proposed plan or an inline page in view. A turn in which the
+  reader opened a row, group or thought while it ran stays open when it ends. Live tool calls append as
   separate rows in the conversation; never replace the preceding tool with the
   latest call. A new thinking, commentary,
   or other standalone event condenses only the preceding tool list into a
@@ -429,8 +430,8 @@ when an intentional design change is accepted.
   or reasoning only from the live edge. Between a tool and the next visible output,
   use a static Thinking label. Thinking is marked with a static brain, in chats
   and bot chats. While a turn runs, one row of three small dots sits under the
-  last thing it shows, its strong dot stepping left to right, still under
-  Reduce Motion. Keep detail-loading text quiet ("Loading details…")
+  last thing it shows, starting where that thing's text starts, its strong dot
+  stepping left to right, still under Reduce Motion. Keep detail-loading text quiet ("Loading details…")
   and never add a separate mobile running spinner below the transcript.
 - **Conversation layout:** agent chats, bot chats and the Forum share one rhythm
   from `ConversationMetrics`; keep exact values there. Everything in an assistant
@@ -438,17 +439,28 @@ when an intentional design change is accepted.
   right edge. Gaps come from roles: a turn ends further from the next message than
   a reply sits from the message it answers; work, reply, files and the
   changed-files card are sections; work-log entries sit closer, and rows inside a
-  group closer still. The work divider shows only while there is work under it.
-  Tool rows are one line, truncated in the middle, with the chevron right after
-  the label; the full text is in their details, which open at the rows' text
-  inset. Thinking looks the same everywhere, and reasoning text is smaller and
-  quieter than the reply. A visual reply sits in a hairline frame with its title
-  inside; its controls show on hover, while zoomed, or with focus. In reply text,
-  lists sit tighter than paragraphs, headings attach to what follows them, and
+  group closer still. Commentary sits close to the tools it introduces and
+  further from the work before it. The work divider shows only over work the
+  header folds. Tool rows are one line, truncated in the middle, with the
+  chevron right after the label; the full text is in their details, which open
+  at the rows' text inset and wrap rather than scroll sideways. Thinking looks
+  the same everywhere. Live reasoning shows its last few lines, smaller and
+  quieter than the reply; afterwards a thought is one closed row, named by its
+  title, or by status and action for a record such as an approval. A visual
+  reply sits in a hairline frame with its title inside, always the measure wide;
+  its controls show on hover, while zoomed, or with focus.
+  Files a reply refers to are compact chips in a wrapping row. In reply text,
+  lists sit tighter than paragraphs, two different lists in a row are spaced as
+  two lists, every item keeps its marker, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
-  block's indent. Each block's spacing depends only on the block before it, so
-  streamed text never moves. Nothing moves when a turn settles: the dots hold the
-  row Copy then takes, and parts with nothing to show draw nothing.
+  block's indent. Inline code is shaded around its own text on each line. Table
+  columns fit their content; a table too wide gives the rest to its widest
+  column. Each block's spacing depends only on the block before it, so streamed
+  text never moves. Nothing moves when a turn settles: the dots hold the row
+  Copy then takes, and parts with nothing to show draw nothing. In agent chats,
+  bot chats and the Forum alike, rows fade out before the composer, and the
+  button back to the latest reply or post is a small round one centred above it,
+  over a band where nothing is legible.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.

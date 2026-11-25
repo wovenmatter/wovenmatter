@@ -103,6 +103,9 @@ struct ConversationWorkTranscript: View {
         // A folded turn shows only the dots below.
         let showsThinking = isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator
         let showsWork = !entries.isEmpty || showsThinking
+        // The rule sits over work the header folds; what stays outside the
+        // fold (a visual reply, a plan) needs none.
+        let showsRule = (foldable && !folded) || showsThinking
         VStack(alignment: .leading, spacing: 0) {
             let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
             if foldable {
@@ -137,11 +140,12 @@ struct ConversationWorkTranscript: View {
                     .padding(.top, ConversationMetrics.rowGap)
             }
 
-            // The divider sits under the header while there is work under it.
             if showsWork {
-                Divider()
-                    .overlay(WovenPalette.foreground.opacity(0.10))
-                    .padding(.top, ConversationMetrics.rowGap)
+                if showsRule {
+                    Divider()
+                        .overlay(WovenPalette.foreground.opacity(0.10))
+                        .padding(.top, ConversationMetrics.rowGap)
+                }
 
                 if !entries.isEmpty {
                     let tailID = timeline.entries.last?.id
@@ -158,10 +162,12 @@ struct ConversationWorkTranscript: View {
                         .padding(.top, ConversationMetrics.entryGap)
                 }
             }
-            // A response below takes the dots under its text instead.
+            // A response below takes the dots under its text instead. They
+            // start where the text above them starts.
             if isRunning && !hasFollowingResponse {
                 ConversationRunningDots()
                     .padding(.top, showsWork ? ConversationMetrics.labelGap : ConversationMetrics.entryGap)
+                    .padding(.leading, showsWork ? ConversationMetrics.textInset : 0)
             }
         }
         // The gap to the reply: from the last entry, or from the header it captions.
@@ -169,14 +175,28 @@ struct ConversationWorkTranscript: View {
         .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
     }
 
-    /// Entries sit an entry apart; a visual reply keeps a section's space on each side.
+    /// Entries sit an entry apart. A visual reply keeps a section's space on
+    /// each side, and commentary stays with the tools it introduces: the next
+    /// sentence starts a new unit.
     private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?) -> CGFloat {
-        isVisualReply(entry) || previous.map(isVisualReply) == true ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap
+        if isVisualReply(entry) || previous.map(isVisualReply) == true { return ConversationMetrics.sectionGap }
+        guard let previous else { return ConversationMetrics.entryGap }
+        if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
+        if case .commentary = entry.content { return ConversationMetrics.sectionGap }
+        return ConversationMetrics.entryGap
     }
 
     private static func isVisualReply(_ entry: ConversationWorkTimelineEntry) -> Bool {
         if case .activity(let activity) = entry.content { return activity.htmlRender != nil }
         return false
+    }
+
+    private static func isTool(_ entry: ConversationWorkTimelineEntry) -> Bool {
+        switch entry.content {
+        case .group: true
+        case .activity(let activity): activity.kind == .tool && activity.htmlRender == nil
+        case .commentary: false
+        }
     }
 
     @ViewBuilder
@@ -199,7 +219,7 @@ struct ConversationWorkTranscript: View {
             if activity.kind == .thought, !activity.workTimelineThoughtHasText {
                 ConversationThinkingLabel(text: isRunning && activity.workTimelineShowsProgress ? "Thinking" : "Thought")
             } else if activity.kind == .thought {
-                ConversationThinkingBlock(activity: activity, runID: run.id,
+                ConversationThinkingBlock(activity: activity, runID: run.id, runStatus: run.status,
                     isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
             } else if let reference = activity.htmlRender {
                 ConversationHTMLRenderView(reference: reference)
@@ -229,7 +249,13 @@ struct ConversationWorkTranscript: View {
             itemID: running ? "turn:running" : "turn",
             local: running ? $localRunningFolded : $localWorkExpanded,
             interaction: transcriptInteraction)
-        return Binding(get: { flipped.wrappedValue != running }, set: { flipped.wrappedValue = $0 != running })
+        return Binding(get: { flipped.wrappedValue != running }, set: { expanded in
+            flipped.wrappedValue = expanded != running
+            // Folding a running turn also lets it fold when it ends.
+            if running, !expanded {
+                transcriptState?.setExpanded(ConversationTranscriptState.disclosureKey(runID: run.id, itemID: "turn"), false)
+            }
+        })
     }
 
     /// The elapsed label, after an alert icon when the turn failed.
@@ -297,11 +323,14 @@ private struct ConversationElapsedButtonStyle: ButtonStyle {
 }
 
 /// Expansion bound to the injected transcript state, else to local state.
+/// Opening something in a running turn keeps that turn open when it ends,
+/// so the end of the turn never folds away what the reader is looking at.
 @MainActor
 private func conversationDisclosure(
     _ state: ConversationTranscriptState?,
     runID: String,
     itemID: String,
+    keepsRunningTurnOpen: Bool = false,
     local: Binding<Bool>,
     interaction: @escaping @MainActor () -> Void
 ) -> Binding<Bool> {
@@ -312,6 +341,9 @@ private func conversationDisclosure(
             interaction()
             if let state {
                 state.setExpanded(key, expanded)
+                if expanded, keepsRunningTurnOpen {
+                    state.setExpanded(ConversationTranscriptState.disclosureKey(runID: runID, itemID: "turn"), true)
+                }
             } else {
                 local.wrappedValue = expanded
             }
@@ -337,33 +369,104 @@ struct ConversationThinkingLabel: View {
 }
 
 /// Supplied thinking stays in the transcript independently of tool disclosures.
-/// Long traces retain the existing bounded, selectable reasoning viewport.
+/// While it streams it shows its latest lines in a short viewport that follows
+/// them; afterwards it is one row, closed, that opens the bounded trace. A
+/// thought that is only a title is that row, and a record of fields (an
+/// approval) is summed up in it.
 private struct ConversationThinkingBlock: View {
+    /// About six lines of reasoning text.
+    private static let liveHeight: CGFloat = 126
+
     let activity: AgentRunActivity
     let runID: String
+    let runStatus: RunStatus
     let isLive: Bool
     @Environment(\.conversationTranscriptState) private var transcriptState
-    @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @State private var localScrollSnapshot: ConversationWorkScrollSnapshot?
+    @State private var localExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ConversationThinkingLabel(text: "Thinking")
-            ConversationBoundedWorkList(
-                group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
-                runID: runID, runStatus: isLive ? .running : .completed, followsAppends: isLive,
-                initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
-                saveScrollSnapshot: { snapshot in
-                    if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
-                    else { localScrollSnapshot = snapshot }
-                })
-                .padding(.top, ConversationMetrics.rowGap)
-                .padding(.leading, ConversationMetrics.textInset)
+        Group {
+            if isLive {
+                VStack(alignment: .leading, spacing: 0) {
+                    ConversationThinkingLabel(text: "Thinking")
+                    trace(maximumHeight: Self.liveHeight)
+                }
+            } else {
+                settledRow(Self.summary(of: activity))
+            }
         }
         .accessibilityIdentifier("work-thinking:" + activity.id)
     }
 
+    @ViewBuilder
+    private func settledRow(_ summary: (label: String, isComplete: Bool)) -> some View {
+        if summary.isComplete {
+            ConversationThinkingLabel(text: summary.label)
+        } else {
+            let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + activity.id,
+                keepsRunningTurnOpen: runStatus == .running, local: $localExpanded, interaction: transcriptInteraction)
+            VStack(alignment: .leading, spacing: 0) {
+                Button { expanded.wrappedValue.toggle() } label: {
+                    HStack(spacing: ConversationMetrics.labelGap) {
+                        ConversationThinkingLabel(text: summary.label)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                            .foregroundStyle(WovenPalette.mutedForeground)
+                            .accessibilityHidden(true)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
+                if expanded.wrappedValue { trace(maximumHeight: ConversationBoundedWorkList.maximumHeight) }
+            }
+        }
+    }
+
+    private func trace(maximumHeight: CGFloat) -> some View {
+        ConversationBoundedWorkList(
+            group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
+            runID: runID, runStatus: isLive ? .running : .completed, followsAppends: isLive,
+            maximumHeight: maximumHeight,
+            // A live trace with no position of the reader's own starts at its latest lines.
+            initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot
+                ?? ConversationWorkScrollSnapshot(offset: 0, isAtBottom: isLive),
+            saveScrollSnapshot: { snapshot in
+                if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
+                else { localScrollSnapshot = snapshot }
+            })
+            .padding(.top, ConversationMetrics.rowGap)
+            .padding(.leading, ConversationMetrics.textInset)
+    }
+
     private var scrollKey: String {
         ConversationTranscriptState.disclosureKey(runID: runID, itemID: "thinking:" + activity.id)
+    }
+
+    /// A settled row's label, and whether it already says everything the
+    /// thought does (then there is nothing to open).
+    static func summary(of activity: AgentRunActivity) -> (label: String, isComplete: Bool) {
+        let text = (activity.content ?? activity.detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        // "Status: Approved", "Action: …": a record, named by its status and action.
+        let fields = lines.compactMap { line -> (key: String, value: String)? in
+            guard let colon = line.firstIndex(of: ":"), line.distance(from: line.startIndex, to: colon) <= 24 else { return nil }
+            return (String(line[..<colon]), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
+        }
+        if lines.count > 1, fields.count == lines.count {
+            let named = ["Status", "Action"].compactMap { key in fields.first { $0.key == key }?.value }
+            return (named.isEmpty ? lines[0] : named.joined(separator: " · "), false)
+        }
+        // A short one-line thought is its own label, exactly as written.
+        if lines.count == 1, !text.hasPrefix("**"), text.count <= 120 { return (text, true) }
+        // Otherwise the provider's title or the trace's leading heading.
+        let label = activity.workTimelineLabel(active: false)
+        return (label, text == label || text == "**\(label)**")
     }
 }
 
@@ -395,8 +498,17 @@ private struct ConversationWorkGroupRow: View {
             ConversationActivityRow(activity: single, runID: runID, runStatus: runStatus,
                 showsProgress: group.showsProgress(single))
         } else {
-            let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: group.id,
-                local: $localExpanded, interaction: transcriptInteraction)
+            let disclosure = conversationDisclosure(transcriptState, runID: runID, itemID: group.id,
+                keepsRunningTurnOpen: runIsActive, local: $localExpanded, interaction: transcriptInteraction)
+            // A tool the reader opened while the list was live keeps the list open around it.
+            let memberKeys = group.activities.map {
+                ConversationTranscriptState.disclosureKey(runID: runID, itemID: "activity:\($0.id)")
+            }
+            let memberOpen = transcriptState.map { state in memberKeys.contains(where: state.isExpanded) } ?? false
+            let expanded = Binding(get: { disclosure.wrappedValue || memberOpen }, set: { open in
+                disclosure.wrappedValue = open
+                if !open { memberKeys.forEach { transcriptState?.setExpanded($0, false) } }
+            })
             VStack(alignment: .leading, spacing: 0) {
                 Button { expanded.wrappedValue.toggle() } label: {
                     HStack(spacing: ConversationMetrics.iconGap) {
@@ -449,6 +561,7 @@ private struct ConversationBoundedWorkList: View {
     let runID: String
     let runStatus: RunStatus
     let followsAppends: Bool
+    var maximumHeight = Self.maximumHeight
     let initialScrollSnapshot: ConversationWorkScrollSnapshot
     let saveScrollSnapshot: (ConversationWorkScrollSnapshot) -> Void
     @State private var contentHeight = Self.maximumHeight
@@ -456,14 +569,12 @@ private struct ConversationBoundedWorkList: View {
     @State private var scrollPosition = ScrollPosition(edge: .top)
     @State private var scrollOffset: CGFloat = 0
     @State private var reasoningText: [String: String] = [:]
-    @State private var laidOutActivityIDs: [String]?
     @State private var growthStartedAtBottom = false
     @State private var isUserScrolling = false
     @State private var followTask: Task<Void, Never>?
     @State private var restoringScroll = true
 
     var body: some View {
-        ScrollViewReader { _ in
             ScrollView(.vertical) {
                 Group {
                     if group.isThoughtOnly {
@@ -481,18 +592,16 @@ private struct ConversationBoundedWorkList: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
         .scrollIndicators(.never)
-        .frame(height: min(Self.maximumHeight, max(1, contentHeight)))
+        .frame(height: min(maximumHeight, max(1, contentHeight)))
         .defaultScrollAnchor(.top, for: .initialOffset)
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ConversationWorkScrollGeometry.self) { geometry in
             .init(contentHeight: geometry.contentSize.height, offset: max(0, geometry.contentOffset.y),
                   viewportHeight: geometry.containerSize.height)
         } action: { before, after in
-            let ids = group.activities.map(\.id)
             if restoringScroll {
                 scrollOffset = after.offset
                 scrollState.setAtBottom(after.isAtBottom)
-                laidOutActivityIDs = ids
                 // A compact preview may be at its bottom before the saved
                 // reasoning page has loaded. Wait for its original position.
                 guard after.contentHeight - after.viewportHeight + 4 >= initialScrollSnapshot.offset else { return }
@@ -505,12 +614,7 @@ private struct ConversationBoundedWorkList: View {
                 }
                 return
             }
-            if followsAppends, !isUserScrolling, let prior = laidOutActivityIDs,
-               scrollState.shouldFollowAppend(from: prior, to: ids, wasAtBottom: before.isAtBottom) {
-                followAfterLayout()
-            }
             growthStartedAtBottom = after.contentHeight > before.contentHeight && before.isAtBottom
-            laidOutActivityIDs = ids
             scrollOffset = after.offset
             scrollState.setAtBottom(after.isAtBottom)
         }
@@ -542,7 +646,6 @@ private struct ConversationBoundedWorkList: View {
         .onDisappear {
             followTask?.cancel()
             saveScrollSnapshot(.init(offset: scrollOffset, isAtBottom: scrollState.isAtBottom))
-        }
         }
     }
 
@@ -595,6 +698,7 @@ private struct ConversationActivityRow: View {
                     transcriptState,
                     runID: runID,
                     itemID: "activity:\(activity.id)",
+                    keepsRunningTurnOpen: runStatus == .running,
                     local: $localExpanded,
                     interaction: transcriptInteraction
                 )
@@ -612,7 +716,8 @@ private struct ConversationActivityRow: View {
                             activity: activity,
                             runID: runID,
                             isLive: isLive,
-                            summary: secondaryLabel
+                            summary: secondaryLabel,
+                            rowTitle: primaryLabel.count > Self.fullTitleLength ? primaryLabel : nil
                         )
                         .padding(.top, ConversationMetrics.rowGap)
                         .padding(.leading, ConversationMetrics.textInset)
@@ -643,13 +748,8 @@ private struct ConversationActivityRow: View {
                     // the full text is in the details.
                     HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
                         Text(primaryLabel)
-                            .font(.system(
-                                size: 13.5,
-                                weight: activity.kind == .thought ? .regular : .medium
-                            ))
-                            .foregroundStyle(WovenPalette.foreground.opacity(
-                                activity.kind == .thought ? 0.58 : 0.72
-                            ))
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(WovenPalette.foreground.opacity(0.72))
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if let expanded { chevron(expanded) }
@@ -703,12 +803,6 @@ private struct ConversationActivityRow: View {
     }
 
     private var secondaryLabel: String? {
-        if activity.kind == .thought {
-            // A thought labelled from its own text needs no preview.
-            guard ["Thinking", "Thought", "Reasoning", "Reasoning summary"].contains(primaryLabel),
-                  let content = activity.content?.nonempty else { return nil }
-            return Self.preview(content)
-        }
         if let detail = activity.detail?.nonempty { return detail }
         guard activity.kind != .activity,
               let content = activity.content?.nonempty else { return nil }
@@ -719,8 +813,13 @@ private struct ConversationActivityRow: View {
 
     private var isLive: Bool { runStatus == .running && showsProgress }
 
+    /// A label longer than this can be cut off in its one line; its details
+    /// then show it whole.
+    private static let fullTitleLength = 72
+
     /// Expandable when anything is not already fully shown in the label.
     private var isExpandable: Bool {
+        if primaryLabel.count > Self.fullTitleLength { return true }
         if activity.subagents?.isEmpty == false || activity.detailsAvailable == true { return true }
         if activity.rawInputJSON != nil || activity.rawOutputJSON != nil || activity.rawPayloadJSON != nil {
             return true
@@ -795,6 +894,8 @@ private struct ConversationActivityDetails: View {
     let isLive: Bool
     /// Text already shown in the row label.
     let summary: String?
+    /// The row's own label when it may be cut off there.
+    var rowTitle: String? = nil
     @Environment(\.conversationActivityDetails) private var loadDetails
     @State private var loaded: AgentRunActivity?
     @State private var loadToken: UUID?
@@ -812,10 +913,11 @@ private struct ConversationActivityDetails: View {
 
     var body: some View {
         let complete = self.complete
+        let fetchedTitle = isLive ? nil : complete?.title.flatMap { $0 == activity.title ? nil : $0 }
         let content = field(\.content)?.nonempty
             ?? (activity.kind == .thought ? field(\.detail)?.nonempty ?? field(\.title)?.nonempty : nil)
         VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
-            if activity.kind != .thought, !isLive, let title = complete?.title, title != activity.title {
+            if activity.kind != .thought, let title = fetchedTitle ?? rowTitle {
                 ConversationPagedText(text: title, style: .prose)
             }
             if activity.kind != .thought, !isLive, let detail = complete?.detail, detail != activity.detail {
@@ -842,7 +944,7 @@ private struct ConversationActivityDetails: View {
                 // A script: its source folded away, the tools it called, then what it printed.
                 ConversationCodeScript(source: field(\.rawInputJSON))
                 ConversationCodeCallList(calls: calls)
-                rawBlock("Output", field(\.rawOutputJSON))
+                rawBlock("Output", field(\.rawOutputJSON).map(Self.unfenced))
             } else if let questions = field(\.questions) {
                 // Each question with its answer, or that it was not answered;
                 // a call that failed says why.
@@ -852,7 +954,7 @@ private struct ConversationActivityDetails: View {
                 }
             } else if activity.kind != .thought {
                 rawBlock("Input", field(\.rawInputJSON))
-                rawBlock("Output", field(\.rawOutputJSON))
+                rawBlock("Output", field(\.rawOutputJSON).map(Self.unfenced))
                 rawBlock("Event", field(\.rawPayloadJSON))
             }
             // A compact record can contain no inline fields. Keep a visible
@@ -945,6 +1047,22 @@ private struct ConversationActivityDetails: View {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
+    }
+
+    /// Output that is one fenced block (a console transcript), without its
+    /// fence lines: the closing fence matches the opening one's character
+    /// and is at least as long.
+    static func unfenced(_ text: String) -> String {
+        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count >= 2, let fence = lines[0].first, fence == "`" || fence == "~" else { return text }
+        let length = lines[0].prefix { $0 == fence }.count
+        func closes(_ line: Substring) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.count >= length && trimmed.allSatisfy { $0 == fence }
+        }
+        guard length >= 3, closes(lines[lines.count - 1]), !lines.dropFirst().dropLast().contains(where: closes) else { return text }
+        return lines.dropFirst().dropLast().joined(separator: "\n")
     }
 
     @ViewBuilder
@@ -1324,14 +1442,13 @@ private struct ConversationPagedText: View {
         let remaining = text.utf16.count - shown.utf16.count
         VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
             if style == .raw {
-                ScrollView(.horizontal) {
-                    textView(shown)
-                        .fixedSize(horizontal: true, vertical: true)
-                        .padding(ConversationMetrics.rowGap)
-                }
-                .scrollIndicators(.never)
-                .background(WovenPalette.muted.opacity(0.65))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                // Wrapped, so nothing is cut off without a cue.
+                textView(shown)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(ConversationMetrics.rowGap)
+                    .background(WovenPalette.muted.opacity(0.65))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 textView(shown)
                     .foregroundStyle(WovenPalette.mutedForeground)

@@ -67,8 +67,9 @@ enum ConversationMetrics {
         static let cellLineSpacing: CGFloat = 3
         static let cellPaddingVertical: CGFloat = 8
         static let cellPaddingHorizontal: CGFloat = 10
-        /// A table column wider than this wraps.
-        static let tableColumnLimit: CGFloat = 400
+        /// In a table too wide for the text, the other columns wrap past this;
+        /// its widest column takes what is left.
+        static let tableShortColumnLimit: CGFloat = 240
     }
 }
 
@@ -92,5 +93,58 @@ struct ConversationTextButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(WovenIconButtonStyle())
+    }
+}
+
+extension View {
+    /// The bottom edge of a transcript under its composer stack, the same in
+    /// agent chats, bot chats and the Forum. Rows fade out before the stack,
+    /// so none shows beside or through it. While the reader is away from the
+    /// end (`jumpLabel` set), a round button to the end sits centred just above
+    /// the stack, and the clear band reaches up behind it, so it never covers
+    /// legible text.
+    func conversationBottomEdge(stackHeight: CGFloat, jumpLabel: String?, jump: @escaping () -> Void) -> some View {
+        modifier(ConversationBottomEdge(stackHeight: stackHeight, jumpLabel: jumpLabel, jump: jump))
+    }
+}
+
+private struct ConversationBottomEdge: ViewModifier {
+    static let jumpSize: CGFloat = 30
+    let stackHeight: CGFloat
+    let jumpLabel: String?
+    let jump: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.wovenTheme) private var theme
+
+    func body(content: Content) -> some View {
+        let stackTop = stackHeight + ConversationBottomOverlayLayout.bottomOffset
+        let jumpBand = jumpLabel == nil ? 0 : ConversationMetrics.rowGap + Self.jumpSize
+        content
+            .mask {
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: reduceTransparency ? 0 : ConversationBottomOverlayLayout.breathingRoom)
+                    Color.clear.frame(height: stackTop + jumpBand)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let jumpLabel {
+                    Button(action: jump) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(WovenPalette.foreground)
+                            .frame(width: Self.jumpSize, height: Self.jumpSize)
+                            .background(theme.palette.workspace, in: Circle())
+                            .overlay { Circle().strokeBorder(WovenPalette.foreground.opacity(0.1), lineWidth: 1) }
+                            .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(jumpLabel)
+                    .accessibilityLabel(jumpLabel)
+                    .padding(.bottom, stackTop + ConversationMetrics.rowGap)
+                }
+            }
     }
 }

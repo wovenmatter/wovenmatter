@@ -214,18 +214,12 @@ struct CloudConversation: View {
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    if !scrollState.isNearBottom, conversation != nil {
-                        Button("Latest reply", systemImage: "arrow.down") {
-                            releaseHeldRow()
-                            transcriptOwnsScroll = false
-                            scrollState.setNearBottom(true)
-                            scrollToConversationBottom(using: proxy)
-                        }
-                        .buttonStyle(WovenQuietButtonStyle())
-                        .padding(.trailing, 32)
-                        .padding(.bottom, bottomScrollClearance)
-                    }
+                .conversationBottomEdge(stackHeight: bottomStackHeight,
+                                        jumpLabel: !scrollState.isNearBottom && conversation != nil ? "Latest reply" : nil) {
+                    releaseHeldRow()
+                    transcriptOwnsScroll = false
+                    scrollState.setNearBottom(true)
+                    scrollToConversationBottom(using: proxy)
                 }
             }
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
@@ -738,10 +732,6 @@ struct MessageRow: View {
     private var isStreaming: Bool {
         AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
     }
-    private var assistantBody: String {
-        isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
-    }
-
     /// The reply's text, apart from the commentary the work log shows.
     private var transcript: (body: String, commentaryIDs: Set<String>) {
         let work = activities.map(\.activity)
@@ -784,54 +774,50 @@ struct MessageRow: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         } else {
-            HStack {
-                // Each part owns the gap above it: the work log ends with the
-                // gap to the reply, and the previews and card start with theirs.
-                VStack(alignment: .leading, spacing: 0) {
-                    if let run {
-                        ConversationWorkTranscript(
-                            run: run,
-                            records: activities,
-                            commentaryIDs: transcript.commentaryIDs,
-                            hasFollowingResponse: hasResponseText && showsAssistantBody,
-                            timeline: projectedTimeline
-                        )
-                    }
-                    if showsAssistantBody {
-                        ConversationResponse(
-                            content: assistantBody,
-                            document: nil,
-                            isStreaming: isStreaming,
-                            // The running turn's dots, under the text it is writing.
-                            showsRunningDots: run?.status == .running && hasResponseText
-                        )
-                        if !isStreaming {
-                            ConversationFilePreviews(content: assistantBody, messageID: message.libraryItemID, resolveFile: resolveFile)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 0)
-            }
-            .fixedSize(horizontal: false, vertical: true)
+            assistantTurn(transcript)
         }
     }
 
-    /// Text the work transcript leaves to the response below it.
-    private var hasResponseText: Bool {
-        !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var showsAssistantBody: Bool {
-        ConversationMessageLayout.showsAssistantBody(
+    /// The partition is worked out once per update and shared by every part.
+    @ViewBuilder
+    private func assistantTurn(_ transcript: (body: String, commentaryIDs: Set<String>)) -> some View {
+        let reply = isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
+        // Text the work transcript leaves to the response below it.
+        let hasResponseText = !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let showsReply = ConversationMessageLayout.showsAssistantBody(
             content: message.content,
-            displayedBody: assistantBody,
+            displayedBody: reply,
             failedRunError: run?.status == .failed ? run?.error : nil
         )
-    }
-
-    private var projectedTimeline: ConversationWorkTimeline {
-        ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
+        HStack {
+            // Each part owns the gap above it: the work log ends with the
+            // gap to the reply, and the previews and card start with theirs.
+            VStack(alignment: .leading, spacing: 0) {
+                if let run {
+                    ConversationWorkTranscript(
+                        run: run,
+                        records: activities,
+                        commentaryIDs: transcript.commentaryIDs,
+                        hasFollowingResponse: hasResponseText && showsReply,
+                        timeline: ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
+                    )
+                }
+                if showsReply {
+                    ConversationResponse(
+                        content: reply,
+                        isStreaming: isStreaming,
+                        // The running turn's dots, under the text it is writing.
+                        showsRunningDots: run?.status == .running && hasResponseText
+                    )
+                    if !isStreaming {
+                        ConversationFilePreviews(content: reply, messageID: message.libraryItemID, resolveFile: resolveFile)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

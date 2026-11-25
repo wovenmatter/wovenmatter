@@ -16,20 +16,25 @@ struct ConversationFilePreviews: View {
     var body: some View {
         let files = self.files
         // Nothing at all without files, so a reply without any keeps its height when it settles.
+        // Compact chips in a wrapping row, each with its own actions.
         if !files.isEmpty {
-            VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
+            FlowLayout(horizontalSpacing: ConversationMetrics.rowGap, verticalSpacing: ConversationMetrics.rowGap) {
                 ForEach(files, id: \.source) { file in
                     ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
                         messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
                 }
             }
-            .padding(.top, ConversationMetrics.sectionGap)
+            .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+            .padding(.top, ConversationMetrics.sectionGap / 2)
         }
     }
 }
 
 private struct ConversationFileAttachment: View {
+    /// A chip never takes more than this; its name truncates in the middle.
+    private static let maximumNameWidth: CGFloat = 240
     @Environment(\.openDocumentPreview) private var openPreview
+    @Environment(\.wovenTheme) private var theme
     let file: LibraryAsset
     let identity: String
     let resolve: () async throws -> URL
@@ -39,17 +44,26 @@ private struct ConversationFileAttachment: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ConversationMetrics.tight) {
-            HStack(spacing: ConversationMetrics.rowGap) {
+            HStack(spacing: ConversationMetrics.hair) {
                 Button { perform { openPreview?($0, "library:" + identity) } } label: {
                     Label(url?.lastPathComponent ?? file.title,
                           systemImage: file.kind == .photo ? "photo" : "doc.richtext")
-                        .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                        .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(WovenPalette.foreground)
+                        .frame(maxWidth: Self.maximumNameWidth, alignment: .leading)
+                        .padding(.leading, ConversationMetrics.labelGap + ConversationMetrics.hair)
+                        .frame(height: WovenMetrics.rowHeight)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(WovenQuietButtonStyle())
+                .buttonStyle(.plain)
                 .help("Preview \(file.title). Drag to copy the file.")
                 .accessibilityLabel("Preview \(file.title)")
                 .onDrag { dragProvider() }
-                Button { perform { await save($0) } } label: { Image(systemName: "arrow.down.to.line") }
+                Button { perform { await save($0) } } label: {
+                    Image(systemName: "arrow.down.to.line")
+                        .frame(width: ConversationMetrics.actionRowHeight, height: ConversationMetrics.actionRowHeight)
+                        .contentShape(Rectangle())
+                }
                     .buttonStyle(WovenIconButtonStyle())
                     .help("Save \(file.title)…")
                     .accessibilityLabel("Save \(file.title)")
@@ -66,6 +80,9 @@ private struct ConversationFileAttachment: View {
                 .accessibilityLabel("File actions for \(file.title)")
                 if loading { ProgressView().controlSize(.small) }
             }
+            .padding(.trailing, ConversationMetrics.hair)
+            .background(theme.palette.themeSoft.opacity(0.5),
+                        in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
             .disabled(loading)
             if let error { Text(error).font(.caption).foregroundStyle(WovenPalette.mutedForeground) }
         }

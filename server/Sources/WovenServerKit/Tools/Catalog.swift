@@ -370,7 +370,8 @@ private let visualReplyTools: [WovenTool] = [
       HTML document, given as `html` or as the `path` of an HTML file you wrote.
       Styles and scripts go inline; libraries may load over HTTPS. It appears above your text and stays \
       in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; \
-      `height` is only where it starts, and `title` defaults to the document's own <title>. Absolute paths to local \
+      `height` is only where it starts, and `title` defaults to the document's own <title>. The chat shows `title` \
+      above it, so do not repeat it inside the document. Absolute paths to local \
       images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
       fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
       the person wants to keep and change, make an app with `create_artifact` instead.
