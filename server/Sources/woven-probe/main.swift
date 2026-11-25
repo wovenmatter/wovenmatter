@@ -35,6 +35,7 @@ let usage = """
     artifacts                        notes, pages, sheets and apps, with their stamps
     artifact ID                      print an artifact's document
     artifact-create KIND TITLE [FILE]
+    artifact-delete ID
                                      create one (note, canvas, spreadsheet, html), FILE its document
     artifact-write ID FILE [--based-on STAMP]
                                      write a document, by default based on an old stamp so it conflicts
@@ -381,6 +382,9 @@ do {
     for artifact in try await client.call(ListArtifacts(includeTrashed: true)) {
       out("\(artifact.id)\t\(artifact.kind.rawValue)\t\(artifact.title)\t\(artifact.stamp)" + (artifact.trashed ? "\ttrashed" : ""))
     }
+  case "artifact-delete":
+    _ = try await client.call(DeleteArtifact(artifactID: argument(0, "ID")))
+    out("done")
   case "artifact":
     out(try await client.call(ReadArtifact(artifactID: argument(0, "ID"))).body)
   case "artifact-create":
