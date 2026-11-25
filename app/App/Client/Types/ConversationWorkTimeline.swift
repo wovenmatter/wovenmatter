@@ -107,8 +107,13 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
         if !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist) { pending.append(activity) }
       case .thought:
         // Revisions have already merged by ID. A new supplied thought is a
-        // visible phase boundary; an empty placeholder must not split tools.
-        guard activity.workTimelineThoughtHasText else { continue }
+        // visible phase boundary. A thought without text still shows that
+        // the agent thought, but never splits tools or repeats one before it.
+        if !activity.workTimelineThoughtHasText {
+          if !pending.isEmpty { continue }
+          if case .activity(let prior) = entries.last?.content, prior.kind == .thought,
+             !prior.workTimelineThoughtHasText { continue }
+        }
         flush()
         entries.append(ConversationWorkTimelineEntry(content: .activity(activity)))
       case .assistant:

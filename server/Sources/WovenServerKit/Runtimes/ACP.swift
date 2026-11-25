@@ -215,6 +215,13 @@ final class ACPSession: RuntimeSession, @unchecked Sendable {
           sessionParams["_meta"] = .object(["rules": .string(instructions)])
         }
       }
+      // Claude Code's thinking often streams no text. Its adapter passes on
+      // the frames that count the thinking as it goes, so the turn shows it.
+      if profile.kind == .claudeCode {
+        sessionParams["_meta"] = .object(["claudeCode": .object(["emitRawSDKMessages": .array([
+          .object(["type": .string("system"), "subtype": .string("thinking_tokens")]),
+        ])])])
+      }
       let handle: String
       if let existing = start.nativeHandle {
         guard initialized["agentCapabilities"]?["loadSession"]?.bool == true else {
@@ -621,6 +628,8 @@ actor ACPState {
         else { .object(["outcome": .object(["outcome": .string("cancelled")])]) }
       await connection.respond(requestID, result: result)
       emit.yield(.promptResolved(id: promptID))
+    case .notification("_claude/sdkMessage", let params):
+      if params["message"]?["subtype"]?.string == "thinking_tokens" { quietThinking() }
     case .notification(let method, let params):
       await profile.handleNotification?(method, params)
     case .request(let id, "session/request_permission", let params):
@@ -668,20 +677,8 @@ actor ACPState {
       emit.yield(.text(text))
     case "agent_thought_chunk":
       guard let text = update["content"]?["text"]?.string else { return }
-      let id: String
-      if let thinkingID {
-        id = thinkingID
-      } else {
-        emit.yield(.messageFinished)
-        thinkingCount += 1
-        id = "thinking-\(turnNumber)-\(thinkingCount)"
-        thinkingID = id
-        let call = ToolCall(name: "thinking", input: "", output: "", title: "Thinking", kind: .thinking)
-        tools[id] = call
-        emit.yield(.tool(callID: id, call: call, finished: false))
-      }
       // Only what is new travels; the server keeps the whole.
-      emit.yield(.toolOutput(callID: id, delta: text))
+      emit.yield(.toolOutput(callID: startThinking(), delta: text))
     case "tool_call", "tool_call_update":
       guard let callID = update["toolCallId"]?.string else { return }
       endActivity(planToo: false)
@@ -723,6 +720,28 @@ actor ACPState {
     default:
       return
     }
+  }
+
+  /// The reasoning in progress, started if there is none.
+  private func startThinking() -> String {
+    if let thinkingID { return thinkingID }
+    emit.yield(.messageFinished)
+    thinkingCount += 1
+    let id = "thinking-\(turnNumber)-\(thinkingCount)"
+    thinkingID = id
+    let call = ToolCall(name: "thinking", input: "", output: "", title: "Thinking", kind: .thinking)
+    tools[id] = call
+    emit.yield(.tool(callID: id, call: call, finished: false))
+    return id
+  }
+
+  /// The agent thinks without text to show: the reasoning is there, empty.
+  /// The model thinks only between tool calls, so with one open this is a
+  /// subagent's thinking, which its call already stands for.
+  private func quietThinking() {
+    guard !replaying, !tools.values.contains(where: { $0.kind != .thinking && $0.kind != .plan }) else { return }
+    output()
+    _ = startThinking()
   }
 
   /// Ends the reasoning in progress, and the plan when the turn ends.

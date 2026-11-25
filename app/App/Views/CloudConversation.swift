@@ -753,9 +753,8 @@ struct MessageRow: View {
         } else if layout.content == .fileChanges {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
-                    if showsAssistantBody { return 18 }
-                    guard let run else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleContent(run: run, timeline: projectedTimeline) ? 18 : 0
+                    // Under the reply, or under the turn's header, which every run shows.
+                    showsAssistantBody || run != nil ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
