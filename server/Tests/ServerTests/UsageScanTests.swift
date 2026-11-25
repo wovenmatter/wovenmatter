@@ -54,6 +54,13 @@ private func totals(_ library: Library) async throws -> [RuntimeKind: UsageAmoun
   let codex = home.appendingPathComponent(".codex/sessions/2026/01/05/" + rollout)
   try FileManager.default.createDirectory(at: codex.deletingLastPathComponent(), withIntermediateDirectories: true)
   try FileManager.default.copyItem(at: fixtures.appendingPathComponent(rollout), to: codex)
+  #if os(macOS)
+  // A history macOS flags hidden (a copy can carry the flag) is still read.
+  var flagged = codex
+  var hidden = URLResourceValues()
+  hidden.isHidden = true
+  try flagged.setResourceValues(hidden)
+  #endif
 
   let project = home.appendingPathComponent(".claude/projects/-tmp-example")
   let claude = project.appendingPathComponent(claudeSession + ".jsonl")
