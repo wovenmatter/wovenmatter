@@ -14,6 +14,8 @@ struct CloudConversation: View {
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
+    /// The agent of a chat being started: it shows as a new chat until its first view arrives.
+    var startingAgent: WorkspaceAgent? = nil
     let attachedNoteTitle: String?
     @Binding var draft: String
     let attachments: [AgentMessageAttachmentDraft]
@@ -88,7 +90,9 @@ struct CloudConversation: View {
                     // estimates can strand the bottom anchor in blank space
                     // before those rows are measured.
                     VStack(spacing: 0) {
-                        if conversation == nil {
+                        if let startingAgent, session?.hasLoaded != true {
+                            newChatEmptyState(runtimeKind: startingAgent.runtimeKind)
+                        } else if conversation == nil {
                             ConversationEmptyState(
                                 icon: .messageSquare,
                                 title: agent.map { "New conversation with \(agentDisplayName($0))" } ?? "Choose a conversation",
@@ -100,17 +104,15 @@ struct CloudConversation: View {
                             // Its first view has not arrived: nothing yet, then the chat whole.
                             Color.clear.frame(height: 1)
                         } else if visibleMessages.isEmpty {
-                            ConversationEmptyState(
-                                icon: conversation?.runtimeKind == nil
-                                    ? (agent.map { agentIconGlyph($0) } ?? .messageSquare)
-                                    : .terminal,
-                                harnessLogo: conversation?.runtimeKind.map(HarnessLogo.init(runtimeKind:)),
-                                title: conversation?.title ?? "Conversation",
-                                detail: conversation?.runtimeKind.map { runtimeKind in
-                                    let recipient = agent.map(agentDisplayName) ?? runtimeKind.displayName
-                                    return "Send a message to \(recipient) to start this chat."
-                                } ?? "This conversation has no messages yet."
-                            )
+                            if let runtimeKind = conversation?.runtimeKind {
+                                newChatEmptyState(runtimeKind: runtimeKind)
+                            } else {
+                                ConversationEmptyState(
+                                    icon: agent.map { agentIconGlyph($0) } ?? .messageSquare,
+                                    title: conversation?.title ?? "Conversation",
+                                    detail: "This conversation has no messages yet."
+                                )
+                            }
                         } else {
                             if session?.hasOlderMessages == true,
                                let oldestMessageID = messages.first?.id {
@@ -573,6 +575,16 @@ struct CloudConversation: View {
     }
 
     private static let contentSpace = "conversation-content"
+
+    /// A harness chat with no messages: its logo, and whom a message goes to.
+    private func newChatEmptyState(runtimeKind: AgentRuntimeKind) -> some View {
+        ConversationEmptyState(
+            icon: .terminal,
+            harnessLogo: HarnessLogo(runtimeKind: runtimeKind),
+            title: conversation?.title ?? "New Chat",
+            detail: "Send a message to \(agent.map(agentDisplayName) ?? runtimeKind.displayName) to start this chat."
+        )
+    }
 
     private func conversationChanged(to conversationID: String?) {
         session?.transcriptState.tasksExpanded = false
