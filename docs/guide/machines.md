@@ -14,8 +14,7 @@ is offline sync when it is back.
 
 The sidebar shows this Mac under **Local workspace**, then one section for each
 other machine, online or offline, under its name. Each section lists that
-machine's agents and folders. A chat started from a machine's section runs on
-that machine.
+machine's folders. A chat started in a folder runs on that folder's machine.
 
 **Settings → Workspaces** lists your other machines under **Remote workspaces**
 with their status. A machine that is switched off stays listed as **Offline**.

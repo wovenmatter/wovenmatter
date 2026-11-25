@@ -12,42 +12,6 @@ enum CompactWorkspacePane: Equatable {
     case note
 }
 
-enum AgentMoveScope {
-    case pinned
-    case stored(String)
-}
-
-enum PinnedAgentsStore {
-    static let storageKey = "wovenmatter.sidebar.pinned-agent-ids"
-
-    static func decode(_ raw: String) -> [String] {
-        guard let data = raw.data(using: .utf8),
-              let values = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        var seen = Set<String>()
-        return values.filter { seen.insert($0).inserted }
-    }
-
-    static func encode(_ ids: [String]) -> String {
-        guard let data = try? JSONEncoder().encode(ids),
-              let raw = String(data: data, encoding: .utf8) else {
-            return "[]"
-        }
-        return raw
-    }
-
-    static func toggle(id: String, in raw: inout String) {
-        var ids = decode(raw)
-        if let index = ids.firstIndex(of: id) {
-            ids.remove(at: index)
-        } else {
-            ids.append(id)
-        }
-        raw = encode(ids)
-    }
-}
-
 struct FolderSections {
     let pinned: [WorkspaceFolderRecord]
     let unpinned: [WorkspaceFolderRecord]
@@ -69,8 +33,6 @@ struct SidebarActions {
     let onMoveSingleRail: () -> Void
     let onShowNavigation: () -> Void
     let onUtility: (WindowDestination) -> Void
-    let onSelectAgent: (String) -> Void
-    let onCreateAgentChat: (String) -> Void
     let onSelectFolder: (String?) -> Void
     let onSelectConversation: (String) -> Void
     let onSelectNote: (String) -> Void
@@ -106,15 +68,12 @@ struct SidebarRail: View {
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
     let runningConversationIDs: Set<String>
-    let selectedAgentID: String?
     let selectedFolderID: String?
     let selectedConversationID: String?
     let selectedNoteID: String?
     let bots: BotsStore
     let selectedBotTarget: BotTarget?
     let destination: WindowDestination
-    @Binding var pinnedAgentIDsRaw: String
-    @Binding var agentOrderRaw: String
     @Binding var agentDisclosureRaw: String
     let actions: SidebarActions
     let onSurfaceProfileChange: () -> Void
@@ -137,20 +96,16 @@ struct SidebarRail: View {
         SidebarNavigationPage(
             model: model,
             side: side,
-            agents: agents,
             machines: machines,
             folders: folders,
             conversations: conversations,
             notes: notes,
             runningConversationIDs: runningConversationIDs,
-            selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
             bots: bots,
             selectedBotTarget: selectedBotTarget,
             destination: destination,
-            pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
-            agentOrderRaw: $agentOrderRaw,
             agentDisclosureRaw: $agentDisclosureRaw,
             onCollapse: adaptiveExpanded ? nil : { actions.onCollapse(side) },
             onMove: style == .split ? nil : actions.onMoveSingleRail,
@@ -197,21 +152,17 @@ struct SidebarNavigationPage: View {
     @Environment(\.wovenTheme) private var theme
     let model: ApplicationModel
     let side: SidebarSide
-    let agents: [WorkspaceAgent]
     /// This machine first, then the others.
     let machines: [Machine]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
     let runningConversationIDs: Set<String>
-    let selectedAgentID: String?
     let selectedFolderID: String?
     let selectedConversationID: String?
     let bots: BotsStore
     let selectedBotTarget: BotTarget?
     let destination: WindowDestination
-    @Binding var pinnedAgentIDsRaw: String
-    @Binding var agentOrderRaw: String
     @Binding var agentDisclosureRaw: String
     let onCollapse: (() -> Void)?
     let onMove: (() -> Void)?
@@ -230,14 +181,6 @@ struct SidebarNavigationPage: View {
     @State private var renamedFolderName = ""
     @State private var deletingFolder: WorkspaceFolderRecord?
     @State private var editingReferenceFolderID: String?
-
-    private var pinnedAgentOrder: [String] {
-        PinnedAgentsStore.decode(pinnedAgentIDsRaw)
-    }
-
-    private var pinnedAgentIDs: Set<String> {
-        Set(pinnedAgentOrder)
-    }
 
     private var thisMachine: Machine? { machines.first(where: \.isThisMachine) }
 
@@ -398,72 +341,47 @@ struct SidebarNavigationPage: View {
                 agentDisclosureHeading(title: "Local workspace", key: key)
                 if agentSectionExpanded(key) {
                     workspaceContents(key: key, title: "Local workspace", machine: thisMachine)
+                        .padding(.leading, 8)
                 }
             }
             if showsRemoteWorkspaces {
                 let key = AgentDisclosureKey.remoteWorkspaces
                 agentDisclosureHeading(title: "Remote workspaces", key: key)
                 if agentSectionExpanded(key) {
-                    if otherMachines.isEmpty {
-                        agentEmptyLabel("No remote workspaces yet")
+                    VStack(alignment: .leading, spacing: 0) {
+                        if otherMachines.isEmpty {
+                            agentEmptyLabel("No remote workspaces yet")
+                        }
+                        ForEach(otherMachines) { machine in
+                            machineSection(machine)
+                        }
                     }
-                    ForEach(otherMachines) { machine in
-                        machineSection(machine)
-                    }
+                    .padding(.leading, 8)
                 }
             }
         }
     }
 
-    /// One machine's agents and folders. Chats started here run on that machine;
-    /// a new folder is created by that machine on its own disk.
+    /// One machine's folders. A new folder is created by that machine on its own disk.
     @ViewBuilder
     private func workspaceContents(
         key: String,
         title: String,
         machine: Machine?
     ) -> some View {
-        let isRemote = machine?.isThisMachine == false
-        let workspaceAgents = machine.map { machine in agents.filter { $0.machineID == machine.id } } ?? []
         let sections = FolderSections(folders: machine.map { machine in folders.filter { $0.machineID == machine.id } } ?? [])
         let counts = folderContentCounts
-        let orderKey = isRemote ? key : AgentSidebarGroup.localWorkspace.orderKey
-        let pinned = AgentSidebarGroup.applyOrder(
-            workspaceAgents.filter { pinnedAgentIDs.contains($0.id) }, preferred: pinnedAgentOrder
-        )
-        let regular = AgentSidebarGroup.agents(
-            from: workspaceAgents,
-            in: isRemote ? .remoteWorkspaces : .localWorkspace,
-            pinnedIDs: pinnedAgentIDs,
-            customOrder: AgentOrderStore.order(forKey: orderKey, in: agentOrderRaw)
-        )
         VStack(alignment: .leading, spacing: 0) {
-            agentDisclosureHeading(title: "Agents", key: key + ":agents")
-            if agentSectionExpanded(key + ":agents") {
-                ForEach(pinned) { agent in
-                    agentRow(agent, moveScope: .pinned, groupAgents: pinned, isPinned: true)
-                }
-                ForEach(regular) { agent in
-                    agentRow(agent, moveScope: .stored(orderKey), groupAgents: regular, isPinned: false)
-                }
-                if pinned.isEmpty && regular.isEmpty {
-                    agentEmptyLabel(isRemote && machine?.isOnline == false ? "Workspace is stopped" : "No agents")
-                }
+            newFolderRow(key: key, machine: machine, workspaceTitle: machine?.name ?? title)
+            ForEach(sections.pinned) { folder in
+                folderRow(folder, sectionFolders: sections.pinned,
+                          counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
             }
-            agentDisclosureHeading(title: "Folders", key: key + ":folders")
-            if agentSectionExpanded(key + ":folders") {
-                newFolderRow(key: key, machine: machine, workspaceTitle: machine?.name ?? title)
-                ForEach(sections.pinned) { folder in
-                    folderRow(folder, sectionFolders: sections.pinned,
-                              counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
-                }
-                ForEach(sections.unpinned) { folder in
-                    folderRow(folder, sectionFolders: sections.unpinned,
-                              counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
-                }
+            ForEach(sections.unpinned) { folder in
+                folderRow(folder, sectionFolders: sections.unpinned,
+                          counts: counts[folder.id, default: .init()], workspaceTitle: machine?.name ?? title)
             }
         }
-        .padding(.leading, 8)
     }
 
     private func agentSectionExpanded(_ key: String) -> Bool {
@@ -486,7 +404,6 @@ struct SidebarNavigationPage: View {
     @ViewBuilder
     private func machineSection(_ machine: Machine) -> some View {
         let key = AgentDisclosureKey.machine(machine.id)
-        // Remote workspace names deliberately align with the local heading.
         agentDisclosureHeading(title: machine.name, key: key)
         if agentSectionExpanded(key) {
             workspaceContents(key: key, title: machine.name, machine: machine)
@@ -501,64 +418,6 @@ struct SidebarNavigationPage: View {
             .padding(.vertical, 4)
     }
 
-    private func agentRow(
-        _ agent: WorkspaceAgent,
-        moveScope: AgentMoveScope,
-        groupAgents: [WorkspaceAgent],
-        isPinned: Bool
-    ) -> some View {
-        let presentation = agentPresentation(agent)
-        let presentIDs = groupAgents.map(\.id)
-        let canMoveUp = AgentOrderStore.canMove(
-            id: agent.id,
-            direction: .up,
-            presentIDs: presentIDs
-        )
-        let canMoveDown = AgentOrderStore.canMove(
-            id: agent.id,
-            direction: .down,
-            presentIDs: presentIDs
-        )
-        return HStack(spacing: 0) {
-            RailRow(
-                icon: agentIconGlyph(agent),
-                harnessLogo: HarnessLogo(runtimeKind: agent.runtimeKind),
-                title: presentation.displayName,
-                hoverID: "agent:\(agent.id)",
-                trailing: agent.status == .running ? "Running" : nil,
-                showsPin: isPinned,
-                selected: destination == .workspace && selectedAgentID == agent.id,
-                pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
-                onTogglePin: {
-                    PinnedAgentsStore.toggle(
-                        id: agent.id,
-                        in: &pinnedAgentIDsRaw
-                    )
-                },
-                moveUpTitle: "Move up",
-                moveUpEnabled: canMoveUp,
-                onMoveUp: {
-                    moveAgent(agent.id, in: moveScope, direction: .up, presentIDs: presentIDs)
-                },
-                moveDownTitle: "Move down",
-                moveDownEnabled: canMoveDown,
-                onMoveDown: {
-                    moveAgent(agent.id, in: moveScope, direction: .down, presentIDs: presentIDs)
-                }
-            ) {
-                actions.onSelectAgent(agent.id)
-            }
-            newChatButton(label: "New chat with \(presentation.displayName)") { actions.onCreateAgentChat(agent.id) }
-                .disabled(!canCreateChat(machineID: agent.machineID))
-        }
-    }
-
-    /// A chat in a folder runs on the folder's machine.
-    private func canCreateChat(machineID: String) -> Bool {
-        guard let selectedFolderID else { return true }
-        return folders.first { $0.id == selectedFolderID }?.machineID == machineID
-    }
-
     private func newChatButton(label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             LucideIcon(glyph: .plus, size: 12)
@@ -567,45 +426,6 @@ struct SidebarNavigationPage: View {
         .buttonStyle(WovenIconButtonStyle())
         .help(label)
         .accessibilityLabel(label)
-    }
-
-    private func moveAgent(
-        _ id: String,
-        in scope: AgentMoveScope,
-        direction: AgentListMoveDirection,
-        presentIDs: [String]
-    ) {
-        switch scope {
-        case .pinned:
-            // Pinned order lives in the pin-IDs list.
-            var order = PinnedAgentsStore.decode(pinnedAgentIDsRaw)
-            // Restrict to currently visible pinned agents' order.
-            order = AgentOrderStore.mergePreferred(order, present: presentIDs)
-            guard let index = order.firstIndex(of: id) else { return }
-            let target: Int
-            switch direction {
-            case .up:
-                guard index > 0 else { return }
-                target = index - 1
-            case .down:
-                guard index < order.count - 1 else { return }
-                target = index + 1
-            }
-            order.swapAt(index, target)
-            // Preserve any pin IDs not currently visible after the reordered present set.
-            let presentSet = Set(presentIDs)
-            let hiddenPins = PinnedAgentsStore.decode(pinnedAgentIDsRaw)
-                .filter { !presentSet.contains($0) }
-            pinnedAgentIDsRaw = PinnedAgentsStore.encode(order + hiddenPins)
-        case .stored(let key):
-            AgentOrderStore.move(
-                id: id,
-                direction: direction,
-                inKey: key,
-                presentIDs: presentIDs,
-                raw: &agentOrderRaw
-            )
-        }
     }
 
     private func newFolderRow(key: String, machine: Machine?, workspaceTitle: String) -> some View {

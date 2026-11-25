@@ -331,11 +331,11 @@ when an intentional design change is accepted.
 - **Machines:** every machine on your tailnet that runs the Woven server reaches all
   workspaces; do not add per-machine workspace permissions or
   execution-sharing switches.
-- **Workspace sidebar:** group Agents and Folders within each owning workspace.
-  Pinned agents and folders lead their respective lists without a separate Pinned
-  section. Each Folders section starts with New folder, scoped to that workspace.
-  Remote workspace names align with the local workspace heading; both use the same
-  child indentation. All Workspaces sits above the workspaces, Trash below them,
+- **Workspace sidebar:** each workspace lists only its folders, starting with New
+  folder, scoped to that workspace. Pinned folders lead the list without a separate
+  Pinned section. Do not list agents in the sidebar. Remote workspace names sit one
+  level in under Remote workspaces; every workspace's New folder row and folders
+  share that same single level, with no second level of nesting. All Workspaces sits above the workspaces, Trash below them,
   and Recents remains global. Never add an Unassigned workspace section: folderless
   chats appear in All Workspaces and still have an execution owner. Folder hover cards match chat previews and show the
   workspace, chat/note counts, root directory, and additional reference directories.

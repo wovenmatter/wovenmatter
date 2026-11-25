@@ -14,87 +14,6 @@ enum NewChatSource: String, CaseIterable, Identifiable {
     }
 }
 
-/// Left-rail agent groupings for Woven Matter's product terminology. The
-/// agents passed in are already those of one machine's section.
-enum AgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case pinned
-    case localWorkspace
-    case remoteWorkspaces
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .pinned: "Pinned"
-        case .localWorkspace: "Local workspace"
-        case .remoteWorkspaces: "Remote workspaces"
-        }
-    }
-
-    var orderKey: String { rawValue }
-
-    static func agents(
-        from agents: [WorkspaceAgent],
-        in group: AgentSidebarGroup,
-        pinnedIDs: Set<String>,
-        customOrder: [String] = []
-    ) -> [WorkspaceAgent] {
-        switch group {
-        case .pinned:
-            return applyOrder(agents.filter { pinnedIDs.contains($0.id) }, preferred: customOrder)
-        case .localWorkspace, .remoteWorkspaces:
-            let defaultOrder = agents
-                .filter { !pinnedIDs.contains($0.id) }
-                .sorted { lhs, rhs in
-                    if lhs.runtimeKind != rhs.runtimeKind {
-                        return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
-                    }
-                    let comparison = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
-                    if comparison != .orderedSame { return comparison == .orderedAscending }
-                    return lhs.id < rhs.id
-                }
-            return applyPreferredOrder(defaultOrder, preferred: customOrder)
-        }
-    }
-
-    /// Stable display order: preferred IDs first (when present), then name-sorted remainder.
-    static func applyOrder(
-        _ agents: [WorkspaceAgent],
-        preferred: [String]
-    ) -> [WorkspaceAgent] {
-        guard !agents.isEmpty else { return [] }
-        let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
-        var seen = Set<String>()
-        var ordered: [WorkspaceAgent] = []
-        for id in preferred {
-            guard let agent = byID[id], seen.insert(id).inserted else { continue }
-            ordered.append(agent)
-        }
-        let remaining = agents
-            .filter { seen.insert($0.id).inserted }
-            .sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
-                    == .orderedAscending
-            }
-        return ordered + remaining
-    }
-
-    /// Applies preferred IDs while retaining the caller's fallback ordering.
-    static func applyPreferredOrder(
-        _ agents: [WorkspaceAgent],
-        preferred: [String]
-    ) -> [WorkspaceAgent] {
-        guard !agents.isEmpty, !preferred.isEmpty else { return agents }
-        let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
-        var seen = Set<String>()
-        let preferredAgents = preferred.compactMap { id -> WorkspaceAgent? in
-            guard let agent = byID[id], seen.insert(id).inserted else { return nil }
-            return agent
-        }
-        return preferredAgents + agents.filter { seen.insert($0.id).inserted }
-    }
-}
-
 /// Presentation-only preferences, independent of runtime visibility and section expansion.
 enum WorkspaceSidebarVisibility: String {
     case localWorkspace
@@ -106,8 +25,8 @@ enum WorkspaceSidebarVisibility: String {
 
     var title: String {
         switch self {
-        case .localWorkspace: AgentSidebarGroup.localWorkspace.title
-        case .remoteWorkspaces: AgentSidebarGroup.remoteWorkspaces.title
+        case .localWorkspace: "Local workspace"
+        case .remoteWorkspaces: "Remote workspaces"
         }
     }
 }
@@ -150,89 +69,6 @@ enum AgentDisclosureStore {
             collapsed.remove(key)
         }
         raw = encode(collapsed)
-    }
-}
-
-enum AgentListMoveDirection: Sendable {
-    case up
-    case down
-}
-
-/// This Mac's order of agents within each sidebar group (`AppStorage` JSON map).
-enum AgentOrderStore {
-    static let storageKey = "wovenmatter.sidebar.agent-order-by-group"
-
-    static func decode(_ raw: String) -> [String: [String]] {
-        guard let data = raw.data(using: .utf8),
-              let values = try? JSONDecoder().decode([String: [String]].self, from: data) else {
-            return [:]
-        }
-        return values.mapValues { ids in
-            var seen = Set<String>()
-            return ids.filter { seen.insert($0).inserted }
-        }
-    }
-
-    static func encode(_ map: [String: [String]]) -> String {
-        guard let data = try? JSONEncoder().encode(map),
-              let raw = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return raw
-    }
-
-    static func order(forKey key: String, in raw: String) -> [String] {
-        decode(raw)[key] ?? []
-    }
-
-    /// Preferred IDs first when present, then remaining present IDs in their given order.
-    static func mergePreferred(_ preferred: [String], present: [String]) -> [String] {
-        let presentSet = Set(present)
-        var seen = Set<String>()
-        var result: [String] = []
-        for id in preferred where presentSet.contains(id) && seen.insert(id).inserted {
-            result.append(id)
-        }
-        for id in present where seen.insert(id).inserted {
-            result.append(id)
-        }
-        return result
-    }
-
-    static func move(
-        id: String,
-        direction: AgentListMoveDirection,
-        inKey key: String,
-        presentIDs: [String],
-        raw: inout String
-    ) {
-        var map = decode(raw)
-        var ids = presentIDs
-        guard let index = ids.firstIndex(of: id) else { return }
-        let target: Int
-        switch direction {
-        case .up:
-            guard index > 0 else { return }
-            target = index - 1
-        case .down:
-            guard index < ids.count - 1 else { return }
-            target = index + 1
-        }
-        ids.swapAt(index, target)
-        map[key] = ids
-        raw = encode(map)
-    }
-
-    static func canMove(
-        id: String,
-        direction: AgentListMoveDirection,
-        presentIDs: [String]
-    ) -> Bool {
-        guard let index = presentIDs.firstIndex(of: id) else { return false }
-        switch direction {
-        case .up: return index > 0
-        case .down: return index < presentIDs.count - 1
-        }
     }
 }
 
