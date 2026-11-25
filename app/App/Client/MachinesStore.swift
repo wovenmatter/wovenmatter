@@ -286,6 +286,41 @@ final class MachinesStore {
         }
     }
 
+    /// Has another Mac update its Woven Matter, sent straight to that Mac's
+    /// server; returns an error's text, or nil once its download has started.
+    /// It shows as updating until it reports another release.
+    func sendUpdateApp(_ machineID: String) async -> String? {
+        let name = machine(id: machineID)?.name ?? "That Mac"
+        guard let connection = connection(for: machineID) else {
+            return ClientError.machineNotConnected(name).localizedDescription
+        }
+        busyMachineIDs.insert(machineID)
+        defer { busyMachineIDs.remove(machineID) }
+        do {
+            _ = try await connection.call(UpdateApp())
+            appUpdatesSent[machineID] = (machine(id: machineID)?.appVersion, Date())
+            return nil
+        } catch let error as ProtocolError where error.code == .unknownMethod {
+            return "Update Woven Matter on \(name) itself this once. After that, it can be updated from here."
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Another Mac told to update, with the release it ran then, until it reports another.
+    @ObservationIgnored private var appUpdatesSent: [String: (version: String?, at: Date)] = [:]
+
+    /// Whether another Mac is updating its Woven Matter at this Mac's request.
+    func isUpdatingApp(_ machineID: String) -> Bool {
+        if isBusy(machineID) { return true }
+        guard let sent = appUpdatesSent[machineID] else { return false }
+        if machine(id: machineID)?.appVersion != sent.version || Date().timeIntervalSince(sent.at) > 15 * 60 {
+            appUpdatesSent[machineID] = nil
+            return false
+        }
+        return true
+    }
+
     /// Reads the end of the server's log, from its own server while the UI is
     /// connected to it, else over SSH through this Mac's server.
     func loadLogs(on machineID: String) {

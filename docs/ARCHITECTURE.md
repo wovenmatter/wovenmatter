@@ -488,6 +488,12 @@ Background** there, or turning the app off under Background App Activity in
 System Settings, stops the server and whatever it is running. Opening the app
 starts it again.
 
+The app updates through Sparkle. Another Mac's UI can ask this Mac's server to
+update it (`UpdateApp`): the server opens the app if it is closed and hands the
+request to it, and the app downloads the newest release, installs it with no
+window and relaunches. A Linux machine's server is updated by a Mac's server
+over SSH, to the release that Mac carries.
+
 ## Development
 
 `scripts/build_and_run.sh --instance NAME` builds the app and starts it with
