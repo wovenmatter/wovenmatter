@@ -154,15 +154,18 @@ enum DebugNavigationSignal {
             (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap(webViews)
         }
         let shown = webViews(in: view).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty }
-        var pieces: [(NSImage, NSRect)] = []
+        var pieces: [(image: NSImage, frame: NSRect, whole: NSRect, framed: Bool)] = []
         let group = DispatchGroup()
         for webView in shown {
             let configuration = WKSnapshotConfiguration()
             configuration.rect = webView.visibleRect
             let frame = view.convert(webView.visibleRect, from: webView)
+            let whole = view.convert(webView.bounds, from: webView)
+            // A visual reply sits at the bottom of its rounded, stroked frame.
+            let framed = webView is ConversationHTMLNativeWebView
             group.enter()
             webView.takeSnapshot(with: configuration) { image, _ in
-                if let image { pieces.append((image, frame)) }
+                if let image { pieces.append((image, frame, whole, framed)) }
                 group.leave()
             }
         }
@@ -170,10 +173,21 @@ enum DebugNavigationSignal {
             if let context = NSGraphicsContext(bitmapImageRep: bitmap) {
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = context
-                for (image, frame) in pieces {
-                    let rect = view.isFlipped ? NSRect(x: frame.minX, y: view.bounds.height - frame.maxY,
-                                                       width: frame.width, height: frame.height) : frame
-                    image.draw(in: rect)
+                func unflipped(_ rect: NSRect) -> NSRect {
+                    view.isFlipped ? NSRect(x: rect.minX, y: view.bounds.height - rect.maxY, width: rect.width, height: rect.height) : rect
+                }
+                for piece in pieces {
+                    NSGraphicsContext.saveGraphicsState()
+                    if piece.framed {
+                        // Only what the frame shows: inside its stroke, with its
+                        // rounded bottom corners (the header above keeps the top ones).
+                        let whole = unflipped(piece.whole)
+                        let radius = ConversationMetrics.blockRadius - 1
+                        NSBezierPath(roundedRect: NSRect(x: whole.minX + 1, y: whole.minY + 1, width: whole.width - 2,
+                                                         height: whole.height + radius), xRadius: radius, yRadius: radius).addClip()
+                    }
+                    piece.image.draw(in: unflipped(piece.frame))
+                    NSGraphicsContext.restoreGraphicsState()
                 }
                 NSGraphicsContext.restoreGraphicsState()
             }
