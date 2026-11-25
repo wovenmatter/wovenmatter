@@ -53,6 +53,9 @@ struct CloudConversation: View {
     @State private var bottomStackHeight: CGFloat = 0
     /// Rows lie below what shows (measured; it never changes whether the transcript follows).
     @State private var hasContentBelow = false
+    @State private var lastEndDistance: CGFloat = 0
+    /// Where the reader's own scroll began.
+    @State private var readerScrollStart: CGFloat = 0
     @State private var isUserScrolling = false
     @State private var libraryHighlightID: String?
     @State private var attachmentOpenError: String?
@@ -178,6 +181,29 @@ struct CloudConversation: View {
                     // The very top, with the transcript's inset above the first row.
                     scroll { $0.scrollTo(edge: .top) }
                 }
+                // `scroll-end` goes to the end as Latest reply does, and follows it again.
+                .debugRequest("scroll-end") {
+                    releaseHeldRow()
+                    transcriptOwnsScroll = false
+                    scrollState.setNearBottom(true)
+                    scrollToConversationBottom(using: proxy)
+                }
+                // `work:open` and `work:fold` open or fold the work of every settled turn.
+                .debugCommand("work:") { action in
+                    guard let session else { return }
+                    for run in session.runs where run.status != .running {
+                        session.transcriptState.setExpanded(
+                            ConversationTranscriptState.disclosureKey(runID: run.id, itemID: "turn"), action == "open")
+                    }
+                }
+                // `send:TEXT` sends TEXT from this chat's composer.
+                .debugCommand("send:") { text in
+                    draft = text
+                    Task { @MainActor in
+                        await Task.yield()
+                        onSend()
+                    }
+                }
                 // `scroll-y:POINTS` sets the offset, as a reader scrolling away would.
                 .debugCommand("scroll-y:") { value in
                     guard let y = Double(value.trimmingCharacters(in: .whitespaces)) else { return }
@@ -204,21 +230,28 @@ struct CloudConversation: View {
                 // Away from the live edge, what the reader sees stays put when
                 // something above or below it opens, folds or grows.
                 .scrollPosition(transcriptPosition, anchor: followsBottom ? .bottom : .top)
-                .onScrollPhaseChange { _, phase in
+                .onScrollPhaseChange { _, phase, context in
                     let wasScrolling = isUserScrolling
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
-                    if isUserScrolling {
-                        transcriptOwnsScroll = false
-                    } else if wasScrolling {
-                        // Where the reader's own scroll stopped decides whether the latest reply stays in view.
-                        scrollState.setNearBottom(!hasContentBelow)
+                    let end = TranscriptEnd(context.geometry)
+                    if isUserScrolling, !wasScrolling {
+                        readerScrollStart = end.offset
+                    } else if wasScrolling, !isUserScrolling, end.offset != readerScrollStart {
+                        // Where the reader's own scroll stopped decides whether
+                        // the latest reply stays in view; a tap that moved
+                        // nothing decides nothing.
+                        readerMoved(to: end)
                     }
                 }
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                    // How far the end of the transcript is below what shows.
-                    max(0, geometry.contentSize.height - geometry.visibleRect.maxY).rounded()
-                } action: { _, distance in
-                    endDistanceChanged(to: distance)
+                .onScrollGeometryChange(for: TranscriptEnd.self) { geometry in
+                    TranscriptEnd(geometry)
+                } action: { before, after in
+                    endChanged(from: before, to: after)
+                }
+                // Back from paging history, a library jump or a reader's
+                // scroll, still following: make up for anything missed meanwhile.
+                .onChange(of: followsBottom) { _, follows in
+                    if follows, lastEndDistance > 0 { scroll { $0.scrollTo(edge: .bottom) } }
                 }
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     // The offset as `scrollTo(y:)` takes it.
@@ -616,21 +649,42 @@ struct CloudConversation: View {
     /// Less than this below the end, nothing is hidden: it is the space under
     /// the last row, which the composer stack covers.
     private static let endTolerance = CGFloat(ConversationBottomOverlayLayout.breathingRoom) + ConversationMetrics.turnGap
+    /// The reader is at the live edge only within this of the end.
+    private static let liveEdgeTolerance: CGFloat = 2
 
     /// Geometry is only measured here. Whether the transcript follows the end
     /// is the reader's: their own scroll, Latest reply, or opening or
     /// selecting something decide it, never a layout pass. Growth and
     /// shrinking at the live edge keep the bottom through the size-change
-    /// anchor in the same pass; when a pass leaves the end out of view anyway
-    /// (as when the transcript first grows past the window, where that anchor
-    /// does nothing), it is put back.
-    private func endDistanceChanged(to distance: CGFloat) {
-        let atEnd = distance <= Self.endTolerance
-        hasContentBelow = !atEnd
-        if isUserScrolling { scrollState.setNearBottom(atEnd) }
+    /// anchor in the same pass; when a resize leaves the end out of view
+    /// anyway (as when the transcript first grows past the window, where that
+    /// anchor does nothing), it is put back. Keyboard, wheel and accessibility
+    /// scrolls report no scroll phase, so the view moving with nothing resized
+    /// is the reader too when it leaves the end (the app only ever moves the
+    /// view away from the end when the reader asked, which stops following
+    /// already) or arrives at it.
+    private func endChanged(from before: TranscriptEnd, to after: TranscriptEnd) {
+        hasContentBelow = after.distance > Self.endTolerance
+        lastEndDistance = after.distance
+        let resized = after.contentHeight != before.contentHeight || after.viewportHeight != before.viewportHeight
+        if !isUserScrolling, !resized, !isPrependingHistory, after.offset != before.offset,
+           after.distance > before.distance || after.distance <= Self.liveEdgeTolerance {
+            readerMoved(to: after)
+        }
         // Back at the live edge, the bottom holds instead.
-        if atEnd, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
-        if followsBottom, distance > 0 { scroll { $0.scrollTo(edge: .bottom) } }
+        if after.distance <= Self.liveEdgeTolerance, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
+        if followsBottom, resized, after.distance > 0 { scroll { $0.scrollTo(edge: .bottom) } }
+    }
+
+    /// The reader moved the view: at the live edge it follows again, away from it it stays where they put it.
+    private func readerMoved(to end: TranscriptEnd) {
+        transcriptOwnsScroll = false
+        let atLiveEdge = end.distance <= Self.liveEdgeTolerance
+        // A move with no scroll phase leaves the last position the app set (the
+        // end, while following) in place, and that would keep pulling the view
+        // down: hold it where the reader put it instead.
+        if !atLiveEdge, scrollState.isNearBottom { scroll { $0.scrollTo(y: end.offset) } }
+        scrollState.setNearBottom(atLiveEdge)
     }
 
     private func scrolled(to offset: CGFloat) {
@@ -981,6 +1035,23 @@ private final class HeldRowPosition {
 
 /// A transcript's scroll view: one per chat, made again when its first view
 /// arrives, so each opens at the bottom in its first layout.
+/// The end of a transcript as its scroll view measures it: how far the end
+/// is below what shows, where the view is, and the sizes that move them.
+private struct TranscriptEnd: Equatable {
+    let distance: CGFloat
+    let offset: CGFloat
+    let contentHeight: CGFloat
+    let viewportHeight: CGFloat
+
+    init(_ geometry: ScrollGeometry) {
+        distance = max(0, geometry.contentSize.height - geometry.visibleRect.maxY).rounded()
+        // As `scrollTo(y:)` takes it.
+        offset = (geometry.contentOffset.y + geometry.contentInsets.top).rounded()
+        contentHeight = geometry.contentSize.height.rounded()
+        viewportHeight = geometry.containerSize.height.rounded()
+    }
+}
+
 private struct TranscriptIdentity: Hashable {
     let conversationID: String?
     let hasLoaded: Bool

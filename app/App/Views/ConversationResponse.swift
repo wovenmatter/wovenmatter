@@ -102,6 +102,7 @@ private struct ConversationResponseText: NSViewRepresentable {
         let textView = viewport.textView
         textView.onOpenLink = onOpenLink
         textView.onPressWhileGrowing = isStreaming ? transcriptInteraction : nil
+        textView.onSelect = transcriptInteraction
         if textView.apply(content: content, isStreaming: isStreaming, style: style, colorScheme: colorScheme) {
             viewport.invalidateIntrinsicContentSize()
         }
@@ -177,6 +178,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     var onOpenLink: ((URL) -> Void)?
     /// Hands the transcript's scroll to the reader while the reply grows.
     var onPressWhileGrowing: (@MainActor () -> Void)?
+    /// The reader selected text, by pointer or keyboard: the transcript keeps it in view.
+    var onSelect: (@MainActor () -> Void)?
+    private var applying = false
     private var appliedContent: String?
     private var appliedStreaming: Bool?
     private var appliedColorScheme: ColorScheme?
@@ -223,6 +227,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         let samePresentation = appliedColorScheme == colorScheme && appliedStyle == style
         appliedColorScheme = colorScheme
         appliedStyle = style
+        // Selection changes from here on are the text changing, not the reader.
+        applying = true
+        defer { applying = false }
         let selection = selectedRange()
         let previous = selection.length > 0 ? NSString(string: string) : nil
         guard let textStorage else { return false }
@@ -487,6 +494,10 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         // the held pointer, so a selection would run on to the newest text.
         onPressWhileGrowing?()
         super.mouseDown(with: event)
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        if !applying, selectedRange().length > 0 { onSelect?() }
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
