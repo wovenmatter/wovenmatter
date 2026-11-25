@@ -104,10 +104,12 @@ struct CloudConversation: View {
                                 icon: conversation?.runtimeKind == nil
                                     ? (agent.map { agentIconGlyph($0) } ?? .messageSquare)
                                     : .terminal,
+                                harnessLogo: conversation?.runtimeKind.map(HarnessLogo.init(runtimeKind:)),
                                 title: conversation?.title ?? "Conversation",
-                                detail: conversation?.runtimeKind == nil
-                                    ? "This conversation has no messages yet."
-                                    : "Send a message to start this chat."
+                                detail: conversation?.runtimeKind.map { runtimeKind in
+                                    let recipient = agent.map(agentDisplayName) ?? runtimeKind.displayName
+                                    return "Send a message to \(recipient) to start this chat."
+                                } ?? "This conversation has no messages yet."
                             )
                         } else {
                             if session?.hasOlderMessages == true,
