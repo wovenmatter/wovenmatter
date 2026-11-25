@@ -7,9 +7,10 @@ import WovenProtocol
 /// decide, highest first (gpt-6.2 before gpt-6.1 before gpt-6 before gpt-5.6),
 /// then the name. An id with no version takes its name's (Claude Code's `opus`
 /// is "Opus 5.5"). Dates (2024-08-06, 12-2024, 20251001) and sizes (70b, 8x22b,
-/// 32k, 1m) are not versions, and a model with no version goes last. Ids that
-/// name a lab (`anthropic/claude-opus-5.5`) keep each lab's models together,
-/// labs by name.
+/// 32k, 1m) are not versions, and a model with no version goes last. A
+/// harness's own `default` choice (Claude Code's "Default (recommended)")
+/// stays first. Ids that name a lab (`anthropic/claude-opus-5.5`) keep each
+/// lab's models together, labs by name.
 enum ModelOrder {
   private static let dates = try! NSRegularExpression(pattern: #"\d{4}-\d{2}-\d{2}|(?<!\d)\d{2}-\d{4}(?!\d)"#)
   private static let numbers = try! NSRegularExpression(pattern: #"(?<!\d)\d{1,3}(?![\dbBkKmM]|x\d)"#)
@@ -22,13 +23,15 @@ enum ModelOrder {
   }
 
   static func newestFirst<T>(_ items: [T], id: (T) -> String, name: (T) -> String) -> [T] {
-    let keyed = items.map { item -> (item: T, id: String, name: String, lab: String, version: [Int]) in
+    let keyed = items.map { item -> (item: T, id: String, name: String, first: Bool, lab: String, version: [Int]) in
       let id = id(item), name = name(item)
       let slash = id.firstIndex(of: "/")
-      let own = version(slash.map { String(id[id.index(after: $0)...]) } ?? id)
-      return (item, id, name, slash.map { String(id[..<$0]) } ?? "", own.isEmpty ? version(name) : own)
+      let bare = slash.map { String(id[id.index(after: $0)...]) } ?? id
+      let own = version(bare)
+      return (item, id, name, bare == "default", slash.map { String(id[..<$0]) } ?? "", own.isEmpty ? version(name) : own)
     }
     return keyed.sorted { a, b in
+      if a.first != b.first { return a.first }
       if a.lab != b.lab { return a.lab < b.lab }
       for index in 0..<max(a.version.count, b.version.count) {
         // The longer version is the later one: 6.1 follows 6.

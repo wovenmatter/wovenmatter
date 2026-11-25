@@ -50,7 +50,8 @@ export async function availableModels({ runtime, claude, credentials }) {
 // `models` newest release first, by the rule of the bots' `newestFirst`
 // (bots/src/model-catalog.ts): the version numbers in the id, else in the name
 // (Claude's `opus` is "Opus 5.5"), highest first, then the name. Dates and sizes
-// are not versions, a model with none goes last, and a reseller's models
+// are not versions, a model with none goes last, a provider's own `default`
+// choice (Claude's "Default (recommended)") stays first, and a reseller's models
 // (`anthropic/claude-opus-5.5`) stay together by lab.
 export function newestFirst(models) {
   const versionOf = text => [...text.replace(/\d{4}-\d{2}-\d{2}|(?<!\d)\d{2}-\d{4}(?!\d)/gu, '')
@@ -58,9 +59,10 @@ export function newestFirst(models) {
   const keyed = models.map(model => {
     const slash = model.id.indexOf('/');
     const version = versionOf(model.id.slice(slash + 1));
-    return { model, lab: slash < 0 ? '' : model.id.slice(0, slash), version: version.length ? version : versionOf(model.name ?? '') };
+    return { model, first: model.id.slice(slash + 1) === 'default', lab: slash < 0 ? '' : model.id.slice(0, slash), version: version.length ? version : versionOf(model.name ?? '') };
   });
   return keyed.sort((a, b) => {
+    if (a.first !== b.first) return a.first ? -1 : 1;
     if (a.lab !== b.lab) return a.lab < b.lab ? -1 : 1;
     for (let index = 0; index < Math.max(a.version.length, b.version.length); index++) {
       const [x, y] = [a.version[index], b.version[index]];

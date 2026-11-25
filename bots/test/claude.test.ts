@@ -192,7 +192,7 @@ describe("bots' Claude subscription", () => {
 });
 
 describe("bots' model lists", () => {
-  it("are newest first, by an alias's name when its id has no version", () => {
+  it("are newest first, Default on top, by an alias's name when its id has no version", () => {
     const listed = [
       ["default", "Default (recommended)"],
       ["claude-opus-4-5-20251101", "Opus 4.5"],
@@ -203,13 +203,13 @@ describe("bots' model lists", () => {
       ["gpt-6.1", "GPT-6.1"],
     ].map(([id, name]) => ({ id: id as string, name: name as string }));
     expect(newestFirst(listed).map((model) => model.id)).toEqual([
+      "default",
       "gpt-6.2-sol",
       "gpt-6.1",
       "gpt-6",
       "opus",
       "claude-fable-5-2[1m]",
       "claude-opus-4-5-20251101",
-      "default",
     ]);
   });
 });

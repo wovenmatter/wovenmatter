@@ -140,9 +140,9 @@ test('Claude sees each tool under the name Pi gives it, and calls come back unde
   assert.equal(request.frames[1].message.content[0].name, 'mcp__woven__list_sessions');
 });
 
-test('the catalog lists each provider newest first', () => {
+test('the catalog lists each provider newest first, Default on top', () => {
   const listed = [['default', 'Default (recommended)'], ['claude-opus-4-5-20251101', 'Opus 4.5'], ['gpt-6', 'GPT-6'],
     ['opus', 'Opus 5.5'], ['claude-fable-5-2[1m]', 'Fable 5.2'], ['gpt-6.2-sol', 'GPT-6.2 Sol'], ['gpt-6.1', 'GPT-6.1']];
   assert.deepEqual(newestFirst(listed.map(([id, name]) => ({ id, name }))).map(model => model.id),
-    ['gpt-6.2-sol', 'gpt-6.1', 'gpt-6', 'opus', 'claude-fable-5-2[1m]', 'claude-opus-4-5-20251101', 'default']);
+    ['default', 'gpt-6.2-sol', 'gpt-6.1', 'gpt-6', 'opus', 'claude-fable-5-2[1m]', 'claude-opus-4-5-20251101']);
 });
