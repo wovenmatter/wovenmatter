@@ -13,18 +13,20 @@ async function folders(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return { data: join(root, 'data'), cwd: root };
 }
+// The synthetic provider's two models. A new chat takes its provider's newest.
+const newest = 'synthetic/echo-2', older = 'synthetic/echo';
 const text = (updates, kind = 'agent_message_chunk') => updates.filter(item => item.update.sessionUpdate === kind).map(item => item.update.content.text).join('');
 
 test('a conversation survives a process restart', async t => {
   const { data, cwd } = await folders(t);
-  const first = startAgent({ data, cwd });
+  const first = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await first.request('session/new', { cwd, mcpServers: [] });
   assert.equal((await first.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'one' }] })).result.stopReason, 'end_turn');
   await first.stop();
 
-  const second = startAgent({ data, cwd });
+  const second = startAgent(t, { data, cwd });
   const loaded = await second.request('session/load', { sessionId, cwd, mcpServers: [] });
-  assert.equal(loaded.result.configOptions.find(option => option.id === 'model').currentValue, 'synthetic/echo');
+  assert.equal(loaded.result.configOptions.find(option => option.id === 'model').currentValue, newest);
   await second.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'two' }] });
   assert.equal(text(second.updates), 'echo: two (turn 2)');
   await second.stop();
@@ -33,7 +35,7 @@ test('a conversation survives a process restart', async t => {
 
 test('loading an unknown session fails with -32002 and creates nothing', async t => {
   const { data, cwd } = await folders(t);
-  const agent = startAgent({ data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const reply = await agent.request('session/load', { sessionId: '0190a000-0000-7000-8000-000000000000', cwd, mcpServers: [] });
   assert.equal(reply.error.code, -32002);
   await agent.stop();
@@ -42,18 +44,18 @@ test('loading an unknown session fails with -32002 and creates nothing', async t
 
 test('a prompt streams its answer, then reports how it stopped and what it used', async t => {
   const { data, cwd } = await folders(t);
-  const agent = startAgent({ data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
   const reply = await agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hello' }] });
   assert.equal(text(agent.updates), 'echo: hello (turn 1)');
-  assert.deepEqual(reply.result, { stopReason: 'end_turn', usage: { inputTokens: 3, outputTokens: 2, cachedReadTokens: 1, cachedWriteTokens: 0 }, _meta: { model: 'synthetic/echo' } });
+  assert.deepEqual(reply.result, { stopReason: 'end_turn', usage: { inputTokens: 3, outputTokens: 2, cachedReadTokens: 1, cachedWriteTokens: 0 }, _meta: { model: newest } });
   await agent.stop();
 });
 
 test('credentials come from the server, renewals go back to it, and none reach the disk', async t => {
   const { data, cwd } = await folders(t);
   const expired = { type: 'oauth', access: 'expired-access', refresh: 'old-refresh', expires: Date.now() - 1000 };
-  const agent = startAgent({ data, cwd, credentials: { synthetic: expired } });
+  const agent = startAgent(t, { data, cwd, credentials: { synthetic: expired } });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
   const reply = await agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hi' }] });
   assert.equal(reply.result.stopReason, 'end_turn');
@@ -70,7 +72,7 @@ test('credentials come from the server, renewals go back to it, and none reach t
 
 test('a subagent shows as a task tool call carrying its answer', async t => {
   const { data, cwd } = await folders(t);
-  const agent = startAgent({ data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
   await agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'delegate this' }] });
   const call = agent.updates.find(item => item.update.sessionUpdate === 'tool_call')?.update;
@@ -84,7 +86,7 @@ test('a subagent shows as a task tool call carrying its answer', async t => {
 
 test('a message sent during a turn steers it, and the turn answers once', async t => {
   const { data, cwd } = await folders(t);
-  const agent = startAgent({ data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
   const turn = agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'work slowly' }] });
   while (!agent.updates.some(item => item.update.sessionUpdate === 'tool_call')) await new Promise(resolve => setTimeout(resolve, 10));
@@ -99,15 +101,15 @@ test('a message sent during a turn steers it, and the turn answers once', async 
 
 test('a model chosen during a turn is taken at once, and the turn goes on with it', async t => {
   const { data, cwd } = await folders(t);
-  const agent = startAgent({ data, cwd });
+  const agent = startAgent(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
   const turn = agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'work slowly' }] });
   while (!agent.updates.some(item => item.update.sessionUpdate === 'tool_call')) await new Promise(resolve => setTimeout(resolve, 10));
-  const changed = await agent.request('session/set_config_option', { sessionId, configId: 'model', value: 'synthetic/echo-2' });
-  assert.equal(changed.result.configOptions.find(option => option.id === 'model').currentValue, 'synthetic/echo-2');
+  const changed = await agent.request('session/set_config_option', { sessionId, configId: 'model', value: older });
+  assert.equal(changed.result.configOptions.find(option => option.id === 'model').currentValue, older);
   const reply = (await turn).result;
   assert.equal(reply.stopReason, 'end_turn');
-  assert.equal(reply._meta.model, 'synthetic/echo-2');
+  assert.equal(reply._meta.model, older);
   await agent.stop();
 });
 
