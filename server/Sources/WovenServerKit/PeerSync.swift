@@ -8,9 +8,13 @@ import WovenProtocol
 actor PeerSync {
   struct Status: Sendable {
     var online: Bool
+    /// Its library has this one's shape, so the two sync.
+    var syncs: Bool
     var appVersion: String
     /// The tailnet address its server answered on.
     var machine: TailnetMachine
+    /// The machine as its server described itself, for one not yet synced here.
+    var described: Machine
   }
 
   private struct SelfLink: Error {}
@@ -24,7 +28,10 @@ actor PeerSync {
   private var discovery: Task<Void, Never>?
   private var links: [TailnetMachine: Task<Void, Never>] = [:]
   private var clients: [String: Client] = [:]
-  private(set) var statuses: [String: Status] = [:]
+  private(set) var statuses: [String: Status] = [:] {
+    didSet { for watcher in watchers.values { watcher.yield() } }
+  }
+  private var watchers: [UUID: AsyncStream<Void>.Continuation] = [:]
   /// The machines the first look at the tailnet found and has not yet
   /// pulled from or failed to reach; nil before that look.
   private var firstRound: Set<TailnetMachine>?
@@ -101,6 +108,19 @@ actor PeerSync {
   /// Where another machine's server was last reached on the tailnet.
   func address(of machineID: String) -> TailnetMachine? {
     statuses[machineID]?.machine
+  }
+
+  /// Yields whenever another machine is linked or lost, until the stream ends.
+  func statusChanges() -> AsyncStream<Void> {
+    let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let id = UUID()
+    watchers[id] = continuation
+    continuation.onTermination = { [weak self] _ in Task { await self?.unwatch(id) } }
+    return stream
+  }
+
+  private func unwatch(_ id: UUID) {
+    watchers[id] = nil
   }
 
   /// Whether this server is linked to that machine's server now.
@@ -206,18 +226,25 @@ actor PeerSync {
       await client.close()
       throw DuplicateLink()
     }
-    statuses[peerID] = Status(online: true, appVersion: remote.appVersion, machine: machine)
+    // Machines on any releases link and show online; they sync only while
+    // their libraries have the same shape.
+    let syncs = remote.libraryShape != nil && remote.libraryShape == hello.libraryShape
+    statuses[peerID] = Status(online: true, syncs: syncs, appVersion: remote.appVersion, machine: machine,
+                              described: remote.machine)
     defer {
       statuses[peerID]?.online = false
       if clients[peerID] === client { clients[peerID] = nil }
       Task { await client.close() }
     }
-    // Two machines on different app releases do not sync.
-    guard remote.appVersion == hello.appVersion else {
-      throw ProtocolError(.versionMismatch, "\(remote.machine.name) runs \(remote.appVersion).", machineID: peerID)
-    }
     clients[peerID] = client
     let changes = try await client.subscribe(SubscribeLibrary())
+    guard syncs else {
+      // Kept linked, so it stays online and is noticed when it goes, but
+      // nothing is pulled until both run the same release.
+      reached(machine)
+      for try await _ in changes.events {}
+      return
+    }
     try await pull(from: client, machineID: peerID)
     reached(machine)
     for try await _ in changes.events {

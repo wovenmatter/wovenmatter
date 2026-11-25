@@ -68,6 +68,9 @@ struct WorkspaceView: View {
     @AppStorage(AgentOrderStore.storageKey) private var agentOrderRaw = "{}"
     @AppStorage(AgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
     @State private var selectedAgentID: String?
+    /// Chats being started, by the id their panel holds, with the agent each
+    /// is started with, so a new chat shows at once instead of after its start.
+    @State private var startingChats: [String: WorkspaceAgent] = [:]
     @State private var chatPanels = ChatPanelState()
     private var assets: WorkspaceAssetSession { model.workspaceAssets }
     private var selectedNoteID: String? { assets.tabs.selectedNoteID }
@@ -606,6 +609,7 @@ struct WorkspaceView: View {
                         onRemoveAttachment: removeAttachment,
                         onDropFiles: attachFiles,
                         onReplaceSession: startChat(replacing:),
+                        startingChats: $startingChats,
                         onBotRoute: { target, panelID in
                             _ = chatPanels.setBot(target, in: panelID)
                         },
@@ -1014,15 +1018,20 @@ struct WorkspaceView: View {
     private func beginChatCreation(agentID: String?) -> ChatCreationSelection {
         let selection = ChatCreationSelection(previousConversationID: selectedConversationID, previousAgentID: selectedAgentID)
         selectedAgentID = agentID
+        startingChats[selection.conversationID] = agentID.flatMap { id in model.workspace.agents.first { $0.id == id } }
         closeNewChatChooser()
         presentCreatedConversation(selection.conversationID)
         return selection
     }
 
     private func finishChatCreation(_ selection: ChatCreationSelection, conversationID: String?) {
+        let agent = startingChats.removeValue(forKey: selection.conversationID)
         // A late setup response must not take focus from a newer navigation action.
         guard selectedConversationID == selection.conversationID else { return }
-        if let conversationID { presentCreatedConversation(conversationID) }
+        if let conversationID {
+            startingChats[conversationID] = agent
+            presentCreatedConversation(conversationID)
+        }
         else {
             _ = chatPanels.replaceActiveConversation(with: selection.previousConversationID)
             selectedAgentID = selection.previousAgentID
@@ -1338,6 +1347,8 @@ struct WorkspaceSurface: View {
     let onDropFiles: ([URL], ChatPanelID) -> Bool
     /// Starts a new chat in place of one whose native session is gone.
     let onReplaceSession: (WorkspaceConversationRecord) -> Void
+    /// Chats being started, with their agents, until their first view arrives.
+    @Binding var startingChats: [String: WorkspaceAgent]
     let onBotRoute: (BotTarget, ChatPanelID) -> Void
     let onOpenBotLink: (URL, ChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
@@ -1507,15 +1518,21 @@ struct WorkspaceSurface: View {
         _ panelID: ChatPanelID,
         showNoteButton: Bool
     ) -> some View {
-        let conversation = conversation(for: panelID)
+        let chosenID = chatPanels.panel(id: panelID)?.conversationID
+        let startingAgent = chosenID.flatMap { startingChats[$0] }
+        // A chat being started shows at once, as the new chat it is.
+        let conversation = startingAgent == nil
+            ? conversation(for: panelID)
+            : conversations.first { $0.id == chosenID }
         let attachments = conversation.flatMap {
             attachmentDraftsByConversation[$0.id]
         } ?? []
         return ZStack(alignment: .topTrailing) {
             CloudConversation(
                 model: model,
-                agent: agent(for: conversation),
+                agent: agent(for: conversation) ?? startingAgent,
                 conversation: conversation,
+                startingAgent: startingAgent,
                 attachedNoteTitle: panelID == .primary && assets.tabs.isPresented
                     ? workspaceContextLabel : nil,
                 draft: draftBinding(for: conversation?.id),
@@ -1553,6 +1570,10 @@ struct WorkspaceSurface: View {
             await model.sessions.follow(chosen)
         }
         .onChange(of: conversation?.id, initial: true) { _, shown in shownConversationIDs[panelID] = .some(shown) }
+        .onChange(of: startingAgent != nil && conversation?.id == chosenID
+                  && conversation.flatMap { model.sessions.conversationState(for: $0.id)?.hasLoaded } == true) { _, started in
+            if started, let chosenID { startingChats[chosenID] = nil }
+        }
     }
 
     /// The chat a panel shows. A chosen chat replaces the one on screen, or

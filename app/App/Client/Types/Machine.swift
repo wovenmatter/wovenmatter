@@ -30,6 +30,9 @@ struct Machine: Identifiable, Hashable, Sendable {
     var platform: Platform
     var isThisMachine: Bool
     var isOnline: Bool
+    /// False while it is online but its library has other tables or columns
+    /// than this Mac's: it does not sync until both run the same release.
+    var syncs: Bool = true
     /// The app release it last reported, when it has been reached.
     var appVersion: String?
     /// The runtimes installed there that can start a session.

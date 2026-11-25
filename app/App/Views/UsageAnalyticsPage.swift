@@ -418,7 +418,7 @@ private extension UsageMachineSyncState {
         case .thisMachine, .synced: nil
         case .scanning: "Reading history"
         case .waiting: "Waiting to connect"
-        case .updateRequired: "Needs an update"
+        case .cannotSync: "Can't sync right now"
         case .unavailable: "Not reachable"
         }
     }
@@ -433,7 +433,7 @@ private extension UsageMachineSummary {
         case .synced: break
         case .scanning: parts.append("This machine is still reading its usage history.")
         case .waiting: parts.append("Usage from this machine hasn't arrived yet.")
-        case .updateRequired: parts.append("Update Woven Matter on this machine to include its usage.")
+        case .cannotSync: parts.append("It runs another release, with a different library. Update the machine that's behind to include its usage.")
         case .unavailable: parts.append(detail ?? "This machine couldn't be reached.")
         }
         if let syncedAt {

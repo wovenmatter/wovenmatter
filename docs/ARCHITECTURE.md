@@ -116,12 +116,19 @@ events. Its types are defined once in `protocol/`.
 - The UI connects to its own server for everything in the library, and
   **directly to the owning machine's server** for the live view of anything
   that runs there. Its own server does not relay live streams.
+- The UI follows its own server's machine list. Each other machine is listed
+  with where its server answered, which the server knows only while it is
+  linked to that machine, so the list is sent again whenever a link starts or
+  ends, and the UI connects to the address listed.
 
 Every connection is pinged every 15 seconds and closed after 45 seconds of
 silence, so a machine that slept or lost power is noticed.
 
-Two machines on different app releases do not sync. The UI says which machine
-needs updating.
+Machines on any app releases link and show online to each other. They sync
+while their libraries have the same shape: each server's hello carries a digest
+of its synced tables, their rules and their columns. With different shapes
+they stay linked but pull nothing, and the UI says the machine can't sync right
+now until the one behind is updated.
 
 ## The library
 
@@ -487,6 +494,12 @@ Woven Matter as running in the background. Choosing **Stop Running in
 Background** there, or turning the app off under Background App Activity in
 System Settings, stops the server and whatever it is running. Opening the app
 starts it again.
+
+The app updates through Sparkle. Another Mac's UI can ask this Mac's server to
+update it (`UpdateApp`): the server opens the app if it is closed and hands the
+request to it, and the app downloads the newest release, installs it with no
+window and relaunches. A Linux machine's server is updated by a Mac's server
+over SSH, to the release that Mac carries.
 
 ## Development
 

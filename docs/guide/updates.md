@@ -22,11 +22,15 @@ runs and the harnesses installed on each, and updates them. The first row of
   that opens.
 - **A Linux machine** gets the server release this Mac carries. When a newer
   release is out, update this Mac first; then update the Linux machine.
-- **Another Mac** updates Woven Matter on that Mac itself.
+- **Another Mac** is updated from here too. Woven Matter opens there if it is
+  closed, downloads the newest release, installs it and relaunches, with
+  nothing to click on that Mac. A Mac whose release can't be updated this way
+  says so; update it on that Mac once, and from then on it can be.
 - **Harnesses** are updated on each online machine.
 
-Two machines on different releases do not sync until they match, so update
-them all. Elsewhere in Settings, **Versions don't match** opens this page.
+Machines on different releases stay online to each other. When a release
+changes the library they can't sync until they match, so update them all.
+Elsewhere in Settings, **Can't sync right now** opens this page.
 
 The bots are updated from **Settings → Bots → Manage → Update bots**; see
 [Bots](bots.md).

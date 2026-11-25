@@ -35,7 +35,7 @@ final class MachinesStore {
             return Machine(id: status.machine.id, name: status.machine.name,
                            platform: status.machine.platform == .linux ? .linux : .mac,
                            isThisMachine: status.isThisMachine,
-                           isOnline: connection?.isConnected == true,
+                           isOnline: connection?.isConnected == true, syncs: status.syncs,
                            appVersion: (status.isThisMachine ? nil : connection?.remote?.appVersion) ?? status.appVersion,
                            runtimes: runtimes.filter(\.installed).compactMap { AgentRuntimeKind(runtime: $0.runtime) })
         }.sorted { ($0.isThisMachine ? 0 : 1, $0.name.localizedLowercase, $0.id)
@@ -57,6 +57,21 @@ final class MachinesStore {
     func attach(_ connections: MachineConnections) {
         self.connections = connections
         connections.whenChanged { [weak self] in self?.connectionsChanged() }
+        following?.cancel()
+        let local = connections.local
+        following = Task { [weak self] in
+            await local.follow(SubscribeMachines(), reply: { [weak self] in self?.apply($0) },
+                               event: { [weak self] in self?.apply($0) })
+        }
+    }
+
+    /// Follows this Mac's server's machine list, so a machine its server
+    /// links after the list was first read still gets a direct connection.
+    @ObservationIgnored private var following: Task<Void, Never>?
+
+    private func apply(_ statuses: [MachineStatus]) {
+        self.statuses = statuses
+        connections?.update(statuses)
     }
 
     /// The connection to `machineID`'s server, when the UI is connected to it now.
@@ -284,6 +299,41 @@ final class MachinesStore {
             errorMessage = error.localizedDescription
             return error.localizedDescription
         }
+    }
+
+    /// Has another Mac update its Woven Matter, sent straight to that Mac's
+    /// server; returns an error's text, or nil once its download has started.
+    /// It shows as updating until it reports another release.
+    func sendUpdateApp(_ machineID: String) async -> String? {
+        let name = machine(id: machineID)?.name ?? "That Mac"
+        guard let connection = connection(for: machineID) else {
+            return ClientError.machineNotConnected(name).localizedDescription
+        }
+        busyMachineIDs.insert(machineID)
+        defer { busyMachineIDs.remove(machineID) }
+        do {
+            _ = try await connection.call(UpdateApp())
+            appUpdatesSent[machineID] = (machine(id: machineID)?.appVersion, Date())
+            return nil
+        } catch let error as ProtocolError where error.code == .unknownMethod {
+            return "Update Woven Matter on \(name) itself this once. After that, it can be updated from here."
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Another Mac told to update, with the release it ran then, until it reports another.
+    @ObservationIgnored private var appUpdatesSent: [String: (version: String?, at: Date)] = [:]
+
+    /// Whether another Mac is updating its Woven Matter at this Mac's request.
+    func isUpdatingApp(_ machineID: String) -> Bool {
+        if isBusy(machineID) { return true }
+        guard let sent = appUpdatesSent[machineID] else { return false }
+        if machine(id: machineID)?.appVersion != sent.version || Date().timeIntervalSince(sent.at) > 15 * 60 {
+            appUpdatesSent[machineID] = nil
+            return false
+        }
+        return true
     }
 
     /// Reads the end of the server's log, from its own server while the UI is

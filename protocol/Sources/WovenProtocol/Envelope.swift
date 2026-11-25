@@ -28,11 +28,15 @@ public struct Hello: Codable, Sendable, Hashable {
   public var role: Role
   public var machine: Machine
   public var appVersion: String
+  /// A server's library shape (its synced tables and columns, as one digest).
+  /// Two servers with the same shape sync whatever their releases.
+  public var libraryShape: String?
 
-  public init(role: Role, machine: Machine, appVersion: String) {
+  public init(role: Role, machine: Machine, appVersion: String, libraryShape: String? = nil) {
     self.role = role
     self.machine = machine
     self.appVersion = appVersion
+    self.libraryShape = libraryShape
   }
 }
 
@@ -148,8 +152,9 @@ public struct ProtocolError: Error, Codable, Sendable, Hashable {
     public static let notOwner = Code(rawValue: "notOwner")
     /// The owning machine could not be reached.
     public static let ownerUnreachable = Code(rawValue: "ownerUnreachable")
-    /// The two machines run different app releases. `machineID` names the other one.
-    public static let versionMismatch = Code(rawValue: "versionMismatch")
+    /// The two machines' libraries have different tables or columns, so they
+    /// do not sync until both run the same release. `machineID` names the other one.
+    public static let librariesDiffer = Code(rawValue: "librariesDiffer")
     /// The caller is not a machine of this tailnet.
     public static let refused = Code(rawValue: "refused")
     /// The runtime no longer has the native session behind this chat.
@@ -164,7 +169,7 @@ public struct ProtocolError: Error, Codable, Sendable, Hashable {
 
   public var code: Code
   public var message: String
-  /// The machine the error points at, for `notOwner` and `versionMismatch`.
+  /// The machine the error points at, for `notOwner` and `librariesDiffer`.
   public var machineID: String?
 
   public init(_ code: Code, _ message: String, machineID: String? = nil) {

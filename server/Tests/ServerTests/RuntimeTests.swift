@@ -140,6 +140,27 @@ func aRuntimesQuestionReachesTheChatAndItsAnswerReturns() async throws {
   #expect(assistantTexts(items).last?.hasSuffix("a question (blue)") == true)
 }
 
+/// Thinking that streams no text, which Claude Code only counts, is kept as
+/// one empty thought before the reply.
+@Test(.timeLimit(.minutes(1)))
+func thinkingWithoutTextIsKeptAsAnEmptyThought() async throws {
+  let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+  let machine = try await TestMachine.start(runtime: try fakeRuntime(store: store))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: .codex, title: "Chat"))
+
+  try await turn(client, session.id, "thinks first")
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  let thoughts = items.compactMap { if case .toolCall(let call) = $0.content, call.kind == .thinking { call } else { nil } }
+  #expect(thoughts.count == 1)
+  #expect(thoughts.first?.output == "")
+  let thought = items.firstIndex { if case .toolCall(let call) = $0.content { call.kind == .thinking } else { false } }
+  let reply = items.firstIndex { if case .assistantMessage = $0.content { true } else { false } }
+  #expect(thought != nil && reply != nil && thought! < reply!)
+}
+
 @Test(.timeLimit(.minutes(1)))
 func acpSessionResumesAfterRestartAndSaysWhenTheRuntimeLostIt() async throws {
   let store = FileManager.default.temporaryDirectory.appendingPathComponent("fake-acp-\(UUID().uuidString)")

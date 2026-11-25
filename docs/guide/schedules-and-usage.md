@@ -33,8 +33,8 @@ Codex, Claude Code, Grok Build, OpenCode and the Pi CLI did on each machine,
 whether in Woven Matter or in the CLI or another app, as well as Pi Durable and
 the bots. Each machine reads its own harnesses' history every two minutes, and
 the records sync, so every machine sees all of it. A session that ran in Woven
-Matter says so beside its harness. A machine on a different release shows that
-it needs an update instead of its usage.
+Matter says so beside its harness. A machine that can't sync right now says so
+instead of showing its usage.
 
 Switch the graph to **API estimate** to see what the same usage would cost at
 public API list prices. This is an estimate for comparison, not your bill.

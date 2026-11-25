@@ -22,6 +22,16 @@ public struct ListMachines: Request {
   public init() {}
 }
 
+/// The machines as `ListMachines` reports them, then the whole list again
+/// whenever it changes: a machine added, renamed or removed, or another
+/// machine's server linked or lost, with where it answers.
+public struct SubscribeMachines: Subscription {
+  public static let method = "machines.subscribe"
+  public typealias Reply = [MachineStatus]
+  public typealias Event = [MachineStatus]
+  public init() {}
+}
+
 /// Removes another machine: deletes it, its sessions and its folders from
 /// every library. A machine cannot remove itself.
 public struct RemoveMachine: Request {

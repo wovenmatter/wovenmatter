@@ -4,9 +4,9 @@ import Observation
 /// The app release each machine runs and the harness versions on each, as Settings → Updates
 /// shows them. The server runs updates; this holds their state and sends the commands.
 /// Harness rows come from `MachinesStore`. The newest release is read from the app's update
-/// feed, and this Mac updates itself through Sparkle; every Mac updates itself, and the bots
-/// come with the app. A Linux machine's server is updated by this Mac's server to the release
-/// this Mac carries.
+/// feed, and this Mac updates itself through Sparkle; another Mac is told to update itself the
+/// same way, with no window there, and the bots come with the app. A Linux machine's server is
+/// updated by this Mac's server to the release this Mac carries.
 @MainActor
 @Observable
 final class UpdatesStore {
@@ -20,7 +20,7 @@ final class UpdatesStore {
         case harnesses
         /// Everything on one machine.
         case machine(String)
-        /// Woven Matter alone on this Mac or a Linux machine.
+        /// Woven Matter alone on one machine.
         case app(machineID: String)
         case harness(machineID: String, harnessID: String)
     }
@@ -39,8 +39,7 @@ final class UpdatesStore {
 
     /// What one machine has to update.
     struct MachineState: Equatable, Sendable {
-        /// A newer Woven Matter release than the one it runs is published. Never set for another
-        /// Mac, which updates itself.
+        /// A newer Woven Matter release than the one it runs is published, or another machine runs one.
         var appUpdateAvailable = false
         /// A Linux machine takes the server release this Mac carries, so this Mac updates first.
         var appWaitsForThisMac = false
@@ -63,8 +62,7 @@ final class UpdatesStore {
     func attach(_ machines: MachinesStore) { machineStore = machines }
 
     /// Per machine, by machine id: its Woven Matter, with its harnesses once read. This Mac or
-    /// a Linux machine behind the newest release, or behind another machine, has an update:
-    /// machines on different releases do not sync.
+    /// a Linux machine behind the newest release, or behind another machine, has an update.
     var machines: [String: MachineState] {
         var result: [String: MachineState] = [:]
         guard let store = machineStore, let thisVersion = store.thisMachine?.appVersion else { return result }
@@ -73,14 +71,14 @@ final class UpdatesStore {
         }
         for machine in store.machines {
             var state = MachineState()
-            if machine.isThisMachine || machine.platform == .linux {
-                state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: target)
-            }
+            state.appUpdateAvailable = Self.isBehind(machine.appVersion, latest: target)
             if machine.isThisMachine {
                 state.updatingApp = DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate
             } else if machine.platform == .linux {
                 state.appWaitsForThisMac = state.appUpdateAvailable && !Self.isBehind(machine.appVersion, latest: thisVersion)
                 state.updatingApp = store.isBusy(machine.id)
+            } else {
+                state.updatingApp = store.isUpdatingApp(machine.id)
             }
             if store.harnessInventoryUnavailable.contains(machine.id) && store.harnesses(on: machine.id).isEmpty {
                 state.harnessError = (machine.isThisMachine ? ClientError.notConnected : .machineNotConnected(machine.name))
@@ -103,10 +101,9 @@ final class UpdatesStore {
         return result
     }
     private(set) var failures: [String] = []
-    /// Machines run different Woven Matter releases, so they do not sync.
-    var versionsDiffer: Bool {
-        guard let store = machineStore, let this = store.thisMachine?.appVersion else { return false }
-        return store.machines.contains { !$0.isThisMachine && $0.appVersion != nil && $0.appVersion != this }
+    /// Another machine is online but can't sync with this Mac until both run the same release.
+    var cannotSync: Bool {
+        machineStore?.machines.contains { $0.isOnline && !$0.syncs } ?? false
     }
 
     /// True when `version` is older than `latest`, comparing dotted numbers.
@@ -194,8 +191,9 @@ final class UpdatesStore {
     }
 
     /// Runs the updates a request covers: this Mac's Woven Matter through Sparkle, which
-    /// restarts the app and with it the server; a Linux machine's server, on another release
-    /// than this Mac's, through this Mac's server; and each machine's harnesses.
+    /// restarts the app and with it the server; another Mac's, behind, which that Mac installs
+    /// itself; a Linux machine's server, on another release than this Mac's, through this Mac's
+    /// server; and each machine's harnesses.
     func start(_ request: Request) {
         guard let store = machineStore, let thisMac = store.thisMachine else {
             failures = [ClientError.notConnected.localizedDescription]
@@ -225,7 +223,11 @@ final class UpdatesStore {
         case .harnesses, .harness: []
         }
         let linuxServers = servers.filter { $0.platform == .linux && $0.appVersion != nil && $0.appVersion != thisMac.appVersion }
+        let otherMacs = servers.filter { $0.platform == .mac && $0.isOnline && state(of: $0.id).appUpdateAvailable }
         if updatesThisApp, let failure = DesktopUpdater.shared.installUpdate() { failures.append(failure) }
+        for machine in otherMacs {
+            Task { if let failure = await store.sendUpdateApp(machine.id) { failures.append(failure) } }
+        }
         for machine in linuxServers {
             Task { if let failure = await store.sendUpdateServer(machine.id) { failures.append(failure) } }
         }

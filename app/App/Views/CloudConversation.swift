@@ -14,6 +14,8 @@ struct CloudConversation: View {
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
+    /// The agent of a chat being started: it shows as a new chat until its first view arrives.
+    var startingAgent: WorkspaceAgent? = nil
     let attachedNoteTitle: String?
     @Binding var draft: String
     let attachments: [AgentMessageAttachmentDraft]
@@ -88,7 +90,9 @@ struct CloudConversation: View {
                     // estimates can strand the bottom anchor in blank space
                     // before those rows are measured.
                     VStack(spacing: 0) {
-                        if conversation == nil {
+                        if let startingAgent, session?.hasLoaded != true {
+                            newChatEmptyState(runtimeKind: startingAgent.runtimeKind)
+                        } else if conversation == nil {
                             ConversationEmptyState(
                                 icon: .messageSquare,
                                 title: agent.map { "New conversation with \(agentDisplayName($0))" } ?? "Choose a conversation",
@@ -100,15 +104,15 @@ struct CloudConversation: View {
                             // Its first view has not arrived: nothing yet, then the chat whole.
                             Color.clear.frame(height: 1)
                         } else if visibleMessages.isEmpty {
-                            ConversationEmptyState(
-                                icon: conversation?.runtimeKind == nil
-                                    ? (agent.map { agentIconGlyph($0) } ?? .messageSquare)
-                                    : .terminal,
-                                title: conversation?.title ?? "Conversation",
-                                detail: conversation?.runtimeKind == nil
-                                    ? "This conversation has no messages yet."
-                                    : "Send a message to start this chat."
-                            )
+                            if let runtimeKind = conversation?.runtimeKind {
+                                newChatEmptyState(runtimeKind: runtimeKind)
+                            } else {
+                                ConversationEmptyState(
+                                    icon: agent.map { agentIconGlyph($0) } ?? .messageSquare,
+                                    title: conversation?.title ?? "Conversation",
+                                    detail: "This conversation has no messages yet."
+                                )
+                            }
                         } else {
                             if session?.hasOlderMessages == true,
                                let oldestMessageID = messages.first?.id {
@@ -571,6 +575,16 @@ struct CloudConversation: View {
 
     private static let contentSpace = "conversation-content"
 
+    /// A harness chat with no messages: its logo, and whom a message goes to.
+    private func newChatEmptyState(runtimeKind: AgentRuntimeKind) -> some View {
+        ConversationEmptyState(
+            icon: .terminal,
+            harnessLogo: HarnessLogo(runtimeKind: runtimeKind),
+            title: conversation?.title ?? "New Chat",
+            detail: "Send a message to \(agent.map(agentDisplayName) ?? runtimeKind.displayName) to start this chat."
+        )
+    }
+
     private func conversationChanged(to conversationID: String?) {
         session?.transcriptState.tasksExpanded = false
         isUserScrolling = false
@@ -752,9 +766,8 @@ struct MessageRow: View {
         } else if layout.content == .fileChanges {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
-                    if showsAssistantBody { return 18 }
-                    guard let run else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleContent(run: run, timeline: projectedTimeline) ? 18 : 0
+                    // Under the reply, or under the turn's header, which every run shows.
+                    showsAssistantBody || run != nil ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)

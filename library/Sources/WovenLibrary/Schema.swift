@@ -1,5 +1,10 @@
 import Foundation
 import WovenProtocol
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 
 /// How a table's rows travel between machines.
 public enum SyncRule: Sendable, Equatable {
@@ -431,6 +436,16 @@ public enum Schema {
 
   static let byName: [String: Table] = Dictionary(uniqueKeysWithValues: tables.map { ($0.name, $0) })
   public static let synced: [Table] = tables.filter(\.synced)
+
+  /// What syncs, as one digest: each synced table with its rule and its
+  /// columns' names and types. Libraries of the same shape sync whatever
+  /// their app releases; libraries of different shapes do not.
+  public static let shape: String = {
+    let text = synced.sorted { $0.name < $1.name }.map { table in
+      "\(table.name) \(table.rule): " + table.allColumns.map { "\($0.name) \($0.type.rawValue)" }.sorted().joined(separator: ", ")
+    }.joined(separator: "\n")
+    return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+  }()
 
   /// Brings the file up to the declaration: creates missing tables, adds
   /// missing columns and indexes. Never removes or rewrites anything.

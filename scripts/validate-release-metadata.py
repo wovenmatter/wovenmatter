@@ -16,7 +16,7 @@ def verify(path, version, build, revision):
         CFBundleVersion=str(build), WovenMatterSourceRevision=revision,
         SUFeedURL='https://github.com/wovenmatter/wovenmatter/releases/latest/download/appcast.xml',
         SUPublicEDKey=PUBLIC_KEY, SURequireSignedFeed=True, SUVerifyUpdateBeforeExtraction=True,
-        SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False)
+        SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False, SUAllowsAutomaticUpdates=True)
     for key, value in expected.items():
         actual = info.get(key)
         if type(actual) is not type(value) or actual != value:

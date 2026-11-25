@@ -143,16 +143,21 @@ struct SettingsUpdatesView: View {
                 SettingsStatus("Updating", tone: .neutral)
             } else if offline {
                 SettingsStatus("Offline", tone: .neutral)
+            } else if !machine.syncs {
+                SettingsStatus("Can't sync right now", tone: .warning)
             } else if state.hasUpdate {
                 SettingsStatus("Update available", tone: .warning)
             } else {
                 SettingsStatus("Up to date", tone: .good)
             }
         } content: {
+            if !offline && !machine.syncs {
+                SettingsNote("It runs another release, with a different library. Update the machine that's behind and they sync again.")
+            }
             updateRow("Update everything on this machine", detail: everythingDetail(machine),
                       request: .machine(machine.id), available: !offline && state.hasUpdate,
                       accessibility: "Update everything on \(machine.name)")
-            if machine.isThisMachine || machine.platform == .linux { appRow(machine, state) }
+            appRow(machine, state)
             harnessRows(machine, state)
         }
     }
@@ -162,11 +167,12 @@ struct SettingsUpdatesView: View {
         return "Updates \(product) and every harness on this machine."
     }
 
-    /// This Mac's Woven Matter or a Linux machine's Woven server, alone.
+    /// One machine's Woven Matter, or a Linux machine's Woven server, alone.
     private func appRow(_ machine: Machine, _ state: UpdatesStore.MachineState) -> some View {
         let outdated = state.appUpdateAvailable
         let request = UpdatesStore.Request.app(machineID: machine.id)
         let detail = machine.isThisMachine ? Self.thisMacAbout
+            : machine.platform == .mac ? "This updates Woven Matter on that Mac. It installs and relaunches there, with nothing to click."
             : outdated && state.appWaitsForThisMac ? "Update this Mac first. Its Woven Matter brings this server's update."
             : "This updates the Woven server on this machine."
         return SettingsRow(title: "Update just Woven Matter", detail: detail) {
@@ -219,16 +225,16 @@ struct SettingsUpdatesView: View {
     }
 }
 
-/// Elsewhere in Settings, mismatched versions are one line that opens Settings → Updates.
+/// Elsewhere in Settings, a machine that can't sync is one line that opens Settings → Updates.
 struct UpdatesStatusLink: View {
     @Bindable var updates: UpdatesStore
     let onOpen: () -> Void
 
     var body: some View {
-        if updates.versionsDiffer || updates.running {
+        if updates.cannotSync || updates.running {
             SettingsSection {
                 SettingsSummaryLink(
-                    title: "Versions don't match",
+                    title: "Can't sync right now",
                     value: updates.running ? "Updating…" : "Open Updates",
                     tone: .warning,
                     action: onOpen
