@@ -151,27 +151,35 @@ export function parseCatalog(value: unknown, source: string): Model<Api>[] {
 /**
  * `models` newest release first. The catalog carries no release dates, so the version numbers in a
  * model's id decide, highest first (gpt-6.2 before gpt-6.1 before gpt-6 before gpt-5.6), then the
- * name. Dates (2024-08-06, 12-2024, 20251001, 2508) and sizes (70b, 8x22b, 32k) are not versions, and an
- * id with no version goes last. A provider that resells other labs' models (`openai/gpt-6`) keeps
- * each lab's models together, labs by name: version numbers of different labs say nothing about
- * which is newer.
+ * name. An id with no version takes its name's (Claude's `opus` is "Opus 5.5"). Dates (2024-08-06,
+ * 12-2024, 20251001, 2508) and sizes (70b, 8x22b, 32k, 1m) are not versions, and a model with no
+ * version goes last. A provider's own `default` choice (Claude's "Default (recommended)") stays first. A provider that resells other labs' models (`openai/gpt-6`) keeps each lab's
+ * models together, labs by name: version numbers of different labs say nothing about which is
+ * newer. The server orders the coding harnesses' lists, and Pi Durable its catalog, by this rule
+ * (`server/Sources/WovenServerKit/ModelOrder.swift`, `default-agent/src/models.mjs`).
  */
 export function newestFirst<T extends { readonly id: string; readonly name: string }>(
   models: readonly T[],
 ): T[] {
-  const keyOf = (id: string) => {
-    const slash = id.indexOf("/");
-    const version = [
-      ...id
-        .slice(slash + 1)
+  const versionOf = (text: string) =>
+    [
+      ...text
         .replace(/\d{4}-\d{2}-\d{2}|(?<!\d)\d{2}-\d{4}(?!\d)/gu, "")
-        .matchAll(/(?<!\d)\d{1,3}(?![\dbBkK]|x\d)/gu),
+        .matchAll(/(?<!\d)\d{1,3}(?![\dbBkKmM]|x\d)/gu),
     ].map((match) => Number(match[0]));
-    return { lab: slash < 0 ? "" : id.slice(0, slash), version };
+  const keyOf = (model: T) => {
+    const slash = model.id.indexOf("/");
+    const version = versionOf(model.id.slice(slash + 1));
+    return {
+      first: model.id.slice(slash + 1) === "default",
+      lab: slash < 0 ? "" : model.id.slice(0, slash),
+      version: version.length ? version : versionOf(model.name),
+    };
   };
   return models
-    .map((model) => ({ model, ...keyOf(model.id) }))
+    .map((model) => ({ model, ...keyOf(model) }))
     .sort((a, b) => {
+      if (a.first !== b.first) return a.first ? -1 : 1;
       if (a.lab !== b.lab) return a.lab < b.lab ? -1 : 1;
       for (let index = 0; index < Math.max(a.version.length, b.version.length); index++) {
         const [x, y] = [a.version[index], b.version[index]];

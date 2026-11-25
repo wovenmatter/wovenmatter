@@ -604,6 +604,15 @@ final class OpenCodeSession: RuntimeSession {
     func reference(_ entry: JSONValue) -> String {
       (entry["providerID"]?.string ?? "") + "/" + (entry["id"]?.string ?? "")
     }
+    func providers(_ entries: [JSONValue]) -> [[JSONValue]] {
+      var order: [String] = [], groups: [String: [JSONValue]] = [:]
+      for entry in entries {
+        let provider = entry["providerID"]?.string ?? ""
+        if groups[provider] == nil { order.append(provider) }
+        groups[provider, default: []].append(entry)
+      }
+      return order.compactMap { groups[$0] }
+    }
     let current = model["id"]?.string.map { _ in reference(model) }
     var variants: [String: [String]] = [:]
     for entry in available {
@@ -615,9 +624,9 @@ final class OpenCodeSession: RuntimeSession {
       model: current,
       thinking: session["model"]?["variant"]?.string,
       permission: agent,
-      models: available.map { entry in
-        SessionOption(id: reference(entry), name: entry["name"]?.string ?? "", detail: entry["providerID"]?.string)
-      },
+      // Each provider's models together, in OpenCode's order of providers, newest first.
+      models: providers(available).flatMap { ModelOrder.newestFirst($0, id: { $0["id"]?.string ?? "" }, name: { $0["name"]?.string ?? "" }) }
+        .map { entry in SessionOption(id: reference(entry), name: entry["name"]?.string ?? "", detail: entry["providerID"]?.string) },
       thinkingLevels: (current.flatMap { variants[$0] } ?? []).map { SessionOption(id: $0, name: $0.capitalized) },
       permissionModes: primary.map {
         SessionOption(id: $0["id"]?.string ?? "", name: $0["name"]?.string ?? "", detail: $0["description"]?.string)

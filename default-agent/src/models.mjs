@@ -37,13 +37,42 @@ export function providerList(runtime) {
   return [...subscriptions, ...apiKey, ...searchProviders];
 }
 
-// The models the supplied credentials can use, preferred providers first.
+// The models the supplied credentials can use, preferred providers first, each
+// provider's newest first.
 export async function availableModels({ runtime, claude, credentials }) {
   const ids = await credentials.providers();
   if (ids.includes('claude-subscription')) await claude.loadModels();
   const order = id => { const index = preferred.indexOf(id); return index < 0 ? preferred.length : index; };
   return ids.filter(id => runtime.getProvider(id)).sort((a, b) => order(a) - order(b))
-    .flatMap(id => runtime.getModels(id).filter(model => model.type === undefined || model.type === 'chat'));
+    .flatMap(id => newestFirst(runtime.getModels(id).filter(model => model.type === undefined || model.type === 'chat')));
+}
+
+// `models` newest release first, by the rule of the bots' `newestFirst`
+// (bots/src/model-catalog.ts): the version numbers in the id, else in the name
+// (Claude's `opus` is "Opus 5.5"), highest first, then the name. Dates and sizes
+// are not versions, a model with none goes last, a provider's own `default`
+// choice (Claude's "Default (recommended)") stays first, and a reseller's models
+// (`anthropic/claude-opus-5.5`) stay together by lab.
+export function newestFirst(models) {
+  const versionOf = text => [...text.replace(/\d{4}-\d{2}-\d{2}|(?<!\d)\d{2}-\d{4}(?!\d)/gu, '')
+    .matchAll(/(?<!\d)\d{1,3}(?![\dbBkKmM]|x\d)/gu)].map(match => Number(match[0]));
+  const keyed = models.map(model => {
+    const slash = model.id.indexOf('/');
+    const version = versionOf(model.id.slice(slash + 1));
+    return { model, first: model.id.slice(slash + 1) === 'default', lab: slash < 0 ? '' : model.id.slice(0, slash), version: version.length ? version : versionOf(model.name ?? '') };
+  });
+  return keyed.sort((a, b) => {
+    if (a.first !== b.first) return a.first ? -1 : 1;
+    if (a.lab !== b.lab) return a.lab < b.lab ? -1 : 1;
+    for (let index = 0; index < Math.max(a.version.length, b.version.length); index++) {
+      const [x, y] = [a.version[index], b.version[index]];
+      if (x === undefined) return 1;
+      if (y === undefined) return -1;
+      if (x !== y) return y - x;
+    }
+    return (a.model.name ?? '').localeCompare(b.model.name ?? '', 'en', { numeric: true, sensitivity: 'base' })
+      || (a.model.id < b.model.id ? -1 : a.model.id > b.model.id ? 1 : 0);
+  }).map(entry => entry.model);
 }
 
 // Refresh catalogs of the providers in use in the background; resolves true when anything changed.

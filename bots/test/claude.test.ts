@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { claudeAgentProvider, claudeRequest, MAX_EXTRA_BODY } from "../src/claude/provider.ts";
 import { ClaudeAgentRuntime, type ClaudeSdkQuery, claudeExecutable } from "../src/claude/runtime.ts";
 import { NATIVE_KEY, ServerCredentials } from "../src/host/credentials.ts";
-import { FileModelsStore } from "../src/model-catalog.ts";
+import { FileModelsStore, newestFirst } from "../src/model-catalog.ts";
 import { SettingsStore } from "../src/settings/store.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -188,5 +188,28 @@ describe("bots' Claude subscription", () => {
     expect(await opened("claude-subscription/claude-fable-5-2[1m]")).toBe("claude-subscription/claude-fable-5-2[1m]");
     expect(await opened("claude-subscription/opus")).toBe("claude-subscription/opus");
     expect(await opened("anthropic/claude-opus-5-5")).toBe("anthropic/claude-opus-5-5");
+  });
+});
+
+describe("bots' model lists", () => {
+  it("are newest first, Default on top, by an alias's name when its id has no version", () => {
+    const listed = [
+      ["default", "Default (recommended)"],
+      ["claude-opus-4-5-20251101", "Opus 4.5"],
+      ["gpt-6", "GPT-6"],
+      ["opus", "Opus 5.5"],
+      ["claude-fable-5-2[1m]", "Fable 5.2"],
+      ["gpt-6.2-sol", "GPT-6.2 Sol"],
+      ["gpt-6.1", "GPT-6.1"],
+    ].map(([id, name]) => ({ id: id as string, name: name as string }));
+    expect(newestFirst(listed).map((model) => model.id)).toEqual([
+      "default",
+      "gpt-6.2-sol",
+      "gpt-6.1",
+      "gpt-6",
+      "opus",
+      "claude-fable-5-2[1m]",
+      "claude-opus-4-5-20251101",
+    ]);
   });
 });

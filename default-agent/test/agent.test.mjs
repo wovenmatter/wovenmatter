@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { claudeExecutable, claudeRequest, claudeStatus } from '../src/claude.mjs';
+import { newestFirst } from '../src/models.mjs';
 import { startAgent } from './fixtures/client.mjs';
 
 async function folders(t) {
@@ -137,4 +138,11 @@ test('Claude sees each tool under the name Pi gives it, and calls come back unde
   const request = claudeRequest({ messages }, { id: 'sonnet' });
   assert.deepEqual(request.inventory.map(entry => entry.name), ['mcp__woven__list_sessions', 'read', 'codemode']);
   assert.equal(request.frames[1].message.content[0].name, 'mcp__woven__list_sessions');
+});
+
+test('the catalog lists each provider newest first, Default on top', () => {
+  const listed = [['default', 'Default (recommended)'], ['claude-opus-4-5-20251101', 'Opus 4.5'], ['gpt-6', 'GPT-6'],
+    ['opus', 'Opus 5.5'], ['claude-fable-5-2[1m]', 'Fable 5.2'], ['gpt-6.2-sol', 'GPT-6.2 Sol'], ['gpt-6.1', 'GPT-6.1']];
+  assert.deepEqual(newestFirst(listed.map(([id, name]) => ({ id, name }))).map(model => model.id),
+    ['default', 'gpt-6.2-sol', 'gpt-6.1', 'gpt-6', 'opus', 'claude-fable-5-2[1m]', 'claude-opus-4-5-20251101']);
 });

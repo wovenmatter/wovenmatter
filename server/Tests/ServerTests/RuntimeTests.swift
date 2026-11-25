@@ -95,7 +95,7 @@ func acpProcessStaysAliveAcrossTurnsAndStreamsToolsAndApprovals() async throws {
 
   let configured = try await client.call(ConfigureSession(sessionID: session.id, model: "fake-large"))
   #expect(configured.model == "fake-large")
-  #expect(configured.models.map(\.id) == ["fake-small", "fake-large"])
+  #expect(configured.models.map(\.id) == ["fake-large", "fake-small"])
 
   let first = try await turn(client, session.id, "one")
   #expect(first.contains { if case .text = $0 { true } else { false } })
