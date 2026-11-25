@@ -17,6 +17,9 @@ import { humanMessage } from './rpc.mjs';
 // prompt uses; Claude Code has no tools of its own and runs none.
 
 export const claudeProvider = 'claude-subscription';
+// The most of a request body sent in CLAUDE_CODE_EXTRA_BODY, under Linux's
+// 128 KiB limit for one environment string. A chat's tools are about 31 KB.
+export const maxExtraBody = 120 * 1024;
 const api = 'claude-agent-sdk';
 const execute = promisify(execFile);
 const zeroCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
@@ -207,6 +210,11 @@ function claudeStream(model, context, options, workspace) {
         if (model.reasoning) body.thinking = { type: 'adaptive' };
         body.output_config = { effort: options.reasoning };
       } else body.thinking = { type: 'disabled' };
+      const extraBody = JSON.stringify(body);
+      // Claude Code takes the tools in one environment variable, which Linux caps at 128 KiB.
+      if (Buffer.byteLength(extraBody) > maxExtraBody) {
+        throw new Error(`This chat's tools are too large to send through Claude Code (${Math.round(Buffer.byteLength(extraBody) / 1024)} KB). Turn code mode to Only, or turn some tools off.`);
+      }
       // Earlier user frames are appended without a model request; each waits for its zero-turn result.
       async function* input() {
         for (const [index, frame] of request.frames.entries()) {
@@ -223,7 +231,7 @@ function claudeStream(model, context, options, workspace) {
         systemPrompt: { type: 'custom', prompt: request.system, snapshot: false },
         maxTurns: 1, permissionMode: 'dontAsk', includePartialMessages: true, abortController: controller, stderr: () => {},
         mcpServers: {},
-        env: claudeEnvironment({ CLAUDE_CODE_EXTRA_BODY: JSON.stringify(body), ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0',
+        env: claudeEnvironment({ CLAUDE_CODE_EXTRA_BODY: extraBody, ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0',
           CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off', DISABLE_AUTO_COMPACT: '1',
           ...(options.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(options.maxTokens) } : {}) }),
       } });

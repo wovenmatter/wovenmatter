@@ -238,8 +238,10 @@ private struct SessionFormCard: View {
                 }
             }
             HStack(spacing: 8) {
+                // Nothing to send until something is answered.
                 Button("Submit") { if let values { respond(.formValues(values)) } }
-                    .buttonStyle(WovenPrimaryButtonStyle()).disabled(values == nil)
+                    .buttonStyle(WovenPrimaryButtonStyle())
+                    .disabled(values.map { $0.isEmpty && !fields.isEmpty } ?? true)
                 Button("Cancel", role: .cancel) { respond(.cancelled) }.buttonStyle(WovenQuietButtonStyle())
             }
         }
@@ -327,7 +329,7 @@ private struct SessionFormCard: View {
     private func textBinding(_ id: String) -> Binding<String> {
         Binding(get: { text[id] ?? "" }, set: { value in
             text[id] = value
-            if value.isEmpty { included.remove(id) } else { included.insert(id) }
+            if nonemptyString(value) == nil { included.remove(id) } else { included.insert(id) }
         })
     }
 

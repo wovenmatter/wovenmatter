@@ -37,6 +37,8 @@ import { NATIVE_KEY } from "../host/credentials.ts";
 
 export const CLAUDE_SUBSCRIPTION_PROVIDER = "claude-subscription";
 export const CLAUDE_AGENT_BASE_URL = "process://claude-agent-sdk";
+/** The most of a request body sent in `CLAUDE_CODE_EXTRA_BODY`, under Linux's 128 KiB per environment string. */
+export const MAX_EXTRA_BODY = 120 * 1024;
 
 /** Set on a compaction request (`Models.stream` options); the summary comes back on the result. */
 export type ClaudeCompactOptions = { readonly botCompact?: { readonly instructions?: string } };
@@ -156,7 +158,14 @@ export function claudeRequest(messages: readonly Message[], model: Model<Api>, c
   if (!compact && frames.at(-1)?.type !== "user") {
     throw new ClaudeAgentError("Claude needs a user message or tool result to continue.");
   }
-  return { frames, inventory, names, system: getCurrentSystemPrompt(messages) };
+  // Claude Code takes the tools in one environment variable, which Linux caps at 128 KiB.
+  const extraBody = JSON.stringify({ tools: inventory });
+  if (Buffer.byteLength(extraBody) > MAX_EXTRA_BODY) {
+    throw new ClaudeAgentError(
+      `This bot's tools are too large to send through Claude Code (${Math.round(Buffer.byteLength(extraBody) / 1024)} KB).`,
+    );
+  }
+  return { frames, inventory, extraBody, names, system: getCurrentSystemPrompt(messages) };
 }
 
 function usageOf(native: Block): Usage {
@@ -374,7 +383,7 @@ export class ClaudeAgentStream {
         options: {
           cwd: workspace,
           // Claude Code merges this into its request: the tools replace its own empty list.
-          env: { ...this.#runtime.environment(), CLAUDE_CODE_EXTRA_BODY: JSON.stringify({ tools: request.inventory }) },
+          env: { ...this.#runtime.environment(), CLAUDE_CODE_EXTRA_BODY: request.extraBody },
           model: model.id,
           tools: [],
           skills: [],

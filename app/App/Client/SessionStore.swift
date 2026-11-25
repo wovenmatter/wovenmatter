@@ -479,7 +479,7 @@ final class SessionStore {
         return AgentRunActivity(
             id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
             title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code")
-                : questions.map { questionTitle($0.count, live: live, failed: call.failed) } ?? call.title ?? call.name,
+                : questions.map { questionTitle($0, live: live, failed: call.failed) } ?? call.title ?? call.name,
             // The tools it called, each once; or what the questions were about.
             detail: questions.flatMap { questions in
                 let names = questions.map { $0.title?.nonempty ?? $0.text }.filter { !$0.isEmpty }
@@ -490,8 +490,7 @@ final class SessionStore {
                 }
                 return names.isEmpty ? nil : names.joined(separator: ", ")
             },
-            // A dismissed question is the person's choice, not a failure.
-            status: live ? "running" : call.failed && questions == nil ? "failed" : "completed",
+            status: live ? "running" : call.failed ? "failed" : "completed",
             toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
@@ -499,10 +498,14 @@ final class SessionStore {
             codeCalls: calls, questions: questions)
     }
 
-    /// "Asked 2 questions"; while the person has not answered, "Asking 2 questions".
-    private static func questionTitle(_ count: Int, live: Bool, failed: Bool) -> String {
-        let questions = count == 1 ? "a question" : "\(count) questions"
-        return failed ? (count == 1 ? "Question dismissed" : "Questions dismissed") : (live ? "Asking " : "Asked ") + questions
+    /// "Asking 2 questions" while they wait, then "Asked 2 questions"; or,
+    /// when none was answered (dismissed, or the turn ended on them), "not
+    /// answered". Before the questions arrive it is "a question".
+    private static func questionTitle(_ questions: [AgentRunQuestion], live: Bool, failed: Bool) -> String {
+        let several = questions.count > 1
+        if failed { return several ? "Questions failed" : "Question failed" }
+        if !live, questions.allSatisfy({ $0.answer == nil }) { return several ? "Questions not answered" : "Question not answered" }
+        return (live ? "Asking " : "Asked ") + (several ? "\(questions.count) questions" : "a question")
     }
 
     /// A script's tool calls as its card lists them. One without output that
@@ -568,7 +571,7 @@ final class SessionStore {
         /// empty reply as a visual reply's turn does.
         func closeRun() {
             guard let last = runs.indices.last, runs[last].assistantMessageID == nil,
-                  runs[last].status == .failed || activities.contains(where: { $0.runID == runs[last].id }) else { return }
+                  runs[last].status == .failed || activities.last?.runID == runs[last].id else { return }
             let id = Self.replyID(runs[last].id)
             messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
                                                    status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))

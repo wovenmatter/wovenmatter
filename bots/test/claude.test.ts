@@ -2,7 +2,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claudeAgentProvider } from "../src/claude/provider.ts";
+import { claudeAgentProvider, claudeRequest, MAX_EXTRA_BODY } from "../src/claude/provider.ts";
 import { ClaudeAgentRuntime, type ClaudeSdkQuery, claudeExecutable } from "../src/claude/runtime.ts";
 import { NATIVE_KEY, ServerCredentials } from "../src/host/credentials.ts";
 import { FileModelsStore } from "../src/model-catalog.ts";
@@ -160,6 +160,18 @@ describe("bots' Claude subscription", () => {
     expect(body.tools[0].input_schema).toEqual({ type: "object", properties: {} });
     expect(JSON.stringify(seen?.frames)).toContain('"name":"read"');
     expect(JSON.stringify(seen?.frames)).not.toContain("mcp__");
+  });
+
+  it("refuses a tool list too large for Claude Code's environment, with a clear error", () => {
+    const model = { id: "opus", api: "claude-agent-sdk", provider: "claude-subscription" } as never;
+    const tool = (name: string, size: number) => ({ name, description: "x".repeat(size), parameters: { type: "object", properties: {} } });
+    const messages = (size: number) =>
+      [
+        { role: "system", content: "", toolsAdded: [tool("a", size), tool("b", size)], timestamp: 0 },
+        { role: "user", content: "hi", timestamp: 0 },
+      ] as never;
+    expect(claudeRequest(messages(1000), model).extraBody.length).toBeLessThan(MAX_EXTRA_BODY);
+    expect(() => claudeRequest(messages(MAX_EXTRA_BODY / 2), model)).toThrow(/too large to send through Claude Code/);
   });
 
   it("moves saved Anthropic model ids to Claude Code's model of the same family", async () => {

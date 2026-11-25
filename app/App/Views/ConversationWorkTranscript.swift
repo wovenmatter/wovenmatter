@@ -813,8 +813,12 @@ private struct ConversationActivityDetails: View {
                 ConversationCodeCallList(calls: calls)
                 rawBlock("Output", field(\.rawOutputJSON))
             } else if let questions = field(\.questions) {
-                // Each question with its answer, or that it was not answered.
+                // Each question with its answer, or that it was not answered;
+                // a call that failed says why.
                 ConversationQuestionList(questions: questions, isLive: isLive)
+                if activity.workTimelineIsFailure, let reason = field(\.rawOutputJSON)?.nonempty {
+                    Text(reason).font(.system(size: 12.5)).foregroundStyle(WovenPalette.danger).textSelection(.enabled)
+                }
             } else if activity.kind != .thought {
                 rawBlock("Input", field(\.rawInputJSON))
                 rawBlock("Output", field(\.rawOutputJSON))
