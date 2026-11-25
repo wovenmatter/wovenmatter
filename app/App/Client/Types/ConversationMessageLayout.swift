@@ -44,11 +44,10 @@ struct ConversationMessageLayout {
     }
 }
 
-/// Running time and failures stay visible independently of the optional activity disclosure.
+/// Every turn shows how long it ran, and a failure, whether or not it has work to show.
 struct ConversationWorkTranscriptPresentation {
     let hasVisibleActivities: Bool
     let failureMessage: String?
-    let isVisible: Bool
 
     init(runStatus: RunStatus, runError: String?, hasVisibleActivities: Bool) {
         self.hasVisibleActivities = hasVisibleActivities
@@ -58,7 +57,6 @@ struct ConversationWorkTranscriptPresentation {
         } else {
             failureMessage = nil
         }
-        isVisible = runStatus == .running || hasVisibleActivities || failureMessage != nil
     }
 }
 
