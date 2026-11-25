@@ -347,7 +347,10 @@ struct PageAssignTarget: Identifiable, Equatable {
         for machine in model.machines.machines {
             for runtime in AgentRuntimeKind.presentationOrder {
                 let ready = model.machines.isRuntimeReady(runtime, on: machine.id)
-                let detail: String? = !machine.canRun(runtime) ? "Not set up" : !machine.isOnline ? "Offline" : nil
+                let detail: String? = !machine.canRun(runtime) ? "Not set up"
+                    : !machine.isOnline ? machine.connection.displayName
+                    : model.machines.harness(runtime, on: machine.id)?.needsAdapter == true
+                        ? model.machines.harness(runtime, on: machine.id)?.state.displayName : nil
                 targets.append(.init(id: "\(machine.id):\(runtime.rawValue)", group: .place(machine.name),
                     assignee: BoardTaskAssignee(kind: .agent, name: runtime.displayName, place: machine.name,
                         runtime: runtime.rawValue, folderID: pageFolder?.machineID == machine.id ? pageFolder?.id : nil,

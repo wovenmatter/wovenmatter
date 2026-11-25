@@ -79,8 +79,9 @@ run on. The **library** is the synced database, never a workspace. A
   the Woven port on each, and treats those that answer as Woven machines.
 - **Add workspace** lists Linux machines on the tailnet without a server and
   installs and starts one over SSH. The SSH host and user given at install
-  are kept on the machine's row, so any Mac reaches it later exactly as the
-  person's SSH settings say. Before each later command over SSH, the machine
+  are passed to the new server, which keeps them on its own machine row from
+  its first start, so any Mac reaches it later exactly as the person's SSH
+  settings say. Before each later command over SSH, the machine
   reached must hold that machine's identifier, or nothing runs.
 - **Remove** deletes the machine, its sessions and its folders from every
   library. A Linux machine's server is stopped and uninstalled over SSH first;

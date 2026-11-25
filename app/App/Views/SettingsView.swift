@@ -435,13 +435,7 @@ private struct SettingsAgentsView: View {
             }
         }
         .task {
-            guard let thisMachineID else { return }
-            model.machines.refreshHarnesses(on: thisMachineID)
-            await withTaskGroup(of: Void.self) { group in
-                for runtime in runtimes where runtime != .defaultAgent {
-                    group.addTask { await model.machines.refreshSignIn(runtime, on: thisMachineID) }
-                }
-            }
+            if let thisMachineID { model.machines.refreshHarnessesIfStale(on: thisMachineID) }
         }
     }
 
@@ -454,15 +448,18 @@ private struct SettingsAgentsView: View {
         }
         if machines.isCheckingHarness(runtime, on: thisMachineID) { return ("Checking", .neutral) }
         guard let harness = machines.harness(runtime, on: thisMachineID) else { return ("Checking", .neutral) }
-        guard harness.isInstalled else {
-            return harness.components.contains(where: \.isInstalled) ? ("Adapter required", .warning) : ("Not installed", .neutral)
-        }
         switch harness.state {
-        case .ready, .notInstalled: break
+        case .ready: break
+        case .notInstalled: return ("Not installed", .neutral)
+        case .unavailable: return (harness.state.displayName, .warning)
+        case .settingUp: return (harness.state.displayName, .neutral)
+        case .adapterRequired: return (harness.state.displayName, .warning)
         case .signInRequired: return ("Sign in required", .warning)
-        case .unavailable, .failed: return ("Setup required", .warning)
+        case .failed: return ("Setup required", .warning)
         }
-        guard let signIn = machines.signInStatus(runtime, on: thisMachineID) else { return ("Installed", .neutral) }
+        guard let signIn = machines.signInStatus(runtime, on: thisMachineID), signIn.state != .notChecked else {
+            return ("Installed", .neutral)
+        }
         return (signIn.label, signIn.hasCredentials ? .good : .warning)
     }
 }

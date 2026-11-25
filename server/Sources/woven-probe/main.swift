@@ -243,8 +243,14 @@ do {
       out("\(machine.name)\t\(machine.address)\t\(machine.platform?.rawValue ?? "-")")
     }
   case "machine-install":
-    _ = try await client.call(InstallServer(host: argument(0, "HOST"), user: arguments.count > 1 ? arguments[1] : nil))
-    out("installed")
+    let install = try await client.subscribe(InstallServer(host: argument(0, "HOST"), user: arguments.count > 1 ? arguments[1] : nil))
+    installing: for try await event in install.events {
+      switch event {
+      case .stage(let stage): out(stage.rawValue)
+      case .finished(let machineID): out("installed \(machineID)"); break installing
+      case .failed(let message): out("failed: \(message)"); break installing
+      }
+    }
   case "machine-update":
     _ = try await client.call(UpdateServer(machineID: argument(0, "MACHINE")))
     out("updated")

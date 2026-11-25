@@ -18,6 +18,10 @@ struct HarnessInstallation: Identifiable, Hashable, Sendable {
     enum State: Hashable, Sendable {
         case ready
         case notInstalled
+        /// The CLI is here and the server is installing its ACP adapter.
+        case settingUp
+        /// The CLI is here but its ACP adapter is not, so no session can start.
+        case adapterRequired
         case signInRequired
         case unavailable
         case failed
@@ -26,6 +30,8 @@ struct HarnessInstallation: Identifiable, Hashable, Sendable {
             switch self {
             case .ready: "Ready"
             case .notInstalled: "Not installed"
+            case .settingUp: "Setting up"
+            case .adapterRequired: "Adapter required"
             case .signInRequired: "Sign-in required"
             case .unavailable: "Unavailable"
             case .failed: "Failed"
@@ -49,6 +55,9 @@ struct HarnessInstallation: Identifiable, Hashable, Sendable {
     var diagnostic: String?
 
     var updateAvailable: Bool { components.contains { $0.updateVersion != nil } }
+
+    /// The CLI is installed but its ACP adapter is not (yet).
+    var needsAdapter: Bool { state == .settingUp || state == .adapterRequired }
 
     /// The version of the harness people know, for "Installed · 1.2.3".
     var installedVersion: String? {
@@ -78,6 +87,9 @@ struct AgentSignInStatus: Identifiable, Hashable, Sendable {
         case credentialsPresent
         case signInRequired
         case notInstalled
+        /// The CLI is here without its ACP adapter: no sign-in is shown until it can run.
+        case settingUp
+        case adapterRequired
         case notChecked
         case checkFailed
     }
@@ -97,6 +109,7 @@ struct AgentSignInStatus: Identifiable, Hashable, Sendable {
     var accounts: [Account] = []
 
     var hasCredentials: Bool { state == .verified || state == .credentialsPresent }
+    var needsAdapter: Bool { state == .settingUp || state == .adapterRequired }
 
     var label: String {
         switch state {
@@ -104,6 +117,8 @@ struct AgentSignInStatus: Identifiable, Hashable, Sendable {
         case .credentialsPresent: "Credentials present"
         case .signInRequired: "Sign-in required"
         case .notInstalled: "Not installed"
+        case .settingUp: "Setting up"
+        case .adapterRequired: "Adapter required"
         case .notChecked: "Not checked"
         case .checkFailed: "Could not check"
         }

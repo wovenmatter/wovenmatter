@@ -3,11 +3,11 @@ import Testing
 import WovenProtocol
 @testable import WovenServerKit
 
-private func startServer(name: String, tailnet: StandInTailnet) async throws -> (WovenServer, String) {
+private func startServer(name: String, tailnet: StandInTailnet, port: Int = 0) async throws -> (WovenServer, String) {
   let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
   let socket = "/tmp/wvt-\(UUID().uuidString.prefix(8)).sock"
   var options = WovenServer.Options(
-    dataFolder: folder, socketPath: socket, listen: ("127.0.0.1", 0), appVersion: "test", machineName: name,
+    dataFolder: folder, socketPath: socket, listen: ("127.0.0.1", port), appVersion: "test", machineName: name,
     tailnet: tailnet, runtimes: [StandInRuntime()], discoveryInterval: .seconds(3600))
   options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
   return (try await WovenServer.start(options), socket)
@@ -51,4 +51,33 @@ func aMachineLinkedAfterTheListWasReadReachesTheUI() async throws {
   await a.discoverMachines()
   let online = try await next(machines.events, b.machineID) { $0?.online == true }
   #expect(online?.address == "127.0.0.1" && online?.port == b.port)
+}
+
+/// A link asleep between attempts at an address with no server yet tries
+/// again at once when asked, so a server that has just started links within
+/// a moment rather than after the backoff.
+@Test(.timeLimit(.minutes(1)))
+func aSleepingLinkRetriedNowLinksAtOnce() async throws {
+  let tailnetA = StandInTailnet()
+  let (a, socket) = try await startServer(name: "Studio", tailnet: tailnetA)
+  // A port with nothing on it: a server's, stopped.
+  let (gone, _) = try await startServer(name: "Gone", tailnet: StandInTailnet())
+  let port = gone.port!
+  await gone.stop()
+  defer { a.stopLater() }
+
+  let ui = Client(transport: try await connectWebSocket(.unix(path: socket)))
+  _ = try await ui.open(Hello(role: .ui, machine: Machine(id: "ui", name: "UI"), appVersion: "test"))
+  let machines = try await ui.subscribe(SubscribeMachines())
+  tailnetA.setMachines([TailnetMachine(name: "b", host: "127.0.0.1", port: port)])
+  await a.discoverMachines()
+  // Failed at 0, 1 and 3 s; asleep until 7 s.
+  try await Task.sleep(for: .seconds(3.5))
+
+  let (b, _) = try await startServer(name: "Laptop", tailnet: StandInTailnet(), port: port)
+  defer { b.stopLater() }
+  let asked = ContinuousClock.now
+  await a.retryMachinesNow()
+  #expect(try await next(machines.events, b.machineID) { $0?.online == true } != nil)
+  #expect(ContinuousClock.now - asked < .seconds(2))
 }

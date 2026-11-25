@@ -51,6 +51,14 @@ extension MachinesStore {
         Task { await refreshProviderSignIns(on: machineID) }
     }
 
+    /// For a page that opens: it shows the last read at once and reads again in
+    /// the background only when that read is more than 30 seconds old.
+    func refreshHarnessesIfStale(on machineID: String) {
+        guard connection(for: machineID) != nil else { return markUnavailable(machineID) }
+        if let readAt = runtimesReadAt[machineID], Date().timeIntervalSince(readAt) < 30 { return }
+        refreshHarnesses(on: machineID)
+    }
+
     /// Looks up the newest release of every harness there.
     func checkForUpdates(_ kind: AgentRuntimeKind, on machineID: String) {
         guard connection(for: machineID) != nil else { return markUnavailable(machineID) }
@@ -126,6 +134,7 @@ extension MachinesStore {
                 let statuses = try await server.call(ListRuntimes(checkForUpdates: checkForUpdates))
                 self.machineRuntimes[machineID] = statuses
                 self.runtimesRead.insert(machineID)
+                self.runtimesReadAt[machineID] = Date()
                 self.harnessInventoryUnavailable.remove(machineID)
                 if checkForUpdates {
                     for status in statuses {
@@ -164,8 +173,10 @@ extension MachinesStore {
                 components.append(HarnessComponent(id: kind.rawValue + "-adapter", displayName: "\(status.name) ACP adapter",
                                                    installedVersion: status.adapterVersion, isInstalled: adapter, isSystemInstall: false))
             }
+            // A CLI without its adapter is installed but cannot run: it is setting up
+            // while the server installs the adapter, and needs the adapter otherwise.
             let state: HarnessInstallation.State = !status.installed ? (status.version == nil ? .notInstalled : .unavailable)
-                : !status.isReady ? .notInstalled
+                : !status.isReady ? (status.installingAdapter ? .settingUp : .adapterRequired)
                 : status.signedIn == false && kind != .defaultAgent ? .signInRequired : .ready
             installations[kind] = HarnessInstallation(
                 runtimeKind: kind, state: state, components: components, isInstalled: status.isReady,
@@ -174,12 +185,14 @@ extension MachinesStore {
                 failureCount: failures,
                 diagnostic: failures > 0 ? harnessErrors[machineID]?[kind] : nil)
             guard kind != .defaultAgent else { continue }
+            // No sign-in shows for a harness that cannot run yet.
             let signInState: AgentSignInStatus.State = !status.installed ? .notInstalled
+                : !status.isReady ? (status.installingAdapter ? .settingUp : .adapterRequired)
                 : status.signedIn == true ? (kind == .opencode ? .credentialsPresent : .verified)
                 : status.signedIn == false ? .signInRequired : .notChecked
             signIns[kind] = AgentSignInStatus(
                 id: kind.rawValue, name: status.name, state: signInState, detail: status.detail ?? "",
-                accounts: status.accounts.map { .init(method: $0.method, name: $0.name, credential: $0.credential) })
+                accounts: status.isReady ? status.accounts.map { .init(method: $0.method, name: $0.name, credential: $0.credential) } : [])
             signInMessages[machineID]?[kind] = nil
         }
         harnessInstallations[machineID] = installations

@@ -29,7 +29,9 @@ struct Machine: Identifiable, Hashable, Sendable {
     var name: String
     var platform: Platform
     var isThisMachine: Bool
-    var isOnline: Bool
+    var connection: MachineConnectionState
+    /// The UI is connected to its server now.
+    var isOnline: Bool { connection == .online }
     /// False while it is online but its library has other tables or columns
     /// than this Mac's: it does not sync until both run the same release.
     var syncs: Bool = true
@@ -39,6 +41,27 @@ struct Machine: Identifiable, Hashable, Sendable {
     var runtimes: [AgentRuntimeKind]
 
     func canRun(_ runtime: AgentRuntimeKind) -> Bool { runtimes.contains(runtime) }
+}
+
+/// How a machine's server reads to the UI, which every page shows the same way.
+enum MachineConnectionState: Hashable, Sendable {
+    /// The UI is connected to its server.
+    case online
+    /// Its server is coming up: it is starting, restarting or updating, it was
+    /// just installed, or this Mac's server reaches it and the UI is not connected yet.
+    case starting
+    /// This Mac's server is not running, or this UI stopped that machine's.
+    case stopped
+    case offline
+
+    var displayName: String {
+        switch self {
+        case .online: "Running"
+        case .starting: "Starting"
+        case .stopped: "Stopped"
+        case .offline: "Offline"
+        }
+    }
 }
 
 /// The runtimes a session can run on. Bots are not here: they have their own
@@ -138,6 +161,11 @@ struct WorkspaceAgent: Identifiable, Hashable, Sendable {
         case ready
         case running
         case needsAuthentication
+        /// Its ACP adapter is installing, or missing: it cannot run yet.
+        case settingUp
+        case adapterRequired
+        /// Its machine's server is coming up.
+        case starting
         case offline
         case failed
     }

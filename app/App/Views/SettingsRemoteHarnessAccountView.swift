@@ -20,7 +20,7 @@ struct SettingsRemoteHarnessAccountView: View {
             if embedded { accountContent }
             else { SettingsSection(title: "Account", detail: machine.name) { accountContent } }
         }.id(machine.id + runtimeKind.rawValue)
-        .task { await model.refreshSignIn(runtimeKind, on: machine.id) }
+        .task { model.refreshHarnessesIfStale(on: machine.id) }
         .onChange(of: session?.state) { _, state in
             if state == .succeeded { Task { await model.refreshSignIn(runtimeKind, on: machine.id) } }
         }
@@ -45,7 +45,7 @@ struct SettingsRemoteHarnessAccountView: View {
                         Text("Account").font(.settingsRow)
                         SettingsHarnessAccountDetails(
                             status: status,
-                            fallback: HarnessAccountPresentation.accountLabel(runtimeKind, status: status))
+                            fallback: "Not checked")
                     }
                     Spacer()
                     harnessButtons(harness, status: status)
@@ -70,7 +70,10 @@ struct SettingsRemoteHarnessAccountView: View {
     @ViewBuilder
     private func harnessButtons(_ harness: HarnessInstallation, status: AgentSignInStatus?) -> some View {
         let methods = HarnessSignInFlow.methods(runtimeKind)
-        if !harness.isInstalled {
+        if harness.needsAdapter {
+            // Its Software row installs the adapter.
+            EmptyView()
+        } else if !harness.isInstalled {
             Text("Install the harness first").font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
         } else if status?.hasCredentials != true {
             if methods.count == 1, let method = methods.first {
