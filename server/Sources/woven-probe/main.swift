@@ -42,7 +42,7 @@ let usage = """
     trash ID | restore ID
     app-state ID KEY JSON            set one key of an app's saved state
     setting KEY JSON                 set a synced setting, e.g. setting tools.defaults '["notes"]'
-    databases | db-create NAME | db-execute ID SQL | db-query ID SQL
+    databases | db-create NAME | db-execute ID SQL | db-query ID SQL | db-delete ID
     bots                             the bots and their chats as the library holds them
     bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
     bots-follow [OPEN_JSON]          print the bots' status and messages (or one opened conversation's)
@@ -417,6 +417,9 @@ do {
     out("\(try await client.call(ExecuteDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).changes) changed")
   case "db-query":
     out(try await client.call(QueryDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).json)
+  case "db-delete":
+    _ = try await client.call(DeleteDatabase(databaseID: argument(0, "ID")))
+    out("done")
   case "bots":
     let saved = try await client.call(ListSavedBots())
     for bot in saved.bots {
