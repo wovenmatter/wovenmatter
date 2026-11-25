@@ -228,8 +228,10 @@ final class SessionStore {
         case .option(let id): answer = .option(id)
         case .answers(let answers):
             switch answers.values.first {
-            case .single(let id): answer = .option(id)
-            case .multiple(let ids): answer = .values([prompt.fields.first?.id ?? "answer": .array(ids.map(JSONValue.string))])
+            case .options(let ids) where prompt.fields.first?.kind == .choices:
+                answer = .values([prompt.fields.first?.id ?? Self.freeTextField: .array(ids.map(JSONValue.string))])
+            case .options(let ids): answer = ids.first.map(PromptAnswer.option) ?? .declined
+            case .text(let text): answer = .text(text)
             case nil: answer = .declined
             }
         case .formValues(let values):
@@ -288,7 +290,8 @@ final class SessionStore {
         case .question where !prompt.options.isEmpty:
             request = .questions(title: nil, questions: [SessionQuestion(id: prompt.fields.first?.id ?? Self.freeTextField,
                                                                          prompt: prompt.text, options: choices(prompt.options),
-                                                                         allowsMultiple: false)])
+                                                                         allowsMultiple: false,
+                                                                         acceptsOwnAnswer: prompt.fields.first?.ownAnswer ?? false)])
         case .question, .form:
             let fields = prompt.fields.isEmpty
                 ? [PromptField(id: Self.freeTextField, title: "Answer", multiline: true)] : prompt.fields
@@ -304,7 +307,8 @@ final class SessionStore {
                 let counted = field.kind == .text || field.kind == .choices
                 return SessionFormField(
                     id: field.id, title: field.title, detail: field.detail, kind: kind, required: field.required,
-                    options: choices(field.options), initialValue: Self.formValue(field.initial), placeholder: field.placeholder,
+                    options: choices(field.options), acceptsOwnAnswer: field.ownAnswer,
+                    initialValue: Self.formValue(field.initial), placeholder: field.placeholder,
                     multiline: field.multiline, minimum: counted ? nil : field.minimum, maximum: counted ? nil : field.maximum,
                     minimumLength: counted ? field.minimum.map { Int($0) } : nil,
                     maximumLength: counted ? field.maximum.map { Int($0) } : nil)
@@ -467,13 +471,63 @@ final class SessionStore {
     }
 
     private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
-        AgentRunActivity(
+        let script = call.kind == .code
+        let calls = script ? codeCalls(call.calls ?? [], live: live) : nil
+        let questions = call.kind == .question
+            ? (call.questions ?? []).enumerated().map { AgentRunQuestion(id: $0, title: $1.title, text: $1.text, answer: $1.answer) }
+            : nil
+        return AgentRunActivity(
             id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
-            title: call.title ?? call.name, status: live ? "running" : call.failed ? "failed" : "completed",
+            title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code")
+                : questions.map { questionTitle($0, live: live, failed: call.failed) } ?? call.title ?? call.name,
+            // The tools it called, each once; or what the questions were about.
+            detail: questions.flatMap { questions in
+                let names = questions.map { $0.title?.nonempty ?? $0.text }.filter { !$0.isEmpty }
+                return names.isEmpty ? nil : names.joined(separator: ", ")
+            } ?? calls.flatMap { calls in
+                let names = calls.filter { $0.status != nil }.map(\.name).reduce(into: [String]()) { names, name in
+                    if !names.contains(name) { names.append(name) }
+                }
+                return names.isEmpty ? nil : names.joined(separator: ", ")
+            },
+            status: live ? "running" : call.failed ? "failed" : "completed",
             toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
-            subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil)
+            subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil,
+            codeCalls: calls, questions: questions)
+    }
+
+    /// "Asking 2 questions" while they wait, then "Asked 2 questions"; or,
+    /// when none was answered (dismissed, or the turn ended on them), "not
+    /// answered". Before the questions arrive it is "a question".
+    private static func questionTitle(_ questions: [AgentRunQuestion], live: Bool, failed: Bool) -> String {
+        let several = questions.count > 1
+        if failed { return several ? "Questions failed" : "Question failed" }
+        if !live, !questions.isEmpty, questions.allSatisfy({ $0.answer == nil }) { return several ? "Questions not answered" : "Question not answered" }
+        return (live ? "Asking " : "Asked ") + (several ? "\(questions.count) questions" : "a question")
+    }
+
+    /// A script's tool calls as its card lists them. One without output that
+    /// has not failed is running while the script runs, and done after.
+    private static func codeCalls(_ calls: [ToolCall], live: Bool) -> [AgentRunCodeCall] {
+        calls.enumerated().map { index, call in
+            // The entry that says how many more calls there were has no name.
+            guard !call.name.isEmpty else { return AgentRunCodeCall(id: index, name: call.title ?? "", status: nil) }
+            let status: AgentRunCodeCall.Status = call.failed ? .failed : live && call.output == nil ? .running
+                : call.kind == .visualReply ? .shownInChat : .completed
+            return AgentRunCodeCall(id: index, name: readableToolName(call.name), status: status,
+                                    error: call.failed ? call.output : nil)
+        }
+    }
+
+    /// A tool's name without the Woven server's prefix, as a script calls
+    /// it (`woven.render_html`, `mcp__woven__render_html`).
+    private static func readableToolName(_ name: String) -> String {
+        for prefix in ["mcp__woven__", "mcp.woven.", "woven.", "woven_", "woven/"] where name.lowercased().hasPrefix(prefix) {
+            return String(name.dropFirst(prefix.count))
+        }
+        return name
     }
 
     private static let timestamps = ISO8601DateFormatter()
@@ -512,6 +566,18 @@ final class SessionStore {
         } + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none) }
         var goneNotice: String?
 
+        /// A turn that ended without a reply (it failed, or the person
+        /// stopped it) still shows its work and how it ended, under an
+        /// empty reply as a visual reply's turn does.
+        func closeRun() {
+            guard let last = runs.indices.last, runs[last].assistantMessageID == nil,
+                  runs[last].status == .failed || activities.last?.runID == runs[last].id else { return }
+            let id = Self.replyID(runs[last].id)
+            messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                                   status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))
+            runs[last].assistantMessageID = id
+        }
+
         func currentRun(at date: Date) -> Int {
             if runs.isEmpty {
                 runs.append(WorkspaceRunRecord(id: "run-start-\(sessionID)", conversationID: sessionID, status: .completed,
@@ -529,6 +595,7 @@ final class SessionStore {
                 case .timer, .wakeUp: .timer
                 default: nil
                 }
+                closeRun()
                 messages.append(WorkspaceMessageRecord(
                     id: entry.id, conversationID: sessionID, role: .user, content: text, status: .complete, createdAt: entry.date,
                     attachments: attachments.map {
@@ -597,11 +664,14 @@ final class SessionStore {
                     runs[runs.count - 1].status = .failed
                     runs[runs.count - 1].error = notice.text
                 } else {
+                    // A stopped turn's work shows before the notice that says it stopped.
+                    if notice.kind == .interrupted { closeRun() }
                     messages.append(WorkspaceMessageRecord(id: entry.id, conversationID: sessionID, role: .system,
                                                            content: notice.text, status: .complete, createdAt: entry.date))
                 }
             }
         }
+        if run != .running { closeRun() }
         if run == .running, let last = runs.indices.last {
             runs[last].status = .running
             runs[last].completedAt = nil

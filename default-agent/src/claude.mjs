@@ -1,9 +1,8 @@
 import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { accessSync, constants, statSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai/utils/transcript';
@@ -13,13 +12,15 @@ import { humanMessage } from './rpc.mjs';
 // through the Claude Agent SDK with its default configuration and the Claude
 // Code installed here. Claude keeps its own tokens. Pi keeps the agent loop
 // and runs the tools: each model request replays the transcript into a fresh
-// SDK query that may make exactly one model request, and the tools are
-// declared through an inventory server that refuses to run them.
+// SDK query that may make exactly one model request. The request declares
+// Pi's tools under Pi's own names, so the model sees exactly the names Pi's
+// prompt uses; Claude Code has no tools of its own and runs none.
 
 export const claudeProvider = 'claude-subscription';
+// The most of a request body sent in CLAUDE_CODE_EXTRA_BODY, under Linux's
+// 128 KiB limit for one environment string. A chat's tools are about 31 KB.
+export const maxExtraBody = 120 * 1024;
 const api = 'claude-agent-sdk';
-const prefix = 'mcp__woven__';
-const inventoryProgram = fileURLToPath(new URL('./claude-inventory.mjs', import.meta.url));
 const execute = promisify(execFile);
 const zeroCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 // Claude Code's own failure when it has no sign-in ("Not logged in · Please run /login").
@@ -158,7 +159,7 @@ export function claudeRequest(context, model) {
     if (role === 'assistant') {
       content = message.content.flatMap(block => {
         if (block.type === 'text') return block.text ? [{ type: 'text', text: block.text }] : [];
-        if (block.type === 'toolCall') return [{ type: 'tool_use', id: toolID(block.id), name: prefix + block.name, input: block.arguments }];
+        if (block.type === 'toolCall') return [{ type: 'tool_use', id: toolID(block.id), name: block.name, input: block.arguments }];
         // Signed thinking is valid only for the model that produced it.
         if (block.type === 'thinking' && block.thinkingSignature && message.api === api && message.model === model.id) {
           return [block.redacted ? { type: 'redacted_thinking', data: block.thinkingSignature } : { type: 'thinking', thinking: block.thinking, signature: block.thinkingSignature }];
@@ -199,18 +200,21 @@ function claudeStream(model, context, options, workspace) {
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) controller.abort();
     await mkdir(workspace, { recursive: true, mode: 0o700 });
-    const toolsFile = join(workspace, `tools-${randomUUID()}.json`);
     let query, timer, acknowledge, started = false, failure;
     const response = { message: undefined, complete: false, json: new Map() }, indices = new Map();
     const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => controller.abort(), 180000); timer.unref?.(); };
     try {
-      await writeFile(toolsFile, JSON.stringify(request.inventory), { mode: 0o600 });
-      const body = { tools: request.inventory.map(tool => ({ name: prefix + tool.name, description: tool.description, input_schema: tool.inputSchema })) };
+      const body = { tools: request.inventory.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) };
       if (options.maxTokens) body.max_tokens = options.maxTokens;
       if (options.reasoning) {
         if (model.reasoning) body.thinking = { type: 'adaptive' };
         body.output_config = { effort: options.reasoning };
       } else body.thinking = { type: 'disabled' };
+      const extraBody = JSON.stringify(body);
+      // Claude Code takes the tools in one environment variable, which Linux caps at 128 KiB.
+      if (Buffer.byteLength(extraBody) > maxExtraBody) {
+        throw new Error(`This chat's tools are too large to send through Claude Code (${Math.round(Buffer.byteLength(extraBody) / 1024)} KB). Turn code mode to Only, or turn some tools off.`);
+      }
       // Earlier user frames are appended without a model request; each waits for its zero-turn result.
       async function* input() {
         for (const [index, frame] of request.frames.entries()) {
@@ -226,8 +230,8 @@ function claudeStream(model, context, options, workspace) {
         cwd: workspace, model: model.id, tools: [], settingSources: [], strictMcpConfig: true, persistSession: false,
         systemPrompt: { type: 'custom', prompt: request.system, snapshot: false },
         maxTurns: 1, permissionMode: 'dontAsk', includePartialMessages: true, abortController: controller, stderr: () => {},
-        mcpServers: { woven: { command: process.execPath, args: [inventoryProgram, toolsFile] } },
-        env: claudeEnvironment({ CLAUDE_CODE_EXTRA_BODY: JSON.stringify(body), ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0',
+        mcpServers: {},
+        env: claudeEnvironment({ CLAUDE_CODE_EXTRA_BODY: extraBody, ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0',
           CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off', DISABLE_AUTO_COMPACT: '1',
           ...(options.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(options.maxTokens) } : {}) }),
       } });
@@ -256,7 +260,6 @@ function claudeStream(model, context, options, workspace) {
       controller.abort();
       query?.close?.();
       options.signal?.removeEventListener('abort', abort);
-      await rm(toolsFile, { force: true });
     }
 
     // One Messages API streaming event of the first response.
@@ -307,8 +310,8 @@ function claudeStream(model, context, options, workspace) {
         if (block.type === 'text') return { type: 'text', text: block.text };
         if (block.type === 'thinking') return { type: 'thinking', thinking: block.thinking, thinkingSignature: block.signature };
         if (block.type === 'redacted_thinking') return { type: 'thinking', thinking: '', redacted: true, thinkingSignature: block.data };
-        if (block.type === 'tool_use' && block.name.startsWith(prefix) && names.has(block.name.slice(prefix.length))) {
-          return { type: 'toolCall', id: block.id, name: block.name.slice(prefix.length), arguments: block.input ?? {} };
+        if (block.type === 'tool_use' && names.has(block.name)) {
+          return { type: 'toolCall', id: block.id, name: block.name, arguments: block.input ?? {} };
         }
         throw new Error('Claude returned a tool or block outside this conversation.');
       });

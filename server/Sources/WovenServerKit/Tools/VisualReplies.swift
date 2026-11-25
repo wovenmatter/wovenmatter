@@ -34,6 +34,42 @@ enum VisualReplies {
   private static let viewportHeights = try! NSRegularExpression(
     pattern: #"(?<![\w.-])\d*\.?\d+\s*[sld]?(?:vh|vmin|vmax)\b"#, options: [.caseInsensitive])
 
+  /// The HTML a `render_html` or `preview_html` call gives: its `html`, or
+  /// the HTML file at its `path`, which the agent wrote with its own tools
+  /// (a large page, kept out of a script). Exactly one of them. A bot's
+  /// files are on another machine, so a bot gives only `html`.
+  static func authored(_ arguments: Arguments, fromBot: Bool) throws -> String {
+    let html = arguments.optionalString("html").flatMap { $0.isEmpty ? nil : $0 }
+    let path = arguments.optionalString("path").flatMap { $0.isEmpty ? nil : $0 }
+    switch (html, path) {
+    case (let html?, nil):
+      return html
+    case (nil, let path?):
+      guard !fromBot else { throw ToolFailure("A bot's files are not on this machine, so give the HTML itself as `html`.") }
+      return try file(path)
+    case (nil, nil):
+      throw ToolFailure("Give `html`, or the `path` of an HTML file.")
+    case (_?, _?):
+      throw ToolFailure("Give `html` or `path`, not both.")
+    }
+  }
+
+  /// A local HTML file's text, refused when it cannot be a visual reply.
+  private static func file(_ path: String) throws -> String {
+    let expanded = (path as NSString).expandingTildeInPath
+    guard expanded.hasPrefix("/") else { throw ToolFailure("Give `path` as an absolute path; \(path) is not one.") }
+    guard let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),
+          attributes[.type] as? FileAttributeType == .typeRegular,
+          let size = (attributes[.size] as? NSNumber)?.intValue else {
+      throw ToolFailure("There is no file at \(path).")
+    }
+    // At most three UTF-8 bytes stand for one character of the limit.
+    guard size <= authoredLimit * 3 else { throw ToolFailure("The visual reply is longer than 512,000 characters.") }
+    guard let data = FileManager.default.contents(atPath: expanded) else { throw ToolFailure("\(path) could not be read.") }
+    guard let html = String(data: data, encoding: .utf8) else { throw ToolFailure("\(path) is not UTF-8 text.") }
+    return html
+  }
+
   /// Embeds each local image the HTML refers to as a data URI. A path read
   /// once is embedded everywhere it appears. Fails when the HTML is empty or
   /// too long, uses viewport-height lengths, or would be over `embeddedLimit`.
@@ -41,7 +77,7 @@ enum VisualReplies {
   /// one) reads nothing: the HTML stays as authored and every local path is
   /// in `missingImages`.
   static func prepare(_ html: String, readingDisk: Bool = true) throws -> PreparedVisualReply {
-    guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("Give `html`.") }
+    guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ToolFailure("The visual reply is empty.") }
     guard html.utf16.count <= authoredLimit else {
       throw ToolFailure("The visual reply is longer than 512,000 characters.")
     }
@@ -77,9 +113,13 @@ enum VisualReplies {
   /// saved once, as its own item, when `render_html` runs; every runtime also
   /// reports the call, and that report is kept without its HTML: each `html`
   /// argument becomes its length, and the call is marked `.visualReply` so
-  /// the chat shows the visual reply, not the call. Every runtime's tool calls pass here
-  /// (`SessionHost`, and the bots' mirror) before they are shown or saved.
+  /// the chat shows the visual reply, not the call. A script's tool calls
+  /// (`.code`) are kept the same way, and the script without its long
+  /// literals, so a page written into it is not kept either (`CodeCalls`).
+  /// Every runtime's tool calls pass here (`SessionHost`, and the bots'
+  /// mirror) before they are shown or saved.
   static func withoutVisualReply(_ call: ToolCall) -> ToolCall {
+    if call.kind == .code { return CodeCalls.prepared(call) }
     guard publishes(call) else { return call }
     var call = call
     call.kind = .visualReply
@@ -97,6 +137,7 @@ enum VisualReplies {
   /// `woven` server and whatever separator the runtime puts between them
   /// (Claude Code and Pi Durable `mcp__woven__render_html`, Codex
   /// `mcp.woven.render_html`, OpenCode and the bots `woven_render_html`,
+  /// OpenCode's scripts `woven.render_html`,
   /// `woven/render_html`, `woven: render_html`). Another server's
   /// `render_html` is not Woven's.
   static func publishes(_ call: ToolCall) -> Bool {
@@ -115,11 +156,16 @@ enum VisualReplies {
     return text.isEmpty ? nil : String(text.prefix(200))
   }
 
+  /// Each `html` string as its length. One that already is (a runtime that
+  /// keeps pages from crossing to the server sends it so) stays as it is.
   private static func withoutHTML(_ value: JSONValue) -> JSONValue {
     switch value {
     case .object(let fields):
       .object(fields.mapValues(withoutHTML).merging(
-        fields["html"]?.string.map { ["html": .string("(\($0.utf16.count) characters, shown in the chat)")] } ?? [:],
+        fields["html"]?.string.map { html in
+          ["html": .string(html.wholeMatch(of: #/\((?:\d+ characters|the visual reply), shown in the chat\)/#) != nil
+            ? html : "(\(html.utf16.count) characters, shown in the chat)")]
+        } ?? [:],
         uniquingKeysWith: { _, shown in shown }))
     case .array(let values): .array(values.map(withoutHTML))
     default: value

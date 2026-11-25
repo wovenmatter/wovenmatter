@@ -38,26 +38,44 @@ public enum ToolContent: Codable, Sendable, Hashable {
 }
 
 /// What a tool returns. `isError` results are for the agent to read and act on.
+/// A success also carries its value as `structuredContent`, one JSON object
+/// that its tool's output schema describes, and the same JSON as its text
+/// (MCP's structured results). A failure is its text alone.
 public struct ToolResult: Codable, Sendable, Hashable {
   public var content: [ToolContent]
   public var isError: Bool
+  /// MCP's `structuredContent`: what a script gets from the call.
+  public var structuredContent: JSONValue?
   /// MCP's `_meta`: what the agent is not shown. `render_html` gives the visual
   /// reply it published as `wovenVisualReply` (a `VisualReply`), for the bots runtime's chat.
   public var meta: JSONValue?
 
   private enum CodingKeys: String, CodingKey {
-    case content, isError
+    case content, isError, structuredContent
     case meta = "_meta"
   }
 
-  public init(content: [ToolContent], isError: Bool = false, meta: JSONValue? = nil) {
+  public init(content: [ToolContent], isError: Bool = false, structuredContent: JSONValue? = nil, meta: JSONValue? = nil) {
     self.content = content
     self.isError = isError
+    self.structuredContent = structuredContent
     self.meta = meta
+  }
+
+  /// A success whose value is `value`, given also as its one text block, in
+  /// compact JSON, with `images` after it.
+  public static func structured(_ value: JSONValue, images: [ToolContent] = [], meta: JSONValue? = nil) -> ToolResult {
+    let text = (try? Wire.encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+    return ToolResult(content: [.text(text)] + images, structuredContent: value, meta: meta)
   }
 
   public static func text(_ text: String) -> ToolResult { ToolResult(content: [.text(text)]) }
   public static func error(_ text: String) -> ToolResult { ToolResult(content: [.text(text)], isError: true) }
+
+  /// Its text blocks, one per line.
+  public var textContent: String {
+    content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined(separator: "\n")
+  }
 }
 
 /// Who calls a Woven tool: a session, or a bot, on a machine.

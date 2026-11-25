@@ -854,7 +854,11 @@ export type HostMethods = {
             name: string;
             description: string;
             inputSchema: Record<string, unknown>;
+            /** The JSON Schema of each success's `structuredContent`, always an object. */
+            outputSchema?: Record<string, unknown>;
             annotations?: { readOnlyHint?: boolean };
+            /** `wovenImages`: its results can hold images beside its value. */
+            _meta?: { wovenImages?: boolean };
           }[];
           instructions: string;
         };
@@ -864,8 +868,11 @@ export type HostMethods = {
   "tools.call": {
     params: { botId: string; name: string; arguments: Record<string, unknown>; forum?: true };
     data: {
+      /** A success's value as JSON text first, then any images; a failure's text. */
       content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
       isError: boolean;
+      /** A success's value, which the tool's `outputSchema` describes; none on a failure. */
+      structuredContent?: Record<string, unknown>;
       /** What the bot is not shown: the visual reply `render_html` published. */
       _meta?: { wovenVisualReply?: VisualReply };
     };

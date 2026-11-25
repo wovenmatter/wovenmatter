@@ -1,6 +1,6 @@
-import { AssistantEntry, UsageDoc, configure, defineExtension, defineTool } from '@earendil-works/pi-durable';
-import { McpClient, StdioTransport, StreamableHttpTransport, createMcpToolName, limitMcpContent, normalizeMcpInputSchema, toLlmContent } from '@earendil-works/pi-mcp';
-import { arr, int, obj, oneOf, opt, str } from '@earendil-works/pi-schema';
+import { AgentDoc, AssistantEntry, UsageDoc, configure, defineExtension, defineTool } from '@earendil-works/pi-durable';
+import { McpClient, StdioTransport, StreamableHttpTransport, createMcpToolName, limitMcpContent, mcpNamespace, mcpServerSummary, normalizeMcpInputSchema, toLlmContent } from '@earendil-works/pi-mcp';
+import { arr, int, lit, obj, oneOf, opt, str, union } from '@earendil-works/pi-schema';
 
 export const checklistName = 'update_checklist';
 export const subagentName = 'subagent';
@@ -29,7 +29,10 @@ const subagent = defineTool({
       const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
       if (existing) return existing.id;
       const created = await tx.createConversation({ ownership: { kind: 'task', taskId: api.taskId } });
-      await configure(tx, created.id, { extensions: { remove: [Subagents] } });
+      // The child starts as a copy of this conversation's agent, code mode included; it only loses subagents.
+      const copied = (await tx.doc(AgentDoc, created.id)).extensions;
+      const removed = Array.isArray(copied) ? [] : (copied?.remove ?? []).filter(name => name !== Subagents.name).map(name => ({ name }));
+      await configure(tx, created.id, { extensions: { remove: [...removed, Subagents] } });
       return created.id;
     }, context);
     await api.details({ conversationId: child }, context);
@@ -101,10 +104,40 @@ export function createSearch(credentials, preferred) {
   ] });
 }
 
-// The session's MCP servers, as ACP describes them, as one extension of tools.
+// What a script gets from an MCP tool (`tools.<name>(args)` in code mode). A tool with an output schema (each of
+// Woven's) resolves to its structured content, as its schema declares it; one that can return images, such as a
+// screenshot (`_meta.wovenImages`), also gets them as `images`, which the script can show with
+// `image(result.images[0])`. A tool without one resolves to its text, or to `{ text, images }` when it returned
+// images. The model never sees this; a direct call's result is the content as it was.
+const mcpImage = obj({ type: lit('image'), data: str(), mimeType: str() }, { open: true });
+const mcpOutput = union([str(), obj({ text: str(), images: arr(mcpImage) })]);
+const imagesOf = content => content.filter(block => block.type === 'image').map(({ data, mimeType }) => ({ type: 'image', data, mimeType }));
+function scriptValue(content) {
+  const text = content.filter(block => block.type === 'text').map(block => block.text).join('\n');
+  const images = imagesOf(content);
+  return images.length ? { text, images } : text;
+}
+// The schema of a tool's value in a script: its output schema, with `images` when it can return them.
+function outputSchemaOf(tool) {
+  const schema = tool.outputSchema;
+  if (schema?.type !== 'object') return mcpOutput;
+  if (tool._meta?.wovenImages !== true) return schema;
+  return { ...schema, properties: { ...(schema.properties ?? {}), images: arr(mcpImage) } };
+}
+// A tool's value in a script, which its schema accepts: its structured content, with the images it returned when
+// the schema may hold them, else its text.
+function structuredValue(result, content, schema) {
+  const value = result.structuredContent;
+  if (schema === mcpOutput || value === null || typeof value !== 'object' || Array.isArray(value)) return scriptValue(content);
+  const images = imagesOf(content);
+  return images.length && (schema.properties?.images || schema.additionalProperties !== false) ? { ...value, images } : value;
+}
+
+// The session's MCP servers, as ACP describes them: one extension of tools per server, each its own code mode
+// namespace, described by the server's instructions.
 export async function connectMcp(servers = [], cwd) {
-  const clients = [], tools = [], instructions = [];
-  const taken = new Set();
+  const clients = [], extensions = [], instructions = [];
+  const taken = new Set(), namespaces = new Set();
   for (const server of servers) {
     const pairs = list => Object.fromEntries((list ?? []).map(({ name, value }) => [name, value]));
     let transport;
@@ -115,18 +148,32 @@ export async function connectMcp(servers = [], cwd) {
     try { await client.connect(transport); } catch (error) { throw new Error(`The MCP server ${server.name} could not be reached: ${error.message}`); }
     clients.push(client);
     if (client.instructions) instructions.push(client.instructions);
+    const tools = [];
     for (const tool of await client.listTools()) {
       const name = createMcpToolName(server.name, tool.name, candidate => taken.has(candidate));
       taken.add(name);
+      const outputSchema = outputSchemaOf(tool);
       tools.push(defineTool({ name, label: tool.title ?? tool.name, description: tool.description ?? tool.name,
         parameters: normalizeMcpInputSchema(tool.inputSchema),
+        structuredOutputSchema: outputSchema,
         replay: tool.annotations?.readOnlyHint ? 'safe' : 'unsafe',
         execute: async (args, _api, context) => {
           const result = await client.callTool(tool.name, args, { signal: context.abortSignal, timeoutMs: 600000 });
           const { content } = await limitMcpContent(toLlmContent(result));
-          return { output: content, isError: result.isError === true };
+          // A failure carries no value, so a script's call rejects with its text.
+          return result.isError === true ? { output: content, isError: true }
+            : { output: content, structuredOutput: structuredValue(result, content, outputSchema) };
         } }));
     }
+    // Two servers whose names differ only in `-` and `_` would share one; each needs its own extension.
+    let namespace = mcpNamespace(server.name);
+    for (let count = 2; namespaces.has(namespace); count++) namespace = `${mcpNamespace(server.name)}_${count}`;
+    namespaces.add(namespace);
+    extensions.push(defineExtension({ name: namespace, tools, namespace: {
+      name: namespace,
+      description: mcpServerSummary(undefined, client.instructions) || `The ${server.name} MCP server's tools.`,
+      ...(client.instructions ? { instructions: client.instructions } : {}),
+    } }));
   }
-  return { extension: defineExtension({ name: 'woven-mcp', tools }), instructions, close: () => Promise.allSettled(clients.map(client => client.close())) };
+  return { extensions, instructions, close: () => Promise.allSettled(clients.map(client => client.close())) };
 }

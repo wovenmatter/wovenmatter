@@ -396,6 +396,8 @@ struct CloudConversation: View {
             .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
             .background(theme.palette.themeWhisper,
                 in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+            .background(WovenPalette.background,
+                in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
             .help("Open Pi Durable settings")
         }
         if let conversation, !conversation.isArchived, WorkspaceGoal.supports(conversation.runtimeKind),
@@ -896,6 +898,8 @@ struct PersistedAttachmentChip: View {
 
 /// A session on a Mac that is missing a permission it needs. Full-width quiet
 /// notice above the composer, matching the composer setup notices.
+/// Notices above the composer sit on the window's colour under their tint:
+/// the chat scrolls beneath them and must not show through.
 private struct MacAccessNotice: View {
     @Environment(\.wovenTheme) private var theme
     let message: String
@@ -907,12 +911,16 @@ private struct MacAccessNotice: View {
                 .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
                 .background(theme.palette.themeWhisper,
                     in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                .background(WovenPalette.background,
+                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
                 .help("Open Settings → Permissions & Access")
         } else {
             label(showsArrow: false)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 32)
                 .background(theme.palette.themeWhisper,
+                    in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
+                .background(WovenPalette.background,
                     in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
         }
     }

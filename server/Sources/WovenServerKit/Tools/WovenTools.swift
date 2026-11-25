@@ -3,13 +3,19 @@ import Synchronization
 import WovenLibrary
 import WovenProtocol
 
-/// One Woven tool: what an agent sees (name, description, input schema) and
-/// how this server carries it out. Adding a tool is one entry in `catalog`.
+/// One Woven tool: what an agent sees (name, description, input and output
+/// schemas) and how this server carries it out. Adding a tool is one entry in
+/// `catalog`.
 struct WovenTool: Sendable {
   var name: String
   var description: String
   /// The JSON Schema of its arguments.
   var input: JSONValue
+  /// The JSON Schema of its value: the `structuredContent` of each success,
+  /// always an object.
+  var output: JSONValue
+  /// Its results can hold images beside its value (screenshots).
+  var images = false
   /// It changes nothing.
   var readOnly = false
   /// Offered to bots too; bots have their own tools for bots and the Forum.
@@ -86,8 +92,13 @@ final class WovenTools: Sendable {
   /// the tools of the other groups.
   func listing(forBots: Bool = false, enabled: Set<ToolGroup>? = nil) -> [JSONValue] {
     catalog.filter { (!forBots || $0.forBots) && Self.allowed($0, enabled) }.map { tool in
-      .object(["name": .string(tool.name), "description": .string(tool.description), "inputSchema": tool.input,
-               "annotations": .object(["readOnlyHint": .bool(tool.readOnly)])])
+      var entry: [String: JSONValue] = [
+        "name": .string(tool.name), "description": .string(tool.description), "inputSchema": tool.input,
+        "outputSchema": tool.output, "annotations": .object(["readOnlyHint": .bool(tool.readOnly)]),
+      ]
+      // For a runtime that gives a script the images with the value (Pi Durable).
+      if tool.images { entry["_meta"] = .object(["wovenImages": .bool(true)]) }
+      return .object(entry)
     }
   }
 
@@ -103,12 +114,22 @@ final class WovenTools: Sendable {
     let arguments: JSONValue = if case .object = arguments { arguments } else { .object([:]) }
     let call = ToolRequest(arguments: Arguments(value: arguments), caller: caller, tools: self, name: name, forwarded: forwarded)
     do {
-      return try await tool.run(call)
+      return Self.structured(try await tool.run(call))
     } catch let failure as ToolFailure {
       return .error(failure.description)
     } catch {
       return .error(ProtocolError(error).message)
     }
+  }
+
+  /// A success always carries its value, which MCP clients require of a tool
+  /// with an output schema: one that came without it (from a UI or a server
+  /// that did not give one) gets its text as `{"text": …}`.
+  static func structured(_ result: ToolResult) -> ToolResult {
+    guard !result.isError, result.structuredContent == nil else { return result }
+    let images = result.content.filter { if case .image = $0 { true } else { false } }
+    let text = result.textContent
+    return .structured(.object(text.isEmpty ? [:] : ["text": .string(text)]), images: images, meta: result.meta)
   }
 
   /// The groups a session may use: its own choice, else its runtime's

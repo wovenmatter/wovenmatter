@@ -4,8 +4,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { CodemodeSandbox } from '@earendil-works/pi-codemode';
 import { AgentDoc, AssistantEntry, ConversationIdle, Harness, UsageDoc, createRegistry, defineExtension, section } from '@earendil-works/pi-durable';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import { CODEMODE_TOOL_NAME, createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { createCodingTools } from '@earendil-works/pi-durable/tools';
@@ -68,6 +70,28 @@ function promptContent(blocks = []) {
   return content;
 }
 
+// Code mode, as Settings sets it: `on` offers the model the `codemode` tool beside the others, `only` offers it
+// nothing else (its scripts call every other tool), and `off` leaves code mode out, its prompt section too.
+export const codeModes = ['on', 'only', 'off'];
+const codeModeOf = settings => codeModes.includes(settings?.codeMode) ? settings.codeMode : 'on';
+// The estimated tokens the `codemode` section may spend declaring tools: enough for every Woven tool and the
+// built-in ones, so a script never has to search for one.
+export const codemodeInlineBudget = 24000;
+
+// How scripts reach the MCP tools, added to the prompt while code mode is selected.
+function codemodeGuide(input, codemode, mcp) {
+  if (!input.agent.extensions.some(extension => extension.name === codemode.name)) return undefined;
+  const example = mcp.extensions.flatMap(extension => extension.tools ?? []).find(tool => tool.name.endsWith('__list_sessions'))
+    ?? mcp.extensions.flatMap(extension => extension.tools ?? [])[0];
+  if (!example) return undefined;
+  return [
+    `Scripts call these tools as \`tools.<identifier>\`, exactly as the codemode section declares them, for example \`await tools.${example.name}({})\`; each keeps its normal permissions.`,
+    'Such a tool resolves to its value as the codemode section declares it: each Woven tool to a JSON object. Everything listed has its own id as `id`; any other id is named as the argument that takes it (`sessionID`, `artifactID`). Pass ids straight back as arguments. One that returned images (a screenshot from `preview_html`, `browser` or `computer`) has them as `images`: show one with `image(result.images[0])`. A tool rejects with its error text when it fails, and one rejected call fails a whole `Promise.all` unless each call is caught.',
+    'A visual reply that `render_html` publishes from a script is shown in the chat as from a direct call.',
+    'To show or check a large page, write it to an HTML file with your own tools and give `render_html` or `preview_html` its absolute `path` instead of `html`, rather than writing the page into the script.',
+  ].join(' ');
+}
+
 const usageTotals = state => {
   const total = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
   for (const usage of [...Object.values(state?.models ?? {}), ...Object.values(state?.tools ?? {})]) {
@@ -78,16 +102,18 @@ const usageTotals = state => {
 };
 
 export class Session {
-  static async open({ models, settings = {}, dataDirectory, sessionId, cwd, mcpServers, systemPrompt, notify, create }) {
+  // `readSettings` asks the server for this machine's Pi Durable settings again; each prompt does, so a code mode
+  // change applies from the next turn.
+  static async open({ models, settings = {}, readSettings = async () => settings, dataDirectory, sessionId, cwd, mcpServers, systemPrompt, notify, create }) {
     const path = databasePath(dataDirectory);
     if (!create && (!uuid.test(sessionId ?? '') || !sessionExists(path, sessionId))) throw new AgentError('There is no Pi Durable session with that ID.', SESSION_NOT_FOUND);
     const root = await directory(cwd);
-    const session = new Session(models, settings, sessionId, root, notify);
+    const session = new Session(models, settings, readSettings, sessionId, root, notify);
     await session.start(path, mcpServers ?? [], systemPrompt);
     return session;
   }
-  constructor(models, settings, sessionId, cwd, notify) {
-    this.models = models; this.settings = settings; this.sessionId = sessionId; this.cwd = cwd;
+  constructor(models, settings, readSettings, sessionId, cwd, notify) {
+    this.models = models; this.settings = settings; this.readSettings = readSettings; this.sessionId = sessionId; this.cwd = cwd;
     this.send = update => notify('session/update', { sessionId, update });
     this.busy = false;
   }
@@ -99,10 +125,16 @@ export class Session {
     registry.install(Workflow);
     registry.install(createSearch(this.models.credentials, this.settings.searchProvider));
     registry.install(Subagents);
-    registry.install(this.mcp.extension);
+    for (const extension of this.mcp.extensions) registry.install(extension);
+    // One sandbox for the session's scripts. A script has no deadline unless it sets `timeout_ms` itself, so one
+    // waiting on a person or a long tool is not cut off.
+    this.sandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 });
+    this.codemode = createCodemodeExtension({ sandbox: this.sandbox, inlineBudget: codemodeInlineBudget });
+    registry.install(this.codemode);
     registry.install(defineExtension({ name: 'woven-context', sections: [
       section('environment', () => `Working directory: ${this.cwd}`, { tag: false }),
       section('woven', () => [systemPrompt, ...this.mcp.instructions].filter(Boolean).join('\n\n') || undefined, { tag: false }),
+      section('woven-codemode', input => codemodeGuide(input, this.codemode, this.mcp), { tag: false }),
       section('project', () => instructions || undefined, { tag: false }),
     ] }));
     this.storage = await openNodeSqliteStorage(path, { prefix: tablePrefix(this.sessionId) });
@@ -114,6 +146,7 @@ export class Session {
     this.conversation = await this.harness.root(context, { agent: { cwd: this.cwd } });
     const agent = await this.harness.snapshot(AgentDoc, this.conversation.id, context);
     if (agent?.cwd && agent.cwd !== this.cwd) await this.conversation.configure({ cwd: this.cwd }, context);
+    await this.applyCodeMode(codeModeOf(this.settings));
     this.projection = new Projection(this.send);
     this.projection.attach(await this.conversation.watch(context));
     // Work a crash or restart left unfinished continues now.
@@ -121,6 +154,16 @@ export class Session {
     void refreshCatalogs(this.models).then(async changed => {
       if (changed) await this.send({ sessionUpdate: 'config_option_update', configOptions: await this.configOptions() });
     }).catch(() => {});
+  }
+  // The conversation's code mode, from what its agent selects.
+  codeModeIn(agent) {
+    if (!Array.isArray(agent?.extensions) && agent?.extensions?.remove?.includes(this.codemode.name)) return 'off';
+    return Array.isArray(agent?.modelTools) && agent.modelTools.length === 1 && agent.modelTools[0] === CODEMODE_TOOL_NAME ? 'only' : 'on';
+  }
+  async applyCodeMode(mode) {
+    if (this.codeModeIn(await this.agentState()) === mode) return;
+    const tool = this.codemode.tools.find(item => item.name === CODEMODE_TOOL_NAME);
+    await this.conversation.configure({ extensions: mode === 'off' ? { remove: [this.codemode] } : null, modelTools: mode === 'only' ? [tool] : null }, context);
   }
   async agentState() { return await this.harness.snapshot(AgentDoc, this.conversation.id, context) ?? {}; }
   async currentModel() {
@@ -168,6 +211,8 @@ export class Session {
     this.busy = true;
     try {
       const content = promptContent(blocks);
+      const settings = await this.readSettings().catch(() => undefined);
+      if (settings) await this.applyCodeMode(codeModeOf(settings));
       await this.ensureModel();
       if (!await this.currentModel()) throw new AgentError('No model is available. Sign in to a provider or add an API key in Settings.');
       const before = usageTotals(await this.harness.snapshot(UsageDoc, this.conversation.id, context));
@@ -203,6 +248,8 @@ export class Session {
   }
   async cancel() { await this.conversation.abort(context); }
   async close() {
+    // The sandbox first: a script it was running resumes in the next process.
+    await this.sandbox?.close().catch(() => {});
     await this.harness?.close(context).catch(() => {});
     await this.mcp?.close();
   }

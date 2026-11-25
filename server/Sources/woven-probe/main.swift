@@ -35,6 +35,7 @@ let usage = """
     artifacts                        notes, pages, sheets and apps, with their stamps
     artifact ID                      print an artifact's document
     artifact-create KIND TITLE [FILE]
+    artifact-delete ID
                                      create one (note, canvas, spreadsheet, html), FILE its document
     artifact-write ID FILE [--based-on STAMP]
                                      write a document, by default based on an old stamp so it conflicts
@@ -42,7 +43,7 @@ let usage = """
     trash ID | restore ID
     app-state ID KEY JSON            set one key of an app's saved state
     setting KEY JSON                 set a synced setting, e.g. setting tools.defaults '["notes"]'
-    databases | db-create NAME | db-execute ID SQL | db-query ID SQL
+    databases | db-create NAME | db-execute ID SQL | db-query ID SQL | db-delete ID
     bots                             the bots and their chats as the library holds them
     bots-call JSON                   pass one request to the bots runtime, e.g. '{"type":"bots.list"}'
     bots-follow [OPEN_JSON]          print the bots' status and messages (or one opened conversation's)
@@ -117,6 +118,10 @@ func describe(_ content: ItemContent) -> String {
     else if !call.input.isEmpty { line += " input=\(call.input.prefix(200))" }
     if let output = call.output, !output.isEmpty { line += " → \(output.replacingOccurrences(of: "\n", with: " ⏎ ").prefix(300))" }
     if call.failed { line += " (failed)" }
+    if let calls = call.calls, !calls.isEmpty {
+      line += " calls: " + calls.map { $0.name.isEmpty ? $0.title ?? "" : $0.name + ($0.failed ? " (failed)" : "") }
+        .joined(separator: ", ")
+    }
     return line
   case .notice(let notice):
     return "notice \(notice.kind.rawValue): \(notice.text)"
@@ -377,6 +382,9 @@ do {
     for artifact in try await client.call(ListArtifacts(includeTrashed: true)) {
       out("\(artifact.id)\t\(artifact.kind.rawValue)\t\(artifact.title)\t\(artifact.stamp)" + (artifact.trashed ? "\ttrashed" : ""))
     }
+  case "artifact-delete":
+    _ = try await client.call(DeleteArtifact(artifactID: argument(0, "ID")))
+    out("done")
   case "artifact":
     out(try await client.call(ReadArtifact(artifactID: argument(0, "ID"))).body)
   case "artifact-create":
@@ -413,6 +421,9 @@ do {
     out("\(try await client.call(ExecuteDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).changes) changed")
   case "db-query":
     out(try await client.call(QueryDatabase(databaseID: argument(0, "ID"), sql: argument(1, "SQL"))).json)
+  case "db-delete":
+    _ = try await client.call(DeleteDatabase(databaseID: argument(0, "ID")))
+    out("done")
   case "bots":
     let saved = try await client.call(ListSavedBots())
     for bot in saved.bots {

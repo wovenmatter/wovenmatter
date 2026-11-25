@@ -38,6 +38,31 @@ func localImagesInAVisualReplyAreEmbeddedOnceAndAMissingOneIsNamed() throws {
   #expect(throws: ToolFailure.self) { try VisualReplies.prepare("<style>main{height:calc(50dvh - 2px)}</style>") }
 }
 
+/// A large page can come from a file the agent wrote on this machine instead
+/// of its HTML; exactly one of them, and never from a bot, whose files are
+/// elsewhere. A script's call keeps the path.
+@Test
+func aVisualReplyCanComeFromAFileOnThisMachine() throws {
+  let page = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).html")
+  try Data("<h1>Sales</h1>".utf8).write(to: page)
+  defer { try? FileManager.default.removeItem(at: page) }
+  func authored(_ fields: [String: JSONValue], fromBot: Bool = false) -> String {
+    do { return try VisualReplies.authored(Arguments(value: .object(fields)), fromBot: fromBot) } catch { return "\(error)" }
+  }
+  #expect(authored(["path": .string(page.path)]) == "<h1>Sales</h1>")
+  #expect(authored(["html": .string("<p>Hi</p>"), "path": .string("")]) == "<p>Hi</p>")
+  #expect(authored(["path": .string(page.path)], fromBot: true).contains("give the HTML itself as `html`"))
+  #expect(authored(["html": .string("<p>Hi</p>"), "path": .string(page.path)]) == "Give `html` or `path`, not both.")
+  #expect(authored([:]) == "Give `html`, or the `path` of an HTML file.")
+  #expect(authored(["path": .string("page.html")]).contains("absolute"))
+  #expect(authored(["path": .string(page.path + ".gone")]).hasPrefix("There is no file"))
+
+  let input = #"{"path":"\#(page.path)","title":"Sales"}"#
+  let call = VisualReplies.withoutVisualReply(ToolCall(name: "execute", input: "", kind: .code,
+                                                       calls: [ToolCall(name: "woven.render_html", input: input)]))
+  #expect(call.calls == [ToolCall(name: "woven.render_html", input: input, kind: .visualReply)])
+}
+
 @Test
 func everyRuntimesReportOfTheCallIsKeptWithoutTheVisualReply() {
   let input = #"{"html":"<h1>Sales</h1>","title":"Sales"}"#
@@ -83,6 +108,7 @@ func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsVisualReply() asyn
   guard case .text(let text)? = previewed.content.first else { Issue.record("No preview text"); return }
   let output = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
   #expect(output["missingImages"]?.array == [.string(image.path)])
+  #expect(previewed.structuredContent == output)
 
   let result = await tools.call("render_html", arguments: .object(["html": .string(html)]), caller: bot)
   #expect(!result.isError)
@@ -159,4 +185,87 @@ func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async
   #expect(copied == items)
   #expect(try await b.server.library.hasContent(reply.digest) == false)
   #expect(try await onB.call(FetchContent(digest: reply.digest)).data == Data(html.utf8))
+}
+
+@Test
+func aScriptKeepsItsToolCallsWithoutTheVisualReplyOrAPageWrittenIntoIt() throws {
+  let page = "<!doctype html><html><body>" + String(repeating: "<p>Quarterly sales</p>", count: 200) + "</body></html>"
+  let json = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(page), "title": .string("Sales")])),
+                    as: UTF8.self)
+  let pieces = stride(from: 0, to: page.count, by: 300).map { offset in
+    "'" + page.dropFirst(offset).prefix(300) + "'"
+  }
+  let scripts = [
+    // In a template literal, with a part.
+    "const title = 'Sales';\nawait tools.woven.render_html({ title, html: `\(page.replacingOccurrences(of: "Quarterly", with: "${title}"))` });",
+    // In a JSON string.
+    "await tools.mcp__woven__render_html(\(json));",
+    // Built by concatenation, around a comment, a regular expression and a division.
+    "// a 'quote\nconst ratio = 4 / 2; const tag = /<\\/?p>/g;\nconst html = " + pieces.joined(separator: " +\n  ")
+      + ";\nawait tools.woven.render_html({ html: html.replace(tag, '') });",
+  ]
+  for script in scripts {
+    let call = VisualReplies.withoutVisualReply(ToolCall(
+      name: "execute", input: script, output: "done", kind: .code,
+      calls: [ToolCall(name: "woven.list_sessions", input: "{}"),
+              ToolCall(name: "woven.render_html", input: json),
+              ToolCall(name: "mcp__woven__render_html", input: json)]))
+    let encoded = String(decoding: try Wire.encoder.encode(call), as: UTF8.self).lowercased()
+    #expect(!encoded.contains("<html") && !encoded.contains("<!doctype") && !encoded.contains("quarterly"), "\(script.prefix(60))")
+    #expect(call.input.contains("characters)") && call.output == "done")
+    #expect(call.calls?.map(\.kind) == [nil, .visualReply, .visualReply])
+    #expect(call.calls?[1].input.contains("\"title\":\"Sales\"") == true)
+  }
+  // Short literals, comments and code stay as written.
+  let short = "const a = 'x' + \"y\"; // `not a template\nconst b = `${a}${'}'}` / 2; const c = /'/;"
+  #expect(CodeCalls.elidingLongLiterals(short) == short)
+  // A long string that does not end on its line is left as written.
+  let open = "const a = '" + String(repeating: "x", count: 3_000) + "\nconst b = 1;"
+  #expect(CodeCalls.elidingLongLiterals(open) == open)
+}
+
+@Test
+func aScriptKeepsItsFirstToolCallsAndSaysHowManyMoreItMade() {
+  let calls = (0..<250).map { ToolCall(name: "woven.read_session", input: #"{"sessionID":"s\#($0)"}"#) }
+  let call = VisualReplies.withoutVisualReply(ToolCall(name: "codemode", input: "", kind: .code, calls: calls))
+  #expect(call.calls?.count == CodeCalls.callLimit)
+  #expect(call.calls?.dropLast() == calls.prefix(CodeCalls.callLimit - 1))
+  #expect(call.calls?.last == ToolCall(name: "", input: "", title: "151 more tool calls"))
+  // Read again, it stays as it is.
+  #expect(VisualReplies.withoutVisualReply(call) == call)
+  // A stored tool call from before scripts reads without calls.
+  let stored = try? JSONDecoder().decode(ToolCall.self, from: Data(#"{"name":"bash","input":"ls","failed":false}"#.utf8))
+  #expect(stored == ToolCall(name: "bash", input: "ls"))
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aScriptThatPublishesAVisualReplyIsSavedAsTheVisualReplyAndOneScript() async throws {
+  let machine = try await VisualReplyServer.start(tailnet: StandInTailnet())
+  defer { machine.server.stopLater() }
+  let ui = try await machine.connect()
+  let session = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Sales"))
+  _ = try await ui.call(UpdateSession(sessionID: session.id, tools: []))
+
+  let html = "<!doctype html><title>Sales</title><h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 500)
+  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(html)])), as: UTF8.self)
+  let subscription = try await ui.subscribe(SubscribeSession(sessionID: session.id))
+  _ = try await ui.call(SendTurn(sessionID: session.id, text: "code woven render_html \(arguments)"))
+  var shown: [ToolCall] = []
+  for try await event in subscription.events {
+    if case .itemStarted(let item) = event, case .toolCall(let call) = item.content { shown.append(call) }
+    if case .toolActivity(_, let call) = event { shown.append(call) }
+    if event == .runState(.idle) { break }
+  }
+
+  let items = try await ui.call(SessionItems(sessionID: session.id))
+  guard items.count == 3, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
+    Issue.record("Expected the message, the visual reply, then the script: \(items.map(\.content))")
+    return
+  }
+  #expect(reply.digest == Library.digest(of: Data(html.utf8)))
+  #expect(call.kind == .code && !call.failed && call.calls?.count == 1 && call.calls?.first?.kind == .visualReply)
+  for call in shown + [call] {
+    let encoded = String(decoding: try Wire.encoder.encode(call), as: UTF8.self)
+    #expect(!encoded.contains("Quarterly sales") && !encoded.contains("<!doctype"))
+  }
 }

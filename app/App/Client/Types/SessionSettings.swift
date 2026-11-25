@@ -129,6 +129,8 @@ struct SessionQuestion: Identifiable, Hashable, Sendable {
     let prompt: String
     let options: [SessionChoice]
     let allowsMultiple: Bool
+    /// Whether the person may answer in their own words instead.
+    let acceptsOwnAnswer: Bool
 }
 
 enum SessionFormValue: Hashable, Sendable {
@@ -143,6 +145,8 @@ struct SessionFormField: Identifiable, Hashable, Sendable {
     let kind: Kind
     let required: Bool
     let options: [SessionChoice]
+    /// For a choice, whether the person may answer in their own words too.
+    let acceptsOwnAnswer: Bool
     let initialValue: SessionFormValue?
     let placeholder: String?
     let multiline: Bool
@@ -156,9 +160,9 @@ struct SessionFormField: Identifiable, Hashable, Sendable {
         case (.text, .string(let value)):
             return (minimumLength.map { value.unicodeScalars.count >= $0 } ?? true)
                 && (maximumLength.map { value.unicodeScalars.count <= $0 } ?? true)
-        case (.singleChoice, .string(let value)): return options.contains { $0.id == value }
+        case (.singleChoice, .string(let value)): return offers(value)
         case (.multipleChoice, .strings(let values)):
-            return Set(values).count == values.count && values.allSatisfy { value in options.contains { $0.id == value } }
+            return Set(values).count == values.count && values.allSatisfy(offers)
                 && (minimumLength.map { values.count >= $0 } ?? true) && (maximumLength.map { values.count <= $0 } ?? true)
         case (.number, .number(let value)), (.integer, .number(let value)):
             return value.isFinite && (kind != .integer || value.rounded() == value)
@@ -166,6 +170,11 @@ struct SessionFormField: Identifiable, Hashable, Sendable {
         case (.boolean, .boolean): return true
         default: return false
         }
+    }
+
+    /// An option's id, or the person's own words where the field takes them.
+    private func offers(_ value: String) -> Bool {
+        options.contains { $0.id == value } || (acceptsOwnAnswer && nonemptyString(value) != nil)
     }
 }
 
@@ -183,9 +192,11 @@ struct SessionInteraction: Identifiable, Hashable, Sendable {
     let request: Request
 }
 
+/// The answer to one question: the options picked, by id, or the person's
+/// own words.
 enum SessionQuestionAnswer: Hashable, Sendable {
-    case single(String)
-    case multiple([String])
+    case options([String])
+    case text(String)
 }
 
 enum SessionInteractionResponse: Hashable, Sendable {

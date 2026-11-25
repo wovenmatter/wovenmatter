@@ -450,6 +450,7 @@ private struct ConversationBoundedWorkList: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.conversationReasoningAtLiveEdge,
                     !restoringScroll && !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
+                .environment(\.conversationInBoundedList, true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
         .scrollIndicators(.never)
@@ -806,7 +807,19 @@ private struct ConversationActivityDetails: View {
             }
             // Reasoning disclosures contain supplied reasoning, not the ACP
             // envelope that carried it. Tool details retain their raw fields.
-            if activity.kind != .thought {
+            if let calls = field(\.codeCalls) {
+                // A script: its source folded away, the tools it called, then what it printed.
+                ConversationCodeScript(source: field(\.rawInputJSON))
+                ConversationCodeCallList(calls: calls)
+                rawBlock("Output", field(\.rawOutputJSON))
+            } else if let questions = field(\.questions) {
+                // Each question with its answer, or that it was not answered;
+                // a call that failed says why.
+                ConversationQuestionList(questions: questions, isLive: isLive)
+                if activity.workTimelineIsFailure, let reason = field(\.rawOutputJSON)?.nonempty {
+                    Text(reason).font(.system(size: 12.5)).foregroundStyle(WovenPalette.danger).textSelection(.enabled)
+                }
+            } else if activity.kind != .thought {
                 rawBlock("Input", field(\.rawInputJSON))
                 rawBlock("Output", field(\.rawOutputJSON))
                 rawBlock("Event", field(\.rawPayloadJSON))
@@ -917,6 +930,153 @@ private struct ConversationActivityDetails: View {
                     .foregroundStyle(WovenPalette.mutedForeground)
                 ConversationPagedText(text: value, style: .raw)
             }
+        }
+    }
+}
+
+/// A script's source, folded away until asked for.
+private struct ConversationCodeScript: View {
+    let source: String?
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @State private var expanded = false
+
+    var body: some View {
+        if let source, !source.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                // Its chevron follows the label, as on every other disclosure here.
+                Button {
+                    transcriptInteraction()
+                    expanded.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Script").font(.system(size: 11.5, weight: .medium))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                if expanded { ConversationPagedText(text: source, style: .raw) }
+            }
+        }
+    }
+}
+
+/// The tools a script called. A long list scrolls within a bounded height,
+/// as an expanded work group does, so one script never pushes the rest of
+/// the transcript far down.
+private struct ConversationCodeCallList: View {
+    static let maximumHeight: CGFloat = 320
+    /// About one row, for the first layout before the rows are measured.
+    private static let rowEstimate: CGFloat = 24
+    let calls: [AgentRunCodeCall]
+    @Environment(\.conversationInBoundedList) private var inBoundedList
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        if inBoundedList {
+            // The group scrolls; a second scroll area inside it would only trap the pointer.
+            rows
+        } else {
+            let height = contentHeight ?? CGFloat(calls.count) * Self.rowEstimate
+            ScrollView(.vertical) {
+                rows.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            }
+            .scrollIndicators(.never)
+            .scrollDisabled(height <= Self.maximumHeight)
+            .frame(height: min(Self.maximumHeight, max(1, height)))
+            .defaultScrollAnchor(.top, for: .initialOffset)
+        }
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(calls) { call in ConversationCodeCallRow(call: call) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The questions the model asked with its question tool, each with the answer given.
+private struct ConversationQuestionList: View {
+    let questions: [AgentRunQuestion]
+    let isLive: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(questions) { question in
+                VStack(alignment: .leading, spacing: 3) {
+                    let title = question.title?.nonempty
+                    Text(title ?? question.text)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(WovenPalette.foreground.opacity(0.72))
+                    if title != nil, question.text.nonempty != nil {
+                        Text(question.text).font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
+                    }
+                    if let answer = question.answer, !answer.isEmpty {
+                        Text(answer.joined(separator: ", ")).font(.system(size: 12.5)).foregroundStyle(WovenPalette.foreground)
+                    } else {
+                        Text(question.answer == nil ? (isLive ? "Waiting for an answer" : "Not answered") : "Left unanswered")
+                            .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One tool a script called: its name, how it went, and its error when it failed.
+private struct ConversationCodeCallRow: View {
+    let call: AgentRunCodeCall
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // The note of calls left out is not a call, so it has no icon.
+                Image(systemName: call.status == .failed ? "exclamationmark.triangle"
+                    : call.status == .shownInChat ? "rectangle.on.rectangle" : "wrench.and.screwdriver")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(call.status == .failed ? WovenPalette.danger : WovenPalette.mutedForeground)
+                    .frame(width: 14)
+                    .opacity(call.status == nil ? 0 : 1)
+                Text(call.name)
+                    .font(.system(size: 12.5, weight: call.status == nil ? .regular : .medium))
+                    .foregroundStyle(call.status == nil ? WovenPalette.mutedForeground : WovenPalette.foreground.opacity(0.72))
+                    .lineLimit(1).truncationMode(.middle)
+                if let label {
+                    Text(label)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                }
+                Spacer(minLength: 0)
+            }
+            if let error = call.error?.nonempty {
+                Text(error)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(WovenPalette.danger)
+                    .textSelection(.enabled)
+                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 22)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var label: String? {
+        switch call.status {
+        case .running: "Running"
+        case .completed: "Done"
+        case .failed: "Failed"
+        case .shownInChat: "Shown in the chat"
+        case nil: nil
         }
     }
 }
@@ -1103,6 +1263,10 @@ private extension EnvironmentValues {
         get { self[ConversationReasoningAtLiveEdgeKey.self] }
         set { self[ConversationReasoningAtLiveEdgeKey.self] = newValue }
     }
+
+    /// Inside an expanded work group, which already scrolls within its own
+    /// bounded height.
+    @Entry var conversationInBoundedList = false
 }
 
 private struct ConversationReasoningTextKey: PreferenceKey {
@@ -1166,12 +1330,14 @@ private extension ConversationToolAction {
     var systemImage: String {
         switch self {
         case .command: "terminal"
+        case .code: "curlybraces"
         case .read: "doc.text"
         case .edit: "pencil.and.outline"
         case .codeSearch: "magnifyingglass"
         case .webSearch, .webFetch, .browser: "globe"
         case .computer: "desktopcomputer"
         case .delegate: "person.2"
+        case .question: "questionmark.bubble"
         case .other: "wrench.and.screwdriver"
         }
     }

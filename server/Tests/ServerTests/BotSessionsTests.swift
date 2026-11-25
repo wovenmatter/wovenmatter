@@ -65,16 +65,18 @@ func aBotStartsSteersAndFollowsASessionOnAnotherMachine() async throws {
 
   let tools = try #require(await a.server.bots.toolsForTests)
   let bot = ToolCaller(machineID: a.server.machineID, botID: "b1")
-  let places = text(await tools.call("list_places", arguments: .object([:]), caller: bot))
-  let laptop = try #require(places.split(separator: "\n").first { $0.hasPrefix("machine \(b.server.machineID) ") })
-  #expect(laptop.hasSuffix("| online | runtimes: \(StandInRuntime.kind.rawValue)"), "\(places)")
-  #expect(places.contains("folder \(folder.id) | Repo"))
+  let places = await tools.call("list_places", arguments: .object([:]), caller: bot)
+  let laptop = try #require(places.structuredContent?["machines"]?.array?.first { $0["id"]?.string == b.server.machineID },
+                            "\(text(places))")
+  #expect(laptop["online"] == .bool(true) && laptop["runtimes"] == .array([.string(StandInRuntime.kind.rawValue)]), "\(text(places))")
+  #expect(laptop["folders"]?.array?.contains { $0["id"]?.string == folder.id && $0["name"]?.string == "Repo" } == true)
 
   let started = await tools.call("start_session", arguments: .object([
     "runtime": .string(StandInRuntime.kind.rawValue), "title": .string("Map"), "message": .string("Map the repo."),
     "folderID": .string(folder.id)]), caller: bot)
   #expect(!started.isError, "\(text(started))")
-  let sessionID = try #require(text(started).split(separator: " ").dropFirst(2).first.map(String.init))
+  let sessionID = try #require(started.structuredContent?["sessionID"]?.string)
+  #expect(started.structuredContent?["machineID"]?.string == b.server.machineID)
   let session = try #require(try await b.server.library.session(sessionID))
   #expect(session.machineID == b.server.machineID && session.directory == folder.path)
 
@@ -82,17 +84,20 @@ func aBotStartsSteersAndFollowsASessionOnAnotherMachine() async throws {
   let sent = await tools.call("send_to_session", arguments: .object([
     "sessionID": .string(sessionID), "text": .string("Count the files too.")]), caller: bot)
   #expect(!sent.isError, "\(text(sent))")
-  let listed = text(await tools.call("list_sessions", arguments: .object([:]), caller: bot))
-  #expect(listed.contains("\(sessionID) | Map | \(StandInRuntime.kind.rawValue) | Laptop |") && listed.contains("| running"), "\(listed)")
-  let reading = text(await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot))
-  #expect(reading.hasPrefix("Session \(sessionID): Map (\(StandInRuntime.kind.rawValue)) on Laptop, running"), "\(reading)")
+  let listed = await tools.call("list_sessions", arguments: .object([:]), caller: bot)
+  let map = listed.structuredContent?["sessions"]?.array?.first { $0["id"]?.string == sessionID }
+  #expect(map?["title"]?.string == "Map" && map?["runtime"]?.string == StandInRuntime.kind.rawValue
+          && map?["machine"]?.string == "Laptop" && map?["state"]?.string == "running", "\(text(listed))")
+  let reading = await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot)
+  #expect(reading.structuredContent?["title"]?.string == "Map" && reading.structuredContent?["machine"]?.string == "Laptop"
+          && reading.structuredContent?["state"]?.string == "running", "\(text(reading))")
 
   // A caller that never touched the session may not stop it; the bot that started it may.
   let stranger = ToolCaller(machineID: a.server.machineID, botID: "b2")
   let refused = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: stranger)
   #expect(refused.isError && text(refused).contains("only a session you started"), "\(text(refused))")
   let stopped = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot)
-  #expect(text(stopped) == "Stopped Map.", "\(text(stopped))")
+  #expect(stopped.structuredContent == .object(["sessionID": .string(sessionID), "stopped": .bool(true)]), "\(text(stopped))")
   #expect(try await eventually {
     try await onB.call(SessionItems(sessionID: sessionID)).contains { $0.content == .notice(Notice(kind: .interrupted, text: "Stopped by Scout.")) }
   })
@@ -103,11 +108,12 @@ func aBotStartsSteersAndFollowsASessionOnAnotherMachine() async throws {
     "sessionID": .string(sessionID), "text": .string("Keep going.")]), caller: bot)
   #expect(!again.isError, "\(text(again))")
   #expect(try await eventually {
-    let read = text(await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot))
-    return read.contains(", idle") && read.contains("Scout: Keep going.") && read.contains("This message is from the bot")
+    let read = await tools.call("read_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot).structuredContent
+    let transcript = read?["text"]?.string ?? ""
+    return read?["state"]?.string == "idle" && transcript.contains("Scout: Keep going.") && transcript.contains("This message is from the bot")
   })
   let idle = await tools.call("stop_session", arguments: .object(["sessionID": .string(sessionID)]), caller: bot)
-  #expect(text(idle) == "Nothing was running in Map.", "\(text(idle))")
+  #expect(idle.structuredContent == .object(["sessionID": .string(sessionID)]), "\(text(idle))")
   let messages = try await onB.call(SessionItems(sessionID: sessionID)).filter {
     if case .userMessage = $0.content { true } else { false }
   }

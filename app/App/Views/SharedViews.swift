@@ -49,6 +49,8 @@ struct InlineError: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .background(WovenPalette.danger.opacity(0.07))
+        // Shown above the composer too, where the chat scrolls beneath it.
+        .background(WovenPalette.background)
         .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
     }
 }

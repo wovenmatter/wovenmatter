@@ -33,10 +33,12 @@ export async function runAgent({ input = process.stdin, output = process.stdout,
       const create = method === 'session/new';
       const sessionId = create ? randomUUID() : params.sessionId;
       if (sessions.has(sessionId)) throw new AgentError('This session is already open.');
-      // Pi Durable's settings for this machine, read once when the session opens.
-      const settings = await rpc.request('woven/settings', {}).then(reply => reply?.settings ?? {}, () => ({}));
+      // Pi Durable's settings for this machine, read when the session opens; each prompt reads them again for its
+      // code mode.
+      const readSettings = () => rpc.request('woven/settings', {}).then(reply => reply?.settings ?? {});
+      const settings = await readSettings().catch(() => ({}));
       registerLocalServers(models.runtime, settings.localServers);
-      const session = await Session.open({ models, settings, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, systemPrompt: appended(params.systemPrompt), notify: rpc.notify, create });
+      const session = await Session.open({ models, settings, readSettings, dataDirectory: data, sessionId, cwd: params.cwd, mcpServers: params.mcpServers, systemPrompt: appended(params.systemPrompt), notify: rpc.notify, create });
       sessions.set(sessionId, session);
       const configOptions = await session.configOptions();
       return create ? { sessionId, configOptions } : { configOptions };

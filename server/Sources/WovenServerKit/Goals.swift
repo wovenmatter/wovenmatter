@@ -11,7 +11,8 @@ import WovenProtocol
 // - The agent says the goal is met with the Woven tool `goal_met`, which
 //   clears it; the person can clear it at any time.
 // - It does not continue after an interrupted or failed turn, nor while a
-//   question or approval waits. The person's next message resumes it.
+//   question or approval waits or after the person dismissed one. The
+//   person's next message resumes it.
 
 enum Goals {
   static let author = ItemAuthor(botID: nil, name: "Goal", source: .goal)

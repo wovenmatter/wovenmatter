@@ -63,10 +63,11 @@ enum PromptForms {
     }
   }
 
-  /// A form as a prompt. A form of one field with fixed choices is a question.
+  /// A form as a prompt. A form of one field with fixed choices is a question,
+  /// asked in the form's message, the field's title and its description.
   static func prompt(id: String, message: String, fields: [PromptField]) -> Prompt {
     if fields.count == 1, fields[0].kind == .choice {
-      let text = [message, fields[0].title == fields[0].id ? nil : fields[0].title].compactMap { $0 }
+      let text = [message, name(fields[0]), fields[0].detail].compactMap { $0 }
         .filter { !$0.isEmpty }.joined(separator: "\n")
       return Prompt(id: id, kind: .question, text: text, options: fields[0].options, fields: fields)
     }
@@ -80,22 +81,33 @@ enum PromptForms {
     }
     for field in fields {
       guard let value = values[field.id], value != .null else {
-        if field.required { throw RuntimeError.failed("\(field.title) needs an answer.") }
+        if field.required { throw RuntimeError.failed("\(name(field) ?? "This question") needs an answer.") }
         continue
       }
-      guard fits(value, field) else { throw RuntimeError.failed("That is not an answer \(field.title) takes.") }
+      guard fits(value, field) else {
+        throw RuntimeError.failed(name(field).map { "That is not an answer \($0) takes." } ?? "That is not one of the answers offered.")
+      }
     }
+  }
+
+  /// A field's title, unless it is only the field's key.
+  private static func name(_ field: PromptField) -> String? {
+    field.title.isEmpty || field.title == field.id ? nil : field.title
   }
 
   private static func fits(_ value: JSONValue, _ field: PromptField) -> Bool {
     func within(_ number: Double) -> Bool {
       (field.minimum.map { number >= $0 } ?? true) && (field.maximum.map { number <= $0 } ?? true)
     }
+    func offered(_ answer: String?) -> Bool {
+      guard let answer else { return false }
+      return field.options.contains { $0.id == answer } || (field.ownAnswer && !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
     switch (field.kind, value) {
     case (.text, .string(let text)): return within(Double(text.count))
-    case (.choice, .string(let id)): return field.options.contains { $0.id == id }
+    case (.choice, .string(let id)): return offered(id)
     case (.choices, .array(let ids)):
-      return within(Double(ids.count)) && ids.allSatisfy { id in field.options.contains { $0.id == id.string } }
+      return within(Double(ids.count)) && ids.allSatisfy { offered($0.string) }
     case (.number, _): return value.double.map(within) ?? false
     case (.integer, _): return value.double.map { $0.rounded() == $0 && within($0) } ?? false
     case (.boolean, .bool): return true

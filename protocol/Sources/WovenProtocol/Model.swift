@@ -232,9 +232,19 @@ public struct ToolKind: RawRepresentable, Codable, Sendable, Hashable {
   public static let plan = ToolKind(rawValue: "plan")
   /// A child task (subagent); `output` is its result.
   public static let task = ToolKind(rawValue: "task")
+  /// A script the model wrote that calls tools (a harness's code mode).
+  /// `input` is the script's source as plain text, `output` what the script
+  /// printed or returned, `failed` how it ended, and `calls` the tool calls
+  /// it made.
+  public static let code = ToolKind(rawValue: "code")
   /// Woven's `render_html`: the visual reply it published is its own item
   /// (`ItemContent.visualReply`), and the call does not carry it.
   public static let visualReply = ToolKind(rawValue: "visualReply")
+  /// The model asked the person questions through its own question tool;
+  /// `questions` holds each, with the answer once there is one. A finished
+  /// call with no answers was dismissed, or the turn ended on it; a failed
+  /// one's `output` says what went wrong.
+  public static let question = ToolKind(rawValue: "question")
   public static let other = ToolKind(rawValue: "other")
 }
 
@@ -267,9 +277,21 @@ public struct ToolCall: Codable, Sendable, Hashable {
   public var kind: ToolKind?
   /// The entries, when this is a plan or to-do update.
   public var plan: [PlanEntry]?
+  /// The tool calls a `.code` script made, in the order it made them. Each
+  /// has its `name` and its arguments as compact JSON in `input`, cut to
+  /// about 1,000 characters. Its `output` is nil while it runs, empty once
+  /// it succeeded, and its error when it `failed`; a runtime that cannot
+  /// tell when a call ends leaves it nil. So once the script has finished,
+  /// a call with no output that has not failed succeeded.
+  /// At most 100 are kept: past that, the first 99, then one last entry with
+  /// no name whose `title` says how many more there were ("37 more tool
+  /// calls").
+  public var calls: [ToolCall]?
+  /// The questions a `.question` call asked, in order.
+  public var questions: [ToolQuestion]?
 
   public init(name: String, input: String, output: String? = nil, failed: Bool = false, title: String? = nil,
-              kind: ToolKind? = nil, plan: [PlanEntry]? = nil) {
+              kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil, questions: [ToolQuestion]? = nil) {
     self.name = name
     self.input = input
     self.output = output
@@ -277,6 +299,27 @@ public struct ToolCall: Codable, Sendable, Hashable {
     self.title = title
     self.kind = kind
     self.plan = plan
+    self.calls = calls
+    self.questions = questions
+  }
+}
+
+/// A question a `.question` call asked, and what the person answered.
+public struct ToolQuestion: Codable, Sendable, Hashable {
+  /// A short name for the question ("Favourite colour").
+  public var title: String?
+  public var text: String
+  /// The answers offered; none when the person types theirs.
+  public var options: [String]
+  /// The options picked or the person's own words: nil until they answer,
+  /// empty when they left this question unanswered.
+  public var answer: [String]?
+
+  public init(title: String? = nil, text: String, options: [String] = [], answer: [String]? = nil) {
+    self.title = title
+    self.text = text
+    self.options = options
+    self.answer = answer
   }
 }
 
@@ -433,9 +476,11 @@ public struct PromptOption: Codable, Sendable, Hashable, Identifiable {
 public struct PromptField: Codable, Sendable, Hashable, Identifiable {
   public enum Kind: String, Codable, Sendable, Hashable {
     case text
-    /// One of `options`; the value is an option's `id`.
+    /// One of `options`; the value is an option's `id`, or the person's own
+    /// words when `ownAnswer` is set.
     case choice
-    /// Any of `options`; the value is an array of option ids.
+    /// Any of `options`; the value is an array of option ids, which may
+    /// hold the person's own words when `ownAnswer` is set.
     case choices
     case number
     case integer
@@ -449,6 +494,9 @@ public struct PromptField: Codable, Sendable, Hashable, Identifiable {
   public var kind: Kind
   public var required: Bool
   public var options: [PromptOption]
+  /// For a choice or choices, whether an answer in the person's own words
+  /// is taken as well as the options.
+  public var ownAnswer: Bool
   /// The value the field starts with.
   public var initial: JSONValue?
   public var placeholder: String?
@@ -458,14 +506,15 @@ public struct PromptField: Codable, Sendable, Hashable, Identifiable {
   public var maximum: Double?
 
   public init(id: String, title: String, detail: String? = nil, kind: Kind = .text, required: Bool = true,
-              options: [PromptOption] = [], initial: JSONValue? = nil, placeholder: String? = nil, multiline: Bool = false,
-              minimum: Double? = nil, maximum: Double? = nil) {
+              options: [PromptOption] = [], ownAnswer: Bool = false, initial: JSONValue? = nil, placeholder: String? = nil,
+              multiline: Bool = false, minimum: Double? = nil, maximum: Double? = nil) {
     self.id = id
     self.title = title
     self.detail = detail
     self.kind = kind
     self.required = required
     self.options = options
+    self.ownAnswer = ownAnswer
     self.initial = initial
     self.placeholder = placeholder
     self.multiline = multiline
@@ -504,7 +553,8 @@ public struct Prompt: Codable, Sendable, Hashable, Identifiable {
 public enum PromptAnswer: Codable, Sendable, Hashable {
   /// One of the prompt's options, by `id`.
   case option(String)
-  /// Free text, for a question without options.
+  /// Free text, for a question without options or one that takes the
+  /// person's own answer.
   case text(String)
   /// A form's values, by field `id`.
   case values([String: JSONValue])

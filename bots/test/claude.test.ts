@@ -2,7 +2,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { claudeAgentProvider } from "../src/claude/provider.ts";
+import { claudeAgentProvider, claudeRequest, MAX_EXTRA_BODY } from "../src/claude/provider.ts";
 import { ClaudeAgentRuntime, type ClaudeSdkQuery, claudeExecutable } from "../src/claude/runtime.ts";
 import { NATIVE_KEY, ServerCredentials } from "../src/host/credentials.ts";
 import { FileModelsStore } from "../src/model-catalog.ts";
@@ -108,6 +108,70 @@ describe("bots' Claude subscription", () => {
       .result();
     expect(reply.errorMessage).toMatch(/No Claude connection/);
     expect(NATIVE_KEY).toBe("woven-native");
+  });
+
+  it("shows Claude each tool under the bot's own name, and takes calls back under it", async () => {
+    let seen: { options: Record<string, unknown>; frames: unknown[] } | undefined;
+    const query: ClaudeSdkQuery = ({ prompt, options }) => {
+      const events = (async function* () {
+        const frames: unknown[] = [];
+        for await (const frame of prompt) {
+          frames.push(frame);
+          if (frame.shouldQuery === false) yield { type: "result", subtype: "success", num_turns: 0 };
+        }
+        seen = { options, frames };
+        yield {
+          type: "assistant",
+          parent_tool_use_id: null,
+          message: {
+            id: "msg_2",
+            stop_reason: "tool_use",
+            content: [{ type: "tool_use", id: "toolu_2", name: "run_subagent", input: { task: "look" } }],
+          },
+        };
+        yield { type: "result", subtype: "error_max_turns", is_error: true };
+      })();
+      return events;
+    };
+    const { provider } = claudeAgentProvider({ directory: join(dir.path, "claude"), query });
+    const model = { id: "opus", api: "claude-agent-sdk", provider: "claude-subscription" } as never;
+    const tool = (name: string) => ({ name, description: `${name} tool`, parameters: { type: "object", properties: {} } });
+    const messages = [
+      { role: "system", content: "", toolsAdded: [tool("run_subagent"), tool("read")], timestamp: 0 },
+      { role: "user", content: "hi", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }],
+        api: "claude-agent-sdk",
+        provider: "claude-subscription",
+        model: "opus",
+        usage: {},
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+      { role: "toolResult", toolCallId: "toolu_1", toolName: "read", content: [{ type: "text", text: "a" }], isError: false, timestamp: 0 },
+    ];
+    const reply = await provider.stream(model, { messages } as never, { apiKey: NATIVE_KEY } as never).result();
+    expect(reply.errorMessage).toBeUndefined();
+    expect(reply.content).toEqual([{ type: "toolCall", id: "toolu_2", name: "run_subagent", arguments: { task: "look" } }]);
+    expect(seen?.options.mcpServers).toEqual({});
+    const body = JSON.parse(String((seen?.options.env as Record<string, string>).CLAUDE_CODE_EXTRA_BODY));
+    expect(body.tools.map((entry: { name: string }) => entry.name)).toEqual(["run_subagent", "read"]);
+    expect(body.tools[0].input_schema).toEqual({ type: "object", properties: {} });
+    expect(JSON.stringify(seen?.frames)).toContain('"name":"read"');
+    expect(JSON.stringify(seen?.frames)).not.toContain("mcp__");
+  });
+
+  it("refuses a tool list too large for Claude Code's environment, with a clear error", () => {
+    const model = { id: "opus", api: "claude-agent-sdk", provider: "claude-subscription" } as never;
+    const tool = (name: string, size: number) => ({ name, description: "x".repeat(size), parameters: { type: "object", properties: {} } });
+    const messages = (size: number) =>
+      [
+        { role: "system", content: "", toolsAdded: [tool("a", size), tool("b", size)], timestamp: 0 },
+        { role: "user", content: "hi", timestamp: 0 },
+      ] as never;
+    expect(claudeRequest(messages(1000), model).extraBody.length).toBeLessThan(MAX_EXTRA_BODY);
+    expect(() => claudeRequest(messages(MAX_EXTRA_BODY / 2), model)).toThrow(/too large to send through Claude Code/);
   });
 
   it("moves saved Anthropic model ids to Claude Code's model of the same family", async () => {

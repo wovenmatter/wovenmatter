@@ -312,12 +312,18 @@ actor UsageScanner {
     return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path
   }
 
+  /// The files below a root, leaving out dot-named files and folders. A
+  /// history macOS flags hidden is still read: the flag is a Finder setting
+  /// a copy can carry, not a sign the file is not a history.
   private static func files(under root: URL) -> [URL] {
-    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
-                                                          options: [.skipsHiddenFiles]) else { return [] }
+    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
     var files: [URL] = []
-    for case let url as URL in enumerator where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
-      files.append(url)
+    for case let url as URL in enumerator {
+      if url.lastPathComponent.hasPrefix(".") {
+        enumerator.skipDescendants()
+        continue
+      }
+      if (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true { files.append(url) }
     }
     return files
   }

@@ -232,6 +232,8 @@ actor OpenCodeHost {
     process.currentDirectoryURL = folder
     var environment = environment(password: password)
     if let tools {
+      // Under the name `woven`, so scripts call `tools.woven.<tool>(…)` in
+      // OpenCode's Code Mode, as Woven's instructions for it say.
       let config: JSONValue = .object(["mcp": .object(["woven": .object([
         "type": .string("local"), "command": .array(([tools.command] + tools.arguments).map(JSONValue.string)),
         "environment": .object(tools.environment.mapValues(JSONValue.string)),
@@ -391,6 +393,7 @@ final class OpenCodeSession: RuntimeSession {
     self.host = host
     self.generation = generation
     (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
+    state.withLock { $0.projection.session = handle }
   }
 
   var configuration: SessionConfiguration {
@@ -459,15 +462,19 @@ final class OpenCodeSession: RuntimeSession {
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
     guard let pending = state.withLock({ $0.prompts[promptID] }) else { return }
-    let asker = "/api/session/" + OpenCodeClient.segment(pending.sessionID)
     if let form = pending.form {
-      if answer == .declined {
-        try await client.call("POST", asker + "/form/" + OpenCodeClient.segment(promptID))
-      } else {
-        try await client.call("POST", asker + "/form/" + OpenCodeClient.segment(promptID) + "/reply",
-                              body: try OpenCodeProjection.formReply(form, answer: answer))
+      let request = try OpenCodeProjection.formAnswer(sessionID: pending.sessionID, form: form, answer: answer)
+      do {
+        try await client.call(request.method, request.path, body: request.body)
+      } catch let error as OpenCodeHTTPError where error.status == 404 {
+        // OpenCode stopped waiting (a tool's question can time out), so the
+        // question is closed rather than left open with no way to answer.
+        resolve(promptID)
+        if answer == .declined { return }
+        throw RuntimeError.failed("OpenCode stopped waiting for that answer.")
       }
     } else {
+      let asker = "/api/session/" + OpenCodeClient.segment(pending.sessionID)
       try await client.call("POST", asker + "/permission/" + OpenCodeClient.segment(promptID) + "/reply",
                             body: OpenCodeProjection.permissionReply(answer))
     }

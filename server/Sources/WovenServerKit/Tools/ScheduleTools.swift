@@ -58,21 +58,36 @@ private func recurrence(_ arguments: Arguments) throws -> Recurrence?? {
   return .some(Recurrence(unit: value, interval: arguments.int("repeatInterval") ?? 1))
 }
 
-private func describe(_ entry: ScheduleEntry, here: String) -> String {
+/// A scheduler entry as a result shows it. `machineID` is given for another
+/// machine's, and `nextFireAt` and `lastError` only for this machine's.
+private let entryShape = Shape([
+  "id": Field.string, "kind": Field.choice(["task", "event", "timer", "wakeUp"]), "title": Field.string,
+  "startsAt": Field.string, "timeZone": Field.string, "repeatUnit": Field.string, "repeatInterval": Field.integer,
+  "runtime": Field.string, "sessionID": Field.string, "newSessionEachRun": Field.boolean, "disabled": Field.boolean,
+  "machineID": Field.string, "nextFireAt": Field.string, "lastError": Field.string, "prompt": Field.string,
+], required: ["id"])
+
+private let scheduleListing = Shape(["schedules": Field.list(entryShape)], required: ["schedules"])
+
+/// What a new or changed scheduler entry returns: its id, and when it fires.
+private let scheduleActionShape = Shape(["scheduleID": Field.string, "firesAt": Field.string], required: ["scheduleID"])
+private let deletedShape = Shape(["scheduleID": Field.string], required: ["scheduleID"])
+
+private func fields(_ entry: ScheduleEntry, here: String) -> JSONValue {
   let draft = entry.draft
-  var parts = ["\(entry.id) | \(entry.kind.rawValue) | \(draft.title)", "starts \(draft.startsAt.formatted(.iso8601))"]
-  if let recurrence = draft.recurrence { parts.append("every \(recurrence.interval) \(recurrence.unit.rawValue)") }
-  if let runtime = draft.runtime { parts.append(runtime.rawValue) }
-  if let sessionID = draft.sessionID { parts.append("session \(sessionID)") }
-  if !draft.enabled { parts.append("disabled") }
-  if entry.machineID != here { parts.append("on machine \(entry.machineID)") }
-  if let state = entry.state {
-    if let next = state.nextFireAt { parts.append("next \(next.formatted(.iso8601))") }
-    if let error = state.lastError { parts.append("last run failed: \(error)") }
-  }
-  if !draft.prompt.isEmpty { parts.append("prompt: \(draft.prompt.prefix(200))") }
-  return parts.joined(separator: " | ")
+  return entryShape([
+    "id": .string(entry.id), "kind": .string(entry.kind.rawValue), "title": .text(draft.title), "startsAt": .time(draft.startsAt),
+    "timeZone": .text(draft.timeZone), "repeatUnit": draft.recurrence.map { .string($0.unit.rawValue) },
+    "repeatInterval": draft.recurrence.map { .count($0.interval) }, "runtime": draft.runtime.map { .string($0.rawValue) },
+    "sessionID": draft.sessionID.map(JSONValue.string), "newSessionEachRun": .bool(draft.newSessionEachRun),
+    "disabled": .bool(!draft.enabled), "machineID": entry.machineID == here ? nil : .string(entry.machineID),
+    "nextFireAt": entry.state?.nextFireAt.map(JSONValue.time), "lastError": .text(entry.state?.lastError),
+    "prompt": .text(String(draft.prompt.prefix(200))),
+  ])
 }
+
+/// When an entry this machine saved fires next: its next time, else its start.
+private func firesAt(_ entry: ScheduleEntry) -> JSONValue { .time(entry.state?.nextFireAt ?? entry.draft.startsAt) }
 
 private extension ToolRequest {
   /// The calling session, which timers, wake-ups and goals are for.
@@ -90,6 +105,7 @@ let scheduleTools: [WovenTool] = [
     description: "The scheduler's entries on every machine: scheduled tasks, calendar events, timers and wake-ups, with id, kind, title, when, repeat, runtime and, for this machine's, when each fires next.",
     input: schema(["kind": .object(["type": .string("string"), "enum": .array(["task", "event", "timer", "wakeUp"].map(JSONValue.string)),
                                     "description": .string("Only this kind.")])]),
+    output: scheduleListing.schema,
     readOnly: true,
     forBots: false,
     groups: [.calendar, .timers],
@@ -97,13 +113,13 @@ let scheduleTools: [WovenTool] = [
       var entries = try await call.tools.library.schedules()
       if let kind = call.arguments.optionalString("kind") { entries = entries.filter { $0.kind.rawValue == kind } }
       let here = call.tools.machineID
-      let lines = entries.prefix(200).map { describe($0, here: here) }
-      return .text(lines.isEmpty ? "(none)" : lines.joined(separator: "\n"))
+      return scheduleListing.result(["schedules": .array(entries.prefix(200).map { fields($0, here: here) })])
     }),
   WovenTool(
     name: "create_scheduled_task",
-    description: "Schedule a prompt to run in an agent session at a time, once or repeating. Each run continues the task's session (or starts a new one with `newSessionEachRun`). It runs on the folder's machine, or `machineID`, even while no one has the app open.",
+    description: "Schedule a prompt to run in an agent session at a time, once or repeating; returns its `scheduleID`.\nEach run continues the task's session (or starts a new one with `newSessionEachRun`). It runs on the folder's machine, or `machineID`, even while no one has the app open.",
     input: schema(taskFields, required: ["title", "prompt", "startsAt", "runtime"]),
+    output: scheduleActionShape.schema,
     forBots: false,
     groups: [.calendar],
     run: { call in
@@ -124,13 +140,14 @@ let scheduleTools: [WovenTool] = [
         recurrence: try recurrence(arguments) ?? nil, showsOnCalendar: arguments.bool("showOnCalendar") ?? true,
         enabled: arguments.bool("enabled") ?? true)
       let entry = try await ScheduleBook.save(nil, draft, by: call.caller.sessionID, library: tools.library, sessions: tools.sessions)
-      return .text("Scheduled task \(entry.id): \(describe(entry, here: tools.machineID))")
+      return scheduleActionShape.result(["scheduleID": .string(entry.id), "firesAt": firesAt(entry)])
     }),
   WovenTool(
     name: "change_scheduled_task",
-    description: "Change a scheduled task: give its id and only the fields to change. Its machine cannot change; delete it and create it again instead.",
+    description: "Change a scheduled task: give its id and only the fields to change.\nIts machine cannot change; delete it and create it again instead.",
     input: schema(taskFields.filter { $0.key != "machineID" && $0.key != "folderID" }
       .merging(["scheduleID": text("The task, from `list_schedules`.")]) { first, _ in first }, required: ["scheduleID"]),
+    output: scheduleActionShape.schema,
     forBots: false,
     groups: [.calendar],
     run: { call in
@@ -151,12 +168,13 @@ let scheduleTools: [WovenTool] = [
       if let shown = arguments.bool("showOnCalendar") { draft.showsOnCalendar = shown }
       if let enabled = arguments.bool("enabled") { draft.enabled = enabled }
       let saved = try await ScheduleBook.save(id, draft, by: call.caller.sessionID, library: tools.library, sessions: tools.sessions)
-      return .text("Changed: \(describe(saved, here: tools.machineID))")
+      return scheduleActionShape.result(["scheduleID": .string(saved.id), "firesAt": firesAt(saved)])
     }),
   WovenTool(
     name: "delete_schedule",
-    description: "Delete a scheduler entry (a scheduled task, event, timer or wake-up) by its id from `list_schedules`. Sessions it already ran stay.",
+    description: "Delete a scheduler entry (a scheduled task, event, timer or wake-up) by its id from `list_schedules`.\nSessions it already ran stay.",
     input: schema(["scheduleID": text("The entry.")], required: ["scheduleID"]),
+    output: deletedShape.schema,
     forBots: false,
     groups: [.calendar, .timers],
     run: { call in
@@ -165,14 +183,15 @@ let scheduleTools: [WovenTool] = [
       guard let entry = try await tools.library.schedule(id) else { throw ToolFailure("No entry \(id).") }
       if let forwarded = try await call.forward(to: entry.machineID) { return forwarded }
       try await ScheduleBook.delete(id, occurrence: nil, library: tools.library)
-      return .text("Deleted \(entry.draft.title).")
+      return deletedShape.result(["scheduleID": .string(id)])
     }),
   WovenTool(
     name: "set_timer",
-    description: "Have this session prompted again after a delay, with an instruction to yourself. Repeats when `repeatMinutes` is given. Cancel it with `delete_schedule`.",
+    description: "Have this session prompted again after a delay, with an instruction to yourself; returns its `scheduleID`.\nRepeats when `repeatMinutes` is given. Cancel it with `delete_schedule`.",
     input: schema(["afterSeconds": integer("Seconds from now until it fires."), "instruction": text("What you will be told when it fires."),
                    "repeatMinutes": integer("Fire again every this many minutes."), "title": text("A short name for it.")],
                   required: ["afterSeconds", "instruction"]),
+    output: scheduleActionShape.schema,
     forBots: false,
     groups: [.timers],
     run: { call in
@@ -186,13 +205,14 @@ let scheduleTools: [WovenTool] = [
                                 recurrence: repeatMinutes.map { Recurrence(unit: .minute, interval: max($0, 1)) },
                                 showsOnCalendar: false)
       let entry = try await ScheduleBook.save(nil, draft, by: session.id, library: tools.library, sessions: tools.sessions)
-      return .text("Timer \(entry.id) fires at \(entry.draft.startsAt.formatted(.iso8601)).")
+      return scheduleActionShape.result(["scheduleID": .string(entry.id), "firesAt": .time(entry.draft.startsAt)])
     }),
   WovenTool(
     name: "set_wake_up",
-    description: "Have this session woken at a time with a message to yourself, e.g. to check on something later. Cancel it with `delete_schedule`.",
+    description: "Have this session woken at a time with a message to yourself, e.g. to check on something later; returns its `scheduleID`.\nCancel it with `delete_schedule`.",
     input: schema(["at": text("When, as ISO 8601 with a time zone offset."), "message": text("What you will be told then.")],
                   required: ["at", "message"]),
+    output: scheduleActionShape.schema,
     forBots: false,
     groups: [.timers],
     run: { call in
@@ -203,17 +223,21 @@ let scheduleTools: [WovenTool] = [
                                 prompt: try call.arguments.string("message"), sessionID: session.id, startsAt: at,
                                 showsOnCalendar: false)
       let entry = try await ScheduleBook.save(nil, draft, by: session.id, library: tools.library, sessions: tools.sessions)
-      return .text("Wake-up \(entry.id) at \(at.formatted(.iso8601)).")
+      return scheduleActionShape.result(["scheduleID": .string(entry.id), "firesAt": .time(at)])
     }),
   WovenTool(
     name: "goal_met",
-    description: "Say that this session's goal is met, with what shows it. The goal is cleared and you are no longer asked to continue toward it. Only call it when the goal truly is met.",
+    description: "Say that this session's goal is met, with what shows it.\nThe goal is cleared and you are no longer asked to continue toward it. Only call it when the goal truly is met.",
     input: schema(["evidence": text("What shows the goal is met.")], required: ["evidence"]),
+    output: goalShape.schema,
     forBots: false,
     run: { call in
       let session = try await call.callingSession()
       if let forwarded = try await call.forward(to: session.machineID) { return forwarded }
       try await call.tools.sessions.host(for: session.id).goalMet(try call.arguments.string("evidence"))
-      return .text("The goal is marked met and cleared.")
+      return goalShape.result(["cleared": .bool(true)])
     }),
 ]
+
+/// `goal_met`: the goal is cleared.
+private let goalShape = Shape(["cleared": Field.boolean], required: ["cleared"])

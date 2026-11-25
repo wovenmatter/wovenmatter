@@ -18,6 +18,8 @@ import WovenProtocol
 /// result. With a gate, that call waits until a message is steered into the
 /// turn, and the steer is answered only once the call returns, as a runtime
 /// that takes mid-turn input at the end of a tool round would.
+/// `code woven NAME {arguments}` makes that call from a script, as a
+/// harness's code mode does: one `.code` call that holds it.
 public final class StandInRuntime: Runtime {
   public static let kind = RuntimeKind(rawValue: "standIn")
   public var kind: RuntimeKind { Self.kind }
@@ -111,6 +113,8 @@ private final class StandInSession: RuntimeSession {
   private let steered = Mutex<[String]?>(nil)
   /// A `woven` turn's tool call while it is out.
   private let toolRound = Mutex<Task<Void, Never>?>(nil)
+  /// The question an "Ask me:" turn waits on, by prompt id.
+  private let asked = Mutex<String?>(nil)
   private let tools: ToolAccess?
 
   init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?) {
@@ -132,9 +136,10 @@ private final class StandInSession: RuntimeSession {
     let number = store.nextTurn(nativeHandle)
     let emit = emit
     let gate = gate
-    if text.hasPrefix("woven ") {
+    let script = text.hasPrefix("code woven ")
+    if script || text.hasPrefix("woven ") {
       let tools = tools
-      let parts = text.dropFirst(6).split(separator: " ", maxSplits: 1)
+      let parts = text.dropFirst(script ? 11 : 6).split(separator: " ", maxSplits: 1)
       let name = String(parts.first ?? "")
       let arguments = parts.count > 1 ? String(parts[1]) : "{}"
       let call = Task {
@@ -142,13 +147,29 @@ private final class StandInSession: RuntimeSession {
         return await Self.callTool(name, arguments: arguments, tools: tools)
       }
       toolRound.withLock { $0 = Task { _ = await call.value } }
+      let source = "const result = await tools.woven.\(name)(\(arguments));\nconsole.log(result);"
+      if script {
+        emit.yield(.tool(callID: "woven-\(number)", call: ToolCall(
+          name: "execute", input: source, kind: .code, calls: [ToolCall(name: "woven." + name, input: arguments)]), finished: false))
+      }
       turn.withLock { $0 = Task {
         let result = await call.value
-        emit.yield(.tool(callID: "woven-\(number)", call: ToolCall(name: name, input: arguments, output: result.text,
-                                                                  failed: result.failed), finished: true))
+        let made = ToolCall(name: name, input: arguments, output: result.text, failed: result.failed)
+        emit.yield(.tool(callID: "woven-\(number)", call: !script ? made : ToolCall(
+          name: "execute", input: source, output: result.text, failed: result.failed, kind: .code,
+          calls: [ToolCall(name: "woven." + name, input: arguments, output: result.failed ? result.text : "",
+                           failed: result.failed)]), finished: true))
         self.toolRound.withLock { $0 = nil }
         emit.yield(.turnFinished(failure: nil, usage: nil))
       } }
+      return
+    }
+    // A turn that says "Ask me:" asks a question and ends once it is answered or dismissed.
+    if text.contains("Ask me:") {
+      let id = "ask-\(number)"
+      asked.withLock { $0 = id }
+      emit.yield(.prompt(Prompt(id: id, kind: .question, text: "Which colour?",
+                                options: [PromptOption(id: "red", name: "Red"), PromptOption(id: "blue", name: "Blue")])))
       return
     }
     steered.withLock { $0 = [] }
@@ -186,6 +207,19 @@ private final class StandInSession: RuntimeSession {
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
     emit.yield(.promptResolved(id: promptID))
+    guard asked.withLock({ id in defer { if id == promptID { id = nil } }; return id == promptID }) else { return }
+    // Recorded as a question call, as a runtime with a question tool records it.
+    let answered: [String]? = if case .option(let id) = answer { [id] } else { nil }
+    emit.yield(.tool(callID: promptID, call: ToolCall(
+      name: "question", input: "{}", kind: .question,
+      questions: [ToolQuestion(title: "Colour", text: "Which colour?", options: ["Red", "Blue"], answer: answered)]), finished: true))
+    if case .declined = answer {
+      emit.yield(.turnFinished(failure: nil, usage: nil))
+      return
+    }
+    emit.yield(.text("You answered."))
+    emit.yield(.messageFinished)
+    emit.yield(.turnFinished(failure: nil, usage: nil))
   }
 
   /// One MCP `tools/call` over the tool socket: the key, then the request.

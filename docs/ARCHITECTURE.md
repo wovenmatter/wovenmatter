@@ -211,11 +211,17 @@ behind one adapter interface in the server and are treated alike:
   turn is stopped, what was said so far is saved as the finished item.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
+- A script a harness runs in code mode, calling tools from JavaScript, is
+  one tool call: its source, its output, and the tool calls it made, at most
+  100, each with its input cut to about 1,000 characters. Its string and
+  template literals over 2,000 characters keep only their length, so a page
+  written into a script is not kept.
 - An agent shows a chart, a table or anything interactive as a visual reply,
   with the Woven tool `render_html`: one self-contained HTML document, at most
-  512,000 characters, with its absolute local image paths embedded (each a real
-  image of at most 10 MiB, the whole at most 25 MiB) on the machine the session
-  runs on. A visual reply is not a Page: it belongs to its chat only, is not in
+  512,000 characters, given as its text or as an HTML file the agent wrote on
+  the machine the session runs on (never from a bot), with its absolute local
+  image paths embedded (each a real image of at most 10 MiB, the whole at most
+  25 MiB) on that machine. A visual reply is not a Page: it belongs to its chat only, is not in
   the Library and is never edited. Its HTML is stored once, in the content
   store; the session gets one small item, `visualReply` (title, starting
   height, digest), saved when the tool is called, after the text so far. The
@@ -243,8 +249,8 @@ A goal is a prompt that belongs to its session. Setting one on an idle session
 starts a turn toward it, and each turn that ends with the goal still set is
 followed by one asking the runtime to continue. It ends when the agent calls
 the Woven tool `goal_met` or the person clears it. It pauses after an
-interrupted or failed turn, while a question or approval waits, and after
-three goal turns in a row that neither said nor did anything. The person's
+interrupted or failed turn, while a question or approval waits, after the
+person dismisses one, and after three goal turns in a row that neither said nor did anything. The person's
 next message resumes it.
 
 ## Usage
@@ -347,8 +353,16 @@ window holds, and returns a screenshot; it saves nothing.
   that speaks MCP over standard input and output and passes it to the server's
   tool socket, a Unix socket that only the person can open. The bridge first
   says a key the server gave that runtime in memory, so the server knows who
-  is calling. The bots runtime asks for the tools over its own connection to
-  the server.
+  is calling. OpenCode serves all its sessions through one bridge and names
+  the session in each call. It offers the tools only in its Code Mode, to
+  scripts, so its instructions list each tool's exact call. The bots runtime
+  asks for the tools over its own connection to the server.
+- Each tool declares the shape of its result, and every success is one JSON
+  object of that shape, given to MCP as structured content and as its text, so
+  a script gets a value it can use and pass back: an id is named as the
+  argument that takes it. A failure is an error result with text alone.
+  `preview_html`, `browser` and `computer` put their images beside that
+  object, never in it. Old transcripts keep the text their tools returned.
 - The tools are in groups, and each session is offered only the groups it may
   use. A tool in no group (goals, places, `render_html`, `preview_html`) is
   always offered to sessions. Bots are offered only the tools meant for them,

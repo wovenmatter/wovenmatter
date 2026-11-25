@@ -1,7 +1,4 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   type AnyModel,
   type Api,
@@ -34,15 +31,14 @@ import { NATIVE_KEY } from "../host/credentials.ts";
  * Matter's `default-agent/src/claude-provider.mjs`. Pi owns the loop: each request replays the
  * canonical history into a fresh SDK process (`shouldQuery: false` frames), runs exactly one model
  * turn (`maxTurns: 1`, no built-in tools, no settings, no skills), and returns the reply to Pi.
- * Tool calls come back as `mcp__bot__<name>` from an inventory-only MCP server; Pi executes them.
+ * The request declares the bot's tools under their own names, so the model sees exactly the names
+ * the bot's prompts use; Claude Code has no tools of its own and runs none. Pi executes the calls.
  */
 
 export const CLAUDE_SUBSCRIPTION_PROVIDER = "claude-subscription";
 export const CLAUDE_AGENT_BASE_URL = "process://claude-agent-sdk";
-const PREFIX = "mcp__bot__";
-const INVENTORY = fileURLToPath(
-  new URL(import.meta.url.endsWith(".ts") ? "./inventory.ts" : "./inventory.js", import.meta.url),
-);
+/** The most of a request body sent in `CLAUDE_CODE_EXTRA_BODY`, under Linux's 128 KiB per environment string. */
+export const MAX_EXTRA_BODY = 120 * 1024;
 
 /** Set on a compaction request (`Models.stream` options); the summary comes back on the result. */
 export type ClaudeCompactOptions = { readonly botCompact?: { readonly instructions?: string } };
@@ -93,14 +89,14 @@ function contentBlocks(content: Extract<Message, { role: "user" }>["content"]): 
 export function claudeRequest(messages: readonly Message[], model: Model<Api>, compact = false) {
   const names = new Set<string>();
   const inventory = getCurrentTools(messages).map((tool) => {
-    if (!/^[A-Za-z0-9_-]{1,50}$/.test(tool.name) || names.has(tool.name)) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(tool.name) || names.has(tool.name)) {
       throw new ClaudeAgentError(`Tool name "${tool.name}" is not usable through Claude Code.`);
     }
     names.add(tool.name);
     return {
       name: tool.name,
       description: tool.description,
-      inputSchema: JSON.parse(JSON.stringify(tool.parameters)),
+      input_schema: JSON.parse(JSON.stringify(tool.parameters)),
     };
   });
   const frames: ClaudeSdkFrame[] = [];
@@ -117,7 +113,7 @@ export function claudeRequest(messages: readonly Message[], model: Model<Api>, c
             {
               type: "tool_use",
               id: nativeToolId(block.id),
-              name: PREFIX + block.name,
+              name: block.name,
               input: block.arguments,
             },
           ];
@@ -162,7 +158,14 @@ export function claudeRequest(messages: readonly Message[], model: Model<Api>, c
   if (!compact && frames.at(-1)?.type !== "user") {
     throw new ClaudeAgentError("Claude needs a user message or tool result to continue.");
   }
-  return { frames, inventory, names, system: getCurrentSystemPrompt(messages) };
+  // Claude Code takes the tools in one environment variable, which Linux caps at 128 KiB.
+  const extraBody = JSON.stringify({ tools: inventory });
+  if (Buffer.byteLength(extraBody) > MAX_EXTRA_BODY) {
+    throw new ClaudeAgentError(
+      `This bot's tools are too large to send through Claude Code (${Math.round(Buffer.byteLength(extraBody) / 1024)} KB).`,
+    );
+  }
+  return { frames, inventory, extraBody, names, system: getCurrentSystemPrompt(messages) };
 }
 
 function usageOf(native: Block): Usage {
@@ -243,9 +246,6 @@ export class ClaudeAgentStream {
     const compact = options.botCompact;
     const request = claudeRequest(messages, model, compact !== undefined);
     const workspace = await this.#runtime.workspace();
-    const scratch = await mkdtemp(join(workspace, "request-"));
-    const toolsFile = join(scratch, "tools.json");
-    await writeFile(toolsFile, JSON.stringify(request.inventory), { mode: 0o600 });
 
     const controller = new AbortController();
     const signal = options.signal as AbortSignal | undefined;
@@ -382,13 +382,14 @@ export class ClaudeAgentStream {
         prompt: input(),
         options: {
           cwd: workspace,
-          env: this.#runtime.environment(),
+          // Claude Code merges this into its request: the tools replace its own empty list.
+          env: { ...this.#runtime.environment(), CLAUDE_CODE_EXTRA_BODY: request.extraBody },
           model: model.id,
           tools: [],
           skills: [],
           settingSources: [],
           strictMcpConfig: true,
-          mcpServers: { bot: { command: process.execPath, args: [INVENTORY, toolsFile] } },
+          mcpServers: {},
           systemPrompt: { type: "custom", prompt: request.system, snapshot: false },
           maxTurns: 1,
           permissionMode: "dontAsk",
@@ -457,7 +458,6 @@ export class ClaudeAgentStream {
       controller.abort();
       acknowledge?.();
       query?.close?.();
-      await rm(scratch, { recursive: true, force: true });
     }
     signal?.throwIfAborted();
     if (failure) {
@@ -490,9 +490,8 @@ export class ClaudeAgentStream {
         return [{ type: "thinking", thinking: "", redacted: true, thinkingSignature: block.data }];
       }
       if (block.type === "tool_use") {
-        const name = typeof block.name === "string" ? block.name.slice(PREFIX.length) : "";
+        const name = typeof block.name === "string" ? block.name : "";
         if (
-          !block.name.startsWith(PREFIX) ||
           !request.names.has(name) ||
           !block.id ||
           ids.has(block.id) ||

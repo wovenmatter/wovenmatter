@@ -301,6 +301,8 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
 /// T3's tool-group action categories, classified from the tool name or title.
 public enum ConversationToolAction: Hashable, Sendable {
   case command
+  /// A script that calls tools (code mode).
+  case code
   case read
   case edit
   case codeSearch
@@ -309,11 +311,17 @@ public enum ConversationToolAction: Hashable, Sendable {
   case browser
   case computer
   case delegate
+  /// The model's question tool: it asked the person something.
+  case question
   case other
 
   public init(_ activity: AgentRunActivity) {
     let name = activity.workTimelineToolIdentity.lowercased()
-    if name.contains("bash") || name.contains("shell") || name == "exec" || name == "execute"
+    if activity.codeCalls != nil {
+      self = .code
+    } else if activity.questions != nil {
+      self = .question
+    } else if name.contains("bash") || name.contains("shell") || name == "exec" || name == "execute"
       || name.contains("command") || name.contains("terminal") {
       self = .command
     } else if name.contains("websearch") || name.contains("web_search") || name.contains("web search") {
@@ -343,7 +351,7 @@ public enum ConversationToolAction: Hashable, Sendable {
 
   var summaryPriority: Int {
     switch self {
-    case .command, .edit, .delegate: 0
+    case .command, .code, .edit, .delegate: 0
     case .other: 2
     default: 1
     }
@@ -365,6 +373,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     let plural = count != 1
     return switch self {
     case .command: "Ran \(count) \(plural ? "commands" : "command")"
+    case .code: "Ran code \(count) \(plural ? "times" : "time")"
     case .read: "Read \(count) \(plural ? "files" : "file")"
     case .edit: "Changed \(count) \(plural ? "files" : "file")"
     case .codeSearch: "Searched code \(count) \(plural ? "times" : "time")"
@@ -373,6 +382,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .browser: "Used the browser \(count) \(plural ? "times" : "time")"
     case .computer: "Used the computer \(count) \(plural ? "times" : "time")"
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
+    case .question: plural ? "Asked questions \(count) times" : "Asked questions"
     case .other: "Used \(count) \(plural ? "tools" : "tool")"
     }
   }
@@ -380,6 +390,7 @@ public enum ConversationToolAction: Hashable, Sendable {
   func liveLabel(active: Bool) -> String {
     switch self {
     case .command: active ? "Running a command" : "Ran a command"
+    case .code: active ? "Running code" : "Ran code"
     case .read: active ? "Reading a file" : "Read a file"
     case .edit: active ? "Editing a file" : "Edited a file"
     case .codeSearch: active ? "Searching code" : "Searched code"
@@ -388,6 +399,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .browser: active ? "Using the browser" : "Used the browser"
     case .computer: active ? "Using the computer" : "Used the computer"
     case .delegate: active ? "Delegating a task" : "Delegated a task"
+    case .question: active ? "Asking a question" : "Asked a question"
     case .other: active ? "Using a tool" : "Used a tool"
     }
   }
