@@ -111,7 +111,7 @@ private struct SessionQuestionCard: View {
                                 toggle(option: option, for: question)
                             } label: {
                                 HStack(spacing: 7) {
-                                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                    Image(systemName: Self.mark(selected: selected, several: question.allowsMultiple))
                                     Text(option.label)
                                         .lineLimit(2)
                                     Spacer(minLength: 0)
@@ -165,6 +165,11 @@ private struct SessionQuestionCard: View {
         }
     }
 
+    /// A checkbox where several options may be picked, a radio mark where one may.
+    static func mark(selected: Bool, several: Bool) -> String {
+        several ? (selected ? "checkmark.square.fill" : "square") : (selected ? "checkmark.circle.fill" : "circle")
+    }
+
     private func ownAnswer(for question: SessionQuestion) -> String? {
         question.acceptsOwnAnswer ? nonemptyString(customAnswers[question.id]) : nil
     }
@@ -203,14 +208,35 @@ private struct SessionFormCard: View {
     /// A choice answered in the person's own words, where the field takes them.
     @State private var ownAnswers: [String: String] = [:]
     @State private var initialized = false
+    /// Whether the form has fields below what its scroll area shows.
+    @State private var moreBelow = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // A long form scrolls; macOS hides the scroller until then, so a
+            // hint says when fields are out of sight below.
             ScrollView {
                 formFields
             }
-            .scrollIndicators(.never)
-            .frame(maxHeight: 260)
+            .scrollIndicators(.automatic)
+            .frame(maxHeight: 420)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height > 4
+            } action: { _, value in
+                moreBelow = value
+            }
+            .overlay(alignment: .bottom) {
+                if moreBelow {
+                    Label("More below", systemImage: "chevron.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(theme.palette.themeWhisper, in: Capsule())
+                        .overlay { Capsule().stroke(theme.palette.border, lineWidth: 1) }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
             HStack(spacing: 8) {
                 Button("Submit") { if let values { respond(.formValues(values)) } }
                     .buttonStyle(WovenPrimaryButtonStyle()).disabled(values == nil)
@@ -245,12 +271,8 @@ private struct SessionFormCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(fields) { field in
                 VStack(alignment: .leading, spacing: 7) {
-                    if field.required { Text(field.title).font(.system(size: 12.5, weight: .medium)) }
-                    else {
-                        Toggle(field.title, isOn: Binding(get: { included.contains(field.id) }, set: { value in
-                            if value { included.insert(field.id) } else { included.remove(field.id) }
-                        })).toggleStyle(CompactSwitchToggleStyle())
-                    }
+                    // An optional field is sent once it has an answer, and left out while it has none.
+                    Text(field.title).font(.system(size: 12.5, weight: .medium))
                     if let detail = field.detail { Text(detail).font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground) }
                     control(for: field)
                 }
@@ -268,15 +290,18 @@ private struct SessionFormCard: View {
             ForEach(field.options) { option in
                 Button {
                     var selected = selections[field.id] ?? []
-                    if field.kind == .singleChoice { selected = [option.id] }
+                    if field.kind == .singleChoice, !field.required, selected.contains(option.id) { selected = [] }
+                    else if field.kind == .singleChoice { selected = [option.id] }
                     else if selected.contains(option.id) { selected.remove(option.id) }
                     else { selected.insert(option.id) }
-                    included.insert(field.id)
                     selections[field.id] = selected
+                    if selected.isEmpty, nonemptyString(ownAnswers[field.id]) == nil, !field.required { included.remove(field.id) }
+                    else { included.insert(field.id) }
                     if field.kind == .singleChoice { ownAnswers[field.id] = nil }
                 } label: {
                     HStack(alignment: .top, spacing: 7) {
-                        Image(systemName: selections[field.id]?.contains(option.id) == true ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: SessionQuestionCard.mark(selected: selections[field.id]?.contains(option.id) == true,
+                                                                   several: field.kind == .multipleChoice))
                         VStack(alignment: .leading, spacing: 3) {
                             Text(option.label)
                             if let detail = option.detail { Text(detail).font(.system(size: 11)).foregroundStyle(WovenPalette.mutedForeground) }
@@ -300,15 +325,19 @@ private struct SessionFormCard: View {
     }
 
     private func textBinding(_ id: String) -> Binding<String> {
-        Binding(get: { text[id] ?? "" }, set: { included.insert(id); text[id] = $0 })
+        Binding(get: { text[id] ?? "" }, set: { value in
+            text[id] = value
+            if value.isEmpty { included.remove(id) } else { included.insert(id) }
+        })
     }
 
     /// Typing an own answer to a single choice replaces the option picked.
     private func ownAnswerBinding(_ field: SessionFormField) -> Binding<String> {
         Binding(get: { ownAnswers[field.id] ?? "" }, set: { value in
-            included.insert(field.id)
             ownAnswers[field.id] = value
             if field.kind == .singleChoice, nonemptyString(value) != nil { selections[field.id] = [] }
+            if nonemptyString(value) != nil || selections[field.id]?.isEmpty == false { included.insert(field.id) }
+            else { included.remove(field.id) }
         })
     }
 
