@@ -51,3 +51,10 @@ func aFreshDataFolderInstallsTheAdapterForAPresentCLIWithoutTouchingTheCLI() asy
   let ran = (try? String(contentsOf: calls, encoding: .utf8)) ?? ""
   #expect(!ran.contains("update"))
 }
+
+@Test func harnessModelListsAreNewestFirst() {
+  let listed = [("default", "Default (recommended)"), ("claude-opus-4-5-20251101", "Opus 4.5"), ("gpt-6", "GPT-6"),
+                ("opus", "Opus 5.5"), ("claude-fable-5-2[1m]", "Fable 5.2"), ("gpt-6.2-sol", "GPT-6.2 Sol"), ("gpt-6.1", "GPT-6.1")]
+  let ordered = ModelOrder.newestFirst(listed.map { SessionOption(id: $0.0, name: $0.1) })
+  #expect(ordered.map(\.id) == ["gpt-6.2-sol", "gpt-6.1", "gpt-6", "opus", "claude-fable-5-2[1m]", "claude-opus-4-5-20251101", "default"])
+}

@@ -41,6 +41,10 @@ struct ACPProfile: Sendable {
   /// The runtime says nothing when a turn it started by itself ends, so one
   /// ends after `ACPState.quietEnd` without output.
   var ownTurnsEndQuietly = false
+  /// The runtime lists its models in the order to show them, so they are not
+  /// put newest first (Pi Durable: the person's list from its settings, whose
+  /// first model is a new chat's).
+  var ordersModels = false
   /// Where the process's standard error goes.
   var logFile: URL?
   /// The Woven MCP and instructions for the native session.
@@ -568,7 +572,7 @@ actor ACPState {
         case "model":
           modelOption = id
           configuration.model = current
-          configuration.models = values
+          configuration.models = profile.ordersModels ? values : ModelOrder.newestFirst(values)
         case "thought_level", "reasoning", "effort", "thinking":
           thinkingOption = id
           configuration.thinking = current
@@ -588,9 +592,10 @@ actor ACPState {
     if modelOption == nil, let models = value["models"], case .array(let available)? = models["availableModels"] {
       usesSetModel = true
       configuration.model = models["currentModelId"]?.string
-      configuration.models = available.compactMap { model in
+      let models = available.compactMap { model in
         model["modelId"]?.string.map { SessionOption(id: $0, name: model["name"]?.string ?? $0, detail: model["description"]?.string) }
       }
+      configuration.models = profile.ordersModels ? models : ModelOrder.newestFirst(models)
     }
     if permissionOption == nil, let modes = value["modes"], case .array(let available)? = modes["availableModes"] {
       usesSetMode = true
