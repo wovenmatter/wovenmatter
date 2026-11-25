@@ -113,6 +113,8 @@ private final class StandInSession: RuntimeSession {
   private let steered = Mutex<[String]?>(nil)
   /// A `woven` turn's tool call while it is out.
   private let toolRound = Mutex<Task<Void, Never>?>(nil)
+  /// The question an "Ask me:" turn waits on, by prompt id.
+  private let asked = Mutex<String?>(nil)
   private let tools: ToolAccess?
 
   init(handle: String, store: StandInRuntime.NativeStore, gate: StandInRuntime.Gate?, tools: ToolAccess?) {
@@ -162,6 +164,14 @@ private final class StandInSession: RuntimeSession {
       } }
       return
     }
+    // A turn that says "Ask me:" asks a question and ends once it is answered or dismissed.
+    if text.contains("Ask me:") {
+      let id = "ask-\(number)"
+      asked.withLock { $0 = id }
+      emit.yield(.prompt(Prompt(id: id, kind: .question, text: "Which colour?",
+                                options: [PromptOption(id: "red", name: "Red"), PromptOption(id: "blue", name: "Blue")])))
+      return
+    }
     steered.withLock { $0 = [] }
     let task = Task { [self] in
       emit.yield(.text("Turn \(number): "))
@@ -197,6 +207,19 @@ private final class StandInSession: RuntimeSession {
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
     emit.yield(.promptResolved(id: promptID))
+    guard asked.withLock({ id in defer { if id == promptID { id = nil } }; return id == promptID }) else { return }
+    // Recorded as a question call, as a runtime with a question tool records it.
+    let answered: [String]? = if case .option(let id) = answer { [id] } else { nil }
+    emit.yield(.tool(callID: promptID, call: ToolCall(
+      name: "question", input: "{}", kind: .question,
+      questions: [ToolQuestion(title: "Colour", text: "Which colour?", options: ["Red", "Blue"], answer: answered)]), finished: true))
+    if case .declined = answer {
+      emit.yield(.turnFinished(failure: nil, usage: nil))
+      return
+    }
+    emit.yield(.text("You answered."))
+    emit.yield(.messageFinished)
+    emit.yield(.turnFinished(failure: nil, usage: nil))
   }
 
   /// One MCP `tools/call` over the tool socket: the key, then the request.

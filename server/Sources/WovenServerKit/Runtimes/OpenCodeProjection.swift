@@ -26,6 +26,11 @@ struct OpenCodeProjection: Sendable {
   /// The error of each failed call in a script, by the script's call and
   /// the call's place in it, once claimed.
   private var nestedErrors: [String: [Int: String]] = [:]
+  /// Whether the person dismissed a question in this turn, which OpenCode
+  /// then ends as interrupted by "shutdown".
+  private var questionDismissed = false
+  /// OpenCode's error for a question the person dismissed.
+  static let questionDismissal = "The user dismissed this question"
 
   /// The events `event` makes. It is one of this session's own.
   mutating func receive(_ event: JSONValue) -> [RuntimeEvent] {
@@ -156,6 +161,9 @@ struct OpenCodeProjection: Sendable {
       let id = data["id"]?.string ?? ""
       let metadata = data["metadata"] ?? .null
       let made = nested(metadata["toolCalls"], in: id)
+      // A dismissed question is the person's choice, not a failure: it ends unanswered.
+      let dismissed = failed && calls[id]?.kind == .question && data["error"]?["message"]?.string == Self.questionDismissal
+      if dismissed { questionDismissed = true }
       return update(id, finished: true) { call in
         var call = call ?? ToolCall(name: "tool", input: "")
         if let made {
@@ -169,7 +177,7 @@ struct OpenCodeProjection: Sendable {
         call.output = failed ? [data["error"]?["message"]?.string ?? "", content].filter { !$0.isEmpty }.joined(separator: "\n") : content
         // A tool that reports its own failure, or a script that failed,
         // succeeds with `metadata.error`.
-        call.failed = failed || metadata["error"]?.bool == true
+        call.failed = (failed && !dismissed) || metadata["error"]?.bool == true
         call.title = call.kind == .code ? call.title : metadata["title"]?.string ?? call.title
         // OpenCode's answers, one list per question in the order asked.
         if call.kind == .question, !failed, let answers = metadata["answers"]?.array {
@@ -188,11 +196,15 @@ struct OpenCodeProjection: Sendable {
       return finishTurn(failure: data["error"]?["message"]?.string ?? stepFailure ?? "OpenCode stopped the turn.")
     case "session.execution.interrupted":
       let reason = data["reason"]?.string ?? ""
-      // OpenCode reports an interruption it gives no reason for as
-      // "shutdown", as when the person dismisses a question, and its own
-      // clients show nothing for it; nor is the person stopping it a failure.
-      let quiet = reason == "user" || reason == "shutdown"
-      return finishTurn(failure: quiet ? nil : "OpenCode stopped the turn (\(reason)).", interrupted: true)
+      // The person stopping the turn is no failure. Nor is OpenCode ending it
+      // after they dismissed a question, which it reports as "shutdown", its
+      // word for any interruption it gives no reason for. Its server going
+      // down is reported the same way, so that one still says so.
+      if reason == "user" || (reason == "shutdown" && questionDismissed) {
+        return finishTurn(failure: nil, interrupted: true)
+      }
+      return finishTurn(failure: reason == "shutdown" ? "OpenCode stopped the turn." : "OpenCode stopped the turn (\(reason)).",
+                        interrupted: true)
     default:
       return []
     }
@@ -206,7 +218,8 @@ struct OpenCodeProjection: Sendable {
     texts.removeAll()
     for id in openCalls {
       guard var call = calls[id] else { continue }
-      if (interrupted || failure != nil) && call.kind != .thinking {
+      // A question still open when the person stopped the turn ends unanswered, not failed.
+      if (interrupted || failure != nil) && call.kind != .thinking && !(call.kind == .question && failure == nil) {
         call.failed = true
         // A script's calls still out ended with it.
         call.calls = call.calls?.map { nested in
@@ -222,6 +235,7 @@ struct OpenCodeProjection: Sendable {
     openCalls.removeAll()
     calls.removeAll()
     nestedErrors.removeAll()
+    questionDismissed = false
     OpenCodeToolFailures.shared.forget(session: session)
     events.append(.turnFinished(failure: failure, usage: nil))
     stepFailure = nil

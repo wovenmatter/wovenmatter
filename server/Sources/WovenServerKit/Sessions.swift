@@ -416,7 +416,8 @@ actor SessionHost {
 
   /// When a turn ends and the session still has a goal, the next turn asks
   /// the runtime to continue toward it. Not after an interruption or a failed
-  /// turn, nor while a question waits; the person's next message resumes it.
+  /// turn, nor while a question waits or after the person dismissed one; the
+  /// person's next message resumes it.
   /// It never steers: a turn the person started meanwhile continues the goal
   /// when it ends.
   private func continueGoal() async {
@@ -445,6 +446,9 @@ actor SessionHost {
       throw ProtocolError(.notFound, "Nothing is waiting for that answer.")
     }
     try await live.answer(promptID: promptID, with: answer)
+    // A question or approval the person dismissed pauses a goal, as Stop
+    // does: the agent must not go on to ask again by itself.
+    if case .declined = answer { interrupted = true }
     resolvePrompt(promptID)
   }
 

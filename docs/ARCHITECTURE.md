@@ -249,8 +249,8 @@ A goal is a prompt that belongs to its session. Setting one on an idle session
 starts a turn toward it, and each turn that ends with the goal still set is
 followed by one asking the runtime to continue. It ends when the agent calls
 the Woven tool `goal_met` or the person clears it. It pauses after an
-interrupted or failed turn, while a question or approval waits, and after
-three goal turns in a row that neither said nor did anything. The person's
+interrupted or failed turn, while a question or approval waits, after the
+person dismisses one, and after three goal turns in a row that neither said nor did anything. The person's
 next message resumes it.
 
 ## Usage

@@ -241,8 +241,9 @@ public struct ToolKind: RawRepresentable, Codable, Sendable, Hashable {
   /// (`ItemContent.visualReply`), and the call does not carry it.
   public static let visualReply = ToolKind(rawValue: "visualReply")
   /// The model asked the person questions through its own question tool;
-  /// `questions` holds each, with the answer once there is one, and a
-  /// failed call was dismissed (`output` says how).
+  /// `questions` holds each, with the answer once there is one. A finished
+  /// call with no answers was dismissed, or the turn ended on it; a failed
+  /// one's `output` says what went wrong.
   public static let question = ToolKind(rawValue: "question")
   public static let other = ToolKind(rawValue: "other")
 }

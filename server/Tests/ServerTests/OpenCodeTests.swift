@@ -802,14 +802,31 @@ private func schemaProblems(_ value: JSONValue, _ schema: JSONValue, at path: St
     ToolQuestion(title: "Nickname", text: "Your nickname?", answer: []),
   ])
 
-  let dismissed = try #require(asked(#"{"type":"session.tool.failed","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","error":{"message":"The user dismissed this question"}}}"#))
-  #expect(dismissed.failed && dismissed.output == "The user dismissed this question")
+  let dismissal = #"{"type":"session.tool.failed","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","error":{"message":"The user dismissed this question"}}}"#
+  let dismissed = try #require(asked(dismissal))
+  #expect(!dismissed.failed && dismissed.output == "The user dismissed this question")
   #expect(dismissed.questions?.count == 3 && dismissed.questions?.allSatisfy { $0.answer == nil } == true)
 
-  // OpenCode then ends the turn as interrupted by "shutdown", which is no failure.
-  let ended = project([
+  // A question OpenCode failed for another reason is failed, with its error.
+  let refused = try #require(asked(#"{"type":"session.tool.failed","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","error":{"message":"Invalid input"}}}"#))
+  #expect(refused.failed && refused.output == "Invalid input")
+
+  // After a dismissal OpenCode ends the turn as interrupted by "shutdown",
+  // which is no failure; "shutdown" with no dismissal is its server stopping.
+  func ending(_ frames: [String]) -> String?? {
+    project(frames + [#"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"shutdown"}}"#])
+      .compactMap { if case .turnFinished(let failure, _) = $0 { failure } else { nil } }.first
+  }
+  let start = [
     #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m1"}}"#,
-    #"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"shutdown"}}"#,
-  ])
-  #expect(ended.contains { if case .turnFinished(nil, _) = $0 { true } else { false } })
+    #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"question"}}"#,
+    #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","input":\#(input)}}"#,
+  ]
+  #expect(ending(start + [dismissal]) == .some(nil))
+  #expect(ending(Array(start.prefix(1))) == .some("OpenCode stopped the turn."))
+
+  // A question still open when the person stops the turn ends unanswered, not failed.
+  let stopped = project(start + [#"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"user"}}"#])
+    .compactMap { event -> ToolCall? in if case .tool(_, let call, true) = event { call } else { nil } }.last
+  #expect(stopped?.kind == .question && stopped?.failed == false)
 }

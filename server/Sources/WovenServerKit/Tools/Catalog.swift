@@ -238,6 +238,15 @@ private let sessionTools: [WovenTool] = [
           result.append("#\(item.sequence) \(who ?? "agent"): \(text)")
         case .toolCall(let tool):
           guard tool.kind != .thinking else { continue }
+          // Questions the agent asked, each with the person's answer.
+          if let questions = tool.questions, tool.kind == .question, !tool.failed {
+            let asked = questions.map { question in
+              let answer = question.answer.map { $0.isEmpty ? "left unanswered" : $0.joined(separator: ", ") } ?? "not answered"
+              return "\(question.text) → \(answer)"
+            }
+            result.append("#\(item.sequence) asked the person: \(asked.joined(separator: "; "))")
+            continue
+          }
           let output = (tool.output ?? "").prefix(600)
           // A script names the tools it called.
           let called = (tool.calls ?? []).map { $0.name.isEmpty ? $0.title ?? "" : $0.name + ($0.failed ? " (failed)" : "") }

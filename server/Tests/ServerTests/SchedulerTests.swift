@@ -124,3 +124,42 @@ func aGoalContinuesUntilTheAgentSaysItIsMet() async throws {
   #expect(items.contains { if case .notice(let notice) = $0.content { notice.kind == .goalMet } else { false } })
   #expect(try await client.call(ListSessions()).first { $0.id == session.id }?.goal == nil)
 }
+
+/// A question the person dismisses pauses the goal, as Stop does: the agent
+/// does not go on to ask again by itself. An answered one lets it continue.
+@Test(.timeLimit(.minutes(1)))
+func aDismissedQuestionPausesTheGoal() async throws {
+  let machine = try await TestServer.start(store: StandInRuntime.NativeStore())
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Asker"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  _ = try await client.call(SetGoal(sessionID: session.id, goal: "Ask me: my colour."))
+
+  func nextPrompt() async throws -> Prompt {
+    for try await event in subscription.events { if case .awaiting(let prompt) = event { return prompt } }
+    throw ProtocolError(.failed, "No question came.")
+  }
+  func goalTurns() async throws -> Int {
+    try await client.call(SessionItems(sessionID: session.id)).filter { $0.author?.source == .goal }.count
+  }
+
+  // Answered: the goal goes on, and its next turn asks again.
+  let first = try await nextPrompt()
+  _ = try await client.call(AnswerPrompt(sessionID: session.id, promptID: first.id, answer: .option("red")))
+  let second = try await nextPrompt()
+  #expect(second.id != first.id)
+  // Another agent reading the chat sees the question and its answer.
+  let server = try await machine.connect(role: .server)
+  let read = try await server.call(CallTool(name: "read_session", arguments: .object(["sessionID": .string(session.id)]),
+                                            caller: ToolCaller(machineID: machine.server.machineID, sessionID: "reader")))
+  #expect(read.structuredContent?["text"]?.string?.contains("asked the person: Which colour? → red") == true)
+
+  // Dismissed: no further goal turn starts.
+  let before = try await goalTurns()
+  _ = try await client.call(AnswerPrompt(sessionID: session.id, promptID: second.id, answer: .declined))
+  try await Task.sleep(for: .milliseconds(800))
+  #expect(try await goalTurns() == before)
+  #expect(try await client.call(ListSessions()).first { $0.id == session.id }?.goal != nil)
+  try await client.unsubscribe(subscription.id)
+}
