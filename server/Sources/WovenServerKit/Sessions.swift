@@ -96,6 +96,10 @@ actor SessionManager {
   }
 
   func supports(_ kind: RuntimeKind) -> Bool { runtimes[kind] != nil }
+  /// That this machine lacks a runtime, and the ones it has, by the names tools take.
+  func missing(_ name: String) -> String {
+    "This machine has no \(name) runtime. It has \(runtimes.keys.map(\.rawValue).sorted().joined(separator: ", "))."
+  }
   var allRuntimes: [any Runtime] { Array(runtimes.values) }
   func runtime(_ kind: RuntimeKind) -> (any Runtime)? { runtimes[kind] }
 

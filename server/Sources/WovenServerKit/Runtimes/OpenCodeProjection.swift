@@ -337,6 +337,9 @@ struct OpenCodeProjection: Sendable {
   /// OpenCode reports only that it failed; the script's output often has
   /// its error.
   static let nestedFailure = "OpenCode did not say why it failed."
+  /// What a failed call of a Woven tool says when Woven never got it:
+  /// OpenCode refused it first, as for arguments its schema does not allow.
+  static let refusedByOpenCode = "OpenCode refused this call before it reached Woven Matter, as for arguments that do not fit the tool. The script's output says why."
 
   /// The tool calls a script made, from Code Mode's `metadata.toolCalls`:
   /// each `{tool, status, input?}`, in order. Nil when there are none to read.
@@ -355,7 +358,7 @@ struct OpenCodeProjection: Sendable {
           let claimed = name.hasPrefix("woven.")
             ? OpenCodeToolFailures.shared.claim(session: session, tool: String(name.dropFirst(6)), input: entry["input"]) : nil
           if let claimed { nestedErrors[callID, default: [:]][index] = claimed }
-          output = claimed ?? Self.nestedFailure
+          output = claimed ?? (name.hasPrefix("woven.") ? Self.refusedByOpenCode : Self.nestedFailure)
         }
       }
       return ToolCall(name: name, input: CodeCalls.input(entry["input"] ?? .object([:])), output: output, failed: failed)

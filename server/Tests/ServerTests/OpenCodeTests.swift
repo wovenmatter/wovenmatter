@@ -208,7 +208,7 @@ private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finishe
   let failed = try #require(scriptCalls(thrown).finished)
   #expect(failed.failed && failed.output == "boom from tool")
   #expect(failed.calls == [ToolCall(name: "woven.echo", input: #"{"text":"first"}"#, output: ""),
-                           ToolCall(name: "woven.fail", input: "{}", output: OpenCodeProjection.nestedFailure, failed: true)])
+                           ToolCall(name: "woven.fail", input: "{}", output: OpenCodeProjection.refusedByOpenCode, failed: true)])
 
   // Woven answered that call, so the call says Woven's error; a turn's end forgets what was not shown.
   let native = "ses_\(UUID().uuidString)"

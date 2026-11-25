@@ -220,7 +220,7 @@ enum ScheduleBook {
         draft.runtime = draft.runtime ?? session.runtime
       }
       guard let runtime = draft.runtime, await sessions.supports(runtime) else {
-        throw ProtocolError(.badRequest, "This machine has no \(draft.runtime?.rawValue ?? "chosen") runtime.")
+        throw ProtocolError(.badRequest, await sessions.missing(draft.runtime?.rawValue ?? "chosen"))
       }
       if let folderID = draft.folderID {
         guard let folder = try await library.folder(folderID) else { throw ProtocolError(.notFound, "No folder \(folderID).") }

@@ -278,7 +278,7 @@ private let sessionTools: [WovenTool] = [
         return forwarded
       }
       let runtime = RuntimeKind(rawValue: try call.arguments.string("runtime"))
-      guard await tools.sessions.supports(runtime) else { throw ToolFailure("This machine has no \(runtime.rawValue) runtime.") }
+      guard await tools.sessions.supports(runtime) else { throw ToolFailure(await tools.sessions.missing(runtime.rawValue)) }
       let session = try await tools.sessions.create(runtime: runtime, title: try call.arguments.string("title"),
                                                     folderID: call.arguments.optionalString("folderID"))
       try await tools.sessions.host(for: session.id).send(try call.arguments.string("message"), attachments: [],
