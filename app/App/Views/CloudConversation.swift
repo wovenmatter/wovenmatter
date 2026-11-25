@@ -119,7 +119,7 @@ struct CloudConversation: View {
                                 let loaderID = historyLoaderID(oldestMessageID: oldestMessageID)
                                 Color.clear
                                     .frame(height: 1)
-                                    .padding(.bottom, 32)
+                                    .padding(.bottom, ConversationMetrics.turnGap)
                                     .id(loaderID)
                                     .accessibilityIdentifier("conversation-history-loader")
                                     .onScrollVisibilityChange(threshold: 0.01) { visible in
@@ -152,14 +152,14 @@ struct CloudConversation: View {
                         }
                         Color.clear
                             .frame(height: bottomScrollClearance)
-                            .padding(.top, 32)
+                            .padding(.top, ConversationMetrics.turnGap)
                             .id(chatEndID)
                     }
                     .coordinateSpace(.named(Self.contentSpace))
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 32)
-                    .padding(.top, 24)
+                    .padding(.horizontal, ConversationMetrics.sideInset)
+                    .padding(.top, ConversationMetrics.topInset)
                     .scrollTargetLayout()
                 }
                 // Each chat gets its own scroll view, which opens at the bottom
@@ -752,70 +752,66 @@ struct MessageRow: View {
 
     var body: some View {
         if message.role == .system {
-            HStack(spacing: 7) {
+            HStack(spacing: ConversationMetrics.labelGap) {
                 Image(systemName: "info.circle")
                 Text(message.content)
                     .lineLimit(1)
                 if let onNewSession {
-                    Button("New Chat", action: onNewSession)
-                        .buttonStyle(WovenQuietButtonStyle())
+                    ConversationTextButton("New Chat", action: onNewSession)
                 }
             }
             .font(.system(size: 12))
             .foregroundStyle(WovenPalette.mutedForeground)
         } else if layout.content == .fileChanges {
             HStack {
-                ConversationChangedFilesCard(records: activities, topSpacing: {
-                    // Under the reply, or under the turn's header, which every run shows.
-                    showsAssistantBody || run != nil ? 18 : 0
-                })
-                .frame(maxWidth: .infinity, alignment: .leading)
+                ConversationChangedFilesCard(records: activities)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .fixedSize(horizontal: false, vertical: true)
-        } else {
-            let isUser = message.role == .user
+        } else if message.role == .user {
             HStack {
-                if isUser { Spacer(minLength: 72) }
-                VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, let run {
+                Spacer(minLength: 72)
+                VStack(alignment: .trailing, spacing: ConversationMetrics.labelGap) {
+                    WorkspaceIncomingAgentHeader(message: message)
+                    ConversationUserMessage(
+                        content: message.senderKind == .goal ? "Continuing toward the goal." : message.content,
+                        attachments: message.attachments,
+                        references: message.references,
+                        onOpenAttachment: onOpenAttachment
+                    )
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            HStack {
+                // Each part owns the gap above it: the work log ends with the
+                // gap to the reply, and the previews and card start with theirs.
+                VStack(alignment: .leading, spacing: 0) {
+                    if let run {
                         ConversationWorkTranscript(
                             run: run,
                             records: activities,
                             commentaryIDs: transcript.commentaryIDs,
-                            hasFollowingResponse: hasResponseText,
+                            hasFollowingResponse: hasResponseText && showsAssistantBody,
                             timeline: projectedTimeline
                         )
                     }
-                    if isUser {
-                        WorkspaceIncomingAgentHeader(message: message)
-                        ConversationUserMessage(
-                            content: message.senderKind == .goal ? "Continuing toward the goal." : message.content,
-                            attachments: message.attachments,
-                            references: message.references,
-                            onOpenAttachment: onOpenAttachment
-                        )
-                    } else if showsAssistantBody {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ConversationResponse(
-                                content: assistantBody,
-                                document: nil,
-                                isStreaming: isStreaming
-                            )
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
+                    if showsAssistantBody {
+                        ConversationResponse(
+                            content: assistantBody,
+                            document: nil,
+                            isStreaming: isStreaming,
                             // The running turn's dots, under the text it is writing.
-                            if run?.status == .running && hasResponseText {
-                                ConversationRunningDots().padding(.top, 4)
-                            }
-                        }
+                            showsRunningDots: run?.status == .running && hasResponseText
+                        )
                         if !isStreaming {
                             ConversationFilePreviews(content: assistantBody, messageID: message.libraryItemID, resolveFile: resolveFile)
                         }
                     }
                 }
-                .frame(maxWidth: isUser ? nil : .infinity, alignment: isUser ? .trailing : .leading)
-                if !isUser { Spacer(minLength: 0) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
             }
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -848,8 +844,8 @@ struct ConversationUserMessage: View {
         ConversationUserBubble(content: content, hasAttachments: !attachments.isEmpty || !references.isEmpty) {
             if !attachments.isEmpty || !references.isEmpty {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 150), spacing: 6)],
-                    spacing: 6
+                    columns: [GridItem(.adaptive(minimum: 150), spacing: ConversationMetrics.labelGap)],
+                    spacing: ConversationMetrics.labelGap
                 ) {
                     ForEach(attachments) { attachment in
                         Button { onOpenAttachment?(attachment) } label: {

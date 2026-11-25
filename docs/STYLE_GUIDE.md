@@ -432,6 +432,23 @@ when an intentional design change is accepted.
   last thing it shows, its strong dot stepping left to right, still under
   Reduce Motion. Keep detail-loading text quiet ("Loading details…")
   and never add a separate mobile running spinner below the transcript.
+- **Conversation layout:** agent chats, bot chats and the Forum share one rhythm
+  from `ConversationMetrics`; keep exact values there. Everything in an assistant
+  turn starts at one left edge and stays within one measure; user messages hug the
+  right edge. Gaps come from roles: a turn ends further from the next message than
+  a reply sits from the message it answers; work, reply, files and the
+  changed-files card are sections; work-log entries sit closer, and rows inside a
+  group closer still. The work divider shows only while there is work under it.
+  Tool rows are one line, truncated in the middle, with the chevron right after
+  the label; the full text is in their details, which open at the rows' text
+  inset. Thinking looks the same everywhere, and reasoning text is smaller and
+  quieter than the reply. A visual reply sits in a hairline frame with its title
+  inside; its controls show on hover, while zoomed, or with focus. In reply text,
+  lists sit tighter than paragraphs, headings attach to what follows them, and
+  code, tables and quotes keep the same space on each side and start at their
+  block's indent. Each block's spacing depends only on the block before it, so
+  streamed text never moves. Nothing moves when a turn settles: the dots hold the
+  row Copy then takes, and parts with nothing to show draw nothing.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.

@@ -94,20 +94,20 @@ struct ConversationWorkTranscript: View {
 
     var body: some View {
         let timeline = self.timeline ?? ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs)
-        let content = ConversationWorkTranscriptPresentation(
-            runStatus: run.status,
-            runError: run.error,
-            hasVisibleActivities: timeline.hasVisibleActivities
-        )
+        let content = ConversationWorkTranscriptPresentation(runStatus: run.status, runError: run.error)
         let isRunning = run.status == .running
         let foldable = timeline.hasFoldableEntries
         let workExpanded = workDisclosure
         let folded = foldable && !workExpanded.wrappedValue
+        let entries = folded ? timeline.entriesOutsideFold : timeline.entries
+        // A folded turn shows only the dots below.
+        let showsThinking = isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator
+        let showsWork = !entries.isEmpty || showsThinking
         VStack(alignment: .leading, spacing: 0) {
             let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
             if foldable {
                 Button { workExpanded.wrappedValue.toggle() } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: ConversationMetrics.labelGap) {
                         headerLabel(failed: content.failureMessage != nil)
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
@@ -134,76 +134,88 @@ struct ConversationWorkTranscript: View {
                     .foregroundStyle(WovenPalette.danger)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 8)
+                    .padding(.top, ConversationMetrics.rowGap)
             }
 
-            // The divider sits under the header from the moment the turn works.
-            if content.hasVisibleActivities || isRunning {
+            // The divider sits under the header while there is work under it.
+            if showsWork {
                 Divider()
                     .overlay(WovenPalette.foreground.opacity(0.10))
-                    .padding(.top, 12)
+                    .padding(.top, ConversationMetrics.rowGap)
 
-                let entries = folded ? timeline.entriesOutsideFold : timeline.entries
                 if !entries.isEmpty {
                     let tailID = timeline.entries.last?.id
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(entries) { entry in
-                            switch entry.content {
-                            case .commentary(let activity):
-                                ConversationResponse(
-                                    content: activity.content ?? "",
-                                    isStreaming: false,
-                                    showsCopyButton: false
-                                )
-                            case .group(let group):
-                                ConversationWorkGroupRow(
-                                    group: group,
-                                    runID: run.id,
-                                    runStatus: run.status,
-                                    isTail: entry.id == tailID && !hasFollowingResponse
-                                )
-                            case .activity(let activity):
-                                if activity.kind == .thought, !activity.workTimelineThoughtHasText {
-                                    ConversationQuietThought(isLive: isRunning && activity.workTimelineShowsProgress)
-                                } else if activity.kind == .thought {
-                                    ConversationThinkingBlock(activity: activity, runID: run.id,
-                                        isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
-                                } else if let reference = activity.htmlRender {
-                                    ConversationHTMLRenderView(reference: reference)
-                                } else if let children = activity.subagents, !children.isEmpty {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        ForEach(children) { child in
-                                            ConversationSubagentRow(child: child)
-                                        }
-                                    }
-                                } else {
-                                    ConversationActivityRow(
-                                        activity: activity,
-                                        runID: run.id,
-                                        runStatus: run.status,
-                                        showsProgress: activity.workTimelineShowsProgress
-                                    )
-                                }
-                            }
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            self.entry(entry, tailID: tailID, isRunning: isRunning)
+                                .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil))
                         }
                     }
-                    .padding(.top, 14)
                     .transition(reduceMotion ? .identity : .opacity)
                 }
-            }
-            // A folded turn shows only the dots below.
-            if isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator {
-                HStack(spacing: 9) {
-                    Image(systemName: "brain").frame(width: 17)
-                    Text("Thinking").font(.system(size: 13.5))
+                if showsThinking {
+                    ConversationThinkingLabel(text: "Thinking")
+                        .padding(.top, ConversationMetrics.entryGap)
                 }
-                .foregroundStyle(WovenPalette.mutedForeground)
-                .padding(.top, 12)
-                .accessibilityLabel("Thinking")
             }
             // A response below takes the dots under its text instead.
             if isRunning && !hasFollowingResponse {
-                ConversationRunningDots().padding(.top, 6)
+                ConversationRunningDots()
+                    .padding(.top, showsWork ? ConversationMetrics.labelGap : ConversationMetrics.entryGap)
+            }
+        }
+        // The gap to the reply: from the last entry, or from the header it captions.
+        .padding(.bottom, hasFollowingResponse ? (showsWork ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap) : 0)
+        .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+    }
+
+    /// Entries sit an entry apart; a visual reply keeps a section's space on each side.
+    private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?) -> CGFloat {
+        isVisualReply(entry) || previous.map(isVisualReply) == true ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap
+    }
+
+    private static func isVisualReply(_ entry: ConversationWorkTimelineEntry) -> Bool {
+        if case .activity(let activity) = entry.content { return activity.htmlRender != nil }
+        return false
+    }
+
+    @ViewBuilder
+    private func entry(_ entry: ConversationWorkTimelineEntry, tailID: String?, isRunning: Bool) -> some View {
+        switch entry.content {
+        case .commentary(let activity):
+            ConversationResponse(
+                content: activity.content ?? "",
+                isStreaming: false,
+                showsCopyButton: false
+            )
+        case .group(let group):
+            ConversationWorkGroupRow(
+                group: group,
+                runID: run.id,
+                runStatus: run.status,
+                isTail: entry.id == tailID && !hasFollowingResponse
+            )
+        case .activity(let activity):
+            if activity.kind == .thought, !activity.workTimelineThoughtHasText {
+                ConversationThinkingLabel(text: isRunning && activity.workTimelineShowsProgress ? "Thinking" : "Thought")
+            } else if activity.kind == .thought {
+                ConversationThinkingBlock(activity: activity, runID: run.id,
+                    isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
+            } else if let reference = activity.htmlRender {
+                ConversationHTMLRenderView(reference: reference)
+            } else if let children = activity.subagents, !children.isEmpty {
+                VStack(alignment: .leading, spacing: ConversationMetrics.entryGap) {
+                    ForEach(children) { child in
+                        ConversationSubagentRow(child: child)
+                    }
+                }
+            } else {
+                ConversationActivityRow(
+                    activity: activity,
+                    runID: run.id,
+                    runStatus: run.status,
+                    showsProgress: activity.workTimelineShowsProgress
+                )
             }
         }
     }
@@ -224,7 +236,7 @@ struct ConversationWorkTranscript: View {
     @ViewBuilder
     private func headerLabel(failed: Bool) -> some View {
         if failed {
-            HStack(spacing: 7) {
+            HStack(spacing: ConversationMetrics.labelGap) {
                 LucideIcon(glyph: .alertCircle, size: 13)
                 elapsedLabel
             }
@@ -233,8 +245,14 @@ struct ConversationWorkTranscript: View {
         }
     }
 
-    @ViewBuilder
     private var elapsedLabel: some View {
+        elapsedText
+            // The same size and digits while the turn runs and once it ends.
+            .font(.system(size: NSFont.systemFontSize).monospacedDigit())
+    }
+
+    @ViewBuilder
+    private var elapsedText: some View {
         switch run.status {
         case .running:
             if let startedAt = presentation?.startedAt {
@@ -301,14 +319,17 @@ private func conversationDisclosure(
     )
 }
 
-/// Thinking that came without text: only that the agent thought.
-private struct ConversationQuietThought: View {
-    let isLive: Bool
+/// Thinking in the work rows' style: the brain in the icon column, then the
+/// label. Also thinking that came without text: only that the agent thought.
+struct ConversationThinkingLabel: View {
+    let text: String
 
     var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "brain").frame(width: 17)
-            Text(isLive ? "Thinking" : "Thought").font(.system(size: 13.5))
+        HStack(spacing: ConversationMetrics.iconGap) {
+            Image(systemName: "brain")
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: ConversationMetrics.iconColumn)
+            Text(text).font(.system(size: 13.5))
         }
         .foregroundStyle(WovenPalette.mutedForeground)
         .accessibilityElement(children: .combine)
@@ -325,10 +346,8 @@ private struct ConversationThinkingBlock: View {
     @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Thinking", systemImage: "brain")
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(WovenPalette.mutedForeground)
+        VStack(alignment: .leading, spacing: 0) {
+            ConversationThinkingLabel(text: "Thinking")
             ConversationBoundedWorkList(
                 group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
                 runID: runID, runStatus: isLive ? .running : .completed, followsAppends: isLive,
@@ -337,6 +356,8 @@ private struct ConversationThinkingBlock: View {
                     if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
                     else { localScrollSnapshot = snapshot }
                 })
+                .padding(.top, ConversationMetrics.rowGap)
+                .padding(.leading, ConversationMetrics.textInset)
         }
         .accessibilityIdentifier("work-thinking:" + activity.id)
     }
@@ -362,7 +383,7 @@ private struct ConversationWorkGroupRow: View {
         let runIsActive = runStatus == .running
         let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
         if runIsActive && isTail {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
                 ForEach(group.activities) { activity in
                     ConversationActivityRow(activity: activity, runID: runID, runStatus: runStatus,
                         showsProgress: group.showsProgress(activity))
@@ -378,11 +399,11 @@ private struct ConversationWorkGroupRow: View {
                 local: $localExpanded, interaction: transcriptInteraction)
             VStack(alignment: .leading, spacing: 0) {
                 Button { expanded.wrappedValue.toggle() } label: {
-                    HStack(spacing: 9) {
+                    HStack(spacing: ConversationMetrics.iconGap) {
                         Image(systemName: group.hasFailure ? "exclamationmark.triangle"
                             : group.action?.systemImage ?? "wrench.and.screwdriver")
                             .font(.system(size: 12, weight: .medium))
-                            .frame(width: 17)
+                            .frame(width: ConversationMetrics.iconColumn)
                         Text(group.summary)
                             .font(.system(size: 13.5, weight: .medium))
                             .lineLimit(1).truncationMode(.tail)
@@ -408,7 +429,7 @@ private struct ConversationWorkGroupRow: View {
                             if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
                             else { localScrollSnapshot = snapshot }
                         })
-                        .padding(.top, 8).padding(.leading, 26)
+                        .padding(.top, ConversationMetrics.rowGap).padding(.leading, ConversationMetrics.textInset)
                 }
             }
         }
@@ -448,9 +469,9 @@ private struct ConversationBoundedWorkList: View {
                     if group.isThoughtOnly {
                         // A reasoning-only group opens directly into formatted
                         // text; mixed tool groups retain lazy rows.
-                        VStack(alignment: .leading, spacing: 8) { rows }
+                        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) { rows }
                     } else {
-                        LazyVStack(alignment: .leading, spacing: 8) { rows }
+                        LazyVStack(alignment: .leading, spacing: ConversationMetrics.rowGap) { rows }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -542,7 +563,7 @@ private struct ConversationBoundedWorkList: View {
                         ConversationActivityDetails(
                             activity: activity, runID: runID,
                             isLive: runStatus == .running && group.showsProgress(activity),
-                            summary: nil, indentation: 0)
+                            summary: nil)
                     } else {
                         ConversationActivityRow(
                             activity: activity,
@@ -552,7 +573,6 @@ private struct ConversationBoundedWorkList: View {
                         )
                     }
                 }
-                Color.clear.frame(height: 1).id("work-end")
     }
 }
 
@@ -594,6 +614,8 @@ private struct ConversationActivityRow: View {
                             isLive: isLive,
                             summary: secondaryLabel
                         )
+                        .padding(.top, ConversationMetrics.rowGap)
+                        .padding(.leading, ConversationMetrics.textInset)
                     }
                 }
             } else {
@@ -605,7 +627,7 @@ private struct ConversationActivityRow: View {
     @ViewBuilder
     private func activityLabel(expanded: Bool?) -> some View {
         if activity.kind == .activity, let content = activity.content?.nonempty {
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
                 Text(content)
                     .font(.system(size: 13))
                     .foregroundStyle(isFailure ? .red.opacity(0.8) : WovenPalette.foreground.opacity(0.72))
@@ -614,10 +636,12 @@ private struct ConversationActivityRow: View {
                 if let expanded { chevron(expanded) }
             }
         } else {
-            HStack(alignment: .firstTextBaseline, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.iconGap) {
                 activityIcon
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
+                    // One line, keeping the command's start and the file name;
+                    // the full text is in the details.
+                    HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
                         Text(primaryLabel)
                             .font(.system(
                                 size: 13.5,
@@ -626,14 +650,15 @@ private struct ConversationActivityRow: View {
                             .foregroundStyle(WovenPalette.foreground.opacity(
                                 activity.kind == .thought ? 0.58 : 0.72
                             ))
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         if let expanded { chevron(expanded) }
                     }
                     if let secondaryLabel {
                         Text(secondaryLabel)
                             .font(.system(size: 12.5))
                             .foregroundStyle(WovenPalette.mutedForeground)
-                            .lineLimit(activity.kind == .thought ? 2 : 1)
+                            .lineLimit(1)
                             .truncationMode(.tail)
                     }
                 }
@@ -654,13 +679,14 @@ private struct ConversationActivityRow: View {
     private var activityIcon: some View {
         if isFailure {
             Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.red.opacity(0.8))
-                .frame(width: 17)
+                .frame(width: ConversationMetrics.iconColumn)
         } else {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(WovenPalette.mutedForeground)
-                .frame(width: 17)
+                .frame(width: ConversationMetrics.iconColumn)
         }
     }
 
@@ -769,7 +795,6 @@ private struct ConversationActivityDetails: View {
     let isLive: Bool
     /// Text already shown in the row label.
     let summary: String?
-    var indentation: CGFloat = 26
     @Environment(\.conversationActivityDetails) private var loadDetails
     @State private var loaded: AgentRunActivity?
     @State private var loadToken: UUID?
@@ -789,7 +814,7 @@ private struct ConversationActivityDetails: View {
         let complete = self.complete
         let content = field(\.content)?.nonempty
             ?? (activity.kind == .thought ? field(\.detail)?.nonempty ?? field(\.title)?.nonempty : nil)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
             if activity.kind != .thought, !isLive, let title = complete?.title, title != activity.title {
                 ConversationPagedText(text: title, style: .prose)
             }
@@ -838,19 +863,16 @@ private struct ConversationActivityDetails: View {
                     .foregroundStyle(WovenPalette.mutedForeground)
             }
             if let error {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.rowGap) {
                     Text(error)
                         .foregroundStyle(WovenPalette.danger)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Retry") { attempt += 1 }
-                        .buttonStyle(WovenQuietButtonStyle())
+                    ConversationTextButton("Retry") { attempt += 1 }
                 }
                 .font(.system(size: 12.5))
             }
         }
-        .padding(.top, 7)
-        .padding(.leading, indentation)
         // A bounded viewport may expose less than one percent of a long
         // reasoning page. Any visible portion must keep its detail load alive.
         .onScrollVisibilityChange(threshold: 0) { visible in
@@ -928,7 +950,7 @@ private struct ConversationActivityDetails: View {
     @ViewBuilder
     private func rawBlock(_ title: String, _ value: String?) -> some View {
         if let value, !value.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: ConversationMetrics.tight) {
                 Text(title)
                     .font(.system(size: 10.5, weight: .semibold))
                     .textCase(.uppercase)
@@ -948,13 +970,13 @@ private struct ConversationCodeScript: View {
 
     var body: some View {
         if let source, !source.isEmpty {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: ConversationMetrics.tight) {
                 // Its chevron follows the label, as on every other disclosure here.
                 Button {
                     transcriptInteraction()
                     expanded.toggle()
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: ConversationMetrics.labelGap) {
                         Text("Script").font(.system(size: 11.5, weight: .medium))
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
@@ -1000,7 +1022,7 @@ private struct ConversationCodeCallList: View {
     }
 
     private var rows: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
             ForEach(calls) { call in ConversationCodeCallRow(call: call) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1013,9 +1035,9 @@ private struct ConversationQuestionList: View {
     let isLive: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
             ForEach(questions) { question in
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
                     let title = question.title?.nonempty
                     Text(title ?? question.text)
                         .font(.system(size: 12.5, weight: .medium))
@@ -1043,8 +1065,8 @@ private struct ConversationCodeCallRow: View {
     let call: AgentRunCodeCall
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
+            HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.rowGap) {
                 // The note of calls left out is not a call, so it has no icon.
                 Image(systemName: call.status == .failed ? "exclamationmark.triangle"
                     : call.status == .shownInChat ? "rectangle.on.rectangle" : "wrench.and.screwdriver")
@@ -1125,34 +1147,32 @@ private struct ConversationReasoningText: View {
         let page = ConversationReasoningPage(text: stream, endOffset: endOffset, maximumCharacters: Self.pageLength)
         let startOffset = page.startOffset
         let shown = page.markdown
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
             if startOffset > 0 || endOffset < count {
-                HStack(spacing: 12) {
+                HStack(spacing: ConversationMetrics.tight) {
                     if startOffset > 0 {
-                        Button("Earlier reasoning") {
+                        ConversationTextButton("Earlier reasoning") {
                             transcriptInteraction()
                             browsingHistory = true
                             displayedEnd = startOffset
                         }
                     }
                     if endOffset < count {
-                        Button("Later reasoning") {
+                        ConversationTextButton("Later reasoning") {
                             transcriptInteraction()
                             displayedEnd = min(count, endOffset + Self.pageLength)
                             browsingHistory = displayedEnd != count
                         }
-                        Button("Latest reasoning") {
+                        ConversationTextButton("Latest reasoning") {
                             transcriptInteraction()
                             displayedEnd = count
                             browsingHistory = false
                         }
                     }
                 }
-                .buttonStyle(WovenQuietButtonStyle())
-                .font(.system(size: 12))
             }
             if !shown.isEmpty {
-                ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false)
+                ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false, style: .reasoning)
             }
         }
         .onAppear {
@@ -1302,12 +1322,12 @@ private struct ConversationPagedText: View {
             ?? text.endIndex
         let shown = String(text[..<end])
         let remaining = text.utf16.count - shown.utf16.count
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
             if style == .raw {
                 ScrollView(.horizontal) {
                     textView(shown)
                         .fixedSize(horizontal: true, vertical: true)
-                        .padding(9)
+                        .padding(ConversationMetrics.rowGap)
                 }
                 .scrollIndicators(.never)
                 .background(WovenPalette.muted.opacity(0.65))
@@ -1318,9 +1338,7 @@ private struct ConversationPagedText: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if remaining > 0 {
-                Button("Show more (\(remaining.formatted()) more characters)") { pages += 1 }
-                    .buttonStyle(WovenQuietButtonStyle())
-                    .font(.system(size: 12))
+                ConversationTextButton("Show more (\(remaining.formatted()) more characters)") { pages += 1 }
             }
         }
     }
@@ -1354,25 +1372,26 @@ private struct ConversationProposedPlan: View {
     let activity: AgentRunActivity
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
+            HStack(spacing: ConversationMetrics.iconGap) {
                 Image(systemName: "list.bullet.clipboard")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(WovenPalette.mutedForeground)
-                    .frame(width: 17)
+                    .frame(width: ConversationMetrics.iconColumn)
                 Text(activity.title?.nonempty ?? "Proposed plan")
                     .font(.system(size: 13.5, weight: .medium))
                     .foregroundStyle(WovenPalette.foreground.opacity(0.72))
             }
             if let content = activity.content?.nonempty {
-                ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
+                ConversationResponse(content: content, isStreaming: false, showsCopyButton: false)
+                    .padding(.leading, ConversationMetrics.textInset)
             } else {
                 ForEach(activity.planEntries.indices, id: \.self) { index in
                     Text("• \(activity.planEntries[index].content)")
                         .font(.system(size: 13))
                         .foregroundStyle(WovenPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 26)
+                        .padding(.leading, ConversationMetrics.textInset)
                 }
             }
         }
@@ -1381,9 +1400,6 @@ private struct ConversationProposedPlan: View {
 
 struct ConversationChangedFilesCard: View {
     let records: [WorkspaceRunActivityRecord]
-    // Evaluate only for a nonempty card. The lazy footer otherwise has no
-    // height and need not project the work transcript merely to decide a gap.
-    var topSpacing: () -> CGFloat = { 0 }
     @State private var expanded = true
     @State private var expandedDirectories: Set<String> = []
     @State private var selectedChange: ConversationChangedFile?
@@ -1399,7 +1415,7 @@ struct ConversationChangedFilesCard: View {
         let deletions = changes.reduce(0) { $0 + $1.deletions }
         if !changes.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 8) {
+                HStack(spacing: ConversationMetrics.rowGap) {
                     Button { expanded.toggle() } label: {
                         Image(systemName: "chevron.right")
                             .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -1415,8 +1431,10 @@ struct ConversationChangedFilesCard: View {
                             Image(systemName: allDirectoriesExpanded
                                 ? "chevron.up.chevron.down"
                                 : "chevron.down.chevron.up")
+                                .frame(width: WovenMetrics.rowHeight, height: WovenMetrics.rowHeight)
+                                .contentShape(Rectangle())
                         }
-                        .buttonStyle(WovenQuietButtonStyle())
+                        .buttonStyle(WovenIconButtonStyle())
                         .accessibilityLabel(allDirectoriesExpanded
                             ? "Collapse all folders"
                             : "Expand all folders")
@@ -1425,12 +1443,15 @@ struct ConversationChangedFilesCard: View {
                         selectedChange = changes.first
                     } label: {
                         Label("Open diff", systemImage: "doc.badge.plus")
+                            .padding(.horizontal, ConversationMetrics.rowGap)
+                            .frame(height: WovenMetrics.rowHeight)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(WovenQuietButtonStyle())
+                    .buttonStyle(WovenIconButtonStyle())
                 }
                 .font(.system(size: 13))
-                .padding(.horizontal, 14)
-                .frame(height: 48)
+                .padding(.horizontal, ConversationMetrics.blockInset)
+                .frame(height: 40)
 
                 if expanded {
                     Divider().opacity(0.45)
@@ -1447,7 +1468,7 @@ struct ConversationChangedFilesCard: View {
                                     selectedChange = row.node.change
                                 }
                             } label: {
-                                HStack(spacing: 9) {
+                                HStack(spacing: ConversationMetrics.iconGap) {
                                     Image(systemName: row.node.isDirectory
                                         ? "chevron.right"
                                         : "doc.text")
@@ -1473,8 +1494,8 @@ struct ConversationChangedFilesCard: View {
                                 }
                                 .font(.system(size: 12.5))
                                 .padding(.leading, CGFloat(row.depth) * 20)
-                                .padding(.horizontal, 16)
-                                .frame(height: 38)
+                                .padding(.horizontal, ConversationMetrics.blockInset)
+                                .frame(height: 32)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1483,16 +1504,17 @@ struct ConversationChangedFilesCard: View {
                 }
             }
             .background(WovenPalette.primary.opacity(0.055))
-            .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous)
                     .stroke(WovenPalette.foreground.opacity(0.10), lineWidth: 1)
             }
+            .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
             .sheet(item: $selectedChange) { change in
                 // Resolve the current owner/revision while the sheet is open.
                 ConversationDiffSheet(path: change.path, file: changes.first { $0.path == change.path })
             }
-            .padding(.top, topSpacing())
+            .padding(.top, ConversationMetrics.sectionGap)
         }
     }
 
@@ -1781,8 +1803,9 @@ func formattedRunDuration(_ interval: TimeInterval) -> String {
 }
 
 /// "Working for …" while a run is under way. It ticks once a second from its
-/// own timer and only repaints itself: its size never changes, so a tick
-/// never makes the transcript lay out again.
+/// own timer and only repaints itself. Its digits are monospaced, so it is as
+/// wide as its text and changes size only when the count gains a character;
+/// only those ticks lay the transcript out again.
 private struct RunningElapsedLabel: NSViewRepresentable {
     let startedAt: Date
 
@@ -1791,20 +1814,23 @@ private struct RunningElapsedLabel: NSViewRepresentable {
     func updateNSView(_ view: RunningElapsedView, context: Context) { view.startedAt = startedAt }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: RunningElapsedView, context: Context) -> CGSize? {
-        RunningElapsedView.size
+        nsView.size
     }
 }
 
 private final class RunningElapsedView: NSView {
     private static let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-    /// Wide enough for any count, so the label keeps one size.
-    static let size: CGSize = {
-        let size = NSAttributedString(string: "Working for 999m 59s", attributes: [.font: font]).size()
-        return CGSize(width: ceil(size.width), height: ceil(size.height))
-    }()
+
+    /// The current text's size; it changes only when the count gains a character.
+    var size: CGSize {
+        let measured = NSAttributedString(string: text, attributes: [.font: Self.font]).size()
+        return CGSize(width: ceil(measured.width), height: ceil(measured.height))
+    }
+    override var intrinsicContentSize: NSSize { size }
+    private var laidOutWidth: CGFloat?
 
     var startedAt = Date.distantPast {
-        didSet { if startedAt != oldValue { needsDisplay = true; schedule() } }
+        didSet { if startedAt != oldValue { tick(); schedule() } }
     }
     private var timer: Timer?
 
@@ -1831,10 +1857,18 @@ private final class RunningElapsedView: NSView {
         guard window != nil, startedAt != .distantPast else { return }
         let next = startedAt.addingTimeInterval(Date().timeIntervalSince(startedAt).rounded(.down) + 1)
         let timer = Timer(fire: next, interval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.needsDisplay = true }
+            MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+    }
+
+    private func tick() {
+        needsDisplay = true
+        let width = size.width
+        guard width != laidOutWidth else { return }
+        laidOutWidth = width
+        invalidateIntrinsicContentSize()
     }
 
     override func draw(_ dirtyRect: NSRect) {

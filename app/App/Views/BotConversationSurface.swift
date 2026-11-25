@@ -754,31 +754,27 @@ private struct BotMessageRow: View {
     var body: some View {
         HStack(spacing: 0) {
             if entry.isUser { Spacer(minLength: 72) }
-            VStack(alignment: entry.isUser ? .trailing : .leading, spacing: 6) {
+            VStack(alignment: entry.isUser ? .trailing : .leading, spacing: ConversationMetrics.labelGap) {
                 // A visual reply on its own continues the reply above it.
                 if !entry.isUser && !visualReplyOnly {
                     Text(botName)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(WovenPalette.foreground)
-                        .padding(.horizontal, 4)
                 }
                 if !entry.text.isEmpty {
                     if entry.isUser {
                         ConversationUserBubble(content: entry.text.trimmingCharacters(in: .whitespacesAndNewlines)) { EmptyView() }
                     } else {
                         ConversationResponse(content: entry.text, isStreaming: false, showsCopyButton: false)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
                     }
                 }
                 ForEach(entry.visualReplies, id: \.id) { reply in
-                    ConversationHTMLRenderView(reference: reply).padding(.horizontal, 4)
+                    ConversationHTMLRenderView(reference: reply)
                 }
                 if entry.isStopped {
                     Text("Stopped")
                         .font(.system(size: 11.5))
                         .foregroundStyle(WovenPalette.mutedForeground)
-                        .padding(.horizontal, 4)
                 }
                 if let error = entry.error {
                     InlineError(text: error)
@@ -901,26 +897,16 @@ private struct BotStreamingMessage: View {
     let text: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
             Text(botName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(WovenPalette.foreground)
-                .padding(.horizontal, 4)
             if let text, !text.isEmpty {
                 ConversationResponse(content: text, isStreaming: true, showsCopyButton: false)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "brain").frame(width: 17)
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                    Text("Thinking…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                }
-                .padding(.horizontal, 4)
+                ConversationThinkingLabel(text: "Thinking…")
             }
-            ConversationRunningDots().padding(.horizontal, 4)
+            ConversationRunningDots()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

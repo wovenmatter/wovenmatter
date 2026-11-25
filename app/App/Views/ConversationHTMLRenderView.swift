@@ -17,6 +17,10 @@ struct ConversationHTMLRenderView: View {
     @State private var expanded = false
     @State private var zoom = 1.0
     @State private var pendingLink: URL?
+    @State private var hovering = false
+    @FocusState private var focusedControl: Control?
+
+    private enum Control: Hashable { case zoomOut, resetZoom, zoomIn, expand }
 
     private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
 
@@ -26,28 +30,41 @@ struct ConversationHTMLRenderView: View {
     }
 
     var body: some View {
+        // One frame for loading, loaded and failed, with the title inside it.
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(spacing: ConversationMetrics.entryGap) {
                 Text(title).lineLimit(1)
                 Spacer()
-                controls
-                Button { expanded = true } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                HStack(spacing: ConversationMetrics.entryGap) {
+                    controls
+                    Button { expanded = true } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .focused($focusedControl, equals: .expand)
+                    .help("Expand visual reply")
+                    .accessibilityLabel("Expand visual reply")
+                    .disabled(reply == nil)
                 }
-                .help("Expand visual reply")
-                .accessibilityLabel("Expand visual reply")
-                .disabled(reply == nil)
+                // Shown on hover, while zoomed or while one has focus. Nearly
+                // invisible rather than hidden, so VoiceOver and the keyboard
+                // still reach them and nothing shifts.
+                .opacity(hovering || zoom != 1 || focusedControl != nil ? 1 : 0.001)
             }
             .font(.system(size: 11.5, weight: .medium))
             .foregroundStyle(WovenPalette.mutedForeground)
             .buttonStyle(.plain)
-            .padding(.vertical, 8)
+            .padding(.horizontal, ConversationMetrics.entryGap)
+            .frame(height: 32)
             if let reply {
                 web(reply).frame(height: min(20_000, max(80, height * zoom)))
             } else if let failure {
-                Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
-                    .padding(.vertical, 16)
-                Button("Retry") { self.failure = nil; Task { await load() } }.buttonStyle(.plain)
+                VStack(spacing: ConversationMetrics.rowGap) {
+                    Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
+                        .multilineTextAlignment(.center)
+                    ConversationTextButton("Retry") { self.failure = nil; Task { await load() } }
+                }
+                .padding(.horizontal, ConversationMetrics.entryGap)
+                .frame(maxWidth: .infinity, minHeight: height)
             } else {
                 Text("Loading visual reply…")
                     .font(.system(size: 13))
@@ -57,6 +74,13 @@ struct ConversationHTMLRenderView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
+                .strokeBorder(WovenPalette.foreground.opacity(0.09), lineWidth: 1)
+        }
+        .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+        .onHover { hovering = $0 }
         .task(id: reference.digest) { await load() }
         .sheet(isPresented: $expanded) {
             VStack(spacing: 0) {
@@ -88,12 +112,15 @@ struct ConversationHTMLRenderView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ConversationMetrics.rowGap) {
             Button { zoom = max(0.5, zoom - 0.25) } label: { Image(systemName: "minus.magnifyingglass") }
+                .focused($focusedControl, equals: .zoomOut)
                 .disabled(zoom <= 0.5).accessibilityLabel("Zoom out")
             Button { zoom = 1 } label: { Text(zoom, format: .percent.precision(.fractionLength(0))).monospacedDigit() }
+                .focused($focusedControl, equals: .resetZoom)
                 .help("Reset zoom").accessibilityLabel("Reset zoom")
             Button { zoom = min(2, zoom + 0.25) } label: { Image(systemName: "plus.magnifyingglass") }
+                .focused($focusedControl, equals: .zoomIn)
                 .disabled(zoom >= 2).accessibilityLabel("Zoom in")
         }.buttonStyle(.plain)
     }

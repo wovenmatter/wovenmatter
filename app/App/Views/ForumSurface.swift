@@ -391,17 +391,10 @@ private struct ForumPane: View {
     /// Who has a turn running here, so it shows that bots saw a post before any has answered.
     @ViewBuilder private var thinkingRow: some View {
         if let text = PiBotForumRoomState.thinkingText(controller.state.thinking.compactMap(name)) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: "brain").frame(width: 17)
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                    Text(text)
-                        .font(.system(size: 13))
-                        .foregroundStyle(WovenPalette.mutedForeground)
-                }
+            VStack(alignment: .leading, spacing: ConversationMetrics.labelGap) {
+                ConversationThinkingLabel(text: text)
                 ConversationRunningDots()
             }
-            .padding(.horizontal, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
         }
@@ -607,12 +600,11 @@ private struct ForumPostRow: View {
     var body: some View {
         HStack(spacing: 0) {
             if post.isUser { Spacer(minLength: 72) }
-            VStack(alignment: post.isUser ? .trailing : .leading, spacing: 6) {
+            VStack(alignment: post.isUser ? .trailing : .leading, spacing: ConversationMetrics.labelGap) {
                 if !post.isUser {
                     Text(post.name)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(WovenPalette.foreground)
-                        .padding(.horizontal, 4)
                 }
                 if post.isUser {
                     ConversationUserBubble(content: post.text.trimmingCharacters(in: .whitespacesAndNewlines)) { EmptyView() }
@@ -620,14 +612,11 @@ private struct ForumPostRow: View {
                         Text("Scheduled")
                             .font(.system(size: 11.5))
                             .foregroundStyle(WovenPalette.mutedForeground)
-                            .padding(.horizontal, 4)
                     }
                 } else if let visualReply = post.visualReply {
-                    ConversationHTMLRenderView(reference: visualReply).padding(.horizontal, 4)
+                    ConversationHTMLRenderView(reference: visualReply)
                 } else {
                     ConversationResponse(content: post.text, isStreaming: false, showsCopyButton: false)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
                 }
                 ForEach(post.unanswered) { note in
                     InlineError(text: "\(note.name) didn't answer: \(note.reason)")

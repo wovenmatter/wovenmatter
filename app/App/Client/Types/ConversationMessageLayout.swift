@@ -10,6 +10,7 @@ struct ConversationMessageLayout {
         }
 
         let messageID: String
+        let role: MessageRole
         let content: Content
 
         var id: String {
@@ -19,19 +20,20 @@ struct ConversationMessageLayout {
             }
         }
 
-        var spacingBefore: Double {
+        var spacingBefore: CGFloat {
             // The card adds its own gap only when it has visible changes.
             if case .fileChanges = content { return 0 }
-            return 32
+            // A reply sits closer to the message it answers than to the turn before it.
+            return role == .assistant ? ConversationMetrics.replyGap : ConversationMetrics.turnGap
         }
     }
 
     static func rows(messageID: String, role: MessageRole) -> [Row] {
-        var rows = [Row(messageID: messageID, content: .message)]
+        var rows = [Row(messageID: messageID, role: role, content: .message)]
         if role == .assistant {
             // Keep footer state stable while the response streams.
             // Empty cards remain zero-height lazy rows.
-            rows.append(Row(messageID: messageID, content: .fileChanges))
+            rows.append(Row(messageID: messageID, role: role, content: .fileChanges))
         }
         return rows
     }
@@ -46,11 +48,9 @@ struct ConversationMessageLayout {
 
 /// Every turn shows how long it ran, and a failure, whether or not it has work to show.
 struct ConversationWorkTranscriptPresentation {
-    let hasVisibleActivities: Bool
     let failureMessage: String?
 
-    init(runStatus: RunStatus, runError: String?, hasVisibleActivities: Bool) {
-        self.hasVisibleActivities = hasVisibleActivities
+    init(runStatus: RunStatus, runError: String?) {
         if runStatus == .failed {
             let detail = runError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             failureMessage = detail.isEmpty ? "No error details were provided." : detail

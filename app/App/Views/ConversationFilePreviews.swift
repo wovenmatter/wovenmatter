@@ -14,11 +14,16 @@ struct ConversationFilePreviews: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(files, id: \.source) { file in
-                ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
-                    messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
+        let files = self.files
+        // Nothing at all without files, so a reply without any keeps its height when it settles.
+        if !files.isEmpty {
+            VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
+                ForEach(files, id: \.source) { file in
+                    ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
+                        messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
+                }
             }
+            .padding(.top, ConversationMetrics.sectionGap)
         }
     }
 }
@@ -33,8 +38,8 @@ private struct ConversationFileAttachment: View {
     @State private var loading = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: ConversationMetrics.tight) {
+            HStack(spacing: ConversationMetrics.rowGap) {
                 Button { perform { openPreview?($0, "library:" + identity) } } label: {
                     Label(url?.lastPathComponent ?? file.title,
                           systemImage: file.kind == .photo ? "photo" : "doc.richtext")
