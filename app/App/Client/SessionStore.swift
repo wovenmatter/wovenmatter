@@ -504,7 +504,7 @@ final class SessionStore {
     private static func questionTitle(_ questions: [AgentRunQuestion], live: Bool, failed: Bool) -> String {
         let several = questions.count > 1
         if failed { return several ? "Questions failed" : "Question failed" }
-        if !live, questions.allSatisfy({ $0.answer == nil }) { return several ? "Questions not answered" : "Question not answered" }
+        if !live, !questions.isEmpty, questions.allSatisfy({ $0.answer == nil }) { return several ? "Questions not answered" : "Question not answered" }
         return (live ? "Asking " : "Asked ") + (several ? "\(questions.count) questions" : "a question")
     }
 

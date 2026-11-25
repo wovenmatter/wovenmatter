@@ -210,6 +210,8 @@ private struct SessionFormCard: View {
     @State private var initialized = false
     /// Whether the form has fields below what its scroll area shows.
     @State private var moreBelow = false
+    /// The height of the form's fields, once laid out.
+    @State private var formHeight: CGFloat?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -219,7 +221,11 @@ private struct SessionFormCard: View {
                 formFields
             }
             .scrollIndicators(.automatic)
-            .frame(maxHeight: 420)
+            // As tall as its fields, up to 420 points; a scroll view alone takes all it is offered.
+            .frame(height: min(420, max(1, formHeight ?? 420)))
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+                formHeight = height
+            }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height > 4
             } action: { _, value in
