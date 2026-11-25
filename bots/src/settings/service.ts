@@ -1,10 +1,9 @@
 import type { CredentialStore, Models } from "@earendil-works/pi-ai";
-import { parseModelRef } from "../config.ts";
+import { isReasoning, parseModelRef, REASONING } from "../config.ts";
 import { LIMIT_LABELS, type LimitEntry } from "../limits.ts";
 import { newestFirst } from "../model-catalog.ts";
 import { modelAccess, modelFacts } from "../model-info.ts";
 import type { AccountStatus, AccountsSummary, ModelCatalog, ProviderModels, Roles } from "../protocol.ts";
-import { isReasoning, REASONING } from "../reasoning.ts";
 import { ACCOUNTS, SEARCH_PROVIDERS, type SearchProviderId } from "./catalog.ts";
 import type { SettingsStore } from "./store.ts";
 

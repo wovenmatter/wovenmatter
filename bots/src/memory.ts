@@ -1,8 +1,7 @@
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { BotManager } from "./bots.ts";
-import { parseModelRef } from "./config.ts";
+import { parseModelRef, type Reasoning } from "./config.ts";
 import { type CronSchedule, parseCron, zonedParts } from "./cron.ts";
-import { type Reasoning, reasoningFor } from "./reasoning.ts";
 import { DELIVERY_KIND } from "./storage/forum.ts";
 import { displayEntry } from "./transcript.ts";
 
@@ -320,14 +319,13 @@ export class MemoryExtractor {
         continue;
       }
       const timeout = AbortSignal.timeout(this.#options.timeoutMs ?? 120_000);
-      const reasoning = reasoningFor(model, MEMORY_REASONING);
       try {
         const reply = await models
           .streamSimple(
             model,
             { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
             {
-              ...(reasoning ? { reasoning } : {}),
+              reasoning: MEMORY_REASONING,
               signal: AbortSignal.any([this.#abort.signal, timeout]),
             },
           )

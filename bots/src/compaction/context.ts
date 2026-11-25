@@ -12,7 +12,7 @@ import {
   type JsonObject,
   type Registry,
 } from "@earendil-works/pi-durable";
-import { isReasoning, type Reasoning } from "../reasoning.ts";
+import { isReasoning, type Reasoning } from "../config.ts";
 import {
   applyWindow,
   compactNative,

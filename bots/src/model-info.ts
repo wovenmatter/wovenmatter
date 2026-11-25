@@ -8,9 +8,9 @@ import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-code
 import { OPENCODE_GO_MODELS } from "@earendil-works/pi-ai/providers/opencode-go.models";
 import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.models";
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
+import { REASONING } from "./config.ts";
 import { LIMIT_LABELS, type LimitEntry } from "./limits.ts";
 import { CATALOG_ENDPOINTS } from "./model-catalog.ts";
-import { REASONING } from "./reasoning.ts";
 
 /**
  * What the runtime knows about a model, for the main model's subagent choices and Settings' model pool.
@@ -258,3 +258,4 @@ export function formatLimit(limit: LimitEntry): string {
     : "reset time unknown";
   return `${LIMIT_LABELS[limit.kind]} (${limit.account}), ${reset}`;
 }
+

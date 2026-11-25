@@ -178,7 +178,6 @@ export async function startRuntime(
     refreshModels = async (how = {}) => {
       if (!live) return;
       const problems = await refreshBotModels(live, how);
-      await manager?.reapplyProfiles();
       // Readers that shared one read share its result: say it once.
       if (reported.has(problems)) return;
       reported.add(problems);

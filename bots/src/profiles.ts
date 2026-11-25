@@ -1,5 +1,13 @@
-import { type PoolModel, PROFILE_ID, type Profile, type ProfileSet, parseModelRef } from "./config.ts";
-import { DEFAULT_REASONING, isReasoning, REASONING } from "./reasoning.ts";
+import {
+  DEFAULT_REASONING,
+  isReasoning,
+  type PoolModel,
+  PROFILE_ID,
+  type Profile,
+  type ProfileSet,
+  parseModelRef,
+  REASONING,
+} from "./config.ts";
 
 export class ProfileError extends Error {}
 

@@ -9,7 +9,7 @@ import {
   section,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { type Profile, parseModelRef } from "./config.ts";
+import { type Profile, parseModelRef, REASONING } from "./config.ts";
 import type { LimitEntry } from "./limits.ts";
 import {
   formatCapabilities,
@@ -20,7 +20,6 @@ import {
   modelAccess,
   modelFacts,
 } from "./model-info.ts";
-import { REASONING, reasoningFor } from "./reasoning.ts";
 
 export const SUBAGENT_EXTENSION = "bot-subagent";
 
@@ -269,16 +268,13 @@ export function subagentExtension(options: SubagentOptions): Extension {
             );
           }
           const model = parseModelRef(choice.model);
-          const reasoning = reasoningFor(
-            options.models?.().getModel(model.provider, model.modelId),
-            args.reasoning,
-          );
+          const reasoning = args.reasoning;
           const log = (phase: "start" | "done" | "failed", detail?: string) =>
             options.log?.({
               phase,
               model: choice.model,
               ...(choice.self ? { self: true } : {}),
-              ...(reasoning ? { reasoning } : {}),
+              reasoning,
               ...(detail ? { detail } : {}),
             });
           log("start");
@@ -298,7 +294,7 @@ export function subagentExtension(options: SubagentOptions): Extension {
               });
               await configure(tx, created.id, {
                 model,
-                thinkingLevel: reasoning ?? null,
+                thinkingLevel: reasoning,
                 instructions: CHILD_INSTRUCTIONS,
                 extensions: { remove: [extension, ...(options.removeFromChild ?? [])] },
               });
@@ -309,7 +305,7 @@ export function subagentExtension(options: SubagentOptions): Extension {
                 conversationId: child,
                 model: choice.model,
                 ...(choice.self ? { self: true } : {}),
-                ...(reasoning ? { reasoning } : {}),
+                reasoning,
               },
               context,
             );

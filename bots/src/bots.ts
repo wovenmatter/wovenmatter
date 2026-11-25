@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
 import {
   type Conversation,
   type ConversationRecord,
@@ -10,12 +9,11 @@ import {
 } from "@earendil-works/pi-durable";
 import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { type BotHarnessOptions, defaultAgent } from "./agent.ts";
-import { type ModelRef, type Profile, parseModelRef } from "./config.ts";
+import { type ModelRef, type Profile, parseModelRef, type Reasoning } from "./config.ts";
 import { conversationId as toConversationId, entryId as toEntryId } from "./ids.ts";
 import { fallbackNote, type Limit, type LimitEntry, type ModelAvailability } from "./limits.ts";
 import { contextNote } from "./message-context.ts";
 import type { ProfileStore } from "./profiles.ts";
-import { type Reasoning, reasoningFor } from "./reasoning.ts";
 import { sharedDatabaseView } from "./storage/database.ts";
 import {
   type BotRecord,
@@ -76,8 +74,6 @@ export class Bot {
    * the main channel and threads, but never listed with them: no client opens one.
    */
   forumConversations: () => Promise<readonly number[]> = async () => [];
-  /** The bot's models (set by the manager), for clamping a profile's reasoning level to a model. */
-  models: (() => Models) | undefined;
 
   constructor(
     record: BotRecord,
@@ -108,11 +104,10 @@ export class Bot {
 
   /**
    * Point the main channel, every thread and the Forum seats at `model` (a profile's main model)
-   * at `reasoning`, clamped to the model. Conversations already on both are left alone; a change
+   * at `reasoning`. Conversations already on both are left alone; a change
    * applies from each one's next request. Returns how many conversations changed.
    */
   async applyModel(model: ModelRef, reasoning: Reasoning): Promise<number> {
-    const level = reasoningFor(this.models?.().getModel(model.provider, model.modelId), reasoning);
     const ids = [(await this.main()).id];
     for (const thread of await this.#registry.listThreads(this.id)) {
       ids.push(toConversationId(thread.conversationId));
@@ -127,11 +122,11 @@ export class Bot {
       if (
         current?.provider === model.provider &&
         current.modelId === model.modelId &&
-        agent.thinkingLevel === (level ?? "off")
+        agent.thinkingLevel === reasoning
       ) {
         continue;
       }
-      await this.harness.commit((tx) => configure(tx, id, defaultAgent(model, level)), ctx);
+      await this.harness.commit((tx) => configure(tx, id, defaultAgent(model, reasoning)), ctx);
       changed += 1;
     }
     return changed;
@@ -749,11 +744,6 @@ export class BotManager {
     return this.#reapplying;
   }
 
-  /** Re-apply every bot's profile (the model catalog changed: reasoning levels clamp anew). */
-  reapplyProfiles(): Promise<void> {
-    return this.#reapplyAll();
-  }
-
   /** Re-apply a bot's model now (a conversation was just created for it). */
   async applyProfile(id: string): Promise<void> {
     await this.#applyProfile(await this.get(id));
@@ -915,7 +905,6 @@ export class BotManager {
     this.#assigned.set(id, record.profile);
     const { attach, ...options } = this.#options.harnessOptions(record, this);
     const harness = await Harness.open(storage, options, ctx);
-    const models = options.models;
     attach?.(harness);
     const bot = new Bot(
       record,
@@ -925,7 +914,6 @@ export class BotManager {
       () => this.#noteFor(id),
       () => this.#hasModel(id),
     );
-    bot.models = typeof models === "function" ? models : () => models;
     const seats = this.#options.forumConversations;
     if (seats) bot.forumConversations = () => seats(id);
     let report: RecoveryReport;

@@ -11,17 +11,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBotHarnessOptions } from "../src/agent.ts";
 import { BotManager } from "../src/bots.ts";
 import { ProfileStore } from "../src/profiles.ts";
-import { reasoningFor } from "../src/reasoning.ts";
 import { openSharedDatabase } from "../src/storage/database.ts";
 import { tempDir } from "./helpers.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 
-/** A faux provider with a reasoning model ("think", minimal…high) and one without ("plain"). */
+/** A faux provider with a reasoning model ("think", minimal…high). */
 function models() {
   const faux = fauxProvider({
     tokensPerSecond: 5000,
-    models: [{ id: "think", reasoning: true }, { id: "plain" }],
+    models: [{ id: "think", reasoning: true }],
   });
   const registry = createModels();
   registry.setProvider(faux.provider);
@@ -35,15 +34,6 @@ describe("reasoning levels", () => {
   });
   afterEach(async () => {
     await dir.cleanup();
-  });
-
-  it("clamps to the nearest lower supported level, then the nearest higher", () => {
-    const { faux } = models();
-    const [think, plain] = faux.models;
-    expect(reasoningFor(think, "high")).toBe("high");
-    expect(reasoningFor(think, "max")).toBe("high");
-    expect(reasoningFor({ ...think, thinkingLevelMap: { minimal: null } }, "minimal")).toBe("low");
-    expect(reasoningFor(plain, "high")).toBeUndefined();
   });
 
   it("follows profile edits, profile switches and default changes", async () => {
@@ -90,7 +80,7 @@ describe("reasoning levels", () => {
     }
   });
 
-  it("runs the main model at the profile level and a subagent at the level it chose, clamped", async () => {
+  it("runs the main model at the profile level and a subagent at the level it chose", async () => {
     const { faux, registry } = models();
     const seen: (string | undefined)[] = [];
     faux.setResponses([
@@ -133,9 +123,9 @@ describe("reasoning levels", () => {
       const bot = await manager.get((await manager.create("Alpha")).id);
       const sent = await bot.send("What is 2 + 2?");
       await expect(sent.submission.wait(ctx)).resolves.toMatchObject({ status: "done" });
-      // Main turn, the subagent (max clamped to high), the main turn's follow-up.
-      expect(seen).toEqual(["medium", "high", "medium"]);
-      expect(subagents).toEqual(["high"]);
+      // Main turn, the subagent, the main turn's follow-up.
+      expect(seen).toEqual(["medium", "max", "medium"]);
+      expect(subagents).toEqual(["max"]);
     } finally {
       await manager.close();
       await db.close();
