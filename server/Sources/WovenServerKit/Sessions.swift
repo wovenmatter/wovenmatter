@@ -241,8 +241,8 @@ actor SessionHost {
   private var prompts: [Prompt] = []
   /// What the runtime last reported.
   private var configuration = SessionConfiguration()
-  /// Choices the person made that the runtime has not taken yet: it refused
-  /// them during a turn, so they are given to it again when the turn ends.
+  /// Choices the runtime takes only as it starts, made during a turn: it
+  /// starts again with them when the turn ends.
   private var pending = SessionChoices()
   /// The session's saved choices, which show while its runtime is not running.
   private var saved = SessionChoices()
@@ -470,10 +470,10 @@ actor SessionHost {
     }
   }
 
-  /// Changes the session's choices, starting or resuming its runtime first.
-  /// During a turn the choice shows and is saved at once, and the runtime is
-  /// offered it without holding up the reply or anything sent after it. A
-  /// runtime that cannot take it during the turn is given it when the turn ends.
+  /// Changes the session's choices, starting or resuming its runtime first,
+  /// and replies with what is in effect, or with the runtime's refusal.
+  /// During a turn the lane is free while the runtime answers, as for a
+  /// steer: the turn's output, Stop and messages go on meanwhile.
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
     await enter()
     defer { leave() }
@@ -488,24 +488,29 @@ actor SessionHost {
       await saveChoices()
       return shown
     }
-    pending = pending.merging(choices)
-    await saveChoices()
-    broadcast(.configuration(shown))
     let current = generation
-    Task { [weak self] in await self?.offer(choices, to: live, generation: current) }
-    return shown
-  }
-
-  /// Offers the runtime choices during a turn, with the lane free, as a
-  /// steer is: the turn's output, Stop and messages go on meanwhile.
-  private func offer(_ choices: SessionChoices, to live: any RuntimeSession, generation current: Int) async {
-    guard let reported = try? await live.configure(choices) else { return }
+    leave()
+    var reported: SessionConfiguration?
+    var failure: (any Error)?
+    do {
+      reported = try await live.configure(choices)
+    } catch RuntimeError.takenAtStart {
+      // Taken below, by starting the runtime again.
+    } catch {
+      failure = error
+    }
     await enter()
-    defer { leave() }
-    guard generation == current else { return }
-    pending = pending.removing(choices)
-    adopt(reported)
+    if let failure { throw failure }
+    if let reported, generation == current {
+      adopt(reported)
+    } else {
+      // It starts again with them: once the turn ends, or as it next starts.
+      pending = pending.merging(choices)
+      broadcast(.configuration(shown))
+      if run != .running { await applyPending() }
+    }
     await saveChoices()
+    return shown
   }
 
   /// Gives the runtime choices while no turn runs. A choice it takes only as
@@ -522,8 +527,8 @@ actor SessionHost {
     }
   }
 
-  /// Gives the runtime the choices it could not take during the turn. Those
-  /// it still refuses are dropped, and every view shows what is in effect.
+  /// Starts the runtime again with the choices it takes only as it starts,
+  /// made during the turn. Every view then shows what is in effect.
   private func applyPending() async {
     guard !pending.isEmpty, let live else { return }
     let choices = pending
@@ -670,7 +675,7 @@ actor SessionHost {
                                        cacheWrite: usage.cacheWrite)
       }
       await endTurn()
-      // Before anything starts the next turn, which takes them.
+      // Before anything starts the next turn.
       await applyPending()
       if runtimeTurn {
         runtimeTurn = false

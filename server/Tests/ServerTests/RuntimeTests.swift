@@ -260,10 +260,10 @@ func apiKeyIsSealedForEachMachineAndContentIsFetchedByDigest() async throws {
   #expect(try await a.server.secretsForTests.apiKeys().isEmpty)
 }
 
-/// A runtime with two models, two thinking levels and two permission modes
-/// that, like Pi Durable, refuses a change while a turn runs. Each turn waits
-/// for `release`. With `permissionAtStart`, like Grok Build, it takes its
-/// permission mode only as it starts.
+/// A runtime with two models, two thinking levels and two permission modes,
+/// which takes a change at any time and refuses a model it does not offer.
+/// Each turn waits for `release`. With `permissionAtStart`, like Grok Build,
+/// it takes its permission mode only as it starts.
 private final class PickyRuntime: Runtime {
   static let kind = RuntimeKind(rawValue: "picky")
   var kind: RuntimeKind { Self.kind }
@@ -298,7 +298,6 @@ private final class PickySession: RuntimeSession {
   let events: AsyncStream<RuntimeEvent>
   private let emit: AsyncStream<RuntimeEvent>.Continuation
   private let runtime: PickyRuntime
-  private let running = Mutex(false)
 
   init(runtime: PickyRuntime) {
     self.runtime = runtime
@@ -308,7 +307,7 @@ private final class PickySession: RuntimeSession {
   var configuration: SessionConfiguration { runtime.configuration }
 
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
-    guard !running.withLock({ $0 }) else { throw RuntimeError.failed("Wait for the current response.") }
+    if let model = choices.model, !["small", "large"].contains(model) { throw RuntimeError.failed("That model is not available.") }
     if runtime.permissionAtStart, let permission = choices.permission, permission != runtime.state.withLock({ $0.choices.permission }) {
       throw RuntimeError.takenAtStart
     }
@@ -317,12 +316,10 @@ private final class PickySession: RuntimeSession {
   }
 
   func send(_ turn: Turn) async throws {
-    running.withLock { $0 = true }
     Task { [self] in
       emit.yield(.text("Working"))
       await runtime.release.wait()
       emit.yield(.messageFinished)
-      running.withLock { $0 = false }
       emit.yield(.turnFinished(failure: nil, usage: nil))
     }
   }
@@ -337,7 +334,7 @@ private final class PickySession: RuntimeSession {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aChoiceTheRuntimeRefusesDuringATurnShowsAtOnceAndAppliesWhenTheTurnEnds() async throws {
+func aChoiceDuringATurnIsTakenAtOnceOrRefusedAtOnce() async throws {
   let runtime = PickyRuntime()
   let machine = try await TestMachine.start(runtime: runtime)
   defer { machine.server.stopLater() }
@@ -345,21 +342,14 @@ func aChoiceTheRuntimeRefusesDuringATurnShowsAtOnceAndAppliesWhenTheTurnEnds() a
   let session = try await client.call(CreateSession(runtime: PickyRuntime.kind, title: "Chat"))
   let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
   _ = try await client.call(SendTurn(sessionID: session.id, text: "work"))
-  var events = subscription.events.makeAsyncIterator()
-  while let event = try await events.next() { if case .text = event { break } }
+  for try await event in subscription.events { if case .text = event { break } }
 
-  let shown = try await client.call(ConfigureSession(sessionID: session.id, model: "large"))
-  #expect(shown.model == "large")
-  #expect(runtime.state.withLock { $0.choices.model } == "small")
-  #expect(try await machine.server.library.session(session.id)?.model == "large")
-
-  await runtime.release.open()
-  var idle = false
-  while let event = try await events.next() {
-    if event == .runState(.idle) { idle = true }
-    if idle, case .configuration(let configuration) = event, configuration.model == "large" { break }
-  }
+  let changed = try await client.call(ConfigureSession(sessionID: session.id, model: "large"))
+  #expect(changed.model == "large")
   #expect(runtime.state.withLock { $0.choices.model } == "large")
+  await #expect(throws: (any Error).self) { try await client.call(ConfigureSession(sessionID: session.id, model: "huge")) }
+  #expect(try await machine.server.library.session(session.id)?.model == "large")
+  await runtime.release.open()
 }
 
 @Test(.timeLimit(.minutes(1)))
@@ -397,4 +387,18 @@ func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throw
   #expect(changed.permission == "auto")
   #expect(runtime.state.withLock { ($0.opened, $0.choices.permission) } == (2, "auto"))
   #expect(try await machine.server.library.session(session.id)?.permission == "auto")
+
+  // During a turn it shows at once, and the runtime starts again once the turn ends.
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  var events = subscription.events.makeAsyncIterator()
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "work"))
+  while let event = try await events.next() { if case .text = event { break } }
+  let shown = try await client.call(ConfigureSession(sessionID: session.id, permission: "ask"))
+  #expect(shown.permission == "ask")
+  #expect(runtime.state.withLock { $0.opened } == 2)
+  await runtime.release.open()
+  while let event = try await events.next() {
+    if case .configuration(let configuration) = event, configuration.permission == "ask", runtime.state.withLock({ $0.opened }) == 3 { break }
+  }
+  #expect(runtime.state.withLock { $0.choices.permission } == "ask")
 }

@@ -96,6 +96,19 @@ test('a message sent during a turn steers it, and the turn answers once', async 
   await agent.stop();
 });
 
+test('an option changed during a turn is taken at once, and the turn goes on', async t => {
+  const { data, cwd } = await folders(t);
+  const agent = startAgent({ data, cwd });
+  const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: [] });
+  const turn = agent.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'work slowly' }] });
+  while (!agent.updates.some(item => item.update.sessionUpdate === 'tool_call')) await new Promise(resolve => setTimeout(resolve, 10));
+  const changed = await agent.request('session/set_config_option', { sessionId, configId: 'model', value: 'synthetic/echo' });
+  assert.equal(changed.error, undefined);
+  assert.equal(changed.result.configOptions.find(option => option.id === 'model').currentValue, 'synthetic/echo');
+  assert.equal((await turn).result.stopReason, 'end_turn');
+  await agent.stop();
+});
+
 test('Claude runs the first executable claude on PATH, or says it is not installed', async t => {
   const { cwd } = await folders(t);
   const [none, plain, installed] = ['none', 'plain', 'installed'].map(name => join(cwd, name));
