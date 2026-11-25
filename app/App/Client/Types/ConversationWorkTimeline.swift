@@ -311,12 +311,16 @@ public enum ConversationToolAction: Hashable, Sendable {
   case browser
   case computer
   case delegate
+  /// The model's question tool: it asked the person something.
+  case question
   case other
 
   public init(_ activity: AgentRunActivity) {
     let name = activity.workTimelineToolIdentity.lowercased()
     if activity.codeCalls != nil {
       self = .code
+    } else if activity.questions != nil {
+      self = .question
     } else if name.contains("bash") || name.contains("shell") || name == "exec" || name == "execute"
       || name.contains("command") || name.contains("terminal") {
       self = .command
@@ -378,6 +382,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .browser: "Used the browser \(count) \(plural ? "times" : "time")"
     case .computer: "Used the computer \(count) \(plural ? "times" : "time")"
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
+    case .question: plural ? "Asked questions \(count) times" : "Asked questions"
     case .other: "Used \(count) \(plural ? "tools" : "tool")"
     }
   }
@@ -394,6 +399,7 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .browser: active ? "Using the browser" : "Used the browser"
     case .computer: active ? "Using the computer" : "Used the computer"
     case .delegate: active ? "Delegating a task" : "Delegated a task"
+    case .question: active ? "Asking a question" : "Asked a question"
     case .other: active ? "Using a tool" : "Used a tool"
     }
   }

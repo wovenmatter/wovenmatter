@@ -812,6 +812,12 @@ private struct ConversationActivityDetails: View {
                 ConversationCodeScript(source: field(\.rawInputJSON))
                 ConversationCodeCallList(calls: calls)
                 rawBlock("Output", field(\.rawOutputJSON))
+            } else if let questions = field(\.questions) {
+                // Each question with its answer; a dismissed one says how it ended.
+                ConversationQuestionList(questions: questions, isLive: isLive)
+                if activity.workTimelineIsFailure, let reason = field(\.rawOutputJSON)?.nonempty {
+                    Text(reason).font(.system(size: 12.5)).foregroundStyle(WovenPalette.danger).textSelection(.enabled)
+                }
             } else if activity.kind != .thought {
                 rawBlock("Input", field(\.rawInputJSON))
                 rawBlock("Output", field(\.rawOutputJSON))
@@ -990,6 +996,37 @@ private struct ConversationCodeCallList: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(calls) { call in ConversationCodeCallRow(call: call) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The questions the model asked with its question tool, each with the answer given.
+private struct ConversationQuestionList: View {
+    let questions: [AgentRunQuestion]
+    let isLive: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(questions) { question in
+                VStack(alignment: .leading, spacing: 3) {
+                    let title = question.title?.nonempty
+                    Text(title ?? question.text)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(WovenPalette.foreground.opacity(0.72))
+                    if title != nil, question.text.nonempty != nil {
+                        Text(question.text).font(.system(size: 11.5)).foregroundStyle(WovenPalette.mutedForeground)
+                    }
+                    if let answer = question.answer, !answer.isEmpty {
+                        Text(answer.joined(separator: ", ")).font(.system(size: 12.5)).foregroundStyle(WovenPalette.foreground)
+                    } else {
+                        Text(question.answer == nil ? (isLive ? "Waiting for an answer" : "Not answered") : "Left unanswered")
+                            .font(.system(size: 12.5)).foregroundStyle(WovenPalette.mutedForeground)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -1299,6 +1336,7 @@ private extension ConversationToolAction {
         case .webSearch, .webFetch, .browser: "globe"
         case .computer: "desktopcomputer"
         case .delegate: "person.2"
+        case .question: "questionmark.bubble"
         case .other: "wrench.and.screwdriver"
         }
     }

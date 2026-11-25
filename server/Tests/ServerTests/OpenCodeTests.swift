@@ -777,3 +777,32 @@ private func schemaProblems(_ value: JSONValue, _ schema: JSONValue, at path: St
   }
   return problems
 }
+
+/// OpenCode's question tool is a `.question` call holding each question with
+/// what the person answered, in the order asked; a dismissed one is failed
+/// and keeps its questions unanswered.
+@Test func openCodeQuestionToolCarriesItsQuestionsAndAnswers() throws {
+  let input = #"{"questions":[{"header":"Favourite colour","question":"Which colour?","options":[{"label":"Red","description":"r"},{"label":"Green","description":"g"}]},{"header":"Fruits","question":"Which fruits?","multiple":true,"options":[{"label":"Pear","description":"p"},{"label":"Plum","description":"q"}]},{"header":"Nickname","question":"Your nickname?","options":[]}]}"#
+  func asked(_ end: String) -> ToolCall? {
+    project([
+      #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m1"}}"#,
+      #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"question"}}"#,
+      #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","input":\#(input)}}"#,
+      end,
+    ]).compactMap { event -> ToolCall? in
+      if case .tool(_, let call, true) = event { return call }
+      return nil
+    }.last
+  }
+  let answered = try #require(asked(#"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","content":[{"type":"text","text":"User has answered your questions"}],"metadata":{"answers":[["Green"],["Pear","Plum"],[]]}}}"#))
+  #expect(answered.kind == .question && !answered.failed)
+  #expect(answered.questions == [
+    ToolQuestion(title: "Favourite colour", text: "Which colour?", options: ["Red", "Green"], answer: ["Green"]),
+    ToolQuestion(title: "Fruits", text: "Which fruits?", options: ["Pear", "Plum"], answer: ["Pear", "Plum"]),
+    ToolQuestion(title: "Nickname", text: "Your nickname?", answer: []),
+  ])
+
+  let dismissed = try #require(asked(#"{"type":"session.tool.failed","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","error":{"message":"The user dismissed this question"}}}"#))
+  #expect(dismissed.failed && dismissed.output == "The user dismissed this question")
+  #expect(dismissed.questions?.count == 3 && dismissed.questions?.allSatisfy { $0.answer == nil } == true)
+}

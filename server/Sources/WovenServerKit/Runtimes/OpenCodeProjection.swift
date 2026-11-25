@@ -116,6 +116,10 @@ struct OpenCodeProjection: Sendable {
           return call
         }
         call.input = Self.compactText(input)
+        if call.kind == .question {
+          call.questions = Self.questions(input)
+          return call
+        }
         call.title = Self.title(input) ?? call.title
         if call.kind == .plan { call.plan = Self.plan(input) }
         return call
@@ -167,6 +171,14 @@ struct OpenCodeProjection: Sendable {
         // succeeds with `metadata.error`.
         call.failed = failed || metadata["error"]?.bool == true
         call.title = call.kind == .code ? call.title : metadata["title"]?.string ?? call.title
+        // OpenCode's answers, one list per question in the order asked.
+        if call.kind == .question, !failed, let answers = metadata["answers"]?.array {
+          call.questions = call.questions?.enumerated().map { index, question in
+            var question = question
+            question.answer = (answers[safe: index]?.array ?? []).compactMap(\.string)
+            return question
+          }
+        }
         return call
       }
 
@@ -276,6 +288,7 @@ struct OpenCodeProjection: Sendable {
     case "webfetch", "fetch": .fetch
     case "todowrite", "todoread", "todo": .plan
     case "task", "subagent": .task
+    case "question": .question
     default: .other
     }
   }
@@ -285,6 +298,15 @@ struct OpenCodeProjection: Sendable {
       if let value = input[key]?.string, !value.isEmpty { return value }
     }
     return nil
+  }
+
+  /// The questions OpenCode's question tool asks: `header`, `question` and
+  /// `options` with their `label`s.
+  private static func questions(_ input: JSONValue) -> [ToolQuestion] {
+    (input["questions"]?.array ?? []).map { question in
+      ToolQuestion(title: question["header"]?.string, text: question["question"]?.string ?? "",
+                   options: (question["options"]?.array ?? []).compactMap { $0["label"]?.string })
+    }
   }
 
   private static func plan(_ input: JSONValue) -> [PlanEntry] {

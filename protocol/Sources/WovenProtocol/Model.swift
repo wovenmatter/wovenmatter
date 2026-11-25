@@ -240,6 +240,10 @@ public struct ToolKind: RawRepresentable, Codable, Sendable, Hashable {
   /// Woven's `render_html`: the visual reply it published is its own item
   /// (`ItemContent.visualReply`), and the call does not carry it.
   public static let visualReply = ToolKind(rawValue: "visualReply")
+  /// The model asked the person questions through its own question tool;
+  /// `questions` holds each, with the answer once there is one, and a
+  /// failed call was dismissed (`output` says how).
+  public static let question = ToolKind(rawValue: "question")
   public static let other = ToolKind(rawValue: "other")
 }
 
@@ -282,9 +286,11 @@ public struct ToolCall: Codable, Sendable, Hashable {
   /// no name whose `title` says how many more there were ("37 more tool
   /// calls").
   public var calls: [ToolCall]?
+  /// The questions a `.question` call asked, in order.
+  public var questions: [ToolQuestion]?
 
   public init(name: String, input: String, output: String? = nil, failed: Bool = false, title: String? = nil,
-              kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil) {
+              kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil, questions: [ToolQuestion]? = nil) {
     self.name = name
     self.input = input
     self.output = output
@@ -293,6 +299,26 @@ public struct ToolCall: Codable, Sendable, Hashable {
     self.kind = kind
     self.plan = plan
     self.calls = calls
+    self.questions = questions
+  }
+}
+
+/// A question a `.question` call asked, and what the person answered.
+public struct ToolQuestion: Codable, Sendable, Hashable {
+  /// A short name for the question ("Favourite colour").
+  public var title: String?
+  public var text: String
+  /// The answers offered; none when the person types theirs.
+  public var options: [String]
+  /// The options picked or the person's own words: nil until they answer,
+  /// empty when they left this question unanswered.
+  public var answer: [String]?
+
+  public init(title: String? = nil, text: String, options: [String] = [], answer: [String]? = nil) {
+    self.title = title
+    self.text = text
+    self.options = options
+    self.answer = answer
   }
 }
 

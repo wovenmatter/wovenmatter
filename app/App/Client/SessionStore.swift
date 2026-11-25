@@ -473,11 +473,18 @@ final class SessionStore {
     private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
         let script = call.kind == .code
         let calls = script ? codeCalls(call.calls ?? [], live: live) : nil
+        let questions = call.kind == .question
+            ? (call.questions ?? []).enumerated().map { AgentRunQuestion(id: $0, title: $1.title, text: $1.text, answer: $1.answer) }
+            : nil
         return AgentRunActivity(
             id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
-            title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code") : call.title ?? call.name,
-            // The tools it called, each once.
-            detail: calls.flatMap { calls in
+            title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code")
+                : questions.map { questionTitle($0.count, live: live, failed: call.failed) } ?? call.title ?? call.name,
+            // The tools it called, each once; or what the questions were about.
+            detail: questions.flatMap { questions in
+                let names = questions.map { $0.title?.nonempty ?? $0.text }.filter { !$0.isEmpty }
+                return names.isEmpty ? nil : names.joined(separator: ", ")
+            } ?? calls.flatMap { calls in
                 let names = calls.filter { $0.status != nil }.map(\.name).reduce(into: [String]()) { names, name in
                     if !names.contains(name) { names.append(name) }
                 }
@@ -488,7 +495,13 @@ final class SessionStore {
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
             subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil,
-            codeCalls: calls)
+            codeCalls: calls, questions: questions)
+    }
+
+    /// "Asked 2 questions"; while the person has not answered, "Asking 2 questions".
+    private static func questionTitle(_ count: Int, live: Bool, failed: Bool) -> String {
+        let questions = count == 1 ? "a question" : "\(count) questions"
+        return failed ? (count == 1 ? "Question dismissed" : "Questions dismissed") : (live ? "Asking " : "Asked ") + questions
     }
 
     /// A script's tool calls as its card lists them. One without output that
