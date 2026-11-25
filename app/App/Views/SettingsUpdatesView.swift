@@ -157,7 +157,7 @@ struct SettingsUpdatesView: View {
             updateRow("Update everything on this machine", detail: everythingDetail(machine),
                       request: .machine(machine.id), available: !offline && state.hasUpdate,
                       accessibility: "Update everything on \(machine.name)")
-            if machine.isThisMachine || machine.platform == .linux { appRow(machine, state) }
+            appRow(machine, state)
             harnessRows(machine, state)
         }
     }
@@ -167,11 +167,12 @@ struct SettingsUpdatesView: View {
         return "Updates \(product) and every harness on this machine."
     }
 
-    /// This Mac's Woven Matter or a Linux machine's Woven server, alone.
+    /// One machine's Woven Matter, or a Linux machine's Woven server, alone.
     private func appRow(_ machine: Machine, _ state: UpdatesStore.MachineState) -> some View {
         let outdated = state.appUpdateAvailable
         let request = UpdatesStore.Request.app(machineID: machine.id)
         let detail = machine.isThisMachine ? Self.thisMacAbout
+            : machine.platform == .mac ? "This updates Woven Matter on that Mac. It installs and relaunches there, with nothing to click."
             : outdated && state.appWaitsForThisMac ? "Update this Mac first. Its Woven Matter brings this server's update."
             : "This updates the Woven server on this machine."
         return SettingsRow(title: "Update just Woven Matter", detail: detail) {

@@ -2,7 +2,7 @@ import Foundation
 import WovenProtocol
 
 /// Carries out the browser, computer and visual-reply preview calls this Mac's server sends its UI,
-/// for as long as the app runs, and answers each one.
+/// and the update another machine asked for, for as long as the app runs, and answers each one.
 @MainActor
 final class UIToolsStore {
     private let host: WovenAutomationHost
@@ -18,6 +18,15 @@ final class UIToolsStore {
     }
 
     private func carryOut(_ call: UIToolCall, server: ServerConnection) {
+        if call.tool == "app_update" {
+            Task {
+                let failure = await DesktopUpdater.shared.updateWithoutAsking()
+                _ = try? await server.call(AnswerUITool(id: call.id, result: failure.map(ToolResult.error) ?? .text("Updating.")))
+                // Installs, quits and relaunches only once the answer has gone.
+                if failure == nil { DesktopUpdater.shared.installWhenReady() }
+            }
+            return
+        }
         Task { [host] in
             // A preview has its own web view, so it never waits on the browser or computer.
             let result = call.tool == "preview_html" ? await VisualReplyPreview().run(call.arguments) : await host.handle(call)

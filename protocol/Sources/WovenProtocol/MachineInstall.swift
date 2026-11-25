@@ -51,6 +51,18 @@ public struct UpdateServer: Request {
   public init(machineID: String) { self.machineID = machineID }
 }
 
+/// Updates Woven Matter on the Mac whose server is asked to the newest
+/// release, with no window or click there: its server opens the app if it is
+/// closed, and the app downloads the update, installs it and relaunches.
+/// Replies once the download has started, or why it could not; the Mac
+/// reports its new release when it is back. Another Mac's UI sends it
+/// straight to that Mac's server.
+public struct UpdateApp: Request {
+  public static let method = "app.update"
+  public typealias Reply = Done
+  public init() {}
+}
+
 /// Looks at a Linux machine over SSH before the server is installed there.
 /// Changes nothing.
 public struct InspectMachine: Request {

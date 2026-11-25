@@ -27,6 +27,34 @@ final class UIToolBroker: Sendable {
     return stream
   }
 
+  /// Whether a UI on this Mac is connected to take calls.
+  var hasUI: Bool { state.withLock { !$0.subscribers.isEmpty } }
+
+  /// Has the app on this Mac update itself with no window or click: opens it
+  /// when no UI is connected, then asks it. Returns once the download has
+  /// started; throws why it could not.
+  func updateApp() async throws {
+    if !hasUI {
+      guard let bundleID = Bundle.main.bundleIdentifier else {
+        throw ProtocolError(.failed, "Woven Matter is not installed as an app on this Mac.")
+      }
+      let open = Process()
+      open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+      open.arguments = ["-g", "-b", bundleID]
+      try? open.run()
+      open.waitUntilExit()
+      for _ in 0..<120 where !hasUI { try? await Task.sleep(for: .milliseconds(500)) }
+    }
+    let result = await carryOut(Self.appUpdateTool, arguments: .object([:]), sessionID: nil,
+                                absent: "Woven Matter could not be opened on this Mac to update it.")
+    guard result.isError else { return }
+    let message = result.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined(separator: " ")
+    throw ProtocolError(.failed, message)
+  }
+
+  /// The UI call that has the app update itself.
+  static let appUpdateTool = "app_update"
+
   func answer(_ id: String, _ result: ToolResult) {
     state.withLock { $0.waiting.removeValue(forKey: id) }?.resume(returning: result)
   }

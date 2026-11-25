@@ -190,6 +190,13 @@ func registerTools(_ router: inout Router, tools: WovenTools) {
     }
     return (Done(), tools.ui.subscribe().throwing)
   }
+  router.on(UpdateApp.self) { _, _ in
+    guard MachinePlatform.current == .mac else {
+      throw ProtocolError(.badRequest, "A Linux machine's server is updated from a Mac, over SSH.")
+    }
+    try await tools.ui.updateApp()
+    return Done()
+  }
   router.on(AnswerUITool.self) { request, caller in
     guard case .local = caller.origin else { throw ProtocolError(.refused, "Only the UI on this Mac answers these.") }
     tools.ui.answer(request.id, request.result)

@@ -24,6 +24,13 @@ final class DesktopUpdater: NSObject {
     @ObservationIgnored private var controller: SPUStandardUpdaterController?
     @ObservationIgnored private var observation: NSKeyValueObservation?
     @ObservationIgnored private var pendingInstallHandler: (() -> Void)?
+    /// An update another machine asked for: told once its download starts or why it can't.
+    @ObservationIgnored private var unattended: CheckedContinuation<String?, Never>?
+    /// The person's own automatic-download setting, put back after an unattended update.
+    @ObservationIgnored private var ownAutomaticDownloads: Bool?
+    /// Installs a downloaded unattended update and relaunches.
+    @ObservationIgnored private var unattendedInstall: (() -> Void)?
+    @ObservationIgnored private var installRequested = false
     #endif
 
     func start() {
@@ -64,6 +71,65 @@ final class DesktopUpdater: NSObject {
         #endif
     }
 
+    /// Downloads and installs the newest release with no window or click, for
+    /// an update another machine asked for. Returns once the download has
+    /// started (nil), or why it could not; `installWhenReady` then lets it
+    /// install and relaunch as soon as it is downloaded.
+    func updateWithoutAsking() async -> String? {
+        #if canImport(Sparkle)
+        // The app may have been opened for this request, before its updater is ready.
+        for _ in 0..<30 where controller == nil || !canCheckForUpdates {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard let controller, canCheckForUpdates, controller.updater.allowsAutomaticUpdates,
+              unattended == nil, ownAutomaticDownloads == nil, !isInstalling else {
+            return isInstalling ? nil : "Woven Matter can't update itself on this Mac right now."
+        }
+        errorMessage = nil
+        installRequested = false
+        // A background check downloads and installs without asking only with
+        // automatic downloads on, so they are on for this one check.
+        ownAutomaticDownloads = controller.updater.automaticallyDownloadsUpdates
+        controller.updater.automaticallyDownloadsUpdates = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(75))
+            guard let self, self.unattended != nil else { return }
+            self.restoreAutomaticDownloads()
+            self.endUnattended("Woven Matter didn't start downloading the update in time. Try again.")
+        }
+        return await withCheckedContinuation { continuation in
+            unattended = continuation
+            controller.updater.checkForUpdatesInBackground()
+        }
+        #else
+        return "Only the installed Woven Matter app updates itself."
+        #endif
+    }
+
+    /// Lets an unattended update install and relaunch once it is downloaded.
+    func installWhenReady() {
+        #if canImport(Sparkle)
+        installRequested = true
+        if let install = unattendedInstall {
+            unattendedInstall = nil
+            install()
+        }
+        #endif
+    }
+
+    #if canImport(Sparkle)
+    private func endUnattended(_ failure: String?) {
+        unattended?.resume(returning: failure)
+        unattended = nil
+    }
+
+    private func restoreAutomaticDownloads() {
+        guard let own = ownAutomaticDownloads else { return }
+        ownAutomaticDownloads = nil
+        controller?.updater.automaticallyDownloadsUpdates = own
+    }
+    #endif
+
     private func send(_ event: AppEvent, _ version: String?) {
         guard let report else { return }
         Task { await report(event, version) }
@@ -85,6 +151,19 @@ final class DesktopUpdater: NSObject {
 extension DesktopUpdater: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
         send(.updateDownloadStarted, item.displayVersionString)
+        endUnattended(nil)
+    }
+
+    /// A background check's update is downloaded and would install at quit. One
+    /// another machine asked for installs now and relaunches.
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        guard ownAutomaticDownloads != nil else { return false }
+        restoreAutomaticDownloads()
+        endUnattended(nil)
+        // Installing asks `shouldPostponeRelaunchForUpdate`, which reports it.
+        if installRequested { immediateInstallHandler() } else { unattendedInstall = immediateInstallHandler }
+        return true
     }
 
     func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
@@ -98,8 +177,9 @@ extension DesktopUpdater: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
         pendingInstallHandler = installHandler
         installingVersion = item.displayVersionString
-        // Sparkle asks this only when the person chose to install, just before
-        // the app quits; the report goes first, as nothing can send it after.
+        // Sparkle asks this just before the app quits to install, whether the
+        // person chose to or another machine asked; the report goes first, as
+        // nothing can send it after.
         Task {
             await sendBeforeQuitting(.updateInstallStarted, item.displayVersionString, limit: .seconds(3))
             // Enter installation outside the Swift task/main dispatch queue, so
@@ -115,6 +195,13 @@ extension DesktopUpdater: SPUUpdaterDelegate {
         return true
     }
 
+    /// A check another machine asked for that ended without a download says why.
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        guard unattended != nil else { return }
+        restoreAutomaticDownloads()
+        endUnattended(error?.localizedDescription ?? "Woven Matter found no update to download on this Mac.")
+    }
+
     func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
         hasStagedUpdate = true
     }
@@ -124,6 +211,11 @@ extension DesktopUpdater: SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        restoreAutomaticDownloads()
+        let nsError = error as NSError
+        endUnattended(nsError.domain == SUSparkleErrorDomain && nsError.code == Int(SUError.noUpdateError.rawValue)
+            ? "Woven Matter is already up to date on this Mac." : error.localizedDescription)
+        unattendedInstall = nil
         pendingInstallHandler = nil
         isInstalling = false
         hasStagedUpdate = false

@@ -26,6 +26,10 @@
     <false/>
     <key>SUAutomaticallyUpdate</key>
     <false/>
+    <!-- Lets an update another Mac asks for download and install with no window
+         (`DesktopUpdater.updateWithoutAsking`). Automatic checks and downloads stay off. -->
+    <key>SUAllowsAutomaticUpdates</key>
+    <true/>
     <key>LSMultipleInstancesProhibited</key>
     <true/>
 </dict>
