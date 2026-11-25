@@ -188,7 +188,11 @@ struct OpenCodeProjection: Sendable {
       return finishTurn(failure: data["error"]?["message"]?.string ?? stepFailure ?? "OpenCode stopped the turn.")
     case "session.execution.interrupted":
       let reason = data["reason"]?.string ?? ""
-      return finishTurn(failure: reason == "user" ? nil : "OpenCode stopped the turn (\(reason)).", interrupted: true)
+      // OpenCode reports an interruption it gives no reason for as
+      // "shutdown", as when the person dismisses a question, and its own
+      // clients show nothing for it; nor is the person stopping it a failure.
+      let quiet = reason == "user" || reason == "shutdown"
+      return finishTurn(failure: quiet ? nil : "OpenCode stopped the turn (\(reason)).", interrupted: true)
     default:
       return []
     }

@@ -490,7 +490,8 @@ final class SessionStore {
                 }
                 return names.isEmpty ? nil : names.joined(separator: ", ")
             },
-            status: live ? "running" : call.failed ? "failed" : "completed",
+            // A dismissed question is the person's choice, not a failure.
+            status: live ? "running" : call.failed && questions == nil ? "failed" : "completed",
             toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
@@ -562,6 +563,18 @@ final class SessionStore {
         } + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none) }
         var goneNotice: String?
 
+        /// A turn that ended without a reply (it failed, or the person
+        /// stopped it) still shows its work and how it ended, under an
+        /// empty reply as a visual reply's turn does.
+        func closeRun() {
+            guard let last = runs.indices.last, runs[last].assistantMessageID == nil,
+                  runs[last].status == .failed || activities.contains(where: { $0.runID == runs[last].id }) else { return }
+            let id = Self.replyID(runs[last].id)
+            messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
+                                                   status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))
+            runs[last].assistantMessageID = id
+        }
+
         func currentRun(at date: Date) -> Int {
             if runs.isEmpty {
                 runs.append(WorkspaceRunRecord(id: "run-start-\(sessionID)", conversationID: sessionID, status: .completed,
@@ -579,6 +592,7 @@ final class SessionStore {
                 case .timer, .wakeUp: .timer
                 default: nil
                 }
+                closeRun()
                 messages.append(WorkspaceMessageRecord(
                     id: entry.id, conversationID: sessionID, role: .user, content: text, status: .complete, createdAt: entry.date,
                     attachments: attachments.map {
@@ -647,11 +661,14 @@ final class SessionStore {
                     runs[runs.count - 1].status = .failed
                     runs[runs.count - 1].error = notice.text
                 } else {
+                    // A stopped turn's work shows before the notice that says it stopped.
+                    if notice.kind == .interrupted { closeRun() }
                     messages.append(WorkspaceMessageRecord(id: entry.id, conversationID: sessionID, role: .system,
                                                            content: notice.text, status: .complete, createdAt: entry.date))
                 }
             }
         }
+        if run != .running { closeRun() }
         if run == .running, let last = runs.indices.last {
             runs[last].status = .running
             runs[last].completedAt = nil

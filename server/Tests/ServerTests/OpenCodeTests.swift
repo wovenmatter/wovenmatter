@@ -805,4 +805,11 @@ private func schemaProblems(_ value: JSONValue, _ schema: JSONValue, at path: St
   let dismissed = try #require(asked(#"{"type":"session.tool.failed","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","error":{"message":"The user dismissed this question"}}}"#))
   #expect(dismissed.failed && dismissed.output == "The user dismissed this question")
   #expect(dismissed.questions?.count == 3 && dismissed.questions?.allSatisfy { $0.answer == nil } == true)
+
+  // OpenCode then ends the turn as interrupted by "shutdown", which is no failure.
+  let ended = project([
+    #"{"type":"session.step.started","data":{"sessionID":"s","assistantMessageID":"m1"}}"#,
+    #"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"shutdown"}}"#,
+  ])
+  #expect(ended.contains { if case .turnFinished(nil, _) = $0 { true } else { false } })
 }
