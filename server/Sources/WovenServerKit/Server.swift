@@ -298,7 +298,7 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
   var router = Router()
   let thisMachine = library.machineID
 
-  router.on(ListMachines.self) { _, _ in
+  @Sendable func machineStatuses() async throws -> [MachineStatus] {
     let statuses = await peers.statuses
     return try await library.machines().map { machine in
       if machine.id == thisMachine {
@@ -308,6 +308,40 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
       return MachineStatus(machine: machine, isThisMachine: false, online: status?.online ?? false,
                            appVersion: status?.appVersion, address: status?.machine.host, port: status?.machine.port)
     }
+  }
+
+  router.on(ListMachines.self) { _, _ in
+    try await machineStatuses()
+  }
+  // A peer's status lives in memory, not in the library, so the list is
+  // read again on either kind of change and sent when it differs.
+  router.subscription(SubscribeMachines.self) { _, _ in
+    let (changes, statusChanges) = (library.changes(), await peers.statusChanges())
+    let (looks, look) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let watchers = [
+      Task { for await _ in changes { look.yield() }; look.finish() },
+      Task { for await _ in statusChanges { look.yield() }; look.finish() },
+    ]
+    let first: [MachineStatus]
+    do { first = try await machineStatuses() } catch {
+      for watcher in watchers { watcher.cancel() }
+      throw error
+    }
+    let (events, continuation) = AsyncStream<[MachineStatus]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let forward = Task {
+      var last = first
+      for await _ in looks {
+        guard let now = try? await machineStatuses(), now != last else { continue }
+        last = now
+        continuation.yield(now)
+      }
+      continuation.finish()
+    }
+    continuation.onTermination = { _ in
+      forward.cancel()
+      for watcher in watchers { watcher.cancel() }
+    }
+    return (first, events.throwing)
   }
   router.on(RenameMachine.self) { request, _ in
     try await library.renameMachine(request.machineID ?? thisMachine, to: request.name)
