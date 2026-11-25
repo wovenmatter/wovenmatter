@@ -9,7 +9,7 @@
 | A chat cannot continue | The harness no longer has its session. The chat stays readable; start a new session to go on. |
 | Another machine is missing or offline | Confirm Tailscale is connected on both machines and on the same tailnet, and that Woven Matter (on a Mac) or its server (on Linux) is running there. Its chats show their saved messages until it is back. |
 | A Linux install fails | Check that this Mac can reach the machine with SSH over Tailscale, that it runs systemd, and that it is x86_64 or arm64. The error says which step failed. |
-| Machines stopped syncing | They run different releases. Open Settings → Updates and update the machine that is behind. See [Updates](updates.md). |
+| A machine says "Can't sync right now" | It runs another release, with a different library. Open Settings → Updates and update the machine that is behind. See [Updates](updates.md). |
 | An agent can't use the microphone or other apps on a Mac | Open **Settings → Permissions & Access** on the Mac that runs the chat and choose **Allow**, or **Allow all**. If a row offers **Reopen**, reopen the app after switching the permission on in System Settings. |
 | Bots won't start | Check the status in Settings → Bots. On a Mac, the first start sets up the bots' virtual machine, which takes a while. On Linux, run the install command Settings → Bots shows, once, on that machine. See [Bots](bots.md). |
 | Linked data is stale | The database's owning machine is offline; linked content shows the last copy until it is back. |

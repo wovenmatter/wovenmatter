@@ -389,7 +389,8 @@ enum UsageMachineSyncState: Hashable, Sendable {
     /// The machine is still reading its usage history.
     case scanning
     case waiting
-    case updateRequired
+    /// Online, but it can't sync until both run the same release.
+    case cannotSync
     case unavailable
 }
 

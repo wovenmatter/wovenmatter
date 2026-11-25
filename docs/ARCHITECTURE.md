@@ -120,8 +120,11 @@ events. Its types are defined once in `protocol/`.
 Every connection is pinged every 15 seconds and closed after 45 seconds of
 silence, so a machine that slept or lost power is noticed.
 
-Two machines on different app releases do not sync. The UI says which machine
-needs updating.
+Machines on any app releases link and show online to each other. They sync
+while their libraries have the same shape: each server's hello carries a digest
+of its synced tables, their rules and their columns. With different shapes
+they stay linked but pull nothing, and the UI says the machine can't sync right
+now until the one behind is updated.
 
 ## The library
 

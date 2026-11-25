@@ -34,6 +34,9 @@ public struct MachineStatus: Codable, Sendable, Hashable {
   /// This is the machine of the server that answered.
   public var isThisMachine: Bool
   public var online: Bool
+  /// False when its library has other tables or columns than this one's: it
+  /// is online but does not sync until both run the same release.
+  public var syncs: Bool
   /// The app release it last reported, when it has been reached.
   public var appVersion: String?
   /// Where its server listens on the tailnet, once this server has reached it;
@@ -41,11 +44,12 @@ public struct MachineStatus: Codable, Sendable, Hashable {
   public var address: String?
   public var port: Int?
 
-  public init(machine: Machine, isThisMachine: Bool, online: Bool, appVersion: String?,
+  public init(machine: Machine, isThisMachine: Bool, online: Bool, syncs: Bool = true, appVersion: String?,
               address: String? = nil, port: Int? = nil) {
     self.machine = machine
     self.isThisMachine = isThisMachine
     self.online = online
+    self.syncs = syncs
     self.appVersion = appVersion
     self.address = address
     self.port = port

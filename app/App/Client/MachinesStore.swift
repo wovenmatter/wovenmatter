@@ -35,7 +35,7 @@ final class MachinesStore {
             return Machine(id: status.machine.id, name: status.machine.name,
                            platform: status.machine.platform == .linux ? .linux : .mac,
                            isThisMachine: status.isThisMachine,
-                           isOnline: connection?.isConnected == true,
+                           isOnline: connection?.isConnected == true, syncs: status.syncs,
                            appVersion: (status.isThisMachine ? nil : connection?.remote?.appVersion) ?? status.appVersion,
                            runtimes: runtimes.filter(\.installed).compactMap { AgentRuntimeKind(runtime: $0.runtime) })
         }.sorted { ($0.isThisMachine ? 0 : 1, $0.name.localizedLowercase, $0.id)

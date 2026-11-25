@@ -35,6 +35,8 @@ public final class WovenServer: Sendable {
     var schedulerClock: @Sendable () -> Date = { Date() }
     /// The runtime that names new chats.
     var titleRuntime: RuntimeKind = .codex
+    /// The shape this server says its library has; tests give another.
+    var libraryShape = Schema.shape
     /// A development instance's name: servers it installs elsewhere are that instance too.
     public var instance: String?
     /// It offers the stand-in runtime, and so do servers it installs.
@@ -98,7 +100,7 @@ public final class WovenServer: Sendable {
     for runtime in options.runtimes { (runtime as? PiDurableRuntime)?.credentials.attach(secrets) }
     // Before any runtime starts, so every one inherits the git environment.
     let github = try await GitHub.start(library: library, secrets: secrets, dataFolder: options.dataFolder)
-    let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion)
+    let hello = Hello(role: .server, machine: machine, appVersion: options.appVersion, libraryShape: options.libraryShape)
     let toolKeys = ToolKeys(socketPath: try SocketFolder.path("tools.sock", for: options.dataFolder))
     let sessions = SessionManager(library: library, runtimes: options.runtimes,
                                   scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true),
@@ -108,7 +110,8 @@ public final class WovenServer: Sendable {
                         scratch: options.dataFolder.appendingPathComponent("scratch", isDirectory: true))
     let scheduler = Scheduler(library: library, sessions: sessions, now: options.schedulerClock)
     let peers = PeerSync(library: library, tailnet: options.tailnet, hello: hello, interval: options.discoveryInterval)
-    var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion)
+    var routes = makeRouter(library: library, sessions: sessions, peers: peers, appVersion: options.appVersion,
+                            libraryShape: options.libraryShape)
     registerFolders(&routes, library: library, root: options.foldersRoot)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
     registerLocalModelServers(&routes, sessions: sessions, secrets: secrets)
@@ -294,19 +297,29 @@ private final class PendingServer: Sendable {
 
 // MARK: Handlers
 
-private func makeRouter(library: Library, sessions: SessionManager, peers: PeerSync, appVersion: String) -> Router {
+private func makeRouter(library: Library, sessions: SessionManager, peers: PeerSync, appVersion: String,
+                        libraryShape: String) -> Router {
   var router = Router()
   let thisMachine = library.machineID
 
   router.on(ListMachines.self) { _, _ in
     let statuses = await peers.statuses
-    return try await library.machines().map { machine in
+    let known = try await library.machines()
+    // A machine linked but never synced here (its library has another shape)
+    // is listed as it described itself, so it still shows online. One that was
+    // removed keeps its deleted row and stays out.
+    var linkedOnly: [Machine] = []
+    for (id, status) in statuses where status.online && !known.contains(where: { $0.id == id }) {
+      if try await library.row("machines", id: id) == nil { linkedOnly.append(status.described) }
+    }
+    linkedOnly.sort { $0.name < $1.name }
+    return (known + linkedOnly).map { machine in
       if machine.id == thisMachine {
         return MachineStatus(machine: machine, isThisMachine: true, online: true, appVersion: appVersion)
       }
       let status = statuses[machine.id]
       return MachineStatus(machine: machine, isThisMachine: false, online: status?.online ?? false,
-                           appVersion: status?.appVersion, address: status?.machine.host, port: status?.machine.port)
+                           syncs: status?.syncs ?? true, appVersion: status?.appVersion, address: status?.machine.host, port: status?.machine.port)
     }
   }
   router.on(RenameMachine.self) { request, _ in
@@ -396,9 +409,10 @@ private func makeRouter(library: Library, sessions: SessionManager, peers: PeerS
     return (LibraryEvent(changed: first, tables: Schema.synced.map(\.name)), events.throwing)
   }
   router.on(SyncPull.self) { request, caller in
-    // Two machines on different app releases do not sync.
-    guard caller.hello.appVersion == appVersion else {
-      throw ProtocolError(.versionMismatch, "This machine runs \(appVersion).", machineID: thisMachine)
+    // Libraries of different shapes do not sync, whatever the releases.
+    guard caller.hello.libraryShape == libraryShape else {
+      throw ProtocolError(.librariesDiffer, "This machine runs \(appVersion), with a library of another shape.",
+                          machineID: thisMachine)
     }
     return try await library.pull(after: request.after, limit: min(max(request.limit, 1), 2000))
   }
