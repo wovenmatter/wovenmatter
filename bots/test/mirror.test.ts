@@ -141,6 +141,10 @@ describe("a bot's turns in the library", () => {
   let server: FakeServer;
   let library: Library;
   const visualReply = { title: "Sales", height: 320, digest: "b".repeat(64), size: 14 };
+  // Woven's tools answer with a value, given also as its JSON text.
+  const places = { machines: [{ id: "studio", name: "Studio", runtimes: ["piDurable"] }] };
+  const placesText = JSON.stringify(places);
+  const shown = { shownIn: "forum", title: "Sales" };
   afterEach(async () => {
     await server.close();
     await app.close();
@@ -178,12 +182,22 @@ describe("a bot's turns in the library", () => {
       "tools.list": () => ({
         allowed: true,
         instructions: "",
-        tools: ["list_places", "render_html"].map((name) => ({ name, description: name, inputSchema: { type: "object", properties: {} } })),
+        tools: ["list_places", "render_html"].map((name) => ({
+          name,
+          description: name,
+          inputSchema: { type: "object", properties: {} },
+          outputSchema: { type: "object", properties: {} },
+        })),
       }),
       "tools.call": ({ name }) =>
         name === "render_html"
-          ? { content: [{ type: "text", text: "Shown in the Forum." }], isError: false, _meta: { wovenVisualReply: visualReply } }
-          : { content: [{ type: "text", text: "Studio: piDurable" }], isError: false },
+          ? {
+              content: [{ type: "text", text: JSON.stringify(shown) }],
+              isError: false,
+              structuredContent: shown,
+              _meta: { wovenVisualReply: visualReply },
+            }
+          : { content: [{ type: "text", text: placesText }], isError: false, structuredContent: places },
     });
     const { bot } = await server.request<{ bot: BotSummary }>("bots.create", { name: "Ada" });
     await server.until(() => server.calls("tools.list").some((call) => call.botId === bot.id));
@@ -202,7 +216,7 @@ describe("a bot's turns in the library", () => {
     expect(items.map((item) => [item.kind, item.text ?? item.tool])).toEqual([
       ["user", "look it up"],
       ["thinking", "Ask Woven first."],
-      ["tool", { name: "woven_list_places", input: "{}", output: "Studio: piDurable", failed: false }],
+      ["tool", { name: "woven_list_places", input: "{}", output: placesText, failed: false }],
       ["assistant", "Here it is."],
     ]);
     // From the session that sent it, not the person; each model turn's usage once.
@@ -225,7 +239,7 @@ describe("a bot's turns in the library", () => {
     // The seat's work, but not its posts, its visual reply or its private words.
     expect(seatItems().map(({ name, item }) => [name, item.kind, item.conversationId, item.text ?? item.tool])).toEqual([
       ["Ada", "thinking", 1, "Ask Woven first."],
-      ["Ada", "tool", 1, { name: "woven_list_places", input: "{}", output: "Studio: piDurable", failed: false }],
+      ["Ada", "tool", 1, { name: "woven_list_places", input: "{}", output: placesText, failed: false }],
     ]);
     const [asked, shown] = posts();
     const call = seatItems()[1]?.item;

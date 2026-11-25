@@ -102,7 +102,7 @@ func piDurablesCopyOfTheToolCatalogIsTheCatalog() throws {
     .appending(path: "default-agent/test/fixtures/woven-catalog.json")
   let catalog = JSONValue.array(wovenToolCatalog().map { tool in
     .object(["name": .string(tool.name), "description": .string(tool.description), "inputSchema": tool.input,
-             "readOnly": .bool(tool.readOnly)])
+             "outputSchema": tool.output, "readOnly": .bool(tool.readOnly), "images": .bool(tool.images)])
   })
   if ProcessInfo.processInfo.environment["WOVEN_WRITE_TOOL_CATALOG"] == "1" {
     let encoder = JSONEncoder()

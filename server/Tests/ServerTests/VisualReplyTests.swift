@@ -108,6 +108,7 @@ func aBotIsOfferedTheHostsToolsButNothingOnTheHostIsReadForItsVisualReply() asyn
   guard case .text(let text)? = previewed.content.first else { Issue.record("No preview text"); return }
   let output = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
   #expect(output["missingImages"]?.array == [.string(image.path)])
+  #expect(previewed.structuredContent == output)
 
   let result = await tools.call("render_html", arguments: .object(["html": .string(html)]), caller: bot)
   #expect(!result.isError)

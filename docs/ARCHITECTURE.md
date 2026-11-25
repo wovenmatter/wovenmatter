@@ -357,6 +357,12 @@ window holds, and returns a screenshot; it saves nothing.
   the session in each call. It offers the tools only in its Code Mode, to
   scripts, so its instructions list each tool's exact call. The bots runtime
   asks for the tools over its own connection to the server.
+- Each tool declares the shape of its result, and every success is one JSON
+  object of that shape, given to MCP as structured content and as its text, so
+  a script gets a value it can use and pass back: an id is named as the
+  argument that takes it. A failure is an error result with text alone.
+  `preview_html`, `browser` and `computer` put their images beside that
+  object, never in it. Old transcripts keep the text their tools returned.
 - The tools are in groups, and each session is offered only the groups it may
   use. A tool in no group (goals, places, `render_html`, `preview_html`) is
   always offered to sessions. Bots are offered only the tools meant for them,

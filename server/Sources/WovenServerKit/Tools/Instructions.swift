@@ -27,16 +27,19 @@ enum WovenInstructions {
     let calls = catalog.map { tool in
       let summary = tool.description.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
       return "- " + (signature(tool, namespace: namespace) ?? "tools.\(namespace).\(tool.name)(input)")
-        + (summary.isEmpty ? "" : " // " + summary)
+        + " → " + returns(tool) + (summary.isEmpty ? "" : " // " + summary)
     }
     return """
       Here the `woven` tools work only in JavaScript inside `execute`: `await tools.\(namespace).<tool>({ … })`. \
       The Code Mode catalog shows only a few of them, but every one is listed below with its exact arguments, so \
       call it directly; never `search` for a `woven` tool.
-      - A tool's result is its text, already parsed when it is JSON. A tool that fails throws an Error with its \
-      message; catch it to go on.
+      - Every `woven` tool resolves to a JSON object, whose shape follows `→` below: lists are arrays of \
+      objects under one name, and a field that is false or empty is left out. Ids are named as the arguments \
+      that take them (`sessionID`, `artifactID`, `databaseID`, `scheduleID`), so pass them straight back. A tool \
+      that fails rejects with an Error with its message; catch it to go on. One rejected call fails a whole \
+      `Promise.all` unless each call is caught.
       - Images a tool returns (`preview_html`, and screenshots and snapshots from `browser` and `computer`) reach \
-      you with the script's result. The script sees only their text, so it need not return them.
+      you with the script's result. The script sees only their object, so it need not return them.
       - A script has no timers and stops at the first syntax error, so write it whole: close every bracket, quote \
       and backtick.
       - To show or check a large page, write it to an HTML file with your own tools and give `render_html` or \
@@ -63,6 +66,29 @@ enum WovenInstructions {
       fields.append(name + (required.contains(name) ? ": " : "?: ") + type)
     }
     return call + "({ " + fields.joined(separator: ", ") + " })"
+  }
+
+  /// A tool's value as its call's line shows it, by field names alone:
+  /// `{ sessions: { id, title, runtime, state }[] }`.
+  static func returns(_ tool: WovenTool) -> String { shape(tool.output) ?? "object" }
+
+  private static func shape(_ schema: JSONValue) -> String? {
+    guard case .object(let properties)? = schema["properties"], !properties.isEmpty else { return nil }
+    let fields = properties.keys.sorted { order($0, $1, in: schema) }.map { name -> String in
+      let property = properties[name] ?? .null
+      if property["type"]?.string == "array" {
+        return property["items"].flatMap(shape).map { "\(name): \($0)[]" } ?? "\(name)[]"
+      }
+      return shape(property).map { "\(name): \($0)" } ?? name
+    }
+    return "{ " + fields.joined(separator: ", ") + " }"
+  }
+
+  /// `id` first, then the required fields, then the rest by name.
+  private static func order(_ first: String, _ second: String, in schema: JSONValue) -> Bool {
+    let required = (schema["required"]?.array ?? []).compactMap(\.string)
+    func rank(_ name: String) -> Int { name == "id" ? 0 : required.contains(name) ? 1 : 2 }
+    return (rank(first), first) < (rank(second), second)
   }
 
   /// A schema's TypeScript type: the plain JSON Schema types, string enums,

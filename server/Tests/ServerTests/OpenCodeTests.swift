@@ -401,11 +401,16 @@ private final class ToolSocket: @unchecked Sendable {
   }
 
   func call(_ name: String, _ arguments: JSONValue, session: String) async -> (text: String, failed: Bool) {
-    let result = await request("tools/call", .object([
-      "name": .string(name), "arguments": arguments, "_meta": .object(["ai.opencode/sessionID": .string(session)]),
-    ]))
+    let result = await result(name, arguments, session: session)
     let text = (result?["content"]?.array ?? []).compactMap { $0["text"]?.string }.joined(separator: "\n")
     return (result == nil ? "No answer." : text, result?["isError"]?.bool ?? true)
+  }
+
+  /// The whole result of one call.
+  func result(_ name: String, _ arguments: JSONValue, session: String) async -> JSONValue? {
+    await request("tools/call", .object([
+      "name": .string(name), "arguments": arguments, "_meta": .object(["ai.opencode/sessionID": .string(session)]),
+    ]))
   }
 
   private func send(_ value: JSONValue) {
@@ -568,7 +573,7 @@ func everyWovenToolAnswersAnOpenCodeScriptAsItsSession() async throws {
   for tool in catalog {
     #expect(tool.name.wholeMatch(of: /[A-Za-z_$][A-Za-z0-9_$]*/) != nil, "\(tool.name)")
     let call = try #require(WovenInstructions.signature(tool, namespace: "woven"), "\(tool.name)")
-    #expect(access.instructions.contains("- " + call + " // "), "\(tool.name)")
+    #expect(access.instructions.contains("- " + call + " → " + WovenInstructions.returns(tool) + " // "), "\(tool.name)")
   }
 
   let when = "2030-01-01T09:00:00Z"
@@ -609,7 +614,11 @@ func everyWovenToolAnswersAnOpenCodeScriptAsItsSession() async throws {
     let result = await socket.call(name, arguments, session: "ses_planner")
     #expect(!result.text.contains("not one Woven Matter runs") && !result.text.contains("has no tool"), "\(name): \(result.text)")
     #expect(result.failed == !succeeds, "\(name): \(result.text)")
-    if name == "list_sessions" { #expect(result.text.contains("Planner (you)")) }
+    if name == "list_sessions" {
+      let planner = try? JSONDecoder().decode(JSONValue.self, from: Data(result.text.utf8))["sessions"]?.array?
+        .first { $0["id"]?.string == session.id }
+      #expect(planner?["you"] == .bool(true) && planner?["title"]?.string == "Planner", "\(result.text)")
+    }
     // A failure is kept for the session's projection to show in the script's card.
     if !succeeds { #expect(OpenCodeToolFailures.shared.claim(session: "ses_planner", tool: name, input: arguments) == result.text, "\(name)") }
   }
@@ -619,4 +628,152 @@ func everyWovenToolAnswersAnOpenCodeScriptAsItsSession() async throws {
   #expect(reply?.digest == Library.digest(of: Data(html.utf8)) && reply?.title == "Plan")
   // A native session Woven Matter does not run is refused.
   #expect(await socket.call("list_sessions", .object([:]), session: "ses_other").text.contains("not one Woven Matter runs"))
+}
+
+/// Every Woven tool's success is its value: `structuredContent` that its
+/// declared output schema accepts, and the same JSON, compact, as its text,
+/// with any image after it. A failure is its text alone. The calls hand
+/// each other the ids they return, as a script does.
+@Test(.timeLimit(.minutes(2)))
+func everyWovenToolAnswersWithAValueItsOutputSchemaDescribes() async throws {
+  let (server, ui) = try await startServer(RecordedOpenCode())
+  defer { server.stopLater() }
+  let session = try await ui.call(CreateSession(runtime: .openCode, title: "Planner"))
+  _ = try await ui.call(UpdateSession(sessionID: session.id, tools: Set(ToolGroup.allCases)))
+  try await server.library.setNativeSession(session.id, runtime: .openCode, handle: "ses_planner")
+  _ = try await server.library.updateSession(session.id, goal: .some("Plan the week"))
+  let builder = try await ui.call(CreateSession(runtime: StandInRuntime.kind, title: "Builder"))
+  let page = FileManager.default.temporaryDirectory.appendingPathComponent("woven-\(UUID().uuidString).html")
+  try Data("<!doctype html><title>Plan</title><p>From a file</p>".utf8).write(to: page)
+  defer { try? FileManager.default.removeItem(at: page) }
+
+  // This Mac's UI, answering as the app does: JSON text, and an image for a preview.
+  let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+  let asked = try await ui.subscribe(SubscribeUITools())
+  let answering = Task {
+    for try await call in asked.events {
+      let content: [ToolContent] = switch (call.tool, call.arguments["action"]?.string) {
+      case ("browser", _): [.text(#"[{"tabId":"t1","url":"https://example.com","title":"Example","loading":false}]"#)]
+      case ("computer", _): [.text(#"{"engine":"cua","screenRecording":true,"accessibility":true}"#)]
+      default: [.text(#"{"width":728,"contentHeight":120,"capturedHeight":120}"#), .image(data: png, mimeType: "image/png")]
+      }
+      _ = try await ui.call(AnswerUITool(id: call.id, result: ToolResult(content: content)))
+    }
+  }
+  defer { answering.cancel() }
+
+  let access = try #require(server.toolKeysForTests.access(.runtime(.openCode)))
+  let socket = try ToolSocket(access)
+  let listed = await socket.request("tools/list", .object([:]))?["tools"]?.array ?? []
+  let catalog = wovenToolCatalog()
+  for tool in catalog {
+    let entry = listed.first { $0["name"]?.string == tool.name }
+    #expect(entry?["outputSchema"] == tool.output && tool.output["type"]?.string == "object", "\(tool.name)")
+    #expect(entry?["_meta"]?["wovenImages"]?.bool == (tool.images ? true : nil), "\(tool.name)")
+  }
+
+  var values: [String: JSONValue] = [:]
+  func value(_ name: String, _ key: String) -> JSONValue { values[name]?[key] ?? .null }
+  let when = "2030-01-01T09:00:00Z"
+  // Each call's arguments, from the values before it.
+  let calls: [(String, () -> JSONValue)] = [
+    ("list_sessions", { .object([:]) }),
+    ("start_session", { .object(["runtime": .string(StandInRuntime.kind.rawValue), "title": .string("Helper"), "message": .string("Hello")]) }),
+    ("send_to_session", { .object(["sessionID": .string(builder.id), "text": .string("Hi")]) }),
+    ("stop_session", { .object(["sessionID": .string(builder.id)]) }),
+    ("read_session", { .object(["sessionID": .string(builder.id)]) }),
+    ("render_html", { .object(["path": .string(page.path)]) }),
+    ("create_artifact", { .object(["kind": .string("note"), "title": .string("Plan"), "text": .string("# Plan")]) }),
+    ("list_artifacts", { .object([:]) }),
+    ("read_artifact", { .object(["artifactID": value("create_artifact", "artifactID")]) }),
+    ("edit_artifact", { .object(["artifactID": value("read_artifact", "id"), "basedOn": value("read_artifact", "basedOn"),
+                                 "title": .string("Week")]) }),
+    ("create_database", { .object(["name": .string("Scores")]) }),
+    ("execute_database", { .object(["databaseID": value("create_database", "databaseID"),
+                                    "sql": .string("CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1)")]) }),
+    ("describe_database", { .object(["databaseID": value("create_database", "databaseID")]) }),
+    ("query_database", { .object(["databaseID": value("create_database", "databaseID"), "sql": .string("SELECT a FROM t")]) }),
+    ("list_places", { .object([:]) }),
+    ("search_library", { .object([:]) }),
+    ("list_bots", { .object([:]) }),
+    ("message_bot", { .object(["botID": .string("missing"), "text": .string("Hi")]) }),
+    ("browser", { .object(["action": .string("tabs")]) }),
+    ("computer", { .object(["action": .string("status")]) }),
+    ("preview_html", { .object(["path": .string(page.path)]) }),
+    ("create_scheduled_task", { .object(["title": .string("Daily"), "prompt": .string("Check"), "startsAt": .string(when),
+                                         "runtime": .string(StandInRuntime.kind.rawValue)]) }),
+    ("change_scheduled_task", { .object(["scheduleID": value("create_scheduled_task", "scheduleID"), "title": .string("Weekly")]) }),
+    ("list_schedules", { .object([:]) }),
+    ("delete_schedule", { .object(["scheduleID": value("create_scheduled_task", "scheduleID")]) }),
+    ("set_timer", { .object(["afterSeconds": .integer(3600), "instruction": .string("Check")]) }),
+    ("set_wake_up", { .object(["at": .string(when), "message": .string("Check")]) }),
+    ("goal_met", { .object(["evidence": .string("Done")]) }),
+  ]
+  #expect(Set(calls.map(\.0)) == Set(catalog.map(\.name)))
+  for (name, arguments) in calls {
+    let tool = try #require(catalog.first { $0.name == name })
+    let result = try #require(await socket.result(name, arguments(), session: "ses_planner"), "\(name)")
+    let content = result["content"]?.array ?? []
+    let text = content.first?["text"]?.string ?? ""
+    // Bots run on no machine here.
+    if name == "message_bot" {
+      #expect(result["isError"]?.bool == true && result["structuredContent"] == nil && content.count == 1, "\(name): \(text)")
+      continue
+    }
+    #expect(result["isError"]?.bool == false, "\(name): \(text)")
+    let structured = try #require(result["structuredContent"], "\(name): \(text)")
+    values[name] = structured
+    #expect(structured.objectValue != nil, "\(name)")
+    #expect(schemaProblems(structured, tool.output).isEmpty, "\(name): \(schemaProblems(structured, tool.output)) in \(text)")
+    #expect(text == String(decoding: try Wire.encoder.encode(structured), as: UTF8.self), "\(name): \(text)")
+    let images = content.dropFirst()
+    #expect(images.allSatisfy { $0["type"]?.string == "image" } && images.isEmpty == !(name == "preview_html"), "\(name)")
+    #expect(!text.contains(png), "\(name)")
+  }
+  // Values a script reads.
+  #expect(value("list_sessions", "sessions").array?.contains { $0["id"]?.string == session.id && $0["you"] == .bool(true) } == true)
+  #expect(value("read_session", "id").string == builder.id && value("read_session", "text").string?.isEmpty == false)
+  #expect(value("start_session", "sessionID").string?.isEmpty == false)
+  #expect(value("read_artifact", "text").string?.contains("Plan") == true)
+  #expect(value("edit_artifact", "basedOn").string != value("read_artifact", "basedOn").string)
+  #expect(value("execute_database", "changes").int == 1)
+  #expect(value("query_database", "rows") == .array([.object(["a": .string("1")])]))
+  #expect(value("describe_database", "tables").array?.first?["rowCount"]?.int == 1)
+  #expect(value("browser", "tabs").array?.first?["tabId"]?.string == "t1")
+  #expect(value("computer", "engine").string == "cua")
+  #expect(value("preview_html", "contentHeight").int == 120 && value("preview_html", "missingImages") == .array([]))
+  #expect(value("list_schedules", "schedules").array?.contains { $0["title"]?.string == "Weekly" } == true)
+  #expect(value("goal_met", "cleared") == .bool(true))
+  // A failure is its text alone.
+  let failed = try #require(await socket.result("read_artifact", .object(["artifactID": .string("missing")]), session: "ses_planner"))
+  #expect(failed["isError"]?.bool == true && failed["structuredContent"] == nil)
+}
+
+/// What is wrong with `value` by `schema`, as far as the type, properties,
+/// required and items keywords go.
+private func schemaProblems(_ value: JSONValue, _ schema: JSONValue, at path: String = "$") -> [String] {
+  var problems: [String] = []
+  if let type = schema["type"]?.string {
+    let fits = switch (type, value) {
+    case ("object", .object), ("array", .array), ("string", .string), ("boolean", .bool), ("integer", .integer): true
+    case ("number", .integer), ("number", .double): true
+    case ("null", .null): true
+    default: false
+    }
+    if !fits { return ["\(path) is not a \(type)"] }
+  }
+  if case .object(let fields) = value {
+    for name in (schema["required"]?.array ?? []).compactMap(\.string) where fields[name] == nil {
+      problems.append("\(path).\(name) is missing")
+    }
+    if case .object(let properties)? = schema["properties"] {
+      for (name, field) in fields {
+        if let property = properties[name] { problems += schemaProblems(field, property, at: "\(path).\(name)") }
+      }
+    }
+  }
+  if case .array(let items) = value, let item = schema["items"] {
+    for (index, element) in items.enumerated() { problems += schemaProblems(element, item, at: "\(path)[\(index)]") }
+  }
+  return problems
 }

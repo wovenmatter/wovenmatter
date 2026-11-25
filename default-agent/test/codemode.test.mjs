@@ -72,6 +72,9 @@ test('the codemode section declares every Woven tool, so scripts need no search,
   assert.equal(catalog.length, 28);
   for (const tool of catalog) assert.ok(prompt.includes(`### \`mcp__woven__${tool.name}\``), tool.name);
   assert.ok(prompt.includes('`await tools.mcp__woven__list_sessions({})`'));
+  // A Woven tool's declaration returns its value's shape, and one that can return images has them.
+  assert.ok(prompt.includes('Promise<{ sessions: Array<{'), prompt);
+  assert.ok(/mcp__woven__preview_html\(args: \{[\s\S]*?\}\): Promise<\{[\s\S]*?images\?: Array</.test(prompt));
   assert.ok(prompt.includes('image(result.images[0])'));
 
   settings.codeMode = 'only';
@@ -109,7 +112,7 @@ test('a change of code mode applies from the next prompt', async t => {
   await again.stop();
 });
 
-test('a script calls Woven tools, gets text, images and errors, and shows as one code call with the calls it made', async t => {
+test('a script calls Woven tools, gets their values, images and errors, and shows as one code call with the calls it made', async t => {
   const { data, cwd, log } = await folders(t);
   const agent = start(t, { data, cwd, settings: { codeMode: 'only' } });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
@@ -123,12 +126,12 @@ test('a script calls Woven tools, gets text, images and errors, and shows as one
     "const slow = await tools.mcp__woven__search_library({ query: 'slow' });",
     "const page = '<!doctype html><html><body>' + 'Quarterly sales '.repeat(400) + '</body></html>';",
     "await tools.mcp__woven__render_html({ html: page, title: 'Sales' });",
-    "text([sessions, shot.text, typeof shot, caught, slow].join(' / '));",
+    "text([sessions.sessions[0].id, sessions.sessions[0].title, shot.contentHeight, typeof shot, shot.images.length, caught, slow.items[0].title].join(' / '));",
   ].join('\n');
   const answer = await ask(agent, sessionId, `script: ${script}`);
 
   // The model gets the script's output and the image it showed.
-  for (const part of ['session-1 | Notes', 'Content height 120. / object / There is no session gone. / Found after a while.']) assert.ok(answer.includes(part), answer);
+  assert.ok(answer.includes('session-1 / Notes / 120 / object / 1 / There is no session gone. / Found after a while.'), answer);
   assert.ok(answer.includes('[images: 1]'), answer);
 
   const [announced, ...rest] = frames(agent, 'call-script-1');
@@ -183,7 +186,7 @@ test('a direct MCP call still gives the model and Woven its content as it was', 
   const agent = start(t, { data, cwd });
   const { result: { sessionId } } = await agent.request('session/new', { cwd, mcpServers: woven(log) });
   const answer = await ask(agent, sessionId, 'call: mcp__woven__preview_html {"html":"<p>hi</p>"}');
-  assert.ok(answer.includes('Content height 120.') && answer.includes('[images: 1]'), answer);
+  assert.ok(answer.includes('{"width":728,"contentHeight":120,"missingImages":[]}') && answer.includes('[images: 1]'), answer);
   const [announced, ...rest] = frames(agent, 'call-direct-1');
   assert.deepEqual(announced, { sessionUpdate: 'tool_call', toolCallId: 'call-direct-1', kind: 'other', rawInput: { html: '<p>hi</p>' }, title: 'mcp__woven__preview_html', status: 'pending' });
   const done = rest.at(-1);
@@ -204,7 +207,7 @@ test('a script a restart interrupts resumes without repeating the calls it finis
   const { data, cwd, log } = await folders(t);
   const first = start(t, { data, cwd });
   const { result: { sessionId } } = await first.request('session/new', { cwd, mcpServers: woven(log, 60000) });
-  const script = "const a = await tools.mcp__woven__list_sessions({}); const b = await tools.mcp__woven__search_library({ query: 'slow' }); text(a + ' + ' + b);";
+  const script = "const a = await tools.mcp__woven__list_sessions({}); const b = await tools.mcp__woven__search_library({ query: 'slow' }); text(a.sessions[0].title + ' + ' + b.items[0].title);";
   void first.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: `script: ${script}` }] });
   await until(() => frames(first, 'call-script-1').some(update => update._meta?.wovenCalls?.some(call => call.name === 'mcp__woven__search_library')));
   await first.stop();
@@ -213,7 +216,7 @@ test('a script a restart interrupts resumes without repeating the calls it finis
   await second.request('session/load', { sessionId, cwd, mcpServers: woven(log, 10) });
   await until(() => frames(second, 'call-script-1').some(update => update.status === 'completed'));
   const done = frames(second, 'call-script-1').at(-1);
-  assert.ok(done.content.some(item => item.content.text?.includes('session-1 | Notes | pi-durable | idle + Found after a while.')), JSON.stringify(done.content));
+  assert.ok(done.content.some(item => item.content.text?.includes('Notes + Found after a while.')), JSON.stringify(done.content));
   assert.deepEqual(done._meta.wovenCalls.map(call => [call.name, call.status]), [['mcp__woven__list_sessions', 'ok'], ['mcp__woven__search_library', 'ok']]);
   // Announced again from the live round, it keeps its source.
   const announced = frames(second, 'call-script-1')[0];

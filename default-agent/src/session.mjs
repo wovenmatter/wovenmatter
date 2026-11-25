@@ -86,7 +86,7 @@ function codemodeGuide(input, codemode, mcp) {
   if (!example) return undefined;
   return [
     `Scripts call these tools as \`tools.<identifier>\`, exactly as the codemode section declares them, for example \`await tools.${example.name}({})\`; each keeps its normal permissions.`,
-    'Such a tool resolves to its text, or to `{ text, images }` when it returned images (a screenshot from `preview_html`, `browser` or `computer`): show one with `image(result.images[0])`. It rejects with its error text when it fails.',
+    'Such a tool resolves to its value as the codemode section declares it: each Woven tool to a JSON object, whose ids are named as the arguments that take them (`sessionID`, `artifactID`), so pass them straight back. One that returned images (a screenshot from `preview_html`, `browser` or `computer`) has them as `images`: show one with `image(result.images[0])`. A tool rejects with its error text when it fails, and one rejected call fails a whole `Promise.all` unless each call is caught.',
     'A visual reply that `render_html` publishes from a script is shown in the chat as from a direct call.',
     'To show or check a large page, write it to an HTML file with your own tools and give `render_html` or `preview_html` its absolute `path` instead of `html`, rather than writing the page into the script.',
   ].join(' ');

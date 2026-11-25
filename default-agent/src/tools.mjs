@@ -104,15 +104,33 @@ export function createSearch(credentials, preferred) {
   ] });
 }
 
-// What a script gets from an MCP tool (`tools.<name>(args)` in code mode): its text, or `{ text, images }` when it
-// returned images, such as a screenshot, which the script can show with `image(result.images[0])`. The model never
-// sees this; a direct call's result is the content as it was.
+// What a script gets from an MCP tool (`tools.<name>(args)` in code mode). A tool with an output schema (each of
+// Woven's) resolves to its structured content, as its schema declares it; one that can return images, such as a
+// screenshot (`_meta.wovenImages`), also gets them as `images`, which the script can show with
+// `image(result.images[0])`. A tool without one resolves to its text, or to `{ text, images }` when it returned
+// images. The model never sees this; a direct call's result is the content as it was.
 const mcpImage = obj({ type: lit('image'), data: str(), mimeType: str() }, { open: true });
 const mcpOutput = union([str(), obj({ text: str(), images: arr(mcpImage) })]);
+const imagesOf = content => content.filter(block => block.type === 'image').map(({ data, mimeType }) => ({ type: 'image', data, mimeType }));
 function scriptValue(content) {
   const text = content.filter(block => block.type === 'text').map(block => block.text).join('\n');
-  const images = content.filter(block => block.type === 'image').map(({ data, mimeType }) => ({ type: 'image', data, mimeType }));
+  const images = imagesOf(content);
   return images.length ? { text, images } : text;
+}
+// The schema of a tool's value in a script: its output schema, with `images` when it can return them.
+function outputSchemaOf(tool) {
+  const schema = tool.outputSchema;
+  if (schema?.type !== 'object') return mcpOutput;
+  if (tool._meta?.wovenImages !== true) return schema;
+  return { ...schema, properties: { ...(schema.properties ?? {}), images: arr(mcpImage) } };
+}
+// A tool's value in a script, which its schema accepts: its structured content, with the images it returned when
+// the schema may hold them, else its text.
+function structuredValue(result, content, schema) {
+  const value = result.structuredContent;
+  if (schema === mcpOutput || value === null || typeof value !== 'object' || Array.isArray(value)) return scriptValue(content);
+  const images = imagesOf(content);
+  return images.length && (schema.properties?.images || schema.additionalProperties !== false) ? { ...value, images } : value;
 }
 
 // The session's MCP servers, as ACP describes them: one extension of tools per server, each its own code mode
@@ -134,15 +152,17 @@ export async function connectMcp(servers = [], cwd) {
     for (const tool of await client.listTools()) {
       const name = createMcpToolName(server.name, tool.name, candidate => taken.has(candidate));
       taken.add(name);
+      const outputSchema = outputSchemaOf(tool);
       tools.push(defineTool({ name, label: tool.title ?? tool.name, description: tool.description ?? tool.name,
         parameters: normalizeMcpInputSchema(tool.inputSchema),
-        structuredOutputSchema: mcpOutput,
+        structuredOutputSchema: outputSchema,
         replay: tool.annotations?.readOnlyHint ? 'safe' : 'unsafe',
         execute: async (args, _api, context) => {
           const result = await client.callTool(tool.name, args, { signal: context.abortSignal, timeoutMs: 600000 });
           const { content } = await limitMcpContent(toLlmContent(result));
           // A failure carries no value, so a script's call rejects with its text.
-          return result.isError === true ? { output: content, isError: true } : { output: content, structuredOutput: scriptValue(content) };
+          return result.isError === true ? { output: content, isError: true }
+            : { output: content, structuredOutput: structuredValue(result, content, outputSchema) };
         } }));
     }
     // Two servers whose names differ only in `-` and `_` would share one; each needs its own extension.

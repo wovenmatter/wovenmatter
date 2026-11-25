@@ -8,7 +8,10 @@ type CatalogTool = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** The JSON Schema of each success's value (`structuredContent`). */
+  outputSchema?: Record<string, unknown>;
   annotations?: { readOnlyHint?: boolean };
+  _meta?: { wovenImages?: boolean };
 };
 
 const WOVEN = "woven";
@@ -58,7 +61,9 @@ export function wovenTools(
 /**
  * A call says when it comes from the bot's Forum seat (`forum`), and its result's `_meta` becomes the
  * result's details: a visual reply `render_html` published (`wovenVisualReply`), which the chat and the
- * library copy show in its place. One published from a seat is posted to the seat's room.
+ * library copy show in its place. One published from a seat is posted to the seat's room. A success's
+ * value (`structuredContent`) comes as its first text block too, which is what the bot reads: bots
+ * have no code mode to hand the value to.
  */
 function extension(
   botId: string,
