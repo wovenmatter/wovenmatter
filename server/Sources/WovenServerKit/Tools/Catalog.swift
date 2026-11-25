@@ -371,7 +371,8 @@ private let visualReplyTools: [WovenTool] = [
       Styles and scripts go inline; libraries may load over HTTPS. It appears above your text and stays \
       in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; \
       `height` is only where it starts, and `title` defaults to the document's own <title>. The chat shows `title` \
-      above it, so do not repeat it inside the document. Absolute paths to local \
+      above it, so do not repeat it inside the document. The chat draws a frame around it, so draw no outer card or \
+      border of your own, and keep a little padding inside the body. Absolute paths to local \
       images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame \
       fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something \
       the person wants to keep and change, make an app with `create_artifact` instead.
@@ -920,12 +921,12 @@ private let uiTools: [WovenTool] = [
       Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.
       Give the same `html` or `path`. With the image come its console messages, its content height, and \
       `missingImages`: local image paths it refers to that are missing, \
-      unreadable or not images. Width defaults to 728 CSS pixels; use 390 for a phone. Appearance defaults to dark. \
+      unreadable or not images. Width defaults to 680 CSS pixels, the width of the chat's frame; use 390 for a phone. Appearance defaults to dark. \
       Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.
       """,
     input: schema(["html": text("The whole self-contained HTML document, at most 512,000 characters. Give this or `path`."),
                    "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
-                   "width": integer("240 to 1600 CSS pixels; default 728."),
+                   "width": integer("240 to 1600 CSS pixels; default 680."),
                    "appearance": choice(["light", "dark"], "Default dark.")]),
     output: previewShape.schema,
     images: true,
@@ -934,7 +935,7 @@ private let uiTools: [WovenTool] = [
       // A bot runs in its own machine: nothing on this one is read for it.
       let fromBot = call.caller.botID != nil
       let prepared = try VisualReplies.prepare(try VisualReplies.authored(call.arguments, fromBot: fromBot), readingDisk: !fromBot)
-      let width = call.arguments.int("width") ?? 728
+      let width = call.arguments.int("width") ?? 680
       guard call.arguments["width"] == nil || call.arguments.int("width") != nil, (240...1600).contains(width) else {
         throw ToolFailure("Give `width` from 240 to 1600.")
       }

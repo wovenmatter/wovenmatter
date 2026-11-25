@@ -278,7 +278,7 @@
     "readOnly" : false
   },
   {
-    "description" : "Show a chart, table, diagram or anything interactive in this chat as a visual reply: one whole self-contained HTML document, given as `html` or as the `path` of an HTML file you wrote.\nStyles and scripts go inline; libraries may load over HTTPS. It appears above your text and stays in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; `height` is only where it starts, and `title` defaults to the document's own <title>. The chat shows `title` above it, so do not repeat it inside the document. Absolute paths to local images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something the person wants to keep and change, make an app with `create_artifact` instead.",
+    "description" : "Show a chart, table, diagram or anything interactive in this chat as a visual reply: one whole self-contained HTML document, given as `html` or as the `path` of an HTML file you wrote.\nStyles and scripts go inline; libraries may load over HTTPS. It appears above your text and stays in the chat. It is not a page or an app: it is not in the library and cannot be edited. It fits its content; `height` is only where it starts, and `title` defaults to the document's own <title>. The chat shows `title` above it, so do not repeat it inside the document. The chat draws a frame around it, so draw no outer card or border of your own, and keep a little padding inside the body. Absolute paths to local images in it are embedded; every one must be there. Heights in vh, vmin or vmax are refused, since the frame fits its content. It runs sandboxed, with no access to Woven Matter, your tools or this chat. For something the person wants to keep and change, make an app with `create_artifact` instead.",
     "images" : false,
     "inputSchema" : {
       "additionalProperties" : false,
@@ -1396,7 +1396,7 @@
     "readOnly" : false
   },
   {
-    "description" : "Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.\nGive the same `html` or `path`. With the image come its console messages, its content height, and `missingImages`: local image paths it refers to that are missing, unreadable or not images. Width defaults to 728 CSS pixels; use 390 for a phone. Appearance defaults to dark. Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.",
+    "description" : "Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.\nGive the same `html` or `path`. With the image come its console messages, its content height, and `missingImages`: local image paths it refers to that are missing, unreadable or not images. Width defaults to 680 CSS pixels, the width of the chat's frame; use 390 for a phone. Appearance defaults to dark. Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.",
     "images" : true,
     "inputSchema" : {
       "additionalProperties" : false,
@@ -1418,7 +1418,7 @@
           "type" : "string"
         },
         "width" : {
-          "description" : "240 to 1600 CSS pixels; default 728.",
+          "description" : "240 to 1600 CSS pixels; default 680.",
           "type" : "integer"
         }
       },

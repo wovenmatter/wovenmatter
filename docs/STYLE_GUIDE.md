@@ -427,7 +427,10 @@ when an intentional design change is accepted.
   or other standalone event condenses only the preceding tool list into a
   reopenable disclosure. Show supplied subagent rows at their event position.
   Preserve the reader's position; follow new work
-  or reasoning only from the live edge. Between a tool and the next visible output,
+  or reasoning only from the live edge. Only the reader decides whether the
+  transcript follows: scrolling away, opening or selecting something stops it,
+  and scrolling back to the end or Latest reply resumes it; layout never does.
+  A chat opens at its end, with the end of its last reply clear of the composer. Between a tool and the next visible output,
   use a static Thinking label. Thinking is marked with a static brain, in chats
   and bot chats. While a turn runs, one row of three small dots sits under the
   last thing it shows, starting where that thing's text starts, its strong dot

@@ -19,8 +19,10 @@ enum ConversationMetrics {
     static let tight: CGFloat = 4
     static let hair: CGFloat = 2
 
-    /// The transcript's top and side insets.
-    static let topInset: CGFloat = 24
+    /// The transcript's top inset: the first message clears the workspace's
+    /// floating header buttons (a 32-point button inset 12) by an entry gap.
+    static let topInset: CGFloat = 56
+    /// The transcript's side inset.
     static let sideInset: CGFloat = 32
     /// The transcript column.
     static let column: CGFloat = 768
