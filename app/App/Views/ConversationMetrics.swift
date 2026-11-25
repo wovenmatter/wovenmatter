@@ -69,9 +69,10 @@ enum ConversationMetrics {
         static let cellLineSpacing: CGFloat = 3
         static let cellPaddingVertical: CGFloat = 8
         static let cellPaddingHorizontal: CGFloat = 10
-        /// In a table too wide for the text, the other columns wrap past this;
-        /// its widest column takes what is left.
-        static let tableShortColumnLimit: CGFloat = 240
+        /// The least a table column takes, however long its longest word.
+        static let tableColumnMinimumLimit: CGFloat = 200
+        /// Inline code up to this many characters keeps together in a table cell.
+        static let unbreakableCodeLength = 28
     }
 }
 

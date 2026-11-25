@@ -461,12 +461,18 @@ public extension AgentRunActivity {
   private func workTimelineToolLabel(active: Bool) -> String {
     let generic = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
     let label = title?.workTimelineSingleLine
-    // Keep a provider's descriptive title; bare function names gain readable
-    // action labels below. A generic title must not mask a real tool name.
-    if let label, label.contains(" "), !generic.contains(label.lowercased()) { return label }
-    let action = ConversationToolAction(self)
     let input = rawInputJSON.flatMap { $0.data(using: .utf8) }
       .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    // Keep a provider's descriptive title; bare function names gain readable
+    // action labels below. A generic title must not mask a real tool name.
+    if let label, label.contains(" "), !generic.contains(label.lowercased()) {
+      // A runtime may cut a long command short to title it: show the whole
+      // command, which the row truncates in the middle, keeping its real end.
+      if let command = (input?["command"] as? String)?.workTimelineSingleLine,
+         command.count > label.count, command.hasPrefix(label) { return command }
+      return label
+    }
+    let action = ConversationToolAction(self)
     func argument(_ key: String) -> String? {
       (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
     }
