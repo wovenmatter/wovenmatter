@@ -57,6 +57,21 @@ final class MachinesStore {
     func attach(_ connections: MachineConnections) {
         self.connections = connections
         connections.whenChanged { [weak self] in self?.connectionsChanged() }
+        following?.cancel()
+        let local = connections.local
+        following = Task { [weak self] in
+            await local.follow(SubscribeMachines(), reply: { [weak self] in self?.apply($0) },
+                               event: { [weak self] in self?.apply($0) })
+        }
+    }
+
+    /// Follows this Mac's server's machine list, so a machine its server
+    /// links after the list was first read still gets a direct connection.
+    @ObservationIgnored private var following: Task<Void, Never>?
+
+    private func apply(_ statuses: [MachineStatus]) {
+        self.statuses = statuses
+        connections?.update(statuses)
     }
 
     /// The connection to `machineID`'s server, when the UI is connected to it now.

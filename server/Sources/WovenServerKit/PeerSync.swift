@@ -24,7 +24,10 @@ actor PeerSync {
   private var discovery: Task<Void, Never>?
   private var links: [TailnetMachine: Task<Void, Never>] = [:]
   private var clients: [String: Client] = [:]
-  private(set) var statuses: [String: Status] = [:]
+  private(set) var statuses: [String: Status] = [:] {
+    didSet { for watcher in watchers.values { watcher.yield() } }
+  }
+  private var watchers: [UUID: AsyncStream<Void>.Continuation] = [:]
   /// The machines the first look at the tailnet found and has not yet
   /// pulled from or failed to reach; nil before that look.
   private var firstRound: Set<TailnetMachine>?
@@ -101,6 +104,19 @@ actor PeerSync {
   /// Where another machine's server was last reached on the tailnet.
   func address(of machineID: String) -> TailnetMachine? {
     statuses[machineID]?.machine
+  }
+
+  /// Yields whenever another machine is linked or lost, until the stream ends.
+  func statusChanges() -> AsyncStream<Void> {
+    let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let id = UUID()
+    watchers[id] = continuation
+    continuation.onTermination = { [weak self] _ in Task { await self?.unwatch(id) } }
+    return stream
+  }
+
+  private func unwatch(_ id: UUID) {
+    watchers[id] = nil
   }
 
   /// Whether this server is linked to that machine's server now.
