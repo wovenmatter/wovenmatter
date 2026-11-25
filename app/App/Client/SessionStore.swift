@@ -29,9 +29,26 @@ final class SessionStore {
     private(set) var goneNoticeID: String?
     /// Questions, approvals and forms the running turn waits on.
     private(set) var interactions: [SessionInteraction] = []
-    /// The runtime's settings, once the owner has reported them.
-    private(set) var settings: SessionSettings?
-    private(set) var isUpdatingSettings = false
+    /// The runtime's settings, once the owner has reported them, with the
+    /// choices the owner has not answered yet over them.
+    var settings: SessionSettings? {
+        guard var settings = reported else { return nil }
+        settings.model = requested.model ?? settings.model
+        settings.thinking = requested.thinking ?? settings.thinking
+        settings.permission = requested.permission ?? settings.permission
+        return settings
+    }
+    private var reported: SessionSettings?
+    /// Choices sent to the owner that it has not answered yet.
+    private var requested = SessionSettingsChange()
+    /// The last change sent; each waits for the one before, and a send waits for all.
+    @ObservationIgnored private var settingsChanges: Task<Void, Never>?
+    /// Changes sent so far, and the latest one of each setting, which alone clears it.
+    @ObservationIgnored private var changesSent = 0
+    /// Changes the owner has answered, in order, and why it refused those it refused.
+    @ObservationIgnored private var changesAnswered = 0
+    @ObservationIgnored private var refusals: [Int: any Error] = [:]
+    @ObservationIgnored private var latestChange = (model: 0, thinking: 0, permission: 0)
     private(set) var goal: WorkspaceGoal?
     private(set) var error: String?
     /// Its first view has arrived, or could not, so a chat switched to it shows it whole.
@@ -188,6 +205,13 @@ final class SessionStore {
     /// Sends a turn to the owner. Attachments go into the owner's content store
     /// first, since the turn refers to them by digest.
     func send(_ input: AgentMessageInput) async throws {
+        // The choices made before it apply to it. One the owner refused
+        // keeps it from going, so it never goes out on a choice not made.
+        let waitedFor = (changesAnswered + 1)..<(changesSent + 1)
+        await settingsChanges?.value
+        let refused = refusals.filter { waitedFor.contains($0.key) }.min { $0.key < $1.key }?.value
+        refusals = refusals.filter { $0.key >= waitedFor.upperBound }
+        if let refused { throw refused }
         guard let owner, isOwnerReachable else { throw ClientError.notConnected }
         // `/goal OBJECTIVE` sets the session's goal, which the owner works toward on every runtime.
         let text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -317,14 +341,32 @@ final class SessionStore {
         return SessionInteraction(id: prompt.id, sessionID: sessionID, request: request)
     }
 
+    /// Shows the choice at once and sends it to the owner after any sent
+    /// before it. When the owner refuses it, what is in effect shows again.
     func updateSettings(_ change: SessionSettingsChange) async {
-        isUpdatingSettings = true
-        defer { isUpdatingSettings = false }
-        await command { server in
-            let configuration = try await server.call(ConfigureSession(
-                sessionID: self.sessionID, model: change.model, thinking: change.thinking, permission: change.permission))
-            self.apply(configuration)
+        changesSent += 1
+        let number = changesSent
+        if change.model != nil { requested.model = change.model; latestChange.model = number }
+        if change.thinking != nil { requested.thinking = change.thinking; latestChange.thinking = number }
+        if change.permission != nil { requested.permission = change.permission; latestChange.permission = number }
+        let previous = settingsChanges
+        let task = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let refusal = await command { server in
+                let configuration = try await server.call(ConfigureSession(
+                    sessionID: self.sessionID, model: change.model, thinking: change.thinking, permission: change.permission))
+                self.apply(configuration)
+            }
+            changesAnswered = number
+            if let refusal { refusals[number] = refusal }
+            // A later choice of the same setting still waits for its answer.
+            if latestChange.model == number { requested.model = nil }
+            if latestChange.thinking == number { requested.thinking = nil }
+            if latestChange.permission == number { requested.permission = nil }
         }
+        settingsChanges = task
+        await task.value
     }
 
     func updateGoal(_ mutation: WorkspaceGoalMutation) async throws {
@@ -351,13 +393,20 @@ final class SessionStore {
     }
 
     /// Runs `body` on the owner's connection.
-    private func command(_ body: (ServerConnection) async throws -> Void) async {
-        guard let owner, owner.isConnected else { return error = ClientError.notConnected.localizedDescription }
+    /// Runs `body` on the owner's connection. Returns why it failed, if it did.
+    @discardableResult
+    private func command(_ body: (ServerConnection) async throws -> Void) async -> (any Error)? {
+        guard let owner, owner.isConnected else {
+            error = ClientError.notConnected.localizedDescription
+            return ClientError.notConnected
+        }
         do {
             try await body(owner)
             error = nil
+            return nil
         } catch {
             self.error = error.localizedDescription
+            return error
         }
     }
 
@@ -540,7 +589,7 @@ final class SessionStore {
             Dictionary(options.map { ($0.id, SessionOptionMetadata(name: $0.name, description: $0.detail)) },
                        uniquingKeysWith: { first, _ in first })
         }
-        settings = SessionSettings(
+        reported = SessionSettings(
             model: configuration.model, thinking: configuration.thinking, permission: configuration.permission,
             modelOptions: configuration.models.map(\.id), thinkingLevels: configuration.thinkingLevels.map(\.id),
             permissionOptions: configuration.permissionModes.map(\.id),

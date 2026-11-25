@@ -47,14 +47,17 @@ final class RunBoard: Sendable {
 /// session with it can choose from before its process has started.
 final class RuntimeConfigurations: Sendable {
   private let known: Mutex<[RuntimeKind: SessionConfiguration]>
+  /// The thinking levels each model offered, since a model's levels are its own.
+  private let levels: Mutex<[RuntimeKind: [String: [SessionOption]]]>
   /// Kept on disk, so Settings can offer a runtime's options after a restart.
   private let file: URL?
+  private let levelsFile: URL?
 
   init(file: URL? = nil) {
     self.file = file
-    let saved = file.flatMap { try? Data(contentsOf: $0) }
-      .flatMap { try? JSONDecoder().decode([String: SessionConfiguration].self, from: $0) } ?? [:]
-    known = Mutex(Dictionary(saved.map { (RuntimeKind(rawValue: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first }))
+    levelsFile = file?.deletingLastPathComponent().appendingPathComponent("runtime-thinking-levels.json")
+    known = Mutex(Self.read(file, as: SessionConfiguration.self))
+    levels = Mutex(Self.read(levelsFile, as: [String: [SessionOption]].self))
   }
 
   func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
@@ -66,12 +69,34 @@ final class RuntimeConfigurations: Sendable {
       known[kind] = configuration
       return known
     }
-    guard let all, let file else { return }
-    let saved = Dictionary(all.map { ($0.key.rawValue, $0.value) }, uniquingKeysWith: { first, _ in first })
-    try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
+    if let all { Self.write(all, to: file) }
+    guard let model = configuration.model else { return }
+    let allLevels = levels.withLock { levels -> [RuntimeKind: [String: [SessionOption]]]? in
+      guard levels[kind]?[model] != configuration.thinkingLevels else { return nil }
+      levels[kind, default: [:]][model] = configuration.thinkingLevels
+      return levels
+    }
+    if let allLevels { Self.write(allLevels, to: levelsFile) }
   }
 
   func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
+
+  /// The thinking levels `model` last offered, if it has been seen.
+  func thinkingLevels(_ kind: RuntimeKind, model: String) -> [SessionOption]? {
+    levels.withLock { $0[kind]?[model] }
+  }
+
+  private static func read<Value: Decodable>(_ file: URL?, as: Value.Type) -> [RuntimeKind: Value] {
+    let saved = file.flatMap { try? Data(contentsOf: $0) }
+      .flatMap { try? JSONDecoder().decode([String: Value].self, from: $0) } ?? [:]
+    return Dictionary(saved.map { (RuntimeKind(rawValue: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+  }
+
+  private static func write<Value: Encodable>(_ all: [RuntimeKind: Value], to file: URL?) {
+    guard let file else { return }
+    let saved = Dictionary(all.map { ($0.key.rawValue, $0.value) }, uniquingKeysWith: { first, _ in first })
+    try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
+  }
 }
 
 /// The sessions this machine owns, each with its host while it is in use.
@@ -224,7 +249,13 @@ actor SessionHost {
   private var assistantItemID: String?
   private var toolItemIDs: [String: String] = [:]
   private var prompts: [Prompt] = []
+  /// What the runtime last reported.
   private var configuration = SessionConfiguration()
+  /// Choices the runtime takes only as it starts, made during a turn: it
+  /// starts again with them when the turn ends.
+  private var pending = SessionChoices()
+  /// The session's saved choices, which show while its runtime is not running.
+  private var saved = SessionChoices()
   private var subscribers: [UUID: AsyncThrowingStream<SessionEvent, any Error>.Continuation] = [:]
   private var busy = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -275,14 +306,34 @@ actor SessionHost {
     subscribers[id] = continuation
     continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
     configuration.goal = session.goal
-    var shown = configuration
-    if live == nil {
-      shown.model = shown.model ?? session.model
-      shown.thinking = shown.thinking ?? session.thinking
-      shown.permission = shown.permission ?? session.permission
-    }
+    saved = SessionChoices(model: session.model, thinking: session.thinking, permission: session.permission)
     return (SessionSnapshot(session: session, items: items, inProgress: inProgress, run: run, prompts: prompts,
                             configuration: shown), events)
+  }
+
+  /// The configuration every view shows: the runtime's, with the person's
+  /// pending choices over it. While the runtime is not running, the saved
+  /// choices and the options it last reported on this machine stand in, so
+  /// the choices can be changed before it starts.
+  private var shown: SessionConfiguration {
+    var shown = configuration
+    if live == nil {
+      shown.model = shown.model ?? saved.model
+      shown.thinking = shown.thinking ?? saved.thinking
+      shown.permission = shown.permission ?? saved.permission
+      if let known = configurations.configuration(runtime.kind) {
+        if shown.models.isEmpty { shown.models = known.models }
+        if shown.thinkingLevels.isEmpty {
+          shown.thinkingLevels = shown.model.flatMap { configurations.thinkingLevels(runtime.kind, model: $0) } ?? known.thinkingLevels
+        }
+        if shown.permissionModes.isEmpty { shown.permissionModes = known.permissionModes }
+        if shown.commands.isEmpty { shown.commands = known.commands }
+      }
+    }
+    shown.model = pending.model ?? shown.model
+    shown.thinking = pending.thinking ?? shown.thinking
+    shown.permission = pending.permission ?? shown.permission
+    return shown
   }
 
   /// `author` marks a message another session or a bot sent through the
@@ -429,14 +480,80 @@ actor SessionHost {
     }
   }
 
+  /// Changes the session's choices, starting or resuming its runtime first,
+  /// and replies with what is in effect, or with the runtime's refusal.
+  /// During a turn the lane is free while the runtime answers, as for a
+  /// steer: the turn's output, Stop and messages go on meanwhile.
   func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
     await enter()
     defer { leave() }
     guard run != .nativeSessionGone else { throw Self.goneError }
     let live = try await openLive()
-    if !choices.isEmpty { adopt(try await live.configure(choices)) }
+    guard !choices.isEmpty else {
+      await saveChoices()
+      return shown
+    }
+    guard run == .running else {
+      try await apply(choices, to: live)
+      await saveChoices()
+      return shown
+    }
+    let current = generation
+    leave()
+    var reported: SessionConfiguration?
+    var failure: (any Error)?
+    do {
+      reported = try await live.configure(choices)
+    } catch RuntimeError.takenAtStart {
+      // Taken below, by starting the runtime again.
+    } catch {
+      failure = error
+    }
+    await enter()
+    if let failure { throw failure }
+    if let reported, generation == current {
+      // A pending choice of the same setting is replaced, also by the value in effect.
+      pending = SessionChoices(model: choices.model == nil ? pending.model : nil,
+                               thinking: choices.thinking == nil ? pending.thinking : nil,
+                               permission: choices.permission == nil ? pending.permission : nil)
+      adopt(reported)
+      broadcast(.configuration(shown))
+    } else {
+      // It starts again with them: once the turn ends, or as it next starts.
+      pending = pending.merging(choices)
+      broadcast(.configuration(shown))
+      if run != .running { await applyPending() }
+    }
     await saveChoices()
-    return configuration
+    return shown
+  }
+
+  /// Gives the runtime choices while no turn runs. A choice it takes only as
+  /// it starts, such as Grok Build's permission mode, starts it again with
+  /// the choice saved.
+  private func apply(_ choices: SessionChoices, to live: any RuntimeSession) async throws {
+    do {
+      adopt(try await live.configure(choices))
+    } catch RuntimeError.takenAtStart {
+      pending = pending.merging(choices)
+      await saveChoices()
+      await shutDown()
+      _ = try await openLive()
+    }
+  }
+
+  /// Starts the runtime again with the choices it takes only as it starts,
+  /// made during the turn. Every view then shows what is in effect.
+  private func applyPending() async {
+    guard !pending.isEmpty, let live else { return }
+    do {
+      try await apply(pending, to: live)
+      pending = SessionChoices()
+    } catch {
+      // Kept and saved: the runtime's next start takes them, or says why it cannot.
+    }
+    await saveChoices()
+    broadcast(.configuration(shown))
   }
 
   func answer(promptID: String, with answer: PromptAnswer) async throws {
@@ -576,6 +693,8 @@ actor SessionHost {
                                        cacheWrite: usage.cacheWrite)
       }
       await endTurn()
+      // Before anything starts the next turn.
+      await applyPending()
       if runtimeTurn {
         runtimeTurn = false
         return
@@ -648,7 +767,12 @@ actor SessionHost {
     generation += 1
     let current = generation
     live = opened
+    // It started with the saved choices, pending ones included. Whatever it
+    // did not take is what is saved and shown now.
+    pending = SessionChoices()
     adopt(await opened.configuration)
+    await saveChoices()
+    broadcast(.configuration(shown))
     Task { [weak self] in
       for await event in opened.events { await self?.handle(event, generation: current) }
     }
@@ -688,21 +812,27 @@ actor SessionHost {
   func goalChanged(_ goal: String?) {
     guard goal != configuration.goal else { return }
     configuration.goal = goal
-    broadcast(.configuration(configuration))
+    broadcast(.configuration(shown))
   }
 
   private func adopt(_ configuration: SessionConfiguration) {
     var configuration = configuration
     configuration.goal = self.configuration.goal
+    // A pending choice the runtime has now taken is no longer pending.
+    pending = pending.removing(SessionChoices(model: configuration.model, thinking: configuration.thinking,
+                                              permission: configuration.permission))
     guard configuration != self.configuration else { return }
     self.configuration = configuration
     configurations.set(runtime.kind, configuration)
-    broadcast(.configuration(configuration))
+    broadcast(.configuration(shown))
   }
 
+  /// Saves the choices shown, pending ones included, so a restart keeps them.
   private func saveChoices() async {
-    try? await library.setSessionChoices(sessionID, model: configuration.model, thinking: configuration.thinking,
-                                         permission: configuration.permission)
+    let shown = shown
+    saved = SessionChoices(model: shown.model ?? saved.model, thinking: shown.thinking ?? saved.thinking,
+                           permission: shown.permission ?? saved.permission)
+    try? await library.setSessionChoices(sessionID, model: shown.model, thinking: shown.thinking, permission: shown.permission)
   }
 
   private func nativeSessionGone() async throws {

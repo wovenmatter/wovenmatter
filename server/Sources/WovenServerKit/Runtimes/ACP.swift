@@ -31,6 +31,8 @@ struct ACPProfile: Sendable {
   /// Permission modes fixed when the process starts, for runtimes that take
   /// them as a launch flag rather than over ACP.
   var launchPermissions: [SessionOption] = []
+  /// The one of them this process was started with.
+  var launchedPermission: String?
   /// Answers a request the agent makes that ACP does not define; nil to
   /// refuse it.
   var handleRequest: (@Sendable (String, JSONValue) async throws -> JSONValue)?
@@ -337,6 +339,7 @@ actor ACPState {
     self.directory = directory
     if !profile.launchPermissions.isEmpty {
       configuration.permissionModes = profile.launchPermissions
+      configuration.permission = profile.launchedPermission
     }
   }
 
@@ -556,7 +559,7 @@ actor ACPState {
         capture(try await connection.request("session/set_mode", .object(["sessionId": .string(sessionID), "modeId": .string(permission)])))
         configuration.permission = permission
       } else if profile.launchPermissions.contains(where: { $0.id == permission }) {
-        throw RuntimeError.failed("\(profile.kind.rawValue) takes its permission mode when it starts; start a new session for this one.")
+        throw RuntimeError.takenAtStart
       } else {
         throw RuntimeError.failed("\(profile.kind.rawValue) has no permission modes to choose from.")
       }

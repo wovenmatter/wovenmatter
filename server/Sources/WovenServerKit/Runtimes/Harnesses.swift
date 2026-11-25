@@ -222,7 +222,7 @@ private func grokBuild(dataFolder: URL) -> ACPRuntime {
     let permission = start.choices.permission.flatMap { choice in modes.contains { $0.id == choice } ? choice : nil }
       ?? harness.defaultPermission ?? "auto"
     return ACPProfile(kind: kind, executable: grok, arguments: ["--permission-mode", permission] + harness.arguments,
-                      environment: [:], launchPermissions: modes, steering: .interject, ownTurnsEndQuietly: true,
+                      environment: [:], launchPermissions: modes, launchedPermission: permission, steering: .interject, ownTurnsEndQuietly: true,
                       logFile: logFile(dataFolder, kind, start.sessionID), tools: start.tools)
   }, statusCheck: {
     guard let harness else { return RuntimeStatus(runtime: kind, name: name, installed: false, detail: "Not in the harness catalog.") }

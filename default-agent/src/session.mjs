@@ -192,7 +192,7 @@ export class Session {
     ];
   }
   async setConfigOption(configId, value) {
-    if (this.busy) throw new AgentError('Wait for the current response before changing options.');
+    // Also during a turn: pi-durable applies a change from the turn's next model request.
     if (configId === 'model') {
       const slash = String(value).indexOf('/');
       const model = slash > 0 ? this.models.runtime.getModel(value.slice(0, slash), value.slice(slash + 1)) : undefined;

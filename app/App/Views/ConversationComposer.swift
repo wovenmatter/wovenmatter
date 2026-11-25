@@ -540,18 +540,20 @@ struct ConversationComposer: View {
                     optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
                     action: onSelectModel
                 )
-                sessionMenu(
-                    kind: .thinking,
-                    icon: .brain,
-                    title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
-                    menuTitle: "Thinking Level",
-                    accessibilityLabel: "Choose thinking level",
-                    options: sessionMetadata?.selectableThinkingLevels ?? [],
-                    selection: sessionMetadata?.thinking,
-                    optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
-                    capitalizeOptions: true,
-                    action: onSelectThinking
-                )
+                if showsThinkingControl {
+                    sessionMenu(
+                        kind: .thinking,
+                        icon: .brain,
+                        title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
+                        menuTitle: "Thinking Level",
+                        accessibilityLabel: "Choose thinking level",
+                        options: sessionMetadata?.selectableThinkingLevels ?? [],
+                        selection: sessionMetadata?.thinking,
+                        optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
+                        capitalizeOptions: true,
+                        action: onSelectThinking
+                    )
+                }
                 if showsPermissionControl {
                     permissionMenu(label: permissionLabel)
                 }
@@ -586,18 +588,20 @@ struct ConversationComposer: View {
                         optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
                         action: onSelectModel
                     )
-                    compactSessionMenu(
-                        kind: .thinking,
-                        icon: .brain,
-                        title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
-                        menuTitle: "Thinking Level",
-                        accessibilityLabel: "Choose thinking level",
-                        options: sessionMetadata?.selectableThinkingLevels ?? [],
-                        selection: sessionMetadata?.thinking,
-                        optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
-                        capitalizeOptions: true,
-                        action: onSelectThinking
-                    )
+                    if showsThinkingControl {
+                        compactSessionMenu(
+                            kind: .thinking,
+                            icon: .brain,
+                            title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata[$0]?.name ?? sessionThinkingLabel($0) } ?? "Thinking",
+                            menuTitle: "Thinking Level",
+                            accessibilityLabel: "Choose thinking level",
+                            options: sessionMetadata?.selectableThinkingLevels ?? [],
+                            selection: sessionMetadata?.thinking,
+                            optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
+                            capitalizeOptions: true,
+                            action: onSelectThinking
+                        )
+                    }
                     if showsPermissionControl {
                         permissionMenu(label: .icon)
                     }
@@ -767,8 +771,12 @@ struct ConversationComposer: View {
         if sessionControlsDisabled { return true }
         // Keep unsupported permission controls discoverable without inventing choices.
         if kind == .permission { return sessionMetadataLoading }
-        let canChange = action != nil && (options.count > 1 || options.first != selection)
-        return options.isEmpty || !canChange
+        return options.isEmpty || action == nil
+    }
+
+    /// A model without thinking levels has no thinking control.
+    private var showsThinkingControl: Bool {
+        sessionMetadataLoading || sessionMetadata?.selectableThinkingLevels.isEmpty == false
     }
 
     private func compactSessionMenu(
