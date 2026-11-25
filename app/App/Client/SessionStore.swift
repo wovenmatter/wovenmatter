@@ -45,6 +45,9 @@ final class SessionStore {
     @ObservationIgnored private var settingsChanges: Task<Void, Never>?
     /// Changes sent so far, and the latest one of each setting, which alone clears it.
     @ObservationIgnored private var changesSent = 0
+    /// Changes the owner has answered, in order, and why it refused those it refused.
+    @ObservationIgnored private var changesAnswered = 0
+    @ObservationIgnored private var refusals: [Int: any Error] = [:]
     @ObservationIgnored private var latestChange = (model: 0, thinking: 0, permission: 0)
     private(set) var goal: WorkspaceGoal?
     private(set) var error: String?
@@ -202,8 +205,13 @@ final class SessionStore {
     /// Sends a turn to the owner. Attachments go into the owner's content store
     /// first, since the turn refers to them by digest.
     func send(_ input: AgentMessageInput) async throws {
-        // The choices made before it apply to it.
+        // The choices made before it apply to it. One the owner refused
+        // keeps it from going, so it never goes out on a choice not made.
+        let waitedFor = (changesAnswered + 1)..<(changesSent + 1)
         await settingsChanges?.value
+        let refused = refusals.filter { waitedFor.contains($0.key) }.min { $0.key < $1.key }?.value
+        refusals = refusals.filter { $0.key >= waitedFor.upperBound }
+        if let refused { throw refused }
         guard let owner, isOwnerReachable else { throw ClientError.notConnected }
         // `/goal OBJECTIVE` sets the session's goal, which the owner works toward on every runtime.
         let text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -345,11 +353,13 @@ final class SessionStore {
         let task = Task { [weak self] in
             await previous?.value
             guard let self else { return }
-            await command { server in
+            let refusal = await command { server in
                 let configuration = try await server.call(ConfigureSession(
                     sessionID: self.sessionID, model: change.model, thinking: change.thinking, permission: change.permission))
                 self.apply(configuration)
             }
+            changesAnswered = number
+            if let refusal { refusals[number] = refusal }
             // A later choice of the same setting still waits for its answer.
             if latestChange.model == number { requested.model = nil }
             if latestChange.thinking == number { requested.thinking = nil }
@@ -383,13 +393,20 @@ final class SessionStore {
     }
 
     /// Runs `body` on the owner's connection.
-    private func command(_ body: (ServerConnection) async throws -> Void) async {
-        guard let owner, owner.isConnected else { return error = ClientError.notConnected.localizedDescription }
+    /// Runs `body` on the owner's connection. Returns why it failed, if it did.
+    @discardableResult
+    private func command(_ body: (ServerConnection) async throws -> Void) async -> (any Error)? {
+        guard let owner, owner.isConnected else {
+            error = ClientError.notConnected.localizedDescription
+            return ClientError.notConnected
+        }
         do {
             try await body(owner)
             error = nil
+            return nil
         } catch {
             self.error = error.localizedDescription
+            return error
         }
     }
 

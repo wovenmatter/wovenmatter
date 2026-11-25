@@ -11,6 +11,8 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 // system prompt.
 export const model = { id: 'echo', name: 'Echo', provider: 'synthetic', api: 'synthetic', baseUrl: 'synthetic://local', reasoning: false,
   input: ['text', 'image'], contextWindow: 100000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+// A second model, to switch to.
+export const other = { ...model, id: 'echo-2', name: 'Echo 2' };
 
 // The tools and system prompt in effect at the end of the transcript, from its system messages.
 function effective(context) {
@@ -85,5 +87,5 @@ export const synthetic = {
       refresh: async credential => ({ ...credential, access: 'test-key', refresh: 'renewed', expires: Date.now() + 3600000 }),
       toAuth: async credential => ({ apiKey: credential.access }) },
   },
-  getModels: () => [model], getAllModels: () => [model], stream, streamSimple: stream,
+  getModels: () => [model, other], getAllModels: () => [model, other], stream, streamSimple: stream,
 };

@@ -46,46 +46,56 @@ final class RunBoard: Sendable {
 /// The configuration each runtime last reported on this machine: what a new
 /// session with it can choose from before its process has started.
 final class RuntimeConfigurations: Sendable {
-  /// A runtime's last configuration, and the thinking levels each of its
-  /// models offered, since a model's levels are its own.
-  private struct Known: Codable, Equatable {
-    var configuration: SessionConfiguration
-    var thinkingLevels: [String: [SessionOption]] = [:]
-  }
-
-  private let known: Mutex<[RuntimeKind: Known]>
+  private let known: Mutex<[RuntimeKind: SessionConfiguration]>
+  /// The thinking levels each model offered, since a model's levels are its own.
+  private let levels: Mutex<[RuntimeKind: [String: [SessionOption]]]>
   /// Kept on disk, so Settings can offer a runtime's options after a restart.
   private let file: URL?
+  private let levelsFile: URL?
 
   init(file: URL? = nil) {
     self.file = file
-    let saved = file.flatMap { try? Data(contentsOf: $0) }
-      .flatMap { try? JSONDecoder().decode([String: Known].self, from: $0) } ?? [:]
-    known = Mutex(Dictionary(saved.map { (RuntimeKind(rawValue: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first }))
+    levelsFile = file?.deletingLastPathComponent().appendingPathComponent("runtime-thinking-levels.json")
+    known = Mutex(Self.read(file, as: SessionConfiguration.self))
+    levels = Mutex(Self.read(levelsFile, as: [String: [SessionOption]].self))
   }
 
   func set(_ kind: RuntimeKind, _ configuration: SessionConfiguration) {
     guard !configuration.models.isEmpty || !configuration.permissionModes.isEmpty else { return }
     var configuration = configuration
     configuration.goal = nil
-    let all = known.withLock { known -> [RuntimeKind: Known]? in
-      var entry = known[kind] ?? Known(configuration: configuration)
-      entry.configuration = configuration
-      if let model = configuration.model { entry.thinkingLevels[model] = configuration.thinkingLevels }
-      guard known[kind] != entry else { return nil }
-      known[kind] = entry
+    let all = known.withLock { known -> [RuntimeKind: SessionConfiguration]? in
+      guard known[kind] != configuration else { return nil }
+      known[kind] = configuration
       return known
     }
-    guard let all, let file else { return }
-    let saved = Dictionary(all.map { ($0.key.rawValue, $0.value) }, uniquingKeysWith: { first, _ in first })
-    try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
+    if let all { Self.write(all, to: file) }
+    guard let model = configuration.model else { return }
+    let allLevels = levels.withLock { levels -> [RuntimeKind: [String: [SessionOption]]]? in
+      guard levels[kind]?[model] != configuration.thinkingLevels else { return nil }
+      levels[kind, default: [:]][model] = configuration.thinkingLevels
+      return levels
+    }
+    if let allLevels { Self.write(allLevels, to: levelsFile) }
   }
 
-  func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind]?.configuration } }
+  func configuration(_ kind: RuntimeKind) -> SessionConfiguration? { known.withLock { $0[kind] } }
 
   /// The thinking levels `model` last offered, if it has been seen.
   func thinkingLevels(_ kind: RuntimeKind, model: String) -> [SessionOption]? {
-    known.withLock { $0[kind]?.thinkingLevels[model] }
+    levels.withLock { $0[kind]?[model] }
+  }
+
+  private static func read<Value: Decodable>(_ file: URL?, as: Value.Type) -> [RuntimeKind: Value] {
+    let saved = file.flatMap { try? Data(contentsOf: $0) }
+      .flatMap { try? JSONDecoder().decode([String: Value].self, from: $0) } ?? [:]
+    return Dictionary(saved.map { (RuntimeKind(rawValue: $0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
+  }
+
+  private static func write<Value: Encodable>(_ all: [RuntimeKind: Value], to file: URL?) {
+    guard let file else { return }
+    let saved = Dictionary(all.map { ($0.key.rawValue, $0.value) }, uniquingKeysWith: { first, _ in first })
+    try? JSONEncoder().encode(saved).write(to: file, options: .atomic)
   }
 }
 
@@ -502,7 +512,12 @@ actor SessionHost {
     await enter()
     if let failure { throw failure }
     if let reported, generation == current {
+      // A pending choice of the same setting is replaced, also by the value in effect.
+      pending = SessionChoices(model: choices.model == nil ? pending.model : nil,
+                               thinking: choices.thinking == nil ? pending.thinking : nil,
+                               permission: choices.permission == nil ? pending.permission : nil)
       adopt(reported)
+      broadcast(.configuration(shown))
     } else {
       // It starts again with them: once the turn ends, or as it next starts.
       pending = pending.merging(choices)
@@ -531,9 +546,12 @@ actor SessionHost {
   /// made during the turn. Every view then shows what is in effect.
   private func applyPending() async {
     guard !pending.isEmpty, let live else { return }
-    let choices = pending
-    try? await apply(choices, to: live)
-    pending = SessionChoices()
+    do {
+      try await apply(pending, to: live)
+      pending = SessionChoices()
+    } catch {
+      // Kept and saved: the runtime's next start takes them, or says why it cannot.
+    }
     await saveChoices()
     broadcast(.configuration(shown))
   }

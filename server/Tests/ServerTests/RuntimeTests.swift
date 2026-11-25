@@ -417,6 +417,9 @@ func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throw
   let shown = try await client.call(ConfigureSession(sessionID: session.id, permission: "ask"))
   #expect(shown.permission == "ask")
   #expect(runtime.state.withLock { $0.opened } == 2)
+  // Choosing the mode in effect again undoes it, and choosing it again redoes it.
+  #expect(try await client.call(ConfigureSession(sessionID: session.id, permission: "auto")).permission == "auto")
+  #expect(try await client.call(ConfigureSession(sessionID: session.id, permission: "ask")).permission == "ask")
   await runtime.release.open()
   while let event = try await events.next() {
     if case .configuration(let configuration) = event, configuration.permission == "ask", runtime.state.withLock({ $0.opened }) == 3 { break }
