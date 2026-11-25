@@ -143,12 +143,17 @@ struct SettingsUpdatesView: View {
                 SettingsStatus("Updating", tone: .neutral)
             } else if offline {
                 SettingsStatus("Offline", tone: .neutral)
+            } else if !machine.syncs {
+                SettingsStatus("Can't sync right now", tone: .warning)
             } else if state.hasUpdate {
                 SettingsStatus("Update available", tone: .warning)
             } else {
                 SettingsStatus("Up to date", tone: .good)
             }
         } content: {
+            if !offline && !machine.syncs {
+                SettingsNote("It runs another release, with a different library. Update the machine that's behind and they sync again.")
+            }
             updateRow("Update everything on this machine", detail: everythingDetail(machine),
                       request: .machine(machine.id), available: !offline && state.hasUpdate,
                       accessibility: "Update everything on \(machine.name)")
@@ -219,16 +224,16 @@ struct SettingsUpdatesView: View {
     }
 }
 
-/// Elsewhere in Settings, mismatched versions are one line that opens Settings → Updates.
+/// Elsewhere in Settings, a machine that can't sync is one line that opens Settings → Updates.
 struct UpdatesStatusLink: View {
     @Bindable var updates: UpdatesStore
     let onOpen: () -> Void
 
     var body: some View {
-        if updates.versionsDiffer || updates.running {
+        if updates.cannotSync || updates.running {
             SettingsSection {
                 SettingsSummaryLink(
-                    title: "Versions don't match",
+                    title: "Can't sync right now",
                     value: updates.running ? "Updating…" : "Open Updates",
                     tone: .warning,
                     action: onOpen

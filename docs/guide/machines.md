@@ -79,8 +79,10 @@ chat shows its saved messages and you cannot send until it is back.
 
 ## Keep versions level
 
-Two machines on different Woven Matter releases do not sync. When that
-happens, Settings shows **Versions don't match**, which opens Settings →
-Updates; it lists the release each machine runs. See [Updates](updates.md).
+Machines on different Woven Matter releases still show online to each other,
+and most releases keep syncing. When a release changes the library, the
+machines say **Can't sync right now** until the one behind is updated; in
+Settings that line opens Settings → Updates, which lists the release each
+machine runs. See [Updates](updates.md).
 
 Next: [Bots](bots.md) or [Updates](updates.md).

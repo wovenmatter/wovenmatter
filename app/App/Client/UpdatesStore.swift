@@ -63,8 +63,7 @@ final class UpdatesStore {
     func attach(_ machines: MachinesStore) { machineStore = machines }
 
     /// Per machine, by machine id: its Woven Matter, with its harnesses once read. This Mac or
-    /// a Linux machine behind the newest release, or behind another machine, has an update:
-    /// machines on different releases do not sync.
+    /// a Linux machine behind the newest release, or behind another machine, has an update.
     var machines: [String: MachineState] {
         var result: [String: MachineState] = [:]
         guard let store = machineStore, let thisVersion = store.thisMachine?.appVersion else { return result }
@@ -103,10 +102,9 @@ final class UpdatesStore {
         return result
     }
     private(set) var failures: [String] = []
-    /// Machines run different Woven Matter releases, so they do not sync.
-    var versionsDiffer: Bool {
-        guard let store = machineStore, let this = store.thisMachine?.appVersion else { return false }
-        return store.machines.contains { !$0.isThisMachine && $0.appVersion != nil && $0.appVersion != this }
+    /// Another machine is online but can't sync with this Mac until both run the same release.
+    var cannotSync: Bool {
+        machineStore?.machines.contains { $0.isOnline && !$0.syncs } ?? false
     }
 
     /// True when `version` is older than `latest`, comparing dotted numbers.

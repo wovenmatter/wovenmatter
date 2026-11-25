@@ -97,13 +97,12 @@ final class UsageStore {
 
     // MARK: Mapping
 
-    /// Each machine, this Mac first. Another machine on a different release does not sync.
+    /// Each machine, this Mac first.
     private func summaries(_ report: UsageReport) -> [UsageMachineSummary] {
         let all = machineStore?.machines ?? []
-        let thisVersion = all.first(where: \.isThisMachine)?.appVersion
         return all.map { machine in
             let state: UsageMachineSyncState = if machine.isThisMachine { .thisMachine }
-                else if let version = machine.appVersion, version != thisVersion { .updateRequired }
+                else if machine.isOnline && !machine.syncs { .cannotSync }
                 else if machine.isOnline { .synced }
                 else if report.newestByMachine[machine.id] == nil { .waiting }
                 else { .unavailable }

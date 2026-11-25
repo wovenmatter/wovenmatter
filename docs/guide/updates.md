@@ -25,8 +25,9 @@ runs and the harnesses installed on each, and updates them. The first row of
 - **Another Mac** updates Woven Matter on that Mac itself.
 - **Harnesses** are updated on each online machine.
 
-Two machines on different releases do not sync until they match, so update
-them all. Elsewhere in Settings, **Versions don't match** opens this page.
+Machines on different releases stay online to each other. When a release
+changes the library they can't sync until they match, so update them all.
+Elsewhere in Settings, **Can't sync right now** opens this page.
 
 The bots are updated from **Settings → Bots → Manage → Update bots**; see
 [Bots](bots.md).
