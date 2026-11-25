@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import WovenLibrary
 import WovenProtocol
@@ -257,4 +258,143 @@ func apiKeyIsSealedForEachMachineAndContentIsFetchedByDigest() async throws {
   _ = try await onB.call(SetAPIKey(provider: "openai", key: nil))
   for _ in 0..<200 where try await !a.server.secretsForTests.apiKeys().isEmpty { try await Task.sleep(for: .milliseconds(25)) }
   #expect(try await a.server.secretsForTests.apiKeys().isEmpty)
+}
+
+/// A runtime with two models, two thinking levels and two permission modes
+/// that, like Pi Durable, refuses a change while a turn runs. Each turn waits
+/// for `release`. With `permissionAtStart`, like Grok Build, it takes its
+/// permission mode only as it starts.
+private final class PickyRuntime: Runtime {
+  static let kind = RuntimeKind(rawValue: "picky")
+  var kind: RuntimeKind { Self.kind }
+  /// What the runtime has in effect, and how many times it was opened.
+  let state = Mutex<(choices: SessionChoices, opened: Int)>((SessionChoices(model: "small", thinking: "low", permission: "ask"), 0))
+  let release = StandInRuntime.Gate()
+  let permissionAtStart: Bool
+
+  init(permissionAtStart: Bool = false) {
+    self.permissionAtStart = permissionAtStart
+  }
+
+  func open(_ start: RuntimeStart) async throws -> any RuntimeSession {
+    state.withLock { state in
+      state.choices = state.choices.merging(start.choices)
+      state.opened += 1
+    }
+    return PickySession(runtime: self)
+  }
+
+  var configuration: SessionConfiguration {
+    let choices = state.withLock { $0.choices }
+    return SessionConfiguration(model: choices.model, thinking: choices.thinking, permission: choices.permission,
+                                models: [SessionOption(id: "small", name: "Small"), SessionOption(id: "large", name: "Large")],
+                                thinkingLevels: [SessionOption(id: "low", name: "Low"), SessionOption(id: "high", name: "High")],
+                                permissionModes: [SessionOption(id: "ask", name: "Ask"), SessionOption(id: "auto", name: "Auto")])
+  }
+}
+
+private final class PickySession: RuntimeSession {
+  let nativeHandle = "picky"
+  let events: AsyncStream<RuntimeEvent>
+  private let emit: AsyncStream<RuntimeEvent>.Continuation
+  private let runtime: PickyRuntime
+  private let running = Mutex(false)
+
+  init(runtime: PickyRuntime) {
+    self.runtime = runtime
+    (events, emit) = AsyncStream<RuntimeEvent>.makeStream()
+  }
+
+  var configuration: SessionConfiguration { runtime.configuration }
+
+  func configure(_ choices: SessionChoices) async throws -> SessionConfiguration {
+    guard !running.withLock({ $0 }) else { throw RuntimeError.failed("Wait for the current response.") }
+    if runtime.permissionAtStart, let permission = choices.permission, permission != runtime.state.withLock({ $0.choices.permission }) {
+      throw RuntimeError.takenAtStart
+    }
+    runtime.state.withLock { $0.choices = $0.choices.merging(choices) }
+    return runtime.configuration
+  }
+
+  func send(_ turn: Turn) async throws {
+    running.withLock { $0 = true }
+    Task { [self] in
+      emit.yield(.text("Working"))
+      await runtime.release.wait()
+      emit.yield(.messageFinished)
+      running.withLock { $0 = false }
+      emit.yield(.turnFinished(failure: nil, usage: nil))
+    }
+  }
+
+  func steer(_ turn: Turn) async throws -> Bool { false }
+  func answer(promptID: String, with answer: PromptAnswer) async throws {}
+  func interrupt() async throws {}
+  func stop() async {
+    emit.yield(.exited)
+    emit.finish()
+  }
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aChoiceTheRuntimeRefusesDuringATurnShowsAtOnceAndAppliesWhenTheTurnEnds() async throws {
+  let runtime = PickyRuntime()
+  let machine = try await TestMachine.start(runtime: runtime)
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: PickyRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "work"))
+  var events = subscription.events.makeAsyncIterator()
+  while let event = try await events.next() { if case .text = event { break } }
+
+  let shown = try await client.call(ConfigureSession(sessionID: session.id, model: "large"))
+  #expect(shown.model == "large")
+  #expect(runtime.state.withLock { $0.choices.model } == "small")
+  #expect(try await machine.server.library.session(session.id)?.model == "large")
+
+  await runtime.release.open()
+  var idle = false
+  while let event = try await events.next() {
+    if event == .runState(.idle) { idle = true }
+    if idle, case .configuration(let configuration) = event, configuration.model == "large" { break }
+  }
+  #expect(runtime.state.withLock { $0.choices.model } == "large")
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aReopenedSessionOffersItsRuntimesOptionsBeforeTheRuntimeStarts() async throws {
+  let first = try await TestMachine.start(runtime: PickyRuntime())
+  let session = try await (try await first.connect()).call(CreateSession(runtime: PickyRuntime.kind, title: "Chat"))
+  await first.server.stop()
+
+  let runtime = PickyRuntime()
+  let second = try await TestMachine.start(folder: first.folder, runtime: runtime)
+  defer { second.server.stopLater() }
+  let client = try await second.connect()
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  let shown = subscription.reply.configuration
+  #expect(runtime.state.withLock { $0.opened } == 0)
+  #expect(shown.model == "small")
+  #expect(shown.models.map(\.id) == ["small", "large"])
+  #expect(shown.thinkingLevels.map(\.id) == ["low", "high"])
+
+  let changed = try await client.call(ConfigureSession(sessionID: session.id, thinking: "high"))
+  #expect(changed.thinking == "high")
+  #expect(runtime.state.withLock { $0.choices.thinking } == "high")
+}
+
+@Test(.timeLimit(.minutes(1)))
+func aPermissionTheRuntimeTakesOnlyAtStartRestartsItWithTheNewMode() async throws {
+  let runtime = PickyRuntime(permissionAtStart: true)
+  let machine = try await TestMachine.start(runtime: runtime)
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: PickyRuntime.kind, title: "Chat"))
+  #expect(runtime.state.withLock { $0.opened } == 1)
+
+  let changed = try await client.call(ConfigureSession(sessionID: session.id, permission: "auto"))
+  #expect(changed.permission == "auto")
+  #expect(runtime.state.withLock { ($0.opened, $0.choices.permission) } == (2, "auto"))
+  #expect(try await machine.server.library.session(session.id)?.permission == "auto")
 }

@@ -18,6 +18,17 @@ public struct SessionChoices: Sendable, Hashable {
   }
 
   public var isEmpty: Bool { model == nil && thinking == nil && permission == nil }
+
+  /// These choices with `newer`'s over them.
+  func merging(_ newer: SessionChoices) -> SessionChoices {
+    SessionChoices(model: newer.model ?? model, thinking: newer.thinking ?? thinking, permission: newer.permission ?? permission)
+  }
+
+  /// These choices without those `other` makes the same.
+  func removing(_ other: SessionChoices) -> SessionChoices {
+    SessionChoices(model: model == other.model ? nil : model, thinking: thinking == other.thinking ? nil : thinking,
+                   permission: permission == other.permission ? nil : permission)
+  }
 }
 
 /// What the server tells a runtime when it opens a session.
@@ -148,11 +159,14 @@ public enum RuntimeError: Error, Sendable, CustomStringConvertible {
   /// The native session asked for no longer exists. A runtime never starts a
   /// fresh one in its place.
   case nativeSessionGone
+  /// The runtime takes this choice only as it starts.
+  case takenAtStart
   case failed(String)
 
   public var description: String {
     switch self {
     case .nativeSessionGone: "The runtime no longer has this session."
+    case .takenAtStart: "The runtime takes this choice only as it starts."
     case .failed(let message): message
     }
   }

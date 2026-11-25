@@ -409,7 +409,6 @@ struct CloudConversation: View {
 
     private var composer: some View {
         let hasRuntime = conversation.map { !$0.isArchived && $0.runtimeKind != nil } ?? false
-        let settingsBusy = session?.isUpdatingSettings ?? false
         return ConversationComposer(
             placeholder: composerPlaceholder(agent: agent, runtimeKind: conversation?.runtimeKind),
             draft: $draft,
@@ -422,8 +421,8 @@ struct CloudConversation: View {
             showsPermissionControl: hasRuntime,
             sessionMetadataLoading: hasRuntime && session?.settings == nil,
             sessionMetadata: hasRuntime ? session?.settings : nil,
-            sessionControlsDisabled: !hasRuntime || isReadOnly || settingsBusy || session?.isRunning == true,
-            sendDisabled: sendInProgress || (conversation != nil && (isReadOnly || !hasRuntime || settingsBusy)),
+            sessionControlsDisabled: !hasRuntime || isReadOnly,
+            sendDisabled: sendInProgress || (conversation != nil && (isReadOnly || !hasRuntime)),
             startsCollapsed: startsComposerCollapsed,
             collapseOverride: $composerCollapseOverride,
             focusRequestGeneration: focusRequestGeneration,
