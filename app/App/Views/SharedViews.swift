@@ -3,18 +3,25 @@ import SwiftUI
 
 struct ConversationEmptyState: View {
     let icon: LucideGlyph
+    /// Shown in place of `icon` for a harness's chat.
+    var harnessLogo: HarnessLogo? = nil
     let title: String
     var detail: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                Circle()
-                    .fill(WovenPalette.primaryFill)
+            if let harnessLogo {
+                HarnessLogoIcon(logo: harnessLogo, size: 48)
                     .frame(width: 56, height: 56)
-                    .shadow(color: WovenPalette.primaryFill.opacity(0.30), radius: 15, y: 8)
-                LucideIcon(glyph: icon, size: 22)
-                    .foregroundStyle(WovenPalette.primaryForeground)
+            } else {
+                ZStack {
+                    Circle()
+                        .fill(WovenPalette.primaryFill)
+                        .frame(width: 56, height: 56)
+                        .shadow(color: WovenPalette.primaryFill.opacity(0.30), radius: 15, y: 8)
+                    LucideIcon(glyph: icon, size: 22)
+                        .foregroundStyle(WovenPalette.primaryForeground)
+                }
             }
             Text(title)
                 .font(.system(size: 15, weight: .medium))

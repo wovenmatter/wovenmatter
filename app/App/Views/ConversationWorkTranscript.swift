@@ -103,107 +103,107 @@ struct ConversationWorkTranscript: View {
         let foldable = timeline.hasFoldableEntries
         let workExpanded = workDisclosure
         let folded = foldable && !workExpanded.wrappedValue
-        if content.isVisible {
-            VStack(alignment: .leading, spacing: 0) {
-                let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
-                if foldable {
-                    Button { workExpanded.wrappedValue.toggle() } label: {
-                        HStack(spacing: 6) {
-                            headerLabel(failed: content.failureMessage != nil)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
-                                .rotationEffect(.degrees(workExpanded.wrappedValue ? 90 : 0))
-                                .accessibilityHidden(true)
-                        }
-                        .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 0) {
+            let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
+            if foldable {
+                Button { workExpanded.wrappedValue.toggle() } label: {
+                    HStack(spacing: 6) {
+                        headerLabel(failed: content.failureMessage != nil)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(workExpanded.wrappedValue ? 90 : 0))
+                            .accessibilityHidden(true)
                     }
-                    .buttonStyle(ConversationElapsedButtonStyle())
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(ConversationElapsedButtonStyle())
+                .foregroundStyle(headerStyle)
+                .accessibilityValue(workExpanded.wrappedValue ? "Expanded" : "Collapsed")
+                .accessibilityHint(workExpanded.wrappedValue ? "Hides this turn's work" : "Shows this turn's thinking and tool calls")
+                .accessibilityIdentifier("work-turn:" + run.id)
+            } else {
+                headerLabel(failed: content.failureMessage != nil)
                     .foregroundStyle(headerStyle)
-                    .accessibilityValue(workExpanded.wrappedValue ? "Expanded" : "Collapsed")
-                    .accessibilityHint(workExpanded.wrappedValue ? "Hides this turn's work" : "Shows this turn's thinking and tool calls")
-                    .accessibilityIdentifier("work-turn:" + run.id)
-                } else {
-                    headerLabel(failed: content.failureMessage != nil)
-                        .foregroundStyle(headerStyle)
-                }
+            }
 
-                // Failure belongs to the run, not to its optional work history.
-                // Keep it visible even when no tool or thinking event was supplied.
-                if let failureMessage = content.failureMessage {
-                    Text(failureMessage)
-                        .font(.system(size: 13))
-                        .foregroundStyle(WovenPalette.danger)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 8)
-                }
+            // Failure belongs to the run, not to its optional work history.
+            // Keep it visible even when no tool or thinking event was supplied.
+            if let failureMessage = content.failureMessage {
+                Text(failureMessage)
+                    .font(.system(size: 13))
+                    .foregroundStyle(WovenPalette.danger)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
 
-                // The divider sits under the header from the moment the turn works.
-                if content.hasVisibleActivities || isRunning {
-                    Divider()
-                        .overlay(WovenPalette.foreground.opacity(0.10))
-                        .padding(.top, 12)
+            // The divider sits under the header from the moment the turn works.
+            if content.hasVisibleActivities || isRunning {
+                Divider()
+                    .overlay(WovenPalette.foreground.opacity(0.10))
+                    .padding(.top, 12)
 
-                    let entries = folded ? timeline.entriesOutsideFold : timeline.entries
-                    if !entries.isEmpty {
-                        let tailID = timeline.entries.last?.id
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(entries) { entry in
-                                switch entry.content {
-                                case .commentary(let activity):
-                                    ConversationResponse(
-                                        content: activity.content ?? "",
-                                        isStreaming: false,
-                                        showsCopyButton: false
-                                    )
-                                case .group(let group):
-                                    ConversationWorkGroupRow(
-                                        group: group,
+                let entries = folded ? timeline.entriesOutsideFold : timeline.entries
+                if !entries.isEmpty {
+                    let tailID = timeline.entries.last?.id
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(entries) { entry in
+                            switch entry.content {
+                            case .commentary(let activity):
+                                ConversationResponse(
+                                    content: activity.content ?? "",
+                                    isStreaming: false,
+                                    showsCopyButton: false
+                                )
+                            case .group(let group):
+                                ConversationWorkGroupRow(
+                                    group: group,
+                                    runID: run.id,
+                                    runStatus: run.status,
+                                    isTail: entry.id == tailID && !hasFollowingResponse
+                                )
+                            case .activity(let activity):
+                                if activity.kind == .thought, !activity.workTimelineThoughtHasText {
+                                    ConversationQuietThought(isLive: isRunning && activity.workTimelineShowsProgress)
+                                } else if activity.kind == .thought {
+                                    ConversationThinkingBlock(activity: activity, runID: run.id,
+                                        isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
+                                } else if let reference = activity.htmlRender {
+                                    ConversationHTMLRenderView(reference: reference)
+                                } else if let children = activity.subagents, !children.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        ForEach(children) { child in
+                                            ConversationSubagentRow(child: child)
+                                        }
+                                    }
+                                } else {
+                                    ConversationActivityRow(
+                                        activity: activity,
                                         runID: run.id,
                                         runStatus: run.status,
-                                        isTail: entry.id == tailID && !hasFollowingResponse
+                                        showsProgress: activity.workTimelineShowsProgress
                                     )
-                                case .activity(let activity):
-                                    if activity.kind == .thought {
-                                        ConversationThinkingBlock(activity: activity, runID: run.id,
-                                            isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
-                                    } else if let reference = activity.htmlRender {
-                                        ConversationHTMLRenderView(reference: reference)
-                                    } else if let children = activity.subagents, !children.isEmpty {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            ForEach(children) { child in
-                                                ConversationSubagentRow(child: child)
-                                            }
-                                        }
-                                    } else {
-                                        ConversationActivityRow(
-                                            activity: activity,
-                                            runID: run.id,
-                                            runStatus: run.status,
-                                            showsProgress: activity.workTimelineShowsProgress
-                                        )
-                                    }
                                 }
                             }
                         }
-                        .padding(.top, 14)
-                        .transition(reduceMotion ? .identity : .opacity)
                     }
+                    .padding(.top, 14)
+                    .transition(reduceMotion ? .identity : .opacity)
                 }
-                // A folded turn shows only the dots below.
-                if isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator {
-                    HStack(spacing: 9) {
-                        Image(systemName: "brain").frame(width: 17)
-                        Text("Thinking").font(.system(size: 13.5))
-                    }
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .padding(.top, 12)
-                    .accessibilityLabel("Thinking")
+            }
+            // A folded turn shows only the dots below.
+            if isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator {
+                HStack(spacing: 9) {
+                    Image(systemName: "brain").frame(width: 17)
+                    Text("Thinking").font(.system(size: 13.5))
                 }
-                // A response below takes the dots under its text instead.
-                if isRunning && !hasFollowingResponse {
-                    ConversationRunningDots().padding(.top, 6)
-                }
+                .foregroundStyle(WovenPalette.mutedForeground)
+                .padding(.top, 12)
+                .accessibilityLabel("Thinking")
+            }
+            // A response below takes the dots under its text instead.
+            if isRunning && !hasFollowingResponse {
+                ConversationRunningDots().padding(.top, 6)
             }
         }
     }
@@ -257,14 +257,6 @@ struct ConversationWorkTranscript: View {
     static func elapsed(_ interval: TimeInterval) -> String {
         interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval)
     }
-
-    static func hasVisibleContent(run: WorkspaceRunRecord, timeline: ConversationWorkTimeline) -> Bool {
-        ConversationWorkTranscriptPresentation(
-            runStatus: run.status,
-            runError: run.error,
-            hasVisibleActivities: timeline.hasVisibleActivities
-        ).isVisible
-    }
 }
 
 private struct ConversationElapsedButtonStyle: ButtonStyle {
@@ -307,6 +299,20 @@ private func conversationDisclosure(
             }
         }
     )
+}
+
+/// Thinking that came without text: only that the agent thought.
+private struct ConversationQuietThought: View {
+    let isLive: Bool
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "brain").frame(width: 17)
+            Text(isLive ? "Thinking" : "Thought").font(.system(size: 13.5))
+        }
+        .foregroundStyle(WovenPalette.mutedForeground)
+        .accessibilityElement(children: .combine)
+    }
 }
 
 /// Supplied thinking stays in the transcript independently of tool disclosures.

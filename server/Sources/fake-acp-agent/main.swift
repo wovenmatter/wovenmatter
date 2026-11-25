@@ -5,7 +5,8 @@ import Foundation
 // runtime's does, and deleting the file loses it. Each turn answers
 // "pid <process> turn <n>: <text>" and makes one tool call; a turn whose text
 // contains "permission" first asks for permission and says which option was
-// chosen; one containing "question" asks a one-field form and says the answer.
+// chosen; one containing "question" asks a one-field form and says the answer;
+// one containing "thinks" first thinks without text, as Claude Code reports it.
 
 let store = URL(fileURLWithPath: ProcessInfo.processInfo.environment["FAKE_ACP_STORE"] ?? NSTemporaryDirectory())
 let pid = ProcessInfo.processInfo.processIdentifier
@@ -43,6 +44,13 @@ func file(_ session: String) -> URL { store.appendingPathComponent(session) }
     update(session, ["sessionUpdate": "tool_call_update", "toolCallId": "call-\(number)", "status": "completed",
                      "content": [["type": "content", "content": ["type": "text", "text": "a.txt"]]]])
     send(["id": id, "result": ["stopReason": "end_turn", "usage": ["inputTokens": 3, "outputTokens": 2]]])
+  }
+  if text.contains("thinks") {
+    for tokens in [40, 90] {
+      send(["method": "_claude/sdkMessage", "params": ["sessionId": session, "message": [
+        "type": "system", "subtype": "thinking_tokens", "estimated_tokens": tokens, "estimated_tokens_delta": 50,
+      ]]])
+    }
   }
   if text.contains("question") {
     nextRequest += 1
