@@ -4,7 +4,8 @@ import WovenProtocol
 @testable import WovenServerKit
 
 /// Another Mac's UI asks this Mac's server to update the app: the server
-/// hands it to the UI on this Mac, and its answer comes back.
+/// hands it to the UI on this Mac, and its answer comes back. A Linux server
+/// refuses it.
 @Test(.timeLimit(.minutes(1)))
 func anotherMacsRequestToUpdateReachesThisMacsAppAndItsAnswerComesBack() async throws {
   let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
@@ -15,6 +16,15 @@ func anotherMacsRequestToUpdateReachesThisMacsAppAndItsAnswerComesBack() async t
   options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
   let server = try await WovenServer.start(options)
   defer { server.stopLater() }
+
+  // Another Mac's UI, over the tailnet address.
+  let other = Client(transport: try await connectWebSocket(.tcp(host: "127.0.0.1", port: server.port!)))
+  _ = try await other.open(Hello(role: .ui, machine: Machine(id: "other-ui", name: "UI"), appVersion: "0.4.9"))
+  guard MachinePlatform.current == .mac else {
+    // A Linux server is updated over SSH from a Mac, never asked this.
+    await #expect(throws: ProtocolError.self) { _ = try await other.call(UpdateApp()) }
+    return
+  }
 
   // The app on this Mac, answering the update call the way it would.
   let app = Client(transport: try await connectWebSocket(.unix(path: socket)))
@@ -31,9 +41,6 @@ func anotherMacsRequestToUpdateReachesThisMacsAppAndItsAnswerComesBack() async t
     return seen
   }
 
-  // Another Mac's UI, over the tailnet address.
-  let other = Client(transport: try await connectWebSocket(.tcp(host: "127.0.0.1", port: server.port!)))
-  _ = try await other.open(Hello(role: .ui, machine: Machine(id: "other-ui", name: "UI"), appVersion: "0.4.9"))
   _ = try await other.call(UpdateApp())
   await #expect(throws: ProtocolError.self) { _ = try await other.call(UpdateApp()) }
   #expect(try await answers.value == [UIToolBroker.appUpdateTool, UIToolBroker.appUpdateTool])
