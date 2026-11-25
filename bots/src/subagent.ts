@@ -20,7 +20,8 @@ import {
   modelAccess,
   modelFacts,
 } from "./model-info.ts";
-import { REASONING, reasoningFor } from "./reasoning.ts";
+import { REASONING } from "./reasoning-levels.ts";
+import { reasoningFor } from "./reasoning.ts";
 
 export const SUBAGENT_EXTENSION = "bot-subagent";
 

@@ -15,7 +15,8 @@ import { conversationId as toConversationId, entryId as toEntryId } from "./ids.
 import { fallbackNote, type Limit, type LimitEntry, type ModelAvailability } from "./limits.ts";
 import { contextNote } from "./message-context.ts";
 import type { ProfileStore } from "./profiles.ts";
-import { type Reasoning, reasoningFor } from "./reasoning.ts";
+import type { Reasoning } from "./reasoning-levels.ts";
+import { reasoningFor } from "./reasoning.ts";
 import { sharedDatabaseView } from "./storage/database.ts";
 import {
   type BotRecord,

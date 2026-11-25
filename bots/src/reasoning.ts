@@ -1,14 +1,5 @@
 import { type Api, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
-
-/** Reasoning levels bots run at. There is no "off": every bot request reasons. */
-export const REASONING = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type Reasoning = (typeof REASONING)[number];
-
-/** A profile's main-model level until the user picks another. */
-export const DEFAULT_REASONING: Reasoning = "high";
-
-export const isReasoning = (value: unknown): value is Reasoning =>
-  (REASONING as readonly unknown[]).includes(value);
+import { isReasoning, REASONING, type Reasoning } from "./reasoning-levels.ts";
 
 /**
  * The level to run `model` at for `wanted`: `wanted` when the model supports it, else the nearest

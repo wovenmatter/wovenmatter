@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MAX_EDITED_FACT_CHARS } from "./memory.ts";
 import { MAX_CONTEXT_LENGTH } from "./message-context.ts";
-import { REASONING } from "./reasoning.ts";
+import { REASONING } from "./reasoning-levels.ts";
 import type { DisplayEntry } from "./transcript.ts";
 
 const botId = z.string().uuid();

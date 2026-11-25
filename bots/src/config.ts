@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
 import { isCronExpression } from "./cron.ts";
-import { DEFAULT_REASONING, REASONING, type Reasoning } from "./reasoning.ts";
+import { DEFAULT_REASONING, REASONING, type Reasoning } from "./reasoning-levels.ts";
 
 /** `provider/model-id`, e.g. `openai/gpt-6-sol`. The model id may contain further slashes. */
 export type ModelRef = { readonly provider: string; readonly modelId: string };

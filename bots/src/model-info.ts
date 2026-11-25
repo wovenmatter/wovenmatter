@@ -10,7 +10,7 @@ import { OPENROUTER_MODELS } from "@earendil-works/pi-ai/providers/openrouter.mo
 import { XAI_MODELS } from "@earendil-works/pi-ai/providers/xai.models";
 import { LIMIT_LABELS, type LimitEntry } from "./limits.ts";
 import { CATALOG_ENDPOINTS } from "./model-catalog.ts";
-import { REASONING } from "./reasoning.ts";
+import { REASONING } from "./reasoning-levels.ts";
 
 /**
  * What the runtime knows about a model, for the main model's subagent choices and Settings' model pool.

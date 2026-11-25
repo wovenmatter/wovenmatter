@@ -2,7 +2,8 @@ import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai
 import type { BotManager } from "./bots.ts";
 import { parseModelRef } from "./config.ts";
 import { type CronSchedule, parseCron, zonedParts } from "./cron.ts";
-import { type Reasoning, reasoningFor } from "./reasoning.ts";
+import type { Reasoning } from "./reasoning-levels.ts";
+import { reasoningFor } from "./reasoning.ts";
 import { DELIVERY_KIND } from "./storage/forum.ts";
 import { displayEntry } from "./transcript.ts";
 

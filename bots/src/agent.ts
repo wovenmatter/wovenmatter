@@ -30,7 +30,8 @@ import {
   type LimitEntry,
   observeLimits,
 } from "./limits.ts";
-import { type Reasoning, reasoningFor } from "./reasoning.ts";
+import type { Reasoning } from "./reasoning-levels.ts";
+import { reasoningFor } from "./reasoning.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { type SubagentLog, subagentExtension } from "./subagent.ts";
 import { type BotPlatform, botTools } from "./tools.ts";
