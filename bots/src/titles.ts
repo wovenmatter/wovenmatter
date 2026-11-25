@@ -1,7 +1,6 @@
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
-import type { ModelRef } from "./config.ts";
-import type { Reasoning } from "./reasoning-levels.ts";
-import { reasoningFor } from "./reasoning.ts";
+import type { ModelRef, Reasoning } from "./config.ts";
+import { reasoningFor } from "./model-info.ts";
 
 /**
  * Woven Matter's title prompt, verbatim

@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { isCronExpression } from "./cron.ts";
-import { DEFAULT_REASONING, REASONING, type Reasoning } from "./reasoning-levels.ts";
 
 /** `provider/model-id`, e.g. `openai/gpt-6-sol`. The model id may contain further slashes. */
 export type ModelRef = { readonly provider: string; readonly modelId: string };
@@ -108,6 +108,27 @@ export async function loadRuntimeConfig(path: string): Promise<RuntimeConfig> {
   }
   return validateRuntimeConfig(json, absolute);
 }
+
+/**
+ * Reasoning levels a profile, a title or a subagent runs at: pi-ai's thinking levels. There is no
+ * "off": every bot request reasons. Only pi-ai's type is imported here: `cli.ts` loads this module
+ * before it switches to Pi Durable's SDK copy, and packaged bots have no SDK of their own.
+ */
+export const REASONING = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const satisfies readonly ThinkingLevel[];
+export type Reasoning = (typeof REASONING)[number];
+
+/** A profile's main-model level until the user picks another. */
+export const DEFAULT_REASONING: Reasoning = "high";
+
+export const isReasoning = (value: unknown): value is Reasoning =>
+  (REASONING as readonly unknown[]).includes(value);
 
 /** `profiles.<id>` keys. */
 export const PROFILE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;

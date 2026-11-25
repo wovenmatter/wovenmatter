@@ -1,9 +1,9 @@
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import type { BotManager } from "./bots.ts";
+import { REASONING } from "./config.ts";
 import type { Forum } from "./forum.ts";
 import { describeProfile, type ProfileStore } from "./profiles.ts";
-import { REASONING } from "./reasoning-levels.ts";
 import type { SettingsService } from "./settings/service.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { displayEntry } from "./transcript.ts";

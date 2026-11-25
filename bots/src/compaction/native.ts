@@ -6,7 +6,7 @@ import type {
   Models,
   UserMessage,
 } from "@earendil-works/pi-ai";
-import type { Reasoning } from "../reasoning-levels.ts";
+import type { Reasoning } from "../config.ts";
 
 /**
  * Provider-native context compaction, ported from Woven Matter's

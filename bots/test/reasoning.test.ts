@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createBotHarnessOptions } from "../src/agent.ts";
 import { BotManager } from "../src/bots.ts";
 import { ProfileStore } from "../src/profiles.ts";
-import { reasoningFor } from "../src/reasoning.ts";
+import { reasoningFor } from "../src/model-info.ts";
 import { openSharedDatabase } from "../src/storage/database.ts";
 import { tempDir } from "./helpers.ts";
 

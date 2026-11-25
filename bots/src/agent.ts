@@ -18,7 +18,13 @@ import {
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { createCompactionRegistry, NativeCompaction } from "./compaction/context.ts";
-import { type ModelRef, type Profile, parseModelRef, type RawSettings } from "./config.ts";
+import {
+  type ModelRef,
+  type Profile,
+  parseModelRef,
+  type RawSettings,
+  type Reasoning,
+} from "./config.ts";
 import { containerTools } from "./container-tools.ts";
 import { forumTools } from "./forum-tools.ts";
 import type { BotEnvironmentAdapter } from "./env.ts";
@@ -30,8 +36,7 @@ import {
   type LimitEntry,
   observeLimits,
 } from "./limits.ts";
-import type { Reasoning } from "./reasoning-levels.ts";
-import { reasoningFor } from "./reasoning.ts";
+import { reasoningFor } from "./model-info.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { type SubagentLog, subagentExtension } from "./subagent.ts";
 import { type BotPlatform, botTools } from "./tools.ts";

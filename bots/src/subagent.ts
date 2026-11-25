@@ -9,7 +9,7 @@ import {
   section,
 } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
-import { type Profile, parseModelRef } from "./config.ts";
+import { type Profile, parseModelRef, REASONING } from "./config.ts";
 import type { LimitEntry } from "./limits.ts";
 import {
   formatCapabilities,
@@ -19,9 +19,8 @@ import {
   type ModelFacts,
   modelAccess,
   modelFacts,
+  reasoningFor,
 } from "./model-info.ts";
-import { REASONING } from "./reasoning-levels.ts";
-import { reasoningFor } from "./reasoning.ts";
 
 export const SUBAGENT_EXTENSION = "bot-subagent";
 

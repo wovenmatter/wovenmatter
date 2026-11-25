@@ -10,13 +10,12 @@ import {
 } from "@earendil-works/pi-durable";
 import { type SqliteDatabase, SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { type BotHarnessOptions, defaultAgent } from "./agent.ts";
-import { type ModelRef, type Profile, parseModelRef } from "./config.ts";
+import { type ModelRef, type Profile, parseModelRef, type Reasoning } from "./config.ts";
 import { conversationId as toConversationId, entryId as toEntryId } from "./ids.ts";
 import { fallbackNote, type Limit, type LimitEntry, type ModelAvailability } from "./limits.ts";
 import { contextNote } from "./message-context.ts";
+import { reasoningFor } from "./model-info.ts";
 import type { ProfileStore } from "./profiles.ts";
-import type { Reasoning } from "./reasoning-levels.ts";
-import { reasoningFor } from "./reasoning.ts";
 import { sharedDatabaseView } from "./storage/database.ts";
 import {
   type BotRecord,

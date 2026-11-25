@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 // Packaged bots carry no SDK of their own: the CLI switches to Pi Durable's copy after reading its
-// config, so nothing it loads before then may import an SDK package.
+// config, so config.ts and what it imports stay SDK-free (types only).
 it("starts the CLI without importing the SDK before it switches to Pi Durable's copy", () => {
   const refuseSDK = `import { registerHooks } from "node:module";
 registerHooks({ resolve(specifier, context, next) {
