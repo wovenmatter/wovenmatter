@@ -1,6 +1,5 @@
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { ModelRef, Reasoning } from "./config.ts";
-import { reasoningFor } from "./model-info.ts";
 
 /**
  * Woven Matter's title prompt, verbatim
@@ -113,11 +112,10 @@ export class TitleGenerator {
     const model: Model<Api> | undefined = models.getModel(provider, modelId);
     if (!model) throw new TitleError(`unknown title model ${provider}/${modelId}`);
     const timeout = AbortSignal.timeout(this.#options.timeoutMs ?? 60_000);
-    const wanted =
+    const reasoning =
       typeof this.#options.reasoning === "function"
         ? this.#options.reasoning()
         : this.#options.reasoning;
-    const reasoning = reasoningFor(model, wanted);
     const reply = await models
       .streamSimple(
         model,
@@ -127,7 +125,7 @@ export class TitleGenerator {
           ],
         },
         {
-          ...(reasoning ? { reasoning } : {}),
+          reasoning,
           signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         },
       )

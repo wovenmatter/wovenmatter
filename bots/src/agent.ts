@@ -36,7 +36,6 @@ import {
   type LimitEntry,
   observeLimits,
 } from "./limits.ts";
-import { reasoningFor } from "./model-info.ts";
 import type { BotRecord } from "./storage/registry.ts";
 import { type SubagentLog, subagentExtension } from "./subagent.ts";
 import { type BotPlatform, botTools } from "./tools.ts";
@@ -168,13 +167,12 @@ export function withFallbackNote(
 
 /**
  * The agent every new bot's main channel starts with: its profile's main model at the profile's
- * reasoning level, clamped to the model (`reasoningFor`; undefined for a model without levels).
- * Threads inherit it via fork.
+ * reasoning level, which pi-ai clamps to the model on each request. Threads inherit it via fork.
  */
-export function defaultAgent(main: ModelRef, reasoning: Reasoning | undefined): AgentChange {
+export function defaultAgent(main: ModelRef, reasoning: Reasoning): AgentChange {
   return {
     model: { provider: main.provider, modelId: main.modelId },
-    thinkingLevel: reasoning ?? null,
+    thinkingLevel: reasoning,
   };
 }
 
@@ -371,10 +369,7 @@ export function createBotHarnessOptions(options: BotAgentOptions): BotHarnessOpt
       if (!main || conversation.owner !== undefined || conversation.parent !== undefined) {
         return undefined;
       }
-      const ref = parseModelRef(main);
-      const models = typeof source === "function" ? source() : source;
-      const level = reasoningFor(models.getModel(ref.provider, ref.modelId), reasoning);
-      return configure(tx, conversation.id, defaultAgent(ref, level));
+      return configure(tx, conversation.id, defaultAgent(parseModelRef(main), reasoning));
     },
     ...(options.env ? { env: options.env.harnessEnv(options.bot.id) } : {}),
     ...(options.onReport
