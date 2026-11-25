@@ -110,6 +110,58 @@ describe("bots' Claude subscription", () => {
     expect(NATIVE_KEY).toBe("woven-native");
   });
 
+  it("shows Claude each tool under the bot's own name, and takes calls back under it", async () => {
+    let seen: { options: Record<string, unknown>; frames: unknown[] } | undefined;
+    const query: ClaudeSdkQuery = ({ prompt, options }) => {
+      const events = (async function* () {
+        const frames: unknown[] = [];
+        for await (const frame of prompt) {
+          frames.push(frame);
+          if (frame.shouldQuery === false) yield { type: "result", subtype: "success", num_turns: 0 };
+        }
+        seen = { options, frames };
+        yield {
+          type: "assistant",
+          parent_tool_use_id: null,
+          message: {
+            id: "msg_2",
+            stop_reason: "tool_use",
+            content: [{ type: "tool_use", id: "toolu_2", name: "run_subagent", input: { task: "look" } }],
+          },
+        };
+        yield { type: "result", subtype: "error_max_turns", is_error: true };
+      })();
+      return events;
+    };
+    const { provider } = claudeAgentProvider({ directory: join(dir.path, "claude"), query });
+    const model = { id: "opus", api: "claude-agent-sdk", provider: "claude-subscription" } as never;
+    const tool = (name: string) => ({ name, description: `${name} tool`, parameters: { type: "object", properties: {} } });
+    const messages = [
+      { role: "system", content: "", toolsAdded: [tool("run_subagent"), tool("read")], timestamp: 0 },
+      { role: "user", content: "hi", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a" } }],
+        api: "claude-agent-sdk",
+        provider: "claude-subscription",
+        model: "opus",
+        usage: {},
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+      { role: "toolResult", toolCallId: "toolu_1", toolName: "read", content: [{ type: "text", text: "a" }], isError: false, timestamp: 0 },
+    ];
+    const reply = await provider.stream(model, { messages } as never, { apiKey: NATIVE_KEY } as never).result();
+    expect(reply.errorMessage).toBeUndefined();
+    expect(reply.content).toEqual([{ type: "toolCall", id: "toolu_2", name: "run_subagent", arguments: { task: "look" } }]);
+    expect(seen?.options.mcpServers).toEqual({});
+    const body = JSON.parse(String((seen?.options.env as Record<string, string>).CLAUDE_CODE_EXTRA_BODY));
+    expect(body.tools.map((entry: { name: string }) => entry.name)).toEqual(["run_subagent", "read"]);
+    expect(body.tools[0].input_schema).toEqual({ type: "object", properties: {} });
+    expect(JSON.stringify(seen?.frames)).toContain('"name":"read"');
+    expect(JSON.stringify(seen?.frames)).not.toContain("mcp__");
+  });
+
   it("moves saved Anthropic model ids to Claude Code's model of the same family", async () => {
     const path = join(dir.path, "settings.json");
     const opened = async (model: string) => {
