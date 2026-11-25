@@ -28,6 +28,8 @@ struct ConversationGoalControls: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12).padding(.vertical, 4)
             .background(theme.palette.themeWhisper, in: DesktopShapes.card)
+            // Above the composer the chat scrolls beneath it, so it is not see-through.
+            .background(WovenPalette.background, in: DesktopShapes.card)
             .sheet(isPresented: $showingDetails) {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
