@@ -25,10 +25,10 @@ from pathlib import Path, PurePosixPath
 
 # The pinned Docker Engine static release (download.docker.com/linux/static/stable)
 # and its archives' SHA-256 values. See docs/DEPENDENCIES.md.
-DOCKER_VERSION = '29.10.0'
+DOCKER_VERSION = '29.10.1'
 DOCKER_SHA256 = {
-    'x86_64': '7c1ebadc65c716cdc6d35fc78759ed0e4317debf43c21dd12f066f2006999def',
-    'aarch64': '6e5159e8b5615e0c0c2954a2a1a2a12bc65f5d9b603595dba24a10cb367408cd',
+    'x86_64': '061642059fa7f2ed9b2f04a327a951cff4249585cf04b2661c2a6539197c9962',
+    'aarch64': 'a38c8a9ef6d17bce07499bfd3a3688542274769dc3b4f75c06ea2705fe65053e',
 }
 
 GiB = 1024**3

@@ -13,7 +13,7 @@ let package = Package(
   dependencies: [
     .package(path: "../protocol"),
     // Linux-only replacement for CryptoKit; see docs/DEPENDENCIES.md.
-    .package(url: "https://github.com/apple/swift-crypto.git", "5.1.2"..<"1000.0.0")
+    .package(url: "https://github.com/apple/swift-crypto.git", "5.2.0"..<"1000.0.0")
   ],
   targets: [
     // Linux links the system SQLite; Apple platforms use the SDK module.

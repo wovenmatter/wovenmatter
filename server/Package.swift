@@ -16,9 +16,9 @@ let package = Package(
     .package(path: "../protocol"),
     .package(path: "../library"),
     // The WebSocket server and client, on macOS and Linux alike.
-    .package(url: "https://github.com/apple/swift-nio.git", "2.105.0"..<"1000.0.0"),
+    .package(url: "https://github.com/apple/swift-nio.git", "2.105.2"..<"1000.0.0"),
     // Linux-only replacement for CryptoKit, for sealing; see docs/DEPENDENCIES.md.
-    .package(url: "https://github.com/apple/swift-crypto.git", "5.1.2"..<"1000.0.0")
+    .package(url: "https://github.com/apple/swift-crypto.git", "5.2.0"..<"1000.0.0")
   ],
   targets: [
     .target(
