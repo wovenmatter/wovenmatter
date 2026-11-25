@@ -34,7 +34,7 @@ enum WovenInstructions {
       The Code Mode catalog shows only a few of them, but every one is listed below with its exact arguments, so \
       call it directly; never `search` for a `woven` tool.
       - Every `woven` tool resolves to a JSON object, whose shape follows `→` below: lists are arrays of \
-      objects under one name, and a field that is false or empty is left out. Each listed thing's own id is its \
+      objects under one name, and a field that is false or empty is left out. Everything listed has its own id as \
       `id`; any other id is named as the argument that takes it (`sessionID`, `artifactID`, `databaseID`, \
       `scheduleID`). Pass ids straight back as arguments. A tool \
       that fails rejects with an Error with its message; catch it to go on. One rejected call fails a whole \
