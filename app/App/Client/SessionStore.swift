@@ -58,6 +58,9 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
+    /// When this view first saw each turn the runtime started by itself,
+    /// while its first item was in progress.
+    @ObservationIgnored private var runStarts: [String: Date] = [:]
     /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
     /// Each text item in progress: the reply that shows it, and that reply's text before it.
@@ -652,14 +655,19 @@ final class SessionStore {
         /// A turn's end closed the last run: what follows it before another
         /// message is a turn the runtime started by itself.
         var ended = false
-        func currentRun(at date: Date, id: String) -> Int {
-            if runs.isEmpty {
-                runs.append(WorkspaceRunRecord(id: "run-start-\(sessionID)", conversationID: sessionID, status: .completed,
-                                               startedAt: date, completedAt: date))
-            } else if ended {
-                // It is its own run, timed from its own first item.
+        func currentRun(at date: Date, id: String, live: Bool) -> Int {
+            if ended {
+                // It is its own run, named and timed by its own first item:
+                // from when this view first saw it, while that item was in
+                // progress, so finishing it does not move the start.
+                let runID = "run-\(id)"
+                if live, runStarts[runID] == nil { runStarts[runID] = date }
+                let start = runStarts[runID] ?? date
                 closeRun()
-                runs.append(WorkspaceRunRecord(id: "run-\(id)", conversationID: sessionID, status: .completed,
+                runs.append(WorkspaceRunRecord(id: runID, conversationID: sessionID, status: .completed,
+                                               startedAt: start, completedAt: start))
+            } else if runs.isEmpty {
+                runs.append(WorkspaceRunRecord(id: "run-start-\(sessionID)", conversationID: sessionID, status: .completed,
                                                startedAt: date, completedAt: date))
             }
             ended = false
@@ -686,7 +694,7 @@ final class SessionStore {
                 runs.append(WorkspaceRunRecord(id: "run-\(entry.id)", conversationID: sessionID, status: .completed,
                                                userMessageID: entry.id, startedAt: entry.date, completedAt: entry.date))
             case .assistantMessage(let text):
-                let run = currentRun(at: entry.date, id: entry.id)
+                let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
                 let id = Self.replyID(runs[run].id)
                 let shown: Int
                 if let index = messages.lastIndex(where: { $0.id == id }) {
@@ -710,7 +718,7 @@ final class SessionStore {
                 runs[run].assistantMessageID = id
                 extend(run, to: entry.date, live: entry.live)
             case .toolCall(let call):
-                let run = currentRun(at: entry.date, id: entry.id)
+                let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
                 extend(run, to: entry.date, live: entry.live)
                 // A published visual reply shows as its own item; only a call that failed shows as a call.
                 if call.kind == .visualReply && !call.failed { continue }
@@ -719,7 +727,7 @@ final class SessionStore {
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .visualReply(let reply):
-                let run = currentRun(at: entry.date, id: entry.id)
+                let run = currentRun(at: entry.date, id: entry.id, live: entry.live)
                 extend(run, to: entry.date, live: entry.live)
                 // A visual reply is a reply even before any words, so its run is drawn.
                 if runs[run].assistantMessageID == nil {
@@ -744,8 +752,9 @@ final class SessionStore {
                         extend(last, to: entry.date, live: false)
                         // A stopped turn says so, unless it failed.
                         if notice.text == "stopped", runs[last].status != .failed { runs[last].status = .cancelled }
-                        ended = true
                     }
+                    // Even as the first item loaded, what follows is its own run.
+                    ended = true
                     continue
                 }
                 // A turn that failed or was stopped ended with that notice.
