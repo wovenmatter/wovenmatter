@@ -585,7 +585,7 @@ public enum ConversationToolAction: Hashable, Sendable {
       guard let pattern = (input?["pattern"] as? String)?.workTimelineSingleLine, pattern.count <= 30 else { return nil }
       return "Searched for \u{201C}\(pattern)\u{201D}"
     case .webSearch:
-      guard let query = (input?["query"] as? String)?.workTimelineSingleLine, query.count <= 40 else { return nil }
+      guard let query = activity.workTimelineWebQuery, query.count <= 40 else { return nil }
       return "Searched the web for \u{201C}\(query)\u{201D}"
     case .delegate:
       return activity.workTimelineDelegatedTask.map { "Delegated \u{201C}\($0)\u{201D}" }
@@ -815,6 +815,29 @@ public extension AgentRunActivity {
     return title == "Search" || title.hasPrefix("Search for ") || title.hasPrefix("Search in '")
   }
 
+  /// What a web search looked for, when its input says so for certain: its
+  /// `query`, or the one query of Codex's search action.
+  var workTimelineWebQuery: String? {
+    let input = workTimelineInput
+    if let step = input?["action"] as? [String: Any] {
+      guard step["type"] as? String == "search" else { return nil }
+      if let query = (step["query"] as? String)?.workTimelineSingleLine { return query }
+      guard let queries = step["queries"] as? [String], queries.count == 1 else { return nil }
+      return queries[0].workTimelineSingleLine
+    }
+    return (input?["query"] as? String)?.workTimelineSingleLine
+  }
+
+  /// The page a fetch opened, without its scheme: its input's `url`, or the
+  /// one Codex's open-page action names.
+  var workTimelineWebPage: String? {
+    let input = workTimelineInput
+    let step = input?["action"] as? [String: Any]
+    if let step, step["type"] as? String != "openPage" { return nil }
+    guard let url = ((step?["url"] ?? input?["url"]) as? String)?.workTimelineSingleLine else { return nil }
+    return url.replacingOccurrences(of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, with: "", options: .regularExpression)
+  }
+
   /// The file or folder a tool's input names.
   var workTimelineInputPath: String? {
     let input = workTimelineInput
@@ -957,6 +980,18 @@ public extension AgentRunActivity {
         }
       }
     }
+    // A web search or a page fetch reads the same in every harness, in these
+    // words rather than the tool's: what it searched for or which page it
+    // opened, when its input says so for certain.
+    if action == .webSearch {
+      return (failed ? "Failed to search the web" : active ? "Searching the web" : "Searched the web")
+        + (workTimelineWebQuery.map { " for \u{201C}\($0)\u{201D}" } ?? "")
+    }
+    let step = (input?["action"] as? [String: Any])?["type"] as? String
+    if action == .webFetch, step == nil || step == "openPage" {
+      guard let page = workTimelineWebPage else { return failed ? "Failed to fetch a web page" : action.liveLabel(active: active) }
+      return (failed ? "Failed to fetch " : active ? "Fetching " : "Fetched ") + page
+    }
     // A title that stands in until the input arrives ("Read File", "Web
     // search") names nothing: the row says what kind of step it is.
     if rawInputJSON?.workTimelineNonempty == nil, let title = label,
@@ -982,10 +1017,6 @@ public extension AgentRunActivity {
       // tool's own name ("Terminal", "Bash") says nothing about what runs.
       guard let name else { return failed ? "Failed to run a command" : action.liveLabel(active: active) }
       return "\(failed ? "Failed" : active ? "Running" : "Ran") \(name)"
-    case .webSearch:
-      let query = argument("query")
-      return "\(failed ? "Failed web search" : active ? "Searching the web" : "Searched the web")"
-        + (query.map { ": " + $0 } ?? "")
     case .browser:
       let operation = argument("action")?.replacingOccurrences(of: "_", with: " ")
       let host = argument("url").flatMap { URL(string: $0)?.host }
