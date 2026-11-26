@@ -237,7 +237,10 @@ struct ConversationWorkTranscript: View {
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
         .onChange(of: run.status) { before, after in
             guard before == .running, after != .running, let start = presentation?.startedAt else { return }
-            watchedDuration = Date().timeIntervalSince(start)
+            // The running label counts whole seconds, so this is the most it
+            // can have shown: later than the saved end by however long the
+            // end took to arrive and draw, it acts only when that was late.
+            watchedDuration = Date().timeIntervalSince(start).rounded(.down)
         }
         // Without a session folder, the folder of the turn's first path, so
         // its rows shorten paths the same way and never change once shown.
@@ -453,15 +456,19 @@ struct ConversationWorkTranscript: View {
     /// The saved time, or the time this view had shown the turn running when
     /// that was longer.
     private var settledDuration: String? {
-        guard let watched = watchedDuration, watched > presentation?.completedSeconds ?? .infinity else {
+        // Compared as the saved time is shown: tenths under ten seconds,
+        // whole seconds above.
+        let saved = presentation?.completedSeconds.map { $0 < 10 ? ($0 * 10).rounded() / 10 : $0.rounded() }
+        guard let watched = watchedDuration, watched > saved ?? .infinity else {
             return presentation?.completedDuration
         }
         return formattedRunDuration(watched)
     }
 
-    /// Whole seconds for a once-per-second count; longer runs use the shared format.
+    /// Whole seconds gone, never rounded up, for a once-per-second count;
+    /// longer runs use the shared format.
     static func elapsed(_ interval: TimeInterval) -> String {
-        interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval)
+        interval < 60 ? "\(max(0, Int(interval)))s" : formattedRunDuration(interval.rounded(.down))
     }
 }
 
