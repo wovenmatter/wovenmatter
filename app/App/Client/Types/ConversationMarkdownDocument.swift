@@ -222,6 +222,24 @@ private extension ConversationMarkdownDocument {
         var endsInParagraph = false
         /// `content` ends in a table, whose rows a paragraph never takes.
         var inTable = false
+        /// How many lines the paragraph `content` ends in has, and its last
+        /// line: what decides a setext underline and a table's header.
+        var paragraphLines = 0
+        var lastLine = ""
+
+        /// A seed whose `content` is its first line.
+        init(depth: Int, marker: String, checked: Bool?, continuationIndent: Int, content: String, continuation: Bool = false) {
+            self.depth = depth
+            self.marker = marker
+            self.checked = checked
+            self.continuationIndent = continuationIndent
+            self.content = content
+            self.continuation = continuation
+            fence = Parser.fenceOpening(content)
+            endsInParagraph = Parser.startsParagraph(content)
+            paragraphLines = endsInParagraph ? 1 : 0
+            lastLine = content
+        }
     }
 
     struct ListMarker {
@@ -352,6 +370,8 @@ private extension ConversationMarkdownDocument {
                     let text = Self.removingIndent(line, columns: last.continuationIndent)
                     add(text)
                     seeds[seeds.count - 1].endsInParagraph = false
+                    seeds[seeds.count - 1].paragraphLines = 0
+                    seeds[seeds.count - 1].lastLine = text
                     if Self.isFenceClosing(text, matching: fence) { seeds[seeds.count - 1].fence = nil }
                     index += 1
                     continue
@@ -364,9 +384,7 @@ private extension ConversationMarkdownDocument {
                             marker: marker.marker,
                             checked: marker.checked,
                             continuationIndent: marker.continuationIndent,
-                            content: marker.content,
-                            fence: Self.fenceOpening(marker.content),
-                            endsInParagraph: Self.startsParagraph(marker.content)
+                            content: marker.content
                         )
                     )
                     pendingBlankLines = 0
@@ -385,21 +403,37 @@ private extension ConversationMarkdownDocument {
                 }
 
                 let text = line.trimmingCharacters(in: .whitespaces)
-                /// Records what the last item ends in once `text` is added: a
-                /// paragraph goes on through lines that cannot interrupt it; a
-                /// blank line, a code block, a heading, a rule, a quote or a
-                /// table ends it.
+                /// Records what the last item ends in once `text` is added, by
+                /// the parser's own rules: a paragraph goes on through lines
+                /// that cannot interrupt it; a blank line, a code block, a
+                /// heading, a rule, a quote or a table ends it; `===` under a
+                /// paragraph of one line makes it a heading, under a longer
+                /// one it is more of the paragraph; a separator under a line
+                /// with as many cells starts a table.
                 func track(_ text: String) {
                     let last = seeds.count - 1
+                    let continuing = pendingBlankLines == 0 && seeds[last].endsInParagraph
+                    defer { seeds[last].lastLine = text }
                     if pendingBlankLines == 0, seeds[last].inTable, Self.tableCells(text) != nil {
                         seeds[last].endsInParagraph = false
-                    } else if pendingBlankLines == 0, seeds[last].endsInParagraph, Self.tableSeparator(text) != nil {
-                        seeds[last].endsInParagraph = false
-                        seeds[last].inTable = true
-                    } else {
-                        seeds[last].inTable = false
-                        seeds[last].endsInParagraph = Self.startsParagraph(text)
+                        return
                     }
+                    seeds[last].inTable = false
+                    if pendingBlankLines == 0, let alignments = Self.tableSeparator(text),
+                       Self.tableCells(seeds[last].lastLine)?.count == alignments.count {
+                        seeds[last].inTable = true
+                        seeds[last].endsInParagraph = false
+                        seeds[last].paragraphLines = 0
+                        return
+                    }
+                    if continuing, !text.isEmpty, text.allSatisfy({ $0 == "=" }) {
+                        seeds[last].endsInParagraph = seeds[last].paragraphLines != 1
+                        seeds[last].paragraphLines = seeds[last].endsInParagraph ? seeds[last].paragraphLines + 1 : 0
+                        return
+                    }
+                    let paragraph = Self.startsParagraph(text)
+                    seeds[last].endsInParagraph = paragraph
+                    seeds[last].paragraphLines = !paragraph ? 0 : continuing ? seeds[last].paragraphLines + 1 : 1
                 }
                 if Self.leadingIndent(line) >= seeds[seeds.count - 1].continuationIndent {
                     track(text)
@@ -420,9 +454,7 @@ private extension ConversationMarkdownDocument {
                                 checked: nil,
                                 continuationIndent: seeds[owner].continuationIndent,
                                 content: text,
-                                continuation: true,
-                                fence: Self.fenceOpening(text),
-                                endsInParagraph: Self.startsParagraph(text)
+                                continuation: true
                             )
                         )
                         pendingBlankLines = 0
@@ -524,7 +556,7 @@ private extension ConversationMarkdownDocument {
             line.allSatisfy(\.isWhitespace)
         }
 
-        private static func fenceOpening(_ line: String) -> Fence? {
+        static func fenceOpening(_ line: String) -> Fence? {
             guard leadingIndent(line) <= 3 else { return nil }
             let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
             guard let character = trimmed.first, character == "`" || character == "~" else {
@@ -626,9 +658,9 @@ private extension ConversationMarkdownDocument {
         /// Whether a line, trimmed, is paragraph text: one that starts or
         /// continues a paragraph rather than a code block, heading, rule,
         /// quote or setext underline.
-        private static func startsParagraph(_ line: String) -> Bool {
+        static func startsParagraph(_ line: String) -> Bool {
             !isBlank(line) && fenceOpening(line) == nil && heading(line) == nil && !isThematicBreak(line)
-                && !isQuote(line) && listMarker(line) == nil && !line.allSatisfy({ $0 == "=" })
+                && !isQuote(line) && listMarker(line) == nil
         }
 
         /// `line` without up to `columns` of its leading spaces and tabs.

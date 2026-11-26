@@ -103,11 +103,17 @@ enum ConversationMetrics {
         /// A narrow table that breaks code tries keeping this many of its
         /// shortest broken spans whole, so its search stays a few layouts.
         static let tableSpansTriedWhole = 4
+        /// The points a narrow table tries moving between its two widest
+        /// prose columns, each way, to save a line.
+        static let tableColumnShifts: [CGFloat] = [24, 40]
         /// Inline code in prose up to this many characters moves to the next
         /// line whole rather than break, when it takes at most
         /// `proseCodeLineShare` of that line.
         static let proseCodeOnOneLine = 32
         static let proseCodeLineShare: CGFloat = 2.0 / 3
+        /// A link whose text is up to this many characters moves to the next
+        /// line whole, like short inline code.
+        static let shortLinkLength = 32
     }
 }
 

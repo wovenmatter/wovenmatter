@@ -1070,6 +1070,29 @@ private enum ConversationResponseAttributedText {
                 }
                 result.append(NSAttributedString(string: string, attributes: attributes))
             }
+            // In prose, a short link moves to the next line whole, with the
+            // brackets around it and the punctuation after it, as short code
+            // does (`allowsBreak`).
+            if !inCell {
+                let string = result.string as NSString
+                var links: [NSRange] = []
+                for key in [NSAttributedString.Key.link, .responseFileLink] {
+                    result.enumerateAttribute(key, in: NSRange(location: 0, length: result.length)) { value, range, _ in
+                        if value != nil, range.length <= Prose.shortLinkLength { links.append(range) }
+                    }
+                }
+                for link in links {
+                    var range = link
+                    if range.location > 0, "([".contains(Character(UnicodeScalar(string.character(at: range.location - 1))!)) {
+                        range = NSRange(location: range.location - 1, length: range.length + 1)
+                    }
+                    while NSMaxRange(range) < string.length,
+                          ")],.".contains(Character(UnicodeScalar(string.character(at: NSMaxRange(range)))!)) {
+                        range.length += 1
+                    }
+                    result.addAttribute(.responseNoBreak, value: ResponseNoBreak.line, range: range)
+                }
+            }
             return result
         }
 
@@ -1214,16 +1237,18 @@ private enum ConversationResponseAttributedText {
                 // decided in source order so a later item never moves an earlier one.
                 var indents: [Int] = []
                 var previousItem: Block?
-                var topKind: MarkerKind?
+                // The kind of list at each open level, so a list straight after
+                // a sibling list of another kind, at any depth, reads as its own.
+                var kinds: [MarkerKind?] = []
                 for (index, item) in items.enumerated() {
-                    while let last = indents.last, last > item.depth { indents.removeLast() }
-                    if indents.last != item.depth { indents.append(item.depth) }
+                    while let last = indents.last, last > item.depth { indents.removeLast(); kinds.removeLast() }
+                    if indents.last != item.depth { indents.append(item.depth); kinds.append(nil) }
                     let level = CGFloat(min(indents.count - 1, 6))
                     let kind: MarkerKind = item.checked != nil ? .task : item.marker == "•" ? .bullet : .number
                     // A different kind of list straight after one reads as a list of its own.
                     // An item's blocks after its nested list continue it, at its text indent.
-                    let startsList = !item.continuation && level == 0 && topKind != nil && topKind != kind
-                    if level == 0, !item.continuation { topKind = kind }
+                    let startsList = !item.continuation && kinds[kinds.count - 1].map { $0 != kind } == true
+                    if !item.continuation { kinds[kinds.count - 1] = kind }
                     let markerEnd = indent + Prose.markerColumn + level * Prose.nestedListStep
                     // A task's box is drawn over its character, which stays for copying.
                     let text: NSAttributedString = if let checked = item.checked {
@@ -1528,6 +1553,24 @@ private enum ConversationResponseAttributedText {
                                     consider((current.choice.code, kept, widths))
                                 }
                                 if let improved = best { current = improved }
+                            }
+                        }
+                    }
+                    // Then a few points moved between the two widest prose
+                    // columns, either way, where that makes the table a line
+                    // shorter: a row that wraps for one word gets it back.
+                    if let current = best {
+                        let widths = current.choice.widths
+                        let prose = widths.indices.filter { !codeColumns.contains($0) }.sorted { widths[$0] > widths[$1] }
+                        if prose.count >= 2 {
+                            let least = limits(cellTexts(current.choice.code, keeping: current.choice.kept)).least
+                            for (from, to) in [(prose[0], prose[1]), (prose[1], prose[0])] {
+                                for shift in Prose.tableColumnShifts where widths[from] - shift >= least[from] {
+                                    var shifted = widths
+                                    shifted[from] -= shift
+                                    shifted[to] += shift
+                                    consider((current.choice.code, current.choice.kept, shifted))
+                                }
                             }
                         }
                     }

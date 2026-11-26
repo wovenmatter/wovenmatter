@@ -528,7 +528,8 @@ when an intentional design change is accepted.
   code, tables and quotes keep the same space on each side and start at their
   block's indent. A code line that wraps continues two cells right of its own
   indent, never past half the box, after a quiet wrap mark drawn in that
-  indent. Short inline code in prose moves to the next line whole rather
+  indent. Short inline code in prose, and a short link with the brackets and
+  punctuation around it, moves to the next line whole rather
   than break, unless it would take more than two thirds of that line. Inline code is shaded around its own text on each line, a
   little smaller than the text it sits in, in a table cell too. Table
   columns fit their content, never narrower than short code or a short value
@@ -537,7 +538,8 @@ when an intentional design change is accepted.
   fit, the widest give way and break, so no cell is cut off. A table too
   narrow for its content breaks code of several words between its words
   only where that makes it shorter, as laid out, and otherwise takes the
-  room from its prose columns. In a narrow column
+  room from its prose columns, moving a few points between its two widest
+  prose columns when that saves a line. In a narrow column
   cells keep less padding. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
