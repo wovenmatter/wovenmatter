@@ -652,13 +652,16 @@ public extension AgentRunActivity {
 
   /// A call that delegates a task to a subagent: Claude Code's Task tool,
   /// which sends a `prompt` and a short `description`, and which its ACP
-  /// adapter first reports as a call of kind `think` with no input yet.
-  /// (Codex's guardian review is also of kind `think`, but always comes
-  /// with its input, which has no prompt.)
+  /// adapter reports as a call of kind `think` whose input streams in: `{}`
+  /// first, then `{description}`, then the rest, the prompt last. (Codex's
+  /// guardian review is also of kind `think`, but always comes with its whole
+  /// input, a review with no description; Claude's web fetch sends a prompt
+  /// and a URL, no description.)
   var workTimelineIsDelegation: Bool {
     guard kind == .tool else { return false }
-    if toolName == "think", rawInputJSON?.workTimelineNonempty == nil { return true }
     let input = workTimelineInput
+    if toolName == "think",
+       input.map({ $0.isEmpty || $0["description"] is String }) ?? (rawInputJSON?.workTimelineNonempty == nil) { return true }
     return input?["prompt"] is String && input?["description"] is String
   }
 
