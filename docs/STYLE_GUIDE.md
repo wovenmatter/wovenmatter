@@ -502,11 +502,13 @@ when an intentional design change is accepted.
   an entry gap below the text when it holds files; a link in the text to one
   of those files opens it as its chip does, and one to a file without a chip
   stays plain text. In reply text,
-  lists sit tighter than paragraphs, with one gap between every two items at
-  every level, whether they wrap or not, two different lists in a row are spaced as
+  lists sit tighter than paragraphs but clearly looser than a line, with one
+  gap between top-level items and a smaller one within a nested list, whether
+  they wrap or not, two different lists in a row are spaced as
   paragraphs, every item keeps its marker, an item's later blocks (after its
-  nested list too) start at its text indent, an item gap below what precedes
-  them, a task's box is one drawn square,
+  nested list too) start at its text indent, its level's item gap below what
+  precedes them, quoted text is a step quieter than the text around it (the
+  step commentary takes), a task's box is one drawn square,
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
   block's indent. A code line that wraps continues two cells right of its own

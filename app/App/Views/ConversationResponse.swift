@@ -1137,23 +1137,23 @@ private enum ConversationResponseAttributedText {
         /// `values` in order. The first block's gap is `firstBefore` when a
         /// container chose it; every other block's comes from its predecessor.
         func sequence(_ values: [Block], indent: CGFloat, after previous: Block?, firstBefore: CGFloat?,
-                      inItem: Bool, marker: Marker? = nil) {
+                      itemGap: CGFloat?, marker: Marker? = nil) {
             var previous = previous
             for (index, block) in values.enumerated() {
                 let chosen = index == 0 ? firstBefore : nil
-                emit(block, indent: indent, before: chosen ?? spacing(after: previous, before: block, inItem: inItem),
-                     inItem: inItem, marker: index == 0 ? marker : nil)
+                emit(block, indent: indent, before: chosen ?? spacing(after: previous, before: block, itemGap: itemGap),
+                     itemGap: itemGap, marker: index == 0 ? marker : nil)
                 previous = block
             }
         }
 
-        func emit(_ block: Block, indent: CGFloat, before: CGFloat, inItem: Bool, marker: Marker?) {
+        func emit(_ block: Block, indent: CGFloat, before: CGFloat, itemGap: CGFloat?, marker: Marker?) {
             if plain { return emitPlain(block) }
             var before = before
             // A block that cannot start with the marker gets a line of its own for it.
             if let marker, leadsWithMarkerLine(block) {
                 appendInline(.init(""), font: body, style: paragraphStyle(indent: indent, before: before), marker: marker)
-                before = spacing(after: emptyParagraph, before: block, inItem: true)
+                before = spacing(after: emptyParagraph, before: block, itemGap: itemGap ?? Prose.nestedListGap)
             }
             let marker = leadsWithMarkerLine(block) ? nil : marker
             switch block {
@@ -1189,21 +1189,31 @@ private enum ConversationResponseAttributedText {
                     } else {
                         NSAttributedString(string: item.marker, attributes: [.font: body, .foregroundColor: foreground])
                     }
-                    let gap = startsList ? Prose.paragraphGap : Prose.listGap
+                    // Top-level items stand further apart than a nested list's,
+                    // and an item's later blocks take its level's gap.
+                    let itemGap = level == 0 ? Prose.listGap : Prose.nestedListGap
+                    let gap = startsList ? Prose.paragraphGap : itemGap
                     let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
                         appendInline(.init(""), font: body,
                                      style: paragraphStyle(indent: markerEnd + Prose.markerGap, before: first), marker: itemMarker)
                     }
-                    sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, inItem: true,
+                    sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, itemGap: itemGap,
                              marker: item.continuation ? nil : itemMarker)
                     previousItem = item.blocks.last ?? emptyParagraph
                 }
             case .quote(let quoted):
                 let start = output.length
                 sequence(quoted, indent: indent + Prose.quoteBar + Prose.quoteGap, after: nil, firstBefore: before,
-                         inItem: inItem, marker: marker)
+                         itemGap: itemGap, marker: marker)
+                // Quoted text is a step quieter than the text around it: the
+                // step commentary takes from the reply's ink.
+                let quoted = foreground.withAlphaComponent(responseStyle.inkOpacity * ConversationResponse.Style.commentary.inkOpacity)
+                let range = NSRange(location: start, length: output.length - start)
+                output.enumerateAttribute(.foregroundColor, in: range) { value, part, _ in
+                    if (value as? NSColor) == foreground { output.addAttribute(.foregroundColor, value: quoted, range: part) }
+                }
                 decorate(.responseQuote, from: start, indent: indent)
             case .code(let language, let content):
                 let start = output.length
@@ -1489,7 +1499,7 @@ private enum ConversationResponseAttributedText {
         var ends: [Int] = []
         var before = previous
         for block in values {
-            sequence([block], indent: 0, after: before, firstBefore: nil, inItem: false)
+            sequence([block], indent: 0, after: before, firstBefore: nil, itemGap: nil)
             ends.append(output.length)
             before = block
         }
@@ -1606,12 +1616,13 @@ private enum ConversationResponseAttributedText {
 
     /// The spacing above `block`'s first line: the visible gap between the two
     /// blocks' edges, adjusted for where those edges sit around their lines.
-    private static func spacing(after previous: Block?, before block: Block, inItem: Bool) -> CGFloat {
-        max(0, gap(after: previous, before: block, inItem: inItem) + topOverhang(block) - bottomSlack(previous))
+    /// `itemGap` is the gap between the items of the list `block` is in, nil outside one.
+    private static func spacing(after previous: Block?, before block: Block, itemGap: CGFloat?) -> CGFloat {
+        max(0, gap(after: previous, before: block, itemGap: itemGap) + topOverhang(block) - bottomSlack(previous))
     }
 
     /// Visible space between two blocks: text to text, or to a box's edge.
-    private static func gap(after previous: Block?, before block: Block, inItem: Bool) -> CGFloat {
+    private static func gap(after previous: Block?, before block: Block, itemGap: CGFloat?) -> CGFloat {
         guard let previous else { return 0 }
         // A heading attaches to what follows it.
         if case .heading(let level, _) = previous { return level <= 2 ? Prose.majorHeadingAttach : Prose.minorHeadingAttach }
@@ -1620,8 +1631,8 @@ private enum ConversationResponseAttributedText {
         if isBox(previous) || isBox(block) { return Prose.paragraphGap }
         // Two lists in a row are two lists, spaced as paragraphs.
         if case .list = previous { return Prose.paragraphGap }
-        if case .list = block { return Prose.listGap }
-        return inItem ? Prose.listGap : Prose.paragraphGap
+        if case .list = block { return itemGap == nil ? Prose.listGap : Prose.nestedListGap }
+        return itemGap ?? Prose.paragraphGap
     }
 
     /// Whether a list item's marker needs a line of its own before this block.
