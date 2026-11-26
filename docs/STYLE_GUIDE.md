@@ -515,8 +515,8 @@ when an intentional design change is accepted.
   stays plain text. In reply text,
   lists sit tighter than paragraphs but clearly looser than a line, with one
   gap between top-level items and a smaller one within a nested list, whether
-  they wrap or not, two different lists in a row are spaced as
-  paragraphs, every item keeps its marker, an item's later blocks (after its
+  they wrap or not, two different lists in a row stand a section gap apart,
+  every item keeps its marker, an item's later blocks (after its
   nested list too) start at its text indent, its level's item gap below what
   precedes them (a line of only links after a nested list, a citation, sits a
   label gap under what it cites), quoted text is a step quieter than the text around it (the
@@ -526,7 +526,7 @@ when an intentional design change is accepted.
   block's indent. A code line that wraps continues two cells right of its own
   indent, never past half the box, after a quiet wrap mark drawn in that
   indent. Short inline code in prose moves to the next line whole rather
-  than break, unless no line could hold it. Inline code is shaded around its own text on each line, a
+  than break, unless it would take more than two thirds of that line. Inline code is shaded around its own text on each line, a
   little smaller than the text it sits in, in a table cell too. Table
   columns fit their content, never narrower than short code or a short value
   they keep whole; a table nearly as wide as the text fills it, and one too

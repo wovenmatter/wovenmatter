@@ -724,9 +724,8 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
             guard piece.length > 0, let font = text.attribute(.font, at: piece.location, effectiveRange: nil) as? NSFont else { continue }
             let pieceGlyphs = layoutManager.glyphRange(forCharacterRange: piece, actualCharacterRange: nil)
             let bounds = layoutManager.boundingRect(forGlyphRange: pieceGlyphs, in: textContainer)
-            // Raised text (the plain style's) is drawn above its layout baseline.
-            let raised = text.attribute(.baselineOffset, at: piece.location, effectiveRange: nil) as? CGFloat ?? 0
-            let baseline = fragment.minY + layoutManager.location(forGlyphAt: pieceGlyphs.location).y - raised
+            // The glyphs' drawn baseline, raised text's (the plain style's) included.
+            let baseline = fragment.minY + layoutManager.location(forGlyphAt: pieceGlyphs.location).y
             // Around the code's own line box, so stacked lines never touch,
             // and never past the text's left edge, where it would be cut off.
             let minX = max(0, bounds.minX - ConversationMetrics.hair)
@@ -905,7 +904,7 @@ private final class ResponseLineBreaks: NSObject, @preconcurrency NSLayoutManage
             let style = text.attribute(.paragraphStyle, at: charIndex, effectiveRange: nil) as? NSParagraphStyle
             let container = layoutManager.textContainers.first?.size.width ?? .greatestFiniteMagnitude
             let tail = style.map { $0.tailIndent <= 0 ? container + $0.tailIndent : $0.tailIndent } ?? container
-            return text.attributedSubstring(from: span).size().width > tail - (style?.headIndent ?? 0)
+            return text.attributedSubstring(from: span).size().width > ConversationMetrics.Prose.proseCodeLineShare * (tail - (style?.headIndent ?? 0))
         }
     }
 
@@ -1047,11 +1046,11 @@ private enum ConversationResponseAttributedText {
                     // as the table allows; in prose, on one line when a line
                     // can hold it; else it may still break at its spaces,
                     // never inside a flag.
-                    if string.count <= Prose.unbreakableCodeLength {
-                        let whole = inCell && (cellCode == .whole || kept.contains(string)
-                            || (cellCode == .wholeWords && !string.contains(" ")))
-                        attributes[.responseNoBreak] = whole ? ResponseNoBreak.whole
-                            : !inCell && string.count <= Prose.proseCodeOnOneLine ? ResponseNoBreak.line : ResponseNoBreak.words
+                    if inCell, string.count <= Prose.unbreakableCodeLength {
+                        let whole = cellCode == .whole || kept.contains(string) || (cellCode == .wholeWords && !string.contains(" "))
+                        attributes[.responseNoBreak] = whole ? ResponseNoBreak.whole : ResponseNoBreak.words
+                    } else if !inCell, string.count <= Prose.proseCodeOnOneLine {
+                        attributes[.responseNoBreak] = ResponseNoBreak.line
                     }
                 }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
@@ -1232,7 +1231,7 @@ private enum ConversationResponseAttributedText {
                     // and an item's later blocks take its level's gap.
                     let itemGap = level == 0 ? Prose.listGap : Prose.nestedListGap
                     // A citation line after an item's nested list belongs to what it cites.
-                    let gap = startsList ? Prose.paragraphGap
+                    let gap = startsList ? ConversationMetrics.sectionGap
                         : item.continuation && isCitationLine(item.blocks.first) ? ConversationMetrics.labelGap : itemGap
                     let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
@@ -1685,8 +1684,12 @@ private enum ConversationResponseAttributedText {
         if isRule(previous) || isRule(block) { return Prose.ruleGap }
         if isBox(previous) || isBox(block) { return Prose.paragraphGap }
         // Two lists in a row are two lists, spaced as paragraphs.
-        if case .list = previous { return Prose.paragraphGap }
-        if case .list = block { return itemGap == nil ? Prose.listGap : Prose.nestedListGap }
+        if case .list = previous {
+            // Two lists in a row are two lists, a section apart.
+            if case .list = block { return ConversationMetrics.sectionGap }
+            return Prose.paragraphGap
+        }
+        if case .list = block { return itemGap == nil ? Prose.paragraphToListGap : Prose.nestedListGap }
         return itemGap ?? Prose.paragraphGap
     }
 

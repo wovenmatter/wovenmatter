@@ -52,12 +52,14 @@ enum ConversationMetrics {
     enum Prose {
         static let lineSpacing: CGFloat = 5
         static let paragraphGap: CGFloat = 14
-        /// Between top-level list items, whether they wrap or not; a
-        /// paragraph → a list; between the blocks of a top-level item.
-        static let listGap: CGFloat = 10
+        /// Between top-level list items, whether they wrap or not, and
+        /// between the blocks of a top-level item.
+        static let listGap: CGFloat = 8
         /// Between a nested list's items, from a parent's text to its first
         /// nested item, and between the blocks of a nested item.
-        static let nestedListGap: CGFloat = 8
+        static let nestedListGap: CGFloat = 6
+        /// A paragraph → the list after it.
+        static let paragraphToListGap: CGFloat = 10
         static let majorHeadingGap: CGFloat = 24
         static let minorHeadingGap: CGFloat = 20
         /// A heading → what follows it.
@@ -102,8 +104,10 @@ enum ConversationMetrics {
         /// shortest broken spans whole, so its search stays a few layouts.
         static let tableSpansTriedWhole = 4
         /// Inline code in prose up to this many characters moves to the next
-        /// line whole rather than break, when a line can hold it.
-        static let proseCodeOnOneLine = 24
+        /// line whole rather than break, when it takes at most
+        /// `proseCodeLineShare` of that line.
+        static let proseCodeOnOneLine = 32
+        static let proseCodeLineShare: CGFloat = 2.0 / 3
     }
 }
 
