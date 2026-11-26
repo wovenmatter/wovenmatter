@@ -366,12 +366,15 @@ public struct VisualReply: Codable, Sendable, Hashable {
   public var title: String
   /// The height it starts at, in points, before it has measured itself.
   public var height: Int
+  /// How wide it needs to be, in points; none fills the chat's width.
+  public var width: Int?
   public var digest: String
   public var size: Int64
 
-  public init(title: String, height: Int, digest: String, size: Int64) {
+  public init(title: String, height: Int, width: Int? = nil, digest: String, size: Int64) {
     self.title = title
     self.height = height
+    self.width = width
     self.digest = digest
     self.size = size
   }

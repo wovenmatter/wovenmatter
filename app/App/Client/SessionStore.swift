@@ -682,6 +682,9 @@ final class SessionStore {
                 if !entry.live { runs[run].completedAt = entry.date }
                 // A published visual reply shows as its own item; only a call that failed shows as a call.
                 if call.kind == .visualReply && !call.failed { continue }
+                // So does a finished script that did nothing but publish visual replies.
+                if call.kind == .code, !entry.live, !call.failed, let calls = call.calls, !calls.isEmpty,
+                   calls.allSatisfy({ $0.kind == .visualReply && !$0.failed }) { continue }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
@@ -700,7 +703,7 @@ final class SessionStore {
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: AgentRunActivity(
                         id: entry.id, kind: .activity, title: reply.title, status: "completed", position: position,
-                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height,
+                        htmlRender: ConversationHTMLRenderReference(id: entry.id, title: reply.title, height: reply.height, width: reply.width,
                                                                     digest: reply.digest)),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .notice(let notice):

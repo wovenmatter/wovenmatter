@@ -26,6 +26,9 @@ private struct ConversationActivityDetailsKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
+    /// The session's folder: tool rows show paths inside it relative to it.
+    @Entry var conversationFolder: String?
+
     var conversationTranscriptInteraction: @MainActor () -> Void {
         get { self[ConversationTranscriptInteractionKey.self] }
         set { self[ConversationTranscriptInteractionKey.self] = newValue }
@@ -171,8 +174,8 @@ struct ConversationWorkTranscript: View {
             }
         }
         // The gap to the reply: from the last entry, or from the header it captions.
-        .padding(.bottom, hasFollowingResponse ? (showsWork ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap) : 0)
-        .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+        .padding(.bottom, hasFollowingResponse ? (showsWork ? ConversationMetrics.workEndGap : ConversationMetrics.entryGap) : 0)
+        .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
     }
 
     /// Entries sit an entry apart. A visual reply keeps a section's space on
@@ -206,8 +209,10 @@ struct ConversationWorkTranscript: View {
             ConversationResponse(
                 content: activity.content ?? "",
                 isStreaming: false,
-                showsCopyButton: false
+                showsCopyButton: false,
+                style: .commentary
             )
+            .padding(.leading, ConversationMetrics.textInset)
         case .group(let group):
             ConversationWorkGroupRow(
                 group: group,
@@ -355,10 +360,12 @@ private func conversationDisclosure(
 /// label. Also thinking that came without text: only that the agent thought.
 struct ConversationThinkingLabel: View {
     let text: String
+    /// A record (an approval) is not thinking, so it has its own glyph.
+    var systemImage = "brain"
 
     var body: some View {
         HStack(spacing: ConversationMetrics.iconGap) {
-            Image(systemName: "brain")
+            Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
                 .frame(width: ConversationMetrics.iconColumn)
             Text(text).font(.system(size: 13.5))
@@ -374,8 +381,8 @@ struct ConversationThinkingLabel: View {
 /// thought that is only a title is that row, and a record of fields (an
 /// approval) is summed up in it.
 private struct ConversationThinkingBlock: View {
-    /// About six lines of reasoning text.
-    private static let liveHeight: CGFloat = 126
+    /// Three lines of reasoning text.
+    private static let liveHeight: CGFloat = 63
 
     let activity: AgentRunActivity
     let runID: String
@@ -401,30 +408,40 @@ private struct ConversationThinkingBlock: View {
     }
 
     @ViewBuilder
-    private func settledRow(_ summary: (label: String, isComplete: Bool)) -> some View {
+    private func settledRow(_ summary: Summary) -> some View {
+        let glyph = summary.isRecord ? "checkmark.shield" : "brain"
         if summary.isComplete {
-            ConversationThinkingLabel(text: summary.label)
-        } else {
-            let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + activity.id,
-                keepsRunningTurnOpen: runStatus == .running, local: $localExpanded, interaction: transcriptInteraction)
-            VStack(alignment: .leading, spacing: 0) {
-                Button { expanded.wrappedValue.toggle() } label: {
-                    HStack(spacing: ConversationMetrics.labelGap) {
-                        ConversationThinkingLabel(text: summary.label)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
-                            .foregroundStyle(WovenPalette.mutedForeground)
-                            .accessibilityHidden(true)
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
-                if expanded.wrappedValue { trace(maximumHeight: ConversationBoundedWorkList.maximumHeight) }
+            // Always one line: a thought too long for it is "Thought", and opens.
+            ViewThatFits(in: .horizontal) {
+                ConversationThinkingLabel(text: summary.label, systemImage: glyph)
+                    .fixedSize(horizontal: true, vertical: false)
+                disclosure(label: "Thought", systemImage: glyph)
             }
+        } else {
+            disclosure(label: summary.label, systemImage: glyph)
+        }
+    }
+
+    private func disclosure(label: String, systemImage: String) -> some View {
+        let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + activity.id,
+            keepsRunningTurnOpen: runStatus == .running, local: $localExpanded, interaction: transcriptInteraction)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button { expanded.wrappedValue.toggle() } label: {
+                HStack(spacing: ConversationMetrics.labelGap) {
+                    ConversationThinkingLabel(text: label, systemImage: systemImage)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                        .foregroundStyle(WovenPalette.mutedForeground)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
+            if expanded.wrappedValue { trace(maximumHeight: ConversationBoundedWorkList.maximumHeight) }
         }
     }
 
@@ -440,7 +457,9 @@ private struct ConversationThinkingBlock: View {
                 if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
                 else { localScrollSnapshot = snapshot }
             })
-            .padding(.top, ConversationMetrics.rowGap)
+            // A live trace has nothing to show until its first line is ready.
+            .padding(.top, isLive && AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? "")
+                .workTimelineNonempty == nil ? 0 : ConversationMetrics.rowGap)
             .padding(.leading, ConversationMetrics.textInset)
     }
 
@@ -448,9 +467,16 @@ private struct ConversationThinkingBlock: View {
         ConversationTranscriptState.disclosureKey(runID: runID, itemID: "thinking:" + activity.id)
     }
 
-    /// A settled row's label, and whether it already says everything the
-    /// thought does (then there is nothing to open).
-    static func summary(of activity: AgentRunActivity) -> (label: String, isComplete: Bool) {
+    struct Summary {
+        let label: String
+        /// The label already says everything the thought does: nothing to open.
+        let isComplete: Bool
+        /// A record of fields, such as an approval, rather than reasoning.
+        var isRecord = false
+    }
+
+    /// A settled row's label.
+    static func summary(of activity: AgentRunActivity) -> Summary {
         let text = (activity.content ?? activity.detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         // "Status: Approved", "Action: …": a record, named by its status and action.
@@ -459,14 +485,20 @@ private struct ConversationThinkingBlock: View {
             return (String(line[..<colon]), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
         }
         if lines.count > 1, fields.count == lines.count {
-            let named = ["Status", "Action"].compactMap { key in fields.first { $0.key == key }?.value }
-            return (named.isEmpty ? lines[0] : named.joined(separator: " · "), false)
+            let named = ["Status", "Action"].compactMap { key in
+                fields.first { $0.key == key }.map { field in
+                    // Woven's visual tools read the same here as in their own rows.
+                    key == "Action" && field.value.split(whereSeparator: { !$0.isLetter && $0 != "_" })
+                        .contains { ConversationToolAction.isVisual($0.lowercased()) } ? "Show a visual reply" : field.value
+                }
+            }
+            return Summary(label: named.isEmpty ? lines[0] : named.joined(separator: " · "), isComplete: false, isRecord: true)
         }
         // A short one-line thought is its own label, exactly as written.
-        if lines.count == 1, !text.hasPrefix("**"), text.count <= 120 { return (text, true) }
+        if lines.count == 1, !text.hasPrefix("**"), text.count <= 120 { return Summary(label: text, isComplete: true) }
         // Otherwise the provider's title or the trace's leading heading.
         let label = activity.workTimelineLabel(active: false)
-        return (label, text == label || text == "**\(label)**")
+        return Summary(label: label, isComplete: text == label || text == "**\(label)**")
     }
 }
 
@@ -573,6 +605,7 @@ private struct ConversationBoundedWorkList: View {
     @State private var isUserScrolling = false
     @State private var followTask: Task<Void, Never>?
     @State private var restoringScroll = true
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
             ScrollView(.vertical) {
@@ -593,6 +626,14 @@ private struct ConversationBoundedWorkList: View {
             }
         .scrollIndicators(.never)
         .frame(height: min(maximumHeight, max(1, contentHeight)))
+        // Scrolled from its start, the line cut at the top fades out instead.
+        .mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: scrollOffset > 0.5 && !reduceTransparency ? ConversationMetrics.entryGap : 0)
+                Color.black
+            }
+        }
         .defaultScrollAnchor(.top, for: .initialOffset)
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ConversationWorkScrollGeometry.self) { geometry in
@@ -687,6 +728,7 @@ private struct ConversationActivityRow: View {
     let showsProgress: Bool
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
+    @Environment(\.conversationFolder) private var folder
     @State private var localExpanded = false
 
     var body: some View {
@@ -793,7 +835,7 @@ private struct ConversationActivityRow: View {
     private var primaryLabel: String {
         switch activity.kind {
         case .thought, .tool:
-            return activity.workTimelineLabel(active: isLive)
+            return activity.workTimelineLabel(active: isLive, folder: folder)
         case .assistant: return activity.title?.nonempty ?? "Commentary"
         case .plan: return activity.title?.nonempty ?? "Updated the plan"
         case .fileChange: return activity.title?.nonempty ?? "Changed files"
@@ -803,6 +845,8 @@ private struct ConversationActivityRow: View {
     }
 
     private var secondaryLabel: String? {
+        // A script that only showed visual replies says so in its label.
+        if activity.kind == .tool, ConversationToolAction(activity) == .visual { return nil }
         if let detail = activity.detail?.nonempty { return detail }
         guard activity.kind != .activity,
               let content = activity.content?.nonempty else { return nil }
@@ -1474,7 +1518,8 @@ private extension ConversationToolAction {
         case .code: "curlybraces"
         case .read: "doc.text"
         case .edit: "pencil.and.outline"
-        case .codeSearch: "magnifyingglass"
+        case .codeSearch, .search: "magnifyingglass"
+        case .visual: "chart.bar.doc.horizontal"
         case .webSearch, .webFetch, .browser: "globe"
         case .computer: "desktopcomputer"
         case .delegate: "person.2"
@@ -1626,7 +1671,7 @@ struct ConversationChangedFilesCard: View {
                 RoundedRectangle(cornerRadius: WovenMetrics.cardRadius, style: .continuous)
                     .stroke(WovenPalette.foreground.opacity(0.10), lineWidth: 1)
             }
-            .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+            .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
             .sheet(item: $selectedChange) { change in
                 // Resolve the current owner/revision while the sheet is open.
                 ConversationDiffSheet(path: change.path, file: changes.first { $0.path == change.path })

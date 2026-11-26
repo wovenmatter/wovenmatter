@@ -311,6 +311,10 @@ public enum ConversationToolAction: Hashable, Sendable {
   case read
   case edit
   case codeSearch
+  /// A search whose subject the event does not name.
+  case search
+  /// Woven's visual reply tools: showing one, or previewing one.
+  case visual
   case webSearch
   case webFetch
   case browser
@@ -322,7 +326,12 @@ public enum ConversationToolAction: Hashable, Sendable {
 
   public init(_ activity: AgentRunActivity) {
     let name = activity.workTimelineToolIdentity.lowercased()
-    if activity.codeCalls != nil {
+    if Self.isVisual(name) || activity.codeCalls.map({ calls in
+      !calls.isEmpty && calls.allSatisfy { Self.isVisual($0.name.lowercased()) }
+    }) == true {
+      // Woven's own visual reply tools, however a harness names or wraps them.
+      self = .visual
+    } else if activity.codeCalls != nil {
       self = .code
     } else if activity.questions != nil {
       self = .question
@@ -335,11 +344,20 @@ public enum ConversationToolAction: Hashable, Sendable {
       self = .browser
     } else if name.contains("computer") {
       self = .computer
+    } else if let step = activity.workTimelineInput?["action"] as? [String: Any],
+              step["url"] != nil || (step["type"] as? String)?.lowercased().contains("search") == true {
+      // A search tool that reports a web step: a query, or a page it opened.
+      self = step["url"] != nil ? .webFetch : .webSearch
     } else if name.contains("web") || name.contains("fetch") || name.contains("browse") {
-      self = .webFetch
-    } else if name.contains("grep") || name.contains("glob")
-      || name.contains("search") || name.contains("find") {
+      // A fetch tool given a query rather than a page searched the web.
+      let input = activity.workTimelineInput
+      self = input?["query"] != nil && input?["url"] == nil ? .webSearch : .webFetch
+    } else if name.contains("grep") || name.contains("glob") {
       self = .codeSearch
+    } else if name.contains("search") || name.contains("find") {
+      // Only a pattern or a path says the search was over files.
+      let input = activity.workTimelineInput
+      self = input?["pattern"] != nil || activity.workTimelineInputPath != nil ? .codeSearch : .search
     } else if name.contains("write") || name.contains("edit")
       || name.contains("patch") || !activity.changes.isEmpty {
       self = .edit
@@ -352,6 +370,11 @@ public enum ConversationToolAction: Hashable, Sendable {
       // but ACP still supplies a reliable execution category.
       self = activity.toolName?.lowercased() == "execute" ? .command : .other
     }
+  }
+
+  /// `render_html` or `preview_html`, under any harness's prefix.
+  static func isVisual(_ name: String) -> Bool {
+    name.hasSuffix("render_html") || name.hasSuffix("preview_html")
   }
 
   var summaryPriority: Int {
@@ -382,6 +405,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .read: "Read \(count) \(plural ? "files" : "file")"
     case .edit: "Changed \(count) \(plural ? "files" : "file")"
     case .codeSearch: "Searched code \(count) \(plural ? "times" : "time")"
+    case .search: "Searched \(count) \(plural ? "times" : "time")"
+    case .visual: "Showed \(count) visual \(plural ? "replies" : "reply")"
     case .webSearch: "Searched the web \(count) \(plural ? "times" : "time")"
     case .webFetch: "Fetched \(count) web \(plural ? "pages" : "page")"
     case .browser: "Used the browser \(count) \(plural ? "times" : "time")"
@@ -399,6 +424,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .read: active ? "Reading a file" : "Read a file"
     case .edit: active ? "Editing a file" : "Edited a file"
     case .codeSearch: active ? "Searching code" : "Searched code"
+    case .search: active ? "Searching" : "Searched"
+    case .visual: active ? "Showing a visual reply" : "Showed a visual reply"
     case .webSearch: active ? "Searching the web" : "Searched the web"
     case .webFetch: active ? "Fetching a web page" : "Fetched a web page"
     case .browser: active ? "Using the browser" : "Used the browser"
@@ -433,7 +460,7 @@ public extension AgentRunActivity {
 
   /// A meaningful one-line label: the provider title, else for a thought its
   /// detail or leading bold heading, else a category phrase.
-  func workTimelineLabel(active: Bool) -> String {
+  func workTimelineLabel(active: Bool, folder: String? = nil) -> String {
     switch kind {
     case .thought:
       if let title = workTimelineThoughtTitle { return title }
@@ -441,7 +468,7 @@ public extension AgentRunActivity {
       if let heading = content.flatMap(Self.leadingBoldHeading) { return heading }
       return active ? "Thinking" : "Thought"
     case .tool:
-      return workTimelineToolLabel(active: active)
+      return workTimelineToolLabel(active: active, folder: folder)
     default:
       return title?.workTimelineSingleLine ?? toolName?.workTimelineSingleLine ?? "Agent activity"
     }
@@ -458,25 +485,76 @@ public extension AgentRunActivity {
     return name.isEmpty ? label : name
   }
 
-  private func workTimelineToolLabel(active: Bool) -> String {
+  /// The tool's input object, when its raw input is one.
+  var workTimelineInput: [String: Any]? {
+    rawInputJSON.flatMap { $0.data(using: .utf8) }
+      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+  }
+
+  /// The file or folder a tool's input names.
+  var workTimelineInputPath: String? {
+    let input = workTimelineInput
+    return ["file_path", "filePath", "path"].lazy
+      .compactMap { (input?[$0] as? String)?.workTimelineSingleLine }.first
+  }
+
+  private func workTimelineToolLabel(active: Bool, folder: String?) -> String {
     let generic = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
     let label = title?.workTimelineSingleLine
-    let input = rawInputJSON.flatMap { $0.data(using: .utf8) }
-      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    let input = workTimelineInput
+    let action = ConversationToolAction(self)
+    let failed = workTimelineIsFailure
+    // Paths inside the folder the tool ran in (else the session's) read relative to it.
+    let root = ["cwd", "workdir"].lazy.compactMap { input?[$0] as? String }.first ?? folder
+    // A command its runtime titled with it reads as its own text, without the
+    // folder plumbing around it. A runtime may cut a long command short to
+    // title it: show the whole command, which the row truncates in the
+    // middle, keeping its real end.
+    if action == .command, let label, let command = (input?["command"] as? String)?.workTimelineSingleLine,
+       command.hasPrefix(label) {
+      return command.workTimelineDisplayCommand(root: root)
+    }
+    if action == .visual {
+      // One plain label in every harness: what it showed, or previewed.
+      let arguments = (input?["arguments"] as? [String: Any]) ?? input
+      let name = (arguments?["title"] as? String)?.workTimelineSingleLine.map { "\u{201C}\($0)\u{201D}" }
+      let previews = workTimelineToolIdentity.lowercased().hasSuffix("preview_html")
+      let verb = previews ? (failed ? "Failed to preview" : active ? "Previewing" : "Previewed")
+        : (failed ? "Failed to show" : active ? "Showing" : "Showed")
+      return "\(verb) \(name ?? "a visual reply")"
+    }
+    // A file tool reads as its verb and a short path: the input's path, else
+    // an absolute path in the title.
+    if [.read, .edit, .codeSearch].contains(action) {
+      let path = workTimelineInputPath ?? label.flatMap { title in
+        title.workTimelineAbsolutePaths.count == 1 ? title.workTimelineAbsolutePaths.first : nil
+      }
+      if let path {
+        let place = path.workTimelineShortPath(root: root)
+        switch action {
+        case .read:
+          // A folder's listing is not a file read.
+          let output = rawOutputJSON?.prefix(200).lowercased() ?? ""
+          if path.hasSuffix("/") || output.hasPrefix("read directory") || output.hasPrefix("list") {
+            return "\(failed ? "Failed to list" : active ? "Listing" : "Listed") \(place)"
+          }
+          return "\(failed ? "Failed to read" : active ? "Reading" : "Read") \(place)"
+        case .edit: return "\(failed ? "Failed to edit" : active ? "Editing" : "Edited") \(place)"
+        default:
+          let pattern = (input?["pattern"] as? String)?.workTimelineSingleLine
+          return "\(failed ? "Failed to search" : active ? "Searching" : "Searched")"
+            + (pattern.map { " for \u{201C}\(String($0.prefix(60)))\u{201D} in" } ?? "") + " \(place)"
+        }
+      }
+    }
     // Keep a provider's descriptive title; bare function names gain readable
     // action labels below. A generic title must not mask a real tool name.
     if let label, label.contains(" "), !generic.contains(label.lowercased()) {
-      // A runtime may cut a long command short to title it: show the whole
-      // command, which the row truncates in the middle, keeping its real end.
-      if let command = (input?["command"] as? String)?.workTimelineSingleLine,
-         command.count > label.count, command.hasPrefix(label) { return command }
-      return label
+      return action == .command ? label.workTimelineDisplayCommand(root: root) : label
     }
-    let action = ConversationToolAction(self)
     func argument(_ key: String) -> String? {
       (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
     }
-    let failed = workTimelineIsFailure
     switch action {
     case .command:
       // Show the program, not command arguments that can contain credentials.
@@ -497,9 +575,10 @@ public extension AgentRunActivity {
       if operation == nil && host == nil { return failed ? "Browser failed" : action.liveLabel(active: active) }
       return (failed ? "Browser failed" : "Browser")
         + (operation.map { ": " + $0 } ?? "") + (host.map { " " + $0 } ?? "")
-    case .other:
+    case .other, .search:
       let identity = workTimelineToolIdentity
-      if !identity.isEmpty, !generic.contains(identity.lowercased()) {
+      if !identity.isEmpty, !generic.contains(identity.lowercased()),
+         action == .other || !["search", "find"].contains(identity.lowercased()) {
         return "\(failed ? "Failed" : active ? "Using" : "Used") \(identity)"
       }
       return action.liveLabel(active: active)
@@ -541,5 +620,66 @@ extension String {
   var workTimelineSingleLine: String? {
     let line = split(whereSeparator: \.isWhitespace).joined(separator: " ")
     return line.isEmpty ? nil : line
+  }
+}
+
+extension String {
+  private static let workTimelinePathPattern = try! NSRegularExpression(
+    pattern: #"'(/[^']+)'|"(/[^"]+)"|(?<![\w/.:~$@=-])(/[^\s'";|&()<>]+)"#)
+  private static let workTimelineLeadingCD = try! NSRegularExpression(
+    pattern: #"^cd\s+('[^']*'|"[^"]*"|[^\s;&]+)\s*(&&|;)\s*"#)
+  private static let workTimelineGitFolder = try! NSRegularExpression(
+    pattern: #"\bgit\s+-C\s+('[^']*'|"[^"]*"|\S+)"#)
+
+  /// Absolute paths in the text, quoted or bare.
+  var workTimelineAbsolutePaths: [String] {
+    let text = self as NSString
+    return Self.workTimelinePathPattern.matches(in: self, range: NSRange(location: 0, length: text.length))
+      .compactMap { match in
+        (1...3).lazy.map { match.range(at: $0) }.first { $0.location != NSNotFound }
+          .map { text.substring(with: $0) }
+      }
+  }
+
+  /// A path relative to `root` when it is inside it, else its last two
+  /// components.
+  func workTimelineShortPath(root: String? = nil) -> String {
+    let parts = split(separator: "/").map(String.init)
+    guard !parts.isEmpty else { return self }
+    if let root {
+      let base = root.split(separator: "/").map(String.init)
+      if parts.count > base.count, Array(parts.prefix(base.count)) == base {
+        return parts.dropFirst(base.count).joined(separator: "/")
+      }
+    }
+    return parts.suffix(2).joined(separator: "/")
+  }
+
+  /// A command as a row shows it: no leading `cd <folder> &&`, no
+  /// `git -C <folder>`, and other absolute paths relative to `root` when
+  /// inside it, else cut to two components.
+  func workTimelineDisplayCommand(root: String? = nil) -> String {
+    var command = self
+    while let match = Self.workTimelineLeadingCD.firstMatch(
+      in: command, range: NSRange(location: 0, length: (command as NSString).length)),
+      match.range.length < (command as NSString).length {
+      command = (command as NSString).replacingCharacters(in: match.range, with: "")
+    }
+    command = Self.workTimelineGitFolder.stringByReplacingMatches(
+      in: command, range: NSRange(location: 0, length: (command as NSString).length), withTemplate: "git")
+    let text = command as NSString
+    var result = command
+    for match in Self.workTimelinePathPattern.matches(
+      in: command, range: NSRange(location: 0, length: text.length)).reversed() {
+      guard let range = (1...3).lazy.map({ match.range(at: $0) }).first(where: { $0.location != NSNotFound }) else { continue }
+      let path = text.substring(with: range)
+      let short = path.workTimelineShortPath(root: root)
+      // A path already this short (`/dev/null`) stays as written.
+      guard short != String(path.drop { $0 == "/" }) else { continue }
+      let replacement = short.contains(" ") && range != match.range ? text.substring(with: match.range)
+        .replacingOccurrences(of: path, with: short) : short
+      result = (result as NSString).replacingCharacters(in: match.range, with: replacement)
+    }
+    return result
   }
 }

@@ -650,8 +650,8 @@ struct WorkspaceView: View {
             HStack {
                 if showLeftRailButton {
                     RevealRailButton(side: .left,
-                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : 36,
-                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : 36,
+                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : WovenMetrics.floatingControlSize,
+                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : WovenMetrics.floatingControlSize,
                         action: onLeftRail)
                 }
                 Spacer()
@@ -676,13 +676,13 @@ struct WorkspaceView: View {
                 }
                 if showRightRailButton {
                     RevealRailButton(side: .right,
-                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : 36,
-                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : 36,
+                        width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : WovenMetrics.floatingControlSize,
+                        height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : WovenMetrics.floatingControlSize,
                         action: onRightRail)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, presentsAssets ? WovenMetrics.assetToolbarVerticalPadding : 12)
+            .padding(.horizontal, WovenMetrics.floatingControlInset)
+            .padding(.vertical, presentsAssets ? WovenMetrics.assetToolbarVerticalPadding : WovenMetrics.floatingControlInset)
 
             if let notice {
                 Text(notice)

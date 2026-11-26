@@ -262,7 +262,7 @@ struct CloudConversation: View {
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
                 }
-                .conversationBottomEdge(stackHeight: bottomStackHeight,
+                .conversationEdges(topClearance: ConversationMetrics.floatingControls, stackHeight: bottomStackHeight,
                                         jumpLabel: !scrollState.isNearBottom && hasContentBelow && conversation != nil
                                             ? "Latest reply" : nil) {
                     releaseHeldRow()
@@ -286,6 +286,7 @@ struct CloudConversation: View {
         }
         .background(theme.palette.workspace)
         .environment(\.conversationTranscriptState, session?.transcriptState)
+        .environment(\.conversationFolder, sessionFolder)
         .environment(\.conversationTaskProgress, interaction == nil ? session?.taskProgress : nil)
         .onChange(of: interaction?.id) { _, _ in session?.transcriptState.tasksExpanded = false }
         .alert("Could not open attachment", isPresented: Binding(
@@ -331,12 +332,12 @@ struct CloudConversation: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(WovenPalette.mutedForeground)
                 }
-                .frame(maxWidth: 768, alignment: .leading)
+                .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
                 .accessibilityElement(children: .combine)
             }
             if let error = session?.error {
                 InlineError(text: error)
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
             }
             if let interaction, let session {
                 SessionInteractionCard(interaction: interaction) { response in
@@ -646,6 +647,11 @@ struct CloudConversation: View {
         releaseHeldRow()
     }
 
+    /// The folder the session works in, when it has one.
+    private var sessionFolder: String? {
+        model.workspace.folder(id: conversation?.folderID)?.rootPath
+    }
+
     /// Less than this below the end, nothing is hidden: it is the space under
     /// the last row, which the composer stack covers.
     private static let endTolerance = CGFloat(ConversationBottomOverlayLayout.breathingRoom) + ConversationMetrics.turnGap
@@ -891,11 +897,9 @@ struct MessageRow: View {
                         content: reply,
                         isStreaming: isStreaming,
                         // The running turn's dots, under the text it is writing.
-                        showsRunningDots: run?.status == .running && hasResponseText
+                        showsRunningDots: run?.status == .running && hasResponseText,
+                        fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)
                     )
-                    if !isStreaming {
-                        ConversationFilePreviews(content: reply, messageID: message.libraryItemID, resolveFile: resolveFile)
-                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

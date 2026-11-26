@@ -12,11 +12,19 @@ extension EnvironmentValues {
 struct ConversationResponse: View {
     enum Style: Equatable {
         case reply
-        /// Reasoning inside the work log: smaller, at the log's ink.
+        /// Commentary in the work lane: the lane's size, a step below the reply's ink.
+        case commentary
+        /// Reasoning in the work lane: the lane's size, its quietest ink.
         case reasoning
 
         var scale: CGFloat { self == .reply ? 1 : 0.9 }
-        var inkOpacity: CGFloat { self == .reply ? 1 : 0.72 }
+        var inkOpacity: CGFloat {
+            switch self {
+            case .reply: 1
+            case .commentary: 0.88
+            case .reasoning: 0.62
+            }
+        }
     }
 
     let content: String
@@ -25,6 +33,8 @@ struct ConversationResponse: View {
     /// While the turn runs, its dots hold the row Copy takes once it ends.
     var showsRunningDots = false
     var style: Style = .reply
+    /// The files the reply refers to, as chips after Copy once it settles.
+    var fileRow: ConversationFileRow?
     @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
     @State private var pendingExternalURL: URL?
@@ -35,20 +45,28 @@ struct ConversationResponse: View {
                 // Page links only work where a handler routes them (bot chats).
                 if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
-            .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+            .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
 
             if showsCopyButton {
                 // One row, the same height while the reply streams and once it
                 // settles, so nothing moves when the turn ends.
+                // Files the reply refers to follow Copy in the same row, which
+                // wraps; with none the row is just Copy.
+                let files = isStreaming || showsRunningDots ? [] : fileRow.map { _ in ConversationFileRow.files(in: content) } ?? []
                 ZStack(alignment: .leading) {
                     if showsRunningDots {
                         ConversationRunningDots()
+                    } else if !isStreaming, let fileRow, !files.isEmpty {
+                        FlowLayout(horizontalSpacing: ConversationMetrics.rowGap, verticalSpacing: ConversationMetrics.rowGap) {
+                            copyButton.frame(height: WovenMetrics.rowHeight)
+                            fileRow.chips(files)
+                        }
                     } else if !isStreaming {
                         copyButton
                     }
                 }
-                .frame(height: ConversationMetrics.actionRowHeight)
-                .padding(.top, ConversationMetrics.rowGap)
+                .frame(minHeight: ConversationMetrics.actionRowHeight)
+                .padding(.top, ConversationMetrics.tight)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,13 +91,13 @@ struct ConversationResponse: View {
             copied = NSPasteboard.general.setString(content, forType: .string)
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .frame(width: ConversationMetrics.actionRowHeight, height: ConversationMetrics.actionRowHeight)
                 .contentShape(Rectangle())
         }
         .buttonStyle(WovenIconButtonStyle())
         // The glyph lines up with the text edge; its hover target hangs left of it.
-        .offset(x: -(ConversationMetrics.actionRowHeight - 12) / 2)
+        .padding(.leading, -(ConversationMetrics.actionRowHeight - 13) / 2)
         .help("Copy complete response")
         .accessibilityLabel(copied ? "Response copied" : "Copy response")
     }
@@ -110,7 +128,7 @@ private struct ConversationResponseText: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ConversationResponseViewport,
                       context: Context) -> CGSize? {
-        nsView.textView.fittingSize(width: proposal.width ?? ConversationMetrics.measure)
+        nsView.textView.fittingSize(width: proposal.width ?? ConversationMetrics.column)
     }
 }
 
@@ -187,7 +205,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     private var appliedStyle: ConversationResponse.Style?
     private var measuredSize: CGSize?
     /// The width tables were sized for.
-    private var layoutWidth = ConversationMetrics.measure
+    private var layoutWidth = ConversationMetrics.column
     private var decorations: [(key: NSAttributedString.Key, range: NSRange, block: ResponseBlockDecoration?)] = []
     /// While streaming: the source's length in UTF-8 before the last stable
     /// cut, the length of its rendering at the start of the text storage, and
@@ -197,7 +215,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     init() {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: CGSize(width: ConversationMetrics.measure, height: CGFloat.greatestFiniteMagnitude))
+        let container = NSTextContainer(size: CGSize(width: ConversationMetrics.column, height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(layoutManager)
         layoutManager.addTextContainer(container)
         super.init(frame: .zero, textContainer: container)
@@ -284,8 +302,10 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         for quote in quotes {
             decorations.append((.responseQuote, NSRange(location: quote.range.location + kept.length, length: quote.range.length), quote.block))
         }
-        tail.enumerateAttribute(.responseInlineCode, in: whole) { value, range, _ in
-            if value != nil { decorations.append((.responseInlineCode, NSRange(location: range.location + kept.length, length: range.length), nil)) }
+        for key in [NSAttributedString.Key.responseInlineCode, .responseTaskBox] {
+            tail.enumerateAttribute(key, in: whole) { value, range, _ in
+                if value != nil { decorations.append((key, NSRange(location: range.location + kept.length, length: range.length), nil)) }
+            }
         }
         // Streaming appends keep the selection; once the selected text itself
         // changes (a replacement, or a rerendered prefix), it no longer
@@ -379,6 +399,10 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
                                    textContainer: textContainer, text: textStorage)
                     continue
                 }
+                if decoration.key == .responseTaskBox {
+                    drawTaskBox(decoration.range, layoutManager: layoutManager, textContainer: textContainer, text: textStorage)
+                    continue
+                }
                 guard let block = decoration.block else { continue }
                 let glyphs = layoutManager.glyphRange(forCharacterRange: decoration.range, actualCharacterRange: nil)
                 guard glyphs.length > 0 else { continue }
@@ -468,6 +492,40 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         }
     }
 
+    /// A task's box: one square for both states, ending where the marker
+    /// column ends and centred on the text's x-height. Checked is filled
+    /// with a check; unchecked is a hairline outline.
+    private func drawTaskBox(_ range: NSRange, layoutManager: NSLayoutManager, textContainer: NSTextContainer,
+                             text: NSTextStorage) {
+        guard let font = text.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont else { return }
+        let checked = text.attribute(.responseTaskBox, at: range.location, effectiveRange: nil) as? Bool == true
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return }
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        let bounds = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        let baseline = fragment.minY + layoutManager.location(forGlyphAt: glyphs.location).y
+        let side = (font.pointSize * 0.87).rounded()
+        let rect = NSRect(x: bounds.maxX - side, y: (baseline - font.xHeight / 2 - side / 2).rounded(), width: side, height: side)
+        let box = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+        if checked {
+            WovenColors.primary.setFill()
+            box.fill()
+            let check = NSBezierPath()
+            check.move(to: NSPoint(x: rect.minX + side * 0.26, y: rect.midY + side * 0.02))
+            check.line(to: NSPoint(x: rect.minX + side * 0.43, y: rect.minY + side * 0.7))
+            check.line(to: NSPoint(x: rect.minX + side * 0.76, y: rect.minY + side * 0.3))
+            check.lineWidth = 1.6
+            check.lineCapStyle = .round
+            check.lineJoinStyle = .round
+            NSColor.white.setStroke()
+            check.stroke()
+        } else {
+            WovenColors.foreground.withAlphaComponent(0.4).setStroke()
+            box.lineWidth = 1
+            box.stroke()
+        }
+    }
+
     /// The text without the characters only layout needs.
     private var textRange: NSRange {
         guard let textStorage, textStorage.length > 0 else { return NSRange(location: 0, length: 0) }
@@ -527,6 +585,8 @@ private extension NSAttributedString.Key {
     static let responseDivider = Self("WovenMatterResponseDivider")
     static let responseTable = Self("WovenMatterResponseTable")
     static let responseInlineCode = Self("WovenMatterResponseInlineCode")
+    /// A task list item's box, drawn in place of its character: true when checked.
+    static let responseTaskBox = Self("WovenMatterResponseTaskBox")
     /// Text a line does not break inside (short inline code in a table cell).
     static let responseNoBreak = Self("WovenMatterResponseNoBreak")
     /// Characters only layout needs: the spacer above a box that opens the
@@ -702,14 +762,15 @@ private enum ConversationResponseAttributedText {
                     let startsList = level == 0 && topKind != nil && topKind != kind
                     if level == 0 { topKind = kind }
                     let markerEnd = indent + Prose.markerColumn + level * Prose.nestedListStep
+                    // A task's box is drawn over its character, which stays for copying.
                     let text: NSAttributedString = if let checked = item.checked {
                         NSAttributedString(string: checked ? "☑" : "☐", attributes: [
-                            .font: font(13), .foregroundColor: checked ? WovenColors.primary : WovenColors.mutedForeground])
+                            .font: body, .foregroundColor: NSColor.clear, .responseTaskBox: checked])
                     } else {
                         NSAttributedString(string: item.marker, attributes: [.font: body, .foregroundColor: foreground])
                     }
                     let first = index == 0 ? before
-                        : max(0, (startsList ? Prose.looseListGap : gap) + itemTopOverhang(item) - bottomSlack(previousItem))
+                        : max(0, (startsList ? Prose.paragraphGap : gap) + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
                         appendInline(.init(""), font: body,
@@ -887,14 +948,10 @@ private enum ConversationResponseAttributedText {
         if case .heading(let level, _) = block { return level <= 2 ? Prose.majorHeadingGap : Prose.minorHeadingGap }
         if isRule(previous) || isRule(block) { return Prose.ruleGap }
         if isBox(previous) || isBox(block) { return Prose.paragraphGap }
-        if case .list = previous { return isList(block) ? Prose.looseListGap : Prose.paragraphGap }
+        // Two lists in a row are two lists, spaced as paragraphs.
+        if case .list = previous { return Prose.paragraphGap }
         if case .list = block { return Prose.looseListGap }
         return inItem ? Prose.looseListGap : Prose.paragraphGap
-    }
-
-    private static func isList(_ block: Block) -> Bool {
-        if case .list = block { return true }
-        return false
     }
 
     /// Whether a list item's marker needs a line of its own before this block.

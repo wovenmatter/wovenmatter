@@ -1,14 +1,16 @@
 import Foundation
 
 /// A visual reply an agent published in the chat: its item's identifier,
-/// title and starting height. Its HTML is in the content store, by `digest`.
+/// title, starting height and the width it needs (none fills the chat's
+/// width). Its HTML is in the content store, by `digest`.
 public struct ConversationHTMLRenderReference: Codable, Equatable, Sendable {
   public let id: String
   public let title: String
   public let height: Int
+  public let width: Int?
   public let digest: String
-  public init(id: String, title: String, height: Int, digest: String) {
-    self.id = id; self.title = title; self.height = height; self.digest = digest
+  public init(id: String, title: String, height: Int, width: Int? = nil, digest: String) {
+    self.id = id; self.title = title; self.height = height; self.width = width; self.digest = digest
   }
 }
 
@@ -24,7 +26,7 @@ public struct ConversationVisualReply: Equatable, Sendable {
 public enum ConversationHTMLDocument {
   public static func render(html: String) -> String {
     let bootstrap = #"""
-    <style id="woven-theme">html,body{margin:0;padding:0;background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
+    <style id="woven-theme">html{margin:0;padding:0}body{margin:0;padding:12px 14px}html,body{background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
     <script>
     (()=>{
       const base=document.getElementById('woven-theme').textContent;

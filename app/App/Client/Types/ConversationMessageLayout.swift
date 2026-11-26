@@ -23,8 +23,7 @@ struct ConversationMessageLayout {
         var spacingBefore: CGFloat {
             // The card adds its own gap only when it has visible changes.
             if case .fileChanges = content { return 0 }
-            // A reply sits closer to the message it answers than to the turn before it.
-            return role == .assistant ? ConversationMetrics.replyGap : ConversationMetrics.turnGap
+            return ConversationMetrics.turnGap
         }
     }
 

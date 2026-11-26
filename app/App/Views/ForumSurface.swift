@@ -147,7 +147,7 @@ private struct ForumPane: View {
             header
             if isPaused, showsPausedBanner {
                 ForumPausedBanner(busy: pausing) { setPaused(false) }
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
             }
@@ -157,7 +157,7 @@ private struct ForumPane: View {
                                      showsFixes: item.status.kind == .paused || item.status.kind == .fallback) {
                     dismissedStatuses.insert(item.key)
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 8)
             }
@@ -257,19 +257,12 @@ private struct ForumPane: View {
                         .padding(.top, 24)
                         .id(Self.endID)
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 32)
                 .padding(.top, 16)
             }
             .scrollIndicators(.never)
-            // Text fades under the header instead of being cut off at it.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
-                    Color.black
-                }
-            }
             .defaultScrollAnchor(isNewThread ? .top : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in
@@ -305,7 +298,7 @@ private struct ForumPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .conversationBottomEdge(stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest post") {
+            .conversationEdges(topClearance: 0, stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest post") {
                 following = true
                 jumpToEnd(proxy)
             }
@@ -424,7 +417,7 @@ private struct ForumPane: View {
         VStack(spacing: 8) {
             if let error = controller.error {
                 BotDismissibleError(text: error) { controller.error = nil }
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
             }
             HStack(alignment: .bottom, spacing: 8) {
@@ -443,7 +436,7 @@ private struct ForumPane: View {
                     if let note = draftMentions.note { ForumMentionNote(text: note) }
                     composer
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 Group {
                     if showsAddPanel {
                         PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)

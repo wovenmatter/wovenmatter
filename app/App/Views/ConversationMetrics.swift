@@ -4,10 +4,11 @@ import SwiftUI
 /// conversation comes from here, in agent chats, bot chats and the Forum alike;
 /// font sizes stay with their views.
 enum ConversationMetrics {
-    /// An assistant turn → the next user message.
-    static let turnGap: CGFloat = 32
-    /// A user message → the assistant turn that answers it.
-    static let replyGap: CGFloat = 24
+    /// Between turns, in both directions: a message → the reply, the reply's
+    /// actions → the next message.
+    static let turnGap: CGFloat = 24
+    /// Expanded work → the reply under it.
+    static let workEndGap: CGFloat = 24
     /// Work → reply, reply → its files or changed-files card, around a visual reply.
     static let sectionGap: CGFloat = 16
     /// Between work-log entries; a turn's header → its reply.
@@ -19,15 +20,16 @@ enum ConversationMetrics {
     static let tight: CGFloat = 4
     static let hair: CGFloat = 2
 
-    /// The transcript's top inset: the first message clears the workspace's
-    /// floating header buttons (a 32-point button inset 12) by an entry gap.
-    static let topInset: CGFloat = 56
+    /// Where the workspace's floating header buttons end, from its top.
+    static let floatingControls = WovenMetrics.floatingControlInset + WovenMetrics.floatingControlSize
+    /// The transcript's top inset: the first message clears the floating
+    /// buttons by an entry gap, the band its top edge fades over.
+    static let topInset = floatingControls + entryGap
     /// The transcript's side inset.
     static let sideInset: CGFloat = 32
-    /// The transcript column.
-    static let column: CGFloat = 768
-    /// The widest anything in an assistant turn gets.
-    static let measure: CGFloat = 680
+    /// The transcript column: user bubbles, everything in an assistant turn
+    /// and the composer share its edges. Settings pages use the same width.
+    static let column = SettingsMetrics.pageWidth
     /// Work rows: icon column, then the gap to their text.
     static let iconColumn: CGFloat = 17
     static let iconGap: CGFloat = 9
@@ -100,19 +102,23 @@ struct ConversationTextButton: View {
 }
 
 extension View {
-    /// The bottom edge of a transcript under its composer stack, the same in
-    /// agent chats, bot chats and the Forum. Rows fade out before the stack,
-    /// so none shows beside or through it. While the reader is away from the
-    /// end (`jumpLabel` set), a round button to the end sits centred just above
-    /// the stack, and the clear band reaches up behind it, so it never covers
-    /// legible text.
-    func conversationBottomEdge(stackHeight: CGFloat, jumpLabel: String?, jump: @escaping () -> Void) -> some View {
-        modifier(ConversationBottomEdge(stackHeight: stackHeight, jumpLabel: jumpLabel, jump: jump))
+    /// The edges of a transcript, the same in agent chats, bot chats and the
+    /// Forum. At the top, rows fade out before `topClearance` (what floats
+    /// over the transcript there), so none passes legibly behind it. At the
+    /// bottom, rows fade out before the composer stack, so none shows beside
+    /// or through it. While the reader is away from the end (`jumpLabel` set),
+    /// a round button to the end sits centred just above the stack, and the
+    /// clear band reaches up behind it, so it never covers legible text.
+    /// Under Reduce Transparency both edges are hard.
+    func conversationEdges(topClearance: CGFloat, stackHeight: CGFloat, jumpLabel: String?,
+                           jump: @escaping () -> Void) -> some View {
+        modifier(ConversationEdges(topClearance: topClearance, stackHeight: stackHeight, jumpLabel: jumpLabel, jump: jump))
     }
 }
 
-private struct ConversationBottomEdge: ViewModifier {
+private struct ConversationEdges: ViewModifier {
     static let jumpSize: CGFloat = 30
+    let topClearance: CGFloat
     let stackHeight: CGFloat
     let jumpLabel: String?
     let jump: () -> Void
@@ -125,6 +131,9 @@ private struct ConversationBottomEdge: ViewModifier {
         content
             .mask {
                 VStack(spacing: 0) {
+                    Color.clear.frame(height: topClearance)
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: reduceTransparency ? 0 : ConversationMetrics.entryGap)
                     Color.black
                     LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
                         .frame(height: reduceTransparency ? 0 : ConversationBottomOverlayLayout.breathingRoom)

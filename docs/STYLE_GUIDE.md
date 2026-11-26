@@ -434,34 +434,46 @@ when an intentional design change is accepted.
   use a static Thinking label. Thinking is marked with a static brain, in chats
   and bot chats. While a turn runs, one row of three small dots sits under the
   last thing it shows, starting where that thing's text starts, its strong dot
-  stepping left to right, still under Reduce Motion. Keep detail-loading text quiet ("Loading details…")
+  stepping left to right, still under Reduce Motion: at the work lane's text edge, or at the reply's. The
+  turn's fold at its end is instantaneous. Keep detail-loading text quiet ("Loading details…")
   and never add a separate mobile running spinner below the transcript.
 - **Conversation layout:** agent chats, bot chats and the Forum share one rhythm
   from `ConversationMetrics`; keep exact values there. Everything in an assistant
-  turn starts at one left edge and stays within one measure; user messages hug the
-  right edge. Gaps come from roles: a turn ends further from the next message than
-  a reply sits from the message it answers; work, reply, files and the
-  changed-files card are sections; work-log entries sit closer, and rows inside a
-  group closer still. Commentary sits close to the tools it introduces and
-  further from the work before it. The work divider shows only over work the
-  header folds. Tool rows are one line, truncated in the middle, with the
-  chevron right after the label; the full text is in their details, which open
-  at the rows' text inset and wrap rather than scroll sideways. Thinking looks
-  the same everywhere. Live reasoning shows its last few lines, smaller and
-  quieter than the reply; afterwards a thought is one closed row, named by its
-  title, or by status and action for a record such as an approval. A visual
-  reply sits in a hairline frame with its title inside, always the measure wide;
-  its controls show on hover, while zoomed, or with focus.
-  Files a reply refers to are compact chips in a wrapping row. In reply text,
+  turn starts at one left edge, and user messages, the assistant turn and the
+  composer share one column and so one right edge. Gaps come from roles: one gap
+  between turns in both directions; work, reply, files and the changed-files card
+  are sections; work-log entries sit closer, and rows inside a group closer
+  still. Commentary sits close to the tools it introduces and further from the
+  work before it. The work log is a secondary lane: everything in it is one
+  size below the reply, commentary a step quieter than the reply's ink, tool
+  labels quieter, reasoning quietest; its text starts at one inset, with only
+  icons left of it, and open work ends a section and a half above the reply.
+  The work divider shows only over work the header folds. Tool rows are one
+  line, truncated in the middle, with the chevron right after the label; the
+  full text is in their details, which open at the rows' text inset and wrap
+  rather than scroll sideways. Every harness's tool rows use one grammar: a
+  verb and a short object (Read docs/README.md, Listed sample, Searched for
+  “x” in docs), paths relative to the folder the tool ran in or else their last
+  two components, and commands without the folder plumbing in front of them.
+  Woven's visual tools have one label each. Thinking looks the same everywhere.
+  Live reasoning shows its last three lines, its cut top line fading out; afterwards a
+  thought is one closed row on one line, named by its title, or by status and
+  action for a record such as an approval, which has its own glyph. A visual
+  reply sits in a hairline frame with its title inside, the column wide or as
+  wide as it asked to be, with a small inset inside it; its controls show on
+  hover, while zoomed, or with focus. Under the reply, Copy and the files it
+  refers to share one wrapping row. In reply text,
   lists sit tighter than paragraphs, two different lists in a row are spaced as
-  two lists, every item keeps its marker, headings attach to what follows them, and
+  paragraphs, every item keeps its marker, a task's box is one drawn square,
+  filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
   block's indent. Inline code is shaded around its own text on each line. Table
   columns fit their content; a table too wide gives the rest to its widest
   column. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
-  bot chats and the Forum alike, rows fade out before the composer, and the
+  bot chats and the Forum alike, rows fade out before the window's floating
+  buttons at the top and before the composer at the bottom, and the
   button back to the latest reply or post is a small round one centred above it,
   over a band where nothing is legible.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set

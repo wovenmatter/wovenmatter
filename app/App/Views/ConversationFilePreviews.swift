@@ -3,34 +3,27 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WovenProtocol
 
+/// The files a reply refers to, as chips in its action row after Copy.
 /// Resolve only retained message identities, never read paths directly from agent text.
-struct ConversationFilePreviews: View {
-    let content: String
+@MainActor
+struct ConversationFileRow {
     let messageID: String
     let resolveFile: (String) async throws -> URL
 
-    private var files: [LibraryAsset] {
+    static func files(in content: String) -> [LibraryAsset] {
         LibraryLinkDiscovery.links(in: content).filter { LibraryFileReference.path($0.source) != nil }
     }
 
-    var body: some View {
-        let files = self.files
-        // Nothing at all without files, so a reply without any keeps its height when it settles.
-        // Compact chips in a wrapping row, each with its own actions.
-        if !files.isEmpty {
-            FlowLayout(horizontalSpacing: ConversationMetrics.rowGap, verticalSpacing: ConversationMetrics.rowGap) {
-                ForEach(files, id: \.source) { file in
-                    ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
-                        messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
-                }
-            }
-            .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
-            .padding(.top, ConversationMetrics.sectionGap / 2)
+    /// One chip per file, each with its own actions.
+    func chips(_ files: [LibraryAsset]) -> some View {
+        ForEach(files, id: \.source) { file in
+            ConversationFileAttachment(file: file, identity: WorkspaceLibraryItem.identifier(
+                messageID: messageID, source: file.source), resolve: { try await resolveFile(file.source) })
         }
     }
 }
 
-private struct ConversationFileAttachment: View {
+struct ConversationFileAttachment: View {
     /// A chip never takes more than this; its name truncates in the middle.
     private static let maximumNameWidth: CGFloat = 240
     @Environment(\.openDocumentPreview) private var openPreview

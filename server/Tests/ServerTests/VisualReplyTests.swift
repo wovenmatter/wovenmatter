@@ -152,9 +152,11 @@ func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async
   _ = try await onA.call(UpdateSession(sessionID: session.id, tools: []))
 
   // The stand-in calls the tool over its tool socket and then reports the call, as a runtime does.
-  // Only the visual reply: its title is its own <title>, and it starts at the default height.
+  // Only the visual reply: its title is its own <title>, it starts at the default height, and it
+  // keeps the width it asked for.
   let html = "<title>Sales by quarter</title><h1>Quarterly sales</h1>" + String(repeating: "<i>bar</i>", count: 5000)
-  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(html)])), as: UTF8.self)
+  let arguments = String(decoding: try Wire.encoder.encode(JSONValue.object(["html": .string(html), "width": .integer(360)])),
+                         as: UTF8.self)
   let subscription = try await onA.subscribe(SubscribeSession(sessionID: session.id))
   _ = try await onA.call(SendTurn(sessionID: session.id, text: "woven render_html \(arguments)"))
   var live: [SessionItem] = []
@@ -170,7 +172,7 @@ func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async
     Issue.record("Expected the message, the visual reply, then the call: \(items.map(\.content))")
     return
   }
-  #expect(reply == VisualReply(title: "Sales by quarter", height: 320, digest: Library.digest(of: Data(html.utf8)),
+  #expect(reply == VisualReply(title: "Sales by quarter", height: 320, width: 360, digest: Library.digest(of: Data(html.utf8)),
                            size: Int64(html.utf8.count)))
   #expect(!call.failed && call.kind == .visualReply)
   #expect(!call.input.contains("Quarterly sales") && call.input.contains("characters, shown in the chat"))

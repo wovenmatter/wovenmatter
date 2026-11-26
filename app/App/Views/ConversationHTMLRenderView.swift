@@ -79,7 +79,10 @@ struct ConversationHTMLRenderView: View {
             RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
                 .strokeBorder(WovenPalette.foreground.opacity(0.09), lineWidth: 1)
         }
-        .frame(maxWidth: ConversationMetrics.measure, alignment: .leading)
+        // The width it asked for, when narrower than the column; the hairline is
+        // drawn over its edge, so its content lays out at exactly that width.
+        .frame(maxWidth: reference.width.map { min(ConversationMetrics.column, CGFloat($0)) } ?? ConversationMetrics.column)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onHover { hovering = $0 }
         .task(id: reference.digest) { await load() }
         .sheet(isPresented: $expanded) {

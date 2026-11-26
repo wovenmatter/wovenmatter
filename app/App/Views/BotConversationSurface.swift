@@ -357,7 +357,7 @@ private struct BotConversationPane: View {
             if let status = bot.modelStatus, let statusKey = statusKey(status), statusKey != dismissedStatus {
                 BotModelStatusBanner(text: PiBotModelStatusText(status: status, botName: bot.name),
                                      showsFixes: status.kind == .paused || status.kind == .fallback) { dismissedStatus = statusKey }
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
             }
@@ -438,19 +438,12 @@ private struct BotConversationPane: View {
                         .padding(.top, 24)
                         .id(Self.endID)
                 }
-                .frame(maxWidth: 768)
+                .frame(maxWidth: ConversationMetrics.column)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 32)
                 .padding(.top, 16)
             }
             .scrollIndicators(.never)
-            // Text fades under the header instead of being cut off at it.
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
-                    Color.black
-                }
-            }
             .defaultScrollAnchor(isNewThread ? .top : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in
@@ -486,7 +479,7 @@ private struct BotConversationPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .conversationBottomEdge(stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest reply") {
+            .conversationEdges(topClearance: 0, stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest reply") {
                 following = true
                 jumpToEnd(proxy)
             }
@@ -581,7 +574,7 @@ private struct BotConversationPane: View {
             // A failed reply already shows its error on the message itself.
             if let error = controller.error, error != entries.last?.error {
                 BotDismissibleError(text: error) { controller.error = nil }
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                     .padding(.horizontal, showsClosePanel || showsAddPanel ? PanelControlButton.size + 8 : 0)
             }
             HStack(alignment: .bottom, spacing: 8) {
@@ -597,7 +590,7 @@ private struct BotConversationPane: View {
                 }
                 .padding(.bottom, ConversationComposer.verticalPadding)
                 composer
-                    .frame(maxWidth: 768)
+                    .frame(maxWidth: ConversationMetrics.column)
                 Group {
                     if showsAddPanel {
                         PanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
