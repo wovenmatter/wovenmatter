@@ -577,7 +577,7 @@ actor UsageScanner {
     }
   }
 
-  private static func encode(_ state: ReaderState) throws -> String {
+  private static func encode(_ state: some Encodable) throws -> String {
     String(decoding: try JSONEncoder().encode(state), as: UTF8.self)
   }
 
@@ -761,11 +761,16 @@ actor UsageScanner {
       let database = try ReadOnlyDatabase(path: path)
       var cursor: (time: Int64, id: String) = (0, "")
       var overlap: OpenCodeOverlap?
+      // The size and change time seen as this read of the database began,
+      // stored when it ends: a change during the read then leaves them
+      // different from the file's, and the next pass reads again.
+      var stamp = (size: size, modified: modified)
       if let known, known.boundary == Self.openCodeBoundary(known.identity),
          try known.identity.isEmpty || HistoryReader.openCodeHas(database, message: known.identity) {
         cursor = (known.offset, known.identity)
-        if let pending = try? JSONDecoder().decode(OpenCodeOverlap.self, from: Data(known.state.utf8)) {
-          overlap = pending
+        if let pending = try? JSONDecoder().decode(OpenCodeRead.self, from: Data(known.state.utf8)) {
+          overlap = pending.overlap
+          stamp = (pending.size, pending.modified)
         } else if known.modified != 0, !known.identity.isEmpty {
           // A new read also takes in the hour before the place again, so a
           // message whose update is stamped before the place was saved is
@@ -784,7 +789,8 @@ actor UsageScanner {
           (again.afterTime, again.afterID) = page.cursor
           let stopped = !done && (Task.isCancelled || clock() >= deadline)
           let next = UsageSource(id: source, offset: cursor.time, identity: cursor.id, boundary: Self.openCodeBoundary(cursor.id),
-                                 state: done ? "" : String(decoding: try JSONEncoder().encode(again), as: UTF8.self),
+                                 state: try Self.encode(OpenCodeRead(size: stamp.size, modified: stamp.modified,
+                                                                     overlap: done ? nil : again)),
                                  interrupted: stopped ? 0 : counted.interrupted)
           let result = try await save(page.entries, next)
           saved = next
@@ -802,8 +808,10 @@ actor UsageScanner {
         let last = page.rows < limit || page.cursor == cursor
         // A stop or the end of the slice ends the read here, to go on at the next pass.
         let stopped = !last && (Task.isCancelled || clock() >= deadline)
-        let next = UsageSource(id: source, offset: page.cursor.time, size: last ? size : 0, modified: last ? modified : 0,
-                               identity: page.cursor.id, boundary: Self.openCodeBoundary(page.cursor.id),
+        let next = UsageSource(id: source, offset: page.cursor.time, size: last ? stamp.size : 0,
+                               modified: last ? stamp.modified : 0, identity: page.cursor.id,
+                               boundary: Self.openCodeBoundary(page.cursor.id),
+                               state: last ? "" : try Self.encode(OpenCodeRead(size: stamp.size, modified: stamp.modified)),
                                interrupted: last || stopped ? 0 : counted.interrupted)
         let result = try await save(page.entries, next)
         saved = next
@@ -824,6 +832,14 @@ actor UsageScanner {
   }
 
   static let openCodeOverlap: Int64 = 3_600_000
+
+  /// A read of OpenCode's database that went on over several passes: the
+  /// size and change time as it began, and the part still to read again.
+  private struct OpenCodeRead: Codable {
+    var size: Int64
+    var modified: Int64
+    var overlap: OpenCodeOverlap?
+  }
 
   /// The part of OpenCode's database read again before reading on: the
   /// messages after one place up to and with another.

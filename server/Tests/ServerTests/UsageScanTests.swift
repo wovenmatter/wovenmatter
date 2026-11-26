@@ -824,6 +824,39 @@ private func codexTurn(_ turn: String, at: String) -> String {
   #expect(try await totals(library)[.openCode]?.requests == 701)
 }
 
+/// A message that arrives in the hour already read again while that read
+/// goes on over passes is counted by a later one, with no further change.
+@Test func openCodeChangedDuringALongReadIsReadAgain() async throws {
+  let home = try temporary("usage-home")
+  let url = home.appendingPathComponent(".local/share/opencode/opencode.db")
+  try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try DatabaseFile.create(at: url)
+  let database = try DatabaseFile(url: url, isCopy: false)
+  _ = try database.execute("""
+    CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT);
+    CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER,
+      time_updated INTEGER, data TEXT);
+    """)
+  func insert(_ indexes: [Int], suffix: String = "") throws {
+    let rows = indexes.map { index in
+      let at = 1_767_614_400_000 + Int64(index) * 1000
+      return "('msg_\(String(format: "%04d", index))\(suffix)', 'ses', 'assistant', \(index), \(at), \(at), "
+        + #"'{"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0,"model":{"id":"m","providerID":"p"},"time":{"completed":\#(at)}}')"#
+    }
+    _ = try database.execute("INSERT INTO session_message VALUES " + rows.joined(separator: ", "))
+  }
+  try insert(Array(0..<700))
+  let library = try await Library.open(folder: try temporary("usage-library"), machineName: "a")
+  #expect(await UsageScanner(library: library, home: home).scan().added == 700)
+  try insert([700])
+  let scanner = UsageScanner(library: library, home: home, slice: .seconds(1), clock: tickingClock())
+  #expect(await scanner.scan().left == 1)
+  // Below where the hour read again has got to.
+  try insert([100], suffix: "b")
+  for _ in 0..<5 { await scanner.scan() }
+  #expect(try await totals(library)[.openCode]?.requests == 702)
+}
+
 /// When one history uses a pass's share without reaching its end, the next
 /// pass begins with the one after it.
 @Test func aHistoryThatTakesItsShareLetsTheNextOneGoFirst() async throws {
