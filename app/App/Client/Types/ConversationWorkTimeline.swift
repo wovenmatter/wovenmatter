@@ -67,14 +67,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       }
       cleared.remove(update.id)
       if let prior = values[update.id] {
-        let merged = prior.merging(update)
-        // A thought's title, once it has one, stays: a later "Thinking" does
-        // not take it back.
-        if let title = prior.workTimelineThoughtTitle, merged.kind == .thought, merged.workTimelineThoughtTitle == nil {
-          values[update.id] = merged.merging(AgentRunActivity(id: update.id, kind: .thought, title: title))
-        } else {
-          values[update.id] = merged
-        }
+        values[update.id] = prior.merging(update)
       } else {
         order.append(update.id)
         values[update.id] = update
@@ -621,9 +614,11 @@ public extension AgentRunActivity {
   /// tools ran: decided by the first path a tool named, and then kept for
   /// the run (keyed by its first activity), so a row's short path never
   /// changes once shown, even when an earlier tool's input arrives later. A
-  /// folder the tool listed or searched, or a path that names no file, is
-  /// the anchor itself; a file's anchor is the folder it is in. Only what
-  /// the path says counts, never the tool's output, which may come later.
+  /// folder that the tool and its input say it lists or searches, or a path
+  /// that by itself names a folder, is the anchor itself, and any other
+  /// path's anchor is the folder it is in; the tool's output, which may come
+  /// later, never counts, so a read that turns out to list a folder anchors
+  /// as its path reads.
   static func workTimelineAnchorFolder(_ activities: [AgentRunActivity]) -> String? {
     guard let run = activities.first?.id else { return nil }
     return WorkTimelineMemo.shared.anchor(run: run) { workTimelineFirstAnchor(activities) }
@@ -639,8 +634,9 @@ public extension AgentRunActivity {
       case .read(let path): folder = (path as NSString).deletingLastPathComponent
       default:
         guard let path = activity.workTimelineInputPath ?? activity.title?.workTimelineAbsolutePaths.first else { continue }
-        folder = ConversationToolAction(activity) == .list || path.workTimelineNamesFolder
-          ? path : (path as NSString).deletingLastPathComponent
+        // A read that listed a folder says so in its output; here only its path counts.
+        let lists = ConversationToolAction(activity) == .list && !activity.workTimelineReadsFolder
+        folder = lists || path.workTimelineNamesFolder ? path : (path as NSString).deletingLastPathComponent
       }
       // Only an absolute folder well below the root anchors anything.
       if let folder, folder.hasPrefix("/"), folder.split(separator: "/").count >= 3 { return .some(folder) }
@@ -880,8 +876,8 @@ extension String {
   /// Whether a path, by itself, names a folder rather than a file: it ends
   /// in `/`, or its last part has no extension. A read tool's input says no
   /// more until its output arrives (OpenCode's `read` lists a folder it is
-  /// given), and a run's anchor is decided before that, so the anchor reads
-  /// the path alone. A file without an extension (`Makefile`) then anchors
+  /// given), and a run's anchor must be the same whenever it is decided, so
+  /// the anchor reads the path alone. A file without an extension (`Makefile`) then anchors
   /// at itself, and the paths beside it show their last two parts, as they
   /// would with no anchor.
   var workTimelineNamesFolder: Bool {
