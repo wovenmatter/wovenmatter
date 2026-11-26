@@ -12,6 +12,8 @@ struct ConversationWorkRun {
 struct ConversationWorkPresentation {
     let startedAt: Date?
     let completedDuration: String?
+    /// The saved duration in seconds, which `completedDuration` words.
+    var completedSeconds: TimeInterval? = nil
 }
 
 
@@ -64,6 +66,10 @@ struct ConversationWorkTranscript: View {
     @Environment(\.conversationFolder) private var folder
     @State private var localWorkExpanded = false
     @State private var localRunningFolded = false
+    /// How long this view had shown the turn running when it saw it settle:
+    /// the settled time it shows is never less. A chat opened later shows
+    /// the saved time.
+    @State private var watchedDuration: TimeInterval?
 
     init(
         run: ConversationWorkRun,
@@ -92,11 +98,12 @@ struct ConversationWorkTranscript: View {
         timeline: ConversationWorkTimeline? = nil
     ) {
         // A run starts with its message and ends with its last saved item.
-        let duration = run.status == .running ? nil : run.startedAt.flatMap { start in
-            run.completedAt.map { formattedRunDuration($0.timeIntervalSince(start)) }
+        let seconds = run.status == .running ? nil : run.startedAt.flatMap { start in
+            run.completedAt.map { $0.timeIntervalSince(start) }
         }
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
-                  presentation: ConversationWorkPresentation(startedAt: run.startedAt, completedDuration: duration),
+                  presentation: ConversationWorkPresentation(startedAt: run.startedAt, completedDuration: seconds.map(formattedRunDuration),
+                                                             completedSeconds: seconds),
                   records: records, commentaryIDs: commentaryIDs,
                   hasFollowingResponse: hasFollowingResponse, replyStartsWithBox: replyStartsWithBox, timeline: timeline)
     }
@@ -228,6 +235,10 @@ struct ConversationWorkTranscript: View {
             : thoughtsCloseVisual ? ConversationMetrics.sectionGap
             : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
+        .onChange(of: run.status) { before, after in
+            guard before == .running, after != .running, let start = presentation?.startedAt else { return }
+            watchedDuration = Date().timeIntervalSince(start)
+        }
         // Without a session folder, the folder of the turn's first path, so
         // its rows shorten paths the same way and never change once shown.
         .environment(\.conversationFolder, folder ?? AgentRunActivity.workTimelineAnchorFolder(
@@ -430,12 +441,21 @@ struct ConversationWorkTranscript: View {
         case .queued:
             Text("Queued")
         case .completed:
-            Text("Done after \(presentation?.completedDuration ?? "a moment")")
+            Text("Done after \(settledDuration ?? "a moment")")
         case .failed:
-            Text("Error\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
+            Text("Error\(settledDuration.map { " after \($0)" } ?? "")")
         case .cancelled:
-            Text("Stopped\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
+            Text("Stopped\(settledDuration.map { " after \($0)" } ?? "")")
         }
+    }
+
+    /// The saved time, or the time this view had shown the turn running when
+    /// that was longer.
+    private var settledDuration: String? {
+        guard let watched = watchedDuration, watched > presentation?.completedSeconds ?? .infinity else {
+            return presentation?.completedDuration
+        }
+        return formattedRunDuration(watched)
     }
 
     /// Whole seconds for a once-per-second count; longer runs use the shared format.

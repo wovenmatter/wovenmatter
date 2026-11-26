@@ -649,11 +649,20 @@ final class SessionStore {
             runs[last].assistantMessageID = id
         }
 
-        func currentRun(at date: Date) -> Int {
+        /// A turn's end closed the last run: what follows it before another
+        /// message is a turn the runtime started by itself.
+        var ended = false
+        func currentRun(at date: Date, id: String) -> Int {
             if runs.isEmpty {
                 runs.append(WorkspaceRunRecord(id: "run-start-\(sessionID)", conversationID: sessionID, status: .completed,
                                                startedAt: date, completedAt: date))
+            } else if ended {
+                // It is its own run, timed from its own first item.
+                closeRun()
+                runs.append(WorkspaceRunRecord(id: "run-\(id)", conversationID: sessionID, status: .completed,
+                                               startedAt: date, completedAt: date))
             }
+            ended = false
             return runs.count - 1
         }
 
@@ -667,6 +676,7 @@ final class SessionStore {
                 default: nil
                 }
                 closeRun()
+                ended = false
                 messages.append(WorkspaceMessageRecord(
                     id: entry.id, conversationID: sessionID, role: .user, content: text, status: .complete, createdAt: entry.date,
                     attachments: attachments.map {
@@ -676,7 +686,7 @@ final class SessionStore {
                 runs.append(WorkspaceRunRecord(id: "run-\(entry.id)", conversationID: sessionID, status: .completed,
                                                userMessageID: entry.id, startedAt: entry.date, completedAt: entry.date))
             case .assistantMessage(let text):
-                let run = currentRun(at: entry.date)
+                let run = currentRun(at: entry.date, id: entry.id)
                 let id = Self.replyID(runs[run].id)
                 let shown: Int
                 if let index = messages.lastIndex(where: { $0.id == id }) {
@@ -700,7 +710,7 @@ final class SessionStore {
                 runs[run].assistantMessageID = id
                 extend(run, to: entry.date, live: entry.live)
             case .toolCall(let call):
-                let run = currentRun(at: entry.date)
+                let run = currentRun(at: entry.date, id: entry.id)
                 extend(run, to: entry.date, live: entry.live)
                 // A published visual reply shows as its own item; only a call that failed shows as a call.
                 if call.kind == .visualReply && !call.failed { continue }
@@ -709,7 +719,7 @@ final class SessionStore {
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .visualReply(let reply):
-                let run = currentRun(at: entry.date)
+                let run = currentRun(at: entry.date, id: entry.id)
                 extend(run, to: entry.date, live: entry.live)
                 // A visual reply is a reply even before any words, so its run is drawn.
                 if runs[run].assistantMessageID == nil {
@@ -734,6 +744,7 @@ final class SessionStore {
                         extend(last, to: entry.date, live: false)
                         // A stopped turn says so, unless it failed.
                         if notice.text == "stopped", runs[last].status != .failed { runs[last].status = .cancelled }
+                        ended = true
                     }
                     continue
                 }
