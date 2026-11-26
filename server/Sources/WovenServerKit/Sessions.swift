@@ -106,9 +106,6 @@ actor SessionManager {
   private let scratch: URL
   private let toolKeys: ToolKeys?
   private var hosts: [String: SessionHost] = [:]
-  /// Hosts still stopping after `close`: a new host for the session waits
-  /// for their last writes, so it starts from the session as they left it.
-  private var closing: [String: Task<Void, Never>] = [:]
   private var watcher: Task<Void, Never>?
   nonisolated let board = RunBoard()
   nonisolated let configurations: RuntimeConfigurations
@@ -188,7 +185,6 @@ actor SessionManager {
   /// owns is refused with `notOwner`: its live view is on that machine.
   func host(for sessionID: String) async throws -> SessionHost {
     if let host = hosts[sessionID] { return host }
-    await closing[sessionID]?.value
     guard let session = try await library.session(sessionID) else {
       throw ProtocolError(.notFound, "No session \(sessionID).")
     }
@@ -210,11 +206,7 @@ actor SessionManager {
 
   /// Stops a session's process and forgets its host.
   func close(_ sessionID: String) async {
-    guard let host = hosts.removeValue(forKey: sessionID) else { return }
-    let stopping = Task { await host.stop() }
-    closing[sessionID] = stopping
-    await stopping.value
-    if closing[sessionID] == stopping { closing[sessionID] = nil }
+    await hosts.removeValue(forKey: sessionID)?.stop()
   }
 
   func closeAll() async {

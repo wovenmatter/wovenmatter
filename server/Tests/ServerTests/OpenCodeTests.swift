@@ -268,6 +268,25 @@ private func scriptCalls(_ events: [RuntimeEvent]) -> (open: [ToolCall], finishe
 
 /// A running command's output, reported whole as it grows, streams as what
 /// is new.
+@Test func openCodeLeavesOutAnEndedExecutionsLateEvents() {
+  let events = project([
+    #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"bash"}}"#,
+    #"{"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","input":{"command":"sleep 9"}}}"#,
+    #"{"type":"session.execution.interrupted","data":{"sessionID":"s","reason":"user"}}"#,
+    // After Stop: the interrupted call closing, and its step failing.
+    #"{"type":"session.tool.progress","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1"}}"#,
+    #"{"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","content":[]}}"#,
+    #"{"type":"session.step.failed","data":{"sessionID":"s","assistantMessageID":"m1","error":{"message":"aborted"}}}"#,
+    // The next execution, whose start the stream missed.
+    #"{"type":"session.text.started","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0}}"#,
+    #"{"type":"session.text.ended","data":{"sessionID":"s","assistantMessageID":"m2","ordinal":0,"text":"Done."}}"#,
+    #"{"type":"session.execution.succeeded","data":{"sessionID":"s"}}"#,
+  ])
+  #expect(events.compactMap { if case .tool(let id, _, true) = $0 { id } else { nil } } == ["c1"])
+  #expect(events.compactMap { if case .turnFinished(let failure, _) = $0 { failure ?? "ok" } else { nil } } == ["ok", "ok"])
+  #expect(events.contains { if case .text(let text) = $0 { text == "Done." } else { false } })
+}
+
 @Test func openCodeToolProgressStreamsWhatIsNew() {
   let events = project([
     #"{"type":"session.tool.input.started","data":{"sessionID":"s","assistantMessageID":"m1","id":"c1","name":"bash"}}"#,
