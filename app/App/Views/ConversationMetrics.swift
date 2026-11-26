@@ -52,10 +52,9 @@ enum ConversationMetrics {
     enum Prose {
         static let lineSpacing: CGFloat = 5
         static let paragraphGap: CGFloat = 14
-        /// A paragraph → a list; after a list item that wraps or holds several blocks.
-        static let looseListGap: CGFloat = 10
-        /// After a list item of one line.
-        static let tightListGap: CGFloat = 6
+        /// Between list items at every level, whether they wrap or not; a
+        /// paragraph → a list; between the blocks of one item.
+        static let listGap: CGFloat = 8
         static let majorHeadingGap: CGFloat = 24
         static let minorHeadingGap: CGFloat = 20
         /// A heading → what follows it.
@@ -64,6 +63,9 @@ enum ConversationMetrics {
         static let ruleGap: CGFloat = 16
         static let codeLineSpacing: CGFloat = 3
         static let codePadding: CGFloat = 12
+        /// A code line that wraps continues this many monospace cells right
+        /// of its own leading whitespace.
+        static let codeContinuationCells: CGFloat = 2
         /// Code language label → the first code line.
         static let codeLabelGap: CGFloat = 6
         /// List markers end here, right-aligned; item text starts a gap later.
@@ -71,8 +73,8 @@ enum ConversationMetrics {
         static let markerGap: CGFloat = 8
         /// A nested list's markers end this far right of its parent's text.
         static let nestedListStep: CGFloat = 22
-        static let quoteBar: CGFloat = 2
-        static let quoteGap: CGFloat = 12
+        static let quoteBar: CGFloat = 3
+        static let quoteGap: CGFloat = 11
         static let cellLineSpacing: CGFloat = 3
         static let cellPaddingVertical: CGFloat = 8
         static let cellPaddingHorizontal: CGFloat = 10

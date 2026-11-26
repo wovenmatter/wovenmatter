@@ -16,13 +16,17 @@ struct ConversationResponse: View {
         case commentary
         /// Reasoning in the work lane: the lane's size, its quietest ink.
         case reasoning
+        /// Reasoning as plain lines, for the live thought's three-line window:
+        /// no boxes, bars, tables or rules, no gaps between blocks, every line
+        /// the same height, so the window always shows three whole lines.
+        case plainReasoning
 
         var scale: CGFloat { self == .reply ? 1 : 0.9 }
         var inkOpacity: CGFloat {
             switch self {
             case .reply: 1
             case .commentary: 0.88
-            case .reasoning: 0.62
+            case .reasoning, .plainReasoning: 0.62
             }
         }
     }
@@ -47,7 +51,7 @@ struct ConversationResponse: View {
 
     var body: some View {
         // Reasoning shows without the provider's own metadata lines.
-        let shown = style == .reasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content) : content
+        let shown = style == .reasoning || style == .plainReasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content) : content
         let accessory = trailingAccessory.flatMap { _ in placed.map(accessoryPlacement) }
         VStack(alignment: .leading, spacing: 0) {
             ConversationResponseText(content: shown, isStreaming: isStreaming, style: style,
@@ -808,6 +812,12 @@ private enum ConversationResponseAttributedText {
 
     private enum MarkerKind { case bullet, number, task }
 
+    /// How much short inline code in a table cell keeps together: all of it
+    /// on one line; one word whole, several words each whole but free to
+    /// break between them; or each breaking at its spaces like the text
+    /// around it.
+    private enum CellCode { case whole, wholeWords, words }
+
     private static let emptyParagraph = Block.paragraph(.init(""))
 
     /// `values` rendered on their own, after `previous` (nil at the start of
@@ -817,18 +827,20 @@ private enum ConversationResponseAttributedText {
     /// chunk, after the last block before the cut, so pieces rendered apart
     /// join exactly as the whole renders. Blocks that do not end the response
     /// keep their last line break.
-    /// `width` is the text's width, which tables share out among their columns.
+    /// `width` is the text's width, which tables share out among their
+    /// columns and which caps how far a wrapped code line indents.
     static func render(_ values: [Block], after previous: Block?, endsResponse: Bool,
                        style responseStyle: ConversationResponse.Style, width: CGFloat) -> NSAttributedString {
         renderPieces(values, after: previous, endsResponse: endsResponse, style: responseStyle, width: width).text
     }
 
     /// Whether a block renders differently at another width: a table shares
-    /// it out among its columns, and a list spaces an item by whether it wraps.
+    /// it out among its columns, and code caps how far its wrapped lines indent.
     static func followsWidth(_ block: Block) -> Bool {
         switch block {
-        case .table, .list: true
+        case .table, .code: true
         case .quote(let quoted): quoted.contains(where: followsWidth)
+        case .list(let items): items.contains { $0.blocks.contains(where: followsWidth) }
         default: false
         }
     }
@@ -871,10 +883,11 @@ private enum ConversationResponseAttributedText {
             return style
         }
 
-        /// In a table cell, short inline code keeps together on one line
-        /// unless `keepsCode` is false. Code is a little smaller than the
-        /// text around it, in a cell as in prose.
-        func inline(_ text: ConversationMarkdownDocument.InlineText, font: ResponseFont, inCell: Bool = false, keepsCode: Bool = true) -> NSMutableAttributedString {
+        /// In a table cell, short inline code keeps together on one line as
+        /// far as `cellCode` allows. Code is a little smaller than the text
+        /// around it, in a cell as in prose.
+        func inline(_ text: ConversationMarkdownDocument.InlineText, font: ResponseFont, inCell: Bool = false,
+                    cellCode: CellCode = .whole) -> NSMutableAttributedString {
             let result = NSMutableAttributedString(string: "")
             for run in text.rendered.runs {
                 let intent = run.inlinePresentationIntent ?? []
@@ -885,14 +898,24 @@ private enum ConversationResponseAttributedText {
                 let string = String(text.rendered[run.range].characters)
                 if intent.contains(.code) {
                     attributes[.responseInlineCode] = true
-                    // Short code keeps together: whole in a table cell; elsewhere
-                    // it may still break at its spaces, never inside a flag.
+                    // Short code keeps together: whole in a table cell, as far
+                    // as the table allows; elsewhere it may still break at its
+                    // spaces, never inside a flag.
                     if string.count <= Prose.unbreakableCodeLength {
-                        attributes[.responseNoBreak] = inCell && keepsCode ? ResponseNoBreak.whole : ResponseNoBreak.words
+                        let whole = inCell && (cellCode == .whole || (cellCode == .wholeWords && !string.contains(" ")))
+                        attributes[.responseNoBreak] = whole ? ResponseNoBreak.whole : ResponseNoBreak.words
                     }
                 }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-                if let link = run.link, ConversationMarkdownDocument.isLiveLink(link) { attributes[.link] = link }
+                if let link = run.link {
+                    if ConversationMarkdownDocument.isLiveLink(link) {
+                        attributes[.link] = link
+                    } else if link.scheme == nil || link.isFileURL, !link.path.isEmpty {
+                        // A link to a local file reads as a link; the reply's
+                        // file chip is what opens it.
+                        attributes[.foregroundColor] = WovenColors.success
+                    }
+                }
                 result.append(NSAttributedString(string: string, attributes: attributes))
             }
             return result
@@ -946,6 +969,57 @@ private enum ConversationResponseAttributedText {
             }
         }
 
+        // The plain style's lines: each as tall as a line of its text, with
+        // nothing between them, whatever block it came from.
+        let plain = responseStyle == .plainReasoning
+        let plainLineHeight = NSLayoutManager().defaultLineHeight(for: body)
+        func plainLine(_ text: NSAttributedString, after prefix: String = "") {
+            let line = NSMutableAttributedString(string: prefix, attributes: [.font: body, .foregroundColor: foreground])
+            line.append(text)
+            let style = paragraphStyle(indent: 0, before: 0)
+            style.minimumLineHeight = plainLineHeight
+            style.maximumLineHeight = plainLineHeight
+            append(line, style: style)
+        }
+
+        /// A block as plain lines: code line by line, a table row by row, a
+        /// list item after its marker, a quote's blocks, and a rule as nothing.
+        func emitPlain(_ block: Block, prefix: String = "") {
+            switch block {
+            case .paragraph(let content):
+                plainLine(inline(content, font: body), after: prefix)
+            case .heading(_, let content):
+                plainLine(inline(content, font: font(15, .semibold)), after: prefix)
+            case .list(let items):
+                for item in items {
+                    let marker = (item.checked.map { $0 ? "☑" : "☐" } ?? item.marker) + " "
+                    guard let first = item.blocks.first else { plainLine(NSAttributedString(), after: marker); continue }
+                    if leadsWithMarkerLine(first) { plainLine(NSAttributedString(), after: marker) }
+                    emitPlain(first, prefix: leadsWithMarkerLine(first) ? "" : marker)
+                    item.blocks.dropFirst().forEach { emitPlain($0) }
+                }
+            case .quote(let quoted):
+                for (index, block) in quoted.enumerated() { emitPlain(block, prefix: index == 0 ? prefix : "") }
+            case .code(_, let content):
+                if !prefix.isEmpty { plainLine(NSAttributedString(), after: prefix) }
+                for line in content.components(separatedBy: "\n") {
+                    plainLine(NSAttributedString(string: line, attributes: [.font: monospaced(13), .foregroundColor: foreground]))
+                }
+            case .table(let table):
+                if !prefix.isEmpty { plainLine(NSAttributedString(), after: prefix) }
+                for cells in [table.header] + table.rows {
+                    let row = NSMutableAttributedString()
+                    for (index, cell) in cells.enumerated() {
+                        if index > 0 { row.append(NSAttributedString(string: " · ", attributes: [.font: body, .foregroundColor: foreground])) }
+                        row.append(inline(cell, font: body))
+                    }
+                    plainLine(row)
+                }
+            case .divider:
+                break
+            }
+        }
+
         /// `values` in order. The first block's gap is `firstBefore` when a
         /// container chose it; every other block's comes from its predecessor.
         func sequence(_ values: [Block], indent: CGFloat, after previous: Block?, firstBefore: CGFloat?,
@@ -960,6 +1034,7 @@ private enum ConversationResponseAttributedText {
         }
 
         func emit(_ block: Block, indent: CGFloat, before: CGFloat, inItem: Bool, marker: Marker?) {
+            if plain { return emitPlain(block) }
             var before = before
             // A block that cannot start with the marker gets a line of its own for it.
             if let marker, leadsWithMarkerLine(block) {
@@ -975,21 +1050,13 @@ private enum ConversationResponseAttributedText {
                 appendInline(content, font: font(size, .semibold), style: paragraphStyle(indent: indent, before: before),
                              marker: marker)
             case .list(let items):
-                // An item that wraps at this width, or holds more than one
-                // block, is told apart from the next by the loose gap; short
-                // one-line items stay tight. Each gap comes from the item above
-                // it, so an item arriving later never moves the ones before it.
-                func spreads(_ item: ConversationMarkdownDocument.ListItem, textIndent: CGFloat) -> Bool {
-                    guard item.blocks.count == 1 else { return item.blocks.count > 1 }
-                    guard case .paragraph(let content) = item.blocks[0] else { return true }
-                    let text = inline(content, font: body)
-                    return text.string.contains("\n") || text.size().width > width - textIndent
-                }
+                // Every item is the same gap from the one before it, at every
+                // level, whether either wraps: an item arriving later never
+                // moves the ones before it, at any width.
                 // Nesting steps by level, however many spaces the source used,
                 // decided in source order so a later item never moves an earlier one.
                 var indents: [Int] = []
                 var previousItem: Block?
-                var previousSpreads = false
                 var topKind: MarkerKind?
                 for (index, item) in items.enumerated() {
                     while let last = indents.last, last > item.depth { indents.removeLast() }
@@ -1007,7 +1074,7 @@ private enum ConversationResponseAttributedText {
                     } else {
                         NSAttributedString(string: item.marker, attributes: [.font: body, .foregroundColor: foreground])
                     }
-                    let gap = startsList ? Prose.paragraphGap : previousSpreads ? Prose.looseListGap : Prose.tightListGap
+                    let gap = startsList ? Prose.paragraphGap : Prose.listGap
                     let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
@@ -1017,7 +1084,6 @@ private enum ConversationResponseAttributedText {
                     sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, inItem: true,
                              marker: itemMarker)
                     previousItem = item.blocks.last ?? emptyParagraph
-                    previousSpreads = spreads(item, textIndent: markerEnd + Prose.markerGap)
                 }
             case .quote(let quoted):
                 let start = output.length
@@ -1036,8 +1102,20 @@ private enum ConversationResponseAttributedText {
                         .font: font(11.5), .foregroundColor: WovenColors.mutedForeground]), style: labelStyle)
                     style.paragraphSpacingBefore = Prose.codeLabelGap
                 }
-                append(NSAttributedString(string: content, attributes: [.font: monospaced(13), .foregroundColor: foreground]),
-                       style: style)
+                // Each code line is its own paragraph. One that wraps continues
+                // two cells right of its own leading whitespace, so a wrap never
+                // reads as a line of its own, and never past half the box.
+                let code = monospaced(13)
+                let cell = (" " as NSString).size(withAttributes: [.font: code]).width
+                let halfBox = max(0, (width - style.headIndent - ConversationMetrics.blockInset) / 2)
+                for (index, line) in content.components(separatedBy: "\n").enumerated() {
+                    let lineStyle = style.mutableCopy() as! NSMutableParagraphStyle
+                    if index > 0 { lineStyle.paragraphSpacingBefore = 0 }
+                    let lead = leadingWidth(of: line, cell: cell, from: style.headIndent, tabs: style)
+                    lineStyle.headIndent = style.headIndent + min(lead + Prose.codeContinuationCells * cell, halfBox)
+                    output.append(NSAttributedString(string: line + "\n", attributes: [
+                        .font: code, .foregroundColor: foreground, .paragraphStyle: lineStyle]))
+                }
                 decorate(.responseCode, from: start, indent: indent)
             case .table(let table):
                 guard !table.header.isEmpty else { return }
@@ -1054,11 +1132,11 @@ private enum ConversationResponseAttributedText {
                 nativeTable.numberOfColumns = table.header.count
                 nativeTable.collapsesBorders = true
                 nativeTable.setWidth(indent, type: responseAbsolute, for: .margin, edge: .minX)
-                func cellTexts(keepingCode: Bool) -> [[NSMutableAttributedString]] {
+                func cellTexts(_ code: CellCode) -> [[NSMutableAttributedString]] {
                     ([table.header] + table.rows).enumerated().map { rowIndex, cells in
                         table.header.indices.map { column in
                             inline(cells.indices.contains(column) ? cells[column] : .init(""),
-                                   font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: true, keepsCode: keepingCode)
+                                   font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: true, cellCode: code)
                         }
                     }
                 }
@@ -1090,49 +1168,78 @@ private enum ConversationResponseAttributedText {
                 let padX = narrow ? Prose.narrowCellPaddingHorizontal : Prose.cellPaddingHorizontal
                 let padY = narrow ? Prose.narrowCellPaddingVertical : Prose.cellPaddingVertical
                 let available = width - indent - CGFloat(table.header.count) * 2 * padX
-                var rows = cellTexts(keepingCode: true)
-                var (most, least) = limits(rows)
-                // Too narrow for short code to keep together: let it break at
-                // its spaces like the words around it, rather than mid-word.
-                if least.reduce(0, +) > available {
-                    rows = cellTexts(keepingCode: false)
-                    (most, least) = limits(rows)
-                }
-                var widths: [CGFloat]
-                let natural = most.reduce(0, +)
-                if natural <= available {
-                    // A table nearly as wide as the text fills it, sharing the
-                    // spare width by natural width, so it does not stop just
-                    // short of the boxes around it; a narrower one hugs its content.
-                    let fills = natural >= Prose.tableFillShare * available
-                    widths = most.map { fills ? $0 + (available - natural) * $0 / natural : $0 }
-                } else {
-                    // Each gets its least, and the room left is shared in
-                    // proportion to how much more each would take.
-                    func share(_ least: [CGFloat]) -> [CGFloat] {
-                        let room = max(0, available - least.reduce(0, +))
-                        let stretch = zip(most, least).map { $0 - $1 }
-                        let total = stretch.reduce(0, +)
-                        return least.indices.map { least[$0] + (total > 0 ? room * stretch[$0] / total : 0) }
-                    }
-                    widths = share(least)
-                    // Minima wider than the text together: short cells break
-                    // between their words too.
-                    if widths.reduce(0, +) > available {
-                        widths = share(limits(rows, keepingShortCells: false).least)
-                    }
-                    // Still too wide: the widest columns give way, down to a
-                    // common width, and break their words where they must, so
-                    // no cell is ever cut off.
-                    if widths.reduce(0, +) > available {
-                        var left = max(CGFloat(widths.count), available), count = CGFloat(widths.count)
-                        var level = left / count
-                        for value in widths.sorted() {
-                            guard value * count > left else { left -= value; count -= 1; continue }
-                            level = left / count
-                            break
+                /// The columns' widths for `rows`: their natural widths when
+                /// they fit, else each column's least and a share of the rest.
+                func columnWidths(_ rows: [[NSMutableAttributedString]]) -> [CGFloat] {
+                    let (most, least) = limits(rows)
+                    var widths: [CGFloat]
+                    let natural = most.reduce(0, +)
+                    if natural <= available {
+                        // A table nearly as wide as the text fills it, sharing the
+                        // spare width by natural width, so it does not stop just
+                        // short of the boxes around it; a narrower one hugs its content.
+                        let fills = natural >= Prose.tableFillShare * available
+                        widths = most.map { fills ? $0 + (available - natural) * $0 / natural : $0 }
+                    } else {
+                        // Each gets its least, and the room left is shared in
+                        // proportion to how much more each would take.
+                        func share(_ least: [CGFloat]) -> [CGFloat] {
+                            let room = max(0, available - least.reduce(0, +))
+                            let stretch = zip(most, least).map { $0 - $1 }
+                            let total = stretch.reduce(0, +)
+                            return least.indices.map { least[$0] + (total > 0 ? room * stretch[$0] / total : 0) }
                         }
-                        widths = widths.map { min($0, max(1, level.rounded(.down))) }
+                        widths = share(least)
+                        // Minima wider than the text together: short cells break
+                        // between their words too.
+                        if widths.reduce(0, +) > available {
+                            widths = share(limits(rows, keepingShortCells: false).least)
+                        }
+                        // Still too wide: the widest columns give way, down to a
+                        // common width, and break their words where they must, so
+                        // no cell is ever cut off.
+                        if widths.reduce(0, +) > available {
+                            var left = max(CGFloat(widths.count), available), count = CGFloat(widths.count)
+                            var level = left / count
+                            for value in widths.sorted() {
+                                guard value * count > left else { left -= value; count -= 1; continue }
+                                level = left / count
+                                break
+                            }
+                            widths = widths.map { min($0, max(1, level.rounded(.down))) }
+                        }
+                    }
+                    return widths
+                }
+                /// How tall `rows` stand at `widths`: each row as tall as its tallest cell.
+                func height(_ rows: [[NSMutableAttributedString]], _ widths: [CGFloat]) -> CGFloat {
+                    rows.map { row in
+                        row.indices.map { column in
+                            ceil(row[column].boundingRect(with: CGSize(width: widths[column], height: .greatestFiniteMagnitude),
+                                                          options: .usesLineFragmentOrigin).height)
+                        }.max() ?? 0
+                    }.reduce(0, +)
+                }
+                var rows = cellTexts(.whole)
+                var widths: [CGFloat]
+                if limits(rows).least.reduce(0, +) > available {
+                    // Too narrow even for short code to keep together: let it
+                    // break at its spaces like the words around it, rather than mid-word.
+                    rows = cellTexts(.words)
+                    widths = columnWidths(rows)
+                } else {
+                    widths = columnWidths(rows)
+                    // Too narrow for the table's natural width: code of several
+                    // words may break between them, each word kept whole, when
+                    // that makes the table shorter, so a long command does not
+                    // hold its column wide while the prose beside it wraps.
+                    if limits(rows).most.reduce(0, +) > available {
+                        let split = cellTexts(.wholeWords)
+                        let splitWidths = columnWidths(split)
+                        if height(split, splitWidths) < height(rows, widths) {
+                            rows = split
+                            widths = splitWidths
+                        }
                     }
                 }
                 // These widths, as computed: TextKit's own automatic layout
@@ -1173,7 +1280,7 @@ private enum ConversationResponseAttributedText {
 
         // TextKit drops the spacing above the text's first paragraph; a box
         // that starts the text needs room above its first line.
-        if previous == nil, topOverhang(values.first) > 0 {
+        if previous == nil, !plain, topOverhang(values.first) > 0 {
             let lead = NSMutableParagraphStyle()
             lead.minimumLineHeight = 0.01
             lead.maximumLineHeight = 0.01
@@ -1234,6 +1341,24 @@ private enum ConversationResponseAttributedText {
         return (kept, word)
     }
 
+    /// How far `line`'s leading spaces and tabs reach past `start`, where it
+    /// begins: a cell for a space, the next of `style`'s tab stops for a tab.
+    private static func leadingWidth(of line: String, cell: CGFloat, from start: CGFloat, tabs style: NSParagraphStyle) -> CGFloat {
+        var x = start
+        for character in line {
+            if character == " " {
+                x += cell
+            } else if character == "\t" {
+                let interval = style.defaultTabInterval
+                x = style.tabStops.first { $0.location > x }?.location
+                    ?? (interval > 0 ? (floor(x / interval) + 1) * interval : x + cell)
+            } else {
+                break
+            }
+        }
+        return x - start
+    }
+
     /// The spacing above `block`'s first line: the visible gap between the two
     /// blocks' edges, adjusted for where those edges sit around their lines.
     private static func spacing(after previous: Block?, before block: Block, inItem: Bool) -> CGFloat {
@@ -1250,8 +1375,8 @@ private enum ConversationResponseAttributedText {
         if isBox(previous) || isBox(block) { return Prose.paragraphGap }
         // Two lists in a row are two lists, spaced as paragraphs.
         if case .list = previous { return Prose.paragraphGap }
-        if case .list = block { return Prose.looseListGap }
-        return inItem ? Prose.looseListGap : Prose.paragraphGap
+        if case .list = block { return Prose.listGap }
+        return inItem ? Prose.listGap : Prose.paragraphGap
     }
 
     /// Whether a list item's marker needs a line of its own before this block.
