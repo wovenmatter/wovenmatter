@@ -660,6 +660,7 @@ struct WorkspaceView: View {
                         width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : WovenMetrics.floatingControlSize,
                         height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : WovenMetrics.floatingControlSize,
                         action: onLeftRail)
+                    .conversationFloatingGlass(!presentsAssets)
                 }
                 Spacer()
                 if destination == .workspace && !assets.tabs.isPresented {
@@ -678,6 +679,7 @@ struct WorkspaceView: View {
                         Image(systemName: "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
                     }
                     .buttonStyle(WovenIconButtonStyle())
+                    .conversationFloatingGlass(!presentsAssets)
                     .help(assets.tabs.selected == nil ? "Open browser" : "Show artifacts")
                     .accessibilityLabel(assets.tabs.selected == nil ? "Open browser" : "Show artifacts")
                 }
@@ -686,6 +688,7 @@ struct WorkspaceView: View {
                         width: presentsAssets ? WovenMetrics.assetToolbarControlWidth : WovenMetrics.floatingControlSize,
                         height: presentsAssets ? WovenMetrics.assetToolbarControlHeight : WovenMetrics.floatingControlSize,
                         action: onRightRail)
+                    .conversationFloatingGlass(!presentsAssets)
                 }
             }
             .padding(.horizontal, WovenMetrics.floatingControlInset)

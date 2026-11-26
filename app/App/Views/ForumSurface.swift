@@ -256,7 +256,6 @@ private struct ForumPane: View {
                     transcriptContent(proxy)
                     Color.clear
                         .frame(height: bottomClearance)
-                        .padding(.top, 24)
                         .id(Self.endID)
                 }
                 .frame(maxWidth: ConversationMetrics.column)

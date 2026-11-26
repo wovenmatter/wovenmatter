@@ -111,11 +111,14 @@ enum DebugNavigationSignal {
                 guard let points = Double(request.dropFirst(11)),
                       let scrollView = scrollViews.max(by: { $0.visibleRect.height < $1.visibleRect.height }) else { return }
                 let clip = scrollView.contentView
-                ConversationReaderInput.note()
+                ConversationReaderInput.noteWheel(over: clip)
                 var origin = clip.bounds.origin
                 origin.y += clip.isFlipped ? points : -points
                 clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
                 scrollView.reflectScrolledClipView(clip)
+            } else if request.hasPrefix("still-glass:") {
+                // `still-glass:off` makes stills skip the composer's glass (for comparing).
+                stillGlass = request.dropFirst(12) != "off"
             } else if request.hasPrefix("theme:") {
                 // `theme:RAW` sets the app theme (green, cognac, dark), as Appearance does.
                 UserDefaults.standard.set(String(request.dropFirst(6)), forKey: WovenTheme.storageKey)
@@ -166,22 +169,24 @@ enum DebugNavigationSignal {
         // own content alone, drawn sharp over what it blurs. The transcripts are
         // hidden only for this capture and shown again before anything reaches
         // the screen.
-        let glass = Array(ConversationEdgeSnapshot.glass.values)
-        // Only where the glass is: the rest of the window is not drawn again.
-        let glassArea = glass.reduce(CGRect.null) { $0.union($1) }.intersection(view.bounds)
-        let clean: CGImage? = glassArea.isEmpty ? nil : {
+        let glass = !stillGlass ? [] : Array(ConversationEdgeSnapshot.glass.values).filter { !$0.frame.intersection(view.bounds).isEmpty }
+        // Only where each surface is: the rest of the window is not drawn again.
+        let clean: [(surface: ConversationGlassSurface, image: CGImage)] = glass.isEmpty ? [] : {
             let under = scrollViews(in: view).filter { scroll in
                 guard !scroll.isHidden else { return false }
                 let frame = view.convert(scroll.bounds, from: scroll)
-                return glass.contains { frame.contains(CGPoint(x: $0.midX, y: $0.midY)) && frame.height > 2 * $0.height }
+                return glass.contains { frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) && frame.height > 2 * $0.frame.height }
             }
             under.forEach { $0.isHidden = true }
             defer { under.forEach { $0.isHidden = false } }
-            let area = view.isFlipped ? glassArea
-                : CGRect(x: glassArea.minX, y: view.bounds.height - glassArea.maxY, width: glassArea.width, height: glassArea.height)
-            guard let copy = view.bitmapImageRepForCachingDisplay(in: area) else { return nil }
-            view.cacheDisplay(in: area, to: copy)
-            return copy.cgImage
+            return glass.compactMap { surface in
+                let rect = surface.frame.intersection(view.bounds)
+                let area = view.isFlipped ? rect
+                    : CGRect(x: rect.minX, y: view.bounds.height - rect.maxY, width: rect.width, height: rect.height)
+                guard let copy = view.bitmapImageRepForCachingDisplay(in: area) else { return nil }
+                view.cacheDisplay(in: area, to: copy)
+                return copy.cgImage.map { (ConversationGlassSurface(frame: rect, radius: surface.radius), $0) }
+            }
         }()
         func webViews(in view: NSView) -> [WKWebView] {
             (view as? WKWebView).map { [$0] } ?? view.subviews.flatMap(webViews)
@@ -265,20 +270,29 @@ enum DebugNavigationSignal {
                 // Then what floats opaque over the transcript (notices, the jump
                 // button): web content scrolls behind it, never over it.
                 if let window {
-                    for rect in ConversationHTMLControlsSnapshot.shown + covers where !pieces.isEmpty {
+                    // Each in its own shape: a round button covers only its circle.
+                    let shapes = ConversationHTMLControlsSnapshot.shown.map { ConversationGlassSurface(frame: $0, radius: .greatestFiniteMagnitude) } + covers
+                    for cover in shapes where !pieces.isEmpty {
+                        let rect = cover.frame
                         let target = unflipped(rect)
                         let source = CGRect(x: rect.minX * scale, y: rect.minY * scale,
                                             width: rect.width * scale, height: rect.height * scale).integral
                         if let piece = window.cropping(to: source) {
-                            context.cgContext.draw(piece, in: target.integral)
+                            let cg = context.cgContext
+                            cg.saveGState()
+                            let radius = min(cover.radius, target.width / 2, target.height / 2)
+                            cg.addPath(CGPath(roundedRect: target.integral, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                            cg.clip()
+                            cg.draw(piece, in: target.integral)
+                            cg.restoreGState()
                         }
                     }
                 }
                 NSGraphicsContext.restoreGraphicsState()
             }
             var output = bitmap
-            if let clean, let drawn = bitmap.cgImage,
-               let glassed = glassed(drawn, clean: clean, cleanOrigin: glassArea.origin, surfaces: glass, scale: CGFloat(bitmap.pixelsWide) / view.bounds.width,
+            if !clean.isEmpty, let drawn = bitmap.cgImage,
+               let glassed = glassed(drawn, surfaces: clean, scale: CGFloat(bitmap.pixelsWide) / view.bounds.width,
                                      dark: view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) {
                 output = NSBitmapImageRep(cgImage: glassed)
             }
@@ -294,12 +308,13 @@ enum DebugNavigationSignal {
     }
 
     private static let glassContext = CIContext()
+    private static var stillGlass = true
 
     /// Glass as the window shows it, near enough: inside each surface (window
     /// coordinates from the top), what lies behind blurred, under the surface's
     /// own content drawn mostly opaque over the panel's colour, and the
     /// material's tint: a little darker than the panel in light, lighter in dark.
-    private static func glassed(_ drawn: CGImage, clean: CGImage, cleanOrigin: CGPoint, surfaces: [CGRect], scale: CGFloat,
+    private static func glassed(_ drawn: CGImage, surfaces: [(surface: ConversationGlassSurface, image: CGImage)], scale: CGFloat,
                                 dark: Bool) -> CGImage? {
         let width = drawn.width, height = drawn.height
         guard let cg = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -309,21 +324,21 @@ enum DebugNavigationSignal {
         cg.draw(drawn, in: whole)
         let context = glassContext
         let blur = 4 * scale
-        for surface in surfaces {
+        for (glass, surfaceOnly) in surfaces {
+            let surface = glass.frame
             // Pixels from the top for cropping; from the bottom for drawing.
             let source = CGRect(x: surface.minX * scale, y: surface.minY * scale,
                                 width: surface.width * scale, height: surface.height * scale).integral
             let target = CGRect(x: source.minX, y: CGFloat(height) - source.maxY, width: source.width, height: source.height)
             let margin = source.insetBy(dx: -3 * blur, dy: -3 * blur).intersection(CGRect(x: 0, y: 0, width: width, height: height))
-            let inClean = source.offsetBy(dx: -cleanOrigin.x * scale, dy: -cleanOrigin.y * scale).integral
-            guard let behind = drawn.cropping(to: margin), let surfaceOnly = clean.cropping(to: inClean) else { continue }
+            guard let behind = drawn.cropping(to: margin) else { continue }
             let input = CIImage(cgImage: behind).clampedToExtent()
             guard let filter = CIFilter(name: "CIGaussianBlur", parameters: [kCIInputImageKey: input, kCIInputRadiusKey: blur]),
                   let output = filter.outputImage,
                   let blurred = context.createCGImage(output, from: CGRect(x: 0, y: 0, width: behind.width, height: behind.height))
             else { continue }
             cg.saveGState()
-            let radius = WovenMetrics.composerRadius * scale
+            let radius = min(glass.radius * scale, target.width / 2, target.height / 2)
             cg.addPath(CGPath(roundedRect: target, cornerWidth: radius, cornerHeight: radius, transform: nil))
             cg.clip()
             cg.draw(blurred, in: CGRect(x: margin.minX, y: CGFloat(height) - margin.maxY, width: margin.width, height: margin.height))

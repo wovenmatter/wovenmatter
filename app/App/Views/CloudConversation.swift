@@ -53,6 +53,8 @@ struct CloudConversation: View {
     @State private var scrollPositionOwner: TranscriptIdentity?
     @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
+    /// This transcript's own scope for Copy reading its visual replies.
+    @State private var copyScope = UUID()
     /// Rows lie below what shows (measured; it never changes whether the transcript follows).
     @State private var hasContentBelow = false
     /// Raw scroll measurements, read in callbacks and never observed: a value
@@ -167,7 +169,8 @@ struct CloudConversation: View {
                         }
                         Color.clear
                             .frame(height: bottomScrollClearance)
-                            .padding(.top, ConversationMetrics.turnGap)
+                            // Which scroll view and window are this transcript's, for the reader's input.
+                            .background(ConversationScrollViewReader { measured.scrollView = $0 })
                             .id(chatEndID)
                     }
                     .coordinateSpace(.named(Self.contentSpace))
@@ -294,8 +297,9 @@ struct CloudConversation: View {
                 } action: { _, offset in
                     scrolled(to: offset)
                 }
+                .onAppear { ConversationReaderInput.start() }
+                .onDisappear { ConversationReaderInput.stop() }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
-                    ConversationReaderInput.start()
                     conversationChanged(to: conversationID)
                 }
                 .onChange(of: transcriptIdentity, initial: true) { _, identity in measured.shown = identity }
@@ -322,6 +326,7 @@ struct CloudConversation: View {
                 .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .environment(\.conversationCopyScope, copyScope)
         .environment(\.conversationTranscriptState, session?.transcriptState)
         .environment(\.conversationFolder, sessionFolder)
         .environment(\.conversationTaskProgress, interaction == nil ? session?.taskProgress : nil)
@@ -754,7 +759,7 @@ struct CloudConversation: View {
         let movedAway = after.distance > max(before.distance, Self.liveEdgeTolerance)
         let arrived = after.distance <= Self.liveEdgeTolerance && before.distance > Self.liveEdgeTolerance
         if !isUserScrolling, !isPrependingHistory, after.offset != before.offset,
-           resized ? ConversationReaderInput.isRecent && (movedAway || arrived)
+           resized ? ConversationReaderInput.isRecent(for: measured.scrollView, isActivePanel: isActivePanel) && (movedAway || arrived)
                    : (after.distance > before.distance || after.distance <= Self.liveEdgeTolerance) {
             readerMoved(to: after)
         }
@@ -919,6 +924,12 @@ func nonemptyString(_ value: String?) -> String? {
 }
 
 struct MessageRow: View {
+    /// What Copy puts before a reply's text: its visual replies' text, if any.
+    static func copyLead(_ keys: [String]) -> (@MainActor @Sendable () async -> String?)? {
+        guard !keys.isEmpty else { return nil }
+        return { @MainActor @Sendable in await ConversationVisualReplyText.text(of: keys) }
+    }
+
     /// Whether reply text opens with a box: fenced code or a table.
     static func startsWithBox(_ text: String) -> Bool {
         guard let first = text.split(whereSeparator: \.isNewline).first(where: {
@@ -934,6 +945,7 @@ struct MessageRow: View {
     let resolveFile: (String) async throws -> URL
     let layout: ConversationMessageLayout.Row
     var onNewSession: (() -> Void)? = nil
+    @Environment(\.conversationCopyScope) private var copyScope
 
     private var isStreaming: Bool {
         AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
@@ -994,6 +1006,9 @@ struct MessageRow: View {
             displayedBody: reply,
             failedRunError: run?.status == .failed ? run?.error : nil
         )
+        // This answer's visual replies, in the order they show, as Copy reads them.
+        let visualKeys: [String] = activities.compactMap(\.activity.htmlRender)
+            .map { ConversationVisualReplyText.key(scope: copyScope, item: $0.id) }
         HStack {
             // Each part owns the gap above it: the work log ends with the
             // gap to the reply, and the previews and card start with theirs.
@@ -1016,11 +1031,12 @@ struct MessageRow: View {
                         showsRunningDots: run?.status == .running && hasResponseText,
                         fileRow: ConversationFileRow(messageID: message.libraryItemID, resolveFile: resolveFile)
                     )
-                } else if !hasResponseText, let run, run.status != .running,
-                          let digest = activities.last(where: { $0.activity.htmlRender != nil })?.activity.htmlRender?.digest {
+                    // Copy takes the whole answer: the visual replies' text above the reply's.
+                    .environment(\.conversationCopyLead, Self.copyLead(visualKeys))
+                } else if !hasResponseText, let run, run.status != .running, !visualKeys.isEmpty {
                     // An answer that is only a visual reply can be copied too:
                     // the page's readable text, from the same action row.
-                    ConversationVisualReplyCopyButton(digest: digest)
+                    ConversationVisualReplyCopyButton(keys: visualKeys)
                         .frame(minHeight: ConversationMetrics.actionRowHeight)
                         .padding(.top, ConversationMetrics.rowGap)
                 }
@@ -1131,7 +1147,7 @@ private struct MacAccessNotice: View {
                         in: RoundedRectangle(cornerRadius: WovenMetrics.controlRadius, style: .continuous))
             }
         }
-        .conversationCoverSnapshot()
+        .conversationCoverSnapshot(radius: WovenMetrics.controlRadius)
     }
 
     private func label(showsArrow: Bool) -> some View {
@@ -1170,6 +1186,8 @@ private final class TranscriptMeasurements {
     /// The transcript the scroll view on screen shows; a position written
     /// back for any other is ignored.
     var shown: TranscriptIdentity?
+    /// The scroll view that shows this transcript.
+    weak var scrollView: NSScrollView?
 }
 
 /// Where the held row is, read in layout callbacks and so not observed.
@@ -1209,7 +1227,7 @@ private struct TranscriptIdentity: Hashable {
 /// Copy for an answer that is only a visual reply: the page's readable text,
 /// with the reply's own quiet Copy look.
 private struct ConversationVisualReplyCopyButton: View {
-    let digest: String
+    let keys: [String]
     @State private var copied = false
 
     var body: some View {
@@ -1231,37 +1249,78 @@ private struct ConversationVisualReplyCopyButton: View {
 
     private func copy() {
         Task { @MainActor in
-            guard let text = await ConversationVisualReplyText.text(of: digest) else { return }
+            guard let text = await ConversationVisualReplyText.text(of: keys) else { return }
             NSPasteboard.general.clearContents()
             copied = NSPasteboard.general.setString(text, forType: .string)
         }
     }
 }
 
-/// When the reader last scrolled by wheel or key: a transcript move in the
-/// same moment is theirs, even when the content resized in the same update.
+/// When the reader last scrolled by wheel or key, and where: a transcript move
+/// in the same moment is theirs, even when the content resized in the same
+/// update. A wheel counts for the transcript under the pointer, a navigation
+/// key for the active panel of the key window.
 @MainActor enum ConversationReaderInput {
-    private static var last = Date.distantPast
+    private static var lastWheel = Date.distantPast
+    private static var wheelScrollViews: [ObjectIdentifier] = []
+    private static var lastKey = Date.distantPast
+    private static weak var keyWindow: NSWindow?
     private static var monitor: Any?
+    private static var users = 0
 
-    /// A wheel or navigation key within the last half second.
-    static var isRecent: Bool { Date().timeIntervalSince(last) < 0.5 }
+    /// A wheel over this transcript, or a navigation key in its window while
+    /// it is the active panel, within the last half second.
+    static func isRecent(for scrollView: NSScrollView?, isActivePanel: Bool) -> Bool {
+        guard let scrollView else { return false }
+        let now = Date()
+        if now.timeIntervalSince(lastWheel) < 0.5, wheelScrollViews.contains(ObjectIdentifier(scrollView)) { return true }
+        return isActivePanel && now.timeIntervalSince(lastKey) < 0.5 && keyWindow != nil && keyWindow === scrollView.window
+    }
 
-    static func note() { last = Date() }
+    /// A move of these scroll views (and those around them) as a wheel makes.
+    static func noteWheel(over view: NSView?) {
+        var scrollViews: [ObjectIdentifier] = []
+        var current = view
+        while let next = current {
+            if let scroll = next as? NSScrollView { scrollViews.append(ObjectIdentifier(scroll)) }
+            current = next.superview
+        }
+        wheelScrollViews = scrollViews
+        lastWheel = Date()
+    }
 
-    /// Watches the app's own wheel and navigation-key events, once. A key
-    /// counts only outside text editing: a space typed in the composer is
-    /// not the reader scrolling.
+    /// Watches the app's own wheel and navigation-key events while any
+    /// transcript is shown. A key counts only outside text editing: a space
+    /// typed in the composer is not the reader scrolling.
     static func start() {
+        users += 1
         guard monitor == nil else { return }
         let keys: Set<UInt16> = [115, 116, 119, 121, 125, 126, 49]   // home, page up, end, page down, down, up, space
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown]) { event in
-            if event.type == .scrollWheel {
-                note()
-            } else if keys.contains(event.keyCode), !(NSApp.keyWindow?.firstResponder is NSText) {
-                note()
+            if event.type == .scrollWheel, let content = event.window?.contentView {
+                noteWheel(over: content.hitTest(content.convert(event.locationInWindow, from: nil)))
+            } else if event.type == .keyDown, keys.contains(event.keyCode), let window = NSApp.keyWindow,
+                      !(window.firstResponder is NSText) {
+                keyWindow = window
+                lastKey = Date()
             }
             return event
         }
+    }
+
+    static func stop() {
+        users = max(0, users - 1)
+        guard users == 0, let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+    }
+}
+
+/// Hands back the scroll view a transcript's content sits in.
+private struct ConversationScrollViewReader: NSViewRepresentable {
+    let found: (NSScrollView?) -> Void
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { found(view.enclosingScrollView) }
     }
 }

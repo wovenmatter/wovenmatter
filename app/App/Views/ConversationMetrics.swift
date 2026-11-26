@@ -144,15 +144,22 @@ extension View {
     /// Debug builds: records where something opaque drawn over a transcript is
     /// (a notice, the jump button), so a debug still draws it again over web
     /// pictures.
-    func conversationCoverSnapshot() -> some View {
-        modifier(CoverSnapshotRecorder())
+    func conversationCoverSnapshot(radius: CGFloat = 0) -> some View {
+        modifier(CoverSnapshotRecorder(coverRadius: radius))
     }
 
     /// Debug builds: records where a glass surface over a transcript is (the
-    /// composer), so a debug still draws it as glass: window captures draw
-    /// the material clear.
-    func conversationGlassSnapshot() -> some View {
-        modifier(CoverSnapshotRecorder(isGlass: true))
+    /// composer, the floating header buttons) and its corner radius, so a
+    /// debug still draws it as glass: window captures draw the material clear.
+    func conversationGlassSnapshot(radius: CGFloat) -> some View {
+        modifier(CoverSnapshotRecorder(glassRadius: radius))
+    }
+
+    /// A floating button over a transcript: a round glass backing of its own
+    /// size, the composer's glass, so its glyph reads over the text passing
+    /// under it. Under Reduce Transparency the panel's colour instead.
+    func conversationFloatingGlass(_ enabled: Bool = true) -> some View {
+        modifier(ConversationFloatingGlass(enabled: enabled))
     }
 }
 
@@ -161,10 +168,10 @@ enum ConversationEnd {
     /// The reader is at the live edge, and the transcript follows, only within this of the end.
     static let liveEdge: CGFloat = 2
 
-    /// The newest content is obscured once the end is more than a turn gap
-    /// below what shows: the last row then reaches that far into the
-    /// clearance kept for the composer stack, behind the stack.
-    static func isObscured(distance: CGFloat) -> Bool { distance > ConversationMetrics.turnGap }
+    /// The newest content is obscured once the end is more than the
+    /// clearance's breathing room below what shows: the last row then reaches
+    /// behind the composer stack.
+    static func isObscured(distance: CGFloat) -> Bool { distance > CGFloat(ConversationBottomOverlayLayout.breathingRoom) }
 
     static func distance(_ geometry: ScrollGeometry) -> CGFloat {
         max(0, geometry.contentSize.height - geometry.visibleRect.maxY).rounded()
@@ -188,8 +195,8 @@ extension ConversationGeometry {
 /// each piece is faded like the transcript it is in and then covered again.
 struct ConversationEdgeSnapshot: Equatable {
     @MainActor static var shown: [UUID: ConversationEdgeSnapshot] = [:]
-    @MainActor static var covers: [UUID: CGRect] = [:]
-    @MainActor static var glass: [UUID: CGRect] = [:]
+    @MainActor static var covers: [UUID: ConversationGlassSurface] = [:]
+    @MainActor static var glass: [UUID: ConversationGlassSurface] = [:]
 
     /// The transcript a piece of web content at `rect` sits in.
     @MainActor static func containing(_ rect: CGRect) -> ConversationEdgeSnapshot? {
@@ -221,7 +228,10 @@ private struct EdgeSnapshotRecorder: ViewModifier {
 }
 
 private struct CoverSnapshotRecorder: ViewModifier {
-    var isGlass = false
+    /// An opaque cover's corner radius.
+    var coverRadius: CGFloat = 0
+    /// Set for a glass surface: its corner radius.
+    var glassRadius: CGFloat?
     #if DEBUG
     @State private var id = UUID()
     #endif
@@ -230,14 +240,46 @@ private struct CoverSnapshotRecorder: ViewModifier {
         #if DEBUG
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
-                if isGlass { ConversationEdgeSnapshot.glass[id] = frame } else { ConversationEdgeSnapshot.covers[id] = frame }
+                if let glassRadius { ConversationEdgeSnapshot.glass[id] = ConversationGlassSurface(frame: frame, radius: glassRadius) }
+                else { ConversationEdgeSnapshot.covers[id] = ConversationGlassSurface(frame: frame, radius: coverRadius) }
             }
             .onDisappear {
-                if isGlass { ConversationEdgeSnapshot.glass[id] = nil } else { ConversationEdgeSnapshot.covers[id] = nil }
+                if glassRadius != nil { ConversationEdgeSnapshot.glass[id] = nil } else { ConversationEdgeSnapshot.covers[id] = nil }
             }
         #else
         content
         #endif
+    }
+}
+
+#if DEBUG
+/// A glass surface or an opaque cover in window coordinates from the top, and
+/// its corner radius.
+struct ConversationGlassSurface {
+    let frame: CGRect
+    let radius: CGFloat
+}
+#endif
+
+private struct ConversationFloatingGlass: ViewModifier {
+    let enabled: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.wovenTheme) private var theme
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .background {
+                    if reduceTransparency {
+                        Circle().fill(theme.palette.workspace)
+                    } else {
+                        Color.clear.glassEffect(.regular.interactive(), in: Circle())
+                    }
+                }
+                .background { Color.clear.conversationGlassSnapshot(radius: .greatestFiniteMagnitude) }
+        } else {
+            content
+        }
     }
 }
 
@@ -287,7 +329,7 @@ private struct ConversationEdges: ViewModifier {
                     .buttonStyle(.plain)
                     .help(jumpLabel)
                     .accessibilityLabel(jumpLabel)
-                    .conversationCoverSnapshot()
+                    .conversationCoverSnapshot(radius: .greatestFiniteMagnitude)
                     .padding(.bottom, stackTop + ConversationMetrics.rowGap)
                 }
             }

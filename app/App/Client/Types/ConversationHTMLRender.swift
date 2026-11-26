@@ -66,9 +66,9 @@ public enum ConversationHTMLDocument {
   /// The size message also carries `lead`: the page's first visible text when
   /// it is a heading or a table's caption, else empty.
   ///
-  /// `wovenReadText()` asks the page for its text as the reader sees it, read
+  /// `wovenReadText(id)` asks the page for its text as the reader sees it, read
   /// inside the frame, so what scripts draw counts; it answers with a `text`
-  /// message.
+  /// message carrying the same `id`.
   public static func render(html: String) -> String {
     let bootstrap = #"""
     <style id="woven-theme">html{margin:0;padding:0}body{margin:0;padding:12px 14px}:root,:root>body{height:auto!important;min-height:0!important;max-height:none!important}:root{position:relative!important}html,body{background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
@@ -76,7 +76,7 @@ public enum ConversationHTMLDocument {
     (()=>{
       const base=document.getElementById('woven-theme').textContent;
       addEventListener('message',e=>{if(e.source!==parent)return;
-        if(e.data?.kind==='text'){parent.postMessage({kind:'text',text:(document.body?.innerText||'').slice(0,200000)},'*');return;}
+        if(e.data?.kind==='text'){parent.postMessage({kind:'text',id:e.data.id,text:(document.body?.innerText||'').slice(0,200000)},'*');return;}
         if(e.data?.kind!=='theme')return;
         const t=e.data;document.getElementById('woven-theme').textContent=':root{color-scheme:'+t.appearance+';'+Object.entries(t.variables).map(([k,v])=>k+':'+v+';').join('')+'}'+base;
         document.documentElement.dataset.theme=t.appearance;
@@ -231,7 +231,7 @@ public enum ConversationHTMLDocument {
     <body><iframe id="page" title="Visual reply" sandbox="allow-scripts allow-forms" allow="camera 'none'; microphone 'none'; geolocation 'none'"></iframe><script>
     const frame=document.getElementById('page');let theme;
     window.wovenSetTheme=t=>{theme=t;frame.contentWindow.postMessage({kind:'theme',...t},'*');};
-    window.wovenReadText=()=>frame.contentWindow.postMessage({kind:'text'},'*');
+    window.wovenReadText=id=>frame.contentWindow.postMessage({kind:'text',id},'*');
     addEventListener('message',e=>{if(e.source!==frame.contentWindow||!e.data)return;
       if(e.data.kind==='ready'&&theme)wovenSetTheme(theme);
       if(['size','link','console','ready','text'].includes(e.data.kind))window.webkit?.messageHandlers.wovenHTML.postMessage(e.data);

@@ -52,6 +52,7 @@ struct ConversationResponse: View {
     var trailingAccessoryWidth: CGFloat = 10
     @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
+    @Environment(\.conversationCopyLead) private var copyLead
     @State private var pendingExternalURL: URL?
     /// The last file a link in the text asked to open.
     @State private var fileOpenRequest: ConversationFileOpenRequest?
@@ -144,8 +145,12 @@ struct ConversationResponse: View {
 
     private var copyButton: some View {
         Button {
-            NSPasteboard.general.clearContents()
-            copied = NSPasteboard.general.setString(content, forType: .string)
+            // The whole answer: anything shown above the text (a visual reply) first.
+            Task { @MainActor in
+                let lead = await copyLead?()
+                NSPasteboard.general.clearContents()
+                copied = NSPasteboard.general.setString(lead.map { $0 + "\n\n" + content } ?? content, forType: .string)
+            }
         } label: {
             // A step above the muted text, so the glyph's thin strokes read as a control.
             Image(systemName: copied ? "checkmark" : "doc.on.doc")

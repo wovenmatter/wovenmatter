@@ -16,6 +16,8 @@ struct PanelControlButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(WovenIconButtonStyle())
+        // It floats beside the composer, over the transcript.
+        .conversationFloatingGlass()
         .accessibilityLabel(accessibilityLabel)
         .help(help)
     }
@@ -242,7 +244,7 @@ struct ConversationComposer: View {
                 style: .continuous
             )
         )
-        .conversationGlassSnapshot()
+        .conversationGlassSnapshot(radius: WovenMetrics.composerRadius)
         .overlay {
             RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous)
                 .stroke(

@@ -293,10 +293,11 @@ struct ConversationWorkTranscript: View {
         return ConversationMetrics.rowGap
     }
 
-    /// A live thought at the tail showing its trace window.
+    /// A live thought at the tail showing its trace window: the block's own
+    /// test, so the dots stay put when the provider marks the thought done
+    /// before the reply arrives.
     private static func isLiveTrace(_ entry: ConversationWorkTimelineEntry, tailID: String?) -> Bool {
-        guard entry.id == tailID, case .activity(let activity) = entry.content, activity.kind == .thought,
-              activity.workTimelineShowsProgress else { return false }
+        guard entry.id == tailID, case .activity(let activity) = entry.content, activity.kind == .thought else { return false }
         return ConversationThinkingBlock.liveShowsText(activity)
     }
 
@@ -633,6 +634,9 @@ private struct ConversationThinkingBlock: View {
                 if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
                 else { localScrollSnapshot = snapshot }
             })
+            // While the block is live its window keeps plain lines, even once
+            // the provider has marked the thought done and the reply is still to come.
+            .environment(\.conversationReasoningLiveWindow, isLive)
             .padding(.top, ConversationMetrics.labelGap)
             .padding(.leading, ConversationMetrics.textInset)
     }
@@ -1568,6 +1572,7 @@ private struct ConversationReasoningText: View {
     let isLive: Bool
     let hasCompleteText: Bool
     @Environment(\.conversationReasoningAtLiveEdge) private var isAtLiveEdge
+    @Environment(\.conversationReasoningLiveWindow) private var inLiveWindow
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
     @State private var displayedEnd: Int?
@@ -1637,7 +1642,7 @@ private struct ConversationReasoningText: View {
                 // While it streams, the three-line window shows plain lines
                 // (no boxes to cut through); opened once finished, the full style.
                 ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false,
-                                     style: isLive ? .plainReasoning : .reasoning)
+                                     style: isLive || inLiveWindow ? .plainReasoning : .reasoning)
             }
         }
         .onAppear {
@@ -1758,6 +1763,9 @@ private extension EnvironmentValues {
     /// Inside an expanded work group, which already scrolls within its own
     /// bounded height.
     @Entry var conversationInBoundedList = false
+
+    /// Inside a live thought's three-line window.
+    @Entry var conversationReasoningLiveWindow = false
 }
 
 private struct ConversationReasoningTextKey: PreferenceKey {

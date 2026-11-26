@@ -503,10 +503,12 @@ when an intentional design change is accepted.
   thought with text is one closed row named by its title or leading heading,
   else "Thought", never by its raw text; one with no text draws nothing. A
   record such as an approval is named by status and action, with its own glyph. A visual
-  reply sits in a hairline frame with its title inside (its row kept but left
-  blank when the page starts with that same heading), the column wide or as
-  wide as it asked to be, with a small inset inside it; its controls show on
-  hover, while zoomed, or with focus. Under the reply, Copy and the files it
+  reply sits in a hairline frame that holds its page alone, the column wide or
+  as wide as it asked to be; its title, unless the page starts with that same
+  heading, is a caption above the frame, 14-point semibold, a label gap above
+  it, one line cut at its end. Its controls float in the frame's corner and show
+  on hover, while zoomed, or with focus. Copy takes the whole answer: the
+  visual reply's text, then the reply's. Under the reply, Copy and the files it
   refers to share one wrapping row, as tall as a file chip in every state and
   an entry gap below the text when it holds files; a link in the text to one
   of those files opens it as its chip does, and one to a file without a chip
@@ -541,7 +543,10 @@ when an intentional design change is accepted.
   down behind the glass composer, which shows them through it. At the ends of a
   chat the first row clears the floating buttons and the last rests above the
   composer. The button back to the latest reply or post is a small round one
-  centred above the composer, on its own background.
+  centred above the composer, on its own background. A control that floats
+  over the transcript (the header buttons, the buttons beside the composer)
+  has a round glass backing of its own, the composer's glass, or for the jump
+  button a solid one; none is a bare glyph over messages.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
