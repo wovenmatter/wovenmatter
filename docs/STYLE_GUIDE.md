@@ -471,8 +471,11 @@ when an intentional design change is accepted.
   command shows as written only when its runtime titled the row with it;
   under a tool's name ("Bash") the row names only the program. A
   plain read-only shell search, listing or file read takes the same words as the
-  file tool; anything compound or unfamiliar shows its first part and an ellipsis, since a row
-  never claims what its command did not do. Verbs are past tense once done.
+  file tool, since a row never claims what its command did not do; any other
+  command shows its first line that does something (not a comment or `set`),
+  every part of it, with an ellipsis only for the lines after it. A harness's
+  own helper is named for what it does ("Looked up tools", "Loaded the dataviz
+  skill"); any other tool keeps its name. Verbs are past tense once done.
   Woven's visual tools have one label each, previewed or shown (shown only once
   the chat shows it), and a group
   names every kind of step in the rows' words ("Listed 1 folder and read 2
@@ -481,7 +484,9 @@ when an intentional design change is accepted.
   when any row failed, two kinds of search each by name, a web search as one
   whatever its row's detail, and one or two tools by name when their rows show
   plain names (a step whose row is a phrase is counted, never quoted), never
-  an unnamed action; a
+  an unnamed action; one step of a kind is said in its own words where they
+  are short ("searched palette.md"), two or more are counted by a noun ("ran 3
+  searches"), never "1 time"; a
   narrow column takes the same facts in short ("1 folder listed · 2 files read"). Thinking looks the same everywhere.
   Live reasoning shows its last three lines, its cut top line fading out, under
   its title once it has one (the title is never prose in the trace); afterwards a

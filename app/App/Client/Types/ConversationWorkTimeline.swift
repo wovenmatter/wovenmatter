@@ -296,25 +296,38 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
       let label = activities.count == 1 ? activities[0].workTimelineLabel(active: false) : "Thought (×\(activities.count))"
       return [SummaryPart(sentence: label, compact: label)]
     }
-    var order: [ConversationToolAction] = []
-    var members: [ConversationToolAction: [AgentRunActivity]] = [:]
+    // A harness's helper is a kind of its own, beside the action it falls under.
+    struct Kind: Hashable { let action: ConversationToolAction; let helper: WorkTimelineHelper.Kind? }
+    var kindOrder: [Kind] = []
+    var members: [Kind: [AgentRunActivity]] = [:]
     for tool in tools {
-      let action = ConversationToolAction(tool)
-      if members[action] == nil { order.append(action) }
-      members[action, default: []].append(tool)
+      let kind = Kind(action: ConversationToolAction(tool), helper: tool.workTimelineHelper?.kind)
+      if members[kind] == nil { kindOrder.append(kind) }
+      members[kind, default: []].append(tool)
     }
+    let order = kindOrder.map(\.action)
     // Two kinds of search side by side are each named, so neither reads as
     // a repeat of the other.
     let searches: Set<ConversationToolAction> = [.webSearch, .codeSearch, .search]
     let namesSearches = Set(order).intersection(searches).count > 1
     // Each kind's facts, with how many of its calls failed where its verb
     // counts them all; the note is worded once the number of kinds is known.
-    let kinds = order.map { action -> (parts: [SummaryPart], failed: Int) in
-      let all = members[action] ?? []
+    let kinds = kindOrder.map { kind -> (parts: [SummaryPart], failed: Int) in
+      let action = kind.action
+      let all = members[kind] ?? []
       let names = all.map(\.workTimelineToolIdentity).reduce(into: [String]()) { names, name in
         if !name.isEmpty, !names.contains(name) { names.append(name) }
       }
       let failures = all.filter(\.workTimelineIsFailure).count
+      if let helper = kind.helper {
+        if failures == all.count {
+          let text = "\(failures) \(helper.noun(count: failures)) failed"
+          return ([SummaryPart(sentence: text, compact: text)], 0)
+        }
+        let one = all.count == 1 ? all[0].workTimelineHelper : nil
+        return ([SummaryPart(sentence: one?.label(active: false, failed: false) ?? helper.summary(count: all.count),
+                             compact: one?.compact ?? "\(all.count) \(helper.noun(count: all.count))")], failures)
+      }
       // One or two tools its rows showed by a plain name are named; a step
       // whose row is a phrase is counted with the rest, never quoted.
       if action == .other, (1...2).contains(names.count), all.allSatisfy({ $0.workTimelineTitlePhrase == nil }),
@@ -334,7 +347,8 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
           return ([SummaryPart(sentence: text, compact: text)], 0)
         }
         let count = action.summaryCount(all)
-        return ([SummaryPart(sentence: action.summary(count: count, namingSearch: namesSearches),
+        let words = all.count == 1 ? action.single(all[0]) : nil
+        return ([SummaryPart(sentence: words ?? action.summary(count: count, namingSearch: namesSearches),
                              compact: action.compactSummary(count: count, namingSearch: namesSearches))], failures)
       }
       let done = all.filter { !$0.workTimelineIsFailure }
@@ -534,26 +548,45 @@ public enum ConversationToolAction: Hashable, Sendable {
   public func summary(count: Int) -> String { summary(count: count, namingSearch: false) }
 
   /// `namingSearch` names which kind a search was, for a summary with two.
+  /// Two or more of a kind are counted by a noun ("Ran 3 searches"); one is
+  /// said in words, never "1 time" (`single` says it in its own words).
   func summary(count: Int, namingSearch: Bool) -> String {
     let plural = count != 1
     return switch self {
     case .command: "Ran \(count) \(plural ? "commands" : "command")"
-    case .code: "Ran code \(count) \(plural ? "times" : "time")"
+    case .code: plural ? "Ran \(count) scripts" : "Ran code"
     case .read: "Read \(count) \(plural ? "files" : "file")"
     case .edit: "Changed \(count) \(plural ? "files" : "file")"
-    case .codeSearch: "Searched \(namingSearch ? "files " : "")\(count) \(plural ? "times" : "time")"
-    case .search: namingSearch ? "Ran \(count) other \(plural ? "searches" : "search")"
-      : "Searched \(count) \(plural ? "times" : "time")"
+    case .codeSearch: plural ? "Ran \(count) \(namingSearch ? "file " : "")searches" : namingSearch ? "Searched files" : "Searched"
+    case .search: plural ? "Ran \(count) \(namingSearch ? "other " : "")searches" : namingSearch ? "Ran another search" : "Searched"
     case .list: "Listed \(count) \(plural ? "folders" : "folder")"
     case .visual: "Showed \(count) visual \(plural ? "replies" : "reply")"
     case .preview: "Previewed \(count) visual \(plural ? "replies" : "reply")"
-    case .webSearch: "Searched the web \(count) \(plural ? "times" : "time")"
+    case .webSearch: plural ? "Ran \(count) web searches" : "Searched the web"
     case .webFetch: "Fetched \(count) web \(plural ? "pages" : "page")"
-    case .browser: "Used the browser \(count) \(plural ? "times" : "time")"
-    case .computer: "Used the computer \(count) \(plural ? "times" : "time")"
+    case .browser: plural ? "Took \(count) browser steps" : "Used the browser"
+    case .computer: plural ? "Took \(count) computer steps" : "Used the computer"
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
     case .question: plural ? "Asked questions \(count) times" : "Asked questions"
     case .other: "Used \(count) \(plural ? "tools" : "tool")"
+    }
+  }
+
+  /// One step of this kind in its own words, where they are short: what it
+  /// searched ("Searched palette.md", "Searched the web for “sqlite”"). Nil
+  /// leaves it to `summary`.
+  func single(_ activity: AgentRunActivity) -> String? {
+    let input = activity.workTimelineInput
+    switch self {
+    case .codeSearch:
+      if let path = activity.workTimelineSubjectPaths.first { return "Searched " + (path as NSString).lastPathComponent }
+      guard let pattern = (input?["pattern"] as? String)?.workTimelineSingleLine, pattern.count <= 30 else { return nil }
+      return "Searched for \u{201C}\(pattern)\u{201D}"
+    case .webSearch:
+      guard let query = (input?["query"] as? String)?.workTimelineSingleLine, query.count <= 40 else { return nil }
+      return "Searched the web for \u{201C}\(query)\u{201D}"
+    default:
+      return nil
     }
   }
 
@@ -788,6 +821,41 @@ public extension AgentRunActivity {
     return label.contains(" ") && line.hasPrefix(label) ? command : nil
   }
 
+  /// A harness's own helper, named for what it does rather than by its
+  /// identifier: Claude Code's ToolSearch looks up the tools it may call,
+  /// and its Skill tool loads a skill. Any other tool keeps its own name.
+  var workTimelineHelper: WorkTimelineHelper? {
+    guard kind == .tool else { return nil }
+    let input = workTimelineInput
+    if workTimelineToolIdentity == "ToolSearch" {
+      guard let query = (input?["query"] as? String)?.workTimelineSingleLine else { return WorkTimelineHelper(kind: .toolLookup) }
+      if query.lowercased().hasPrefix("select:") {
+        // `select:a,b`: the tools it asked for by name, Woven's and the
+        // harness's own by what they do, any other without a server's prefix.
+        let names = query.dropFirst(7).split(separator: ",").map { name -> String in
+          let name = name.trimmingCharacters(in: .whitespaces)
+          switch ConversationToolAction.wovenVisualTool(name) {
+          case .visual?: return "the visual reply tool"
+          case .preview?: return "the preview tool"
+          default: break
+          }
+          switch name {
+          case "WebSearch": return "the web search tool"
+          case "WebFetch": return "the web fetch tool"
+          default: return name.hasPrefix("mcp__") ? (name.components(separatedBy: "__").last ?? name) : name
+          }
+        }.filter { !$0.isEmpty }
+        return WorkTimelineHelper(kind: .toolLookup, object: (1...2).contains(names.count) ? names.joined(separator: " and ") : nil)
+      }
+      return WorkTimelineHelper(kind: .toolLookup, object: query.count <= 40 ? "tools for \u{201C}\(query)\u{201D}" : nil)
+    }
+    if let skill = (input?["skill"] as? String)?.workTimelineSingleLine,
+       toolName?.lowercased() == "skill" || title?.hasPrefix("Load skill") == true {
+      return WorkTimelineHelper(kind: .skill, object: skill)
+    }
+    return nil
+  }
+
   /// The runtime's own title when the row shows it as it is, a phrase
   /// ("Load skill: dataviz"), rather than a tool's name; a group's summary
   /// decides the same way. A generic title must not mask a real tool name.
@@ -814,6 +882,7 @@ public extension AgentRunActivity {
     if action == .command, let command = workTimelineTitledCommand {
       return command.workTimelineCommandLine(root: root)
     }
+    if let helper = workTimelineHelper { return helper.label(active: active, failed: failed) }
     if action == .visual || action == .preview {
       // One plain label in every harness: what it showed, or previewed.
       let arguments = (input?["arguments"] as? [String: Any]) ?? input
@@ -987,39 +1056,26 @@ extension String {
     return digits.count >= 12 && digits.allSatisfy(\.isHexDigit)
   }
 
-  /// A command of several parts shows its first part and an ellipsis:
-  /// joined commands, pipelines and here-documents are not flattened into one
-  /// middle-cut line.
-  var workTimelineFirstSegment: String {
-    var quote: Character?
-    var index = startIndex
-    while index < endIndex {
-      let character = self[index]
-      let next = self.index(after: index)
-      if let open = quote {
-        if character == open { quote = nil }
-      } else if character == "'" || character == "\"" {
-        quote = character
-      } else if character == "\\" {
-        if next < endIndex { index = self.index(after: next); continue }
-      } else if character == ";" || character == "\n" || character == "\r\n" || character == "|"
-        || (character == "&" && next < endIndex && self[next] == "&")
-        || (character == "<" && next < endIndex && self[next] == "<") {
-        let first = self[..<index].trimmingCharacters(in: .whitespaces)
-        let rest = self[index...].trimmingCharacters(in: CharacterSet(charactersIn: ";|&<\n ").union(.whitespaces))
-        return first.isEmpty || rest.isEmpty ? self : first + " \u{2026}"
-      }
-      index = next
-    }
-    return self
-  }
-
-  /// A command as its row shows it, in one line: its first part, found in
-  /// the command as written (`pwd` then `date` on the next line is `pwd …`),
-  /// without the folder plumbing, then its whitespace collapsed.
+  /// A command as its row shows it, on one line: the first line that does
+  /// something (not blank, a comment, a shebang or a `set` of shell
+  /// options), with the lines it continues onto with a trailing `\`, every
+  /// part of it (`a && b | c; d`), without the folder plumbing, then its
+  /// whitespace collapsed. " …" stands for what a label leaves out: the
+  /// lines after it, such as a here-document's body or the rest of a script.
   func workTimelineCommandLine(root: String? = nil) -> String {
-    let line = workTimelineDisplayCommand(root: root).workTimelineFirstSegment
-    return line.workTimelineSingleLine ?? workTimelineSingleLine ?? self
+    var lines: [String] = []
+    var continued = false
+    for line in components(separatedBy: .newlines) {
+      if continued, let last = lines.popLast() { lines.append(String(last.dropLast()) + " " + line) } else { lines.append(line) }
+      continued = line.hasSuffix("\\")
+    }
+    let doing = lines.filter { line in
+      let text = line.trimmingCharacters(in: .whitespaces)
+      return !text.isEmpty && !text.hasPrefix("#") && text.range(of: #"^set(\s+[-+][A-Za-z]+(\s+[a-z]+)?)+$"#, options: .regularExpression) == nil
+    }
+    guard let first = doing.first else { return workTimelineSingleLine ?? self }
+    let shown = first.workTimelineDisplayCommand(root: root).workTimelineSingleLine ?? first
+    return doing.count > 1 ? shown + " \u{2026}" : shown
   }
 
   /// A command as a row shows it: no leading `cd <folder> &&`, no
@@ -1048,6 +1104,50 @@ extension String {
       result = (result as NSString).replacingCharacters(in: match.range, with: replacement)
     }
     return result
+  }
+}
+
+/// A harness's own helper, as `AgentRunActivity.workTimelineHelper` finds it.
+public struct WorkTimelineHelper: Equatable, Sendable {
+  public enum Kind: Hashable, Sendable { case toolLookup, skill }
+  public let kind: Kind
+  /// What it looked up or loaded, when that is short.
+  public var object: String?
+
+  /// Its row: "Looked up render_html", "Loaded the dataviz skill".
+  func label(active: Bool, failed: Bool) -> String {
+    switch kind {
+    case .toolLookup:
+      return (failed ? "Failed to look up " : active ? "Looking up " : "Looked up ") + (object ?? "tools")
+    case .skill:
+      let skill = object.map { "the \($0) skill" } ?? "a skill"
+      return (failed ? "Failed to load " : active ? "Loading " : "Loaded ") + skill
+    }
+  }
+
+  /// One in a narrow column: "1 tool lookup", "dataviz skill".
+  var compact: String {
+    switch kind {
+    case .toolLookup: "1 tool lookup"
+    case .skill: object.map { "\($0) skill" } ?? "1 skill"
+    }
+  }
+}
+
+extension WorkTimelineHelper.Kind {
+  func noun(count: Int) -> String {
+    switch self {
+    case .toolLookup: count == 1 ? "tool lookup" : "tool lookups"
+    case .skill: count == 1 ? "skill" : "skills"
+    }
+  }
+
+  /// Two or more: "Ran 2 tool lookups", "Loaded 2 skills".
+  func summary(count: Int) -> String {
+    switch self {
+    case .toolLookup: "Ran \(count) \(noun(count: count))"
+    case .skill: "Loaded \(count) \(noun(count: count))"
+    }
   }
 }
 
