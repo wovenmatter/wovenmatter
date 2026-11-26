@@ -797,18 +797,12 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         super.mouseDown(with: event)
     }
 
-    /// Lines do not break inside text kept together, except after a space in
-    /// text kept together only by its words.
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
-        guard let textStorage = layoutManager.textStorage, charIndex > 0, charIndex < textStorage.length,
-              let kept = textStorage.attribute(.responseNoBreak, at: charIndex, effectiveRange: nil) as? ResponseNoBreak,
-              textStorage.attribute(.responseNoBreak, at: charIndex - 1, effectiveRange: nil) != nil else { return true }
-        let previous = (textStorage.string as NSString).character(at: charIndex - 1)
-        return kept == .words && (previous == 0x20 || previous == 0x09)
+        ResponseLineBreaks.allowsBreak(in: layoutManager.textStorage, before: charIndex)
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByHyphenatingBeforeCharacterAt charIndex: Int) -> Bool {
-        self.layoutManager(layoutManager, shouldBreakLineByWordBeforeCharacterAt: charIndex)
+        ResponseLineBreaks.allowsBreak(in: layoutManager.textStorage, before: charIndex)
     }
 
     /// Text that changes keeps its links to files that have chips.
@@ -852,6 +846,31 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
 private enum ResponseNoBreak: Int {
     case whole
     case words
+}
+
+/// Where a reply's lines may break, for the displayed text and for
+/// measuring a table before it is displayed.
+@MainActor
+private final class ResponseLineBreaks: NSObject, @preconcurrency NSLayoutManagerDelegate {
+    static let shared = ResponseLineBreaks()
+
+    /// Lines do not break inside text kept together, except after a space in
+    /// text kept together only by its words.
+    static func allowsBreak(in text: NSAttributedString?, before charIndex: Int) -> Bool {
+        guard let text, charIndex > 0, charIndex < text.length,
+              let kept = text.attribute(.responseNoBreak, at: charIndex, effectiveRange: nil) as? ResponseNoBreak,
+              text.attribute(.responseNoBreak, at: charIndex - 1, effectiveRange: nil) != nil else { return true }
+        let previous = (text.string as NSString).character(at: charIndex - 1)
+        return kept == .words && (previous == 0x20 || previous == 0x09)
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
+        Self.allowsBreak(in: layoutManager.textStorage, before: charIndex)
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByHyphenatingBeforeCharacterAt charIndex: Int) -> Bool {
+        Self.allowsBreak(in: layoutManager.textStorage, before: charIndex)
+    }
 }
 
 private extension NSAttributedString.Key {
@@ -968,7 +987,7 @@ private enum ConversationResponseAttributedText {
         /// far as `cellCode` allows. Code is a little smaller than the text
         /// around it, in a cell as in prose.
         func inline(_ text: ConversationMarkdownDocument.InlineText, font: ResponseFont, inCell: Bool = false,
-                    cellCode: CellCode = .whole) -> NSMutableAttributedString {
+                    cellCode: CellCode = .whole, keeping kept: Set<String> = []) -> NSMutableAttributedString {
             let result = NSMutableAttributedString(string: "")
             for run in text.rendered.runs {
                 let intent = run.inlinePresentationIntent ?? []
@@ -983,7 +1002,8 @@ private enum ConversationResponseAttributedText {
                     // as the table allows; elsewhere it may still break at its
                     // spaces, never inside a flag.
                     if string.count <= Prose.unbreakableCodeLength {
-                        let whole = inCell && (cellCode == .whole || (cellCode == .wholeWords && !string.contains(" ")))
+                        let whole = inCell && (cellCode == .whole || kept.contains(string)
+                            || (cellCode == .wholeWords && !string.contains(" ")))
                         attributes[.responseNoBreak] = whole ? ResponseNoBreak.whole : ResponseNoBreak.words
                     }
                 }
@@ -1005,7 +1025,7 @@ private enum ConversationResponseAttributedText {
         /// Each source line is its own paragraph. The first takes `style`;
         /// the lines after it continue the block, at its content indent with
         /// no gap above, so they space like wrapped lines.
-        func append(_ text: NSAttributedString, style: NSParagraphStyle) {
+        func append(_ text: NSAttributedString, style: NSParagraphStyle, into target: NSMutableAttributedString? = nil) {
             let paragraph = NSMutableAttributedString(attributedString: text)
             let lineFont: Any = text.length > 0 ? text.attribute(.font, at: text.length - 1, effectiveRange: nil) ?? body : body
             paragraph.append(NSAttributedString(string: "\n", attributes: [.font: lineFont, .foregroundColor: foreground]))
@@ -1020,7 +1040,7 @@ private enum ConversationResponseAttributedText {
                 paragraph.addAttribute(.paragraphStyle, value: continuation,
                     range: NSRange(location: first.length, length: paragraph.length - first.length))
             }
-            output.append(paragraph)
+            (target ?? output).append(paragraph)
         }
 
         func appendInline(_ content: ConversationMarkdownDocument.InlineText, font: ResponseFont,
@@ -1210,15 +1230,11 @@ private enum ConversationResponseAttributedText {
                     append(NSAttributedString(string: "", attributes: [.font: body]), style: gap)
                 }
                 let start = output.length
-                let nativeTable = NSTextTable()
-                nativeTable.numberOfColumns = table.header.count
-                nativeTable.collapsesBorders = true
-                nativeTable.setWidth(indent, type: responseAbsolute, for: .margin, edge: .minX)
-                func cellTexts(_ code: CellCode) -> [[NSMutableAttributedString]] {
+                func cellTexts(_ code: CellCode, keeping kept: Set<String> = []) -> [[NSMutableAttributedString]] {
                     ([table.header] + table.rows).enumerated().map { rowIndex, cells in
                         table.header.indices.map { column in
                             inline(cells.indices.contains(column) ? cells[column] : .init(""),
-                                   font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: true, cellCode: code)
+                                   font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: true, cellCode: code, keeping: kept)
                         }
                     }
                 }
@@ -1252,7 +1268,9 @@ private enum ConversationResponseAttributedText {
                 let available = width - indent - CGFloat(table.header.count) * 2 * padX
                 /// The columns' widths for `rows`: their natural widths when
                 /// they fit, else each column's least and a share of the rest.
-                func columnWidths(_ rows: [[NSMutableAttributedString]]) -> [CGFloat] {
+                /// With `pinningCode`, a column mostly of code keeps its least
+                /// and the others share the room.
+                func columnWidths(_ rows: [[NSMutableAttributedString]], pinningCode: Bool = false) -> [CGFloat] {
                     let (most, least) = limits(rows)
                     var widths: [CGFloat]
                     let natural = most.reduce(0, +)
@@ -1267,7 +1285,7 @@ private enum ConversationResponseAttributedText {
                         // proportion to how much more each would take.
                         func share(_ least: [CGFloat]) -> [CGFloat] {
                             let room = max(0, available - least.reduce(0, +))
-                            let stretch = zip(most, least).map { $0 - $1 }
+                            let stretch = most.indices.map { pinningCode && codeColumns.contains($0) ? 0 : most[$0] - least[$0] }
                             let total = stretch.reduce(0, +)
                             return least.indices.map { least[$0] + (total > 0 ? room * stretch[$0] / total : 0) }
                         }
@@ -1293,62 +1311,148 @@ private enum ConversationResponseAttributedText {
                     }
                     return widths
                 }
-                /// How tall `rows` stand at `widths`: each row as tall as its tallest cell.
-                func height(_ rows: [[NSMutableAttributedString]], _ widths: [CGFloat]) -> CGFloat {
-                    rows.map { row in
-                        row.indices.map { column in
-                            ceil(row[column].boundingRect(with: CGSize(width: widths[column], height: .greatestFiniteMagnitude),
-                                                          options: .usesLineFragmentOrigin).height)
-                        }.max() ?? 0
-                    }.reduce(0, +)
+                /// The table's cells at `widths`, as displayed.
+                func tableCells(_ rows: [[NSMutableAttributedString]], _ widths: [CGFloat], into target: NSMutableAttributedString? = nil) {
+                    let nativeTable = NSTextTable()
+                    nativeTable.numberOfColumns = table.header.count
+                    nativeTable.collapsesBorders = true
+                    nativeTable.setWidth(indent, type: responseAbsolute, for: .margin, edge: .minX)
+                    // These widths, as computed: TextKit's own automatic layout
+                    // would weigh them against the cells' content again.
+                    nativeTable.layoutAlgorithm = .fixedLayoutAlgorithm
+                    for (rowIndex, cells) in rows.enumerated() {
+                        for (column, text) in cells.enumerated() {
+                            let cell = NSTextTableBlock(table: nativeTable, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
+                            cell.setValue(widths[column], type: responseAbsolute, for: .width)
+                            cell.setWidth(padX, type: responseAbsolute, for: .padding, edge: .minX)
+                            cell.setWidth(padX, type: responseAbsolute, for: .padding, edge: .maxX)
+                            cell.setWidth(padY, type: responseAbsolute, for: .padding, edge: .minY)
+                            // A cell's last line keeps its line spacing below it.
+                            cell.setWidth(padY - Prose.cellLineSpacing, type: responseAbsolute,
+                                          for: .padding, edge: .maxY)
+                            if rowIndex < rows.count - 1 {
+                                cell.setWidth(0.5, type: responseAbsolute, for: .border, edge: .maxY)
+                            }
+                            cell.setBorderColor(WovenColors.foreground.withAlphaComponent(0.09))
+                            let cellStyle = paragraphStyle(indent: 0, before: 0, lineSpacing: Prose.cellLineSpacing)
+                            cellStyle.textBlocks = [cell]
+                            if table.alignments.indices.contains(column) {
+                                cellStyle.alignment = switch table.alignments[column] { case .leading: .left; case .center: .center; case .trailing: .right }
+                            }
+                            append(text, style: cellStyle, into: target)
+                        }
+                    }
                 }
-                var rows = cellTexts(.whole)
-                var widths: [CGFloat]
-                if limits(rows).least.reduce(0, +) > available {
-                    // Too narrow even for short code to keep together: let it
-                    // break at its spaces like the words around it, rather than mid-word.
-                    rows = cellTexts(.words)
-                    widths = columnWidths(rows)
+                // Columns mostly of code (a column of commands).
+                let codeColumns: Set<Int> = Set(table.header.indices.filter { column in
+                    var code = 0, all = 0
+                    for row in table.rows where row.indices.contains(column) {
+                        let text = inline(row[column], font: body)
+                        all += text.length
+                        text.enumerateAttribute(.responseInlineCode, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+                            if value != nil { code += range.length }
+                        }
+                    }
+                    return all > 0 && 2 * code > all
+                })
+                /// One way to lay the table out: how its code keeps together
+                /// (and which spans of several words stay whole), and its widths.
+                typealias Choice = (code: CellCode, kept: Set<String>, widths: [CGFloat])
+                /// `widths` with each column at least its least for `rows`, the
+                /// points that takes coming from one other column, or from all
+                /// of them by the room each has past its least.
+                func fitting(_ widths: [CGFloat], _ rows: [[NSMutableAttributedString]]) -> [[CGFloat]] {
+                    let least = limits(rows).least
+                    var raised = widths
+                    for column in raised.indices where raised[column] < least[column] { raised[column] = least[column] }
+                    let need = raised.reduce(0, +) - widths.reduce(0, +)
+                    guard need > 0 else { return [raised] }
+                    let donors = raised.indices.filter { raised[$0] == widths[$0] && raised[$0] > least[$0] }
+                    var result: [[CGFloat]] = donors.compactMap { donor in
+                        guard raised[donor] - need >= least[donor] else { return nil }
+                        var one = raised
+                        one[donor] -= need
+                        return one
+                    }
+                    let room = donors.reduce(0) { $0 + raised[$1] - least[$1] }
+                    if room >= need {
+                        var shared = raised
+                        for donor in donors { shared[donor] -= need * (raised[donor] - least[donor]) / room }
+                        result.append(shared)
+                    }
+                    return result
+                }
+                let whole = cellTexts(.whole)
+                let choice: Choice
+                if limits(whole).most.reduce(0, +) <= available {
+                    choice = (.whole, [], columnWidths(whole))
+                } else if let known = Self.tableChoices[Self.tableChoiceKey(whole, width: width, indent: indent)] {
+                    choice = known
                 } else {
-                    widths = columnWidths(rows)
-                    // Too narrow for the table's natural width: code of several
-                    // words may break between them, each word kept whole, when
-                    // that makes the table shorter, so a long command does not
-                    // hold its column wide while the prose beside it wraps.
-                    if limits(rows).most.reduce(0, +) > available {
-                        let split = cellTexts(.wholeWords)
-                        let splitWidths = columnWidths(split)
-                        if height(split, splitWidths) < height(rows, widths) {
-                            rows = split
-                            widths = splitWidths
+                    // Too narrow for the table's natural width. Of the ways
+                    // considered, the one laid out shortest, as displayed, by a
+                    // line or more; then the one breaking the fewest code spans;
+                    // then the earliest, natural shares first. So code breaks
+                    // only where that makes the table shorter.
+                    let line = (NSLayoutManager().defaultLineHeight(for: font(13)) + Prose.cellLineSpacing) / 2
+                    var best: (choice: Choice, height: CGFloat, broken: Int)?
+                    var measuredChoices: [Choice] = []
+                    @discardableResult
+                    func consider(_ candidate: Choice) -> Bool {
+                        guard !measuredChoices.contains(where: { $0.code == candidate.code && $0.kept == candidate.kept && $0.widths == candidate.widths })
+                        else { return false }
+                        measuredChoices.append(candidate)
+                        let text = NSMutableAttributedString()
+                        tableCells(cellTexts(candidate.code, keeping: candidate.kept), candidate.widths, into: text)
+                        let measured = Self.measuredTable(text, width: width)
+                        guard best.map({ measured.height < $0.height - line
+                            || (abs(measured.height - $0.height) <= line && measured.broken < $0.broken) }) ?? true else { return false }
+                        best = (candidate, measured.height, measured.broken)
+                        return true
+                    }
+                    // Code kept whole: natural shares, and a column of code at its least.
+                    let wholeFits = limits(whole).least.reduce(0, +) <= available
+                    if wholeFits {
+                        consider((.whole, [], columnWidths(whole)))
+                        consider((.whole, [], columnWidths(whole, pinningCode: true)))
+                    }
+                    // Code of several words broken between its words (or, too
+                    // narrow even for that, every span free to break at its spaces).
+                    let splitCode: CellCode = limits(cellTexts(.wholeWords)).least.reduce(0, +) <= available ? .wholeWords : .words
+                    let split = cellTexts(splitCode)
+                    let splitWidths = columnWidths(split)
+                    if split != whole {
+                        consider((splitCode, [], splitWidths))
+                        consider((splitCode, [], columnWidths(split, pinningCode: true)))
+                        // The split's shares with code kept whole again, from the other columns.
+                        if wholeFits { for widths in fitting(splitWidths, whole) { consider((.whole, [], widths)) } }
+                        // Then each broken span kept whole in turn, shortest
+                        // first, where that is no taller.
+                        if var current = best, current.broken > 0, current.choice.code != .whole {
+                            var spans: [String] = []
+                            for row in table.rows {
+                                for cell in row {
+                                    for run in cell.rendered.runs where run.inlinePresentationIntent?.contains(.code) == true {
+                                        let string = String(cell.rendered[run.range].characters)
+                                        if string.contains(" "), string.count <= Prose.unbreakableCodeLength, !spans.contains(string) { spans.append(string) }
+                                    }
+                                }
+                            }
+                            let code = monospaced(Prose.cellCodeSize)
+                            func spanWidth(_ span: String) -> CGFloat { (span as NSString).size(withAttributes: [.font: code]).width }
+                            for span in spans.sorted(by: { spanWidth($0) < spanWidth($1) }) {
+                                let kept = current.choice.kept.union([span])
+                                for widths in fitting(current.choice.widths, cellTexts(current.choice.code, keeping: kept)) {
+                                    consider((current.choice.code, kept, widths))
+                                }
+                                if let improved = best { current = improved }
+                            }
                         }
                     }
+                    choice = best?.choice ?? (splitCode, [], splitWidths)
+                    Self.rememberTableChoice(choice, for: Self.tableChoiceKey(whole, width: width, indent: indent))
                 }
-                // These widths, as computed: TextKit's own automatic layout
-                // would weigh them against the cells' content again.
-                nativeTable.layoutAlgorithm = .fixedLayoutAlgorithm
-                for (rowIndex, cells) in rows.enumerated() {
-                    for (column, text) in cells.enumerated() {
-                        let cell = NSTextTableBlock(table: nativeTable, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
-                        cell.setValue(widths[column], type: responseAbsolute, for: .width)
-                        cell.setWidth(padX, type: responseAbsolute, for: .padding, edge: .minX)
-                        cell.setWidth(padX, type: responseAbsolute, for: .padding, edge: .maxX)
-                        cell.setWidth(padY, type: responseAbsolute, for: .padding, edge: .minY)
-                        // A cell's last line keeps its line spacing below it.
-                        cell.setWidth(padY - Prose.cellLineSpacing, type: responseAbsolute,
-                                      for: .padding, edge: .maxY)
-                        if rowIndex < rows.count - 1 {
-                            cell.setWidth(0.5, type: responseAbsolute, for: .border, edge: .maxY)
-                        }
-                        cell.setBorderColor(WovenColors.foreground.withAlphaComponent(0.09))
-                        let cellStyle = paragraphStyle(indent: 0, before: 0, lineSpacing: Prose.cellLineSpacing)
-                        cellStyle.textBlocks = [cell]
-                        if table.alignments.indices.contains(column) {
-                            cellStyle.alignment = switch table.alignments[column] { case .leading: .left; case .center: .center; case .trailing: .right }
-                        }
-                        append(text, style: cellStyle)
-                    }
-                }
+                tableCells(cellTexts(choice.code, keeping: choice.kept), choice.widths)
                 decorate(.responseTable, from: start, indent: indent)
             case .divider:
                 let start = output.length
@@ -1392,6 +1496,52 @@ private enum ConversationResponseAttributedText {
             ends = ends.map { min($0, output.length) }
         }
         return pieces()
+    }
+
+    /// Which way of sharing a narrow table's width was chosen, by table and width.
+    private static var tableChoices: [String: (code: CellCode, kept: Set<String>, widths: [CGFloat])] = [:]
+
+    private static func rememberTableChoice(_ choice: (code: CellCode, kept: Set<String>, widths: [CGFloat]), for key: String) {
+        if tableChoices.count > 256 { tableChoices.removeAll() }
+        tableChoices[key] = choice
+    }
+
+    /// A table's cells (their text, and where their code runs) and the width it is laid out at.
+    private static func tableChoiceKey(_ rows: [[NSMutableAttributedString]], width: CGFloat, indent: CGFloat) -> String {
+        var key = "\(width) \(indent) \((rows.first?.first?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 0)"
+        for row in rows {
+            for cell in row {
+                key += "\u{1F}"
+                cell.enumerateAttribute(.responseInlineCode, in: NSRange(location: 0, length: cell.length)) { value, range, _ in
+                    key += (value == nil ? "" : "\u{1}") + (cell.string as NSString).substring(with: range)
+                }
+            }
+            key += "\u{1E}"
+        }
+        return key
+    }
+
+    /// A table's height laid out as the reply lays it out, at `width`, and
+    /// how many of its code spans run across more than one line.
+    private static func measuredTable(_ text: NSAttributedString, width: CGFloat) -> (height: CGFloat, broken: Int) {
+        let storage = NSTextStorage(attributedString: text)
+        let layoutManager = NSLayoutManager()
+        layoutManager.delegate = ResponseLineBreaks.shared
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        layoutManager.ensureLayout(for: container)
+        var broken = 0
+        storage.enumerateAttribute(.responseInlineCode, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard value != nil else { return }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphs.length > 1 else { return }
+            let first = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            let last = layoutManager.lineFragmentRect(forGlyphAt: NSMaxRange(glyphs) - 1, effectiveRange: nil)
+            if first.minY != last.minY { broken += 1 }
+        }
+        return (layoutManager.usedRect(for: container).maxY, broken)
     }
 
     /// The widest runs in `text` a line cannot break inside: code kept

@@ -515,7 +515,10 @@ when an intentional design change is accepted.
   columns fit their content, never narrower than short code or a short value
   they keep whole; a table nearly as wide as the text fills it, and one too
   wide gives the rest to its widest column; when even their least does not
-  fit, the widest give way and break, so no cell is cut off. In a narrow column
+  fit, the widest give way and break, so no cell is cut off. A table too
+  narrow for its content breaks code of several words between its words
+  only where that makes it shorter, as laid out, and otherwise takes the
+  room from its prose columns. In a narrow column
   cells keep less padding. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
