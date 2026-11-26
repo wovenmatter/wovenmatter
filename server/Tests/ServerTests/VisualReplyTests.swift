@@ -167,9 +167,9 @@ func aPublishedVisualReplyIsSavedOnceShownLiveAndFetchedOnAnotherMachine() async
 
   let items = try await onA.call(SessionItems(sessionID: session.id))
   #expect(items == live)
-  #expect(items.count == 3)
-  guard items.count == 3, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
-    Issue.record("Expected the message, the visual reply, then the call: \(items.map(\.content))")
+  #expect(items.count == 4)
+  guard items.count == 4, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
+    Issue.record("Expected the message, the visual reply, the call, then the turn's end: \(items.map(\.content))")
     return
   }
   #expect(reply == VisualReply(title: "Sales by quarter", height: 320, width: 360, digest: Library.digest(of: Data(html.utf8)),
@@ -260,8 +260,8 @@ func aScriptThatPublishesAVisualReplyIsSavedAsTheVisualReplyAndOneScript() async
   }
 
   let items = try await ui.call(SessionItems(sessionID: session.id))
-  guard items.count == 3, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
-    Issue.record("Expected the message, the visual reply, then the script: \(items.map(\.content))")
+  guard items.count == 4, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
+    Issue.record("Expected the message, the visual reply, the script, then the turn's end: \(items.map(\.content))")
     return
   }
   #expect(reply.digest == Library.digest(of: Data(html.utf8)))

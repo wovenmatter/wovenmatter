@@ -535,8 +535,8 @@ func anOpenCodeScriptThatPublishesAVisualReplyIsSavedAsTheVisualReplyAndOneScrip
   }
 
   let items = try await ui.call(SessionItems(sessionID: session.id))
-  guard items.count == 3, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
-    Issue.record("Expected the message, the visual reply, then the script: \(items.map(\.content))")
+  guard items.count == 4, case .visualReply(let reply) = items[1].content, case .toolCall(let call) = items[2].content else {
+    Issue.record("Expected the message, the visual reply, the script, then the turn's end: \(items.map(\.content))")
     return
   }
   #expect(reply.digest == Library.digest(of: Data(html.utf8)) && reply.title == "Sales")

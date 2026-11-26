@@ -115,8 +115,12 @@ func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async thr
   }
 
   let saved = try await late.call(SessionItems(sessionID: session.id))
-  #expect(saved.count == 3)
-  #expect(Set(saved.map(\.id)).count == 3)
+  #expect(saved.count == 4)
+  #expect(Set(saved.map(\.id)).count == 4)
+  // The turn's end is saved last, so the view that joined mid-turn, the one
+  // that watched it and the saved chat all time it the same.
+  #expect(saved.last?.content == .notice(Notice(kind: .turnEnded, text: "")))
+  #expect(saved.dropLast().allSatisfy { $0.createdAt <= saved.last!.createdAt })
   #expect(assistantTexts(saved) == ["Turn 1: hello"])
   #expect(lateView.items == saved)
   #expect(earlyView.items == saved)
@@ -147,7 +151,7 @@ func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
 
   let items = try await client.call(SessionItems(sessionID: session.id))
   #expect(runStates == [.idle])
-  #expect(items.count == 5 && Set(items.map(\.id)).count == 5)
+  #expect(items.count == 6 && Set(items.map(\.id)).count == 6)
   #expect(Array(items.prefix(4).map(\.content)) == [
     .userMessage(text: "one"), .assistantMessage(text: "Turn 1: "), .userMessage(text: "two"), .assistantMessage(text: "one + two"),
   ])
@@ -289,7 +293,7 @@ func restartResumesTheSameNativeSession() async throws {
   try await turn(again, session.id, "two")
 
   let items = try await again.call(SessionItems(sessionID: session.id))
-  #expect(items.map(\.sequence) == Array(1...6))
+  #expect(items.map(\.sequence) == Array(1...8))
   #expect(assistantTexts(items) == ["Turn 1: one", "Turn 2: two"])
   #expect(store.started == 1)
   #expect(store.resumed == 1)
@@ -316,7 +320,7 @@ func lostNativeSessionGivesANoticeAndNeverAFreshSession() async throws {
   }
 
   let items = try await again.call(SessionItems(sessionID: session.id))
-  #expect(items.count == 4)
+  #expect(items.count == 5)
   guard case .notice(let notice) = items.last?.content else {
     Issue.record("The last item is not a notice")
     return

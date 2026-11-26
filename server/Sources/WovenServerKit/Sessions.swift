@@ -815,10 +815,12 @@ actor SessionHost {
   }
 
   /// Whatever ends a turn ends its run state, marker and prompts, even when
-  /// a write failed.
+  /// a write failed. When it ended is saved before views hear it ended, so a
+  /// view that watched it and one that opens the chat later time it the same.
   private func endTurn() async {
     clearPrompts()
     if run == .running {
+      try? await finish(.notice(Notice(kind: .turnEnded, text: "")), id: UUID().uuidString.lowercased())
       setRun(.idle)
       try? await library.setTurnRunning(sessionID, false)
     }

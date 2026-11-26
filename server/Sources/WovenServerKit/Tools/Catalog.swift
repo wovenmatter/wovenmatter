@@ -253,6 +253,7 @@ private let sessionTools: [WovenTool] = [
           result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : "")"
                         + (called.isEmpty ? "" : " calling \(called.joined(separator: ", "))") + ": \(output)")
         case .notice(let notice):
+          guard notice.kind != .turnEnded else { continue }
           result.append("#\(item.sequence) notice: \(notice.text)")
         case .visualReply(let reply):
           result.append("#\(item.sequence) visual reply shown in the chat: \(reply.title)")

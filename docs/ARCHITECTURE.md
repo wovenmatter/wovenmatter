@@ -220,7 +220,9 @@ behind one adapter interface in the server and are treated alike:
   Items are numbered in the order they finish; a tool call the server saw
   start carries where it started, counted rather than timed (the session's
   last saved item then, and its place among the calls that started), and
-  clients show it in that place.
+  clients show it in that place. When a turn ends, the server saves a
+  `turnEnded` notice before it says so, so every view times the turn from
+  its saved end; views draw nothing for it.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
 - A script a harness runs in code mode, calling tools from JavaScript, is
