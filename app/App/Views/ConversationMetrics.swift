@@ -73,6 +73,8 @@ enum ConversationMetrics {
         static let cellPaddingHorizontal: CGFloat = 10
         /// The least a table column takes, however long its longest word.
         static let tableColumnMinimumLimit: CGFloat = 200
+        /// A table cell this short is kept on one line when its column can be.
+        static let shortCellLength = 16
         /// A table at least this share of the text's width fills it.
         static let tableFillShare: CGFloat = 0.75
         /// Inline code up to this many characters keeps together in a table cell.

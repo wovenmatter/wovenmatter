@@ -300,7 +300,7 @@
           "type" : "string"
         },
         "width" : {
-          "description" : "How wide it needs to be, 240 to 1600 CSS pixels, for something narrower than the chat such as a small table; leave it out to fill the chat's width.",
+          "description" : "How wide it needs to be, 240 to 1600 CSS pixels, for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.",
           "type" : "integer"
         }
       },

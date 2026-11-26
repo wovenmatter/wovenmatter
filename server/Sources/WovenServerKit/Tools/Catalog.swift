@@ -381,7 +381,7 @@ private let visualReplyTools: [WovenTool] = [
                    "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
                    "title": text("A short title, at most 200 characters; default the document's <title>."),
                    "height": integer("Where its height starts, 80 to 2000 pixels; default 320."),
-                   "width": integer("How wide it needs to be, 240 to 1600 CSS pixels, for something narrower than the chat such as a small table; leave it out to fill the chat's width.")]),
+                   "width": integer("How wide it needs to be, 240 to 1600 CSS pixels, for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.")]),
     output: shownShape.schema,
     run: { call in
       let html = try VisualReplies.authored(call.arguments, fromBot: call.caller.botID != nil)

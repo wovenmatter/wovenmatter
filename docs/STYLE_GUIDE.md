@@ -440,25 +440,35 @@ when an intentional design change is accepted.
 - **Conversation layout:** agent chats, bot chats and the Forum share one rhythm
   from `ConversationMetrics`; keep exact values there. Everything in an assistant
   turn starts at one left edge, and user messages, the assistant turn and the
-  composer share one column and so one right edge. Gaps come from roles: one gap
+  composer share one column and so one right edge. A long user message
+  collapses to six lines only when that hides at least three more at its width;
+  otherwise it shows whole, with no control. Gaps come from roles: one gap
   between turns in both directions; work, reply, files and the changed-files card
   are sections; work-log entries sit closer, and rows inside a group closer
   still. Commentary sits close to the tools it introduces and further from the
   work before it. The work log is a secondary lane: everything in it is one
   size below the reply, commentary a step quieter than the reply's ink, tool
   labels quieter, reasoning quietest; its text starts at one inset, with only
-  icons left of it, and open work ends a section and a half above the reply.
-  The work divider shows only over work the header folds. Tool rows are one
+  icons left of it, and open work ends a section and a half above the reply. A
+  visual reply and the reply that explains it are one answer, a section apart.
+  The work divider shows only over foldable work that is showing, never over a
+  lone Thinking row or the dots. Tool rows are one
   line, truncated in the middle, with the chevron right after the label; the
   full text is in their details, which open at the rows' text inset and wrap
   rather than scroll sideways. Every harness's tool rows use one grammar: a
   verb and a short object (Read docs/README.md, Listed sample, Searched for
   “x” in docs), paths relative to the folder the tool ran in or else their last
-  two components, and commands without the folder plumbing in front of them.
-  Woven's visual tools have one label each. Thinking looks the same everywhere.
+  two components, and commands without the folder plumbing in front of them. A
+  plain read-only shell search, listing or file read takes the same words as the
+  file tool; anything compound shows its first part and an ellipsis, since a row
+  never claims what its command did not do. Verbs are past tense once done.
+  Woven's visual tools have one label each, previewed or shown, and a group
+  names its kinds of step in the rows' words ("Listed 1 folder and read 2
+  files"), never an unnamed action. Thinking looks the same everywhere.
   Live reasoning shows its last three lines, its cut top line fading out; afterwards a
-  thought is one closed row on one line, named by its title, or by status and
-  action for a record such as an approval, which has its own glyph. A visual
+  thought with text is one closed row named by its title or leading heading,
+  else "Thought", never by its raw text; one with no text draws nothing. A
+  record such as an approval is named by status and action, with its own glyph. A visual
   reply sits in a hairline frame with its title inside, the column wide or as
   wide as it asked to be, with a small inset inside it; its controls show on
   hover, while zoomed, or with focus. Under the reply, Copy and the files it

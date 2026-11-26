@@ -58,6 +58,7 @@ struct ConversationWorkTranscript: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
+    @Environment(\.conversationFolder) private var folder
     @State private var localWorkExpanded = false
     @State private var localRunningFolded = false
 
@@ -102,13 +103,18 @@ struct ConversationWorkTranscript: View {
         let foldable = timeline.hasFoldableEntries
         let workExpanded = workDisclosure
         let folded = foldable && !workExpanded.wrappedValue
-        let entries = folded ? timeline.entriesOutsideFold : timeline.entries
+        // A settled thought with nothing in it says nothing: it draws no row.
+        let entries = (folded ? timeline.entriesOutsideFold : timeline.entries).filter { entry in
+            guard case .activity(let activity) = entry.content, activity.kind == .thought,
+                  !activity.workTimelineThoughtHasText else { return true }
+            return isRunning && activity.workTimelineShowsProgress
+        }
         // A folded turn shows only the dots below.
         let showsThinking = isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator
         let showsWork = !entries.isEmpty || showsThinking
         // The rule sits over work the header folds; what stays outside the
         // fold (a visual reply, a plan) needs none.
-        let showsRule = (foldable && !folded) || showsThinking
+        let showsRule = foldable && !folded
         VStack(alignment: .leading, spacing: 0) {
             let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
             if foldable {
@@ -173,9 +179,15 @@ struct ConversationWorkTranscript: View {
                     .padding(.leading, showsWork ? ConversationMetrics.textInset : 0)
             }
         }
-        // The gap to the reply: from the last entry, or from the header it captions.
-        .padding(.bottom, hasFollowingResponse ? (showsWork ? ConversationMetrics.workEndGap : ConversationMetrics.entryGap) : 0)
+        // The gap to the reply: from open work, from a visual reply the reply
+        // explains (one answer), or from the header it captions.
+        .padding(.bottom, !hasFollowingResponse ? 0 : !showsWork ? ConversationMetrics.entryGap
+            : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
+            : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
+        // Without a session folder, the folder this turn's tools worked in, so
+        // its rows shorten paths the same way.
+        .environment(\.conversationFolder, folder ?? AgentRunActivity.workTimelineCommonFolder(records.map(\.activity)))
     }
 
     /// Entries sit an entry apart. A visual reply keeps a section's space on
@@ -411,12 +423,8 @@ private struct ConversationThinkingBlock: View {
     private func settledRow(_ summary: Summary) -> some View {
         let glyph = summary.isRecord ? "checkmark.shield" : "brain"
         if summary.isComplete {
-            // Always one line: a thought too long for it is "Thought", and opens.
-            ViewThatFits(in: .horizontal) {
-                ConversationThinkingLabel(text: summary.label, systemImage: glyph)
-                    .fixedSize(horizontal: true, vertical: false)
-                disclosure(label: "Thought", systemImage: glyph)
-            }
+            // A title with nothing behind it.
+            ConversationThinkingLabel(text: summary.label, systemImage: glyph).lineLimit(1)
         } else {
             disclosure(label: summary.label, systemImage: glyph)
         }
@@ -488,17 +496,19 @@ private struct ConversationThinkingBlock: View {
             let named = ["Status", "Action"].compactMap { key in
                 fields.first { $0.key == key }.map { field in
                     // Woven's visual tools read the same here as in their own rows.
-                    key == "Action" && field.value.split(whereSeparator: { !$0.isLetter && $0 != "_" })
-                        .contains { ConversationToolAction.isVisual($0.lowercased()) } ? "Show a visual reply" : field.value
+                    guard key == "Action" else { return field.value }
+                    let words = field.value.split(whereSeparator: { !$0.isLetter && $0 != "_" }).map { $0.lowercased() }
+                    if words.contains(where: { $0.hasSuffix("preview_html") }) { return "Previewed a visual reply" }
+                    if words.contains(where: { $0.hasSuffix("render_html") }) { return "Showed a visual reply" }
+                    return field.value
                 }
             }
             return Summary(label: named.isEmpty ? lines[0] : named.joined(separator: " · "), isComplete: false, isRecord: true)
         }
-        // A short one-line thought is its own label, exactly as written.
-        if lines.count == 1, !text.hasPrefix("**"), text.count <= 120 { return Summary(label: text, isComplete: true) }
-        // Otherwise the provider's title or the trace's leading heading.
-        let label = activity.workTimelineLabel(active: false)
-        return Summary(label: label, isComplete: text == label || text == "**\(label)**")
+        // The provider's title or the trace's leading heading, else "Thought";
+        // the reasoning itself is behind the disclosure, never the label.
+        let label = activity.workTimelineThoughtTitle ?? AgentRunActivity.leadingBoldHeading(text) ?? "Thought"
+        return Summary(label: label, isComplete: text.isEmpty || text == label || text == "**\(label)**")
     }
 }
 
@@ -846,7 +856,7 @@ private struct ConversationActivityRow: View {
 
     private var secondaryLabel: String? {
         // A script that only showed visual replies says so in its label.
-        if activity.kind == .tool, ConversationToolAction(activity) == .visual { return nil }
+        if activity.kind == .tool, [.visual, .preview].contains(ConversationToolAction(activity)) { return nil }
         if let detail = activity.detail?.nonempty { return detail }
         guard activity.kind != .activity,
               let content = activity.content?.nonempty else { return nil }
@@ -1519,7 +1529,8 @@ private extension ConversationToolAction {
         case .read: "doc.text"
         case .edit: "pencil.and.outline"
         case .codeSearch, .search: "magnifyingglass"
-        case .visual: "chart.bar.doc.horizontal"
+        case .visual, .preview: "chart.bar.doc.horizontal"
+        case .list: "folder"
         case .webSearch, .webFetch, .browser: "globe"
         case .computer: "desktopcomputer"
         case .delegate: "person.2"

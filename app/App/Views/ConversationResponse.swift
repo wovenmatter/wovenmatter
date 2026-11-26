@@ -90,8 +90,10 @@ struct ConversationResponse: View {
             NSPasteboard.general.clearContents()
             copied = NSPasteboard.general.setString(content, forType: .string)
         } label: {
+            // A step above the muted text, so the glyph's thin strokes read as a control.
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(WovenPalette.foreground.opacity(0.72))
                 .frame(width: ConversationMetrics.actionRowHeight, height: ConversationMetrics.actionRowHeight)
                 .contentShape(Rectangle())
         }
@@ -555,11 +557,14 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         super.mouseDown(with: event)
     }
 
-    /// Lines do not break inside text kept together.
+    /// Lines do not break inside text kept together, except after a space in
+    /// text kept together only by its words.
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
-        guard let textStorage, charIndex > 0, charIndex < textStorage.length else { return true }
-        return textStorage.attribute(.responseNoBreak, at: charIndex, effectiveRange: nil) == nil
-            || textStorage.attribute(.responseNoBreak, at: charIndex - 1, effectiveRange: nil) == nil
+        guard let textStorage, charIndex > 0, charIndex < textStorage.length,
+              let kept = textStorage.attribute(.responseNoBreak, at: charIndex, effectiveRange: nil) as? ResponseNoBreak,
+              textStorage.attribute(.responseNoBreak, at: charIndex - 1, effectiveRange: nil) != nil else { return true }
+        let previous = (textStorage.string as NSString).character(at: charIndex - 1)
+        return kept == .words && (previous == 0x20 || previous == 0x09)
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByHyphenatingBeforeCharacterAt charIndex: Int) -> Bool {
@@ -579,6 +584,13 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
 }
 
 
+/// How short inline code keeps together: whole (in a table cell), or only
+/// between its spaces.
+private enum ResponseNoBreak: Int {
+    case whole
+    case words
+}
+
 private extension NSAttributedString.Key {
     static let responseCode = Self("WovenMatterResponseCode")
     static let responseQuote = Self("WovenMatterResponseQuote")
@@ -587,7 +599,7 @@ private extension NSAttributedString.Key {
     static let responseInlineCode = Self("WovenMatterResponseInlineCode")
     /// A task list item's box, drawn in place of its character: true when checked.
     static let responseTaskBox = Self("WovenMatterResponseTaskBox")
-    /// Text a line does not break inside (short inline code in a table cell).
+    /// Text a line does not break inside (short inline code), as a `ResponseNoBreak`.
     static let responseNoBreak = Self("WovenMatterResponseNoBreak")
     /// Characters only layout needs: the spacer above a box that opens the
     /// text and the line break kept after one that ends it. Selection skips them.
@@ -661,7 +673,11 @@ private enum ConversationResponseAttributedText {
                 let string = String(text.rendered[run.range].characters)
                 if intent.contains(.code) {
                     attributes[.responseInlineCode] = true
-                    if inCell, string.count <= Prose.unbreakableCodeLength { attributes[.responseNoBreak] = true }
+                    // Short code keeps together: whole in a table cell; elsewhere
+                    // it may still break at its spaces, never inside a flag.
+                    if string.count <= Prose.unbreakableCodeLength {
+                        attributes[.responseNoBreak] = inCell ? ResponseNoBreak.whole : ResponseNoBreak.words
+                    }
                 }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
                 if let link = run.link, ConversationMarkdownDocument.isLiveLink(link) { attributes[.link] = link }
@@ -832,8 +848,12 @@ private enum ConversationResponseAttributedText {
                     let most = table.header.indices.map { column in
                         max(1, rows.map { ceil($0[column].size().width) + 1 }.max() ?? 1)
                     }
+                    // A short cell ("7,098 bytes") counts as one unbreakable run.
                     let least = table.header.indices.map { column in
-                        min(most[column], Prose.tableColumnMinimumLimit, rows.map { unbreakableWidth($0[column]) }.max() ?? 1)
+                        min(most[column], Prose.tableColumnMinimumLimit, rows.map { row in
+                            row[column].length <= Prose.shortCellLength ? ceil(row[column].size().width) + 1
+                                : unbreakableWidth(row[column])
+                        }.max() ?? 1)
                     }
                     return (most, least)
                 }
@@ -929,7 +949,7 @@ private enum ConversationResponseAttributedText {
         for index in 0...string.length {
             let breaks = index == string.length || (
                 CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(string.character(at: index)) ?? " ")
-                && text.attribute(.responseNoBreak, at: index, effectiveRange: nil) == nil)
+                && text.attribute(.responseNoBreak, at: index, effectiveRange: nil) as? ResponseNoBreak != .whole)
             guard breaks else { continue }
             if index > start {
                 widest = max(widest, ceil(text.attributedSubstring(from: NSRange(location: start, length: index - start)).size().width) + 1)
@@ -1016,17 +1036,25 @@ struct ConversationUserBubble<Attachments: View>: View {
     var hasAttachments = false
     @ViewBuilder var attachments: () -> Attachments
     @State private var expanded = false
+    @State private var textWidth: CGFloat?
+
+    /// A long message shows this many lines until opened.
+    private static var collapsedLines: Int { 6 }
+    /// It collapses only when that hides at least this many more.
+    private static var hiddenLines: Int { 3 }
 
     var body: some View {
+        let isLong = collapses
         VStack(alignment: .trailing, spacing: ConversationMetrics.rowGap) {
             if !content.isEmpty {
                 Text(content)
                     .font(.system(size: 15))
                     .lineSpacing(ConversationMetrics.Prose.lineSpacing)
-                    .lineLimit(isLong && !expanded ? 6 : nil)
+                    .lineLimit(isLong && !expanded ? Self.collapsedLines : nil)
                     .foregroundStyle(WovenPalette.foreground)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
             }
             attachments()
             if isLong {
@@ -1043,12 +1071,30 @@ struct ConversationUserBubble<Attachments: View>: View {
         .background(WovenPalette.primary.opacity(0.13))
         .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous))
     }
-    private var isLong: Bool { content.count > 420 || content.filter { $0 == "\n" }.count > 5 }
+    /// Whether the message, laid out at its width, is long enough that
+    /// collapsing it earns the row its control takes.
+    private var collapses: Bool {
+        lineCount(width: textWidth ?? preferredContentWidth) >= Self.collapsedLines + Self.hiddenLines
+    }
+
+    private func lineCount(width: CGFloat) -> Int {
+        let font = ResponseFont.systemFont(ofSize: 15)
+        let spacing = ConversationMetrics.Prose.lineSpacing
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = spacing
+        let height = (content as NSString).boundingRect(
+            with: CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin], attributes: [.font: font, .paragraphStyle: style]).height
+        let line = NSLayoutManager().defaultLineHeight(for: font)
+        return Int(((height + spacing) / (line + spacing)).rounded())
+    }
+
     private var preferredContentWidth: CGFloat {
         if hasAttachments { return 420 }
         let font = ResponseFont.systemFont(ofSize: 15)
         let longestLine = content.split(separator: "\n", omittingEmptySubsequences: false)
             .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return min(586, max(isLong ? 118 : 1, ceil(longestLine)))
+        // Room for the control under a message that collapses.
+        return min(586, max(content.count > 300 ? 118 : 1, ceil(longestLine)))
     }
 }
