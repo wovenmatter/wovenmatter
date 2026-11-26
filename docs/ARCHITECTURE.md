@@ -308,7 +308,7 @@ library and so shows every machine.
   Matter made it, holding the sums. Each row a save changes is written again
   in place, in the same transaction, by the owning machine only; a row is
   never deleted. So reading the same history again, in any order, gives the
-  same rows, and a year of heavy use stays a few thousand rows per machine.
+  same rows.
 - The server reads each history on from where it stopped, at start and
   every two minutes. Its place is kept in a local table, keyed by a digest of
   the path, with a digest of its first line and of the bytes just before the
