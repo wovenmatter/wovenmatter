@@ -225,6 +225,8 @@ private let sessionTools: [WovenTool] = [
       let session = try await call.tools.session(try call.arguments.string("sessionID"))
       let limit = min(max(call.arguments.int("limit") ?? 40, 1), 200)
       var items = try await call.tools.library.items(sessionID: session.id, afterSequence: call.arguments.int("afterSequence") ?? 0)
+      // A turn's end says nothing, so it neither shows nor takes a place in `limit`.
+      items.removeAll { if case .notice(let notice) = $0.content { notice.kind == .turnEnded } else { false } }
       if call.arguments.int("afterSequence") == nil { items = Array(items.suffix(limit)) } else { items = Array(items.prefix(limit)) }
       let states = await call.tools.runStates(of: [session.machineID])
       var result: [String] = []
@@ -253,7 +255,6 @@ private let sessionTools: [WovenTool] = [
           result.append("#\(item.sequence) tool \(tool.title ?? tool.name)\(tool.failed ? " (failed)" : "")"
                         + (called.isEmpty ? "" : " calling \(called.joined(separator: ", "))") + ": \(output)")
         case .notice(let notice):
-          guard notice.kind != .turnEnded else { continue }
           result.append("#\(item.sequence) notice: \(notice.text)")
         case .visualReply(let reply):
           result.append("#\(item.sequence) visual reply shown in the chat: \(reply.title)")
