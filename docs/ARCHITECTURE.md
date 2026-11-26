@@ -218,7 +218,9 @@ behind one adapter interface in the server and are treated alike:
   it announces it. Partial text is never written while it streams. When a
   turn is stopped, what was said so far is saved as the finished item.
   Items are numbered in the order they finish; a tool call the server saw
-  start carries when it started, and clients show it in that place.
+  start carries where it started, counted rather than timed (the session's
+  last saved item then, and its place among the calls that started), and
+  clients show it in that place.
 - A tool call's stored input and output are each capped at 256K characters;
   the start and the end are kept, with a line saying how much was left out.
 - A script a harness runs in code mode, calling tools from JavaScript, is

@@ -176,7 +176,7 @@ func aSteerTheRuntimeAnswersAfterAWovenToolCallLetsThatCallThrough() async throw
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aCallIsSavedWithWhenItStartedEvenWhenWhatItMadeIsSavedFirst() async throws {
+func aCallIsSavedWithWhereItStartedEvenWhenWhatItMadeIsSavedFirst() async throws {
   let machine = try await TestServer.start(runtime: StandInRuntime())
   defer { machine.server.stopLater() }
   let client = try await machine.connect()
@@ -189,9 +189,21 @@ func aCallIsSavedWithWhenItStartedEvenWhenWhatItMadeIsSavedFirst() async throws 
   let reply = items.first { if case .visualReply = $0.content { true } else { false } }
   let script = items.first { if case .toolCall(let call) = $0.content { call.kind == .code } else { false } }
   guard let reply, let script, case .toolCall(let call) = script.content else { Issue.record("no reply or script"); return }
-  // Saved when it finished, after the reply it made, and stamped with its start, before it.
+  // Saved when it finished, after the reply it made, and counted as started
+  // after the person's message, before that reply.
   #expect(reply.sequence < script.sequence)
-  #expect(call.startedAt.map { $0 <= reply.createdAt } == true)
+  #expect(call.start?.after == items.first?.sequence)
+  #expect((call.start?.after ?? .max) < reply.sequence)
+}
+
+@Test func anUpdateKeepsWhereACallStartedAndAThoughtsTitle() {
+  let start = ToolCallStart(after: 3, order: 2)
+  let named = ToolCall(name: "thinking", input: "", title: "Planning the fix", kind: .thinking, start: start)
+  let generic = ToolCall(name: "thinking", input: "", output: "more", title: "Thinking", kind: .thinking)
+  let update = SessionHost.updated(generic, from: named)
+  #expect(update.start == start && update.title == "Planning the fix" && update.output == "more")
+  let renamed = ToolCall(name: "thinking", input: "", title: "Weighing options", kind: .thinking)
+  #expect(SessionHost.updated(renamed, from: named).title == "Weighing options")
 }
 
 @Test(.timeLimit(.minutes(1)))

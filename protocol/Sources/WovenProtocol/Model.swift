@@ -293,13 +293,13 @@ public struct ToolCall: Codable, Sendable, Hashable {
   public var calls: [ToolCall]?
   /// The questions a `.question` call asked, in order.
   public var questions: [ToolQuestion]?
-  /// When the call started, set by the server that ran it. A call that
-  /// arrived already finished has none.
-  public var startedAt: Date?
+  /// Where the call started among the session's items, set by the server
+  /// that ran it. A call that arrived already finished has none.
+  public var start: ToolCallStart?
 
   public init(name: String, input: String, output: String? = nil, failed: Bool = false, title: String? = nil,
               kind: ToolKind? = nil, plan: [PlanEntry]? = nil, calls: [ToolCall]? = nil, questions: [ToolQuestion]? = nil,
-              startedAt: Date? = nil) {
+              start: ToolCallStart? = nil) {
     self.name = name
     self.input = input
     self.output = output
@@ -309,7 +309,23 @@ public struct ToolCall: Codable, Sendable, Hashable {
     self.plan = plan
     self.calls = calls
     self.questions = questions
-    self.startedAt = startedAt
+    self.start = start
+  }
+}
+
+/// Where a tool call started, counted by the server that ran it rather than
+/// read from a clock. Items are numbered in the order they finish, so a
+/// call that ran while others finished shows after item `after`, and after
+/// the calls with the same `after` and a lower `order`.
+public struct ToolCallStart: Codable, Sendable, Hashable {
+  /// The sequence of the session's last saved item when the call started.
+  public var after: Int
+  /// Its place among the calls the server saw start.
+  public var order: Int
+
+  public init(after: Int, order: Int) {
+    self.after = after
+    self.order = order
   }
 }
 

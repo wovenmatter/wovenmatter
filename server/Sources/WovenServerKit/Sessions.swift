@@ -279,6 +279,13 @@ actor SessionHost {
   /// Output of a tool call in progress past `ToolOutput.limit`: its start,
   /// its latest end and how much fell between, by item.
   private var overflow: [String: (head: String, tail: String, omitted: Int)] = [:]
+  /// Calls seen starting, which numbers each call's `ToolCallStart.order`.
+  /// It need not outlive this host: two calls share a start's `after` only
+  /// when nothing was saved between them, and a call saved after it
+  /// started raises `after` for every later one, while one this host never
+  /// saved is gone with it. So calls compared by `order` are always this
+  /// host's.
+  private var callsStarted = 0
   private let firstMessages: FirstMessageHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
@@ -645,9 +652,8 @@ actor SessionHost {
       if call.kind != .thinking { turnActed = true }
       await saving { try await self.finishAssistant() }
       if let id = toolItemIDs[callID] {
-        // It keeps the time it started through every update, into the saved item.
-        if let item = inProgress.first(where: { $0.id == id }), case .toolCall(let started) = item.content {
-          call.startedAt = started.startedAt
+        if let item = inProgress.first(where: { $0.id == id }), case .toolCall(let previous) = item.content {
+          call = Self.updated(call, from: previous)
         }
         let whole = withOutput(call, of: id)
         if finished {
@@ -662,9 +668,12 @@ actor SessionHost {
         if finished {
           await saving { try await self.finish(.toolCall(call), id: id) }
         } else {
-          // A call seen starting carries when it started; one that arrives
-          // already finished has no start time.
-          call.startedAt = Date()
+          // A call seen starting carries where it started; one that arrives
+          // already finished has no start.
+          if let last = try? await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1) {
+            callsStarted += 1
+            call.start = ToolCallStart(after: last.last?.sequence ?? 0, order: callsStarted)
+          }
           let item = LiveItem(id: id, content: .toolCall(call))
           toolItemIDs[callID] = id
           inProgress.append(item)
@@ -888,6 +897,23 @@ actor SessionHost {
 
   /// A tool call's latest state with the output streamed so far, unless the
   /// call brings output of its own.
+  /// A call in progress as a runtime's update leaves it: it keeps where it
+  /// started, and a thought keeps the last title that says something, so a
+  /// later update titled only "Thinking" does not take it back, for every
+  /// view and in the saved item.
+  static func updated(_ call: ToolCall, from previous: ToolCall) -> ToolCall {
+    var call = call
+    call.start = previous.start
+    func says(_ title: String?) -> Bool {
+      guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return false }
+      return !["thinking", "thought", "reasoning"].contains(title.lowercased())
+    }
+    if call.kind == .thinking, previous.kind == .thinking, !says(call.title), says(previous.title) {
+      call.title = previous.title
+    }
+    return call
+  }
+
   private func withOutput(_ call: ToolCall, of id: String) -> ToolCall {
     var call = call
     if call.output?.isEmpty ?? true {

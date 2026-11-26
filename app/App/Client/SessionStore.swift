@@ -441,7 +441,7 @@ final class SessionStore {
         case .toolActivity(let itemID, var call):
             if let index = inProgress.firstIndex(where: { $0.id == itemID }) {
                 if call.output?.isEmpty ?? true, case .toolCall(let previous) = inProgress[index].content { call.output = previous.output }
-                inProgress[index].content = .toolCall(Self.keepingThoughtTitle(call, of: inProgress[index].content))
+                inProgress[index].content = .toolCall(call)
             }
         case .toolOutput(let itemID, let delta):
             if let index = inProgress.firstIndex(where: { $0.id == itemID }), case .toolCall(var call) = inProgress[index].content {
@@ -451,10 +451,7 @@ final class SessionStore {
         case .itemDropped(let itemID):
             inProgress.removeAll { $0.id == itemID }
             readyEnds[itemID] = nil
-        case .itemFinished(var item):
-            if case .toolCall(let call) = item.content, let live = inProgress.first(where: { $0.id == item.id }) {
-                item.content = .toolCall(Self.keepingThoughtTitle(call, of: live.content))
-            }
+        case .itemFinished(let item):
             inProgress.removeAll { $0.id == item.id }
             readyEnds[item.id] = nil
             if !items.contains(where: { $0.id == item.id }) { items.append(item) }
@@ -510,17 +507,6 @@ final class SessionStore {
         default:
             return false
         }
-    }
-
-    /// A thought keeps the last title that says something: a later update or
-    /// its finish that says only "Thinking" does not take it back.
-    private static func keepingThoughtTitle(_ call: ToolCall, of previous: ItemContent) -> ToolCall {
-        func says(_ title: String?) -> Bool { AgentRunActivity(id: "", kind: .thought, title: title).workTimelineThoughtTitle != nil }
-        guard call.kind == .thinking, !says(call.title), case .toolCall(let previous) = previous,
-              previous.kind == .thinking, says(previous.title) else { return call }
-        var call = call
-        call.title = previous.title
-        return call
     }
 
     /// Whether the ready part of `text` now ends past where it was drawn, as
@@ -627,13 +613,13 @@ final class SessionStore {
         var liveReplies: [String: (messageID: String, before: String)] = [:]
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
-        func started(_ content: ItemContent) -> Date? { if case .toolCall(let call) = content { call.startedAt } else { nil } }
+        func start(_ content: ItemContent) -> ToolCallStart? { if case .toolCall(let call) = content { call.start } else { nil } }
         let entries = sessionItemOrder(
             items.sorted { $0.sequence < $1.sequence }.map {
-                (started: started($0.content), finished: $0.createdAt,
+                (start: start($0.content), sequence: $0.sequence,
                  value: (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author))
             } + inProgress.map {
-                (started: started($0.content), finished: Date?.none,
+                (start: start($0.content), sequence: Int?.none,
                  value: (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none))
             })
         var goneNotice: String?
@@ -782,26 +768,29 @@ final class SessionStore {
     }
 }
 
-/// A session's items in the order they started. Items are saved in the
+/// A session's items in the order they started. Items are numbered in the
 /// order they finish, so a call that ran while others finished (a tool a
 /// reply was written beside, a script whose visual reply was saved first)
-/// would otherwise show after them. Saved items come by sequence, then the
-/// items in progress in the server's order; then each item with a start
-/// time, in that order, moves up past the items before it that started
-/// later: one with a start time by that time, one without by when it
-/// finished. Only items with a start time move, so items without one never
-/// change order among themselves, and a session with none is shown as it
-/// was saved. An item in progress without a start time (a reply being
-/// written) stays last.
-func sessionItemOrder<Value>(_ items: [(started: Date?, finished: Date?, value: Value)]) -> [Value] {
-    var ordered = items.filter { $0.started != nil || $0.finished != nil }
-    for index in ordered.indices {
-        guard let started = ordered[index].started else { continue }
-        var place = index
-        while place > 0, let before = ordered[place - 1].started ?? ordered[place - 1].finished, before > started {
-            ordered.swapAt(place, place - 1)
-            place -= 1
+/// would otherwise show after them. A call the server saw start says where
+/// (`ToolCallStart`): right after the item it followed, among the calls
+/// that followed that item in the order they started. Every other item
+/// keeps its sequence, so items without a start never change order among
+/// themselves, and a session with none shows as it was saved. An item in
+/// progress without a start (a reply being written) comes last. One sort of
+/// the placed calls and one merge: no clock and no repeated passes.
+func sessionItemOrder<Value>(_ items: [(start: ToolCallStart?, sequence: Int?, value: Value)]) -> [Value] {
+    let placed = items.compactMap { item in item.start.map { (start: $0, value: item.value) } }
+        .sorted { ($0.start.after, $0.start.order) < ($1.start.after, $1.start.order) }
+    var ordered: [Value] = []
+    var next = placed.startIndex
+    for item in items where item.start == nil {
+        guard let sequence = item.sequence else { continue }
+        while next < placed.endIndex, placed[next].start.after < sequence {
+            ordered.append(placed[next].value)
+            next += 1
         }
+        ordered.append(item.value)
     }
-    return (ordered + items.filter { $0.started == nil && $0.finished == nil }).map(\.value)
+    ordered += placed[next...].map(\.value)
+    return ordered + items.filter { $0.start == nil && $0.sequence == nil }.map(\.value)
 }
