@@ -121,7 +121,7 @@ func acpHarness(_ kind: RuntimeKind, dataFolder: URL, cliVariable: String, npm: 
   @Sendable func cli() -> String? { harness?.cliCommand.flatMap(findCLI) }
   @Sendable func hasAdapter() -> Bool { FileManager.default.isExecutableFile(atPath: adapter.path) }
   @Sendable func installTask(_ cli: String) async -> Task<Void, any Error> {
-    await AdapterInstalls.shared.start(key) {
+    await AdapterInstalls.shared.start(key, cli: cli) {
       guard let package = harness?.adapterPackage else { throw RuntimeError.failed("\(name) has no adapter in the harness catalog.") }
       try await installAdapter(package, prefix: prefix, cli: cli, npm: npm)
     }
@@ -138,7 +138,7 @@ func acpHarness(_ kind: RuntimeKind, dataFolder: URL, cliVariable: String, npm: 
     let cli = cli()
     var installing = false, failure: String?
     if let cli, !hasAdapter() {
-      failure = await AdapterInstalls.shared.failure(key)
+      failure = await AdapterInstalls.shared.failure(key, cli: cli)
       if failure == nil { _ = await installTask(cli) }
       installing = await AdapterInstalls.shared.isRunning(key)
     }
@@ -175,19 +175,31 @@ func installedAdapterVersion(_ link: URL) -> String? {
 }
 
 /// Adapter installs in progress, and the last one that failed, by adapter path.
-/// A failed install is not retried by itself; `InstallRuntime` or a new
-/// session tries again.
+/// A status read tries a failed install again once the CLI found is another
+/// one or ten minutes have passed; `InstallRuntime` or a new session tries
+/// again at once. Each failure is written to the server's log.
 actor AdapterInstalls {
+  struct Failure {
+    var message: String
+    var cli: String
+    var at: ContinuousClock.Instant
+  }
+
   static let shared = AdapterInstalls()
+  static let retryAfter = Duration.seconds(600)
   private var running: [String: Task<Void, any Error>] = [:]
-  private var failures: [String: String] = [:]
+  private var failures: [String: Failure] = [:]
 
   func isRunning(_ key: String) -> Bool { running[key] != nil }
-  func failure(_ key: String) -> String? { failures[key] }
+  /// Why the last install for `cli` failed, while that is still the answer.
+  func failure(_ key: String, cli: String) -> String? {
+    guard let failure = failures[key], failure.cli == cli, ContinuousClock.now - failure.at < Self.retryAfter else { return nil }
+    return failure.message
+  }
   func forget(_ key: String) { failures[key] = nil }
 
   /// The install running for `key`, or a new one running `body`.
-  func start(_ key: String, _ body: @escaping @Sendable () async throws -> Void) -> Task<Void, any Error> {
+  func start(_ key: String, cli: String, _ body: @escaping @Sendable () async throws -> Void) -> Task<Void, any Error> {
     if let task = running[key] { return task }
     failures[key] = nil
     let task = Task {
@@ -195,7 +207,9 @@ actor AdapterInstalls {
         try await body()
         self.finish(key, nil)
       } catch {
-        self.finish(key, "\(error)")
+        let message = "\(error)"
+        FileHandle.standardError.write(Data("woven-server: the adapter at \(key) for \(cli) did not install: \(message)\n".utf8))
+        self.finish(key, Failure(message: message, cli: cli, at: .now))
         throw error
       }
     }
@@ -203,7 +217,7 @@ actor AdapterInstalls {
     return task
   }
 
-  private func finish(_ key: String, _ failure: String?) {
+  private func finish(_ key: String, _ failure: Failure?) {
     running[key] = nil
     failures[key] = failure
   }
@@ -237,18 +251,23 @@ private func grokBuild(dataFolder: URL) -> ACPRuntime {
 /// What the CLI reports about itself: its version and whether it is signed in.
 private func cliStatus(_ kind: RuntimeKind, _ harness: Harness, cli: String?, missing: String?) async -> RuntimeStatus {
   guard let cli else { return RuntimeStatus(runtime: kind, name: harness.displayName, installed: false, detail: missing) }
-  let version = await ChildProcess.run(cli, ["--version"], timeout: .seconds(20))
-  var signedIn: Bool?
-  var accounts: [RuntimeAccount] = []
-  if let commands = harness.authentication?.statusCommands, !commands.isEmpty {
-    var all = true
-    for command in commands {
-      let result = await harnessShell(command, cli: cli, timeout: .seconds(30))
-      if result.status != 0 { all = false }
-      accounts += reportedAccounts(kind, result.output)
+  // The version and every status command run at once: the reply waits only for the slowest.
+  async let running = ChildProcess.run(cli, ["--version"], timeout: .seconds(20))
+  let commands = harness.authentication?.statusCommands ?? []
+  let results = await withTaskGroup(of: (Int, Int32, String).self) { group in
+    for (index, command) in commands.enumerated() {
+      group.addTask {
+        let result = await harnessShell(command, cli: cli, timeout: .seconds(30))
+        return (index, result.status, result.output)
+      }
     }
-    signedIn = all
+    var results: [(Int, Int32, String)] = []
+    for await result in group { results.append(result) }
+    return results.sorted { $0.0 < $1.0 }
   }
+  let signedIn: Bool? = commands.isEmpty ? nil : results.allSatisfy { $0.1 == 0 }
+  let accounts = results.flatMap { reportedAccounts(kind, $0.2) }
+  let version = await running
   return RuntimeStatus(runtime: kind, name: harness.displayName, installed: true,
                        version: version.status == 0 ? versionNumber(version.output) : nil,
                        signedIn: signedIn, accounts: signedIn == true ? accounts : [], detail: missing)
@@ -303,5 +322,8 @@ private func installAdapter(_ package: String, prefix: URL, cli: String, npm: [S
   let text = String(decoding: try Wire.encoder.encode(selection), as: UTF8.self)
   let result = await ChildProcess.run(node, [Resources.harnesses.appendingPathComponent("install-adapter.mjs").path, text],
                                       timeout: .seconds(600))
-  guard result.status == 0 else { throw RuntimeError.failed("Installing \(package) failed: \(result.output.suffix(2000))") }
+  guard result.status == 0 else {
+    let reason = result.output.trimmingCharacters(in: .whitespacesAndNewlines).suffix(2000)
+    throw RuntimeError.failed("Installing \(package) failed: \(reason)")
+  }
 }

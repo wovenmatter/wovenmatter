@@ -29,6 +29,27 @@ func sshUsesTheInstalledRouteAndRefusesAnotherMachine() async throws {
   #expect(try await run("machine-b").status == 97)
   try FileManager.default.removeItem(at: data.appendingPathComponent("machine-id"))
   #expect(try await run(nil).status == 97)
+
+  // The install script's stage lines come before the machine id it ends with.
+  let output = "\(LinuxInstall.marker)node\n\(LinuxInstall.marker)starting\nmachine-a\n"
+  #expect(output.split(separator: "\n").compactMap { LinuxInstall.stage(marked: String($0)) } == [.node, .starting])
+  #expect(LinuxInstall.machineID(output) == "machine-a")
+}
+
+/// A server a Mac installed keeps how that Mac reached it on its own row from
+/// its first start, so the row never reaches another machine without it.
+@Test(.timeLimit(.minutes(1)))
+func anInstalledServerKeepsItsSSHRouteOnItsOwnRow() async throws {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent("woven-server-\(UUID().uuidString)")
+  var options = WovenServer.Options(
+    dataFolder: folder, socketPath: nil, listen: nil, appVersion: "test", machineName: "Box",
+    tailnet: StandInTailnet(), runtimes: [StandInRuntime()], discoveryInterval: .seconds(3600))
+  options.secretStore = FileSecretStore(file: folder.appendingPathComponent("secrets.json"))
+  options.sshRoute = ("box.example.ts.net", "person")
+  let server = try await WovenServer.start(options)
+  defer { server.stopLater() }
+  let route = try #require(try await server.library.sshRoute(of: server.machineID))
+  #expect(route.host == "box.example.ts.net" && route.user == "person")
 }
 
 #if os(macOS)

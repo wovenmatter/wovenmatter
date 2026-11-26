@@ -41,6 +41,9 @@ public final class WovenServer: Sendable {
     public var instance: String?
     /// It offers the stand-in runtime, and so do servers it installs.
     public var offersStandIn = false
+    /// How a Mac reaches this machine over SSH, for a Linux server a Mac
+    /// installed: written onto this machine's row before anything can read it.
+    public var sshRoute: (host: String, user: String?)?
     /// The home folder whose harness histories (Codex, Claude Code, Grok
     /// Build, OpenCode, the Pi CLI) this server counts usage from; nil for none.
     public var harnessHome: URL?
@@ -95,6 +98,10 @@ public final class WovenServer: Sendable {
     guard let machine = try await library.machine(library.machineID) else {
       throw ProtocolError(.failed, "The library has no row for this machine.")
     }
+    // Before it listens or links, so its row never reaches another machine without it.
+    if let route = options.sshRoute {
+      try await library.setSSHRoute(of: library.machineID, host: route.host, user: route.user)
+    }
     let secrets = try await Secrets.open(library: library, store: options.secretStore ?? standardSecretStore(
       dataFolder: options.dataFolder, machineID: library.machineID))
     for runtime in options.runtimes { (runtime as? PiDurableRuntime)?.credentials.attach(secrets) }
@@ -114,6 +121,7 @@ public final class WovenServer: Sendable {
                             libraryShape: options.libraryShape)
     registerFolders(&routes, library: library, root: options.foldersRoot)
     registerRuntimes(&routes, sessions: sessions, secrets: secrets)
+    registerStorage(&routes, dataFolder: options.dataFolder)
     registerLocalModelServers(&routes, sessions: sessions, secrets: secrets)
     registerArtifacts(&routes, library: library, sessions: sessions)
     registerLibraryItems(&routes, library: library)
@@ -218,6 +226,11 @@ public final class WovenServer: Sendable {
   /// Looks at the tailnet for machines now, instead of at the next interval.
   public func discoverMachines() async {
     await peers.discover()
+  }
+
+  /// Retries every machine not linked now at once, as a wait for a server does.
+  func retryMachinesNow() async {
+    await peers.retryNow()
   }
 
   /// Returns once another machine has removed this one. The server has

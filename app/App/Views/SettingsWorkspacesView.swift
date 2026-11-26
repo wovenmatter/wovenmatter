@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WovenProtocol
 
 /// Every machine in one list. Machine details open in place; agents' install,
 /// sign-in, and update controls live on each agent page.
@@ -18,19 +19,12 @@ struct SettingsWorkspacesView: View {
     @State private var acknowledgedMachineAccess = false
     @State private var pendingRemoval: Machine?
     @State private var logsMachine: Machine?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var trimmedHost: String { hostName.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var trimmedUser: String? {
         let user = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         return user.isEmpty ? nil : user
-    }
-
-    private func deploymentProgress(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            SettingsNote(message)
-        }
-        .accessibilityElement(children: .combine)
     }
 
     private var pageTitle: String {
@@ -57,25 +51,20 @@ struct SettingsWorkspacesView: View {
                 machineSection(selectedMachine)
                 agentsSection(selectedMachine)
                 detailsSection(selectedMachine)
-                if let progress = model.progress {
-                    deploymentProgress(progress)
-                }
+                if let error = model.serverErrors[selectedMachine.id] { SettingsError(error) }
             } else if addingMachine {
                 machineCard
                 if currentPreflight?.ready == true { createCard }
-                if let progress = model.progress { deploymentProgress(progress) }
             } else {
                 machineList
-                if let progress = model.progress { deploymentProgress(progress) }
-            }
-            if let error = model.errorMessage {
-                SettingsError(error)
+                if let error = model.listError { SettingsError(error) }
             }
         }
         .id(selectedMachineID)
         .task(id: selectedMachineID) {
             if let selectedMachine {
-                model.refreshHarnesses(on: selectedMachine.id)
+                model.refreshHarnessesIfStale(on: selectedMachine.id)
+                await model.readStorage(on: selectedMachine.id)
             } else {
                 model.findMachines()
             }
@@ -92,7 +81,7 @@ struct SettingsWorkspacesView: View {
                     Button("Refresh") { model.loadLogs(on: machine.id) }
                     Button("Done") { logsMachine = nil }
                 }.buttonStyle(SettingsQuietButtonStyle())
-                if let error = model.errorMessage { SettingsError(error) }
+                if let error = model.serverErrors[machine.id] { SettingsError(error) }
                 ScrollView {
                     Text(model.serverLogs[machine.id] ?? "Loading logs…")
                         .font(.system(size: 11.5, design: .monospaced))
@@ -106,11 +95,17 @@ struct SettingsWorkspacesView: View {
         .onChange(of: hostName + userName) { _, _ in
             acknowledgedMachineAccess = false
         }
-        .onChange(of: model.machines.map(\.id)) { oldIDs, machineIDs in
+        .onChange(of: model.machines.map(\.id)) { _, machineIDs in
             if let selectedMachineID, !machineIDs.contains(selectedMachineID) {
                 self.selectedMachineID = nil
             }
-            if machineIDs.count > oldIDs.count { addingMachine = false }
+        }
+        // Add Workspace stays open while the install runs, then opens the new machine.
+        .onChange(of: model.finishedInstalls) { _, finished in
+            guard addingMachine, let machineID = finished[trimmedHost] else { return }
+            model.finishedInstalls[trimmedHost] = nil
+            addingMachine = false
+            selectedMachineID = machineID
         }
         .onAppear {
             selectedMachineID = selectedMachineID ?? initialMachineID
@@ -169,8 +164,10 @@ struct SettingsWorkspacesView: View {
     @ViewBuilder private var machineList: some View {
         SettingsSection(title: "This Mac", detail: "Create a blank project or link an existing directory from the sidebar.") {
             SettingsRow(title: "Local workspace", detail: model.thisMachine?.name) {
-                let running = model.thisMachine.flatMap { model.serverStatus(on: $0.id) }?.isRunning == true
-                SettingsStatus(running ? "Ready" : "Setup required", tone: running ? .good : .warning)
+                let running = model.thisMachine?.isOnline == true
+                let starting = model.thisMachine?.connection == .starting
+                SettingsStatus(running ? "Ready" : starting ? "Starting" : "Setup required",
+                               tone: running ? .good : starting ? .neutral : .warning)
             }
         }
         SettingsSection(title: "Remote workspaces", detail: "Agents and files on your other machines.") {
@@ -187,13 +184,18 @@ struct SettingsWorkspacesView: View {
     }
 
     private func statusLabel(_ machine: Machine) -> String {
-        if model.isBusy(machine.id) || model.isMaintainingHarnesses(on: machine.id) { return "Working" }
-        if !machine.isOnline { return "Offline" }
-        return model.serverStatus(on: machine.id)?.state.displayName ?? "Unknown"
+        if machine.connection != .starting, model.isBusy(machine.id) || model.isMaintainingHarnesses(on: machine.id) {
+            return "Working"
+        }
+        return machine.connection.displayName
     }
 
-    private func isRunning(_ machine: Machine) -> Bool {
-        machine.isOnline && model.serverStatus(on: machine.id)?.isRunning == true
+    private func statusTone(_ machine: Machine) -> SettingsStatusTone {
+        switch machine.connection {
+        case .online: .good
+        case .starting: .neutral
+        case .stopped, .offline: .warning
+        }
     }
 
     private func machineRow(_ machine: Machine) -> some View {
@@ -201,32 +203,29 @@ struct SettingsWorkspacesView: View {
             title: machine.name,
             detail: machineLocation(machine),
             status: statusLabel(machine),
-            statusTone: isRunning(machine) ? .good : .warning,
+            statusTone: statusTone(machine),
             icon: { MachineConnectionIcon(platform: machine.platform, size: 15) },
             action: { selectedMachineID = machine.id }
         )
     }
 
     private func machineSection(_ machine: Machine) -> some View {
-        let status = model.serverStatus(on: machine.id)
         let busy = model.isBusy(machine.id)
         let maintaining = model.isMaintainingHarnesses(on: machine.id)
         return SettingsSection {
             SettingsRow(title: "Status") {
-                SettingsStatus(statusLabel(machine), tone: isRunning(machine) ? .good : .warning)
+                SettingsStatus(statusLabel(machine), tone: statusTone(machine))
                 Menu("Manage") {
-                    if let status {
-                        // A stopped Mac cannot be reached to start it.
-                        if machine.platform == .linux {
-                            Button("Start") { manage { try await model.startServer(on: machine.id) } }
-                                .disabled(status.isRunning || maintaining)
-                        }
-                        Button("Stop") { manage { _ = try await model.stopServer(on: machine.id, confirmed: true) } }
-                            .disabled(!status.isRunning || maintaining)
-                        Button("Restart") { manage { _ = try await model.restartServer(on: machine.id, confirmed: true) } }
-                            .disabled(!status.isRunning || maintaining)
-                        Divider()
+                    // A stopped Mac cannot be reached to start it.
+                    if machine.platform == .linux {
+                        Button("Start") { manage(machine.id) { try await model.startServer(on: machine.id) } }
+                            .disabled(machine.isOnline || maintaining)
                     }
+                    Button("Stop") { manage(machine.id) { _ = try await model.stopServer(on: machine.id, confirmed: true) } }
+                        .disabled(!machine.isOnline || maintaining)
+                    Button("Restart") { manage(machine.id) { _ = try await model.restartServer(on: machine.id, confirmed: true) } }
+                        .disabled(!machine.isOnline || maintaining)
+                    Divider()
                     if machine.platform == .linux {
                         Button("Update server") { model.updateServer(on: machine.id) }
                             .disabled(maintaining)
@@ -242,45 +241,36 @@ struct SettingsWorkspacesView: View {
                 .buttonStyle(SettingsQuietButtonStyle())
                 .disabled(busy)
             }
-            if status == nil {
-                SettingsEmpty("This machine's status appears when it is online.")
-            }
             if maintaining {
                 SettingsNote("Harnesses are installing or updating. Stopping, updating or removing this workspace waits until they finish.")
             }
-            if let warning = status?.storageWarning, !warning.isEmpty {
-                storageWarning(warning)
-            }
         }
     }
 
-    private func manage(_ action: @escaping () async throws -> Void) {
+    /// A machine's action; its error shows on that machine's page until its next action.
+    private func manage(_ machineID: String, _ action: @escaping () async throws -> Void) {
+        model.serverErrors[machineID] = nil
         Task {
             do {
                 try await action()
-                model.errorMessage = nil
             } catch {
-                model.errorMessage = error.localizedDescription
+                model.serverErrors[machineID] = error.localizedDescription
             }
         }
     }
 
-    private func detailsSection(_ machine: Machine) -> some View {
-        let status = model.serverStatus(on: machine.id)
-        return SettingsSection(title: "Details") {
-            if let status {
-                SettingsSummaryRow("Storage", value: machineStorageLabel(status)) {
-                    SettingsValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
-                    SettingsValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
-                    SettingsValueRow(label: "Machine storage", value: machineStorageLabel(status))
-                }
+    /// Shown once the machine's own server has reported its disk.
+    @ViewBuilder private func detailsSection(_ machine: Machine) -> some View {
+        if let storage = model.machineStorage[machine.id] {
+            SettingsSection(title: "Details") {
+                SettingsValueRow(label: "Storage", value: storageCapacityLabel(
+                    capacity: storage.capacityBytes, available: storage.availableBytes))
             }
         }
     }
 
     private func machineLocation(_ machine: Machine) -> String {
-        let status = model.serverStatus(on: machine.id)
-        return status?.hostName ?? machine.platform.displayName
+        model.address(of: machine.id) ?? machine.platform.displayName
     }
 
     private var machineCard: some View {
@@ -381,6 +371,33 @@ struct SettingsWorkspacesView: View {
             }
             .buttonStyle(WovenPrimaryButtonStyle())
             .disabled(installing || currentPreflight?.ready != true || !acknowledgedMachineAccess)
+            if installing { installProgress(model.installStages[trimmedHost]) }
+        }
+    }
+
+    /// Where the install has got to: a bar at the current stage's place among them all, and its name.
+    private func installProgress(_ stage: InstallStage?) -> some View {
+        let stages = InstallStage.allCases
+        let index = stage.flatMap { stages.firstIndex(of: $0) } ?? 0
+        return VStack(alignment: .leading, spacing: 6) {
+            ProgressView(value: (Double(index) + 0.5) / Double(stages.count))
+                .progressViewStyle(.linear)
+                .tint(WovenPalette.primary)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: index)
+            SettingsNote(installStageLabel(stage ?? .checking))
+        }
+        .frame(maxWidth: 320, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func installStageLabel(_ stage: InstallStage) -> String {
+        switch stage {
+        case .checking: "Checking the machine…"
+        case .packing: "Packing Woven Matter…"
+        case .sending: "Sending to \(trimmedHost)…"
+        case .node: "Installing Node…"
+        case .starting: "Starting the server…"
+        case .connecting: "Connecting…"
         }
     }
 
@@ -392,7 +409,13 @@ struct SettingsWorkspacesView: View {
         SettingsSection(title: "Agents") {
             let harnesses = model.harnesses(on: machine.id)
             if harnesses.isEmpty {
-                SettingsEmpty("Start the workspace or refresh to check for agents.")
+                // Until its first read returns, a machine that is up or coming up is being checked.
+                if machine.connection == .starting || (machine.isOnline && !model.runtimesRead.contains(machine.id)
+                    && !model.harnessInventoryUnavailable.contains(machine.id)) {
+                    SettingsEmpty("Checking…")
+                } else {
+                    SettingsEmpty("Start the workspace or refresh to check for agents.")
+                }
             } else {
                 VStack(spacing: 2) {
                     ForEach(harnesses) { harness in
@@ -403,7 +426,7 @@ struct SettingsWorkspacesView: View {
                                 : HarnessAccountPresentation.accountLabel(harness.runtimeKind,
                                     status: model.signInStatus(harness.runtimeKind, on: machine.id)),
                             status: harness.state.displayName,
-                            statusTone: harness.state == .ready ? .good : .warning,
+                            statusTone: harness.state == .ready ? .good : harness.state == .settingUp ? .neutral : .warning,
                             icon: { HarnessLogoIcon(logo: HarnessLogo(runtimeKind: harness.runtimeKind), size: 15) },
                             action: { onMoreRuntime(harness.runtimeKind, machine) }
                         )
@@ -412,24 +435,10 @@ struct SettingsWorkspacesView: View {
             }
             Button("Set up harnesses") { setupMachine = machine }
                 .buttonStyle(SettingsQuietButtonStyle())
-            if model.harnessInventoryUnavailable.contains(machine.id) {
+            if model.harnessInventoryUnavailable.contains(machine.id), machine.connection != .starting {
                 SettingsNote("Runtime inventory unavailable. Open an agent and check for updates to retry.")
             }
         }
-    }
-
-    private func workspaceUsageLabel(_ status: MachineServerStatus) -> String {
-        let usage = status.storageUsedBytes.map {
-            ByteCountFormatter.string(fromByteCount: max($0, 0), countStyle: .file)
-        } ?? "Usage unavailable"
-        return "\(usage) · no fixed limit"
-    }
-
-    private func machineStorageLabel(_ status: MachineServerStatus) -> String {
-        storageCapacityLabel(
-            capacity: status.storageCapacityBytes,
-            available: status.storageAvailableBytes
-        )
     }
 
     private func storageCapacityLabel(capacity: Int64?, available: Int64?) -> String {
@@ -437,12 +446,5 @@ struct SettingsWorkspacesView: View {
         let free = ByteCountFormatter.string(fromByteCount: max(available, 0), countStyle: .file)
         let total = ByteCountFormatter.string(fromByteCount: max(capacity, 0), countStyle: .file)
         return "\(free) available of \(total)"
-    }
-
-    private func storageWarning(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            SettingsStatus("Warning", tone: .warning)
-            SettingsNote(message)
-        }
     }
 }

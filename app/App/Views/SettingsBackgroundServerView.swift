@@ -42,7 +42,7 @@ struct SettingsBackgroundServerView: View {
         }
     }
 
-    private var status: MachineServerStatus? { machineID.flatMap { model.serverStatus(on: $0) } }
+    private var state: MachineConnectionState? { model.thisMachine?.connection }
 
     private var serverRow: some View {
         SettingsRow(title: "Status") {
@@ -51,12 +51,12 @@ struct SettingsBackgroundServerView: View {
                 Text(actionInProgress == .start ? "Starting server…" : actionInProgress == .restart ? "Restarting server…" : "Stopping server…")
                     .font(.settingsSecondary).foregroundStyle(WovenPalette.mutedForeground)
             } else {
-                SettingsStatus(status?.state.displayName ?? "Checking server…",
-                               tone: status?.state == .running ? .good : status?.state == .unavailable ? .warning : .neutral)
+                SettingsStatus(state?.displayName ?? "Checking server…",
+                               tone: state == .online ? .good : state == .offline ? .warning : .neutral)
                 Group {
-                    if status?.state == .stopped {
+                    if state == .stopped {
                         Button("Start") { perform(.start) }
-                    } else if status?.state == .running {
+                    } else if state == .online {
                         Button("Stop", role: .destructive) { perform(.stop) }
                         Button("Restart") { perform(.restart) }
                     }

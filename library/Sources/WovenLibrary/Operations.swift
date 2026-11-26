@@ -39,10 +39,12 @@ extension Library {
     }
   }
 
-  /// Records how this machine was installed over SSH, for every Mac.
+  /// Records how this machine was installed over SSH, for every Mac. Writes
+  /// nothing when that is already recorded.
   public func setSSHRoute(of id: String, host: String, user: String?) async throws {
     try await write { writer in
-      guard try writer.row("machines", id) != nil else { throw LibraryError(.notFound, "No machine \(id).") }
+      guard let row = try writer.row("machines", id) else { throw LibraryError(.notFound, "No machine \(id).") }
+      guard row.text("ssh_host") != host || (row.text("ssh_user") ?? "") != (user ?? "") else { return }
       _ = try writer.put("machines", id: id, ["ssh_host": .text(host), "ssh_user": .text(user ?? "")])
     }
   }

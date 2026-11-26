@@ -18,9 +18,15 @@ struct SettingsAgentDefaultsSection: View {
     @State private var loading = false
     @State private var saving = false
     @State private var error: String?
+    /// The harness has not reported its options there yet: advice, not a failure.
+    @State private var optionsUnknown: String?
     @State private var requestID = UUID()
 
     private var machineID: String? { scope == "global" ? nil : scope }
+    /// No chat can start while the harness there is without its adapter, so no advice to start one.
+    private var canStartChat: Bool {
+        (machineID ?? model.thisMachineID).flatMap { model.machines.harness(runtime, on: $0)?.needsAdapter } != true
+    }
     private var identity: String { runtime.rawValue + ":" + scope }
     private var inheritedLabel: String { scope == "global" || (managesSharing && !usesShared) ? "Use agent default" : "Use shared settings" }
     private var inheritsDefaults: Bool {
@@ -72,6 +78,7 @@ struct SettingsAgentDefaultsSection: View {
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(loading || saving)
                 if loading { ProgressView().controlSize(.small) }
             }
+            if let optionsUnknown, canStartChat { SettingsNote(optionsUnknown) }
             if let error { SettingsError(error) }
         }
         .disabled(saving)
@@ -146,7 +153,7 @@ struct SettingsAgentDefaultsSection: View {
     @MainActor private func loadDefaults() async {
         requestID = UUID()
         let request = requestID
-        metadata = nil; error = nil; loading = false; defaultsReady = false
+        metadata = nil; error = nil; optionsUnknown = nil; loading = false; defaultsReady = false
         stored = SessionSelections(); resolved = SessionSelections()
         do {
             let defaults = try await model.settings.agentSelectionDefaults(runtime: runtime, machineID: machineID)
@@ -182,7 +189,7 @@ struct SettingsAgentDefaultsSection: View {
 
     @MainActor private func loadOptions() async {
         let request = UUID()
-        requestID = request; loading = true; error = nil; metadata = nil
+        requestID = request; loading = true; error = nil; optionsUnknown = nil; metadata = nil
         let selectedModel = runtime == .defaultAgent ? model.connections.configuration.defaultModel : resolved.model
         defer { if requestID == request { loading = false } }
         do {
@@ -190,6 +197,9 @@ struct SettingsAgentDefaultsSection: View {
                                                                   model: selectedModel)
             guard requestID == request, !Task.isCancelled else { return }
             metadata = result
+        } catch let unknown as RuntimeOptionsUnknown {
+            guard requestID == request, !Task.isCancelled else { return }
+            optionsUnknown = unknown.localizedDescription
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
             self.error = error.localizedDescription

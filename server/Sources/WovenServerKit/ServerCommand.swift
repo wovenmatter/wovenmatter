@@ -7,7 +7,7 @@ import WovenProtocol
 ///
 ///     DATA-FOLDER [--socket PATH|none] [--listen HOST:PORT|auto|none] [--port PORT] [--tailnet none]
 ///                 [--name NAME] [--app-version VERSION] [--folders PATH] [--stand-in-runtime] [--instance NAME]
-///                 [--peer-port PORT]...
+///                 [--peer-port PORT]... [--ssh-host HOST [--ssh-user USER]]
 ///
 /// Opens the library in DATA-FOLDER, listens on a Unix socket for the UI on
 /// this machine (default `server.sock` in the data folder's `SocketFolder`) and on this machine's
@@ -19,6 +19,8 @@ import WovenProtocol
 /// machines are that instance too (`woven-server-NAME`). `--peer-port`, for
 /// development, also looks for a server on this machine's own tailnet address
 /// at that port, so two instances on one Mac find each other.
+/// `--ssh-host` and `--ssh-user`, from a Mac's install, are how that Mac
+/// reached this machine; the server keeps them on its own row for every Mac.
 /// `--socket-folder DATA-FOLDER` prints that data folder's socket directory
 /// instead, for an uninstall to remove it.
 /// Runs until SIGINT or SIGTERM, then stops cleanly, or until another machine
@@ -56,6 +58,7 @@ public enum ServerCommand {
     var port = wovenPort
     var instance: String?
     var peerPorts: [Int] = []
+    var sshHost: String?, sshUser: String?
     while let option = arguments.first {
       arguments.removeFirst()
       func value() throws -> String {
@@ -83,6 +86,8 @@ public enum ServerCommand {
       case "--peer-port":
         guard let number = Int(try value()), (1...65535).contains(number) else { throw UsageError(description: "--peer-port takes a number") }
         peerPorts.append(number)
+      case "--ssh-host": sshHost = try value()
+      case "--ssh-user": sshUser = try value()
       default: throw UsageError(description: "unknown option \(option)")
       }
     }
@@ -116,6 +121,7 @@ public enum ServerCommand {
     // A development instance on Linux also runs its bots in its own engine, `woven-bots-engine-NAME`.
     options.instance = instance
     options.offersStandIn = standIn
+    options.sshRoute = sshHost.map { ($0, sshUser) }
     options.harnessHome = FileManager.default.homeDirectoryForCurrentUser
     // Only a release server sends usage statistics: never a debug build or a development instance.
     #if !DEBUG

@@ -24,7 +24,7 @@ struct SettingsHarnessAccounts: View {
                     SettingsRemoteHarnessAccountView(model: machines,
                         runtimeKind: runtimeKind, machine: machine, embedded: true)
                 }
-                .task { machines.refreshHarnesses(on: machine.id) }
+                .task { machines.refreshHarnessesIfStale(on: machine.id) }
             }
             if scope != "global", inScope.isEmpty {
                 SettingsEmpty("This workspace is no longer configured.")
@@ -39,7 +39,7 @@ struct SettingsHarnessAccounts: View {
                 if let thisMachine {
                     localLabel
                     SettingsRemoteHarnessSoftware(model: machines, runtimeKind: runtimeKind, machine: thisMachine)
-                        .task { machines.refreshHarnesses(on: thisMachine.id) }
+                        .task { machines.refreshHarnessesIfStale(on: thisMachine.id) }
                 }
                 ForEach(others) { machine in
                     perMachine(machine) {
@@ -101,15 +101,17 @@ struct SettingsRemoteHarnessSoftware: View {
             if harness != nil || !unavailable {
                 SettingsRuntimeSummaryRow(
                     summary: harness?.summary ?? "Checking installed components…",
-                    status: harness?.isInstalled == true ? "Installed" : harness == nil ? "Checking" : "Not installed",
-                    tone: harness?.isInstalled == true ? .good : harness == nil ? .neutral : .warning
+                    status: harness.map { $0.isInstalled ? "Installed" : $0.needsAdapter ? $0.state.displayName : "Not installed" }
+                        ?? "Checking",
+                    tone: harness?.isInstalled == true ? .good : harness == nil || harness?.state == .settingUp ? .neutral : .warning
                 ) {
                     if let harness, !harness.isInstalled {
+                        // Installing again also installs a missing adapter.
                         Button(installing ? "Installing…" : (harness.failureCount > 0 ? "Retry install" : "Install")) {
                             model.install(runtimeKind, on: machine.id)
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(busy)
+                        .disabled(busy || harness.state == .settingUp)
                         .accessibilityLabel("Install " + runtimeKind.displayName)
                     } else if harness?.isSystemInstall != true {
                         SettingsHarnessUpdateButton(model: model, runtimeKind: runtimeKind, machineID: machine.id)

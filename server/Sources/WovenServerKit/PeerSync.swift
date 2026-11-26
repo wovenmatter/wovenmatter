@@ -27,6 +27,8 @@ actor PeerSync {
   private let interval: Duration
   private var discovery: Task<Void, Never>?
   private var links: [TailnetMachine: Task<Void, Never>] = [:]
+  /// The wait of each link asleep between attempts.
+  private var naps: [TailnetMachine: Task<Void, Never>] = [:]
   private var clients: [String: Client] = [:]
   private(set) var statuses: [String: Status] = [:] {
     didSet { for watcher in watchers.values { watcher.yield() } }
@@ -89,6 +91,14 @@ actor PeerSync {
     reached(nil)
   }
 
+  /// Looks at the tailnet now, and every link asleep between attempts tries
+  /// again at once, its delay started afresh. A connect under way is left to
+  /// finish.
+  func retryNow() async {
+    await discover()
+    for nap in naps.values { nap.cancel() }
+  }
+
   /// That machine has been pulled from once, or could not be.
   private func reached(_ machine: TailnetMachine?) {
     if let machine { firstRound?.remove(machine) }
@@ -134,7 +144,7 @@ actor PeerSync {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
       if statuses[machineID]?.online == true { return true }
-      await discover()
+      await retryNow()
       try? await Task.sleep(for: .seconds(2))
     }
     return false
@@ -196,8 +206,12 @@ actor PeerSync {
         return
       } catch {}
       reached(machine)
-      try? await Task.sleep(for: delay)
-      delay = min(delay * 2, .seconds(60))
+      // A task of its own, so `retryNow` can end it early.
+      let nap = Task { [delay] in _ = try? await Task.sleep(for: delay) }
+      naps[machine] = nap
+      await withTaskCancellationHandler { await nap.value } onCancel: { nap.cancel() }
+      if naps[machine] == nap { naps[machine] = nil }
+      delay = nap.isCancelled ? .seconds(1) : min(delay * 2, .seconds(60))
     }
   }
 

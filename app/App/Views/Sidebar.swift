@@ -447,7 +447,9 @@ struct SidebarNavigationPage: View {
                     agentRow(agent, moveScope: .stored(orderKey), groupAgents: regular, isPinned: false)
                 }
                 if pinned.isEmpty && regular.isEmpty {
-                    agentEmptyLabel(isRemote && machine?.isOnline == false ? "Workspace is stopped" : "No agents")
+                    agentEmptyLabel(!isRemote || machine?.isOnline != false ? "No agents"
+                        : machine?.connection == .starting ? "Workspace is starting"
+                        : machine?.connection == .offline ? "Workspace is offline" : "Workspace is stopped")
                 }
             }
             agentDisclosureHeading(title: "Folders", key: key + ":folders")
@@ -525,7 +527,9 @@ struct SidebarNavigationPage: View {
                 harnessLogo: HarnessLogo(runtimeKind: agent.runtimeKind),
                 title: presentation.displayName,
                 hoverID: "agent:\(agent.id)",
-                trailing: agent.status == .running ? "Running" : nil,
+                trailing: agent.status == .running ? "Running"
+                    : agent.status == .settingUp ? "Setting up"
+                    : agent.status == .adapterRequired ? "Adapter required" : nil,
                 showsPin: isPinned,
                 selected: destination == .workspace && selectedAgentID == agent.id,
                 pinMenuTitle: isPinned ? "Unpin agent" : "Pin agent",
@@ -1189,7 +1193,10 @@ struct NewChatDrawer: View {
         switch agent.status {
         case .ready, .running: machine?.name ?? agent.runtimeKind.displayName
         case .needsAuthentication: "Sign in — see Settings"
-        case .offline: "Workspace is stopped"
+        case .settingUp: "Setting up — see Settings"
+        case .adapterRequired: "Adapter required — see Settings"
+        case .starting: "Workspace is starting"
+        case .offline: machine?.connection == .offline ? "Workspace is offline" : "Workspace is stopped"
         case .failed: "Unavailable — see Settings"
         }
     }
