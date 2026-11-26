@@ -106,6 +106,9 @@ actor SessionManager {
   private let scratch: URL
   private let toolKeys: ToolKeys?
   private var hosts: [String: SessionHost] = [:]
+  /// Hosts still stopping after `close`: a new host for the session waits
+  /// for their last writes, so it starts from the session as they left it.
+  private var closing: [String: Task<Void, Never>] = [:]
   private var watcher: Task<Void, Never>?
   nonisolated let board = RunBoard()
   nonisolated let configurations: RuntimeConfigurations
@@ -133,11 +136,9 @@ actor SessionManager {
   func start() async {
     for sessionID in (try? await library.sessionsStoppedMidTurn()) ?? [] {
       try? await library.setTurnRunning(sessionID, false)
+      // A turn's end clears its flag in the same write, so a flag still set
+      // is a turn that never ended.
       guard (try? await library.session(sessionID)) != nil else { continue }
-      // A turn whose end was saved had finished: it stopped only before its
-      // running flag was cleared.
-      let last = try? await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1).last
-      if case .notice(let notice)? = last?.content, notice.kind == .turnEnded { continue }
       _ = try? await library.appendItem(sessionID: sessionID, content: .notice(Notice(
         kind: .interrupted, text: "The server stopped while this reply was being written, so it may be cut short.")))
     }
@@ -187,6 +188,7 @@ actor SessionManager {
   /// owns is refused with `notOwner`: its live view is on that machine.
   func host(for sessionID: String) async throws -> SessionHost {
     if let host = hosts[sessionID] { return host }
+    await closing[sessionID]?.value
     guard let session = try await library.session(sessionID) else {
       throw ProtocolError(.notFound, "No session \(sessionID).")
     }
@@ -208,7 +210,11 @@ actor SessionManager {
 
   /// Stops a session's process and forgets its host.
   func close(_ sessionID: String) async {
-    await hosts.removeValue(forKey: sessionID)?.stop()
+    guard let host = hosts.removeValue(forKey: sessionID) else { return }
+    let stopping = Task { await host.stop() }
+    closing[sessionID] = stopping
+    await stopping.value
+    if closing[sessionID] == stopping { closing[sessionID] = nil }
   }
 
   func closeAll() async {
@@ -837,13 +843,16 @@ actor SessionHost {
   /// The one way out of a running turn. When it ended is saved before views
   /// hear it ended, so a view that watched it and one that opens the chat
   /// later time it the same, with "stopped" when Stop was asked while it
-  /// ran; then the running flag clears (a restart that finds the end saved
-  /// knows the turn had finished).
+  /// ran, and the running flag clears in the same write.
   private func leaveRun(to state: RunState) async {
     if run == .running {
-      try? await finish(.notice(Notice(kind: .turnEnded, text: stopAsked ? "stopped" : "")), id: UUID().uuidString.lowercased())
+      do {
+        try await finish(.notice(Notice(kind: .turnEnded, text: stopAsked ? "stopped" : "")), id: UUID().uuidString.lowercased(),
+                         endingTurn: true)
+      } catch {
+        try? await library.setTurnRunning(sessionID, false)
+      }
       setRun(state)
-      try? await library.setTurnRunning(sessionID, false)
     } else if run != state {
       setRun(state)
     }
@@ -878,7 +887,6 @@ actor SessionHost {
 
   private func nativeSessionGone() async throws {
     clearPrompts()
-    try? await library.setTurnRunning(sessionID, false)
     try await library.markNativeSessionGone(sessionID)
     await leaveRun(to: .nativeSessionGone)
     try await finish(.notice(Notice(kind: .nativeSessionGone, text: Self.goneError.message)), id: UUID().uuidString.lowercased())
@@ -957,12 +965,13 @@ actor SessionHost {
 
   /// Writes a finished item to the library, then announces it. A tool
   /// call's input and output are capped first.
-  private func finish(_ content: ItemContent, id: String, author: ItemAuthor? = nil) async throws {
+  private func finish(_ content: ItemContent, id: String, author: ItemAuthor? = nil, endingTurn: Bool = false) async throws {
     var content = content
     if case .toolCall(let call) = content { content = .toolCall(ToolOutput.capped(call)) }
     overflow[id] = nil
     do {
-      let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author)
+      let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author,
+                                              endingTurn: endingTurn)
       lastSequence = item.sequence
       inProgress.removeAll { $0.id == id }
       broadcast(.itemFinished(item))

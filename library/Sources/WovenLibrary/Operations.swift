@@ -170,8 +170,11 @@ extension Library {
 
   /// Saves a finished item of a session this machine owns, as the next in
   /// its sequence. Only the owning machine writes a session's items.
+  /// `endingTurn` also clears the session's running turn in the same write,
+  /// so a turn's saved end and its flag are never apart.
   public func appendItem(sessionID: String, id: String = UUID().uuidString.lowercased(),
-                         content: ItemContent, author: ItemAuthor? = nil, createdAt: Date = Date()) async throws -> SessionItem {
+                         content: ItemContent, author: ItemAuthor? = nil, createdAt: Date = Date(),
+                         endingTurn: Bool = false) async throws -> SessionItem {
     let body = String(decoding: try Wire.encoder.encode(content), as: UTF8.self)
     let machineID = machineID
     // Stored to the millisecond, so the item announced equals the item read back.
@@ -185,6 +188,10 @@ extension Library {
       }
       let sequence = try Self.putItem(id: id, sessionID: sessionID, content: content, body: body, author: author,
                                       createdAt: createdAt, writer)
+      if endingTurn {
+        try writer.db.run("UPDATE native_sessions SET turn_running = 0, updated_at = ? WHERE session_id = ?",
+                          [.integer(Writer.now()), .text(sessionID)])
+      }
       return SessionItem(id: id, sessionID: sessionID, sequence: sequence, createdAt: createdAt, content: content,
                          author: author)
     }

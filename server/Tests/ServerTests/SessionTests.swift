@@ -145,20 +145,22 @@ func aStoppedTurnIsSavedAsStopped() async throws {
 }
 
 @Test(.timeLimit(.minutes(1)))
-func aTurnWhoseEndWasSavedIsNotCalledCutShortAfterARestart() async throws {
+func aTurnStillRunningAtARestartIsSaidToBeCutShortAfterAnEndedOne() async throws {
   let store = StandInRuntime.NativeStore()
   let first = try await TestServer.start(runtime: StandInRuntime(store: store))
   let client = try await first.connect()
   let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
   try await turn(client, session.id, "one")
-  // The server stopped after it saved the turn's end, before it cleared the running flag.
+  #expect(try await first.server.library.sessionsStoppedMidTurn().isEmpty)
+  // A turn the runtime started by itself was running, nothing of it saved yet, when the server stopped.
   try await first.server.library.setTurnRunning(session.id, true)
   await first.server.stop()
 
   let second = try await TestServer.start(folder: first.folder, runtime: StandInRuntime(store: store))
   defer { second.server.stopLater() }
   let items = try await (try await second.connect()).call(SessionItems(sessionID: session.id))
-  #expect(items.last?.content == .notice(Notice(kind: .turnEnded, text: "")))
+  guard case .notice(let notice)? = items.last?.content else { Issue.record("no notice"); return }
+  #expect(notice.kind == .interrupted)
 }
 
 @Test(.timeLimit(.minutes(1)))
