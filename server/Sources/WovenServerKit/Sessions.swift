@@ -134,6 +134,10 @@ actor SessionManager {
     for sessionID in (try? await library.sessionsStoppedMidTurn()) ?? [] {
       try? await library.setTurnRunning(sessionID, false)
       guard (try? await library.session(sessionID)) != nil else { continue }
+      // A turn whose end was saved had finished: it stopped only before its
+      // running flag was cleared.
+      let last = try? await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1).last
+      if case .notice(let notice)? = last?.content, notice.kind == .turnEnded { continue }
       _ = try? await library.appendItem(sessionID: sessionID, content: .notice(Notice(
         kind: .interrupted, text: "The server stopped while this reply was being written, so it may be cut short.")))
     }
@@ -288,6 +292,9 @@ actor SessionHost {
   /// saved is gone with it. So calls compared by `order` are always this
   /// host's.
   private var callsStarted = 0
+  /// The sequence of the session's last saved item, read when the runtime
+  /// opens and kept by each save, so a call's start needs no read.
+  private var lastSequence: Int?
   private let firstMessages: FirstMessageHook?
 
   init(sessionID: String, library: Library, runtime: any Runtime, gone: Bool, board: RunBoard,
@@ -410,8 +417,7 @@ actor SessionHost {
     do {
       try await live.send(turn)
     } catch {
-      try? await library.setTurnRunning(sessionID, false)
-      setRun(.idle)
+      await endTurn()
       throw ProtocolError(.failed, "The runtime did not take the turn: \(error)")
     }
     if first { firstMessages?.tell(sessionID, text) }
@@ -608,6 +614,7 @@ actor SessionHost {
       try? await finish(.notice(Notice(kind: .interrupted, text: "The session was stopped while this reply was being written.")),
                         id: UUID().uuidString.lowercased())
     }
+    await endTurn()
   }
 
   /// The session was deleted: stop the process and end every subscription.
@@ -616,6 +623,7 @@ actor SessionHost {
     defer { leave() }
     await shutDown()
     dropOpenItems()
+    await endTurn()
     board.set(SessionRunState(sessionID: sessionID, run: .idle))
     for continuation in subscribers.values { continuation.finish() }
     subscribers.removeAll()
@@ -674,9 +682,9 @@ actor SessionHost {
         } else {
           // A call seen starting carries where it started; one that arrives
           // already finished has no start.
-          if let last = try? await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1) {
+          if let lastSequence {
             callsStarted += 1
-            call.start = ToolCallStart(after: last.last?.sequence ?? 0, order: callsStarted)
+            call.start = ToolCallStart(after: lastSequence, order: callsStarted)
           }
           let item = LiveItem(id: id, content: .toolCall(call))
           toolItemIDs[callID] = id
@@ -760,6 +768,7 @@ actor SessionHost {
     if let live { return live }
     guard let session = try await library.session(sessionID) else { throw ProtocolError(.notFound, "No session \(sessionID).") }
     let native = try await library.nativeSession(for: sessionID)
+    lastSequence = try await library.items(sessionID: sessionID, beforeSequence: .max, limit: 1).last?.sequence ?? 0
     var directory = session.directory
     if directory.isEmpty, let folderID = session.folderID { directory = try await library.folder(folderID)?.path ?? "" }
     guard !directory.isEmpty else { throw ProtocolError(.failed, "This session has no directory to work in.") }
@@ -804,7 +813,6 @@ actor SessionHost {
     generation += 1
     self.live = nil
     await live.stop()
-    await endTurn()
   }
 
   /// Output with no turn running is a turn the runtime started by itself.
@@ -820,15 +828,24 @@ actor SessionHost {
   }
 
   /// Whatever ends a turn ends its run state, marker and prompts, even when
-  /// a write failed. When it ended is saved before views hear it ended, so a
-  /// view that watched it and one that opens the chat later time it the same,
-  /// with "stopped" when Stop was asked while it ran.
+  /// a write failed. Its caller saves what the turn left open first.
   private func endTurn() async {
     clearPrompts()
+    if run == .running { await leaveRun(to: .idle) }
+  }
+
+  /// The one way out of a running turn. When it ended is saved before views
+  /// hear it ended, so a view that watched it and one that opens the chat
+  /// later time it the same, with "stopped" when Stop was asked while it
+  /// ran; then the running flag clears (a restart that finds the end saved
+  /// knows the turn had finished).
+  private func leaveRun(to state: RunState) async {
     if run == .running {
       try? await finish(.notice(Notice(kind: .turnEnded, text: stopAsked ? "stopped" : "")), id: UUID().uuidString.lowercased())
-      setRun(.idle)
+      setRun(state)
       try? await library.setTurnRunning(sessionID, false)
+    } else if run != state {
+      setRun(state)
     }
   }
 
@@ -863,7 +880,7 @@ actor SessionHost {
     clearPrompts()
     try? await library.setTurnRunning(sessionID, false)
     try await library.markNativeSessionGone(sessionID)
-    setRun(.nativeSessionGone)
+    await leaveRun(to: .nativeSessionGone)
     try await finish(.notice(Notice(kind: .nativeSessionGone, text: Self.goneError.message)), id: UUID().uuidString.lowercased())
   }
 
@@ -876,6 +893,7 @@ actor SessionHost {
     } catch {
       dropOpenItems()
       await shutDown()
+      await endTurn()
     }
   }
 
@@ -945,6 +963,7 @@ actor SessionHost {
     overflow[id] = nil
     do {
       let item = try await library.appendItem(sessionID: sessionID, id: id, content: content, author: author)
+      lastSequence = item.sequence
       inProgress.removeAll { $0.id == id }
       broadcast(.itemFinished(item))
     } catch {
