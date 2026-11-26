@@ -15,8 +15,16 @@ public enum ConversationShellOperation: Equatable, Sendable {
   /// `cd <dir> &&` sets the folder; a pipeline counts as its first command
   /// when everything after it only filters that command's output.
   public static func recognize(_ command: String, folder: String? = nil) -> ConversationShellOperation? {
-    guard var words = Self.words(command.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+    var command = command.trimmingCharacters(in: .whitespacesAndNewlines)
     var folder = folder
+    // `cd <pattern> &&` (Pi writes `cd /tmp/*sample &&`): what follows ran
+    // only if the shell found one folder, but which is not certain, so its
+    // paths keep their own words.
+    if let range = command.range(of: #"^cd +[^\s;&|<>$`'"(){}]*[*?\[][^\s;&|<>$`'"(){}]* *&& *"#, options: .regularExpression) {
+      command.removeSubrange(range)
+      folder = nil
+    }
+    guard var words = Self.words(command) else { return nil }
     // `cd <dir> &&` in front sets the folder for what follows. After `;` the
     // rest would run where it was if `cd` failed.
     if words.count > 3, words[0] == .word("cd"), case .word(let dir) = words[1], words[2] == .control("&&") {

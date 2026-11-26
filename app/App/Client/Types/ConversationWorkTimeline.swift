@@ -684,7 +684,8 @@ public extension AgentRunActivity {
       if let heading = (content ?? detail).flatMap(Self.leadingBoldHeading) { return heading }
       return active ? "Thinking" : "Thought"
     case .tool:
-      return workTimelineToolLabel(active: active, folder: folder)
+      // A row's words never carry a credential its call was given.
+      return workTimelineToolLabel(active: active, folder: folder).workTimelineRedactingCredentials
     default:
       return title?.workTimelineSingleLine ?? toolName?.workTimelineSingleLine ?? "Agent activity"
     }
@@ -835,7 +836,9 @@ public extension AgentRunActivity {
     let step = input?["action"] as? [String: Any]
     if let step, step["type"] as? String != "openPage" { return nil }
     guard let url = ((step?["url"] ?? input?["url"]) as? String)?.workTimelineSingleLine else { return nil }
+    // Without its scheme, and without a user and password before the host.
     return url.replacingOccurrences(of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, with: "", options: .regularExpression)
+      .replacingOccurrences(of: #"^[^/\s@]+@"#, with: "…@", options: .regularExpression)
   }
 
   /// The file or folder a tool's input names.
@@ -931,7 +934,10 @@ public extension AgentRunActivity {
     // middle, keeping its real end. Any other title keeps the program only.
     if action == .command, let command = workTimelineTitledCommand {
       if let script = command.workTimelineScript {
-        return (active ? "Running a " : "Ran a ") + script.language + " script" + (script.more ? " \u{2026}" : "")
+        // Failed as a script run in code mode fails ("Code failed").
+        let done = failed ? script.language.prefix(1).uppercased() + script.language.dropFirst() + " script failed"
+          : (active ? "Running a " : "Ran a ") + script.language + " script"
+        return done + (script.more ? " \u{2026}" : "")
       }
       return command.workTimelineCommandLine(root: root)
     }
@@ -1069,6 +1075,27 @@ extension String {
     let line = split(whereSeparator: \.isWhitespace).joined(separator: " ")
     return line.isEmpty ? nil : line
   }
+
+  /// The text with the values of credentials it carries replaced by "…":
+  /// authorization and key headers, bearer tokens, `-u user:pass`, options
+  /// and assignments named for a token, key, secret or password, and the
+  /// user and password in a URL.
+  var workTimelineRedactingCredentials: String {
+    var text = self
+    for (pattern, template) in Self.workTimelineCredentialPatterns {
+      text = pattern.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: template)
+    }
+    return text
+  }
+
+  private static let workTimelineCredentialPatterns: [(NSRegularExpression, String)] = [
+    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)[^'"\n]+"#, "$1$2…"),
+    (#"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]{8,}"#, "$1$2…"),
+    (#"(?<=\s)(-u|--user)(\s+|=)(['"]?)[^\s'"]+:[^\s'"]+\3"#, "$1$2…"),
+    (#"(?i)(--?[a-z0-9-]*(?:token|password|passwd|secret|api-?key)[a-z0-9-]*)(\s+)(?!-)[^\s'"]+"#, "$1$2…"),
+    (#"(?i)\b([a-z0-9_.-]*(?:token|key|secret|password|passwd|pwd|auth)[a-z0-9_]*)=[^\s&'"]+"#, "$1=…"),
+    (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@"#, "$1…@"),
+  ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 }
 
 extension String {
