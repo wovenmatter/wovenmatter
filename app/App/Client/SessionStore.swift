@@ -58,6 +58,9 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
+    /// When this view saw each run's turn end, so the time it settles on is
+    /// never less than the running time it showed.
+    @ObservationIgnored private var turnEnds: [String: Date] = [:]
     /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
     /// Each text item in progress: the reply that shows it, and that reply's text before it.
@@ -457,6 +460,11 @@ final class SessionStore {
             if !items.contains(where: { $0.id == item.id }) { items.append(item) }
             if case .notice(let notice) = item.content, notice.kind == .goalMet { applyGoal(nil) }
         case .runState(let state):
+            // The server says when a turn ends but not when it ended, so the
+            // sections it settles end no earlier than this view saw them run.
+            if run == .running, state != .running {
+                for settled in runs where settled.status == .running { turnEnds[settled.id] = Date() }
+            }
             run = state
         case .awaiting(let prompt):
             prompts.removeAll { $0.id == prompt.id }
@@ -736,6 +744,10 @@ final class SessionStore {
                                                            content: notice.text, status: .complete, createdAt: entry.date))
                 }
             }
+        }
+        for index in runs.indices {
+            guard let end = turnEnds[runs[index].id] else { continue }
+            runs[index].completedAt = max(runs[index].completedAt ?? end, end)
         }
         if run != .running { closeRun() }
         if run == .running, let last = runs.indices.last {
