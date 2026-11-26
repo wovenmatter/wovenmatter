@@ -37,34 +37,33 @@ struct ConversationResponse: View {
     var fileRow: ConversationFileRow?
     /// Drawn right after the text's last line, centred on it (a disclosure chevron).
     var trailingAccessory: AnyView?
+    /// The accessory's width, which decides whether it fits after the last line.
+    var trailingAccessoryWidth: CGFloat = 10
     @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
     @State private var pendingExternalURL: URL?
-    /// Where the text's last line sits once laid out: nil inside when it shows no line.
-    @State private var lastLine: CGRect??
-    @State private var textSize: CGSize = .zero
-    @State private var accessoryWidth: CGFloat = 0
+    /// The text as placed, measured once at its placed width, for the accessory.
+    @State private var placed: ConversationPlacedText?
 
     var body: some View {
         // Reasoning shows without the provider's own metadata lines.
         let shown = style == .reasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content) : content
-        let accessory = trailingAccessory.flatMap { _ in lastLine.map(accessoryPlacement) }
+        let accessory = trailingAccessory.flatMap { _ in placed.map(accessoryPlacement) }
         VStack(alignment: .leading, spacing: 0) {
             ConversationResponseText(content: shown, isStreaming: isStreaming, style: style,
-                                     onLastLine: trailingAccessory == nil ? nil : { lastLine = .some($0) }) { url in
+                                     onPlaced: trailingAccessory == nil ? nil : { placed = $0 }) { url in
                 // Page links only work where a handler routes them (bot chats).
                 if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
             .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { textSize = $0 }
-            // An accessory on a line of its own below the text gets room for it.
-            .padding(.bottom, accessory.map { max(0, $0.maxY - textSize.height) } ?? 0)
+            // An accessory on a line of its own below the text gets room for
+            // it. The room comes from the same measurement as the placement,
+            // and neither changes the width the text is laid out at.
+            .padding(.bottom, accessory.flatMap { accessory in placed.map { max(0, accessory.maxY - $0.height) } } ?? 0)
             .overlay(alignment: .topLeading) {
                 if let trailingAccessory, let accessory {
                     trailingAccessory
-                        .fixedSize()
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { accessoryWidth = $0 }
-                        .frame(height: accessory.height, alignment: .center)
+                        .frame(width: accessory.width, height: accessory.height, alignment: .center)
                         .offset(x: accessory.minX, y: accessory.minY)
                 }
             }
@@ -113,14 +112,16 @@ struct ConversationResponse: View {
     /// The trailing accessory's frame in the text: right after the last line
     /// when it fits there, else at the start of the next line, or of the
     /// first when the text shows none, so it always exists inside the column.
-    private func accessoryPlacement(_ lastLine: CGRect?) -> CGRect {
+    /// All of it comes from one measurement at the placed width.
+    private func accessoryPlacement(_ placed: ConversationPlacedText) -> CGRect {
         let gap = ConversationMetrics.labelGap
-        if let lastLine, lastLine.maxX + gap + accessoryWidth <= textSize.width {
-            return CGRect(x: lastLine.maxX + gap, y: lastLine.minY, width: accessoryWidth, height: lastLine.height)
+        let width = trailingAccessoryWidth
+        if let lastLine = placed.lastLine, lastLine.maxX + gap + width <= placed.width {
+            return CGRect(x: lastLine.maxX + gap, y: lastLine.minY, width: width, height: lastLine.height)
         }
-        let height = lastLine?.height ?? ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 15 * style.scale)))
-        let top = lastLine.map { $0.maxY + ConversationMetrics.Prose.lineSpacing } ?? 0
-        return CGRect(x: 0, y: top, width: accessoryWidth, height: height)
+        let height = placed.lastLine?.height ?? ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 15 * style.scale)))
+        let top = placed.lastLine.map { $0.maxY + ConversationMetrics.Prose.lineSpacing } ?? 0
+        return CGRect(x: 0, y: top, width: width, height: height)
     }
 
     private var copyButton: some View {
@@ -143,14 +144,22 @@ struct ConversationResponse: View {
     }
 }
 
+/// A response's text as placed: its width and height, and its last line
+/// (nil when it shows none), all from one layout at that width.
+struct ConversationPlacedText: Equatable {
+    let width: CGFloat
+    let height: CGFloat
+    let lastLine: CGRect?
+}
+
 private struct ConversationResponseText: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     let content: String
     let isStreaming: Bool
     let style: ConversationResponse.Style
-    /// Told where the text's last line sits, once laid out: nil when it shows none.
-    var onLastLine: ((CGRect?) -> Void)?
+    /// Told how the text is placed, once laid out at its placed width.
+    var onPlaced: ((ConversationPlacedText) -> Void)?
     let onOpenLink: (URL) -> Void
 
     func makeNSView(context: Context) -> ConversationResponseViewport {
@@ -163,10 +172,10 @@ private struct ConversationResponseText: NSViewRepresentable {
         textView.onOpenLink = onOpenLink
         textView.onPressWhileGrowing = isStreaming ? transcriptInteraction : nil
         textView.onSelect = transcriptInteraction
-        viewport.onLastLine = onLastLine
+        viewport.onPlaced = onPlaced
         if textView.apply(content: content, isStreaming: isStreaming, style: style, colorScheme: colorScheme) {
             viewport.invalidateIntrinsicContentSize()
-            viewport.reportLastLine()
+            viewport.placeText()
         }
     }
 
@@ -200,29 +209,33 @@ final class ConversationResponseViewport: NSView {
         updateVisibleFrame()
     }
 
-    /// Told where the text's last line sits at the width the text is placed
-    /// at, once per change: never from a width layout only probed, which
-    /// would make the answer, and the state it sets, change on every pass.
-    var onLastLine: ((CGRect?) -> Void)?
-    private var reportedLastLine: CGRect??
+    /// Told how the text is placed (its width, height and last line), once
+    /// per change, measured at the width it is placed at: never at a width
+    /// SwiftUI only asked about.
+    var onPlaced: ((ConversationPlacedText) -> Void)?
+    private var reported: ConversationPlacedText?
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateVisibleFrame()
-        reportLastLine()
+        placeText()
     }
 
-    func reportLastLine() {
-        guard let onLastLine, bounds.width > 0 else { return }
-        _ = textView.fittingSize(width: bounds.width)
-        let line = textView.lastLineRect
-        if case .some(let reported) = reportedLastLine, reported == line { return }
-        reportedLastLine = .some(line)
-        DispatchQueue.main.async { onLastLine(line) }
+    /// Lays the text out for the width it is placed at, and reports it.
+    func placeText() {
+        guard bounds.width > 0 else { return }
+        textView.place(width: bounds.width)
+        guard let onPlaced else { return }
+        let size = textView.fittingSize(width: bounds.width)
+        let placed = ConversationPlacedText(width: bounds.width, height: size.height, lastLine: textView.lastLineRect)
+        if placed == reported { return }
+        reported = placed
+        DispatchQueue.main.async { onPlaced(placed) }
     }
 
     override func layout() {
         super.layout()
+        placeText()
         updateVisibleFrame()
     }
 
@@ -263,8 +276,11 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     private var appliedStreaming: Bool?
     private var appliedColorScheme: ColorScheme?
     private var appliedStyle: ConversationResponse.Style?
-    private var measuredSize: CGSize?
-    /// The width tables and lists were laid out for.
+    /// Sizes measured for the current text, by width: the placed width's on
+    /// the displayed text, any other width's on a detached copy.
+    private var measuredSizes: [(width: CGFloat, size: CGSize)] = []
+    /// The width the displayed text is laid out for: the width it is placed
+    /// at. Only placement changes it; measuring another width never does.
     private var layoutWidth = ConversationMetrics.column
     private var decorations: [(key: NSAttributedString.Key, range: NSRange, block: ResponseBlockDecoration?)] = []
     /// The reply's blocks, in order, each with the length of its rendering in
@@ -346,7 +362,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         textStorage.replaceCharacters(in: NSRange(location: kept.length, length: textStorage.length - kept.length), with: tail.text)
         pieces.removeSubrange(kept.pieces...)
         pieces += tail.pieces
-        measuredSize = nil
+        measuredSizes.removeAll()
         decorations.removeAll { $0.range.location >= kept.length }
         collectDecorations(in: tail.text, at: kept.length)
         // Streaming appends keep the selection; once the selected text itself
@@ -426,36 +442,49 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         }
     }
 
-    /// Lays the blocks that follow the width out again for `layoutWidth`,
-    /// each after the block before it, as the whole reply would render them
-    /// there. Their text is the same at any width, so the selection stays.
+    /// Lays the displayed blocks that follow the width out again for
+    /// `layoutWidth`, each after the block before it, as the whole reply would
+    /// render them there. Their text is the same at any width, so the
+    /// selection stays.
     private func followWidth() {
-        guard let textStorage, let style = appliedStyle, textStorage.length == pieces.reduce(0, { $0 + $1.length }),
-              pieces.contains(where: { $0.length > 0 && ConversationResponseAttributedText.followsWidth($0.block) }) else { return }
+        guard let textStorage, followsWidth(textStorage) else { return }
         applying = true
         defer { applying = false }
         let selection = selectedRange()
         let before = textStorage.string
-        let lastShown = pieces.lastIndex { $0.length > 0 }
-        var location = 0
-        textStorage.beginEditing()
-        for index in pieces.indices {
-            let piece = pieces[index]
-            if piece.length > 0, ConversationResponseAttributedText.followsWidth(piece.block) {
-                let text = ConversationResponseAttributedText.render([piece.block], after: index > 0 ? pieces[index - 1].block : nil,
-                                                                     endsResponse: index == lastShown, style: style, width: layoutWidth)
-                textStorage.replaceCharacters(in: NSRange(location: location, length: piece.length), with: text)
-                pieces[index].length = text.length
-            }
-            location += pieces[index].length
-        }
-        textStorage.endEditing()
+        render(textStorage, at: layoutWidth, recordingPieces: true)
         if let kept = stable {
             stable?.length = pieces.prefix(kept.pieces).reduce(0) { $0 + $1.length }
         }
         decorations.removeAll()
         collectDecorations(in: textStorage, at: 0)
         if textStorage.string == before { setSelectedRange(selection) }
+    }
+
+    /// Whether `storage` holds the reply's blocks and some of them follow the width.
+    private func followsWidth(_ storage: NSAttributedString) -> Bool {
+        guard appliedStyle != nil, storage.length == pieces.reduce(0, { $0 + $1.length }) else { return false }
+        return pieces.contains { $0.length > 0 && ConversationResponseAttributedText.followsWidth($0.block) }
+    }
+
+    /// Renders the blocks of `storage` that follow the width again at `width`.
+    private func render(_ storage: NSTextStorage, at width: CGFloat, recordingPieces: Bool) {
+        guard let style = appliedStyle else { return }
+        let lastShown = pieces.lastIndex { $0.length > 0 }
+        var location = 0
+        storage.beginEditing()
+        for index in pieces.indices {
+            var length = pieces[index].length
+            if length > 0, ConversationResponseAttributedText.followsWidth(pieces[index].block) {
+                let text = ConversationResponseAttributedText.render([pieces[index].block], after: index > 0 ? pieces[index - 1].block : nil,
+                                                                     endsResponse: index == lastShown, style: style, width: width)
+                storage.replaceCharacters(in: NSRange(location: location, length: length), with: text)
+                length = text.length
+                if recordingPieces { pieces[index].length = length }
+            }
+            location += length
+        }
+        storage.endEditing()
     }
 
     /// The text's last line: where its glyphs end, and its height without the
@@ -473,12 +502,31 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
                       height: max(1, used.height - (last < string.length - 1 ? style?.lineSpacing ?? 0 : 0)))
     }
 
+    /// The text's size at `width`. The placed width is measured on the
+    /// displayed text; any other width SwiftUI asks about is measured on a
+    /// detached copy, so asking never changes what is displayed, and the
+    /// answer for a width is the same whatever was asked before.
     func fittingSize(width: CGFloat) -> CGSize {
         let width = max(1, width)
-        guard let textContainer, let layoutManager else { return CGSize(width: width, height: 1) }
-        if let measuredSize, measuredSize.width == width { return measuredSize }
-        // Tables share out the width they are given, and lists space items by
-        // whether they wrap in it: lay those out again for a new one.
+        if let known = measuredSizes.first(where: { $0.width == width }) { return known.size }
+        let size: CGSize
+        if width == layoutWidth, let textContainer, let layoutManager, let textStorage {
+            if textContainer.size.width != width {
+                textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+            }
+            size = Self.measure(textStorage, layoutManager: layoutManager, container: textContainer, width: width)
+        } else {
+            size = detachedSize(width: width)
+        }
+        measuredSizes.append((width, size))
+        if measuredSizes.count > 4 { measuredSizes.removeFirst() }
+        return size
+    }
+
+    /// Lays the displayed text out for the width it is placed at.
+    func place(width: CGFloat) {
+        let width = max(1, width)
+        guard let textContainer else { return }
         if width != layoutWidth {
             layoutWidth = width
             followWidth()
@@ -486,20 +534,35 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         if textContainer.size.width != width {
             textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         }
-        layoutManager.ensureLayout(for: textContainer)
-        var height = layoutManager.usedRect(for: textContainer).maxY
-        if let textStorage, textStorage.length > 0,
-           (textStorage.string as NSString).character(at: textStorage.length - 1) == 0x0A {
+    }
+
+    /// The size at `width` of a copy of the text, rendered for that width.
+    private func detachedSize(width: CGFloat) -> CGSize {
+        guard let textStorage else { return CGSize(width: width, height: 1) }
+        let storage = NSTextStorage(attributedString: textStorage)
+        if width != layoutWidth, followsWidth(storage) { render(storage, at: width, recordingPieces: false) }
+        let layoutManager = NSLayoutManager()
+        layoutManager.delegate = self
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        return Self.measure(storage, layoutManager: layoutManager, container: container, width: width)
+    }
+
+    private static func measure(_ storage: NSTextStorage, layoutManager: NSLayoutManager, container: NSTextContainer,
+                                width: CGFloat) -> CGSize {
+        layoutManager.ensureLayout(for: container)
+        var height = layoutManager.usedRect(for: container).maxY
+        if storage.length > 0, (storage.string as NSString).character(at: storage.length - 1) == 0x0A {
             // Text ending in a box keeps its last line break: measure to the
             // box's edge, not to the empty line after it.
             height = layoutManager.extraLineFragmentRect.minY
-            if textStorage.attribute(.responseCode, at: textStorage.length - 1, effectiveRange: nil) != nil {
+            if storage.attribute(.responseCode, at: storage.length - 1, effectiveRange: nil) != nil {
                 height += ConversationMetrics.Prose.codePadding - ConversationMetrics.Prose.codeLineSpacing
             }
         }
-        let size = CGSize(width: width, height: max(1, ceil(height)))
-        measuredSize = size
-        return size
+        return CGSize(width: width, height: max(1, ceil(height)))
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -677,7 +740,7 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     /// Lines do not break inside text kept together, except after a space in
     /// text kept together only by its words.
     func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
-        guard let textStorage, charIndex > 0, charIndex < textStorage.length,
+        guard let textStorage = layoutManager.textStorage, charIndex > 0, charIndex < textStorage.length,
               let kept = textStorage.attribute(.responseNoBreak, at: charIndex, effectiveRange: nil) as? ResponseNoBreak,
               textStorage.attribute(.responseNoBreak, at: charIndex - 1, effectiveRange: nil) != nil else { return true }
         let previous = (textStorage.string as NSString).character(at: charIndex - 1)
@@ -1249,7 +1312,8 @@ struct ConversationUserBubble<Attachments: View>: View {
     @ViewBuilder var attachments: () -> Attachments
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded = false
-    @State private var textWidth: CGFloat?
+    /// The width the row offers the bubble, whatever the bubble decides.
+    @State private var offeredWidth: CGFloat?
 
     /// A long message shows this many lines until opened.
     private static var collapsedLines: Int { 6 }
@@ -1267,7 +1331,6 @@ struct ConversationUserBubble<Attachments: View>: View {
                     .foregroundStyle(WovenPalette.foreground)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
             }
             attachments()
             if isLong {
@@ -1285,11 +1348,17 @@ struct ConversationUserBubble<Attachments: View>: View {
         .padding(ConversationMetrics.bubbleInsets)
         .background(WovenPalette.primary.opacity(0.13))
         .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous))
+        // The bubble sits at the end of all the room the row offers, which is
+        // measured here: the room never depends on what the bubble decides.
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { offeredWidth = $0 }
     }
-    /// Whether the message, laid out at its width, is long enough that
-    /// collapsing it earns the row its control takes.
+    /// Whether the message is long enough that collapsing it earns the row
+    /// its control: its lines at the width it has before any widening for
+    /// the control, the room offered or its longest line, whichever is less.
     private var collapses: Bool {
-        lineCount(width: textWidth ?? naturalContentWidth) >= Self.collapsedLines + Self.hiddenLines
+        let room = offeredWidth.map { $0 - ConversationMetrics.bubbleInsets.leading - ConversationMetrics.bubbleInsets.trailing }
+        return lineCount(width: min(naturalContentWidth, room ?? naturalContentWidth)) >= Self.collapsedLines + Self.hiddenLines
     }
 
     private func lineCount(width: CGFloat) -> Int {

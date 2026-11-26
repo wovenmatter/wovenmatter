@@ -771,25 +771,34 @@ private struct ConversationBoundedWorkList: View {
     @State private var restoringScroll = true
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    /// A group with more rows than the height holds at their smallest is as
+    /// tall as the height, and its rows are lazy. A shorter one is as tall as
+    /// its rows, laid out eagerly, so their height never depends on how much
+    /// of them the viewport shows.
+    private var fillsHeight: Bool {
+        !group.isThoughtOnly
+            && CGFloat(group.activities.count) * (Self.smallestRow + ConversationMetrics.rowGap) - ConversationMetrics.rowGap > maximumHeight
+    }
+    /// A tool row is at least one line of its label.
+    private static let smallestRow: CGFloat = 16
+
     var body: some View {
             ScrollView(.vertical) {
                 Group {
-                    if group.isThoughtOnly {
-                        // A reasoning-only group opens directly into formatted
-                        // text; mixed tool groups retain lazy rows.
-                        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) { rows }
-                    } else {
+                    if fillsHeight {
                         LazyVStack(alignment: .leading, spacing: ConversationMetrics.rowGap) { rows }
+                    } else {
+                        VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) { rows }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.conversationReasoningAtLiveEdge,
                     !restoringScroll && !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
                 .environment(\.conversationInBoundedList, true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
         .scrollIndicators(.never)
-        .frame(height: min(maximumHeight, max(1, contentHeight)))
+        .frame(height: fillsHeight ? maximumHeight : min(maximumHeight, max(1, contentHeight)))
         // Scrolled from its start, the line cut at the top fades out instead.
         .mask {
             VStack(spacing: 0) {

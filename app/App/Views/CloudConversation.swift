@@ -195,12 +195,15 @@ struct CloudConversation: View {
                     scrollState.setNearBottom(true)
                     scrollToEnd()
                 }
-                // `work:open` and `work:fold` open or fold the work of every settled turn.
+                // `work:open` and `work:fold` open or fold the work of every turn, as
+                // its header does; a running turn's fold is flipped from open.
                 .debugCommand("work:") { action in
                     guard let session else { return }
-                    for run in session.runs where run.status != .running {
+                    for run in session.runs {
+                        let running = run.status == .running
                         session.transcriptState.setExpanded(
-                            ConversationTranscriptState.disclosureKey(runID: run.id, itemID: "turn"), action == "open")
+                            ConversationTranscriptState.disclosureKey(runID: run.id, itemID: running ? "turn:running" : "turn"),
+                            running ? action != "open" : action == "open")
                     }
                 }
                 // `send:TEXT` sends TEXT from this chat's composer.
@@ -281,6 +284,7 @@ struct CloudConversation: View {
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     conversationChanged(to: conversationID)
                 }
+                .onChange(of: transcriptIdentity, initial: true) { _, identity in measured.shown = identity }
                 .conversationEdges(topClearance: ConversationMetrics.floatingControls, stackHeight: bottomStackHeight,
                                         jumpLabel: !scrollState.isNearBottom && hasContentBelow && conversation != nil
                                             ? "Latest reply" : nil) {
@@ -583,10 +587,17 @@ struct CloudConversation: View {
         let identity = transcriptIdentity
         return Binding(
             get: { scrollPositionOwner == identity ? scrollPosition : ScrollPosition(idType: String.self) },
-            set: { scrollPosition = $0; scrollPositionOwner = identity })
+            set: { position in
+                // A scroll view that no longer shows the current transcript writes nothing back.
+                guard identity == measured.shown else { return }
+                if scrollPosition != position { scrollPosition = position }
+                if scrollPositionOwner != identity { scrollPositionOwner = identity }
+            })
     }
 
     private func scroll(_ change: (inout ScrollPosition) -> Void) {
+        // The app scrolls only the transcript it shows now.
+        measured.shown = transcriptIdentity
         var position = transcriptPosition.wrappedValue
         change(&position)
         transcriptPosition.wrappedValue = position
@@ -718,13 +729,31 @@ struct CloudConversation: View {
         if obscured != hasContentBelow { hasContentBelow = obscured }
         measured.endDistance = after.distance
         let resized = after.contentHeight != before.contentHeight || after.viewportHeight != before.viewportHeight
+        if resized { measured.resizes += 1 }
         if !isUserScrolling, !resized, !isPrependingHistory, after.offset != before.offset,
            after.distance > before.distance || after.distance <= Self.liveEdgeTolerance {
             readerMoved(to: after)
         }
         // Back at the live edge, the bottom holds instead.
         if after.distance <= Self.liveEdgeTolerance, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
-        if followsBottom, resized, after.distance > 0 { scrollToEnd() }
+        if followsBottom, resized, after.distance > 0 { restoreEndAfterLayout() }
+    }
+
+    /// Puts the end back after this layout, not inside it: at most once for
+    /// each change of content or viewport size, and only if, by then, the
+    /// same transcript still shows, still follows, and still has its end out
+    /// of view. Growth after that is a new change, so it is followed too.
+    private func restoreEndAfterLayout() {
+        guard !measured.restoreQueued else { return }
+        measured.restoreQueued = true
+        let identity = transcriptIdentity
+        Task { @MainActor in
+            measured.restoreQueued = false
+            guard identity == measured.shown, followsBottom, measured.endDistance > 0,
+                  measured.restoredResize != measured.resizes else { return }
+            measured.restoredResize = measured.resizes
+            scrollToEnd()
+        }
     }
 
     /// The reader moved the view: at the live edge it follows again, away from it it stays where they put it.
@@ -1092,6 +1121,14 @@ private final class TranscriptMeasurements {
     var offset: CGFloat = 0
     /// Where the reader's own scroll began.
     var readerScrollStart: CGFloat = 0
+    /// How many times the content or viewport has changed size, the change
+    /// the end was last put back for, and whether a put-back is queued.
+    var resizes = 0
+    var restoredResize: Int?
+    var restoreQueued = false
+    /// The transcript the scroll view on screen shows; a position written
+    /// back for any other is ignored.
+    var shown: TranscriptIdentity?
 }
 
 /// Where the held row is, read in layout callbacks and so not observed.
