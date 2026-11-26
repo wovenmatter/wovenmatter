@@ -236,7 +236,7 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     self.activities = activities
     let tools = activities.filter { $0.kind != .thought }
     isThoughtOnly = tools.isEmpty
-    let actions = Set(tools.map(ConversationToolAction.init))
+    let actions = Set(tools.map { ConversationToolAction($0) })
     action = actions.count == 1 ? actions.first : nil
     hasFailure = tools.contains(where: \.workTimelineIsFailure)
     summary = Self.summary(activities: activities, tools: tools)
@@ -317,7 +317,8 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
       let failures = all.filter(\.workTimelineIsFailure).count
       // One or two tools its rows showed by a plain name are named; a step
       // whose row is a phrase is counted with the rest, never quoted.
-      if action == .other, (1...2).contains(names.count), names.allSatisfy({ !$0.contains(" ") }) {
+      if action == .other, (1...2).contains(names.count), all.allSatisfy({ $0.workTimelineTitlePhrase == nil }),
+         names.allSatisfy({ !$0.contains(" ") }) {
         let several = names.count == 1 && all.count > 1
         if failures == all.count {
           let text = names.joined(separator: " and ") + " failed" + (several ? " \(all.count) times" : "")
@@ -395,7 +396,9 @@ public enum ConversationToolAction: Hashable, Sendable {
   case question
   case other
 
-  public init(_ activity: AgentRunActivity) {
+  /// `readsOutput` false classifies by the tool and its input alone, as a
+  /// run's path anchor must, since output may come later.
+  public init(_ activity: AgentRunActivity, readsOutput: Bool = true) {
     let name = activity.workTimelineToolIdentity.lowercased()
     if let visual = Self.wovenVisual(activity) {
       self = visual
@@ -447,7 +450,7 @@ public enum ConversationToolAction: Hashable, Sendable {
       self = .list
     } else if name.contains("read") || name.contains("view") {
       // A folder's listing is not a file read.
-      self = activity.workTimelineReadsFolder ? .list : .read
+      self = readsOutput && activity.workTimelineReadsFolder ? .list : .read
     } else if name.contains("task") || name.contains("agent") {
       self = .delegate
     } else {
@@ -679,8 +682,7 @@ public extension AgentRunActivity {
       case .read(let path): folder = (path as NSString).deletingLastPathComponent
       default:
         guard let path = activity.workTimelineInputPath ?? activity.title?.workTimelineAbsolutePaths.first else { continue }
-        // A read that listed a folder says so in its output; here only its path counts.
-        let lists = ConversationToolAction(activity) == .list && !activity.workTimelineReadsFolder
+        let lists = ConversationToolAction(activity, readsOutput: false) == .list
         folder = lists || path.workTimelineNamesFolder ? path : (path as NSString).deletingLastPathComponent
       }
       // Only an absolute folder well below the root anchors anything.
@@ -786,8 +788,19 @@ public extension AgentRunActivity {
     return label.contains(" ") && line.hasPrefix(label) ? command : nil
   }
 
+  /// The runtime's own title when the row shows it as it is, a phrase
+  /// ("Load skill: dataviz"), rather than a tool's name; a group's summary
+  /// decides the same way. A generic title must not mask a real tool name.
+  var workTimelineTitlePhrase: String? {
+    guard let label = title?.workTimelineSingleLine, label.contains(" "),
+          !Self.workTimelineGenericTitles.contains(label.lowercased()) else { return nil }
+    return label
+  }
+
+  private static let workTimelineGenericTitles = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
+
   private func workTimelineToolLabel(active: Bool, folder: String?) -> String {
-    let generic = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
+    let generic = Self.workTimelineGenericTitles
     let label = title?.workTimelineSingleLine
     let input = workTimelineInput
     let action = ConversationToolAction(self)
@@ -842,9 +855,9 @@ public extension AgentRunActivity {
       }
     }
     // Keep a provider's descriptive title; bare function names gain readable
-    // action labels below. A generic title must not mask a real tool name.
-    if let label, label.contains(" "), !generic.contains(label.lowercased()) {
-      return action == .command ? (title ?? label).workTimelineCommandLine(root: root) : label
+    // action labels below.
+    if let phrase = workTimelineTitlePhrase {
+      return action == .command ? (title ?? phrase).workTimelineCommandLine(root: root) : phrase
     }
     func argument(_ key: String) -> String? {
       (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
