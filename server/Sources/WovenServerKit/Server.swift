@@ -153,7 +153,7 @@ public final class WovenServer: Sendable {
     registerServerControl(&routes, library: library, sessions: sessions, peers: peers, tailnet: options.tailnet,
                           dataFolder: options.dataFolder, instance: options.instance, install: install)
     let keepAwake = KeepAwake(library: library)
-    let usage = options.harnessHome.map { UsageScanner(library: library, home: $0) }
+    let usage = options.harnessHome.map { UsageScanner(library: library, home: $0, environment: ProcessInfo.processInfo.environment) }
     let analytics = Analytics(library: library,
                               delivery: options.analyticsDelivery ?? (options.sendsAnalytics ? PostHogDelivery() : nil),
                               appVersion: options.appVersion, settled: { await peers.firstRoundDone })

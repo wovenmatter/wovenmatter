@@ -357,13 +357,23 @@ extension Library {
     }
   }
 
+  /// Records the runtime's handle for a session. The usage hours of the
+  /// harness session it names, and of one it named before, are published
+  /// again under the session they now belong to.
   public func setNativeSession(_ sessionID: String, runtime: RuntimeKind, handle: String) async throws {
     try await write { writer in
+      let before = try writer.db.query("SELECT runtime, handle FROM native_sessions WHERE session_id = ?", [.text(sessionID)]).first
       try writer.db.run("""
         INSERT INTO native_sessions (session_id, runtime, handle, gone, updated_at) VALUES (?, ?, ?, 0, ?)
         ON CONFLICT(session_id) DO UPDATE SET runtime = excluded.runtime, handle = excluded.handle, gone = 0,
           updated_at = excluded.updated_at
         """, [.text(sessionID), .text(runtime.rawValue), .text(handle), .integer(Writer.now())])
+      guard before?.text("runtime") != runtime.rawValue || before?.text("handle") != handle else { return }
+      try Self.publishSession(runtime: runtime, nativeSession: handle, writer)
+      if let before {
+        try Self.publishSession(runtime: RuntimeKind(rawValue: before.text("runtime") ?? ""),
+                                nativeSession: before.text("handle") ?? "", writer)
+      }
     }
   }
 

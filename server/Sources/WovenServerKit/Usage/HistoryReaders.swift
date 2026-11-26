@@ -20,6 +20,11 @@ struct ReaderState: Codable, Sendable {
   var woven = false
   var model: String?
   var provider: String?
+  /// Codex: the last cumulative count of the file's `token_count` events.
+  var total: [Int64]?
+  /// Codex: the usage of the newest `token_usage_record`s no `token_count`
+  /// has restated yet, at most `unpairedLimit`.
+  var unpaired: [[Int64]]?
 }
 
 enum HistoryKind: Sendable, Equatable {
@@ -45,7 +50,7 @@ enum HistoryKind: Sendable, Equatable {
   /// A line can only count if it holds one of these.
   var markers: [[UInt8]] {
     switch self {
-    case .codex: [#""token_usage_record""#, #""session_meta""#, #""turn_context""#].map { Array($0.utf8) }
+    case .codex: [#""token_usage_record""#, #""token_count""#, #""session_meta""#, #""turn_context""#].map { Array($0.utf8) }
     case .claude: [Array(#""usage""#.utf8)]
     case .grok: [Array(#""usage""#.utf8), Array(#"Usage""#.utf8)]
     case .pi: [#""usage""#, #""session""#, #""model_change""#].map { Array($0.utf8) }
@@ -69,9 +74,14 @@ enum HistoryReader {
   // MARK: Codex
 
   /// `session_meta` names the thread, who started it (`originator`) and the
-  /// thread that spawned it; `turn_context` the model; each
-  /// `token_usage_record` one response. A forked thread's copies of its
-  /// parent's records keep the parent's `thread_id` and are left out.
+  /// thread that spawned it; `turn_context` the model. A
+  /// `token_usage_record` is one response, by its own identifier. Older
+  /// releases record a response only as a `token_count` event, with its
+  /// usage (`last_token_usage`) and the thread's running total; newer ones
+  /// write both, so a `token_count` restating a record counts nothing. A
+  /// forked thread's copies of its parent's records keep the parent's
+  /// `thread_id` and are left out, as are the copied events that restate
+  /// them.
   private static func codex(_ root: [String: Any], _ state: inout ReaderState) -> [UsageEntry] {
     guard let payload = root["payload"] as? [String: Any] else { return [] }
     switch root["type"] as? String {
@@ -86,18 +96,63 @@ enum HistoryReader {
       state.model = text(payload["model"]) ?? state.model
       return []
     case "token_usage_record":
-      guard let response = text(payload["response_id"]), let usage = payload["usage"] as? [String: Any],
-            let at = date(root["timestamp"]) else { return [] }
+      guard let usage = payload["usage"] as? [String: Any], !usage.isEmpty else { return [] }
+      var unpaired = state.unpaired ?? []
+      unpaired.append(codexVector(usage))
+      state.unpaired = Array(unpaired.suffix(unpairedLimit))
+      guard let response = text(payload["response_id"]), let at = date(root["timestamp"]) else { return [] }
       let thread = text(payload["thread_id"])
       if let thread, let session = state.session, thread != session { return [] }
-      let cached = integer(usage["cached_input_tokens"]), written = integer(usage["cache_write_input_tokens"])
-      return [UsageEntry(id: "codex:" + response, runtime: .codex, nativeSession: state.owner ?? thread ?? "",
-                         woven: state.woven, model: state.model ?? "", at: at,
-                         input: max(0, integer(usage["input_tokens"]) - cached - written), output: integer(usage["output_tokens"]),
-                         cacheRead: cached, cacheWrite: written)]
+      return [codexEntry(id: "codex:" + response, nativeSession: state.owner ?? thread ?? "", usage: codexVector(usage),
+                         at: at, state)]
+    case "event_msg":
+      guard payload["type"] as? String == "token_count", let info = payload["info"] as? [String: Any],
+            let last = info["last_token_usage"] as? [String: Any], !last.isEmpty else { return [] }
+      let usage = codexVector(last)
+      let total = (info["total_token_usage"] as? [String: Any]).flatMap { $0.isEmpty ? nil : codexVector($0) }
+      let first = state.total == nil
+      if let total {
+        // The same running total again: the event is repeated, not a response.
+        if total == state.total { return [] }
+        state.total = total
+      }
+      var restates = false
+      if let index = state.unpaired?.firstIndex(of: usage) {
+        state.unpaired?.remove(at: index)
+        restates = true
+      }
+      // A file's first total that is more than its own usage carries what the
+      // thread it was forked, resumed or spawned from used; that event
+      // restates the other thread's last response, counted in its history.
+      if !restates, first, let total, total != usage { return [] }
+      guard usage.prefix(5).contains(where: { $0 > 0 }), let stamp = root["timestamp"], let at = date(stamp) else { return [] }
+      // Known by its usage and running total, which a copy of it in a forked
+      // thread's history keeps although its time is that of the copy. One
+      // that restates a record is saved as such, so a copy of it elsewhere
+      // counts nothing either.
+      let key = [usage.map(String.init).joined(separator: ","), total.map { $0.map(String.init).joined(separator: ",") } ?? "\(stamp)"]
+      let id = "codex:counted:" + Library.digest(of: Data(key.joined(separator: "\n").utf8)).prefix(32)
+      var entry = codexEntry(id: id, nativeSession: state.owner ?? state.session ?? "", usage: usage, at: at, state)
+      entry.restates = restates
+      return [entry]
     default:
       return []
     }
+  }
+
+  static let unpairedLimit = 64
+
+  /// A Codex usage object as its six counts: input (cached and written
+  /// included), cached input, cache written, output (reasoning included),
+  /// reasoning and total.
+  private static func codexVector(_ usage: [String: Any]) -> [Int64] {
+    ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens",
+     "total_tokens"].map { integer(usage[$0]) }
+  }
+
+  private static func codexEntry(id: String, nativeSession: String, usage: [Int64], at: Date, _ state: ReaderState) -> UsageEntry {
+    UsageEntry(id: id, runtime: .codex, nativeSession: nativeSession, woven: state.woven, model: state.model ?? "", at: at,
+               input: max(0, usage[0] - usage[1] - usage[2]), output: usage[3], cacheRead: usage[1], cacheWrite: usage[2])
   }
 
   // MARK: Claude Code
@@ -122,8 +177,9 @@ enum HistoryReader {
   // MARK: Grok Build
 
   /// A turn's usage arrives as an ACP update whose `usage` (or, per model,
-  /// `modelUsage`) holds token counts and the cost in ticks of 10⁻¹⁰ dollars.
-  /// Lines copied from another session keep that session's event ids.
+  /// `modelUsage`) holds token counts, the model calls they took and the
+  /// cost in ticks of 10⁻¹⁰ dollars. Lines copied from another session keep
+  /// that session's event ids.
   private static func grok(_ root: [String: Any], session: String, _ state: inout ReaderState) -> [UsageEntry] {
     guard let params = root["params"] as? [String: Any], let update = params["update"] as? [String: Any] else { return [] }
     if let model = text(update["modelId"] ?? update["model"]) { state.model = model }
@@ -132,7 +188,7 @@ enum HistoryReader {
     if let event, !event.hasPrefix(session + "-") { return [] }
     let turn = event ?? text(update["promptId"] ?? update["prompt_id"]) ?? ""
     guard !turn.isEmpty else { return [] }
-    let at = number(root["timestamp_us"]).map { Date(timeIntervalSince1970: $0 / 1_000_000) } ?? date(root["timestamp"]) ?? Date()
+    guard let at = date(root["timestamp_us"], unit: 1_000_000) ?? date(root["timestamp"]) else { return [] }
     let perModel = (usage["modelUsage"] ?? update["modelUsage"]) as? [String: Any]
     let counts: [(String, [String: Any])] = if let perModel, !perModel.isEmpty {
       perModel.compactMap { model, value in (value as? [String: Any]).map { (model, $0) } }
@@ -145,7 +201,8 @@ enum HistoryReader {
       let entry = UsageEntry(id: "grok:\(turn):\(model)", runtime: .grokBuild, nativeSession: session, model: model, at: at,
                              input: max(0, integer(values["inputTokens"]) - cached - written),
                              output: integer(values["outputTokens"]), cacheRead: cached, cacheWrite: written,
-                             cost: (number(values["costUsdTicks"]) ?? 0) / 10_000_000_000)
+                             cost: (number(values["costUsdTicks"]) ?? 0) / 10_000_000_000,
+                             requests: max(1, integer(values["modelCalls"] ?? usage["modelCalls"])))
       return entry.input + entry.output + entry.cacheRead + entry.cacheWrite > 0 ? entry : nil
     }
   }
@@ -219,6 +276,11 @@ enum HistoryReader {
     return (entries, next, rows.count)
   }
 
+  /// The message is still in the database.
+  static func openCodeHas(_ database: ReadOnlyDatabase, message: String) throws -> Bool {
+    try !database.query("SELECT 1 FROM session_message WHERE id = ?1", [.text(message)]).isEmpty
+  }
+
   // MARK: Values
 
   static func contains(_ line: UnsafeRawBufferPointer, _ marker: [UInt8]) -> Bool {
@@ -239,13 +301,12 @@ enum HistoryReader {
     return value
   }
 
-  /// The most one count may be: no response comes near a trillion tokens,
-  /// and sums of such counts stay far from overflowing.
-  static let maximumCount: Double = 1_000_000_000_000
+  /// The most one count may be.
+  static let maximumCount = Library.maximumUsageCount
 
   private static func integer(_ value: Any?) -> Int64 {
     guard let value = number(value) else { return 0 }
-    return Int64(min(value, maximumCount))
+    return Int64(min(value, Double(maximumCount)))
   }
 
   /// A JSON number, however Foundation on this platform hands it over.
@@ -258,16 +319,28 @@ enum HistoryReader {
     default: nil
     }
     guard let result, result.isFinite, result >= 0 else { return nil }
-    return min(result, maximumCount)
+    return result
   }
 
-  /// An ISO 8601 time, or seconds or milliseconds since 1970.
-  static func date(_ value: Any?) -> Date? {
+  /// The times a history can hold: from 2000 up to 2100. Anything else is
+  /// not a time.
+  private static let plausible = Date(timeIntervalSince1970: 946_684_800)...Date(timeIntervalSince1970: 4_102_444_800)
+
+  /// An ISO 8601 time, or a number of seconds, milliseconds, microseconds or
+  /// nanoseconds since 1970: `unit` per second when given, else told apart by
+  /// size. A value that is no plausible time is none.
+  static func date(_ value: Any?, unit: Double? = nil) -> Date? {
+    let parsed: Date?
     if let raw = number(value) {
-      return Date(timeIntervalSince1970: raw > 10_000_000_000 ? raw / 1000 : raw)
+      let divisor = unit ?? (raw >= 1e17 ? 1e9 : raw >= 1e14 ? 1e6 : raw >= 1e11 ? 1e3 : 1)
+      parsed = Date(timeIntervalSince1970: raw / divisor)
+    } else if let text = value as? String {
+      parsed = (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(text))
+        ?? (try? Date.ISO8601FormatStyle().parse(text))
+    } else {
+      parsed = nil
     }
-    guard let text = value as? String else { return nil }
-    if let parsed = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(text) { return parsed }
-    return try? Date.ISO8601FormatStyle().parse(text)
+    guard let parsed, plausible.contains(parsed) else { return nil }
+    return parsed
   }
 }

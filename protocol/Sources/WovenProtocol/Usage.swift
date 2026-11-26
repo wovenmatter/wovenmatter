@@ -1,7 +1,7 @@
 import Foundation
 
-// Usage and dictation history: both append-only and synced, so any server
-// answers for every machine from its own library. Usage covers every
+// Usage and dictation history: both synced, so any server answers for
+// every machine from its own library. Usage covers every
 // harness on every machine, inside Woven Matter or not: each server reads its
 // own machine's harness histories into the library.
 
@@ -84,11 +84,15 @@ public struct ReadUsage: Request {
   public var start: Date
   public var end: Date
   public var periodSeconds: Int
+  /// A time zone identifier ("Europe/Paris"). With a period of a day, the
+  /// periods are that zone's calendar days rather than UTC days.
+  public var timeZone: String?
 
-  public init(start: Date, end: Date, periodSeconds: Int) {
+  public init(start: Date, end: Date, periodSeconds: Int, timeZone: String? = nil) {
     self.start = start
     self.end = end
     self.periodSeconds = periodSeconds
+    self.timeZone = timeZone
   }
 }
 
