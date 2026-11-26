@@ -92,6 +92,9 @@ struct ConversationMarkdownDocument: Sendable {
         let marker: String
         let checked: Bool?
         let blocks: [Block]
+        /// More blocks of the item before it at this depth, after a nested
+        /// list: shown at that item's text indent, without a marker.
+        var continuation = false
     }
 
     enum TableAlignment: Sendable {
@@ -210,6 +213,10 @@ private extension ConversationMarkdownDocument {
         let checked: Bool?
         let continuationIndent: Int
         var content: String
+        var continuation = false
+        /// The fence of a code block open in `content`, whose lines keep
+        /// their indent past the item's.
+        var fence: Fence?
     }
 
     struct ListMarker {
@@ -317,15 +324,42 @@ private extension ConversationMarkdownDocument {
         private mutating func parseList() -> Block {
             var seeds: [ListItemSeed] = []
             var pendingBlankLines = 0
+            /// Adds a line to the last item, after the blank lines before it.
+            func add(_ text: String) {
+                seeds[seeds.count - 1].content += String(repeating: "\n", count: pendingBlankLines > 0 ? pendingBlankLines + 1 : 1) + text
+                pendingBlankLines = 0
+            }
+            /// The nearest item around the last one whose text a line at `indent` continues.
+            func owner(accepting indent: Int) -> Int? {
+                var depth = seeds[seeds.count - 1].depth
+                for candidate in seeds.indices.dropLast().reversed() where seeds[candidate].depth < depth {
+                    if seeds[candidate].continuationIndent <= indent { return candidate }
+                    depth = seeds[candidate].depth
+                }
+                return nil
+            }
             while index < lines.count {
-                if let marker = Self.listMarker(lines[index]) {
+                let line = lines[index]
+                // Inside an item's fenced code, a line within the item is
+                // code: it keeps its indent past the item's, and is never a marker.
+                if let last = seeds.last, let fence = last.fence, Self.isBlank(line) == false,
+                   Self.leadingIndent(line) >= last.continuationIndent {
+                    let text = Self.removingIndent(line, columns: last.continuationIndent)
+                    add(text)
+                    if Self.isFenceClosing(text, matching: fence) { seeds[seeds.count - 1].fence = nil }
+                    index += 1
+                    continue
+                }
+
+                if let marker = Self.listMarker(line) {
                     seeds.append(
                         ListItemSeed(
                             depth: marker.depth,
                             marker: marker.marker,
                             checked: marker.checked,
                             continuationIndent: marker.continuationIndent,
-                            content: marker.content
+                            content: marker.content,
+                            fence: Self.fenceOpening(marker.content)
                         )
                     )
                     pendingBlankLines = 0
@@ -337,26 +371,39 @@ private extension ConversationMarkdownDocument {
                     break
                 }
 
-                if Self.isBlank(lines[index]) {
+                if Self.isBlank(line) {
                     pendingBlankLines += 1
                     index += 1
                     continue
                 }
 
-                guard Self.leadingIndent(lines[index]) >= seeds[seeds.count - 1].continuationIndent else {
+                let text = line.trimmingCharacters(in: .whitespaces)
+                if Self.leadingIndent(line) >= seeds[seeds.count - 1].continuationIndent {
+                    add(text)
+                    seeds[seeds.count - 1].fence = Self.fenceOpening(text)
+                } else if let owner = owner(accepting: Self.leadingIndent(line)) {
+                    if pendingBlankLines == 0 {
+                        // A lazy line continues the paragraph it follows.
+                        add(text)
+                    } else {
+                        // After a blank line, a block of an item further out,
+                        // following its nested list.
+                        seeds.append(
+                            ListItemSeed(
+                                depth: seeds[owner].depth,
+                                marker: seeds[owner].marker,
+                                checked: nil,
+                                continuationIndent: seeds[owner].continuationIndent,
+                                content: text,
+                                continuation: true,
+                                fence: Self.fenceOpening(text)
+                            )
+                        )
+                        pendingBlankLines = 0
+                    }
+                } else {
                     break
                 }
-
-                if pendingBlankLines > 0 {
-                    seeds[seeds.count - 1].content += String(
-                        repeating: "\n",
-                        count: pendingBlankLines + 1
-                    )
-                    pendingBlankLines = 0
-                } else {
-                    seeds[seeds.count - 1].content += "\n"
-                }
-                seeds[seeds.count - 1].content += lines[index].trimmingCharacters(in: .whitespaces)
                 index += 1
             }
             return .list(
@@ -366,7 +413,8 @@ private extension ConversationMarkdownDocument {
                         depth: $0.depth,
                         marker: $0.marker,
                         checked: $0.checked,
-                        blocks: parser.parse()
+                        blocks: parser.parse(),
+                        continuation: $0.continuation
                     )
                 }
             )
@@ -547,6 +595,17 @@ private extension ConversationMarkdownDocument {
                 return false
             }
             return compact.allSatisfy { $0 == marker }
+        }
+
+        /// `line` without up to `columns` of its leading spaces and tabs.
+        private static func removingIndent(_ line: String, columns: Int) -> String {
+            var removed = 0
+            var rest = Substring(line)
+            while removed < columns, let first = rest.first, first == " " || first == "\t" {
+                removed += first == "\t" ? 4 : 1
+                rest = rest.dropFirst()
+            }
+            return String(rest)
         }
 
         private static func leadingIndent(_ line: String) -> Int {

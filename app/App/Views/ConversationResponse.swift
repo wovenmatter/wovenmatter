@@ -1073,9 +1073,9 @@ private enum ConversationResponseAttributedText {
                 plainLine(inline(content, font: font(15, .semibold)), after: prefix)
             case .list(let items):
                 for item in items {
-                    let marker = (item.checked.map { $0 ? "☑" : "☐" } ?? item.marker) + " "
+                    let marker = item.continuation ? "" : (item.checked.map { $0 ? "☑" : "☐" } ?? item.marker) + " "
                     guard let first = item.blocks.first else { plainLine(NSAttributedString(), after: marker); continue }
-                    if leadsWithMarkerLine(first) { plainLine(NSAttributedString(), after: marker) }
+                    if !marker.isEmpty, leadsWithMarkerLine(first) { plainLine(NSAttributedString(), after: marker) }
                     emitPlain(first, prefix: leadsWithMarkerLine(first) ? "" : marker)
                     item.blocks.dropFirst().forEach { emitPlain($0) }
                 }
@@ -1145,8 +1145,9 @@ private enum ConversationResponseAttributedText {
                     let level = CGFloat(min(indents.count - 1, 6))
                     let kind: MarkerKind = item.checked != nil ? .task : item.marker == "•" ? .bullet : .number
                     // A different kind of list straight after one reads as a list of its own.
-                    let startsList = level == 0 && topKind != nil && topKind != kind
-                    if level == 0 { topKind = kind }
+                    // An item's blocks after its nested list continue it, at its text indent.
+                    let startsList = !item.continuation && level == 0 && topKind != nil && topKind != kind
+                    if level == 0, !item.continuation { topKind = kind }
                     let markerEnd = indent + Prose.markerColumn + level * Prose.nestedListStep
                     // A task's box is drawn over its character, which stays for copying.
                     let text: NSAttributedString = if let checked = item.checked {
@@ -1163,7 +1164,7 @@ private enum ConversationResponseAttributedText {
                                      style: paragraphStyle(indent: markerEnd + Prose.markerGap, before: first), marker: itemMarker)
                     }
                     sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, inItem: true,
-                             marker: itemMarker)
+                             marker: item.continuation ? nil : itemMarker)
                     previousItem = item.blocks.last ?? emptyParagraph
                 }
             case .quote(let quoted):
@@ -1471,7 +1472,7 @@ private enum ConversationResponseAttributedText {
 
     /// An item's top overhang: none when its marker has a line of its own.
     private static func itemTopOverhang(_ item: ConversationMarkdownDocument.ListItem) -> CGFloat {
-        guard let first = item.blocks.first, !leadsWithMarkerLine(first) else { return 0 }
+        guard let first = item.blocks.first, item.continuation || !leadsWithMarkerLine(first) else { return 0 }
         return topOverhang(first)
     }
 

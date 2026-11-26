@@ -498,7 +498,9 @@ when an intentional design change is accepted.
   stays plain text. In reply text,
   lists sit tighter than paragraphs, with one gap between every two items at
   every level, whether they wrap or not, two different lists in a row are spaced as
-  paragraphs, every item keeps its marker, a task's box is one drawn square,
+  paragraphs, every item keeps its marker, an item's later blocks (after its
+  nested list too) start at its text indent, an item gap below what precedes
+  them, a task's box is one drawn square,
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
   block's indent. A code line that wraps continues two cells right of its own
