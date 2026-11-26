@@ -60,8 +60,9 @@ public enum ConversationHTMLDocument {
   /// settles was answering the frame, and its height is held. Heights that
   /// come round again, however slowly the page answers, hold the tallest of
   /// them until the page shows a height outside them; when the page stays at
-  /// a shorter one for a second, the frame tries it once, and holds again
-  /// for good only if the page answers by changing back. A change while
+  /// a shorter one for a while, the frame tries it, and holds again (waiting
+  /// longer before the next try) only if the page answers by changing back.
+  /// A change while
   /// the frame is still, a new width, or the reader pressing a pointer or key
   /// in the page lets a held height go. The first measurement is always
   /// reported.
@@ -163,10 +164,14 @@ public enum ConversationHTMLDocument {
       // and stops moving, and while it is still the page can only show those
       // same heights unless it changes on its own; any other height is
       // followed. A cycle may also be the page's own and over, so once the
-      // page has shown one height for `rest` the frame takes that height,
-      // once; if the page answers with another height of the cycle, the
-      // frame holds the tallest again and stays. The first measurement is
-      // always reported.
+      // page has shown a shorter height of it for `wait` the frame tries that
+      // height. The page answers each resize with at most its next change
+      // (`answered`): if that answer is another height of the cycle, the
+      // frame holds the tallest again and waits twice as long before the next
+      // try; nothing else counts as an answer. Any further change before the
+      // frame moves again is the page's own and allows another try. While a
+      // try is out, heights within a pixel of it are the same height. The
+      // first measurement is always reported.
       const calm=350,rest=1000;
       let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null,sent=[];
       const near=(a,b)=>Math.abs(a-b)<=1;
@@ -177,13 +182,16 @@ public enum ConversationHTMLDocument {
         if(innerHeight!==tall){if(tall)resized=t;tall=innerHeight;}
         const still=t-resized>=calm;
         if(last<0)return h;
-        if(held?.cycle){
-          if(!held.cycle.some(x=>near(x,h))){held=null;run=[];sent=[];return h;}
-          if(held.out){if(near(h,held.seen))return h;held.out=false;return held.h;}
-          if(!near(h,held.seen)){held.seen=h;held.at=t;}
-          if(held.probed||near(held.seen,held.h))return held.h;
-          if(t-held.at<rest){setTimeout(schedule,held.at+rest-t+5);return held.h;}
-          held.probed=held.out=true;return held.seen;}
+        if(held?.cycle){const H=held;
+          if(!H.cycle.some(x=>near(x,h))){held=null;run=[];sent=[];return h;}
+          if(!near(h,H.seen)){const answer=!H.answered;H.answered=true;H.seen=h;H.at=t;
+            if(H.out){H.out=false;H.wait=Math.min(H.wait*2,32*rest);H.answered=near(H.h,last);return H.h;}
+            if(!answer)H.armed=true;}
+          if(H.out)return last;
+          if(H.armed&&H.seen<H.h&&!near(H.seen,H.h)){
+            if(t-H.at<H.wait){setTimeout(schedule,H.at+H.wait-t+5);return H.h;}
+            H.armed=false;H.out=true;H.answered=false;return H.seen;}
+          return H.h;}
         if(held){
           if(h!==held.seen){if(still){held=null;run=[];sent=[];return h;}held.seen=h;}
           if(h!==held.h&&held.spare){if(still){held.spare=false;return held.h=h;}setTimeout(schedule,resized+calm-t+5);}
@@ -195,8 +203,9 @@ public enum ConversationHTMLDocument {
           const q=quiet;quiet=null;run=[];
           held=q.turned?{h:Math.max(q.peak,last),seen:h,spare:false}:{h,seen:h,spare:true};return held.h;}
         if(h===last)return h;
-        const round=cycle(h);if(round){run=[];held={h:Math.max(...round),cycle:round,seen:h,at:t,probed:false,out:false};
-          if(!near(h,held.h))setTimeout(schedule,rest+5);return held.h;}
+        const round=cycle(h);if(round){run=[];const top=Math.max(...round);
+          held={h:top,cycle:round,seen:h,at:t,armed:true,out:false,answered:near(top,last),wait:rest};
+          if(!near(h,top))setTimeout(schedule,rest+5);return top;}
         if(still){run=[];return h;}
         if(!run.length)run=[last];run.push(h);
         if(run.length<4)return h;
