@@ -516,9 +516,10 @@ when an intentional design change is accepted.
   an entry gap below the text when it holds files; a link in the text to one
   of those files opens it as its chip does, and one to a file without a chip
   stays plain text. In reply text,
-  lists sit tighter than paragraphs but clearly looser than a line, with one
-  gap between top-level items and a smaller one within a nested list, whether
-  they wrap or not, two different lists in a row stand a section gap apart,
+  lists sit tighter than paragraphs but clearly looser than a line: 8 under a
+  top-level item of one line and 10 under one that wraps, 6 and 8 within a
+  nested list, decided by the item above alone; two different lists in a row
+  stand a section gap apart,
   every item keeps its marker, an item's later blocks (after its
   nested list too) start at its text indent, its level's item gap below what
   precedes them (a line of only links after a nested list, a citation, sits a

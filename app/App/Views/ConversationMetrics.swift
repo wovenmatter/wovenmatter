@@ -52,12 +52,16 @@ enum ConversationMetrics {
     enum Prose {
         static let lineSpacing: CGFloat = 5
         static let paragraphGap: CGFloat = 14
-        /// Between top-level list items, whether they wrap or not, and
-        /// between the blocks of a top-level item.
+        /// Under a top-level list item of one line, and between the blocks of
+        /// a top-level item.
         static let listGap: CGFloat = 8
-        /// Between a nested list's items, from a parent's text to its first
-        /// nested item, and between the blocks of a nested item.
+        /// Under a top-level list item that wraps at the laid-out width.
+        static let wrappedListGap: CGFloat = 10
+        /// Under a nested item of one line (from a parent's text of one line
+        /// to its first nested item too), and between a nested item's blocks.
         static let nestedListGap: CGFloat = 6
+        /// Under a nested item, or a parent's text, that wraps.
+        static let wrappedNestedListGap: CGFloat = 8
         /// A paragraph → the list after it.
         static let paragraphToListGap: CGFloat = 10
         static let majorHeadingGap: CGFloat = 24

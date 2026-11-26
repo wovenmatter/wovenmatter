@@ -984,12 +984,12 @@ private enum ConversationResponseAttributedText {
     }
 
     /// Whether a block renders differently at another width: a table shares
-    /// it out among its columns, and code caps how far its wrapped lines indent.
+    /// it out among its columns, code caps how far its wrapped lines indent,
+    /// and a list spaces an item by whether the item above it wraps.
     static func followsWidth(_ block: Block) -> Bool {
         switch block {
-        case .table, .code: true
+        case .table, .code, .list: true
         case .quote(let quoted): quoted.contains(where: followsWidth)
-        case .list(let items): items.contains { $0.blocks.contains(where: followsWidth) }
         default: false
         }
     }
@@ -1230,9 +1230,6 @@ private enum ConversationResponseAttributedText {
                 appendInline(content, font: font(size, .semibold), style: paragraphStyle(indent: indent, before: before),
                              marker: marker)
             case .list(let items):
-                // Every item is the same gap from the one before it, at every
-                // level, whether either wraps: an item arriving later never
-                // moves the ones before it, at any width.
                 // Nesting steps by level, however many spaces the source used,
                 // decided in source order so a later item never moves an earlier one.
                 var indents: [Int] = []
@@ -1240,6 +1237,19 @@ private enum ConversationResponseAttributedText {
                 // The kind of list at each open level, so a list straight after
                 // a sibling list of another kind, at any depth, reads as its own.
                 var kinds: [MarkerKind?] = []
+                // Whether the item above wraps at this width: the gap under an
+                // item comes from that item alone, so an item that starts to
+                // wrap while it streams never moves itself or what is above it.
+                var previousWraps = false
+                /// An item takes more than one line at this width: it holds
+                /// more than one block, or its first paragraph is wider than
+                /// its line.
+                func wraps(_ item: ConversationMarkdownDocument.ListItem, textIndent: CGFloat) -> Bool {
+                    guard item.blocks.count == 1 else { return item.blocks.count > 1 }
+                    guard case .paragraph(let content) = item.blocks[0] else { return true }
+                    let text = inline(content, font: body)
+                    return text.string.contains("\n") || text.size().width > width - textIndent
+                }
                 for (index, item) in items.enumerated() {
                     while let last = indents.last, last > item.depth { indents.removeLast(); kinds.removeLast() }
                     if indents.last != item.depth { indents.append(item.depth); kinds.append(nil) }
@@ -1258,11 +1268,13 @@ private enum ConversationResponseAttributedText {
                         NSAttributedString(string: item.marker, attributes: [.font: body, .foregroundColor: foreground])
                     }
                     // Top-level items stand further apart than a nested list's,
-                    // and an item's later blocks take its level's gap.
+                    // and further under an item that wraps; an item's later
+                    // blocks take its level's one-line gap.
                     let itemGap = level == 0 ? Prose.listGap : Prose.nestedListGap
+                    let underGap = !previousWraps ? itemGap : level == 0 ? Prose.wrappedListGap : Prose.wrappedNestedListGap
                     // A citation line after an item's nested list belongs to what it cites.
                     let gap = startsList ? ConversationMetrics.sectionGap
-                        : item.continuation && isCitationLine(item.blocks.first) ? ConversationMetrics.labelGap : itemGap
+                        : item.continuation && isCitationLine(item.blocks.first) ? ConversationMetrics.labelGap : underGap
                     let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
@@ -1272,6 +1284,7 @@ private enum ConversationResponseAttributedText {
                     sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, itemGap: itemGap,
                              marker: item.continuation ? nil : itemMarker)
                     previousItem = item.blocks.last ?? emptyParagraph
+                    previousWraps = wraps(item, textIndent: markerEnd + Prose.markerGap)
                 }
             case .quote(let quoted):
                 let start = output.length
