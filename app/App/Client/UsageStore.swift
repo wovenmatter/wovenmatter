@@ -27,6 +27,8 @@ final class UsageStore {
     @ObservationIgnored private var flagsOwner = 0
     /// Limit reads started, likewise.
     @ObservationIgnored private var limitRequests = 0
+    /// A refresh took on reading limits and has not finished it.
+    @ObservationIgnored private var limitsOwed = false
     /// The range the page last asked for; nil until it first did.
     @ObservationIgnored private var lastRange: UsageTimeRange?
     @ObservationIgnored private var automatic: Task<Void, Never>?
@@ -59,15 +61,17 @@ final class UsageStore {
         refreshes += 1
         let generation = refreshes
         flagsOwner = generation
-        // The limits read belongs to this call from the start, so an older
-        // call can neither apply its reply over this one's nor drop it.
+        // Limits are read when asked for, when they never have been, and when
+        // an earlier refresh still owed them: this call takes that read over
+        // from the start, so an older call's reply can no longer apply.
         var limitsOwner: Int?
-        if refreshLimits {
+        if refreshLimits || limitsOwed || !limitsRead {
+            limitsOwed = true
             limitRequests += 1
             limitsOwner = limitRequests
         }
         isRefreshing = true
-        isRefreshingLimits = refreshLimits
+        isRefreshingLimits = limitsOwner != nil
         defer {
             if flagsOwner == generation {
                 isRefreshing = false
@@ -86,9 +90,11 @@ final class UsageStore {
             guard limitsOwner == limitRequests else { return }
             limits = read
             limitsRead = true
+            limitsOwed = false
             if let current = snapshot { snapshot = UsageSnapshot(analytics: current.analytics, limits: read) }
         } catch {
             guard limitsOwner == limitRequests else { return }
+            limitsOwed = false
             self.error = error.localizedDescription
         }
     }
