@@ -24,20 +24,49 @@ public struct ConversationVisualReply: Equatable, Sendable {
 /// Authored content runs in an opaque sandboxed child frame. Only the
 /// app-owned outer document has a native handler; it verifies message sources.
 public enum ConversationHTMLDocument {
-  /// The page reports how tall its content is: the root's in-flow height,
-  /// and below it only positioned content that shows. Not the body's scroll
-  /// height, which also counts content clipped out of sight, such as a table
-  /// kept only for screen readers.
+  /// The page reports how tall its content is: the larger of the root's
+  /// in-flow height and the lowest point of anything that shows, plus the
+  /// body's bottom padding. Not the body's scroll height, which also counts
+  /// content clipped out of sight, such as a table kept only for screen
+  /// readers.
+  ///
   /// The frame takes the height the page reports, and that height is the
-  /// page's viewport, so nothing measured may follow the viewport: the root
+  /// page's viewport, so nothing measured may follow the viewport. The root
   /// and body keep their content's height whatever the page asks (a
   /// percentage height or minimum on them would resolve against the frame and
   /// grow with it), so their padding, margins and borders count once, in
-  /// either box sizing. The size message also carries `lead`: the page's first
-  /// visible text when it is a heading or a table's caption, else empty.
+  /// either box sizing. The root is the containing block for absolutely
+  /// positioned content, so `bottom` and percentage heights on it resolve
+  /// against the content rather than the viewport, and a box at `top:0;
+  /// left:0` stays where it was. Content fixed to the viewport never counts.
+  ///
+  /// The lowest point comes from one walk down from the body that carries
+  /// the clip each box sets: a box that clips its overflow cuts off what is
+  /// inside it, except absolutely positioned content that escapes to a
+  /// containing block outside it; `clip` and `clip-path` cut off everything
+  /// inside. Hidden boxes, boxes clipped to nothing and 1px boxes that clip
+  /// (the usual way to keep content only for screen readers) add nothing.
+  /// Images, canvases, SVG and embedded frames count as one box. The walk
+  /// stops after a few thousand elements and keeps what it found, and it
+  /// runs at most once a frame, whenever a box resizes, the page changes, an
+  /// image or font loads, or the theme changes.
+  ///
+  /// A page whose own rules or scripts follow the viewport's height (a height
+  /// media query, a viewport unit, a canvas sized to the window) can still
+  /// swing between two heights or keep growing. When reports change direction
+  /// three times within a second, the page keeps the tallest of them. When
+  /// three reports running move the same way, each right after the viewport
+  /// took the height reported before it, the page stops reporting briefly
+  /// and keeps measuring: if the height still changes it is real and is
+  /// reported; if it holds still it is reported once, and when the next
+  /// change again follows the viewport the page keeps the height it last
+  /// reported. Either hold lasts until the width changes or the reader
+  /// presses a pointer or key in the page.
+  /// The size message also carries `lead`: the page's first visible text when
+  /// it is a heading or a table's caption, else empty.
   public static func render(html: String) -> String {
     let bootstrap = #"""
-    <style id="woven-theme">html{margin:0;padding:0}body{margin:0;padding:12px 14px}:root,:root>body{height:auto!important;min-height:0!important;max-height:none!important}html,body{background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
+    <style id="woven-theme">html{margin:0;padding:0}body{margin:0;padding:12px 14px}:root,:root>body{height:auto!important;min-height:0!important;max-height:none!important}:root{position:relative!important}html,body{background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
     <script>
     (()=>{
       const base=document.getElementById('woven-theme').textContent;
@@ -51,19 +80,92 @@ public enum ConversationHTMLDocument {
         for(let n=w.nextNode();n;n=w.nextNode()){const p=n.parentElement;if(!n.data.trim()||!p||!shown(p))continue;
           const h=p.closest('h1,h2,h3,h4,h5,h6,caption');return h?h.innerText.trim().slice(0,200):'';}
         return '';};
-      let last=0,lastLead='',queued=false;
-      const clipped=s=>(s.clip&&s.clip!=='auto')||(s.clipPath&&s.clipPath!=='none');
-      const placed=()=>{let m=0;for(const e of document.body.querySelectorAll('*')){const s=getComputedStyle(e);
-          if((s.position!=='absolute'&&s.position!=='fixed')||clipped(s)||!shown(e))continue;
-          const r=e.getBoundingClientRect();if(r.width>1&&r.height>1)m=Math.max(m,r.bottom+scrollY);}
-        return m;};
-      const measure=()=>{queued=false;const b=document.body;if(!b)return;
-        const flow=document.documentElement.getBoundingClientRect().height,abs=placed();
-        const h=Math.ceil(Math.max(flow,abs?abs+parseFloat(getComputedStyle(b).paddingBottom||'0'):0)),l=lead();
-        if(h!==last||l!==lastLead){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
-      const schedule=()=>{if(!queued){queued=true;requestAnimationFrame(measure);setTimeout(measure,0);}};
-      addEventListener('DOMContentLoaded',()=>{const o=new ResizeObserver(schedule);o.observe(document.documentElement);o.observe(document.body);measure();});
-      addEventListener('load',()=>{measure();parent.postMessage({kind:'ready'},'*');});
+      // The bottom a box's own `clip` or `clip-path` lets show, or -1 when
+      // they leave nothing showing.
+      const len=(x,full)=>x.endsWith('%')?parseFloat(x)*full/100:parseFloat(x)||0;
+      const cut=(s,r)=>{let b=Infinity;
+        if((s.position==='absolute'||s.position==='fixed')&&s.clip&&s.clip!=='auto'){
+          const v=s.clip.match(/-?[\d.]+px|auto/g)||[],n=(x,d)=>x&&x!=='auto'?parseFloat(x):d;
+          const t=n(v[0],0),right=n(v[1],r.width),bottom=n(v[2],r.height),left=n(v[3],0);
+          if(bottom-t<=1||right-left<=1)return -1;b=r.top+bottom;}
+        const p=s.clipPath;if(!p||p==='none')return b;
+        const m=/^([\w-]+)\((.*)\)/.exec(p),f=m?.[1],a=(m?.[2]||'').split(/\s+round\s+/)[0].trim();
+        if(f==='inset'){const v=a.split(/\s+/),t=len(v[0],r.height),right=len(v[1]??v[0],r.width),
+            bottom=len(v[2]??v[0],r.height),left=len(v[3]??v[1]??v[0],r.width);
+          if(t+bottom>=r.height-1||left+right>=r.width-1)return -1;return Math.min(b,r.bottom-bottom);}
+        if(f==='circle'||f==='ellipse'){if(a.split(/\s+at\s+/)[0].split(/\s+/).some(x=>x&&parseFloat(x)===0))return -1;}
+        if(f==='polygon'){const q=a.replace(/^(nonzero|evenodd)\s*,/,'').split(',').map(x=>x.trim().split(/\s+/));
+          const xs=q.map(x=>len(x[0]||'0',r.width)),ys=q.map(x=>len(x[1]||'0',r.height));
+          if(Math.max(...xs)-Math.min(...xs)<=1||Math.max(...ys)-Math.min(...ys)<=1)return -1;
+          return Math.min(b,r.top+Math.max(...ys));}
+        return Math.min(b,r.bottom);};
+      const leaf=/^(svg|canvas|img|video|iframe|object|embed)$/i,boxed=/paint|layout|strict|content/;
+      const text=document.createRange();
+      // The lowest point that shows, in page coordinates. Each box keeps the
+      // clip its in-flow content gets (`flow`), the clip everything inside it
+      // gets (`paint`), and whether it holds absolutely positioned content
+      // (`abs`) or content fixed in place (`fixed`).
+      const lowest=()=>{const root=document.documentElement,body=document.body;
+        const kept=new Map([[root,{flow:Infinity,paint:Infinity,abs:true,fixed:false}]]);
+        const holds=s=>s.transform!=='none'||s.filter!=='none'||s.perspective!=='none'||boxed.test(s.contain);
+        const bs=getComputedStyle(body);kept.set(body,{flow:Infinity,paint:Infinity,abs:bs.position!=='static'||holds(bs),fixed:holds(bs)});
+        let low=0,seen=0;const stack=[...body.children].reverse();
+        while(stack.length&&++seen<=3000){const e=stack.pop(),s=getComputedStyle(e);
+          if(s.display==='none'||s.opacity==='0'||s.contentVisibility==='hidden'||e.checkVisibility?.()===false)continue;
+          let inside=kept.get(e.parentElement);if(!inside)continue;const paint=inside.paint;
+          if(s.position==='absolute'||s.position==='fixed'){let a=e.parentElement;
+            for(;a;a=a.parentElement){inside=kept.get(a);if(s.position==='absolute'?inside.abs:inside.fixed)break;}
+            if(!a)continue;}
+          const r=e.getBoundingClientRect(),own=cut(s,r);if(own<0)continue;
+          const clips=s.overflowY!=='visible'||boxed.test(s.contain);
+          if((r.width<=1||r.height<=1)&&(clips||own!==Infinity))continue;
+          const limit=Math.min(inside.flow,paint,own);
+          if(s.visibility==='visible'&&r.height>0)low=Math.max(low,Math.min(r.bottom,limit));
+          if(leaf.test(e.localName))continue;
+          // Text that spills out of a box with a set height.
+          if(!clips&&e.clientHeight>0&&e.scrollHeight>e.clientHeight+1)for(const n of e.childNodes)
+            if(n.nodeType===3&&n.data.trim()){text.selectNodeContents(n);const q=text.getBoundingClientRect();
+              if(q.height>0)low=Math.max(low,Math.min(q.bottom,limit));}
+          kept.set(e,{flow:Math.min(inside.flow,clips?r.bottom-(parseFloat(s.borderBottomWidth)||0):Infinity),
+            paint:Math.min(paint,own),abs:s.position!=='static'||holds(s),fixed:holds(s)});
+          for(let c=e.lastElementChild;c;c=c.previousElementSibling)stack.push(c);}
+        return low?low+scrollY:0;};
+      // Heights that follow the viewport. Reports that change direction three
+      // times within a second keep the tallest of them. Three changes running
+      // the same way, each measured just after the viewport took the height
+      // reported before it, look like feedback: the page stops reporting for
+      // a moment, and the viewport with it, and keeps measuring. A height
+      // that still changes is real and is reported. One that holds still is
+      // reported once (it may be where real growth ended); if the next change
+      // again follows the viewport, the height last reported stays.
+      let last=-1,lastLead='',queued=false,ran=-1e9,width=0,held=0,recent=[],resized=-1e9,run=0,way=0,quiet=null,doubt=false;
+      const settle=h=>{const t=performance.now();if(held)return held;
+        if(quiet){if(h!==quiet.h||t>=quiet.until){doubt=h===quiet.h;quiet=null;run=0;return h;}
+          setTimeout(schedule,25);return null;}
+        if(h===last)return h;
+        recent=recent.filter(x=>t-x[0]<1000);recent.push([t,h]);let turns=0;
+        for(let i=2;i<recent.length;i++)if((recent[i][1]-recent[i-1][1])*(recent[i-1][1]-recent[i-2][1])<0)turns++;
+        if(turns>=3)return held=Math.max(...recent.map(x=>x[1]));
+        const d=Math.sign(h-last),follows=t-resized<50&&Math.abs(innerHeight-Math.min(20000,Math.max(80,last)))<=1;
+        if(doubt){doubt=false;if(follows)return held=last;}
+        run=follows?(d===way?run+1:1):0;way=d;
+        if(run>=3){quiet={h,until:t+150};setTimeout(schedule,25);return null;}
+        return h;};
+      const release=()=>{held=0;recent=[];run=0;quiet=null;doubt=false;};
+      const measure=()=>{if(!queued)return;queued=false;ran=performance.now();const b=document.body;if(!b)return;
+        if(innerWidth!==width){width=innerWidth;release();}
+        const flow=document.documentElement.getBoundingClientRect().height,low=lowest();
+        const h=settle(Math.ceil(Math.max(flow,low?low+(parseFloat(getComputedStyle(b).paddingBottom)||0):0))),l=lead();
+        if(h!==null&&(h!==last||l!==lastLead)){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
+      const schedule=()=>{if(queued)return;queued=true;const wait=ran+16-performance.now();
+        if(wait>0)setTimeout(measure,wait);else{requestAnimationFrame(measure);setTimeout(measure,0);}};
+      for(const kind of ['pointerdown','keydown'])addEventListener(kind,()=>{if(held||quiet||recent.length){release();schedule();}},true);
+      new MutationObserver(schedule).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});
+      document.addEventListener('load',schedule,true);
+      document.fonts?.addEventListener?.('loadingdone',schedule);
+      addEventListener('resize',()=>{resized=performance.now();schedule();},true);
+      addEventListener('DOMContentLoaded',()=>{const o=new ResizeObserver(schedule);o.observe(document.documentElement);o.observe(document.body);schedule();});
+      addEventListener('load',()=>{schedule();parent.postMessage({kind:'ready'},'*');});
       document.addEventListener('click',e=>{const a=e.composedPath().find(x=>x?.matches?.('a[href]'));if(!a||!e.isTrusted)return;
         const u=new URL(a.href,document.baseURI);if(/^https?:$/.test(u.protocol)){e.preventDefault();parent.postMessage({kind:'link',url:u.href},'*');}},true);
       for(const level of ['log','info','warn','error']){const old=console[level];console[level]=(...args)=>{old.apply(console,args);parent.postMessage({kind:'console',level,text:args.map(String).join(' ').slice(0,2000)},'*');};}
