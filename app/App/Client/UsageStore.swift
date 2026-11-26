@@ -112,14 +112,16 @@ final class UsageStore {
             self.lastAutomatic = Date()
             guard let range = self.lastRange, let server = self.server, server.isConnected else { return }
             self.refreshes += 1
-            await self.read(range: range, generation: self.refreshes, from: server)
+            await self.read(range: range, generation: self.refreshes, from: server, reportsErrors: false)
         }
     }
 
     private static let automaticInterval: TimeInterval = 5
 
     /// Reads usage for the range and shows it, unless a later read began.
-    private func read(range: UsageTimeRange, generation: Int, from server: ServerConnection) async {
+    /// Only a read the page asked for sets or clears the error; an automatic
+    /// one leaves it as it is, and on failure changes nothing.
+    private func read(range: UsageTimeRange, generation: Int, from server: ServerConnection, reportsErrors: Bool = true) async {
         let now = Date()
         let interval = range.interval(relativeTo: now)
         do {
@@ -141,9 +143,9 @@ final class UsageStore {
                 analytics: UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources),
                 limits: limits)
             machines = summaries(report)
-            error = nil
+            if reportsErrors { error = nil }
         } catch {
-            guard generation == refreshes else { return }
+            guard reportsErrors, generation == refreshes else { return }
             self.error = error.localizedDescription
         }
     }
