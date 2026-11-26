@@ -488,7 +488,8 @@ when an intentional design change is accepted.
   are short ("searched palette.md"), two or more are counted by a noun ("ran 3
   searches"), never "1 time"; a
   narrow column takes the same facts in short ("1 folder listed · 2 files read"). Thinking looks the same everywhere.
-  Live reasoning shows its last three lines, its cut top line fading out, under
+  Live reasoning shows its last three lines as plain lines of one pitch, with
+  no space between paragraphs or blocks, its cut top line fading out, under
   its title once it has one (the title is never prose in the trace); afterwards a
   thought with text is one closed row named by its title or leading heading,
   else "Thought", never by its raw text; one with no text draws nothing. A

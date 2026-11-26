@@ -19,8 +19,14 @@ struct ConversationResponse: View {
         case reasoning
         /// Reasoning as plain lines, for the live thought's three-line window:
         /// no boxes, bars, tables or rules, no gaps between blocks, every line
-        /// the same height, so the window always shows three whole lines.
+        /// box `plainLinePitch` tall, its last line's too.
         case plainReasoning
+
+        /// The plain style's one line pitch. N lines are N pitches tall, so a
+        /// window N pitches tall at the text's end shows N whole lines.
+        @MainActor static let plainLinePitch: CGFloat =
+            ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 15 * Style.plainReasoning.scale)))
+            + ConversationMetrics.Prose.lineSpacing
 
         var scale: CGFloat { self == .reply ? 1 : 0.9 }
         var inkOpacity: CGFloat {
@@ -696,7 +702,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
             guard piece.length > 0, let font = text.attribute(.font, at: piece.location, effectiveRange: nil) as? NSFont else { continue }
             let pieceGlyphs = layoutManager.glyphRange(forCharacterRange: piece, actualCharacterRange: nil)
             let bounds = layoutManager.boundingRect(forGlyphRange: pieceGlyphs, in: textContainer)
-            let baseline = fragment.minY + layoutManager.location(forGlyphAt: pieceGlyphs.location).y
+            // Raised text (the plain style's) is drawn above its layout baseline.
+            let raised = text.attribute(.baselineOffset, at: piece.location, effectiveRange: nil) as? CGFloat ?? 0
+            let baseline = fragment.minY + layoutManager.location(forGlyphAt: pieceGlyphs.location).y - raised
             // Around the code's own line box, so stacked lines never touch,
             // and never past the text's left edge, where it would be cut off.
             let minX = max(0, bounds.minX - ConversationMetrics.hair)
@@ -1073,13 +1081,18 @@ private enum ConversationResponseAttributedText {
         // The plain style's lines: each as tall as a line of its text, with
         // nothing between them, whatever block it came from.
         let plain = responseStyle == .plainReasoning
-        let plainLineHeight = NSLayoutManager().defaultLineHeight(for: body)
+        // Every line box is the pitch tall, line spacing included, the last
+        // line's too; TextKit puts the extra height above the text, so the
+        // text is raised by it to sit where a line with spacing below would.
+        let pitch = ConversationResponse.Style.plainLinePitch
+        let raise = pitch - ceil(NSLayoutManager().defaultLineHeight(for: body))
         func plainLine(_ text: NSAttributedString, after prefix: String = "") {
             let line = NSMutableAttributedString(string: prefix, attributes: [.font: body, .foregroundColor: foreground])
             line.append(text)
-            let style = paragraphStyle(indent: 0, before: 0)
-            style.minimumLineHeight = plainLineHeight
-            style.maximumLineHeight = plainLineHeight
+            line.addAttribute(.baselineOffset, value: raise, range: NSRange(location: 0, length: line.length))
+            let style = paragraphStyle(indent: 0, before: 0, lineSpacing: 0)
+            style.minimumLineHeight = pitch
+            style.maximumLineHeight = pitch
             append(line, style: style)
         }
 
