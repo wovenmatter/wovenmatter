@@ -204,6 +204,12 @@ struct CloudConversation: View {
                         onSend()
                     }
                 }
+                // `status:PATH` writes whether this chat's turn is still running.
+                .debugCommand("status:") { path in
+                    let running = session?.isRunning == true
+                    let text = "{\"chat\":\"\(conversation?.id ?? "")\",\"running\":\(running)}"
+                    try? text.write(toFile: path.trimmingCharacters(in: .whitespaces), atomically: true, encoding: .utf8)
+                }
                 // `scroll-y:POINTS` sets the offset, as a reader scrolling away would.
                 .debugCommand("scroll-y:") { value in
                     guard let y = Double(value.trimmingCharacters(in: .whitespaces)) else { return }
@@ -251,7 +257,7 @@ struct CloudConversation: View {
                 // Back from paging history, a library jump or a reader's
                 // scroll, still following: make up for anything missed meanwhile.
                 .onChange(of: followsBottom) { _, follows in
-                    if follows, lastEndDistance > 0 { scroll { $0.scrollTo(edge: .bottom) } }
+                    if follows, lastEndDistance > 0 { scrollToEndUnlessAsked() }
                 }
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     // The offset as `scrollTo(y:)` takes it.
@@ -581,6 +587,16 @@ struct CloudConversation: View {
         transcriptPosition.wrappedValue = position
     }
 
+    /// Asks for the end only when nothing has asked for it yet. A second
+    /// target for the same end (the bottom edge beside Latest reply's end
+    /// row), set while SwiftUI is still resolving the first, never settles:
+    /// the scroll view keeps laying out between the two and the app hangs.
+    private func scrollToEndUnlessAsked() {
+        let target = transcriptPosition.wrappedValue
+        guard target.edge != .bottom, target.viewID(type: String.self) != chatEndID else { return }
+        scroll { $0.scrollTo(edge: .bottom) }
+    }
+
     private var chatEndID: String {
         "chat-end:\(conversation?.id ?? "none")"
     }
@@ -679,7 +695,7 @@ struct CloudConversation: View {
         }
         // Back at the live edge, the bottom holds instead.
         if after.distance <= Self.liveEdgeTolerance, !isPrependingHistory, heldRowID != nil { releaseHeldRow() }
-        if followsBottom, resized, after.distance > 0 { scroll { $0.scrollTo(edge: .bottom) } }
+        if followsBottom, resized, after.distance > 0 { scrollToEndUnlessAsked() }
     }
 
     /// The reader moved the view: at the live edge it follows again, away from it it stays where they put it.
@@ -850,8 +866,7 @@ struct MessageRow: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         } else if message.role == .user {
-            HStack {
-                Spacer(minLength: 72)
+            ConversationMessageRowLayout {
                 VStack(alignment: .trailing, spacing: ConversationMetrics.labelGap) {
                     WorkspaceIncomingAgentHeader(message: message)
                     ConversationUserMessage(

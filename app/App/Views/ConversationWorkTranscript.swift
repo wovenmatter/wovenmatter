@@ -100,15 +100,17 @@ struct ConversationWorkTranscript: View {
         let timeline = self.timeline ?? ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs)
         let content = ConversationWorkTranscriptPresentation(runStatus: run.status, runError: run.error)
         let isRunning = run.status == .running
-        let foldable = timeline.hasFoldableEntries
+        // Only work the header can fold counts; live thinking on its own is not that yet.
+        let foldable = timeline.entries.contains { entry in
+            guard Self.draws(entry, isRunning: isRunning), !entry.staysOutsideFold else { return false }
+            if case .activity(let activity) = entry.content, activity.kind == .thought,
+               isRunning && activity.workTimelineShowsProgress { return false }
+            return true
+        }
         let workExpanded = workDisclosure
         let folded = foldable && !workExpanded.wrappedValue
-        // A settled thought with nothing in it says nothing: it draws no row.
-        let entries = (folded ? timeline.entriesOutsideFold : timeline.entries).filter { entry in
-            guard case .activity(let activity) = entry.content, activity.kind == .thought,
-                  !activity.workTimelineThoughtHasText else { return true }
-            return isRunning && activity.workTimelineShowsProgress
-        }
+        let drawn = (folded ? timeline.entriesOutsideFold : timeline.entries).filter { Self.draws($0, isRunning: isRunning) }
+        let (entries, reasoning) = Self.carryThoughts(drawn, isRunning: isRunning, hasFollowingResponse: hasFollowingResponse)
         // A folded turn shows only the dots below.
         let showsThinking = isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator
         let showsWork = !entries.isEmpty || showsThinking
@@ -149,19 +151,23 @@ struct ConversationWorkTranscript: View {
                     .padding(.top, ConversationMetrics.rowGap)
             }
 
+            // While the turn runs, the rule's place is kept under the header,
+            // so nothing below moves when foldable work first appears.
+            if showsRule || (isRunning && (showsWork || !hasFollowingResponse)) {
+                Divider()
+                    .overlay(WovenPalette.foreground.opacity(0.10))
+                    .opacity(showsRule ? 1 : 0)
+                    .padding(.top, ConversationMetrics.rowGap)
+            }
             if showsWork {
-                if showsRule {
-                    Divider()
-                        .overlay(WovenPalette.foreground.opacity(0.10))
-                        .padding(.top, ConversationMetrics.rowGap)
-                }
 
                 if !entries.isEmpty {
                     let tailID = timeline.entries.last?.id
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                            self.entry(entry, tailID: tailID, isRunning: isRunning)
-                                .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil))
+                            self.entry(entry, tailID: tailID, isRunning: isRunning, reasoning: reasoning[entry.id])
+                                .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil,
+                                                        next: index + 1 < entries.count ? entries[index + 1] : nil))
                         }
                     }
                     .transition(reduceMotion ? .identity : .opacity)
@@ -185,20 +191,64 @@ struct ConversationWorkTranscript: View {
             : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
             : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
-        // Without a session folder, the folder this turn's tools worked in, so
-        // its rows shorten paths the same way.
-        .environment(\.conversationFolder, folder ?? AgentRunActivity.workTimelineCommonFolder(records.map(\.activity)))
+        // Without a session folder, the folder of the turn's first path, so
+        // its rows shorten paths the same way and never change once shown.
+        .environment(\.conversationFolder, folder ?? AgentRunActivity.workTimelineAnchorFolder(
+            records.sorted(by: WorkspaceRunActivityRecord.precedes).map(\.activity)))
     }
 
     /// Entries sit an entry apart. A visual reply keeps a section's space on
     /// each side, and commentary stays with the tools it introduces: the next
     /// sentence starts a new unit.
-    private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?) -> CGFloat {
+    /// A settled thought with nothing in it says nothing: it draws no row.
+    private static func draws(_ entry: ConversationWorkTimelineEntry, isRunning: Bool) -> Bool {
+        guard case .activity(let activity) = entry.content, activity.kind == .thought,
+              !activity.workTimelineThoughtHasText else { return true }
+        return isRunning && activity.workTimelineShowsProgress
+    }
+
+    /// The entries that draw rows, and the thoughts sentences carry instead.
+    private static func carryThoughts(_ drawn: [ConversationWorkTimelineEntry], isRunning: Bool,
+                                      hasFollowingResponse: Bool) -> ([ConversationWorkTimelineEntry], [String: AgentRunActivity]) {
+        // An untitled settled thought right before a sentence of commentary
+        // belongs to it: the sentence carries it, with no row of its own.
+        var reasoning: [String: AgentRunActivity] = [:]
+        var carried: Set<String> = []
+        for (index, entry) in drawn.enumerated() where index + 1 < drawn.count {
+            guard case .activity(let thought) = entry.content, thought.kind == .thought,
+                  case .commentary = drawn[index + 1].content,
+                  !(isRunning && thought.workTimelineShowsProgress),
+                  ConversationThinkingBlock.summary(of: thought).label == "Thought",
+                  !ConversationThinkingBlock.summary(of: thought).isRecord else { continue }
+            reasoning[drawn[index + 1].id] = thought
+            carried.insert(entry.id)
+        }
+        // Nor does one stand alone between a visual reply and the reply text it
+        // led to: the reply is what it produced.
+        if hasFollowingResponse, drawn.count >= 2, let last = drawn.last, Self.isVisualReply(drawn[drawn.count - 2]),
+           case .activity(let thought) = last.content, thought.kind == .thought,
+           !(isRunning && thought.workTimelineShowsProgress),
+           ConversationThinkingBlock.summary(of: thought).label == "Thought" {
+            carried.insert(last.id)
+        }
+        return (drawn.filter { !carried.contains($0.id) }, reasoning)
+    }
+
+    /// A unit of work is [a titled thought,] a sentence of commentary, and the
+    /// tools it introduces: a section above its first row, a label gap inside.
+    private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?,
+                            next: ConversationWorkTimelineEntry?) -> CGFloat {
         if isVisualReply(entry) || previous.map(isVisualReply) == true { return ConversationMetrics.sectionGap }
         guard let previous else { return ConversationMetrics.entryGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
-        if case .commentary = entry.content { return ConversationMetrics.sectionGap }
+        if case .commentary = entry.content { return isThought(previous) ? ConversationMetrics.labelGap : ConversationMetrics.sectionGap }
+        if isThought(entry), case .commentary? = next?.content { return ConversationMetrics.sectionGap }
         return ConversationMetrics.entryGap
+    }
+
+    private static func isThought(_ entry: ConversationWorkTimelineEntry) -> Bool {
+        if case .activity(let activity) = entry.content { return activity.kind == .thought }
+        return false
     }
 
     private static func isVisualReply(_ entry: ConversationWorkTimelineEntry) -> Bool {
@@ -215,16 +265,21 @@ struct ConversationWorkTranscript: View {
     }
 
     @ViewBuilder
-    private func entry(_ entry: ConversationWorkTimelineEntry, tailID: String?, isRunning: Bool) -> some View {
+    private func entry(_ entry: ConversationWorkTimelineEntry, tailID: String?, isRunning: Bool,
+                       reasoning: AgentRunActivity?) -> some View {
         switch entry.content {
         case .commentary(let activity):
-            ConversationResponse(
-                content: activity.content ?? "",
-                isStreaming: false,
-                showsCopyButton: false,
-                style: .commentary
-            )
-            .padding(.leading, ConversationMetrics.textInset)
+            if let reasoning {
+                ConversationReasonedCommentary(commentary: activity, thought: reasoning, runID: run.id, runStatus: run.status)
+            } else {
+                ConversationResponse(
+                    content: activity.content ?? "",
+                    isStreaming: false,
+                    showsCopyButton: false,
+                    style: .commentary
+                )
+                .padding(.leading, ConversationMetrics.textInset)
+            }
         case .group(let group):
             ConversationWorkGroupRow(
                 group: group,
@@ -393,8 +448,13 @@ struct ConversationThinkingLabel: View {
 /// thought that is only a title is that row, and a record of fields (an
 /// approval) is summed up in it.
 private struct ConversationThinkingBlock: View {
-    /// Three lines of reasoning text.
-    private static let liveHeight: CGFloat = 63
+    /// Exactly three lines of reasoning text, so a trace that follows its end
+    /// stops on a line's top rather than cutting one.
+    private static let liveHeight: CGFloat = {
+        let font = NSFont.systemFont(ofSize: 15 * ConversationResponse.Style.reasoning.scale)
+        let line = NSLayoutManager().defaultLineHeight(for: font) + ConversationMetrics.Prose.lineSpacing
+        return ceil(3 * line - ConversationMetrics.Prose.lineSpacing)
+    }()
 
     let activity: AgentRunActivity
     let runID: String
@@ -467,7 +527,7 @@ private struct ConversationThinkingBlock: View {
             })
             // A live trace has nothing to show until its first line is ready.
             .padding(.top, isLive && AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? "")
-                .workTimelineNonempty == nil ? 0 : ConversationMetrics.rowGap)
+                .workTimelineNonempty == nil ? 0 : ConversationMetrics.labelGap)
             .padding(.leading, ConversationMetrics.textInset)
     }
 
@@ -492,7 +552,9 @@ private struct ConversationThinkingBlock: View {
             guard let colon = line.firstIndex(of: ":"), line.distance(from: line.startIndex, to: colon) <= 24 else { return nil }
             return (String(line[..<colon]), line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
         }
-        if lines.count > 1, fields.count == lines.count {
+        // Only a record that says what happened (an approval's status or
+        // action); reasoning written as "Label: text" lines is still reasoning.
+        if lines.count > 1, fields.count == lines.count, fields.contains(where: { ["Status", "Action"].contains($0.key) }) {
             let named = ["Status", "Action"].compactMap { key in
                 fields.first { $0.key == key }.map { field in
                     // Woven's visual tools read the same here as in their own rows.
@@ -509,6 +571,62 @@ private struct ConversationThinkingBlock: View {
         // the reasoning itself is behind the disclosure, never the label.
         let label = activity.workTimelineThoughtTitle ?? AgentRunActivity.leadingBoldHeading(text) ?? "Thought"
         return Summary(label: label, isComplete: text.isEmpty || text == label || text == "**\(label)**")
+    }
+}
+
+/// A sentence of commentary that carries the thought it came from: the
+/// brain in the icon column, a chevron after the sentence, and the reasoning
+/// under it when opened.
+private struct ConversationReasonedCommentary: View {
+    let commentary: AgentRunActivity
+    let thought: AgentRunActivity
+    let runID: String
+    let runStatus: RunStatus
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @State private var localExpanded = false
+
+    var body: some View {
+        let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + thought.id,
+            keepsRunningTurnOpen: runStatus == .running, local: $localExpanded, interaction: transcriptInteraction)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: ConversationMetrics.iconGap) {
+                Image(systemName: "brain")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(WovenPalette.mutedForeground)
+                    .frame(width: ConversationMetrics.iconColumn, height: 16)
+                    .accessibilityHidden(true)
+                ConversationResponse(
+                    content: commentary.content ?? "",
+                    isStreaming: false,
+                    showsCopyButton: false,
+                    style: .commentary,
+                    trailingAccessory: AnyView(
+                        Button { expanded.wrappedValue.toggle() } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold))
+                                .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                                .foregroundStyle(WovenPalette.mutedForeground)
+                                .frame(width: 10, height: 16)
+                                .contentShape(Rectangle().inset(by: -6))
+                        }
+                        .buttonStyle(.plain)
+                        .help(expanded.wrappedValue ? "Hide reasoning" : "Show reasoning")
+                        .accessibilityLabel("Reasoning")
+                        .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed"))
+                )
+            }
+            if expanded.wrappedValue {
+                ConversationBoundedWorkList(
+                    group: ConversationWorkGroup(id: thought.id, activities: [thought], endsTimeline: false),
+                    runID: runID, runStatus: .completed, followsAppends: false,
+                    initialScrollSnapshot: ConversationWorkScrollSnapshot(offset: 0, isAtBottom: false),
+                    saveScrollSnapshot: { _ in })
+                    .padding(.top, ConversationMetrics.labelGap)
+                    .padding(.leading, ConversationMetrics.textInset)
+            }
+        }
+        .accessibilityIdentifier("work-thinking:" + thought.id)
     }
 }
 

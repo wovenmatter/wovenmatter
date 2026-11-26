@@ -442,7 +442,8 @@ when an intentional design change is accepted.
   turn starts at one left edge, and user messages, the assistant turn and the
   composer share one column and so one right edge. A long user message
   collapses to six lines only when that hides at least three more at its width;
-  otherwise it shows whole, with no control. Gaps come from roles: one gap
+  otherwise it shows whole, with no control. In a narrow column a user message
+  keeps a smaller space on its left. Gaps come from roles: one gap
   between turns in both directions; work, reply, files and the changed-files card
   are sections; work-log entries sit closer, and rows inside a group closer
   still. Commentary sits close to the tools it introduces and further from the
@@ -452,19 +453,24 @@ when an intentional design change is accepted.
   icons left of it, and open work ends a section and a half above the reply. A
   visual reply and the reply that explains it are one answer, a section apart.
   The work divider shows only over foldable work that is showing, never over a
-  lone Thinking row or the dots. Tool rows are one
+  lone Thinking row or the dots; while a turn runs its place is kept, so the
+  first row never moves when it appears. A unit of work is a sentence of
+  commentary and the tools it introduces, a section above it and a label gap
+  inside; an untitled thought that led to the sentence has no row of its own:
+  the sentence carries the brain and a chevron that opens the reasoning. Tool rows are one
   line, truncated in the middle, with the chevron right after the label; the
   full text is in their details, which open at the rows' text inset and wrap
   rather than scroll sideways. Every harness's tool rows use one grammar: a
   verb and a short object (Read docs/README.md, Listed sample, Searched for
-  “x” in docs), paths relative to the folder the tool ran in or else their last
+  “x” in docs), paths relative to the folder the tool ran in, or else to the folder of the
+  turn's first path (fixed, so a shown row never changes), or else their last
   two components, and commands without the folder plumbing in front of them. A
   plain read-only shell search, listing or file read takes the same words as the
   file tool; anything compound shows its first part and an ellipsis, since a row
   never claims what its command did not do. Verbs are past tense once done.
   Woven's visual tools have one label each, previewed or shown, and a group
   names its kinds of step in the rows' words ("Listed 1 folder and read 2
-  files"), never an unnamed action. Thinking looks the same everywhere.
+  files"), and one or two tools by name, never an unnamed action. Thinking looks the same everywhere.
   Live reasoning shows its last three lines, its cut top line fading out; afterwards a
   thought with text is one closed row named by its title or leading heading,
   else "Thought", never by its raw text; one with no text draws nothing. A
@@ -473,13 +479,15 @@ when an intentional design change is accepted.
   wide as it asked to be, with a small inset inside it; its controls show on
   hover, while zoomed, or with focus. Under the reply, Copy and the files it
   refers to share one wrapping row. In reply text,
-  lists sit tighter than paragraphs, two different lists in a row are spaced as
+  lists sit tighter than paragraphs (a list with an item long enough to wrap
+  takes the loose gap), two different lists in a row are spaced as
   paragraphs, every item keeps its marker, a task's box is one drawn square,
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
   block's indent. Inline code is shaded around its own text on each line. Table
-  columns fit their content; a table nearly as wide as the text fills it, and
-  one too wide gives the rest to its widest column. Each block's spacing depends only on the block before it, so streamed
+  columns fit their content, never narrower than short code or a short value
+  they keep whole; a table nearly as wide as the text fills it, and one too
+  wide gives the rest to its widest column. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
   bot chats and the Forum alike, rows fade out before the window's floating

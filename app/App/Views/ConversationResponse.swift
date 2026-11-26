@@ -35,17 +35,28 @@ struct ConversationResponse: View {
     var style: Style = .reply
     /// The files the reply refers to, as chips after Copy once it settles.
     var fileRow: ConversationFileRow?
+    /// Drawn right after the text's last line, centred on it (a disclosure chevron).
+    var trailingAccessory: AnyView?
     @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
     @State private var pendingExternalURL: URL?
+    @State private var lastLine: CGRect?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ConversationResponseText(content: content, isStreaming: isStreaming, style: style) { url in
+            ConversationResponseText(content: content, isStreaming: isStreaming, style: style,
+                                     onLastLine: trailingAccessory == nil ? nil : { lastLine = $0 }) { url in
                 // Page links only work where a handler routes them (bot chats).
                 if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
             .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
+            .overlay(alignment: .topLeading) {
+                if let trailingAccessory, let lastLine {
+                    trailingAccessory
+                        .frame(height: lastLine.height, alignment: .center)
+                        .offset(x: lastLine.maxX + ConversationMetrics.labelGap, y: lastLine.minY)
+                }
+            }
 
             if showsCopyButton {
                 // One row, the same height while the reply streams and once it
@@ -111,6 +122,8 @@ private struct ConversationResponseText: NSViewRepresentable {
     let content: String
     let isStreaming: Bool
     let style: ConversationResponse.Style
+    /// Told where the last line of text sits, once laid out.
+    var onLastLine: ((CGRect) -> Void)?
     let onOpenLink: (URL) -> Void
 
     func makeNSView(context: Context) -> ConversationResponseViewport {
@@ -123,8 +136,10 @@ private struct ConversationResponseText: NSViewRepresentable {
         textView.onOpenLink = onOpenLink
         textView.onPressWhileGrowing = isStreaming ? transcriptInteraction : nil
         textView.onSelect = transcriptInteraction
+        viewport.onLastLine = onLastLine
         if textView.apply(content: content, isStreaming: isStreaming, style: style, colorScheme: colorScheme) {
             viewport.invalidateIntrinsicContentSize()
+            viewport.reportLastLine()
         }
     }
 
@@ -158,9 +173,24 @@ final class ConversationResponseViewport: NSView {
         updateVisibleFrame()
     }
 
+    /// Told where the text's last line sits at the width the text is placed
+    /// at, once per change: never from a width layout only probed, which
+    /// would make the answer, and the state it sets, change on every pass.
+    var onLastLine: ((CGRect) -> Void)?
+    private var reportedLastLine: CGRect?
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateVisibleFrame()
+        reportLastLine()
+    }
+
+    func reportLastLine() {
+        guard let onLastLine, bounds.width > 0 else { return }
+        _ = textView.fittingSize(width: bounds.width)
+        guard let line = textView.lastLineRect, line != reportedLastLine else { return }
+        reportedLastLine = line
+        DispatchQueue.main.async { onLastLine(line) }
     }
 
     override func layout() {
@@ -350,6 +380,21 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         tail.append(parts.rest)
         stable = (kept.source + cutOffset, kept.length + parts.settled.length, parts.last)
         return tail
+    }
+
+    /// The text's last line: where its glyphs end, and its height without the
+    /// line spacing below it.
+    var lastLineRect: CGRect? {
+        guard let layoutManager, let textStorage, textStorage.length > 0 else { return nil }
+        let string = textStorage.string as NSString
+        var last = string.length - 1
+        while last > 0, string.character(at: last) == 0x0A { last -= 1 }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: last, length: 1), actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return nil }
+        let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        let style = textStorage.attribute(.paragraphStyle, at: last, effectiveRange: nil) as? NSParagraphStyle
+        return CGRect(x: used.minX, y: used.minY, width: used.width,
+                      height: max(1, used.height - (last < string.length - 1 ? style?.lineSpacing ?? 0 : 0)))
     }
 
     func fittingSize(width: CGFloat) -> CGSize {
@@ -763,7 +808,14 @@ private enum ConversationResponseAttributedText {
                 appendInline(content, font: font(size, .semibold), style: paragraphStyle(indent: indent, before: before),
                              marker: marker)
             case .list(let items):
-                let gap = items.contains { $0.blocks.count > 1 } ? Prose.looseListGap : Prose.tightListGap
+                // Items of more than one block, or long enough to wrap, are told
+                // apart by the loose gap; a list of short items stays tight.
+                let gap = items.contains { item in
+                    item.blocks.count > 1 || item.blocks.contains { block in
+                        if case .paragraph(let content) = block { return content.rendered.characters.count > Prose.longListItemLength }
+                        return false
+                    }
+                } ? Prose.looseListGap : Prose.tightListGap
                 // Nesting steps by level, however many spaces the source used,
                 // decided in source order so a later item never moves an earlier one.
                 var indents: [Int] = []
@@ -848,12 +900,17 @@ private enum ConversationResponseAttributedText {
                     let most = table.header.indices.map { column in
                         max(1, rows.map { ceil($0[column].size().width) + 1 }.max() ?? 1)
                     }
-                    // A short cell ("7,098 bytes") counts as one unbreakable run.
+                    // A column is never narrower than a run it may not break: code
+                    // kept whole, or a short cell ("7,098 bytes"). The limit only
+                    // caps runs a line may still break, such as a long word or URL.
                     let least = table.header.indices.map { column in
-                        min(most[column], Prose.tableColumnMinimumLimit, rows.map { row in
-                            row[column].length <= Prose.shortCellLength ? ceil(row[column].size().width) + 1
-                                : unbreakableWidth(row[column])
-                        }.max() ?? 1)
+                        let runs = rows.map { row in
+                            row[column].length <= Prose.shortCellLength
+                                ? (kept: ceil(row[column].size().width) + 1, word: CGFloat(1)) : unbreakableWidths(row[column])
+                        }
+                        let kept = runs.map(\.kept).max() ?? 1
+                        let word = min(Prose.tableColumnMinimumLimit, runs.map(\.word).max() ?? 1)
+                        return min(most[column], max(kept, word))
                     }
                     return (most, least)
                 }
@@ -940,23 +997,33 @@ private enum ConversationResponseAttributedText {
         return output
     }
 
-    /// The widest run in `text` a line cannot break inside: a word, or a short
-    /// inline code span kept together.
-    private static func unbreakableWidth(_ text: NSAttributedString) -> CGFloat {
+    /// The widest runs in `text` a line cannot break inside: code kept
+    /// whole (with room for its shading), and plain words, which a line can
+    /// still break when it must.
+    private static func unbreakableWidths(_ text: NSAttributedString) -> (kept: CGFloat, word: CGFloat) {
         let string = text.string as NSString
-        var widest: CGFloat = 1
+        var kept: CGFloat = 1, word: CGFloat = 1
         var start = 0
+        func isKept(_ index: Int) -> Bool {
+            text.attribute(.responseNoBreak, at: index, effectiveRange: nil) as? ResponseNoBreak == .whole
+        }
         for index in 0...string.length {
             let breaks = index == string.length || (
                 CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(string.character(at: index)) ?? " ")
-                && text.attribute(.responseNoBreak, at: index, effectiveRange: nil) as? ResponseNoBreak != .whole)
+                && !isKept(index))
             guard breaks else { continue }
             if index > start {
-                widest = max(widest, ceil(text.attributedSubstring(from: NSRange(location: start, length: index - start)).size().width) + 1)
+                let range = NSRange(location: start, length: index - start)
+                let width = ceil(text.attributedSubstring(from: range).size().width) + 1
+                if (start..<index).contains(where: isKept) {
+                    kept = max(kept, width + 2 * ConversationMetrics.hair + 2)
+                } else {
+                    word = max(word, width)
+                }
             }
             start = index + 1
         }
-        return widest
+        return (kept, word)
     }
 
     /// The spacing above `block`'s first line: the visible gap between the two

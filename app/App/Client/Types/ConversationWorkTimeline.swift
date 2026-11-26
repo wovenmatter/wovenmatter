@@ -293,7 +293,15 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
       .sorted { $0.offset < $1.offset }
       .map(\.element)
     var labels = selected.map { action in
-      action.summary(count: action.summaryCount(members[action] ?? []))
+      // One or two tools of their own are named, as their rows name them.
+      let names = (members[action] ?? []).map(\.workTimelineToolIdentity).reduce(into: [String]()) { names, name in
+        if !name.isEmpty, !names.contains(name) { names.append(name) }
+      }
+      if action == .other, (1...2).contains(names.count), names.allSatisfy({ !$0.contains(" ") }) {
+        let calls = members[action]?.count ?? 0
+        return "Used " + names.joined(separator: " and ") + (names.count == 1 && calls > 1 ? " \(calls) times" : "")
+      }
+      return action.summary(count: action.summaryCount(members[action] ?? []))
     }
     let remaining = tools.count - selected.reduce(0) { $0 + (members[$1]?.count ?? 0) }
     if remaining > 0 {
@@ -518,28 +526,25 @@ public extension AgentRunActivity {
       .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
   }
 
-  /// The deepest folder that holds every file or folder these tools named,
-  /// when they named at least two and it is not near the root.
-  static func workTimelineCommonFolder(_ activities: [AgentRunActivity]) -> String? {
-    var paths: Set<String> = []
+  /// The folder a turn's paths read relative to when nothing says where its
+  /// tools ran: fixed by the first path a tool named, so a row's short path
+  /// never changes once shown. A folder the tool listed or searched is the
+  /// anchor itself; a file's anchor is the folder it is in.
+  static func workTimelineAnchorFolder(_ activities: [AgentRunActivity]) -> String? {
     for activity in activities where activity.kind == .tool {
+      let folder: String?
       switch activity.workTimelineOperation {
-      case .search(_, let path?), .list(let path?): paths.insert(path)
-      case .read(let path): paths.insert(path)
+      case .list(let path?), .search(_, let path?): folder = path
+      case .read(let path): folder = (path as NSString).deletingLastPathComponent
       default:
-        if let path = activity.workTimelineInputPath ?? activity.title?.workTimelineAbsolutePaths.first { paths.insert(path) }
+        guard let path = activity.workTimelineInputPath ?? activity.title?.workTimelineAbsolutePaths.first else { continue }
+        folder = ConversationToolAction(activity) == .list ? path : (path as NSString).deletingLastPathComponent
       }
+      // Only an absolute folder well below the root anchors anything.
+      if let folder, folder.hasPrefix("/"), folder.split(separator: "/").count >= 3 { return folder }
+      return nil
     }
-    let absolute = paths.filter { $0.hasPrefix("/") }.map { $0.split(separator: "/").map(String.init) }
-    guard absolute.count >= 2, var common = absolute.first else { return nil }
-    for parts in absolute.dropFirst() {
-      common = Array(zip(common, parts).prefix { $0 == $1 }.map(\.0))
-    }
-    // A file the others sit beside is not a folder.
-    if absolute.contains(where: { $0 == common }), common.last?.contains(".") == true { common.removeLast() }
-    // Only a folder close above all of them: paths under it stay short.
-    guard common.count >= 3, absolute.allSatisfy({ $0.count - common.count <= 3 }) else { return nil }
-    return "/" + common.joined(separator: "/")
+    return nil
   }
 
   /// A tool that runs a shell command, by its name.
@@ -598,8 +603,10 @@ public extension AgentRunActivity {
     // folder plumbing around it. A runtime may cut a long command short to
     // title it: show the whole command, which the row truncates in the
     // middle, keeping its real end.
+    // A one-word title ("Terminal", "Bash") names the tool, not the step:
+    // the command, once known, names it from the start.
     if action == .command, let label, let command = (input?["command"] as? String)?.workTimelineSingleLine,
-       command.hasPrefix(label) {
+       command.hasPrefix(label) || !label.contains(" ") {
       return command.workTimelineDisplayCommand(root: root).workTimelineFirstSegment
     }
     if action == .visual || action == .preview {

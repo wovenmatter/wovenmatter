@@ -42,6 +42,11 @@ enum ConversationMetrics {
     static let bubbleInsets = EdgeInsets(top: 10, leading: blockInset, bottom: 10, trailing: blockInset)
     /// The row under a reply that holds Copy, or the dots while it runs.
     static let actionRowHeight: CGFloat = 24
+    /// The least space left of a user's message; in a column narrower than
+    /// `narrowColumn`, the smaller lead.
+    static let bubbleLead: CGFloat = 72
+    static let narrowBubbleLead: CGFloat = 48
+    static let narrowColumn: CGFloat = 520
 
     /// Reply typography, as visible gaps between text boxes and box edges.
     enum Prose {
@@ -51,6 +56,8 @@ enum ConversationMetrics {
         static let looseListGap: CGFloat = 10
         /// Items of a list whose items are single paragraphs.
         static let tightListGap: CGFloat = 6
+        /// A list item longer than this wraps at the column's width.
+        static let longListItemLength = 100
         static let majorHeadingGap: CGFloat = 24
         static let minorHeadingGap: CGFloat = 20
         /// A heading → what follows it.
@@ -181,5 +188,33 @@ private struct ConversationEdges: ViewModifier {
                     .padding(.bottom, stackTop + ConversationMetrics.rowGap)
                 }
             }
+    }
+}
+
+/// A message row: a user's message hugs the right edge, keeping at least
+/// `ConversationMetrics.bubbleLead` of space on its left (less in a narrow
+/// column, so short lines do not wrap); anything else starts at the left.
+struct ConversationMessageRowLayout: Layout {
+    var trailing = true
+
+    static func lead(for width: CGFloat) -> CGFloat {
+        width < ConversationMetrics.narrowColumn ? ConversationMetrics.narrowBubbleLead : ConversationMetrics.bubbleLead
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let width = proposal.width ?? child.sizeThatFits(.unspecified).width
+        let room = trailing ? max(0, width - Self.lead(for: width)) : width
+        let size = child.sizeThatFits(ProposedViewSize(width: room, height: nil))
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        let room = trailing ? max(0, bounds.width - Self.lead(for: bounds.width)) : bounds.width
+        let size = child.sizeThatFits(ProposedViewSize(width: room, height: nil))
+        let x = trailing ? bounds.maxX - min(size.width, room) : bounds.minX
+        child.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading,
+                    proposal: ProposedViewSize(width: min(size.width, room), height: size.height))
     }
 }

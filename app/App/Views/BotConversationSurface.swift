@@ -738,8 +738,7 @@ private struct BotMessageRow: View {
     private var visualReplyOnly: Bool { entry.text.isEmpty && !entry.visualReplies.isEmpty && entry.error == nil }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if entry.isUser { Spacer(minLength: 72) }
+        ConversationMessageRowLayout(trailing: entry.isUser) {
             VStack(alignment: entry.isUser ? .trailing : .leading, spacing: ConversationMetrics.labelGap) {
                 // A visual reply on its own continues the reply above it.
                 if !entry.isUser && !visualReplyOnly {
@@ -773,7 +772,6 @@ private struct BotMessageRow: View {
                 if !visualReplyOnly { actions }
             }
             .frame(maxWidth: entry.isUser ? nil : .infinity, alignment: entry.isUser ? .trailing : .leading)
-            if !entry.isUser { Spacer(minLength: 0) }
         }
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
@@ -869,8 +867,7 @@ struct BotPendingMessage: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 72)
+        ConversationMessageRowLayout {
             ConversationUserBubble(content: text) { EmptyView() }
                 .opacity(0.6)
         }
