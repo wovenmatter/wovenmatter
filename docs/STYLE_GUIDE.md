@@ -431,7 +431,8 @@ when an intentional design change is accepted.
   transcript follows: scrolling away, opening or selecting something stops it,
   and scrolling back to the end or Latest reply resumes it; layout never does.
   A chat opens at its end, with the end of its last reply clear of the composer. Between a tool and the next visible output,
-  use a static Thinking label. Thinking is marked with a static brain, in chats
+  use a static Thinking label, also while a delegated task still runs above
+  the last finished row. Thinking is marked with a static brain, in chats
   and bot chats. While a turn runs, one row of three small dots sits under the
   last thing it shows, starting where that thing's text starts, its strong dot
   stepping left to right, still under Reduce Motion: at the work lane's text edge, or at the reply's. The
@@ -457,7 +458,9 @@ when an intentional design change is accepted.
   work divider is drawn in the middle of that gap over foldable work that is
   showing, never over a Thinking row with nothing in it yet or the dots, so it
   never adds or removes height. A unit of work is a sentence of commentary and
-  the tools it introduces, a section above it and a label gap inside; a
+  the tools it introduces, a section above it and a label gap inside; once
+  the turn has settled, a thought row after a tool starts a section the same
+  way (while it runs, rows keep the place of the "Thinking" row they replace); a
   thought that led to the sentence, untitled or only its title, has no row of
   its own: the sentence stays commentary, at the lane's text inset with no
   icon, and a chevron after it opens the reasoning. Elsewhere a thought that is

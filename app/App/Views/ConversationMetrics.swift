@@ -273,6 +273,8 @@ private struct ConversationFloatingGlass: ViewModifier {
     func body(content: Content) -> some View {
         if enabled {
             content
+                // A step above the muted ink, so the glyph reads over what the glass blurs.
+                .environment(\.sidebarForeground, WovenPalette.foreground.opacity(0.8))
                 .background {
                     if reduceTransparency {
                         Circle().fill(theme.palette.workspace)
@@ -280,7 +282,14 @@ private struct ConversationFloatingGlass: ViewModifier {
                         Color.clear.glassEffect(.regular.interactive(), in: Circle())
                     }
                 }
-                .background { Color.clear.conversationGlassSnapshot(radius: .greatestFiniteMagnitude) }
+                .background {
+                    // Solid under Reduce Transparency: a debug still covers it rather than glazing it.
+                    if reduceTransparency {
+                        Color.clear.conversationCoverSnapshot(radius: .greatestFiniteMagnitude)
+                    } else {
+                        Color.clear.conversationGlassSnapshot(radius: .greatestFiniteMagnitude)
+                    }
+                }
         } else {
             content
         }

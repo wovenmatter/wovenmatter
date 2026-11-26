@@ -141,8 +141,9 @@ struct ConversationHTMLRenderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipShape(RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous))
         .overlay {
+            // A step stronger in Dark, where the hairline otherwise all but vanishes.
             RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
-                .strokeBorder(WovenPalette.foreground.opacity(0.09), lineWidth: 1)
+                .strokeBorder(WovenPalette.foreground.opacity(theme == .dark ? 0.14 : 0.09), lineWidth: 1)
         }
         // Zoom and expand float in the frame's top corner, over the page.
         .overlay(alignment: .topTrailing) {
@@ -283,18 +284,32 @@ extension EnvironmentValues {
     static func key(scope: UUID?, item: String) -> String { "\(scope?.uuidString ?? "-")/\(item)" }
 
     /// The mounted inline pages, each with the coordinator that registered it.
-    static var readers: [String: (owner: ObjectIdentifier, read: () async -> String?)] = [:]
+    static var readers: [String: (owner: ObjectIdentifier, read: @MainActor () async -> String?)] = [:]
 
     static func text(of key: String) async -> String? {
         await readers[key]?.read()
     }
 
-    /// Several pages' text in order, a blank line apart; nil when none answers.
+    /// Several pages' text in order, a blank line apart, read together under
+    /// one deadline (each read's own second, all started at once); a page that
+    /// does not answer is left out; nil when none answers.
     static func text(of keys: [String]) async -> String? {
+        let reads = keys.compactMap { readers[$0]?.read }.map { read in Task { @MainActor in await read() } }
         var parts: [String] = []
-        for key in keys { if let text = await text(of: key) { parts.append(text) } }
+        for read in reads { if let text = await read.value { parts.append(text) } }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
+
+    /// The newest Copy press anywhere; only it may write the pasteboard.
+    private static var latestPress = 0
+
+    /// Starts a Copy press; pass what it returns to `isLatest` before writing.
+    static func press() -> Int {
+        latestPress += 1
+        return latestPress
+    }
+
+    static func isLatest(_ press: Int) -> Bool { press == latestPress }
 
     /// What the page answered, tidied: trailing spaces off, at most one blank line in a row.
     static func tidy(_ text: String?) -> String? {

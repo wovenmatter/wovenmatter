@@ -191,7 +191,8 @@ struct ConversationWorkTranscript: View {
                             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                                 self.entry(entry, tailID: tailID, isRunning: isRunning, reasoning: reasoning[entry.id])
                                     .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil,
-                                                            next: index + 1 < entries.count ? entries[index + 1] : nil))
+                                                            next: index + 1 < entries.count ? entries[index + 1] : nil,
+                                                            settled: !isRunning))
                             }
                         }
                         .transition(reduceMotion ? .identity : .opacity)
@@ -238,8 +239,7 @@ struct ConversationWorkTranscript: View {
         .onChange(of: run.status) { before, after in
             guard before == .running, after != .running, let start = presentation?.startedAt else { return }
             // The running label counts whole seconds, so this is the most it
-            // can have shown: later than the saved end by however long the
-            // end took to arrive and draw, it acts only when that was late.
+            // can have shown.
             watchedDuration = Date().timeIntervalSince(start).rounded(.down)
         }
         // Without a session folder, the folder of the turn's first path, so
@@ -285,11 +285,15 @@ struct ConversationWorkTranscript: View {
     /// row's gap depends only on the row before it, so a row that replaces a
     /// live "Thinking" lands exactly where it was.
     private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?,
-                            next: ConversationWorkTimelineEntry?) -> CGFloat {
+                            next: ConversationWorkTimelineEntry?, settled: Bool) -> CGFloat {
         // The first row's gap is the section under the header.
         guard let previous else { return 0 }
         if isVisualReply(entry) || isVisualReply(previous) { return ConversationMetrics.sectionGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
+        // Once settled, a thought after a tool starts the next step, as a
+        // sentence does; while running it keeps the row gap of the "Thinking"
+        // row it replaced, so nothing moves until the turn ends.
+        if settled, isThought(entry), !isRecord(entry), isTool(previous) { return ConversationMetrics.sectionGap }
         // A thought keeps a row's gap (it took the place of "Thinking"); the
         // sentence after a thought row stays with it.
         if case .commentary = entry.content { return isThought(previous) ? ConversationMetrics.labelGap : ConversationMetrics.sectionGap }
@@ -306,12 +310,24 @@ struct ConversationWorkTranscript: View {
 
     /// Whether the rows drawn need a Thinking row under them: none drawn yet,
     /// or the last is a settled group or row, and nothing shows progress.
+    /// A delegation still running above the last row shows no progress where
+    /// the reader is looking, so it does not stand in for the Thinking row.
     private static func needsThinking(_ entries: [ConversationWorkTimelineEntry]) -> Bool {
+        // The last row drawn, down to the last call in a group.
+        let lastActivityID: String? = switch entries.last?.content {
+        case .group(let group): group.activities.last?.id
+        case .activity(let activity): activity.id
+        default: nil
+        }
         if entries.contains(where: { entry in
+            // Running, unless it is a delegation with rows drawn after it.
+            func shows(_ activity: AgentRunActivity) -> Bool {
+                activity.id == lastActivityID || activity.workTimelineDelegatedTask == nil
+            }
             switch entry.content {
-            case .group(let group): group.hasActiveActivity
-            case .activity(let activity): activity.workTimelineShowsProgress
-            case .commentary: false
+            case .group(let group): return group.activities.contains { group.showsProgress($0) && shows($0) }
+            case .activity(let activity): return activity.workTimelineShowsProgress && shows(activity)
+            case .commentary: return false
             }
         }) { return false }
         guard let last = entries.last else { return true }
@@ -323,6 +339,12 @@ struct ConversationWorkTranscript: View {
     private static func thoughtsCloseVisual(_ entries: [ConversationWorkTimelineEntry]) -> Bool {
         guard let visual = entries.lastIndex(where: { !isThought($0) }), visual < entries.count - 1 else { return false }
         return isVisualReply(entries[visual])
+    }
+
+    /// A record of fields (an approval): it reads as the tool row it stands for.
+    private static func isRecord(_ entry: ConversationWorkTimelineEntry) -> Bool {
+        guard case .activity(let activity) = entry.content, activity.kind == .thought else { return false }
+        return ConversationThinkingBlock.summary(of: activity).isRecord
     }
 
     private static func isThought(_ entry: ConversationWorkTimelineEntry) -> Bool {
@@ -453,13 +475,12 @@ struct ConversationWorkTranscript: View {
         }
     }
 
-    /// The saved time, or the time this view had shown the turn running when
-    /// that was longer.
+    /// The saved time; or, when the end reached this view a second or more
+    /// late (a slow link), the time it had already shown the turn running, so
+    /// the header does not step back. On the Mac that ran the turn the two
+    /// agree, live and reopened.
     private var settledDuration: String? {
-        // Compared as the saved time is shown: tenths under ten seconds,
-        // whole seconds above.
-        let saved = presentation?.completedSeconds.map { $0 < 10 ? ($0 * 10).rounded() / 10 : $0.rounded() }
-        guard let watched = watchedDuration, watched > saved ?? .infinity else {
+        guard let watched = watchedDuration, let saved = presentation?.completedSeconds, watched >= saved + 1 else {
             return presentation?.completedDuration
         }
         return formattedRunDuration(watched)

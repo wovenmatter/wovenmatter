@@ -146,8 +146,11 @@ struct ConversationResponse: View {
     private var copyButton: some View {
         Button {
             // The whole answer: anything shown above the text (a visual reply) first.
+            let press = ConversationVisualReplyText.press()
             Task { @MainActor in
                 let lead = await copyLead?()
+                // A Copy pressed meanwhile on another answer wins.
+                guard ConversationVisualReplyText.isLatest(press) else { return }
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(lead.map { $0 + "\n\n" + content } ?? content, forType: .string)
             }
@@ -678,7 +681,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
                                             xRadius: ConversationMetrics.blockRadius, yRadius: ConversationMetrics.blockRadius)
                     WovenColors.primary.withAlphaComponent(0.032).setFill()
                     path.fill()
-                    WovenColors.foreground.withAlphaComponent(0.09).setStroke()
+                    // A step stronger in Dark, as a visual reply's frame is.
+                    let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    WovenColors.foreground.withAlphaComponent(isDark ? 0.14 : 0.09).setStroke()
                     path.lineWidth = 1
                     path.stroke()
                     // One rule under every row but the last, one device pixel

@@ -1248,8 +1248,10 @@ private struct ConversationVisualReplyCopyButton: View {
     }
 
     private func copy() {
+        let press = ConversationVisualReplyText.press()
         Task { @MainActor in
-            guard let text = await ConversationVisualReplyText.text(of: keys) else { return }
+            guard let text = await ConversationVisualReplyText.text(of: keys),
+                  ConversationVisualReplyText.isLatest(press) else { return }
             NSPasteboard.general.clearContents()
             copied = NSPasteboard.general.setString(text, forType: .string)
         }
@@ -1298,7 +1300,9 @@ private struct ConversationVisualReplyCopyButton: View {
         let keys: Set<UInt16> = [115, 116, 119, 121, 125, 126, 49]   // home, page up, end, page down, down, up, space
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown]) { event in
             if event.type == .scrollWheel, let content = event.window?.contentView {
-                noteWheel(over: content.hitTest(content.convert(event.locationInWindow, from: nil)))
+                // `hitTest` takes a point in the receiver's superview's coordinates.
+                let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+                noteWheel(over: content.hitTest(point))
             } else if event.type == .keyDown, keys.contains(event.keyCode), let window = NSApp.keyWindow,
                       !(window.firstResponder is NSText) {
                 keyWindow = window
