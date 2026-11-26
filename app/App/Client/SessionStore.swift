@@ -558,13 +558,16 @@ final class SessionStore {
     }
 
     /// A script's tool calls as its card lists them. One without output that
-    /// has not failed is running while the script runs, and done after.
+    /// has not failed is running while the script runs, and done after. A
+    /// visual reply it published is left out: the reply shows as its own
+    /// item, while the script keeps its source, output and other calls.
     private static func codeCalls(_ calls: [ToolCall], live: Bool) -> [AgentRunCodeCall] {
-        calls.enumerated().map { index, call in
+        calls.enumerated().compactMap { index, call -> AgentRunCodeCall? in
             // The entry that says how many more calls there were has no name.
             guard !call.name.isEmpty else { return AgentRunCodeCall(id: index, name: call.title ?? "", status: nil) }
             let status: AgentRunCodeCall.Status = call.failed ? .failed : live && call.output == nil ? .running
                 : call.kind == .visualReply ? .shownInChat : .completed
+            if status == .shownInChat { return nil }
             return AgentRunCodeCall(id: index, name: readableToolName(call.name), status: status,
                                     error: call.failed ? call.output : nil)
         }
@@ -682,9 +685,6 @@ final class SessionStore {
                 if !entry.live { runs[run].completedAt = entry.date }
                 // A published visual reply shows as its own item; only a call that failed shows as a call.
                 if call.kind == .visualReply && !call.failed { continue }
-                // So does a finished script that did nothing but publish visual replies.
-                if call.kind == .code, !entry.live, !call.failed, let calls = call.calls, !calls.isEmpty,
-                   calls.allSatisfy({ $0.kind == .visualReply && !$0.failed }) { continue }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
                     activity: Self.activity(call, id: entry.id, live: entry.live, position: position),

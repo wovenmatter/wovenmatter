@@ -185,11 +185,6 @@ extension ConversationWorkTimeline {
   var entriesOutsideFold: [ConversationWorkTimelineEntry] {
     entries.filter(\.staysOutsideFold)
   }
-
-  /// Whether a fold would hide anything at all.
-  var hasFoldableEntries: Bool {
-    entries.contains { !$0.staysOutsideFold }
-  }
 }
 
 extension ConversationWorkTimelineEntry {
@@ -220,8 +215,7 @@ public struct ConversationWorkTimelineEntry: Equatable, Identifiable, Sendable {
   }
 }
 
-/// Consecutive tool calls, summarized using at most two action categories,
-/// prioritizing commands and edits, with remaining calls counted as other steps.
+/// Consecutive tool calls, summarized by naming each kind of step they took.
 public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public let id: String
   public let activities: [AgentRunActivity]
@@ -270,43 +264,72 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
 
   static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
+    sentence(summaryParts(activities: activities, tools: tools).map(\.sentence))
+  }
+
+  /// The facts of `summary` as short count-first parts, for a column too
+  /// narrow for the sentence: "2 files changed · 3 previews · ToolSearch".
+  public var compactSummary: String {
+    Self.summaryParts(activities: activities, tools: activities.filter { $0.kind != .thought })
+      .map(\.compact).joined(separator: " · ")
+  }
+
+  /// One fact of a summary, as the sentence words it and in compact form.
+  struct SummaryPart: Equatable {
+    let sentence: String
+    let compact: String
+  }
+
+  /// Every kind of step, in the order it first ran, in the rows' words.
+  /// Files are counted once however often they were touched; a step whose
+  /// outcome the verb would claim is counted apart when it failed.
+  static func summaryParts(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> [SummaryPart] {
     if tools.isEmpty {
-      if activities.count == 1, let only = activities.first {
-        return only.workTimelineLabel(active: false)
-      }
-      return "Thought (×\(activities.count))"
+      let label = activities.count == 1 ? activities[0].workTimelineLabel(active: false) : "Thought (×\(activities.count))"
+      return [SummaryPart(sentence: label, compact: label)]
     }
     var order: [ConversationToolAction] = []
     var members: [ConversationToolAction: [AgentRunActivity]] = [:]
     for tool in tools {
-      // Searches read the same in a summary, whatever their subject.
-      let classified = ConversationToolAction(tool)
-      let action = classified == .search ? .codeSearch : classified
+      let action = ConversationToolAction(tool)
       if members[action] == nil { order.append(action) }
       members[action, default: []].append(tool)
     }
-    // Every kind of step, in order, while there are few; past four, the three
-    // that matter most and a count of the rest.
-    let selected = order.count <= 4 ? order : order.enumerated()
-      .sorted { ($0.element.summaryPriority, $0.offset) < ($1.element.summaryPriority, $1.offset) }
-      .prefix(3)
-      .sorted { $0.offset < $1.offset }
-      .map(\.element)
-    var labels = selected.map { action in
+    // Two kinds of search side by side are each named, so neither reads as
+    // a repeat of the other.
+    let searches: Set<ConversationToolAction> = [.webSearch, .codeSearch, .search]
+    let namesSearches = Set(order).intersection(searches).count > 1
+    return order.flatMap { action -> [SummaryPart] in
+      let all = members[action] ?? []
       // One or two tools of their own are named, as their rows name them.
-      let names = (members[action] ?? []).map(\.workTimelineToolIdentity).reduce(into: [String]()) { names, name in
+      let names = all.map(\.workTimelineToolIdentity).reduce(into: [String]()) { names, name in
         if !name.isEmpty, !names.contains(name) { names.append(name) }
       }
       if action == .other, (1...2).contains(names.count), names.allSatisfy({ !$0.contains(" ") }) {
-        let calls = members[action]?.count ?? 0
-        return "Used " + names.joined(separator: " and ") + (names.count == 1 && calls > 1 ? " \(calls) times" : "")
+        let several = names.count == 1 && all.count > 1
+        return [SummaryPart(
+          sentence: "Used " + names.joined(separator: " and ") + (several ? " \(all.count) times" : ""),
+          compact: several ? "\(all.count)× \(names[0])" : names.joined(separator: " · "))]
       }
-      return action.summary(count: action.summaryCount(members[action] ?? []))
+      let failed = action.claimsOutcome ? all.filter(\.workTimelineIsFailure) : []
+      let done = action.claimsOutcome ? all.filter { !$0.workTimelineIsFailure } : all
+      var parts: [SummaryPart] = []
+      if !done.isEmpty {
+        let count = action.summaryCount(done)
+        parts.append(SummaryPart(
+          sentence: action.summary(count: count, namingSearch: namesSearches),
+          compact: action.compactSummary(count: count, namingSearch: namesSearches)))
+      }
+      if !failed.isEmpty, let noun = action.failureNoun(count: failed.count) {
+        let text = "\(failed.count) \(noun) failed"
+        parts.append(SummaryPart(sentence: text, compact: text))
+      }
+      return parts
     }
-    let remaining = tools.count - selected.reduce(0) { $0 + (members[$1]?.count ?? 0) }
-    if remaining > 0 {
-      labels.append("\(remaining) other \(remaining == 1 ? "step" : "steps")")
-    }
+  }
+
+  /// Parts as one sentence: "Read 2 files, changed 1 file, and ran 3 commands".
+  static func sentence(_ labels: [String]) -> String {
     let sentence = labels.enumerated().map { index, label in
       index == 0 ? label : label.prefix(1).lowercased() + label.dropFirst()
     }
@@ -342,15 +365,8 @@ public enum ConversationToolAction: Hashable, Sendable {
 
   public init(_ activity: AgentRunActivity) {
     let name = activity.workTimelineToolIdentity.lowercased()
-    let visualCalls = activity.codeCalls.flatMap { calls in
-      calls.isEmpty || !calls.allSatisfy({ Self.isVisual($0.name.lowercased()) }) ? nil : calls
-    }
-    if Self.isVisual(name) || visualCalls != nil {
-      // Woven's own visual reply tools, however a harness names or wraps
-      // them: a preview stays a preview unless something was published.
-      let previews = visualCalls.map { $0.allSatisfy { $0.name.lowercased().hasSuffix("preview_html") } }
-        ?? name.hasSuffix("preview_html")
-      self = previews ? .preview : .visual
+    if let visual = Self.wovenVisual(activity) {
+      self = visual
     } else if activity.codeCalls != nil {
       self = .code
     } else if activity.questions != nil {
@@ -389,11 +405,12 @@ public enum ConversationToolAction: Hashable, Sendable {
     } else if name.contains("write") || name.contains("edit")
       || name.contains("patch") || !activity.changes.isEmpty {
       self = .edit
+    } else if ["list", "ls", "list_directory", "list_dir", "listdir"].contains(name) {
+      // OpenCode's `list`, and the like: a folder's listing by the tool's own name.
+      self = .list
     } else if name.contains("read") || name.contains("view") {
       // A folder's listing is not a file read.
-      let output = activity.rawOutputJSON?.prefix(200).lowercased() ?? ""
-      self = activity.workTimelineInputPath?.hasSuffix("/") == true || output.hasPrefix("read directory")
-        || output.hasPrefix("list") ? .list : .read
+      self = activity.workTimelineReadsFolder ? .list : .read
     } else if name.contains("task") || name.contains("agent") {
       self = .delegate
     } else {
@@ -403,40 +420,82 @@ public enum ConversationToolAction: Hashable, Sendable {
     }
   }
 
-  /// `render_html` or `preview_html`, under any harness's prefix.
-  static func isVisual(_ name: String) -> Bool {
-    name.hasSuffix("render_html") || name.hasSuffix("preview_html")
+  /// Woven's own `render_html` or `preview_html`, by the name or title a
+  /// runtime gives it: alone, or after the `woven` server and its separator,
+  /// as the server recognises it. Another server's tool of that name is not.
+  private static let wovenVisualName = try! NSRegularExpression(
+    pattern: #"^(?:(?:.*[^a-z0-9])?woven(?:__|[_./:]\s*|\s+))?(render_html|preview_html)$"#)
+
+  static func wovenVisualTool(_ name: String) -> ConversationToolAction? {
+    let name = name.trimmingCharacters(in: .whitespaces).lowercased()
+    let range = NSRange(location: 0, length: (name as NSString).length)
+    guard let match = wovenVisualName.firstMatch(in: name, range: range) else { return nil }
+    return (name as NSString).substring(with: match.range(at: 1)) == "preview_html" ? .preview : .visual
   }
 
-  var summaryPriority: Int {
-    switch self {
-    case .command, .code, .edit, .delegate: 0
-    case .other: 2
-    default: 1
+  /// Showing a visual reply, or checking one: a Woven visual tool, or a
+  /// script that called only those. A script claims to have shown one only
+  /// when a call of it was shown in the chat (or still runs); one whose
+  /// publication failed is a script that ran.
+  static func wovenVisual(_ activity: AgentRunActivity) -> ConversationToolAction? {
+    if let calls = activity.codeCalls {
+      let named = calls.filter { $0.status != nil }
+      let kinds = named.map { wovenVisualTool($0.name) }
+      guard !named.isEmpty, !kinds.contains(nil) else { return nil }
+      if zip(named, kinds).contains(where: { $1 == .visual && [.shownInChat, .running].contains($0.status) }) {
+        return .visual
+      }
+      return kinds.allSatisfy { $0 == .preview } ? .preview : nil
+    }
+    return [activity.toolName, activity.title].lazy.compactMap { $0.flatMap(wovenVisualTool) }.first
+  }
+
+  /// Whether the summary's verb says the step succeeded (read, changed,
+  /// showed), so failed members are counted apart.
+  var claimsOutcome: Bool {
+    [.read, .edit, .list, .visual, .preview, .webFetch].contains(self)
+  }
+
+  /// What failed, as "2 edits failed" counts it.
+  func failureNoun(count: Int) -> String? {
+    let plural = count != 1
+    return switch self {
+    case .read: plural ? "reads" : "read"
+    case .edit: plural ? "edits" : "edit"
+    case .list: plural ? "listings" : "listing"
+    case .visual: plural ? "visual replies" : "visual reply"
+    case .preview: plural ? "previews" : "preview"
+    case .webFetch: plural ? "fetches" : "fetch"
+    default: nil
     }
   }
 
-  /// Edits count distinct files, plus each edit that names no file.
+  /// Reads, edits and listings count distinct files, plus each one that
+  /// names none; every other step counts its calls.
   func summaryCount(_ activities: [AgentRunActivity]) -> Int {
-    guard self == .edit else { return activities.count }
+    guard [.read, .edit, .list].contains(self) else { return activities.count }
     var paths: Set<String> = []
     var unnamed = 0
     for activity in activities {
-      let named = activity.changes.map(\.path) + activity.locations.map(\.path)
+      let named = activity.workTimelineSubjectPaths
       if named.isEmpty { unnamed += 1 } else { paths.formUnion(named) }
     }
     return paths.count + unnamed
   }
 
-  public func summary(count: Int) -> String {
+  public func summary(count: Int) -> String { summary(count: count, namingSearch: false) }
+
+  /// `namingSearch` names which kind a search was, for a summary with two.
+  func summary(count: Int, namingSearch: Bool) -> String {
     let plural = count != 1
     return switch self {
     case .command: "Ran \(count) \(plural ? "commands" : "command")"
     case .code: "Ran code \(count) \(plural ? "times" : "time")"
     case .read: "Read \(count) \(plural ? "files" : "file")"
     case .edit: "Changed \(count) \(plural ? "files" : "file")"
-    case .codeSearch: "Searched \(count) \(plural ? "times" : "time")"
-    case .search: "Searched \(count) \(plural ? "times" : "time")"
+    case .codeSearch: "Searched \(namingSearch ? "files " : "")\(count) \(plural ? "times" : "time")"
+    case .search: namingSearch ? "Ran \(count) other \(plural ? "searches" : "search")"
+      : "Searched \(count) \(plural ? "times" : "time")"
     case .list: "Listed \(count) \(plural ? "folders" : "folder")"
     case .visual: "Showed \(count) visual \(plural ? "replies" : "reply")"
     case .preview: "Previewed \(count) visual \(plural ? "replies" : "reply")"
@@ -447,6 +506,30 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
     case .question: plural ? "Asked questions \(count) times" : "Asked questions"
     case .other: "Used \(count) \(plural ? "tools" : "tool")"
+    }
+  }
+
+  /// The same count as `summary`, count first and short.
+  func compactSummary(count: Int, namingSearch: Bool) -> String {
+    let plural = count != 1
+    let searches = plural ? "searches" : "search"
+    return switch self {
+    case .command: "\(count) \(plural ? "commands" : "command")"
+    case .code: "\(count) \(plural ? "scripts" : "script")"
+    case .read: "\(count) \(plural ? "files" : "file") read"
+    case .edit: "\(count) \(plural ? "files" : "file") changed"
+    case .codeSearch: "\(count) \(namingSearch ? "file " : "")\(searches)"
+    case .search: "\(count) \(namingSearch ? "other " : "")\(searches)"
+    case .list: "\(count) \(plural ? "folders" : "folder") listed"
+    case .visual: "\(count) visual \(plural ? "replies" : "reply")"
+    case .preview: "\(count) \(plural ? "previews" : "preview")"
+    case .webSearch: "\(count) web \(searches)"
+    case .webFetch: "\(count) \(plural ? "pages" : "page") fetched"
+    case .browser: "\(count) browser \(plural ? "steps" : "step")"
+    case .computer: "\(count) computer \(plural ? "steps" : "step")"
+    case .delegate: "\(count) \(plural ? "tasks" : "task")"
+    case .question: plural ? "\(count)× questions" : "questions"
+    case .other: "\(count) \(plural ? "tools" : "tool")"
     }
   }
 
@@ -520,17 +603,27 @@ public extension AgentRunActivity {
     return name.isEmpty ? label : name
   }
 
-  /// The tool's input object, when its raw input is one.
+  /// The tool's input object, when its raw input is one. It is decoded once
+  /// per activity and input, since the timeline is rebuilt on every update.
   var workTimelineInput: [String: Any]? {
-    rawInputJSON.flatMap { $0.data(using: .utf8) }
-      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    guard let raw = rawInputJSON else { return nil }
+    return WorkTimelineMemo.shared.input(id: id, raw: raw)
   }
 
   /// The folder a turn's paths read relative to when nothing says where its
-  /// tools ran: fixed by the first path a tool named, so a row's short path
-  /// never changes once shown. A folder the tool listed or searched is the
-  /// anchor itself; a file's anchor is the folder it is in.
+  /// tools ran: decided by the first path a tool named, and then kept for
+  /// the run (keyed by its first activity), so a row's short path never
+  /// changes once shown, even when an earlier tool's input arrives later. A
+  /// folder the tool listed or searched is the anchor itself; a file's
+  /// anchor is the folder it is in.
   static func workTimelineAnchorFolder(_ activities: [AgentRunActivity]) -> String? {
+    guard let run = activities.first?.id else { return nil }
+    return WorkTimelineMemo.shared.anchor(run: run) { workTimelineFirstAnchor(activities) }
+  }
+
+  /// The anchor the first path a tool named gives (`.some(nil)` when that
+  /// path anchors nothing), or nil while no tool has named one.
+  private static func workTimelineFirstAnchor(_ activities: [AgentRunActivity]) -> String?? {
     for activity in activities where activity.kind == .tool {
       let folder: String?
       switch activity.workTimelineOperation {
@@ -541,10 +634,38 @@ public extension AgentRunActivity {
         folder = ConversationToolAction(activity) == .list ? path : (path as NSString).deletingLastPathComponent
       }
       // Only an absolute folder well below the root anchors anything.
-      if let folder, folder.hasPrefix("/"), folder.split(separator: "/").count >= 3 { return folder }
-      return nil
+      if let folder, folder.hasPrefix("/"), folder.split(separator: "/").count >= 3 { return .some(folder) }
+      return .some(nil)
     }
     return nil
+  }
+
+  /// A read tool that read a folder: its input path ends in `/`, or its
+  /// output opens by saying it read that very directory (OpenCode's
+  /// `Read directory <path>, entries …`), never because of what a file says.
+  var workTimelineReadsFolder: Bool {
+    guard let path = workTimelineInputPath else { return false }
+    if path.hasSuffix("/") { return true }
+    guard let output = rawOutputJSON, output.hasPrefix("Read directory " + path) else { return false }
+    let rest = output.dropFirst(("Read directory " + path).count)
+    return rest.isEmpty || rest.first == "," || rest.first?.isNewline == true
+  }
+
+  /// The files a step names, for counting each once: a change's paths,
+  /// else its locations, else what it read, listed or searched, else its
+  /// input's path, else the one absolute path in its title.
+  var workTimelineSubjectPaths: [String] {
+    let changed = changes.map(\.path).filter { !$0.isEmpty }
+    if !changed.isEmpty { return changed }
+    let located = locations.map(\.path).filter { !$0.isEmpty }
+    if !located.isEmpty { return located }
+    switch workTimelineOperation {
+    case .read(let path), .list(let path?), .search(_, let path?): return [path]
+    default: break
+    }
+    if let path = workTimelineInputPath { return [path] }
+    let titled = title?.workTimelineAbsolutePaths ?? []
+    return titled.count == 1 ? titled : []
   }
 
   /// A tool that runs a shell command, by its name.
@@ -561,7 +682,9 @@ public extension AgentRunActivity {
     let input = workTimelineInput
     let folder = ["cwd", "workdir"].lazy.compactMap { input?[$0] as? String }.first
     if workTimelineIsCommand || (toolName?.lowercased() == "execute" && codeCalls == nil) {
-      guard let command = (input?["command"] as? String) ?? title else { return nil }
+      // Only a command the row may show says what it did: one the runtime
+      // titled the row with.
+      guard let command = workTimelineTitledCommand else { return nil }
       return ConversationShellOperation.recognize(command, folder: folder)
     }
     // "Search for 'x' in docs", "List files in 'docs'", "List files".
@@ -570,9 +693,13 @@ public extension AgentRunActivity {
       let trimmed = text.trimmingCharacters(in: .whitespaces)
       return trimmed.count > 1 && trimmed.first == "'" && trimmed.last == "'" ? String(trimmed.dropFirst().dropLast()) : trimmed
     }
-    if title.hasPrefix("Search for "), let range = title.range(of: " in ", options: .backwards) {
-      let pattern = unquoted(title[title.index(title.startIndex, offsetBy: 11)..<range.lowerBound])
-      let path = unquoted(title[range.upperBound...])
+    let searchPrefix = "Search for "
+    if title.hasPrefix(searchPrefix) {
+      // The place follows the last " in " after the prefix, never inside it.
+      let rest = title.dropFirst(searchPrefix.count)
+      guard let range = rest.range(of: " in ", options: .backwards) else { return nil }
+      let pattern = unquoted(rest[..<range.lowerBound])
+      let path = unquoted(rest[range.upperBound...])
       guard !pattern.isEmpty, !path.isEmpty else { return nil }
       return .search(pattern: pattern, path: folder.map { $0 + "/" + path } ?? path)
     }
@@ -591,6 +718,24 @@ public extension AgentRunActivity {
       .compactMap { (input?[$0] as? String)?.workTimelineSingleLine }.first
   }
 
+  /// The command as written, when the runtime titled the row with it: the
+  /// whole command, or its start cut short (with or without an ellipsis).
+  /// Only such a command may show in the row; a tool's name as the title
+  /// ("Bash", "Terminal") leaves only the program to show, since arguments
+  /// can carry credentials. Without a command in the input, a title of
+  /// several words is the command.
+  var workTimelineTitledCommand: String? {
+    guard let command = workTimelineInput?["command"] as? String else {
+      return title?.workTimelineSingleLine?.contains(" ") == true ? title : nil
+    }
+    guard let line = command.workTimelineSingleLine, var label = title?.workTimelineSingleLine else { return nil }
+    if line == label { return command }
+    for mark in ["\u{2026}", "..."] where label.hasSuffix(mark) {
+      label = String(label.dropLast(mark.count)).trimmingCharacters(in: .whitespaces)
+    }
+    return label.contains(" ") && line.hasPrefix(label) ? command : nil
+  }
+
   private func workTimelineToolLabel(active: Bool, folder: String?) -> String {
     let generic = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
     let label = title?.workTimelineSingleLine
@@ -602,12 +747,9 @@ public extension AgentRunActivity {
     // A command its runtime titled with it reads as its own text, without the
     // folder plumbing around it. A runtime may cut a long command short to
     // title it: show the whole command, which the row truncates in the
-    // middle, keeping its real end.
-    // A one-word title ("Terminal", "Bash") names the tool, not the step:
-    // the command, once known, names it from the start.
-    if action == .command, let label, let command = (input?["command"] as? String)?.workTimelineSingleLine,
-       command.hasPrefix(label) || !label.contains(" ") {
-      return command.workTimelineDisplayCommand(root: root).workTimelineFirstSegment
+    // middle, keeping its real end. Any other title keeps the program only.
+    if action == .command, let command = workTimelineTitledCommand {
+      return command.workTimelineCommandLine(root: root)
     }
     if action == .visual || action == .preview {
       // One plain label in every harness: what it showed, or previewed.
@@ -652,7 +794,7 @@ public extension AgentRunActivity {
     // Keep a provider's descriptive title; bare function names gain readable
     // action labels below. A generic title must not mask a real tool name.
     if let label, label.contains(" "), !generic.contains(label.lowercased()) {
-      return action == .command ? label.workTimelineDisplayCommand(root: root).workTimelineFirstSegment : label
+      return action == .command ? (title ?? label).workTimelineCommandLine(root: root) : label
     }
     func argument(_ key: String) -> String? {
       (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
@@ -729,7 +871,7 @@ extension String {
   private static let workTimelinePathPattern = try! NSRegularExpression(
     pattern: #"'(/[^']+)'|"(/[^"]+)"|(?<![\w/.:~$@=-])(/[^\s'";|&()<>]+)"#)
   private static let workTimelineLeadingCD = try! NSRegularExpression(
-    pattern: #"^cd\s+('[^']*'|"[^"]*"|[^\s;&]+)\s*(&&|;)\s*"#)
+    pattern: #"^cd[ \t]+('[^']*'|"[^"]*"|[^\s;&]+)[ \t]*(&&|;|\r?\n)\s*"#)
   private static let workTimelineGitFolder = try! NSRegularExpression(
     pattern: #"\bgit\s+-C\s+('[^']*'|"[^"]*"|\S+)"#)
 
@@ -744,11 +886,16 @@ extension String {
   }
 
   /// A path relative to `root` when it is inside it, else its last two
-  /// components.
+  /// components. A relative path, given where the tool ran, already is
+  /// relative to that folder and stays whole.
   func workTimelineShortPath(root: String? = nil) -> String {
     let parts = split(separator: "/").map(String.init)
     guard !parts.isEmpty else { return self }
     if let root {
+      if !hasPrefix("/"), !hasPrefix("~") {
+        let named = parts.filter { $0 != "." }
+        return named.isEmpty ? self : named.joined(separator: "/")
+      }
       let base = root.split(separator: "/").map(String.init)
       if parts.count >= base.count, Array(parts.prefix(base.count)) == base {
         // The folder itself is its name.
@@ -781,7 +928,7 @@ extension String {
         quote = character
       } else if character == "\\" {
         if next < endIndex { index = self.index(after: next); continue }
-      } else if character == ";" || character == "\n" || character == "|"
+      } else if character == ";" || character == "\n" || character == "\r\n" || character == "|"
         || (character == "&" && next < endIndex && self[next] == "&")
         || (character == "<" && next < endIndex && self[next] == "<") {
         let first = self[..<index].trimmingCharacters(in: .whitespaces)
@@ -791,6 +938,14 @@ extension String {
       index = next
     }
     return self
+  }
+
+  /// A command as its row shows it, in one line: its first part, found in
+  /// the command as written (`pwd` then `date` on the next line is `pwd …`),
+  /// without the folder plumbing, then its whitespace collapsed.
+  func workTimelineCommandLine(root: String? = nil) -> String {
+    let line = workTimelineDisplayCommand(root: root).workTimelineFirstSegment
+    return line.workTimelineSingleLine ?? workTimelineSingleLine ?? self
   }
 
   /// A command as a row shows it: no leading `cd <folder> &&`, no
@@ -819,5 +974,49 @@ extension String {
       result = (result as NSString).replacingCharacters(in: match.range, with: replacement)
     }
     return result
+  }
+}
+
+/// What the timeline remembers between rebuilds, which happen on every
+/// streamed update: each activity's decoded input, kept while its raw input
+/// is the same text, and each run's path anchor once decided.
+private final class WorkTimelineMemo: @unchecked Sendable {
+  static let shared = WorkTimelineMemo()
+  private static let limit = 4_096
+
+  private let lock = NSLock()
+  private var inputs: [String: (raw: String, value: [String: Any]?)] = [:]
+  private var anchors: [String: String?] = [:]
+
+  func input(id: String, raw: String) -> [String: Any]? {
+    lock.lock()
+    if let kept = inputs[id], kept.raw == raw {
+      lock.unlock()
+      return kept.value
+    }
+    lock.unlock()
+    let value = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+    lock.lock()
+    if inputs.count >= Self.limit { inputs.removeAll(keepingCapacity: true) }
+    inputs[id] = (raw, value)
+    lock.unlock()
+    return value
+  }
+
+  /// The run's anchor: the one first decided, else `decide`'s once it has one.
+  func anchor(run: String, decide: () -> String??) -> String? {
+    lock.lock()
+    if let kept = anchors[run] {
+      lock.unlock()
+      return kept
+    }
+    lock.unlock()
+    guard let decided = decide() else { return nil }
+    lock.lock()
+    defer { lock.unlock() }
+    if let kept = anchors[run] { return kept }
+    if anchors.count >= Self.limit { anchors.removeAll(keepingCapacity: true) }
+    anchors[run] = decided
+    return decided
   }
 }
