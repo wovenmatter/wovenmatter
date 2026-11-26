@@ -468,8 +468,8 @@ when an intentional design change is accepted.
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
   block's indent. Inline code is shaded around its own text on each line. Table
-  columns fit their content; a table too wide gives the rest to its widest
-  column. Each block's spacing depends only on the block before it, so streamed
+  columns fit their content; a table nearly as wide as the text fills it, and
+  one too wide gives the rest to its widest column. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
   bot chats and the Forum alike, rows fade out before the window's floating

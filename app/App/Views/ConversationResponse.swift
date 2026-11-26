@@ -826,7 +826,7 @@ private enum ConversationResponseAttributedText {
                 // The usual automatic table layout: each column is at least
                 // its longest unbreakable run (up to a limit) and at most its
                 // width on one line. If every column fits on one line, it
-                // gets that; otherwise each gets its least, and the room left
+                // gets that (stretched to the full width when nearly there); otherwise each gets its least, and the room left
                 // is shared in proportion to how much more each would take.
                 func limits(_ rows: [[NSMutableAttributedString]]) -> (most: [CGFloat], least: [CGFloat]) {
                     let most = table.header.indices.map { column in
@@ -847,8 +847,13 @@ private enum ConversationResponseAttributedText {
                     (most, least) = limits(rows)
                 }
                 let widths: [CGFloat]
-                if most.reduce(0, +) <= available {
-                    widths = most
+                let natural = most.reduce(0, +)
+                if natural <= available {
+                    // A table nearly as wide as the text fills it, sharing the
+                    // spare width by natural width, so it does not stop just
+                    // short of the boxes around it; a narrower one hugs its content.
+                    let fills = natural >= Prose.tableFillShare * available
+                    widths = most.map { fills ? $0 + (available - natural) * $0 / natural : $0 }
                 } else {
                     let room = max(0, available - least.reduce(0, +))
                     let stretch = zip(most, least).map { $0 - $1 }
