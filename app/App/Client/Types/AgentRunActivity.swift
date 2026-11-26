@@ -224,6 +224,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public let codeCalls: [AgentRunCodeCall]?
   /// The questions asked, when this is the model's question tool.
   public let questions: [AgentRunQuestion]?
+  /// It hands a task to a subagent, as its runtime's own tool for that does
+  /// (Claude Code's Task); set where the session's runtime is known.
+  public let delegates: Bool?
 
   public init(
     id: String,
@@ -251,7 +254,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     planOperation: String? = nil,
     htmlRender: ConversationHTMLRenderReference? = nil,
     codeCalls: [AgentRunCodeCall]? = nil,
-    questions: [AgentRunQuestion]? = nil
+    questions: [AgentRunQuestion]? = nil,
+    delegates: Bool? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -279,6 +283,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.subagents = subagents
     self.codeCalls = codeCalls
     self.questions = questions
+    self.delegates = delegates
   }
 
   public func scoped(to runID: String) -> Self {
@@ -289,7 +294,7 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       rawPayloadJSON: rawPayloadJSON, subagents: subagents,
       detailsAvailable: detailsAvailable, detailStamp: detailStamp,
       planKind: planKind, planOperation: planOperation, htmlRender: htmlRender, codeCalls: codeCalls,
-      questions: questions)
+      questions: questions, delegates: delegates)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -340,7 +345,8 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       planOperation: update.planOperation ?? planOperation,
       htmlRender: update.htmlRender ?? htmlRender,
       codeCalls: update.codeCalls ?? codeCalls,
-      questions: update.questions ?? questions
+      questions: update.questions ?? questions,
+      delegates: update.delegates ?? delegates
     )
   }
 

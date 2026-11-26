@@ -61,6 +61,12 @@ final class SessionStore {
     /// When this view first saw each turn the runtime started by itself,
     /// while its first item was in progress.
     @ObservationIgnored private var runStarts: [String: Date] = [:]
+    /// The session's runtime: from the owner's snapshot, else the workspace's
+    /// record of the chat while only saved items show.
+    @ObservationIgnored private var runtime: RuntimeKind?
+    private var runsClaudeCode: Bool {
+        (runtime ?? workspace?.conversation(id: sessionID)?.runtime) == .claudeCode
+    }
     /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
     /// Each text item in progress: the reply that shows it, and that reply's text before it.
@@ -423,6 +429,7 @@ final class SessionStore {
         inProgress = snapshot.inProgress
         readyEnds = [:]
         prompts = snapshot.prompts
+        runtime = snapshot.session.runtime
         run = snapshot.run
         applyGoal(snapshot.session.goal)
         apply(snapshot.configuration)
@@ -504,7 +511,7 @@ final class SessionStore {
             guard grew || drawn?.isEmpty != false else { return true }
             runActivities[shown] = WorkspaceRunActivityRecord(
                 id: record.id, runID: record.runID, conversationID: record.conversationID,
-                activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0),
+                activity: Self.activity(call, id: itemID, live: true, position: record.activity.position ?? 0, claudeCode: runsClaudeCode),
                 createdAt: record.createdAt, sequence: record.sequence)
             return true
         default:
@@ -522,20 +529,22 @@ final class SessionStore {
         return end > drawn
     }
 
-    private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int) -> AgentRunActivity {
+    private static func activity(_ call: ToolCall, id: String, live: Bool, position: Int, claudeCode: Bool) -> AgentRunActivity {
         let script = call.kind == .code
         let calls = script ? codeCalls(call.calls ?? [], live: live) : nil
         let questions = call.kind == .question
             ? (call.questions ?? []).enumerated().map { AgentRunQuestion(id: $0, title: $1.title, text: $1.text, answer: $1.answer) }
             : nil
-        // A call its runtime reports as thinking but that gives a subagent a
-        // task (Claude Code's Task tool) is a delegation, not a thought: a
-        // call of ACP's kind `think` from its first report, whose input
-        // streams in as `{}`, then `{description}`, then the rest, the prompt
-        // last; and any call with a prompt and a description.
+        // In Claude Code's sessions, a call its adapter reports as thinking
+        // but that gives a subagent a task (its Task tool) is a delegation,
+        // not a thought: a call of ACP's kind `think` from its first report,
+        // whose input streams in as `{}`, then `{description}`, then the
+        // rest, the prompt last; and any call with a prompt and a
+        // description. Another runtime's tool of that name is its own.
         let input = (try? JSONSerialization.jsonObject(with: Data(call.input.utf8))) as? [String: Any]
-        let delegation = call.name == "think" && (input?.isEmpty ?? call.input.isEmpty || input?["description"] is String)
-            || input?["prompt"] is String && input?["description"] is String
+        let delegation = claudeCode
+            && (call.name == "think" && (input?.isEmpty ?? call.input.isEmpty || input?["description"] is String)
+                || input?["prompt"] is String && input?["description"] is String)
         let thought = call.kind == .thinking && !delegation
         return AgentRunActivity(
             id: id, kind: thought ? .thought : call.kind == .plan ? .plan : .tool,
@@ -556,7 +565,7 @@ final class SessionStore {
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
             subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil,
-            codeCalls: calls, questions: questions)
+            codeCalls: calls, questions: questions, delegates: delegation ? true : nil)
     }
 
     /// "Asking 2 questions" while they wait, then "Asked 2 questions"; or,
@@ -729,7 +738,7 @@ final class SessionStore {
                 if call.kind == .visualReply && !call.failed { continue }
                 activities.append(WorkspaceRunActivityRecord(
                     id: entry.id, runID: runs[run].id, conversationID: sessionID,
-                    activity: Self.activity(call, id: entry.id, live: entry.live, position: position),
+                    activity: Self.activity(call, id: entry.id, live: entry.live, position: position, claudeCode: runsClaudeCode),
                     createdAt: Self.timestamps.string(from: entry.date), sequence: Int64(position)))
             case .visualReply(let reply):
                 let run = currentRun(at: entry.date, id: entry.id, live: entry.live)

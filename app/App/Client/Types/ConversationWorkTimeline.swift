@@ -657,12 +657,10 @@ public extension AgentRunActivity {
   /// guardian review is also of kind `think`, but always comes with its whole
   /// input, a review with no description; Claude's web fetch sends a prompt
   /// and a URL, no description.)
+  /// Which call that is depends on the session's runtime, so it is decided
+  /// where that is known (`delegates`).
   var workTimelineIsDelegation: Bool {
-    guard kind == .tool else { return false }
-    let input = workTimelineInput
-    if toolName == "think",
-       input.map({ $0.isEmpty || $0["description"] is String }) ?? (rawInputJSON?.workTimelineNonempty == nil) { return true }
-    return input?["prompt"] is String && input?["description"] is String
+    kind == .tool && delegates == true
   }
 
   /// The name of the task it delegated, once known: its input's
@@ -1113,19 +1111,21 @@ extension String {
   /// More than a row or a summary ever shows at any width.
   private static let workTimelineShownLength = 1_000
 
-  // A value: quoted whole, or up to the next space or quote.
-  private static let workTimelineCredentialValue = #"(?:'[^']*'|"[^"]*"|[^\s&'"“”‘’]+)"#
+  // A value: quoted whole, or quoted and still open where the text was cut,
+  // or up to the next space or quote.
+  private static let workTimelineCredentialValue = #"(?:'[^']*'|"[^"]*"|'[^']*$|"[^"]*$|[^\s&'"“”‘’]+)"#
   // A name that is a credential's whole name or ends in one (`GITHUB_TOKEN`,
-  // `api_key`, `password`), never a word that merely contains one (`key`,
-  // `max-tokens`).
+  // `api_key`, `password`, `--oauth2-bearer`), never a word that merely
+  // contains one (`key`, `max-tokens`).
   private static let workTimelineCredentialName =
-    #"(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|token|secret|password|passwd|pwd|auth)"#
+    #"(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|token|secret|password|passwd|pwd|auth|bearer)"#
 
   // Each pattern starts at a word or token boundary and inspects a name once.
+  // `Basic` and `Bearer` are masked as part of an authorization header's
+  // value, never on their own (`echo basic info`).
   private static let workTimelineCredentialPatterns: [(NSRegularExpression, String)] = [
-    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)[^'"“”\n]+"#, "$1$2…"),
-    (#"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]+"#, "$1$2…"),
-    (#"(?<!\S)(-u|--user)(\s+|=)(['"]?)[^\s'"]+:[^\s'"]+\3"#, "$1$2…"),
+    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)(?:"[^"]*"?|'[^']*'?|[^'"“”\n]+)"#, "$1$2…"),
+    (#"(?<!\S)(-u|--user)(\s+|=)(?:'[^':]*:[^']*'?|"[^":]*:[^"]*"?|[^\s'"]+:[^\s'"]+)"#, "$1$2…"),
     (#"(?i)(?<!\S)(--?(?:[a-z0-9]+-)*"# + workTimelineCredentialName + #")(\s+)(?!-)"# + workTimelineCredentialValue, "$1$2…"),
     (#"(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]*[_.-])?"# + workTimelineCredentialName + ")=" + workTimelineCredentialValue, "$1=…"),
     (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@"#, "$1…@"),
@@ -1227,7 +1227,8 @@ extension String {
             let found = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
       return (0..<found.numberOfRanges).map { Range(found.range(at: $0), in: text).map { String(text[$0]) } ?? "" }
     }
-    let lines = command.components(separatedBy: .newlines)
+    // Lines as the shell reads them: split at LF alone, so a CR stays in its line.
+    let lines = command.components(separatedBy: "\n")
     if let first = lines.first,
        let parts = match(#"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<(-?) *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3$"#, first),
        let language = languages[parts[1]],
