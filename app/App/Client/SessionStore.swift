@@ -529,9 +529,12 @@ final class SessionStore {
             ? (call.questions ?? []).enumerated().map { AgentRunQuestion(id: $0, title: $1.title, text: $1.text, answer: $1.answer) }
             : nil
         // A call its runtime reports as thinking but that gives a subagent a
-        // prompt (Claude Code's Task tool) is a delegation, not a thought.
+        // task (Claude Code's Task tool) is a delegation, not a thought:
+        // from its first report, a call of ACP's kind `think` with no input
+        // yet, and once its prompt and description come.
         let input = (try? JSONSerialization.jsonObject(with: Data(call.input.utf8))) as? [String: Any]
-        let thought = call.kind == .thinking && !(input?["prompt"] is String)
+        let delegation = call.name == "think" && call.input.isEmpty || input?["prompt"] is String && input?["description"] is String
+        let thought = call.kind == .thinking && !delegation
         return AgentRunActivity(
             id: id, kind: thought ? .thought : call.kind == .plan ? .plan : .tool,
             title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code")

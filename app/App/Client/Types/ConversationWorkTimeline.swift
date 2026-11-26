@@ -421,7 +421,7 @@ public enum ConversationToolAction: Hashable, Sendable {
       self = .code
     } else if activity.questions != nil {
       self = .question
-    } else if activity.workTimelineDelegatedTask != nil {
+    } else if activity.workTimelineIsDelegation {
       self = .delegate
     } else if let operation = activity.workTimelineOperation {
       // A command or a titled step that does what a file tool does is that.
@@ -650,13 +650,26 @@ public extension AgentRunActivity {
     return hasChecklist && workTimelineIsChecklistTool && !workTimelineIsFailure
   }
 
-  /// The name of the task a call delegated to a subagent, when its input
-  /// gives one: Claude Code's Task tool sends a `prompt` and a short
-  /// `description` (its ACP adapter reports the call as thinking).
+  /// A call that delegates a task to a subagent: Claude Code's Task tool,
+  /// which sends a `prompt` and a short `description`, and which its ACP
+  /// adapter first reports as a call of kind `think` with no input yet.
+  /// (Codex's guardian review is also of kind `think`, but always comes
+  /// with its input, which has no prompt.)
+  var workTimelineIsDelegation: Bool {
+    guard kind == .tool else { return false }
+    if toolName == "think", rawInputJSON?.workTimelineNonempty == nil { return true }
+    let input = workTimelineInput
+    return input?["prompt"] is String && input?["description"] is String
+  }
+
+  /// The name of the task it delegated, once known: its input's
+  /// `description`, or the adapter's title, which is that description (or
+  /// "Task" before it is known).
   var workTimelineDelegatedTask: String? {
-    guard kind == .tool, let input = workTimelineInput, input["prompt"] is String,
-          let name = (input["description"] as? String)?.workTimelineSingleLine else { return nil }
-    return name
+    guard workTimelineIsDelegation else { return nil }
+    if let name = (workTimelineInput?["description"] as? String)?.workTimelineSingleLine { return name }
+    guard toolName == "think", let title = title?.workTimelineSingleLine, title != "Task" else { return nil }
+    return title
   }
 
   var workTimelineIsChecklistTool: Bool {
@@ -946,8 +959,9 @@ public extension AgentRunActivity {
     }
     if let helper = workTimelineHelper { return helper.label(active: active, failed: failed) }
     if workTimelineIsUncheckedSearch { return failed ? "Failed to search files" : active ? "Searching files" : "Searched files" }
-    if let task = workTimelineDelegatedTask {
-      return (failed ? "Failed to delegate" : active ? "Delegating" : "Delegated") + " \u{201C}\(task)\u{201D}"
+    if workTimelineIsDelegation {
+      let verb = failed ? "Failed to delegate" : active ? "Delegating" : "Delegated"
+      return verb + (workTimelineDelegatedTask.map { " \u{201C}\($0)\u{201D}" } ?? " a task")
     }
     if action == .visual || action == .preview {
       // One plain label in every harness: what it showed, or previewed.
