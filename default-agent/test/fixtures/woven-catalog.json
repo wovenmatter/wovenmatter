@@ -300,7 +300,7 @@
           "type" : "string"
         },
         "width" : {
-          "description" : "How wide it needs to be, 240 to 1600 CSS pixels, for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.",
+          "description" : "How wide it needs to be, 240 to 1600 CSS pixels (the chat shows at most 720), for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.",
           "type" : "integer"
         }
       },
@@ -1400,7 +1400,7 @@
     "readOnly" : false
   },
   {
-    "description" : "Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.\nGive the same `html` or `path`. With the image come its console messages, its content height, and `missingImages`: local image paths it refers to that are missing, unreadable or not images. Width defaults to 720 CSS pixels, the width of the chat's frame; when you will pass `render_html` a `width`, pass the same one here. Use 390 for a phone. Appearance defaults to dark. Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.",
+    "description" : "Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.\nGive the same `html` or `path`. With the image come its console messages, its content height, and `missingImages`: local image paths it refers to that are missing, unreadable or not images. Width defaults to 720 CSS pixels, the width of the chat's frame, and a wider one is shown at 720 as in the chat; when you will pass `render_html` a `width`, pass the same one here. Use 390 for a phone. Appearance defaults to dark. Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.",
     "images" : true,
     "inputSchema" : {
       "additionalProperties" : false,

@@ -5,7 +5,8 @@ import WovenProtocol
 /// Carries out the Woven MCP's `preview_html`: renders HTML the way the chat
 /// shows a published visual reply (the same wrapper, sandbox, theme variables and
 /// nonpersistent storage) in a web view that no window ever holds, waits for
-/// it to load and settle, and captures it. Each preview has its own.
+/// it to load and settle, and captures it, at the width the chat would give
+/// it. Each preview has its own.
 @MainActor final class VisualReplyPreview {
     static let loadLimit = Duration.seconds(15)
     /// The tallest part of a visual reply the screenshot covers.
@@ -17,10 +18,12 @@ import WovenProtocol
     private var waiter: CheckedContinuation<Bool, Never>?
 
     func run(_ arguments: JSONValue) async -> ToolResult {
-        guard let html = arguments["html"]?.string, let width = arguments["width"]?.int, (240...1600).contains(width),
+        guard let html = arguments["html"]?.string, let asked = arguments["width"]?.int, (240...1600).contains(asked),
               let appearance = arguments["appearance"]?.string, ["light", "dark"].contains(appearance) else {
             return .error("Give the HTML, a width from 240 to 1600 and an appearance of light or dark.")
         }
+        // The width the chat will give it: never wider than its frame.
+        let width = min(asked, Int(ConversationMetrics.column))
         let theme: WovenTheme = appearance == "dark" ? .dark : .green
         let view = coordinator.makeWebView()
         view.frame = NSRect(x: 0, y: 0, width: width, height: 600)

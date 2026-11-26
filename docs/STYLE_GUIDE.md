@@ -480,19 +480,24 @@ when an intentional design change is accepted.
   thought with text is one closed row named by its title or leading heading,
   else "Thought", never by its raw text; one with no text draws nothing. A
   record such as an approval is named by status and action, with its own glyph. A visual
-  reply sits in a hairline frame with its title inside, the column wide or as
+  reply sits in a hairline frame with its title inside (its row kept but left
+  blank when the page starts with that same heading), the column wide or as
   wide as it asked to be, with a small inset inside it; its controls show on
   hover, while zoomed, or with focus. Under the reply, Copy and the files it
-  refers to share one wrapping row. In reply text,
-  lists sit tighter than paragraphs (a list with an item long enough to wrap
-  takes the loose gap), two different lists in a row are spaced as
+  refers to share one wrapping row, as tall as a file chip in every state and
+  an entry gap below the text when it holds files. In reply text,
+  lists sit tighter than paragraphs (an item that wraps at the text's width, or
+  holds more than one block, takes the loose gap after it), two different lists in a row are spaced as
   paragraphs, every item keeps its marker, a task's box is one drawn square,
   filled with a check or outlined, headings attach to what follows them, and
   code, tables and quotes keep the same space on each side and start at their
-  block's indent. Inline code is shaded around its own text on each line. Table
+  block's indent. Inline code is shaded around its own text on each line, a
+  little smaller than the text it sits in, in a table cell too. Table
   columns fit their content, never narrower than short code or a short value
   they keep whole; a table nearly as wide as the text fills it, and one too
-  wide gives the rest to its widest column. Each block's spacing depends only on the block before it, so streamed
+  wide gives the rest to its widest column; when even their least does not
+  fit, the widest give way and break, so no cell is cut off. In a narrow column
+  cells keep less padding. Each block's spacing depends only on the block before it, so streamed
   text never moves. Nothing moves when a turn settles: the dots hold the row
   Copy then takes, and parts with nothing to show draw nothing. In agent chats,
   bot chats and the Forum alike, rows fade out before the window's floating

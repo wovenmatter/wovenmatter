@@ -18,11 +18,21 @@ struct ConversationHTMLRenderView: View {
     @State private var zoom = 1.0
     @State private var pendingLink: URL?
     @State private var hovering = false
+    /// The page's leading heading or caption, as it reports it.
+    @State private var pageLead = ""
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable { case zoomOut, resetZoom, zoomIn, expand }
 
     private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
+
+    /// The page starts with the frame's own title, so the frame does not
+    /// repeat it; its row and controls stay, so nothing changes height.
+    private var titleRepeated: Bool {
+        let own = reference.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !own.isEmpty && reply != nil
+            && pageLead.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(own) == .orderedSame
+    }
 
     init(reference: ConversationHTMLRenderReference) {
         self.reference = reference
@@ -34,6 +44,8 @@ struct ConversationHTMLRenderView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: ConversationMetrics.entryGap) {
                 Text(title).lineLimit(1)
+                    .opacity(titleRepeated ? 0 : 1)
+                    .accessibilityHidden(titleRepeated)
                 Spacer()
                 HStack(spacing: ConversationMetrics.entryGap) {
                     controls
@@ -134,7 +146,7 @@ struct ConversationHTMLRenderView: View {
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
-            }, onLink: { pendingLink = $0 }, onFailure: { error in
+            }, onLead: { pageLead = $0 }, onLink: { pendingLink = $0 }, onFailure: { error in
                 failure = error.localizedDescription; self.reply = nil
             })
     }
@@ -206,6 +218,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let zoom: Double
     let forwardsConversationScroll: Bool
     let onHeight: (CGFloat) -> Void
+    let onLead: (String) -> Void
     let onLink: (URL) -> Void
     let onFailure: (any Error) -> Void
 
@@ -218,7 +231,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
 
     private func update(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) {
         (view as? ConversationHTMLNativeWebView)?.forwardsConversationScroll = forwardsConversationScroll
-        coordinator.onHeight = onHeight; coordinator.onLink = onLink; coordinator.onFailure = onFailure
+        coordinator.onHeight = onHeight; coordinator.onLead = onLead; coordinator.onLink = onLink; coordinator.onFailure = onFailure
         coordinator.apply(html: html, theme: theme, to: view)
         if view.pageZoom != zoom { view.pageZoom = zoom }
     }
@@ -228,6 +241,8 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     private var html: String?
     private var themeJSON: String?
     var onHeight: (CGFloat) -> Void = { _ in }
+    /// The page's leading heading or caption, empty when it starts otherwise.
+    var onLead: (String) -> Void = { _ in }
     var onLink: (URL) -> Void = { _ in }
     var onReady: () -> Void = {}
     var onFailure: (any Error) -> Void = { _ in }
@@ -259,7 +274,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     func stop(_ view: WKWebView) {
         view.stopLoading(); view.navigationDelegate = nil
         view.configuration.userContentController.removeScriptMessageHandler(forName: "wovenHTML")
-        onHeight = { _ in }; onLink = { _ in }; onReady = {}; onFailure = { _ in }
+        onHeight = { _ in }; onLead = { _ in }; onLink = { _ in }; onReady = {}; onFailure = { _ in }
         html = nil; themeJSON = nil; consoleMessages.removeAll(); consoleBytes = 0
     }
 
@@ -276,6 +291,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
             onReady()
         case "size":
             if let value = body["height"] as? Double, value.isFinite { onHeight(CGFloat(min(20_000, max(80, value)))) }
+            onLead(String((body["lead"] as? String ?? "").prefix(200)))
         case "link":
             if let raw = body["url"] as? String, let url = URL(string: raw), ["http", "https"].contains(url.scheme?.lowercased() ?? "") { onLink(url) }
         case "console":

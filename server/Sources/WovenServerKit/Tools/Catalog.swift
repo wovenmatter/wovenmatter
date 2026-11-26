@@ -381,7 +381,7 @@ private let visualReplyTools: [WovenTool] = [
                    "path": text("Instead of `html`: the absolute path of an HTML file on this machine, written with your own tools."),
                    "title": text("A short title, at most 200 characters; default the document's <title>."),
                    "height": integer("Where its height starts, 80 to 2000 pixels; default 320."),
-                   "width": integer("How wide it needs to be, 240 to 1600 CSS pixels, for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.")]),
+                   "width": integer("How wide it needs to be, 240 to 1600 CSS pixels (the chat shows at most 720), for something narrower than the chat such as a small table (one usually needs about 320); leave it out to fill the chat's width.")]),
     output: shownShape.schema,
     run: { call in
       let html = try VisualReplies.authored(call.arguments, fromBot: call.caller.botID != nil)
@@ -926,7 +926,8 @@ private let uiTools: [WovenTool] = [
       Check a visual reply before publishing it with `render_html`: get a PNG of it as the chat shows it.
       Give the same `html` or `path`. With the image come its console messages, its content height, and \
       `missingImages`: local image paths it refers to that are missing, \
-      unreadable or not images. Width defaults to 720 CSS pixels, the width of the chat's frame; when you will pass \
+      unreadable or not images. Width defaults to 720 CSS pixels, the width of the chat's frame, and a wider one is shown at 720 \
+      as in the chat; when you will pass \
       `render_html` a `width`, pass the same one here. Use 390 for a phone. Appearance defaults to dark. \
       Nothing is saved. Needs the Woven Matter app open on this machine; `render_html` does not.
       """,

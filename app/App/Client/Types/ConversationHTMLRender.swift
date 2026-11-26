@@ -24,9 +24,16 @@ public struct ConversationVisualReply: Equatable, Sendable {
 /// Authored content runs in an opaque sandboxed child frame. Only the
 /// app-owned outer document has a native handler; it verifies message sources.
 public enum ConversationHTMLDocument {
+  /// The frame takes the height the page reports, and that height is the
+  /// page's viewport, so nothing measured may follow the viewport: the root
+  /// and body keep their content's height whatever the page asks (a
+  /// percentage height or minimum on them would resolve against the frame and
+  /// grow with it), so their padding, margins and borders count once, in
+  /// either box sizing. The size message also carries `lead`: the page's first
+  /// visible text when it is a heading or a table's caption, else empty.
   public static func render(html: String) -> String {
     let bootstrap = #"""
-    <style id="woven-theme">html{margin:0;padding:0}body{margin:0;padding:12px 14px}html,body{background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
+    <style id="woven-theme">html{margin:0;padding:0}body{margin:0;padding:12px 14px}:root,:root>body{height:auto!important;min-height:0!important;max-height:none!important}html,body{background:transparent;font-family:var(--font-sans,system-ui);color:var(--foreground)}*{box-sizing:border-box}img,svg,canvas{max-width:100%}::-webkit-scrollbar{display:none}</style>
     <script>
     (()=>{
       const base=document.getElementById('woven-theme').textContent;
@@ -35,10 +42,15 @@ public enum ConversationHTMLDocument {
         document.documentElement.dataset.theme=t.appearance;
         schedule();
       });
-      let last=0,queued=false;
+      const shown=e=>e.checkVisibility?e.checkVisibility({visibilityProperty:true,opacityProperty:true}):e.getClientRects().length>0;
+      const lead=()=>{const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+        for(let n=w.nextNode();n;n=w.nextNode()){const p=n.parentElement;if(!n.data.trim()||!p||!shown(p))continue;
+          const h=p.closest('h1,h2,h3,h4,h5,h6,caption');return h?h.innerText.trim().slice(0,200):'';}
+        return '';};
+      let last=0,lastLead='',queued=false;
       const measure=()=>{queued=false;const b=document.body;if(!b)return;
-        const h=Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,b.scrollHeight));
-        if(h!==last){last=h;parent.postMessage({kind:'size',height:h},'*');}};
+        const h=Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,b.scrollHeight)),l=lead();
+        if(h!==last||l!==lastLead){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
       const schedule=()=>{if(!queued){queued=true;requestAnimationFrame(measure);setTimeout(measure,0);}};
       addEventListener('DOMContentLoaded',()=>{const o=new ResizeObserver(schedule);o.observe(document.documentElement);o.observe(document.body);measure();});
       addEventListener('load',()=>{measure();parent.postMessage({kind:'ready'},'*');});

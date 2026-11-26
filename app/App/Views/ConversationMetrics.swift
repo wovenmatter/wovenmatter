@@ -52,12 +52,10 @@ enum ConversationMetrics {
     enum Prose {
         static let lineSpacing: CGFloat = 5
         static let paragraphGap: CGFloat = 14
-        /// A paragraph → a list; items of a list whose items hold several blocks.
+        /// A paragraph → a list; after a list item that wraps or holds several blocks.
         static let looseListGap: CGFloat = 10
-        /// Items of a list whose items are single paragraphs.
+        /// After a list item of one line.
         static let tightListGap: CGFloat = 6
-        /// A list item longer than this wraps at the column's width.
-        static let longListItemLength = 100
         static let majorHeadingGap: CGFloat = 24
         static let minorHeadingGap: CGFloat = 20
         /// A heading → what follows it.
@@ -78,6 +76,13 @@ enum ConversationMetrics {
         static let cellLineSpacing: CGFloat = 3
         static let cellPaddingVertical: CGFloat = 8
         static let cellPaddingHorizontal: CGFloat = 10
+        /// Text narrower than this gives its tables' cells the narrow padding.
+        static let narrowTableWidth: CGFloat = 480
+        static let narrowCellPaddingVertical: CGFloat = 6
+        static let narrowCellPaddingHorizontal: CGFloat = 7
+        /// Inline code: in prose (15pt), and in a table cell (13pt).
+        static let inlineCodeSize: CGFloat = 13.5
+        static let cellCodeSize: CGFloat = 12
         /// The least a table column takes, however long its longest word.
         static let tableColumnMinimumLimit: CGFloat = 200
         /// A table cell this short is kept on one line when its column can be.

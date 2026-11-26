@@ -40,21 +40,32 @@ struct ConversationResponse: View {
     @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
     @State private var pendingExternalURL: URL?
-    @State private var lastLine: CGRect?
+    /// Where the text's last line sits once laid out: nil inside when it shows no line.
+    @State private var lastLine: CGRect??
+    @State private var textSize: CGSize = .zero
+    @State private var accessoryWidth: CGFloat = 0
 
     var body: some View {
+        // Reasoning shows without the provider's own metadata lines.
+        let shown = style == .reasoning ? ConversationResponseAttributedText.withoutProviderMarkup(content) : content
+        let accessory = trailingAccessory.flatMap { _ in lastLine.map(accessoryPlacement) }
         VStack(alignment: .leading, spacing: 0) {
-            ConversationResponseText(content: content, isStreaming: isStreaming, style: style,
-                                     onLastLine: trailingAccessory == nil ? nil : { lastLine = $0 }) { url in
+            ConversationResponseText(content: shown, isStreaming: isStreaming, style: style,
+                                     onLastLine: trailingAccessory == nil ? nil : { lastLine = .some($0) }) { url in
                 // Page links only work where a handler routes them (bot chats).
                 if let linkHandler { linkHandler(url) } else if WovenAppLink(url) == nil { pendingExternalURL = url }
             }
             .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { textSize = $0 }
+            // An accessory on a line of its own below the text gets room for it.
+            .padding(.bottom, accessory.map { max(0, $0.maxY - textSize.height) } ?? 0)
             .overlay(alignment: .topLeading) {
-                if let trailingAccessory, let lastLine {
+                if let trailingAccessory, let accessory {
                     trailingAccessory
-                        .frame(height: lastLine.height, alignment: .center)
-                        .offset(x: lastLine.maxX + ConversationMetrics.labelGap, y: lastLine.minY)
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { accessoryWidth = $0 }
+                        .frame(height: accessory.height, alignment: .center)
+                        .offset(x: accessory.minX, y: accessory.minY)
                 }
             }
 
@@ -62,7 +73,8 @@ struct ConversationResponse: View {
                 // One row, the same height while the reply streams and once it
                 // settles, so nothing moves when the turn ends.
                 // Files the reply refers to follow Copy in the same row, which
-                // wraps; with none the row is just Copy.
+                // wraps, an entry gap under the text; with none the row is just
+                // Copy, close under it. The text above never moves for them.
                 let files = isStreaming || showsRunningDots ? [] : fileRow.map { _ in ConversationFileRow.files(in: content) } ?? []
                 ZStack(alignment: .leading) {
                     if showsRunningDots {
@@ -76,8 +88,10 @@ struct ConversationResponse: View {
                         copyButton
                     }
                 }
-                .frame(minHeight: ConversationMetrics.actionRowHeight)
-                .padding(.top, ConversationMetrics.tight)
+                // As tall as a file chip in every state: the dots, Copy alone, and
+                // Copy with the files' first line.
+                .frame(minHeight: WovenMetrics.rowHeight)
+                .padding(.top, files.isEmpty ? ConversationMetrics.tight : ConversationMetrics.entryGap)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -94,6 +108,19 @@ struct ConversationResponse: View {
         } message: { url in
             Text(url.absoluteString)
         }
+    }
+
+    /// The trailing accessory's frame in the text: right after the last line
+    /// when it fits there, else at the start of the next line, or of the
+    /// first when the text shows none, so it always exists inside the column.
+    private func accessoryPlacement(_ lastLine: CGRect?) -> CGRect {
+        let gap = ConversationMetrics.labelGap
+        if let lastLine, lastLine.maxX + gap + accessoryWidth <= textSize.width {
+            return CGRect(x: lastLine.maxX + gap, y: lastLine.minY, width: accessoryWidth, height: lastLine.height)
+        }
+        let height = lastLine?.height ?? ceil(NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 15 * style.scale)))
+        let top = lastLine.map { $0.maxY + ConversationMetrics.Prose.lineSpacing } ?? 0
+        return CGRect(x: 0, y: top, width: accessoryWidth, height: height)
     }
 
     private var copyButton: some View {
@@ -122,8 +149,8 @@ private struct ConversationResponseText: NSViewRepresentable {
     let content: String
     let isStreaming: Bool
     let style: ConversationResponse.Style
-    /// Told where the last line of text sits, once laid out.
-    var onLastLine: ((CGRect) -> Void)?
+    /// Told where the text's last line sits, once laid out: nil when it shows none.
+    var onLastLine: ((CGRect?) -> Void)?
     let onOpenLink: (URL) -> Void
 
     func makeNSView(context: Context) -> ConversationResponseViewport {
@@ -176,8 +203,8 @@ final class ConversationResponseViewport: NSView {
     /// Told where the text's last line sits at the width the text is placed
     /// at, once per change: never from a width layout only probed, which
     /// would make the answer, and the state it sets, change on every pass.
-    var onLastLine: ((CGRect) -> Void)?
-    private var reportedLastLine: CGRect?
+    var onLastLine: ((CGRect?) -> Void)?
+    private var reportedLastLine: CGRect??
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -188,8 +215,9 @@ final class ConversationResponseViewport: NSView {
     func reportLastLine() {
         guard let onLastLine, bounds.width > 0 else { return }
         _ = textView.fittingSize(width: bounds.width)
-        guard let line = textView.lastLineRect, line != reportedLastLine else { return }
-        reportedLastLine = line
+        let line = textView.lastLineRect
+        if case .some(let reported) = reportedLastLine, reported == line { return }
+        reportedLastLine = .some(line)
         DispatchQueue.main.async { onLastLine(line) }
     }
 
@@ -236,13 +264,18 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     private var appliedColorScheme: ColorScheme?
     private var appliedStyle: ConversationResponse.Style?
     private var measuredSize: CGSize?
-    /// The width tables were sized for.
+    /// The width tables and lists were laid out for.
     private var layoutWidth = ConversationMetrics.column
     private var decorations: [(key: NSAttributedString.Key, range: NSRange, block: ResponseBlockDecoration?)] = []
+    /// The reply's blocks, in order, each with the length of its rendering in
+    /// the text storage: a new width renders again only the blocks that
+    /// follow it, without parsing anything.
+    private var pieces: [(block: ConversationMarkdownDocument.Block, length: Int)] = []
     /// While streaming: the source's length in UTF-8 before the last stable
-    /// cut, the length of its rendering at the start of the text storage, and
-    /// its last block.
-    private var stable: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?)?
+    /// cut, the length of its rendering at the start of the text storage, its
+    /// last block, and how many of `pieces` it holds.
+    private var stable: Stable?
+    private typealias Stable = (source: Int, length: Int, last: ConversationMarkdownDocument.Block?, pieces: Int)
 
     init() {
         let storage = NSTextStorage()
@@ -289,56 +322,33 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         // and laid out again, so a chunk costs its own length, not the reply's.
         // The cut stays valid while the reply only grows past what was applied,
         // through the last chunk when it settles.
-        var kept: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?) = (0, 0, nil)
-        var tail: NSAttributedString
+        var kept: Stable = (0, 0, nil, 0)
+        var tail: (text: NSAttributedString, pieces: [(block: ConversationMarkdownDocument.Block, length: Int)])
         if let stable, samePresentation, let appliedContent,
-           content.utf8.starts(with: appliedContent.utf8), stable.length <= textStorage.length {
+           content.utf8.starts(with: appliedContent.utf8), stable.length <= textStorage.length, stable.pieces <= pieces.count {
             kept = stable
             tail = renderStreaming(content, keeping: kept, style: style)
             // Nothing after the kept part: its last line break, which the
             // whole reply would drop, must not stay.
-            if tail.length == 0, kept.length > 0 {
-                kept = (0, 0, nil)
+            if tail.text.length == 0, kept.length > 0 {
+                kept = (0, 0, nil, 0)
                 tail = renderStreaming(content, keeping: kept, style: style)
             }
         } else if isStreaming {
             tail = renderStreaming(content, keeping: kept, style: style)
         } else {
             stable = nil
-            tail = ConversationResponseAttributedText.render(ConversationMarkdownDocument(content).blocks, after: nil,
-                                                             endsResponse: true, style: style, width: layoutWidth)
+            let blocks = ConversationMarkdownDocument(content).blocks
+            let rendered = ConversationResponseAttributedText.renderPieces(blocks, after: nil, endsResponse: true,
+                                                                           style: style, width: layoutWidth)
+            tail = (rendered.text, Array(zip(blocks, rendered.lengths)).map { (block: $0.0, length: $0.1) })
         }
-        textStorage.replaceCharacters(in: NSRange(location: kept.length, length: textStorage.length - kept.length), with: tail)
+        textStorage.replaceCharacters(in: NSRange(location: kept.length, length: textStorage.length - kept.length), with: tail.text)
+        pieces.removeSubrange(kept.pieces...)
+        pieces += tail.pieces
         measuredSize = nil
         decorations.removeAll { $0.range.location >= kept.length }
-        // Inline code last: it draws over code boxes and table fills.
-        let whole = NSRange(location: 0, length: tail.length)
-        for key in [NSAttributedString.Key.responseCode, .responseDivider, .responseTable] {
-            tail.enumerateAttribute(key, in: whole) { value, range, _ in
-                if let block = value as? ResponseBlockDecoration {
-                    decorations.append((key, NSRange(location: range.location + kept.length, length: range.length), block))
-                }
-            }
-        }
-        // Nested quotes overlap: each keeps its own range and bar.
-        var quotes: [(block: ResponseBlockDecoration, range: NSRange)] = []
-        tail.enumerateAttribute(.responseQuote, in: whole) { value, range, _ in
-            for block in value as? [ResponseBlockDecoration] ?? [] {
-                if let index = quotes.firstIndex(where: { $0.block === block }) {
-                    quotes[index].range = NSUnionRange(quotes[index].range, range)
-                } else {
-                    quotes.append((block, range))
-                }
-            }
-        }
-        for quote in quotes {
-            decorations.append((.responseQuote, NSRange(location: quote.range.location + kept.length, length: quote.range.length), quote.block))
-        }
-        for key in [NSAttributedString.Key.responseInlineCode, .responseTaskBox] {
-            tail.enumerateAttribute(key, in: whole) { value, range, _ in
-                if value != nil { decorations.append((key, NSRange(location: range.location + kept.length, length: range.length), nil)) }
-            }
-        }
+        collectDecorations(in: tail.text, at: kept.length)
         // Streaming appends keep the selection; once the selected text itself
         // changes (a replacement, or a rerendered prefix), it no longer
         // identifies what the user chose.
@@ -357,29 +367,95 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
     /// What follows the kept part of a streaming reply, rendered, with the
     /// reply's new stable cut recorded. Each part is rendered after the last
     /// block before it, which is all a block's spacing depends on.
-    private func renderStreaming(_ content: String, keeping kept: (source: Int, length: Int, last: ConversationMarkdownDocument.Block?),
-                                 style: ConversationResponse.Style) -> NSAttributedString {
+    private func renderStreaming(_ content: String, keeping kept: Stable, style: ConversationResponse.Style)
+        -> (text: NSAttributedString, pieces: [(block: ConversationMarkdownDocument.Block, length: Int)]) {
         let start = content.utf8.index(content.startIndex, offsetBy: kept.source)
         let (blocks, cut) = ConversationMarkdownDocument.blocks(cutting: content[start...])
-        func render(cutAt settledCount: Int) -> (settled: NSAttributedString, rest: NSAttributedString, last: ConversationMarkdownDocument.Block?) {
+        typealias Rendered = (text: NSAttributedString, lengths: [Int])
+        func render(cutAt settledCount: Int) -> (settled: Rendered, rest: Rendered, count: Int, last: ConversationMarkdownDocument.Block?) {
             let last = settledCount > 0 ? blocks[settledCount - 1] : kept.last
-            return (ConversationResponseAttributedText.render(Array(blocks[..<settledCount]), after: kept.last,
-                                                               endsResponse: false, style: style, width: layoutWidth),
-                    ConversationResponseAttributedText.render(Array(blocks[settledCount...]), after: last,
-                                                              endsResponse: true, style: style, width: layoutWidth), last)
+            return (ConversationResponseAttributedText.renderPieces(Array(blocks[..<settledCount]), after: kept.last,
+                                                                     endsResponse: false, style: style, width: layoutWidth),
+                    ConversationResponseAttributedText.renderPieces(Array(blocks[settledCount...]), after: last,
+                                                                    endsResponse: true, style: style, width: layoutWidth),
+                    settledCount, last)
         }
         var cutOffset = cut?.offset ?? 0
         var parts = render(cutAt: cut?.blockCount ?? 0)
         // A cut with nothing visible after it would keep the settled blocks'
         // last line break, which the whole reply drops: don't cut there yet.
-        if parts.rest.length == 0, parts.settled.length > 0 {
+        if parts.rest.text.length == 0, parts.settled.text.length > 0 {
             cutOffset = 0
             parts = render(cutAt: 0)
         }
-        let tail = NSMutableAttributedString(attributedString: parts.settled)
-        tail.append(parts.rest)
-        stable = (kept.source + cutOffset, kept.length + parts.settled.length, parts.last)
-        return tail
+        let tail = NSMutableAttributedString(attributedString: parts.settled.text)
+        tail.append(parts.rest.text)
+        stable = (kept.source + cutOffset, kept.length + parts.settled.text.length, parts.last, kept.pieces + parts.count)
+        return (tail, Array(zip(blocks, parts.settled.lengths + parts.rest.lengths)).map { (block: $0.0, length: $0.1) })
+    }
+
+    /// The boxes, bars and shading `text` asks for, placed at `offset` in the
+    /// text storage. Inline code last: it draws over code boxes and table fills.
+    private func collectDecorations(in text: NSAttributedString, at offset: Int) {
+        let whole = NSRange(location: 0, length: text.length)
+        for key in [NSAttributedString.Key.responseCode, .responseDivider, .responseTable] {
+            text.enumerateAttribute(key, in: whole) { value, range, _ in
+                if let block = value as? ResponseBlockDecoration {
+                    decorations.append((key, NSRange(location: range.location + offset, length: range.length), block))
+                }
+            }
+        }
+        // Nested quotes overlap: each keeps its own range and bar.
+        var quotes: [(block: ResponseBlockDecoration, range: NSRange)] = []
+        text.enumerateAttribute(.responseQuote, in: whole) { value, range, _ in
+            for block in value as? [ResponseBlockDecoration] ?? [] {
+                if let index = quotes.firstIndex(where: { $0.block === block }) {
+                    quotes[index].range = NSUnionRange(quotes[index].range, range)
+                } else {
+                    quotes.append((block, range))
+                }
+            }
+        }
+        for quote in quotes {
+            decorations.append((.responseQuote, NSRange(location: quote.range.location + offset, length: quote.range.length), quote.block))
+        }
+        for key in [NSAttributedString.Key.responseInlineCode, .responseTaskBox] {
+            text.enumerateAttribute(key, in: whole) { value, range, _ in
+                if value != nil { decorations.append((key, NSRange(location: range.location + offset, length: range.length), nil)) }
+            }
+        }
+    }
+
+    /// Lays the blocks that follow the width out again for `layoutWidth`,
+    /// each after the block before it, as the whole reply would render them
+    /// there. Their text is the same at any width, so the selection stays.
+    private func followWidth() {
+        guard let textStorage, let style = appliedStyle, textStorage.length == pieces.reduce(0, { $0 + $1.length }),
+              pieces.contains(where: { $0.length > 0 && ConversationResponseAttributedText.followsWidth($0.block) }) else { return }
+        applying = true
+        defer { applying = false }
+        let selection = selectedRange()
+        let before = textStorage.string
+        let lastShown = pieces.lastIndex { $0.length > 0 }
+        var location = 0
+        textStorage.beginEditing()
+        for index in pieces.indices {
+            let piece = pieces[index]
+            if piece.length > 0, ConversationResponseAttributedText.followsWidth(piece.block) {
+                let text = ConversationResponseAttributedText.render([piece.block], after: index > 0 ? pieces[index - 1].block : nil,
+                                                                     endsResponse: index == lastShown, style: style, width: layoutWidth)
+                textStorage.replaceCharacters(in: NSRange(location: location, length: piece.length), with: text)
+                pieces[index].length = text.length
+            }
+            location += pieces[index].length
+        }
+        textStorage.endEditing()
+        if let kept = stable {
+            stable?.length = pieces.prefix(kept.pieces).reduce(0) { $0 + $1.length }
+        }
+        decorations.removeAll()
+        collectDecorations(in: textStorage, at: 0)
+        if textStorage.string == before { setSelectedRange(selection) }
     }
 
     /// The text's last line: where its glyphs end, and its height without the
@@ -401,15 +477,11 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
         let width = max(1, width)
         guard let textContainer, let layoutManager else { return CGSize(width: width, height: 1) }
         if let measuredSize, measuredSize.width == width { return measuredSize }
-        // Tables share out the width they are given: lay them out again for a new one.
+        // Tables share out the width they are given, and lists space items by
+        // whether they wrap in it: lay those out again for a new one.
         if width != layoutWidth {
             layoutWidth = width
-            if decorations.contains(where: { $0.key == .responseTable }), let content = appliedContent,
-               let isStreaming = appliedStreaming, let style = appliedStyle {
-                stable = nil
-                appliedContent = nil
-                apply(content: content, isStreaming: isStreaming, style: style, colorScheme: appliedColorScheme ?? .light)
-            }
+            followWidth()
         }
         if textContainer.size.width != width {
             textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
@@ -685,6 +757,36 @@ private enum ConversationResponseAttributedText {
     /// `width` is the text's width, which tables share out among their columns.
     static func render(_ values: [Block], after previous: Block?, endsResponse: Bool,
                        style responseStyle: ConversationResponse.Style, width: CGFloat) -> NSAttributedString {
+        renderPieces(values, after: previous, endsResponse: endsResponse, style: responseStyle, width: width).text
+    }
+
+    /// Whether a block renders differently at another width: a table shares
+    /// it out among its columns, and a list spaces an item by whether it wraps.
+    static func followsWidth(_ block: Block) -> Bool {
+        switch block {
+        case .table, .list: true
+        case .quote(let quoted): quoted.contains(where: followsWidth)
+        default: false
+        }
+    }
+
+    /// `text` without the lines that are only a provider's metadata tag, such
+    /// as `<tools-used-before-summary>WebFetch</tools-used-before-summary>`:
+    /// a hyphenated tag name, opened and closed on one line, or self-closing.
+    static func withoutProviderMarkup(_ text: String) -> String {
+        guard text.contains("<") else { return text }
+        return providerMarkupLine.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+    }
+
+    private static let providerMarkupLine = try! NSRegularExpression(
+        pattern: #"^[ \t]*<([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?:[ \t][^<>\n]*)?(?:/>|>[^<>\n]*</\1>)[ \t]*(?:\n|$)"#,
+        options: [.anchorsMatchLines, .caseInsensitive])
+
+    /// `render`'s text, with the length of each block's part of it: a block
+    /// rendered again on its own, after the block before it, is exactly that
+    /// part, and the last block with any text is the one that ends it.
+    static func renderPieces(_ values: [Block], after previous: Block?, endsResponse: Bool,
+                             style responseStyle: ConversationResponse.Style, width: CGFloat) -> (text: NSAttributedString, lengths: [Int]) {
         let output = NSMutableAttributedString(string: "")
         // Streaming is conveyed by work activity; answer ink stays stable as
         // paragraphs arrive and the run settles.
@@ -706,12 +808,14 @@ private enum ConversationResponseAttributedText {
             return style
         }
 
-        /// In a table cell, short inline code keeps together on one line.
-        func inline(_ text: ConversationMarkdownDocument.InlineText, font: ResponseFont, inCell: Bool = false) -> NSMutableAttributedString {
+        /// In a table cell, short inline code keeps together on one line
+        /// unless `keepsCode` is false. Code is a little smaller than the
+        /// text around it, in a cell as in prose.
+        func inline(_ text: ConversationMarkdownDocument.InlineText, font: ResponseFont, inCell: Bool = false, keepsCode: Bool = true) -> NSMutableAttributedString {
             let result = NSMutableAttributedString(string: "")
             for run in text.rendered.runs {
                 let intent = run.inlinePresentationIntent ?? []
-                var runFont = intent.contains(.code) ? monospaced(13.5) : font
+                var runFont = intent.contains(.code) ? monospaced(inCell ? Prose.cellCodeSize : Prose.inlineCodeSize) : font
                 if intent.contains(.stronglyEmphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .boldFontMask) }
                 if intent.contains(.emphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .italicFontMask) }
                 var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
@@ -721,7 +825,7 @@ private enum ConversationResponseAttributedText {
                     // Short code keeps together: whole in a table cell; elsewhere
                     // it may still break at its spaces, never inside a flag.
                     if string.count <= Prose.unbreakableCodeLength {
-                        attributes[.responseNoBreak] = inCell ? ResponseNoBreak.whole : ResponseNoBreak.words
+                        attributes[.responseNoBreak] = inCell && keepsCode ? ResponseNoBreak.whole : ResponseNoBreak.words
                     }
                 }
                 if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
@@ -808,18 +912,21 @@ private enum ConversationResponseAttributedText {
                 appendInline(content, font: font(size, .semibold), style: paragraphStyle(indent: indent, before: before),
                              marker: marker)
             case .list(let items):
-                // Items of more than one block, or long enough to wrap, are told
-                // apart by the loose gap; a list of short items stays tight.
-                let gap = items.contains { item in
-                    item.blocks.count > 1 || item.blocks.contains { block in
-                        if case .paragraph(let content) = block { return content.rendered.characters.count > Prose.longListItemLength }
-                        return false
-                    }
-                } ? Prose.looseListGap : Prose.tightListGap
+                // An item that wraps at this width, or holds more than one
+                // block, is told apart from the next by the loose gap; short
+                // one-line items stay tight. Each gap comes from the item above
+                // it, so an item arriving later never moves the ones before it.
+                func spreads(_ item: ConversationMarkdownDocument.ListItem, textIndent: CGFloat) -> Bool {
+                    guard item.blocks.count == 1 else { return item.blocks.count > 1 }
+                    guard case .paragraph(let content) = item.blocks[0] else { return true }
+                    let text = inline(content, font: body)
+                    return text.string.contains("\n") || text.size().width > width - textIndent
+                }
                 // Nesting steps by level, however many spaces the source used,
                 // decided in source order so a later item never moves an earlier one.
                 var indents: [Int] = []
                 var previousItem: Block?
+                var previousSpreads = false
                 var topKind: MarkerKind?
                 for (index, item) in items.enumerated() {
                     while let last = indents.last, last > item.depth { indents.removeLast() }
@@ -837,8 +944,8 @@ private enum ConversationResponseAttributedText {
                     } else {
                         NSAttributedString(string: item.marker, attributes: [.font: body, .foregroundColor: foreground])
                     }
-                    let first = index == 0 ? before
-                        : max(0, (startsList ? Prose.paragraphGap : gap) + itemTopOverhang(item) - bottomSlack(previousItem))
+                    let gap = startsList ? Prose.paragraphGap : previousSpreads ? Prose.looseListGap : Prose.tightListGap
+                    let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
                         appendInline(.init(""), font: body,
@@ -847,6 +954,7 @@ private enum ConversationResponseAttributedText {
                     sequence(item.blocks, indent: markerEnd + Prose.markerGap, after: nil, firstBefore: first, inItem: true,
                              marker: itemMarker)
                     previousItem = item.blocks.last ?? emptyParagraph
+                    previousSpreads = spreads(item, textIndent: markerEnd + Prose.markerGap)
                 }
             case .quote(let quoted):
                 let start = output.length
@@ -887,7 +995,7 @@ private enum ConversationResponseAttributedText {
                     ([table.header] + table.rows).enumerated().map { rowIndex, cells in
                         table.header.indices.map { column in
                             inline(cells.indices.contains(column) ? cells[column] : .init(""),
-                                   font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: keepingCode)
+                                   font: font(13, rowIndex == 0 ? .semibold : .regular), inCell: true, keepsCode: keepingCode)
                         }
                     }
                 }
@@ -896,7 +1004,7 @@ private enum ConversationResponseAttributedText {
                 // width on one line. If every column fits on one line, it
                 // gets that (stretched to the full width when nearly there); otherwise each gets its least, and the room left
                 // is shared in proportion to how much more each would take.
-                func limits(_ rows: [[NSMutableAttributedString]]) -> (most: [CGFloat], least: [CGFloat]) {
+                func limits(_ rows: [[NSMutableAttributedString]], keepingShortCells: Bool = true) -> (most: [CGFloat], least: [CGFloat]) {
                     let most = table.header.indices.map { column in
                         max(1, rows.map { ceil($0[column].size().width) + 1 }.max() ?? 1)
                     }
@@ -905,7 +1013,7 @@ private enum ConversationResponseAttributedText {
                     // caps runs a line may still break, such as a long word or URL.
                     let least = table.header.indices.map { column in
                         let runs = rows.map { row in
-                            row[column].length <= Prose.shortCellLength
+                            keepingShortCells && row[column].length <= Prose.shortCellLength
                                 ? (kept: ceil(row[column].size().width) + 1, word: CGFloat(1)) : unbreakableWidths(row[column])
                         }
                         let kept = runs.map(\.kept).max() ?? 1
@@ -914,7 +1022,11 @@ private enum ConversationResponseAttributedText {
                     }
                     return (most, least)
                 }
-                let available = width - indent - CGFloat(table.header.count) * 2 * Prose.cellPaddingHorizontal
+                // In a narrow column cells keep less padding, so their text gets the room.
+                let narrow = width < Prose.narrowTableWidth
+                let padX = narrow ? Prose.narrowCellPaddingHorizontal : Prose.cellPaddingHorizontal
+                let padY = narrow ? Prose.narrowCellPaddingVertical : Prose.cellPaddingVertical
+                let available = width - indent - CGFloat(table.header.count) * 2 * padX
                 var rows = cellTexts(keepingCode: true)
                 var (most, least) = limits(rows)
                 // Too narrow for short code to keep together: let it break at
@@ -923,7 +1035,7 @@ private enum ConversationResponseAttributedText {
                     rows = cellTexts(keepingCode: false)
                     (most, least) = limits(rows)
                 }
-                let widths: [CGFloat]
+                var widths: [CGFloat]
                 let natural = most.reduce(0, +)
                 if natural <= available {
                     // A table nearly as wide as the text fills it, sharing the
@@ -932,10 +1044,33 @@ private enum ConversationResponseAttributedText {
                     let fills = natural >= Prose.tableFillShare * available
                     widths = most.map { fills ? $0 + (available - natural) * $0 / natural : $0 }
                 } else {
-                    let room = max(0, available - least.reduce(0, +))
-                    let stretch = zip(most, least).map { $0 - $1 }
-                    let total = stretch.reduce(0, +)
-                    widths = least.indices.map { least[$0] + (total > 0 ? room * stretch[$0] / total : 0) }
+                    // Each gets its least, and the room left is shared in
+                    // proportion to how much more each would take.
+                    func share(_ least: [CGFloat]) -> [CGFloat] {
+                        let room = max(0, available - least.reduce(0, +))
+                        let stretch = zip(most, least).map { $0 - $1 }
+                        let total = stretch.reduce(0, +)
+                        return least.indices.map { least[$0] + (total > 0 ? room * stretch[$0] / total : 0) }
+                    }
+                    widths = share(least)
+                    // Minima wider than the text together: short cells break
+                    // between their words too.
+                    if widths.reduce(0, +) > available {
+                        widths = share(limits(rows, keepingShortCells: false).least)
+                    }
+                    // Still too wide: the widest columns give way, down to a
+                    // common width, and break their words where they must, so
+                    // no cell is ever cut off.
+                    if widths.reduce(0, +) > available {
+                        var left = max(CGFloat(widths.count), available), count = CGFloat(widths.count)
+                        var level = left / count
+                        for value in widths.sorted() {
+                            guard value * count > left else { left -= value; count -= 1; continue }
+                            level = left / count
+                            break
+                        }
+                        widths = widths.map { min($0, max(1, level.rounded(.down))) }
+                    }
                 }
                 // These widths, as computed: TextKit's own automatic layout
                 // would weigh them against the cells' content again.
@@ -944,11 +1079,11 @@ private enum ConversationResponseAttributedText {
                     for (column, text) in cells.enumerated() {
                         let cell = NSTextTableBlock(table: nativeTable, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
                         cell.setValue(widths[column], type: responseAbsolute, for: .width)
-                        cell.setWidth(Prose.cellPaddingHorizontal, type: responseAbsolute, for: .padding, edge: .minX)
-                        cell.setWidth(Prose.cellPaddingHorizontal, type: responseAbsolute, for: .padding, edge: .maxX)
-                        cell.setWidth(Prose.cellPaddingVertical, type: responseAbsolute, for: .padding, edge: .minY)
+                        cell.setWidth(padX, type: responseAbsolute, for: .padding, edge: .minX)
+                        cell.setWidth(padX, type: responseAbsolute, for: .padding, edge: .maxX)
+                        cell.setWidth(padY, type: responseAbsolute, for: .padding, edge: .minY)
                         // A cell's last line keeps its line spacing below it.
-                        cell.setWidth(Prose.cellPaddingVertical - Prose.cellLineSpacing, type: responseAbsolute,
+                        cell.setWidth(padY - Prose.cellLineSpacing, type: responseAbsolute,
                                       for: .padding, edge: .maxY)
                         if rowIndex < rows.count - 1 {
                             cell.setWidth(0.5, type: responseAbsolute, for: .border, edge: .maxY)
@@ -982,8 +1117,17 @@ private enum ConversationResponseAttributedText {
             output.append(NSAttributedString(string: "\n", attributes: [.font: ResponseFont.systemFont(ofSize: 1), .paragraphStyle: lead,
                                                                         .responseLayoutOnly: true]))
         }
-        sequence(values, indent: 0, after: previous, firstBefore: nil, inItem: false)
-        guard endsResponse, output.length > 0 else { return output }
+        var ends: [Int] = []
+        var before = previous
+        for block in values {
+            sequence([block], indent: 0, after: before, firstBefore: nil, inItem: false)
+            ends.append(output.length)
+            before = block
+        }
+        func pieces() -> (text: NSAttributedString, lengths: [Int]) {
+            (output, ends.indices.map { ends[$0] - ($0 > 0 ? ends[$0 - 1] : 0) })
+        }
+        guard endsResponse, output.length > 0 else { return pieces() }
         // The last line break would add an empty line under the text. A box
         // keeps it, so its last line keeps the spacing its edge is drawn from.
         let end = output.length - 1
@@ -993,8 +1137,9 @@ private enum ConversationResponseAttributedText {
             output.addAttribute(.responseLayoutOnly, value: true, range: NSRange(location: end, length: 1))
         } else {
             output.deleteCharacters(in: NSRange(location: end, length: 1))
+            ends = ends.map { min($0, output.length) }
         }
-        return output
+        return pieces()
     }
 
     /// The widest runs in `text` a line cannot break inside: code kept
@@ -1102,6 +1247,7 @@ struct ConversationUserBubble<Attachments: View>: View {
     let content: String
     var hasAttachments = false
     @ViewBuilder var attachments: () -> Attachments
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded = false
     @State private var textWidth: CGFloat?
 
@@ -1126,6 +1272,8 @@ struct ConversationUserBubble<Attachments: View>: View {
             attachments()
             if isLong {
                 Button(expanded ? "Show less" : "Show full message") {
+                    // The reader opened or closed it: the transcript stops following first.
+                    transcriptInteraction()
                     withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
                 }
                 .buttonStyle(.plain)
@@ -1133,7 +1281,7 @@ struct ConversationUserBubble<Attachments: View>: View {
                 .foregroundStyle(WovenPalette.mutedForeground)
             }
         }
-        .frame(maxWidth: preferredContentWidth, alignment: .trailing)
+        .frame(maxWidth: isLong ? max(naturalContentWidth, Self.controlWidth) : naturalContentWidth, alignment: .trailing)
         .padding(ConversationMetrics.bubbleInsets)
         .background(WovenPalette.primary.opacity(0.13))
         .clipShape(RoundedRectangle(cornerRadius: WovenMetrics.composerRadius, style: .continuous))
@@ -1141,7 +1289,7 @@ struct ConversationUserBubble<Attachments: View>: View {
     /// Whether the message, laid out at its width, is long enough that
     /// collapsing it earns the row its control takes.
     private var collapses: Bool {
-        lineCount(width: textWidth ?? preferredContentWidth) >= Self.collapsedLines + Self.hiddenLines
+        lineCount(width: textWidth ?? naturalContentWidth) >= Self.collapsedLines + Self.hiddenLines
     }
 
     private func lineCount(width: CGFloat) -> Int {
@@ -1156,12 +1304,18 @@ struct ConversationUserBubble<Attachments: View>: View {
         return Int(((height + spacing) / (line + spacing)).rounded())
     }
 
-    private var preferredContentWidth: CGFloat {
+    /// The width of the message's longest line, within the bubble's limit.
+    private var naturalContentWidth: CGFloat {
         if hasAttachments { return 420 }
         let font = ResponseFont.systemFont(ofSize: 15)
         let longestLine = content.split(separator: "\n", omittingEmptySubsequences: false)
             .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        // Room for the control under a message that collapses.
-        return min(586, max(content.count > 300 ? 118 : 1, ceil(longestLine)))
+        return min(586, max(1, ceil(longestLine)))
+    }
+
+    /// Room for the control under a message that collapses, however narrow its lines.
+    private static var controlWidth: CGFloat {
+        let font = ResponseFont.systemFont(ofSize: 12.5, weight: .medium)
+        return ceil(["Show full message", "Show less"].map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0)
     }
 }
