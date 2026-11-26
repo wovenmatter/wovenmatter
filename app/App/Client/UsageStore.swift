@@ -21,6 +21,8 @@ final class UsageStore {
     @ObservationIgnored private weak var machineStore: MachinesStore?
     @ObservationIgnored private var limits: [UsageLimitAccount] = []
     @ObservationIgnored private var limitsRead = false
+    /// Refreshes started, so a reply can tell whether a later one began.
+    @ObservationIgnored private var refreshes = 0
 
     init() {}
 
@@ -39,24 +41,43 @@ final class UsageStore {
         await refresh(range: range)
     }
 
-    /// Re-reads usage for the range, and provider limits when asked.
+    /// Re-reads usage for the range, and provider limits when asked. Only the
+    /// most recent call sets what it reads and the refreshing flags, so a
+    /// slow reply for a range no longer selected changes nothing.
     func refresh(range: UsageTimeRange, refreshLimits: Bool = false) async {
+        refreshes += 1
+        let generation = refreshes
         guard let server, server.isConnected else {
             error = ClientError.notConnected.localizedDescription
             return
         }
         isRefreshing = true
         if refreshLimits { isRefreshingLimits = true }
-        defer { isRefreshing = false; isRefreshingLimits = false }
+        defer {
+            if generation == refreshes {
+                isRefreshing = false
+                isRefreshingLimits = false
+            }
+        }
         let now = Date()
         let interval = range.interval(relativeTo: now)
         do {
             let report = try await server.call(ReadUsage(start: interval.start, end: interval.end.addingTimeInterval(1),
-                                                         periodSeconds: range.usesHourlyBuckets ? 3600 : 86_400))
+                                                         periodSeconds: range.usesHourlyBuckets ? 3600 : 86_400,
+                                                         timeZone: TimeZone.current.identifier))
+            var failure: String?
             if refreshLimits {
-                limits = try await server.call(ReadUsageLimits()).map(Self.account)
-                limitsRead = true
+                do {
+                    let read = try await server.call(ReadUsageLimits()).map(Self.account)
+                    if generation == refreshes {
+                        limits = read
+                        limitsRead = true
+                    }
+                } catch {
+                    failure = error.localizedDescription
+                }
             }
+            guard generation == refreshes else { return }
             let names = Dictionary((machineStore?.machines ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             let samples = report.groups.enumerated().map { Self.sample($1, index: $0) }
             let sources = Dictionary(grouping: samples, by: \.machineID).map { machineID, values in
@@ -68,8 +89,9 @@ final class UsageStore {
                 analytics: UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources),
                 limits: limits)
             machines = summaries(report)
-            error = nil
+            error = failure
         } catch {
+            guard generation == refreshes else { return }
             self.error = error.localizedDescription
         }
     }
