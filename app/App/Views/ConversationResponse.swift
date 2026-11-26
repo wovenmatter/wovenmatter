@@ -81,16 +81,16 @@ struct ConversationResponse: View {
                         ConversationRunningDots()
                     } else if !isStreaming, let fileRow, !files.isEmpty {
                         FlowLayout(horizontalSpacing: ConversationMetrics.rowGap, verticalSpacing: ConversationMetrics.rowGap) {
-                            copyButton.frame(height: WovenMetrics.rowHeight)
+                            copyButton.frame(height: ConversationMetrics.actionRowHeight)
                             fileRow.chips(files)
                         }
                     } else if !isStreaming {
                         copyButton
                     }
                 }
-                // As tall as a file chip in every state: the dots, Copy alone, and
-                // Copy with the files' first line.
-                .frame(minHeight: WovenMetrics.rowHeight)
+                // One height in every state: the dots, Copy alone, and Copy with
+                // the files' first line (the chips are as tall as the row).
+                .frame(minHeight: ConversationMetrics.actionRowHeight)
                 .padding(.top, files.isEmpty ? ConversationMetrics.tight : ConversationMetrics.entryGap)
             }
         }

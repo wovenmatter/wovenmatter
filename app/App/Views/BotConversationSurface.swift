@@ -323,6 +323,8 @@ private struct BotConversationPane: View {
     @Environment(\.wovenTheme) private var theme
     @State private var attached: BotChatStore?
     @State private var following = true
+    /// The newest content is out of view or in the composer's fade.
+    @State private var endObscured = false
     @State private var isUserScrolling = false
     @State private var shownMessages = BotConversationPane.messagePage
     @State private var bottomStackHeight: CGFloat = 0
@@ -444,18 +446,18 @@ private struct BotConversationPane: View {
                 .padding(.top, 16)
             }
             .scrollIndicators(.never)
+            // Opening or selecting something is the reader taking over: the
+            // newest reply no longer pulls the view down.
+            .environment(\.conversationTranscriptInteraction) { following = false }
             .defaultScrollAnchor(isNewThread ? .top : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in
                 isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
             }
             .onScrollGeometryChange(for: ConversationGeometry.self) { geometry in
-                ConversationGeometry(
-                    contentHeight: geometry.contentSize.height,
-                    isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 90,
-                    viewportHeight: geometry.containerSize.height
-                )
+                ConversationGeometry(geometry)
             } action: { old, new in
+                if new.isObscured != endObscured { endObscured = new.isObscured }
                 let resized = old.contentHeight != new.contentHeight || old.viewportHeight != new.viewportHeight
                 if isNewThread {
                     // A new thread opens at the top, with its starting message in view.
@@ -467,7 +469,7 @@ private struct BotConversationPane: View {
                     }
                 } else if !resized || isUserScrolling {
                     // Any movement of the reader's own decides whether the newest reply stays in view.
-                    following = new.isNearBottom
+                    following = new.isAtLiveEdge
                 }
             }
             .onChange(of: controller.loading) { _, loading in
@@ -479,7 +481,7 @@ private struct BotConversationPane: View {
                 guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
-            .conversationEdges(topClearance: 0, stackHeight: bottomStackHeight, jumpLabel: following ? nil : "Latest reply") {
+            .conversationEdges(topClearance: 0, stackHeight: bottomStackHeight, jumpLabel: following || !endObscured ? nil : "Latest reply") {
                 following = true
                 jumpToEnd(proxy)
             }

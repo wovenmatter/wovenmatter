@@ -132,16 +132,72 @@ extension View {
     }
 }
 
-/// Where the most recently laid out transcript's edges fade, in window
-/// coordinates from the top, for debug snapshots: they draw web content in
-/// after the window, past SwiftUI's mask.
+/// Where a transcript's end is, the same rule on every surface.
+enum ConversationEnd {
+    /// The reader is at the live edge, and the transcript follows, only within this of the end.
+    static let liveEdge: CGFloat = 2
+
+    /// The newest content is obscured once the end is more than a turn gap
+    /// below what shows: rows end that far above the clearance under them,
+    /// whose top is where the composer's fade begins.
+    static func isObscured(distance: CGFloat) -> Bool { distance > ConversationMetrics.turnGap }
+
+    static func distance(_ geometry: ScrollGeometry) -> CGFloat {
+        max(0, geometry.contentSize.height - geometry.visibleRect.maxY).rounded()
+    }
+}
+
+extension ConversationGeometry {
+    init(_ geometry: ScrollGeometry) {
+        self.init(contentHeight: geometry.contentSize.height, viewportHeight: geometry.containerSize.height,
+                  endDistance: ConversationEnd.distance(geometry))
+    }
+
+    var isAtLiveEdge: Bool { endDistance <= ConversationEnd.liveEdge }
+    var isObscured: Bool { ConversationEnd.isObscured(distance: endDistance) }
+}
+
+#if DEBUG
+/// Where each shown transcript's edges fade, in window coordinates from the
+/// top, for debug snapshots: they draw web content in after the window, past
+/// SwiftUI's mask, and fade each piece with the edges of the transcript it is in.
 struct ConversationEdgeSnapshot: Equatable {
-    @MainActor static var current: ConversationEdgeSnapshot?
+    @MainActor static var shown: [UUID: ConversationEdgeSnapshot] = [:]
+
+    /// The transcript a piece of web content at `rect` sits in.
+    @MainActor static func containing(_ rect: CGRect) -> ConversationEdgeSnapshot? {
+        shown.values.first { $0.frame.contains(CGPoint(x: rect.midX, y: rect.midY)) }
+    }
+
     let frame: CGRect
     let topClearance: CGFloat
     let topFade: CGFloat
     let bottomFade: CGFloat
     let bottomClearance: CGFloat
+}
+#endif
+
+/// Debug builds: records a transcript's edges for debug snapshots. Release
+/// builds record nothing.
+private struct EdgeSnapshotRecorder: ViewModifier {
+    let id: UUID?
+    let topClearance: CGFloat
+    let topFade: CGFloat
+    let bottomFade: CGFloat
+    let bottomClearance: CGFloat
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content
+            .onGeometryChange(for: ConversationEdgeSnapshot.self) { geometry in
+                ConversationEdgeSnapshot(frame: geometry.frame(in: .global), topClearance: topClearance, topFade: topFade,
+                                         bottomFade: bottomFade, bottomClearance: bottomClearance)
+            } action: { snapshot in if let id { ConversationEdgeSnapshot.shown[id] = snapshot } }
+            .onDisappear { if let id { ConversationEdgeSnapshot.shown[id] = nil } }
+        #else
+        content
+        #endif
+    }
 }
 
 private struct ConversationEdges: ViewModifier {
@@ -152,6 +208,17 @@ private struct ConversationEdges: ViewModifier {
     let jump: () -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.wovenTheme) private var theme
+    #if DEBUG
+    @State private var snapshotID = UUID()
+    #endif
+
+    private var debugSnapshotID: UUID? {
+        #if DEBUG
+        snapshotID
+        #else
+        nil
+        #endif
+    }
 
     func body(content: Content) -> some View {
         let stackTop = stackHeight + ConversationBottomOverlayLayout.bottomOffset
@@ -170,11 +237,8 @@ private struct ConversationEdges: ViewModifier {
                     Color.clear.frame(height: stackTop + jumpBand)
                 }
             }
-            // Debug snapshots draw web content in afterwards; they fade it the same way.
-            .onGeometryChange(for: ConversationEdgeSnapshot.self) { geometry in
-                ConversationEdgeSnapshot(frame: geometry.frame(in: .global), topClearance: topClearance, topFade: topFade,
-                                         bottomFade: bottomFade, bottomClearance: stackTop + jumpBand)
-            } action: { ConversationEdgeSnapshot.current = $0 }
+            .modifier(EdgeSnapshotRecorder(id: debugSnapshotID, topClearance: topClearance, topFade: topFade,
+                                           bottomFade: bottomFade, bottomClearance: stackTop + jumpBand))
             .overlay(alignment: .bottom) {
                 if let jumpLabel {
                     Button(action: jump) {

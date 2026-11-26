@@ -159,6 +159,13 @@ struct WorkspaceView: View {
         .debugRequest("trash") { showsWorkspaceTrash = true }
         // `chat:ID` opens a chat; `new:RUNTIME` starts one with this Mac's agent, `new:RUNTIME@MACHINE` there.
         .debugCommand("chat:") { selectConversation($0) }
+        // `source:CHAT` opens the oldest loaded Library item of CHAT, as the Library does.
+        .debugCommand("source:") { conversationID in
+            guard let item = model.library.items.last(where: { $0.conversationID == conversationID }) else { return }
+            model.navigation.libraryMessageTarget = item
+            destination = .workspace
+            selectConversation(item.conversationID)
+        }
         .debugCommand("new:", startDebugChat)
         // `bot:ID` opens a bot's chat (`bot:forum` the Forum); `bots-settings` Settings > Bots.
         .debugCommand("bot:") { selectBot(BotTarget(machineID: model.bots.hostMachineID ?? "", botID: $0)) }
@@ -1522,6 +1529,7 @@ struct WorkspaceSurface: View {
                 focusRequestGeneration: chatPanels.focusRequest?.panelID == panelID
                     ? chatPanels.focusRequest?.generation
                     : nil,
+                isActivePanel: chatPanels.activePanelID == panelID,
                 onActivatePanel: { onActivatePanel(panelID) },
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },

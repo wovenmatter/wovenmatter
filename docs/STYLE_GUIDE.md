@@ -452,12 +452,15 @@ when an intentional design change is accepted.
   labels quieter, reasoning quietest; its text starts at one inset, with only
   icons left of it, and open work ends a section and a half above the reply. A
   visual reply and the reply that explains it are one answer, a section apart.
-  The work divider shows only over foldable work that is showing, never over a
-  lone Thinking row or the dots; while a turn runs its place is kept, so the
-  first row never moves when it appears. A unit of work is a sentence of
-  commentary and the tools it introduces, a section above it and a label gap
-  inside; an untitled thought that led to the sentence has no row of its own:
-  the sentence carries the brain and a chevron that opens the reasoning. Tool rows are one
+  Under the header, work, a visual reply or a reply that opens with a box
+  starts a section below it, and reply text an entry gap, in every state; the
+  work divider is drawn in the middle of that gap over foldable work that is
+  showing, never over a Thinking row with nothing in it yet or the dots, so it
+  never adds or removes height. A unit of work is a sentence of commentary and
+  the tools it introduces, a section above it and a label gap inside; an
+  untitled thought that led to the sentence has no row of its own: the
+  sentence carries the brain and a chevron that opens the reasoning. Anywhere
+  else a thought keeps its row; none is ever lost. Tool rows are one
   line, truncated in the middle, with the chevron right after the label; the
   full text is in their details, which open at the rows' text inset and wrap
   rather than scroll sideways. Every harness's tool rows use one grammar: a
@@ -476,7 +479,8 @@ when an intentional design change is accepted.
   files"), each file once, failures apart ("1 edit failed"), two kinds of search
   each by name, and one or two tools by name, never an unnamed action; a
   narrow column takes the same facts in short ("1 folder listed · 2 files read"). Thinking looks the same everywhere.
-  Live reasoning shows its last three lines, its cut top line fading out; afterwards a
+  Live reasoning shows its last three lines, its cut top line fading out, under
+  its title once it has one (the title is never prose in the trace); afterwards a
   thought with text is one closed row named by its title or leading heading,
   else "Thought", never by its raw text; one with no text draws nothing. A
   record such as an approval is named by status and action, with its own glyph. A visual

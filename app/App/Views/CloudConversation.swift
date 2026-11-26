@@ -25,6 +25,8 @@ struct CloudConversation: View {
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let focusRequestGeneration: Int?
+    /// The panel debug requests that act on one chat (`send:`, `status:`) go to.
+    var isActivePanel = true
     let onActivatePanel: () -> Void
     let onClosePanel: () -> Void
     let onAddPanel: () -> Void
@@ -53,9 +55,14 @@ struct CloudConversation: View {
     @State private var bottomStackHeight: CGFloat = 0
     /// Rows lie below what shows (measured; it never changes whether the transcript follows).
     @State private var hasContentBelow = false
-    @State private var lastEndDistance: CGFloat = 0
-    /// Where the reader's own scroll began.
-    @State private var readerScrollStart: CGFloat = 0
+    /// Raw scroll measurements, read in callbacks and never observed: a value
+    /// that changes with every scroll tick must not rebuild the transcript.
+    @State private var measured = TranscriptMeasurements()
+    /// Counts the reader's and the app's explicit scroll actions (Latest
+    /// reply, send, opening a chat, the reader's own scroll): positioning
+    /// begun before the latest one (a Library source, a page-in's held row)
+    /// gives way to it.
+    @State private var scrollGeneration = 0
     @State private var isUserScrolling = false
     @State private var libraryHighlightID: String?
     @State private var attachmentOpenError: String?
@@ -82,7 +89,7 @@ struct CloudConversation: View {
     @ViewBuilder var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
         let activitiesByRunID = self.activitiesByRunID
-        let visibleMessages = self.visibleMessages
+        let visibleMessages = self.visibleMessages(runs: runsByAssistantMessageID)
         let rows = visibleMessages.flatMap { message in
             ConversationMessageLayout.rows(messageID: message.id, role: message.role)
                 .map { ConversationMessageRow(message: message, layout: $0) }
@@ -183,7 +190,7 @@ struct CloudConversation: View {
                 }
                 // `scroll-end` goes to the end as Latest reply does, and follows it again.
                 .debugRequest("scroll-end") {
-                    releaseHeldRow()
+                    takeOverScrolling()
                     transcriptOwnsScroll = false
                     scrollState.setNearBottom(true)
                     scrollToEnd()
@@ -198,18 +205,22 @@ struct CloudConversation: View {
                 }
                 // `send:TEXT` sends TEXT from this chat's composer.
                 .debugCommand("send:") { text in
+                    // Only the active panel's chat, and only if it is still that chat.
+                    guard isActivePanel, let target = conversation?.id else { return }
                     draft = text
                     Task { @MainActor in
                         await Task.yield()
+                        guard isActivePanel, conversation?.id == target else { return }
                         sendFromComposer()
                     }
                 }
                 // `status:PATH` writes whether this chat's turn is still running.
                 .debugCommand("status:") { path in
+                    guard isActivePanel else { return }
                     let running = session?.isRunning == true
                     // How far the end is below what shows, and whether the transcript follows it.
                     let text = "{\"chat\":\"\(conversation?.id ?? "")\",\"running\":\(running)," +
-                        "\"endDistance\":\(Int(lastEndDistance)),\"following\":\(followsBottom)}"
+                        "\"endDistance\":\(Int(measured.endDistance)),\"following\":\(followsBottom)}"
                     try? text.write(toFile: path.trimmingCharacters(in: .whitespaces), atomically: true, encoding: .utf8)
                 }
                 // `scroll-y:POINTS` sets the offset, as a reader scrolling away would.
@@ -243,8 +254,11 @@ struct CloudConversation: View {
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
                     let end = TranscriptEnd(context.geometry)
                     if isUserScrolling, !wasScrolling {
-                        readerScrollStart = end.offset
-                    } else if wasScrolling, !isUserScrolling, end.offset != readerScrollStart {
+                        measured.readerScrollStart = end.offset
+                        // The reader's scroll outranks a pending Library jump;
+                        // a page-in they scrolled to keeps holding their row.
+                        scrollGeneration += 1
+                    } else if wasScrolling, !isUserScrolling, end.offset != measured.readerScrollStart {
                         // Where the reader's own scroll stopped decides whether
                         // the latest reply stays in view; a tap that moved
                         // nothing decides nothing.
@@ -270,7 +284,7 @@ struct CloudConversation: View {
                 .conversationEdges(topClearance: ConversationMetrics.floatingControls, stackHeight: bottomStackHeight,
                                         jumpLabel: !scrollState.isNearBottom && hasContentBelow && conversation != nil
                                             ? "Latest reply" : nil) {
-                    releaseHeldRow()
+                    takeOverScrolling()
                     transcriptOwnsScroll = false
                     scrollState.setNearBottom(true)
                     scrollToEnd()
@@ -589,10 +603,24 @@ struct CloudConversation: View {
         scroll { $0.scrollTo(edge: .bottom) }
     }
 
+    /// An explicit jump takes over: a Library source jump or a page-in still
+    /// positioning the view gives way, and the Library target it replaces is
+    /// dropped.
+    private func takeOverScrolling() {
+        scrollGeneration += 1
+        historyGeneration += 1
+        isPrependingHistory = false
+        releaseHeldRow()
+        if model.navigation.libraryMessageTarget?.conversationID == conversation?.id {
+            model.navigation.libraryMessageTarget = nil
+            libraryHighlightID = nil
+        }
+    }
+
     /// What the composer's Send does, and the debug `send:` with it.
     private func sendFromComposer() {
         guard conversation?.isArchived != true else { return }
-        releaseHeldRow()
+        takeOverScrolling()
         transcriptOwnsScroll = false
         isUserScrolling = false
         scrollState.setNearBottom(true)
@@ -621,9 +649,8 @@ struct CloudConversation: View {
     }
 
     /// An empty reply to a run that has not started yet is not shown.
-    private var visibleMessages: [WorkspaceMessageRecord] {
-        let runs = runsByAssistantMessageID
-        return messages.filter { message in
+    private func visibleMessages(runs: [String: WorkspaceRunRecord]) -> [WorkspaceMessageRecord] {
+        messages.filter { message in
             message.role != .assistant || !message.content.isEmpty || runs[message.id]?.status != .queued
         }
     }
@@ -659,6 +686,7 @@ struct CloudConversation: View {
         scrollState.conversationChanged(to: conversationID)
         if transcriptOwnsScroll { scrollState.setNearBottom(false) }
         scrollPosition = ScrollPosition(idType: String.self)
+        scrollGeneration += 1
         // A page-in begun in the last chat ends there.
         historyGeneration += 1
         isPrependingHistory = false
@@ -671,11 +699,7 @@ struct CloudConversation: View {
         model.workspace.folder(id: conversation?.folderID)?.rootPath
     }
 
-    /// Less than this below the end, nothing is hidden: it is the space under
-    /// the last row, which the composer stack covers.
-    private static let endTolerance = CGFloat(ConversationBottomOverlayLayout.breathingRoom) + ConversationMetrics.turnGap
-    /// The reader is at the live edge only within this of the end.
-    private static let liveEdgeTolerance: CGFloat = 2
+    private static let liveEdgeTolerance = ConversationEnd.liveEdge
 
     /// Geometry is only measured here. Whether the transcript follows the end
     /// is the reader's: their own scroll, Latest reply, or opening or
@@ -689,8 +713,10 @@ struct CloudConversation: View {
     /// view away from the end when the reader asked, which stops following
     /// already) or arrives at it.
     private func endChanged(from before: TranscriptEnd, to after: TranscriptEnd) {
-        hasContentBelow = after.distance > Self.endTolerance
-        lastEndDistance = after.distance
+        // Only what changes something visible is published.
+        let obscured = ConversationEnd.isObscured(distance: after.distance)
+        if obscured != hasContentBelow { hasContentBelow = obscured }
+        measured.endDistance = after.distance
         let resized = after.contentHeight != before.contentHeight || after.viewportHeight != before.viewportHeight
         if !isUserScrolling, !resized, !isPrependingHistory, after.offset != before.offset,
            after.distance > before.distance || after.distance <= Self.liveEdgeTolerance {
@@ -714,6 +740,7 @@ struct CloudConversation: View {
 
     private func scrolled(to offset: CGFloat) {
         hold.offset = offset
+        measured.offset = offset
         // The reader moved the held row; it holds where they put it.
         if isUserScrolling, heldRowID != nil, let top = hold.top { hold.screenTop = top - offset }
     }
@@ -736,7 +763,7 @@ struct CloudConversation: View {
     /// Holds the topmost row whose identity survives older rows arriving: a
     /// reply's first part can join a turn that starts above it.
     private func holdTopRow() {
-        let shown = visibleMessages
+        let shown = visibleMessages(runs: runsByAssistantMessageID)
         let message = shown.first { $0.role != .assistant } ?? shown.first
         hold.top = nil
         hold.screenTop = nil
@@ -753,6 +780,7 @@ struct CloudConversation: View {
     private func scrollToLibraryMessage(using proxy: ScrollViewProxy) async {
         guard let item = model.navigation.libraryMessageTarget, item.conversationID == conversation?.id,
               let session else { return }
+        let generation = scrollGeneration
         transcriptOwnsScroll = true
         scrollState.setNearBottom(false)
         await session.refresh()
@@ -766,8 +794,9 @@ struct CloudConversation: View {
         guard !Task.isCancelled, conversation?.id == item.conversationID else { return }
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(100))
+        // Anything the reader or the app did meanwhile wins over this jump.
         guard !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id,
-              conversation?.id == item.conversationID else { return }
+              conversation?.id == item.conversationID, generation == scrollGeneration else { return }
         // A run's reply shows several of its items.
         guard let shownID = session.messages.first(where: { $0.shows(item.messageID) })?.id else {
             session.setError("This source message is no longer available.")
@@ -778,6 +807,11 @@ struct CloudConversation: View {
         scrollState.sourceMessagePositioned(in: item.conversationID)
         scrollPosition = ScrollPosition(idType: String.self)
         scrollWithoutAnimation(proxy, to: shownID, anchor: .top)
+        // Below the top edge's clear band and fade, where it can be seen; in
+        // a later update, so it is never a second target beside the first.
+        try? await Task.sleep(for: .milliseconds(50))
+        guard !Task.isCancelled, generation == scrollGeneration else { return }
+        scroll { $0.scrollTo(y: max(0, measured.offset - ConversationMetrics.topInset)) }
         try? await Task.sleep(for: .seconds(2))
         if libraryHighlightID == shownID { libraryHighlightID = nil }
         if !Task.isCancelled, model.navigation.libraryMessageTarget?.id == item.id {
@@ -826,6 +860,14 @@ func nonemptyString(_ value: String?) -> String? {
 }
 
 struct MessageRow: View {
+    /// Whether reply text opens with a box: fenced code or a table.
+    static func startsWithBox(_ text: String) -> Bool {
+        guard let first = text.split(whereSeparator: \.isNewline).first(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        })?.trimmingCharacters(in: .whitespaces) else { return false }
+        return first.hasPrefix("```") || first.hasPrefix("~~~") || first.hasPrefix("|")
+    }
+
     let message: WorkspaceMessageRecord
     let run: WorkspaceRunRecord?
     let activities: [WorkspaceRunActivityRecord]
@@ -903,6 +945,7 @@ struct MessageRow: View {
                         records: activities,
                         commentaryIDs: transcript.commentaryIDs,
                         hasFollowingResponse: hasResponseText && showsReply,
+                        replyStartsWithBox: Self.startsWithBox(reply),
                         timeline: ConversationWorkTimeline(records: activities, commentaryIDs: transcript.commentaryIDs)
                     )
                 }
@@ -1039,6 +1082,16 @@ private struct MacAccessNotice: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
     }
+}
+
+/// Scroll measurements read in callbacks, and so not observed.
+private final class TranscriptMeasurements {
+    /// How far the end is below what shows.
+    var endDistance: CGFloat = 0
+    /// The offset, as `scrollTo(y:)` takes it.
+    var offset: CGFloat = 0
+    /// Where the reader's own scroll began.
+    var readerScrollStart: CGFloat = 0
 }
 
 /// Where the held row is, read in layout callbacks and so not observed.

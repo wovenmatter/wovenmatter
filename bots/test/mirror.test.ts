@@ -140,7 +140,7 @@ describe("a bot's turns in the library", () => {
   let app: TestRuntime;
   let server: FakeServer;
   let library: Library;
-  const visualReply = { title: "Sales", height: 320, digest: "b".repeat(64), size: 14 };
+  const visualReply = { title: "Sales", height: 320, width: 360, digest: "b".repeat(64), size: 14 };
   // Woven's tools answer with a value, given also as its JSON text.
   const places = { machines: [{ id: "studio", name: "Studio", runtimes: ["piDurable"] }] };
   const placesText = JSON.stringify(places);

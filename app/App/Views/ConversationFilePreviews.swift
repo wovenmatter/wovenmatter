@@ -45,7 +45,8 @@ struct ConversationFileAttachment: View {
                         .foregroundStyle(WovenPalette.foreground)
                         .frame(maxWidth: Self.maximumNameWidth, alignment: .leading)
                         .padding(.leading, ConversationMetrics.labelGap + ConversationMetrics.hair)
-                        .frame(height: WovenMetrics.rowHeight)
+                        // The reply's action row height, so Copy and the chips share one line.
+                        .frame(height: ConversationMetrics.actionRowHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

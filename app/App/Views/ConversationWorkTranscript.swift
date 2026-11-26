@@ -52,6 +52,9 @@ struct ConversationWorkTranscript: View {
     /// The latest assistant text is rendered below this timeline. Its arrival
     /// closes the preceding tool list even before the run finishes.
     let hasFollowingResponse: Bool
+    /// The reply under the header opens with a box (code, a table), which
+    /// starts a section below it, as a visual reply's frame does.
+    var replyStartsWithBox = false
     /// A projection precomputed from `records` and `commentaryIDs`; built in
     /// `body` when absent.
     let timeline: ConversationWorkTimeline?
@@ -68,6 +71,7 @@ struct ConversationWorkTranscript: View {
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
+        replyStartsWithBox: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         self.run = run
@@ -75,6 +79,7 @@ struct ConversationWorkTranscript: View {
         self.records = records
         self.commentaryIDs = commentaryIDs
         self.hasFollowingResponse = hasFollowingResponse
+        self.replyStartsWithBox = replyStartsWithBox
         self.timeline = timeline
     }
 
@@ -83,6 +88,7 @@ struct ConversationWorkTranscript: View {
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
         hasFollowingResponse: Bool = false,
+        replyStartsWithBox: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         // A run starts with its message and ends with its last saved item.
@@ -92,7 +98,7 @@ struct ConversationWorkTranscript: View {
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
                   presentation: ConversationWorkPresentation(startedAt: run.startedAt, completedDuration: duration),
                   records: records, commentaryIDs: commentaryIDs,
-                  hasFollowingResponse: hasFollowingResponse, timeline: timeline)
+                  hasFollowingResponse: hasFollowingResponse, replyStartsWithBox: replyStartsWithBox, timeline: timeline)
     }
 
 
@@ -100,17 +106,21 @@ struct ConversationWorkTranscript: View {
         let timeline = self.timeline ?? ConversationWorkTimeline(records: records, commentaryIDs: commentaryIDs)
         let content = ConversationWorkTranscriptPresentation(runStatus: run.status, runError: run.error)
         let isRunning = run.status == .running
-        // Only work the header can fold counts; live thinking on its own is not that yet.
-        let foldable = timeline.entries.contains { entry in
-            guard Self.draws(entry, isRunning: isRunning), !entry.staysOutsideFold else { return false }
+        // The header folds what would be drawn under it: anything but what
+        // stays outside the fold and a Thinking row with nothing in it yet.
+        let (unfolded, unfoldedReasoning) = Self.carryThoughts(
+            timeline.entries.filter { Self.draws($0, isRunning: isRunning) }, isRunning: isRunning)
+        let foldable = unfolded.contains { entry in
+            if entry.staysOutsideFold { return false }
             if case .activity(let activity) = entry.content, activity.kind == .thought,
-               isRunning && activity.workTimelineShowsProgress { return false }
+               !activity.workTimelineThoughtHasText { return false }
             return true
         }
         let workExpanded = workDisclosure
         let folded = foldable && !workExpanded.wrappedValue
-        let drawn = (folded ? timeline.entriesOutsideFold : timeline.entries).filter { Self.draws($0, isRunning: isRunning) }
-        let (entries, reasoning) = Self.carryThoughts(drawn, isRunning: isRunning, hasFollowingResponse: hasFollowingResponse)
+        let (entries, reasoning) = folded
+            ? Self.carryThoughts(timeline.entriesOutsideFold.filter { Self.draws($0, isRunning: isRunning) }, isRunning: isRunning)
+            : (unfolded, unfoldedReasoning)
         // A folded turn shows only the dots below.
         let showsThinking = isRunning && !hasFollowingResponse && !folded && timeline.needsThinkingIndicator
         let showsWork = !entries.isEmpty || showsThinking
@@ -151,31 +161,36 @@ struct ConversationWorkTranscript: View {
                     .padding(.top, ConversationMetrics.rowGap)
             }
 
-            // While the turn runs, the rule's place is kept under the header,
-            // so nothing below moves when foldable work first appears.
-            if showsRule || (isRunning && (showsWork || !hasFollowingResponse)) {
-                Divider()
-                    .overlay(WovenPalette.foreground.opacity(0.10))
-                    .opacity(showsRule ? 1 : 0)
-                    .padding(.top, ConversationMetrics.rowGap)
-            }
+            // Work and a visual reply start a section below the header in
+            // every state; the rule is drawn in the middle of that gap when
+            // there is foldable work showing, so it never adds or removes height.
             if showsWork {
-
-                if !entries.isEmpty {
-                    let tailID = timeline.entries.last?.id
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                            self.entry(entry, tailID: tailID, isRunning: isRunning, reasoning: reasoning[entry.id])
-                                .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil,
-                                                        next: index + 1 < entries.count ? entries[index + 1] : nil))
+                VStack(alignment: .leading, spacing: 0) {
+                    if !entries.isEmpty {
+                        let tailID = timeline.entries.last?.id
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                                self.entry(entry, tailID: tailID, isRunning: isRunning, reasoning: reasoning[entry.id])
+                                    .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil,
+                                                            next: index + 1 < entries.count ? entries[index + 1] : nil))
+                            }
                         }
+                        .transition(reduceMotion ? .identity : .opacity)
                     }
-                    .transition(reduceMotion ? .identity : .opacity)
+                    if showsThinking {
+                        ConversationThinkingLabel(text: "Thinking")
+                            .padding(.top, entries.isEmpty ? 0 : ConversationMetrics.entryGap)
+                    }
                 }
-                if showsThinking {
-                    ConversationThinkingLabel(text: "Thinking")
-                        .padding(.top, ConversationMetrics.entryGap)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) {
+                    if showsRule {
+                        Divider()
+                            .overlay(WovenPalette.foreground.opacity(0.10))
+                            .offset(y: -ConversationMetrics.sectionGap / 2)
+                    }
                 }
+                .padding(.top, ConversationMetrics.sectionGap)
             }
             // A response below takes the dots under its text instead. They
             // start where the text above them starts.
@@ -187,7 +202,8 @@ struct ConversationWorkTranscript: View {
         }
         // The gap to the reply: from open work, from a visual reply the reply
         // explains (one answer), or from the header it captions.
-        .padding(.bottom, !hasFollowingResponse ? 0 : !showsWork ? ConversationMetrics.entryGap
+        .padding(.bottom, !hasFollowingResponse ? 0
+            : !showsWork ? (replyStartsWithBox ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap)
             : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
             : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
@@ -208,8 +224,8 @@ struct ConversationWorkTranscript: View {
     }
 
     /// The entries that draw rows, and the thoughts sentences carry instead.
-    private static func carryThoughts(_ drawn: [ConversationWorkTimelineEntry], isRunning: Bool,
-                                      hasFollowingResponse: Bool) -> ([ConversationWorkTimelineEntry], [String: AgentRunActivity]) {
+    private static func carryThoughts(_ drawn: [ConversationWorkTimelineEntry],
+                                      isRunning: Bool) -> ([ConversationWorkTimelineEntry], [String: AgentRunActivity]) {
         // An untitled settled thought right before a sentence of commentary
         // belongs to it: the sentence carries it, with no row of its own.
         var reasoning: [String: AgentRunActivity] = [:]
@@ -217,20 +233,13 @@ struct ConversationWorkTranscript: View {
         for (index, entry) in drawn.enumerated() where index + 1 < drawn.count {
             guard case .activity(let thought) = entry.content, thought.kind == .thought,
                   case .commentary = drawn[index + 1].content,
-                  !(isRunning && thought.workTimelineShowsProgress),
-                  ConversationThinkingBlock.summary(of: thought).label == "Thought",
-                  !ConversationThinkingBlock.summary(of: thought).isRecord else { continue }
+                  !(isRunning && thought.workTimelineShowsProgress) else { continue }
+            let summary = ConversationThinkingBlock.summary(of: thought)
+            guard summary.label == "Thought", !summary.isRecord else { continue }
             reasoning[drawn[index + 1].id] = thought
             carried.insert(entry.id)
         }
-        // Nor does one stand alone between a visual reply and the reply text it
-        // led to: the reply is what it produced.
-        if hasFollowingResponse, drawn.count >= 2, let last = drawn.last, Self.isVisualReply(drawn[drawn.count - 2]),
-           case .activity(let thought) = last.content, thought.kind == .thought,
-           !(isRunning && thought.workTimelineShowsProgress),
-           ConversationThinkingBlock.summary(of: thought).label == "Thought" {
-            carried.insert(last.id)
-        }
+        // Anywhere else a thought keeps its own row: none is ever lost.
         return (drawn.filter { !carried.contains($0.id) }, reasoning)
     }
 
@@ -238,8 +247,9 @@ struct ConversationWorkTranscript: View {
     /// tools it introduces: a section above its first row, a label gap inside.
     private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?,
                             next: ConversationWorkTimelineEntry?) -> CGFloat {
-        if isVisualReply(entry) || previous.map(isVisualReply) == true { return ConversationMetrics.sectionGap }
-        guard let previous else { return ConversationMetrics.entryGap }
+        // The first row's gap is the section under the header.
+        guard let previous else { return 0 }
+        if isVisualReply(entry) || isVisualReply(previous) { return ConversationMetrics.sectionGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
         if case .commentary = entry.content { return isThought(previous) ? ConversationMetrics.labelGap : ConversationMetrics.sectionGap }
         if isThought(entry), case .commentary? = next?.content { return ConversationMetrics.sectionGap }
@@ -468,9 +478,11 @@ private struct ConversationThinkingBlock: View {
     var body: some View {
         Group {
             if isLive {
+                // A title the reasoning has so far is the row's label, as it
+                // will be once settled; the viewport shows only what follows it.
                 VStack(alignment: .leading, spacing: 0) {
-                    ConversationThinkingLabel(text: "Thinking")
-                    trace(maximumHeight: Self.liveHeight)
+                    ConversationThinkingLabel(text: liveTitle ?? "Thinking")
+                    if hasShownText { trace(maximumHeight: Self.liveHeight) }
                 }
             } else {
                 settledRow(Self.summary(of: activity))
@@ -525,14 +537,24 @@ private struct ConversationThinkingBlock: View {
                 if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
                 else { localScrollSnapshot = snapshot }
             })
-            // A live trace has nothing to show until its first line is ready.
-            .padding(.top, isLive && AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? "")
-                .workTimelineNonempty == nil ? 0 : ConversationMetrics.labelGap)
+            .padding(.top, ConversationMetrics.labelGap)
             .padding(.leading, ConversationMetrics.textInset)
     }
 
     private var scrollKey: String {
         ConversationTranscriptState.disclosureKey(runID: runID, itemID: "thinking:" + activity.id)
+    }
+
+    /// The live reasoning's title so far: the provider's, or its leading bold heading.
+    private var liveTitle: String? {
+        activity.workTimelineThoughtTitle
+            ?? AgentRunActivity.leadingBoldHeading(AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? ""))
+    }
+
+    /// The live trace has a line to show beyond its title.
+    private var hasShownText: Bool {
+        ConversationReasoningText.shown(AssistantStreamingText.readyPrefix(of: activity.content ?? activity.detail ?? ""))
+            .workTimelineNonempty != nil
     }
 
     struct Summary {
@@ -585,6 +607,11 @@ private struct ConversationReasonedCommentary: View {
     @Environment(\.conversationTranscriptState) private var transcriptState
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var localExpanded = false
+    @State private var localScrollSnapshot: ConversationWorkScrollSnapshot?
+
+    private var scrollKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: "thinking:" + thought.id)
+    }
 
     var body: some View {
         let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: "thinking:" + thought.id,
@@ -620,8 +647,13 @@ private struct ConversationReasonedCommentary: View {
                 ConversationBoundedWorkList(
                     group: ConversationWorkGroup(id: thought.id, activities: [thought], endsTimeline: false),
                     runID: runID, runStatus: .completed, followsAppends: false,
-                    initialScrollSnapshot: ConversationWorkScrollSnapshot(offset: 0, isAtBottom: false),
-                    saveScrollSnapshot: { _ in })
+                    // Where the reader left this thought's trace, as its own row keeps it.
+                    initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot
+                        ?? ConversationWorkScrollSnapshot(offset: 0, isAtBottom: false),
+                    saveScrollSnapshot: { snapshot in
+                        if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
+                        else { localScrollSnapshot = snapshot }
+                    })
                     .padding(.top, ConversationMetrics.labelGap)
                     .padding(.leading, ConversationMetrics.textInset)
             }
@@ -676,9 +708,13 @@ private struct ConversationWorkGroupRow: View {
                             : group.action?.systemImage ?? "wrench.and.screwdriver")
                             .font(.system(size: 12, weight: .medium))
                             .frame(width: ConversationMetrics.iconColumn)
-                        Text(group.summary)
-                            .font(.system(size: 13.5, weight: .medium))
-                            .lineLimit(1).truncationMode(.tail)
+                        // The sentence when it fits on one line, else the
+                        // compact form; never a sentence cut short.
+                        ViewThatFits(in: .horizontal) {
+                            Text(group.summary).fixedSize(horizontal: true, vertical: false)
+                            Text(group.compactSummary).lineLimit(1).truncationMode(.tail)
+                        }
+                        .font(.system(size: 13.5, weight: .medium))
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
                             .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
@@ -810,7 +846,8 @@ private struct ConversationBoundedWorkList: View {
         }
         .onScrollPhaseChange { _, phase in
             isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-            if isUserScrolling { restoringScroll = false }
+            // The reader took over: a follow already queued must not land.
+            if isUserScrolling { restoringScroll = false; followTask?.cancel() }
         }
         .onDisappear {
             followTask?.cancel()
@@ -822,7 +859,7 @@ private struct ConversationBoundedWorkList: View {
         followTask?.cancel()
         followTask = Task { @MainActor in
             await Task.yield()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !isUserScrolling else { return }
             scrollPosition.scrollTo(edge: .bottom)
         }
     }
@@ -1115,7 +1152,8 @@ private struct ConversationActivityDetails: View {
             if let calls = field(\.codeCalls) {
                 // A script: its source folded away, the tools it called, then what it printed.
                 ConversationCodeScript(source: field(\.rawInputJSON))
-                ConversationCodeCallList(calls: calls)
+                // Calls shown elsewhere (visual replies, as their cards) leave none here.
+                if !calls.isEmpty { ConversationCodeCallList(calls: calls) }
                 rawBlock("Output", field(\.rawOutputJSON).map(Self.unfenced))
             } else if let questions = field(\.questions) {
                 // Each question with its answer, or that it was not answered;
@@ -1425,7 +1463,20 @@ private struct ConversationReasoningText: View {
     }
 
     private var committedText: String {
-        isLive ? AssistantStreamingText.readyPrefix(of: text) : text
+        Self.shown(isLive ? AssistantStreamingText.readyPrefix(of: text) : text)
+    }
+
+    /// Reasoning as the trace shows it: without its leading bold heading,
+    /// which is the row's label. (The renderer drops provider metadata lines.)
+    static func shown(_ text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
+        if let first = lines.first?.trimmingCharacters(in: .whitespaces), first.hasPrefix("**"), first.hasSuffix("**"),
+           first.count > 4, !first.dropFirst(2).dropLast(2).contains("**") {
+            lines.removeFirst()
+            while let next = lines.first, next.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
+        }
+        return lines.joined(separator: "\n")
     }
 
     var body: some View {
@@ -1691,6 +1742,8 @@ private struct ConversationProposedPlan: View {
 
 struct ConversationChangedFilesCard: View {
     let records: [WorkspaceRunActivityRecord]
+    /// Told before anything here changes height: the reader took over.
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded = true
     @State private var expandedDirectories: Set<String> = []
     @State private var selectedChange: ConversationChangedFile?
@@ -1707,7 +1760,7 @@ struct ConversationChangedFilesCard: View {
         if !changes.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: ConversationMetrics.rowGap) {
-                    Button { expanded.toggle() } label: {
+                    Button { transcriptInteraction(); expanded.toggle() } label: {
                         Image(systemName: "chevron.right")
                             .rotationEffect(.degrees(expanded ? 90 : 0))
                     }
@@ -1718,7 +1771,10 @@ struct ConversationChangedFilesCard: View {
                     Text("−\(deletions)").foregroundStyle(.red)
                     Spacer()
                     if expanded, !directoryPaths.isEmpty {
-                        Button { expandedDirectories = allDirectoriesExpanded ? [] : directoryPaths } label: {
+                        Button {
+                            transcriptInteraction()
+                            expandedDirectories = allDirectoriesExpanded ? [] : directoryPaths
+                        } label: {
                             Image(systemName: allDirectoriesExpanded
                                 ? "chevron.up.chevron.down"
                                 : "chevron.down.chevron.up")
@@ -1750,6 +1806,7 @@ struct ConversationChangedFilesCard: View {
                         ForEach(visibleRows) { row in
                             Button {
                                 if row.node.isDirectory {
+                                    transcriptInteraction()
                                     if expandedDirectories.contains(row.node.path) {
                                         expandedDirectories.remove(row.node.path)
                                     } else {

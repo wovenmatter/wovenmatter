@@ -10,7 +10,6 @@ struct ConversationMessageLayout {
         }
 
         let messageID: String
-        let role: MessageRole
         let content: Content
 
         var id: String {
@@ -28,11 +27,11 @@ struct ConversationMessageLayout {
     }
 
     static func rows(messageID: String, role: MessageRole) -> [Row] {
-        var rows = [Row(messageID: messageID, role: role, content: .message)]
+        var rows = [Row(messageID: messageID, content: .message)]
         if role == .assistant {
             // Keep footer state stable while the response streams.
             // Empty cards remain zero-height lazy rows.
-            rows.append(Row(messageID: messageID, role: role, content: .fileChanges))
+            rows.append(Row(messageID: messageID, content: .fileChanges))
         }
         return rows
     }
@@ -66,10 +65,12 @@ enum ConversationScrollAction: Equatable {
     case followBottom
 }
 
+/// A transcript's scroll geometry as bot chats and the Forum follow it.
 struct ConversationGeometry: Equatable {
     let contentHeight: CGFloat
-    let isNearBottom: Bool
-    var viewportHeight: CGFloat? = nil
+    let viewportHeight: CGFloat
+    /// How far the end is below what shows.
+    let endDistance: CGFloat
 }
 
 struct ConversationScrollState: Equatable {
@@ -109,7 +110,7 @@ struct ConversationScrollState: Equatable {
                                   isPrependingHistory: Bool) -> Bool {
         let resized = previous.contentHeight != current.contentHeight || previous.viewportHeight != current.viewportHeight
         let follow = resized && isNearBottom && !isUserScrolling && !transcriptOwnsScroll && !isPrependingHistory
-        setNearBottom(current.isNearBottom && !transcriptOwnsScroll)
+        setNearBottom(current.isAtLiveEdge && !transcriptOwnsScroll)
         return follow
     }
 
