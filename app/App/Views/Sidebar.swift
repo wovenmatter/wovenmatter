@@ -1009,7 +1009,10 @@ struct NewChatDrawer: View {
         switch agent.status {
         case .ready, .running: machine?.name ?? agent.runtimeKind.displayName
         case .needsAuthentication: "Sign in — see Settings"
-        case .offline: "Workspace is stopped"
+        case .settingUp: "Setting up — see Settings"
+        case .adapterRequired: "Adapter required — see Settings"
+        case .starting: "Workspace is starting"
+        case .offline: machine?.connection == .offline ? "Workspace is offline" : "Workspace is stopped"
         case .failed: "Unavailable — see Settings"
         }
     }

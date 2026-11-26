@@ -17,12 +17,17 @@ func registerRuntimes(_ router: inout Router, sessions: SessionManager, secrets:
           let late = lastStatuses.withLock { $0[runtime.kind] }
             ?? RuntimeStatus(runtime: runtime.kind, name: Harness.named(runtime.kind)?.displayName ?? runtime.kind.rawValue,
                              installed: false, detail: "It did not answer in time.")
-          return await firstOf(seconds: statusLimit, or: late) {
-            var status = await runtime.status()
-            if request.checkForUpdates { status.latestVersion = await latestRelease(runtime.kind) }
+          // The registry is asked beside the CLI, under its own limit: a slow or failed
+          // registry leaves the status without update information, never without the CLI.
+          async let latest = request.checkForUpdates
+            ? firstOf(seconds: statusLimit, or: String?.none) { await latestRelease(runtime.kind) } : nil
+          var status = await firstOf(seconds: statusLimit, or: late) {
+            let status = await runtime.status()
             lastStatuses.withLock { $0[runtime.kind] = status }
             return status
           }
+          if request.checkForUpdates { status.latestVersion = await latest }
+          return status
         }
       }
       var statuses: [RuntimeStatus] = []

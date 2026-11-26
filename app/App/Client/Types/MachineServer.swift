@@ -1,32 +1,5 @@
 import Foundation
 
-/// The Woven server on one machine, as Settings shows it.
-struct MachineServerStatus: Hashable, Sendable {
-    enum State: Hashable, Sendable {
-        case running
-        case stopped
-        case unavailable
-
-        var displayName: String {
-            switch self {
-            case .running: "Running"
-            case .stopped: "Stopped"
-            case .unavailable: "Server unavailable"
-            }
-        }
-    }
-
-    var state: State
-    var hostName: String?
-    var health: String?
-    var storageUsedBytes: Int64?
-    var storageCapacityBytes: Int64?
-    var storageAvailableBytes: Int64?
-    var storageWarning: String?
-
-    var isRunning: Bool { state == .running }
-}
-
 /// Stopping a server with active work asks first.
 struct ServerStopResult: Hashable, Sendable {
     var confirmationRequired: Bool

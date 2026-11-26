@@ -113,6 +113,27 @@ final class ServerConnection {
         }
     }
 
+    /// Opens `request` once, on the current connection, and returns when its
+    /// events end: the server ended it, the connection dropped, or the calling
+    /// task was cancelled. Unlike `follow` it is never opened again, so a
+    /// one-shot operation is not started a second time after a reconnect.
+    /// Throws when it cannot be opened.
+    func once<S: Subscription>(_ request: S, event: @MainActor (S.Event) -> Void) async throws {
+        guard let client else { throw ClientError.notConnected }
+        let subscription: ClientSubscription<S>
+        do {
+            subscription = try await client.subscribe(request)
+        } catch let error as ProtocolError {
+            throw error
+        } catch {
+            throw ClientError.notConnected
+        }
+        do {
+            for try await value in subscription.events { event(value) }
+        } catch {}
+        if Task.isCancelled { Task { try? await client.unsubscribe(subscription.id) } }
+    }
+
     /// The current client once its connection is newer than `generation`;
     /// nil when the task is cancelled first.
     private func connection(newerThan generation: Int) async -> (Client, Int)? {

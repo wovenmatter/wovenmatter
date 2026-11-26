@@ -9,10 +9,14 @@ enum HarnessAccountPresentation {
         return count == 0 ? "No accounts connected" : "\(count) account\(count == 1 ? "" : "s") with credentials"
     }
 
-    /// A harness's account on one machine, for lists that link to its page.
-    static func accountLabel(_ kind: AgentRuntimeKind, status: AgentSignInStatus?) -> String {
+    /// A harness's account on one machine, for lists that link to its page: nil
+    /// when there is nothing to say yet. A harness without its adapter shows what
+    /// went wrong instead of a sign-in.
+    static func accountLabel(_ kind: AgentRuntimeKind, status: AgentSignInStatus?) -> String? {
         if kind == .defaultAgent { return "Manage provider accounts" }
-        return status?.label ?? "Not checked"
+        guard let status else { return nil }
+        if status.needsAdapter { return status.detail.isEmpty ? nil : status.detail }
+        return status.state == .notChecked ? nil : status.label
     }
 }
 

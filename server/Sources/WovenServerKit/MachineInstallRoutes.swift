@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import WovenLibrary
 import WovenProtocol
 
@@ -25,28 +26,59 @@ func registerMachineInstall(_ router: inout Router, library: Library, peers: Pee
     }
   }
 
-  router.on(InstallServer.self) { request, _ in
+  // The hosts an install is running on: a second one there would unpack over the first.
+  let installing = Mutex(Set<String>())
+  router.subscription(InstallServer.self) { request, _ in
     guard let install else { throw ProtocolError(.failed, "This machine cannot install the Woven server elsewhere.") }
-    let machineID: String
-    do {
-      machineID = try await install.install(on: LinuxInstall.Target(host: request.host, user: request.user))
-    } catch let failure as LinuxInstall.Failure {
-      throw ProtocolError(.failed, failure.description)
+    guard installing.withLock({ $0.insert(request.host).inserted }) else {
+      throw ProtocolError(.failed, "The server is already being installed on \(request.host).")
     }
-    // Once its machine row has arrived, the host and user go with it, so any
-    // Mac reaches it the same way later.
-    let deadline = ContinuousClock.now + .seconds(120)
-    while true {
-      let online = await peers.isOnline(machineID)
-      if online, try await library.machine(machineID) != nil { break }
-      guard ContinuousClock.now < deadline else {
-        throw ProtocolError(.failed, "The server was installed on \(request.host) but has not answered yet.")
+    let (events, continuation) = AsyncThrowingStream<InstallEvent, any Error>.makeStream()
+    // Stages only go forward, whatever order the lines arrive in.
+    let reached = Mutex(-1)
+    @Sendable func stage(_ stage: InstallStage) {
+      let index = InstallStage.allCases.firstIndex(of: stage)!
+      let forward = reached.withLock { last in
+        guard index > last else { return false }
+        last = index
+        return true
       }
-      await peers.discover()
-      try await Task.sleep(for: .seconds(2))
+      if forward { continuation.yield(.stage(stage)) }
     }
-    try await library.setSSHRoute(of: machineID, host: request.host, user: request.user)
-    return Done()
+    let host = request.host
+    let target = LinuxInstall.Target(host: request.host, user: request.user)
+    // Not the subscription's task: an install goes on to the end when its
+    // subscriber leaves, which only stops the events.
+    Task {
+      defer { installing.withLock { _ = $0.remove(host) } }
+      let end: InstallEvent
+      do {
+        let machineID = try await install.install(on: target, progress: stage)
+        stage(.connecting)
+        // The new server writes its SSH route onto its own row at start, so
+        // the row arrives with it.
+        let deadline = ContinuousClock.now + .seconds(120)
+        var joined = false
+        while true {
+          if await peers.isOnline(machineID), try await library.sshRoute(of: machineID) != nil {
+            joined = true
+            break
+          }
+          guard ContinuousClock.now < deadline else { break }
+          await peers.retryNow()
+          try await Task.sleep(for: .seconds(1))
+        }
+        end = joined ? .finished(machineID: machineID)
+          : .failed(message: "The server was installed on \(host) but has not answered yet.")
+      } catch let failure as LinuxInstall.Failure {
+        end = .failed(message: failure.description)
+      } catch {
+        end = .failed(message: "\(error)")
+      }
+      continuation.yield(end)
+      continuation.finish()
+    }
+    return (Done(), events)
   }
 
   router.on(UpdateServer.self) { request, _ in

@@ -142,7 +142,7 @@ struct HarnessSetupView: View {
             let suffix = inventory.updateAvailable ? " · Update available" : ""
             return (inventory.installedVersion.map { "Installed · \($0)" } ?? "Installed") + suffix
         }
-        return inventory.components.contains(where: \.isInstalled) ? "Finish installation" : "Not installed"
+        return inventory.needsAdapter ? inventory.state.displayName : "Not installed"
     }
 
     private var piDurable: some View {

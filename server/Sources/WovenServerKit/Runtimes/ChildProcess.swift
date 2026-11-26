@@ -125,10 +125,12 @@ final class ChildProcess: Sendable {
   /// apart). `input` is a file given as its standard input. It never holds a
   /// thread while it waits, and returns by `timeout` whatever the command or
   /// anything it started does: the command is then stopped and the status is -1.
+  /// `onLine` is given each line of its output as it arrives.
   @discardableResult
   static func run(_ executable: String, _ arguments: [String], directory: String? = nil,
                   environment: [String: String] = [:], mergeErrors: Bool = true, input: URL? = nil,
-                  timeout: Duration = .seconds(60)) async -> (status: Int32, output: String, errors: String) {
+                  timeout: Duration = .seconds(60),
+                  onLine: (@Sendable (String) -> Void)? = nil) async -> (status: Int32, output: String, errors: String) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -144,10 +146,23 @@ final class ChildProcess: Sendable {
     }
     let pipes = mergeErrors ? [output] : [output, errors]
     let collected = Mutex([Data(), Data()])
+    let partial = Mutex(Data())
     for (index, pipe) in pipes.enumerated() {
       pipe.fileHandleForReading.readabilityHandler = { handle in
         let data = handle.availableData
         collected.withLock { if $0[index].count < 1 << 20 { $0[index].append(data) } }
+        guard index == 0, let onLine else { return }
+        let lines = partial.withLock { buffer -> [String] in
+          buffer.append(data)
+          var lines: [String] = []
+          while let end = buffer.firstIndex(of: 10) {
+            lines.append(String(decoding: buffer[buffer.startIndex..<end], as: UTF8.self))
+            buffer.removeSubrange(buffer.startIndex...end)
+          }
+          if buffer.count > 1 << 20 { buffer.removeAll() }
+          return lines
+        }
+        for line in lines { onLine(line) }
       }
     }
     let (ended, finish) = AsyncStream<Int32>.makeStream()

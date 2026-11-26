@@ -142,7 +142,7 @@ struct SettingsUpdatesView: View {
                 ProgressView().controlSize(.small)
                 SettingsStatus("Updating", tone: .neutral)
             } else if offline {
-                SettingsStatus("Offline", tone: .neutral)
+                SettingsStatus(machine.connection.displayName, tone: .neutral)
             } else if !machine.syncs {
                 SettingsStatus("Can't sync right now", tone: .warning)
             } else if state.hasUpdate {
@@ -177,7 +177,7 @@ struct SettingsUpdatesView: View {
             : "This updates the Woven server on this machine."
         return SettingsRow(title: "Update just Woven Matter", detail: detail) {
             if state.updatingApp { ProgressView().controlSize(.small) }
-            else if !machine.isOnline { SettingsStatus("Offline", tone: .neutral) }
+            else if !machine.isOnline { SettingsStatus(machine.connection.displayName, tone: .neutral) }
             else if outdated { SettingsStatus("Update available", tone: .warning) }
             else if !machine.isThisMachine || updates.checkedAt != nil { SettingsStatus("Up to date", tone: .good) }
             Button(state.updatingApp ? "Updating…" : "Update") { updates.start(request) }

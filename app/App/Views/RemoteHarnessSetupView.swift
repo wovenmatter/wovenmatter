@@ -48,7 +48,7 @@ struct RemoteHarnessSetupView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if step == 0 { choices } else { accounts }
-                        if let error = model.errorMessage { SettingsError(error) }
+                        if let error = model.serverErrors[machine.id] { SettingsError(error) }
                     }.padding(.horizontal, 24).padding(.bottom, 16)
                 }.scrollIndicators(.never)
                 HStack {

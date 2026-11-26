@@ -51,10 +51,12 @@ struct LinuxInstall: Sendable {
   }
 
   /// Copies the release there and (re)starts the unit. The data folder stays.
-  /// Returns the id of the machine the server there runs as.
+  /// Returns the id of the machine the server there runs as. `progress` is
+  /// told each stage as it begins, up to `starting`.
   @discardableResult
-  func install(on target: Target) async throws -> String {
+  func install(on target: Target, progress: @escaping @Sendable (InstallStage) -> Void = { _ in }) async throws -> String {
     let host = target.host
+    progress(.checking)
     let facts = try await ssh(target, script: """
       uname -m
       command -v systemctl >/dev/null && echo systemd || echo none
@@ -80,6 +82,7 @@ struct LinuxInstall: Sendable {
     let staging = FileManager.default.temporaryDirectory.appendingPathComponent("woven-install-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: staging) }
+    progress(.packing)
     let upload = try await payload(arch: arch, in: staging)
 
     let root = "$HOME/.local/share/\(unit)"
@@ -89,6 +92,10 @@ struct LinuxInstall: Sendable {
     // A development instance keeps its new folders with its data, not in ~/Woven Matter.
     if let instance { arguments += ["--instance", instance, "--folders", "%h/.local/share/\(unit)/folders"] }
     if standIn { arguments.append("--stand-in-runtime") }
+    // How this Mac reached it, which the server keeps on its own row. Both
+    // are plain (`sshArguments` refused them otherwise), so safe in the unit file.
+    arguments += ["--ssh-host", host]
+    if let user = target.user, !user.isEmpty { arguments += ["--ssh-user", user] }
     let resourcesFolder = "%h/.local/share/\(unit)/release/resources"
     let unitText = """
       [Unit]
@@ -110,7 +117,10 @@ struct LinuxInstall: Sendable {
       [Install]
       WantedBy=default.target
       """
-    let installed = try await ssh(target, input: upload, script: """
+    progress(.sending)
+    let installed = try await ssh(target, input: upload, onLine: { line in
+      if let stage = Self.stage(marked: line) { progress(stage) }
+    }, script: """
       set -eu
       root="\(root)"
       mkdir -p "$root/data" "$HOME/.config/systemd/user"
@@ -122,6 +132,7 @@ struct LinuxInstall: Sendable {
       # Node from nodejs.org, checked against the SHA-256 this Mac carries.
       node="$root/\(nodeFolder)"
       if [ ! -x "$node/bin/node" ]; then
+        echo "\(Self.marker)node"
         rm -rf "$root/node.next"
         mkdir -p "$root/node.next" "$root/node"
         url="https://nodejs.org/dist/v\(nodeVersion)/\(nodeName).tar.gz"
@@ -141,6 +152,7 @@ struct LinuxInstall: Sendable {
       "$node/bin/node" --version >/dev/null
       # Resources.npm finds Node's npm beside the resources.
       ln -s "$node" "$root/release.next/resources/node"
+      echo "\(Self.marker)starting"
       systemctl --user stop \(unit).service 2>/dev/null || true
       rm -rf "$root/release"
       mv "$root/release.next" "$root/release"
@@ -160,9 +172,22 @@ struct LinuxInstall: Sendable {
       // Without lingering the unit stops when the person logs out there.
       _ = try? await ssh(target, script: "loginctl enable-linger \"$(id -un)\"")
     }
-    let machineID = installed.trimmingCharacters(in: .whitespacesAndNewlines)
+    let machineID = Self.machineID(installed)
     guard !machineID.isEmpty else { throw Failure(description: "The server on \(host) did not start.") }
     return machineID
+  }
+
+  /// What the install script prints before each stage it reaches.
+  static let marker = "woven-install-stage: "
+
+  static func stage(marked line: String) -> InstallStage? {
+    line.hasPrefix(marker) ? InstallStage(rawValue: String(line.dropFirst(marker.count))) : nil
+  }
+
+  /// The machine id the install script ends with, after its stage lines.
+  static func machineID(_ output: String) -> String {
+    output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+      .last { !$0.isEmpty && !$0.hasPrefix(marker) } ?? ""
   }
 
   /// One gzip tar for SSH's standard input, unpacked there into the release's
@@ -204,11 +229,13 @@ struct LinuxInstall: Sendable {
 
   /// Runs `script` with `sh` there and returns its standard output. Every
   /// SSH use goes through here; the unit's name goes into shell lines and the
-  /// unit file, so it must be plain.
-  func ssh(_ target: Target, input: URL? = nil, script: String) async throws -> String {
+  /// unit file, so it must be plain. `onLine` is given each line of its output as it arrives.
+  func ssh(_ target: Target, input: URL? = nil, onLine: (@Sendable (String) -> Void)? = nil,
+           script: String) async throws -> String {
     guard Self.isPlain(instance ?? "", extra: "._-") else { throw Failure(description: "\(unit) is not a plain unit name.") }
     let arguments = try sshArguments(target, script: script)
-    let result = await ChildProcess.run("/usr/bin/ssh", arguments, mergeErrors: false, input: input, timeout: .seconds(600))
+    let result = await ChildProcess.run("/usr/bin/ssh", arguments, mergeErrors: false, input: input, timeout: .seconds(600),
+                                        onLine: onLine)
     guard result.status == 0 else {
       let detail = result.errors.trimmingCharacters(in: .whitespacesAndNewlines)
       throw Failure(description: "SSH to \(target.host) failed\(detail.isEmpty ? "" : ": " + String(detail.suffix(600)))")

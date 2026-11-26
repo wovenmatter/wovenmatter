@@ -873,6 +873,8 @@ struct SettingsHarnessSignInControl: View {
     private var opening: Bool { target.map { machines.isOpeningSignIn(runtimeKind, on: $0) } ?? false }
     private var removing: Bool { target.map { machines.isRemovingSignIn(runtimeKind, on: $0) } ?? false }
     private var notInstalled: Bool { status?.state == .notInstalled }
+    /// Not installed, or installed without its adapter: no sign-in until it can run.
+    private var cannotSignIn: Bool { notInstalled || status?.needsAdapter == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -893,7 +895,7 @@ struct SettingsHarnessSignInControl: View {
             }
         }
         .frame(minHeight: compact ? nil : SettingsMetrics.rowHeight)
-        .task(id: target) { await refresh() }
+        .task(id: target) { if let target { machines.refreshHarnessesIfStale(on: target) } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }
         }
@@ -970,7 +972,8 @@ struct SettingsHarnessSignInControl: View {
     }
 
     private var signedOutRow: some View {
-        SettingsRow(title: notInstalled ? "Not installed" : status == nil ? "Checking sign-in…" : "Not signed in",
+        SettingsRow(title: notInstalled ? "Not installed" : status?.needsAdapter == true ? status?.label ?? ""
+                        : status == nil ? "Checking sign-in…" : "Not signed in",
                     detail: status.flatMap { $0.state == .signInRequired ? nil : $0.detail }) {
             signInButton
         }
@@ -985,7 +988,7 @@ struct SettingsHarnessSignInControl: View {
         } else if methods.count == 1, let method = methods.first {
             Button(method.title) { begin(method) }
                 .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(busy || notInstalled)
+                .disabled(busy || cannotSignIn)
         } else {
             Menu("Sign in") {
                 ForEach(methods) { method in Button(method.title) { begin(method) } }
@@ -993,7 +996,7 @@ struct SettingsHarnessSignInControl: View {
             .menuStyle(.button)
             .fixedSize()
             .buttonStyle(SettingsQuietButtonStyle())
-            .disabled(busy || notInstalled)
+            .disabled(busy || cannotSignIn)
             .accessibilityLabel("Sign in to \(runtimeKind.displayName)")
         }
     }
@@ -1003,7 +1006,7 @@ struct SettingsHarnessSignInControl: View {
                 if let target { machines.openTerminalSignIn(runtimeKind, on: target) }
             }
             .buttonStyle(SettingsQuietButtonStyle())
-            .disabled(busy || notInstalled)
+            .disabled(busy || cannotSignIn)
             .help("Opens OpenCode's sign-in in Terminal. Return here when finished.")
     }
 
