@@ -217,6 +217,11 @@ private extension ConversationMarkdownDocument {
         /// The fence of a code block open in `content`, whose lines keep
         /// their indent past the item's.
         var fence: Fence?
+        /// `content` ends in a paragraph a lazy line can continue, kept as
+        /// lines are added rather than parsed again for each one.
+        var endsInParagraph = false
+        /// `content` ends in a table, whose rows a paragraph never takes.
+        var inTable = false
     }
 
     struct ListMarker {
@@ -346,6 +351,7 @@ private extension ConversationMarkdownDocument {
                    Self.leadingIndent(line) >= last.continuationIndent {
                     let text = Self.removingIndent(line, columns: last.continuationIndent)
                     add(text)
+                    seeds[seeds.count - 1].endsInParagraph = false
                     if Self.isFenceClosing(text, matching: fence) { seeds[seeds.count - 1].fence = nil }
                     index += 1
                     continue
@@ -359,7 +365,8 @@ private extension ConversationMarkdownDocument {
                             checked: marker.checked,
                             continuationIndent: marker.continuationIndent,
                             content: marker.content,
-                            fence: Self.fenceOpening(marker.content)
+                            fence: Self.fenceOpening(marker.content),
+                            endsInParagraph: Self.startsParagraph(marker.content)
                         )
                     )
                     pendingBlankLines = 0
@@ -378,12 +385,30 @@ private extension ConversationMarkdownDocument {
                 }
 
                 let text = line.trimmingCharacters(in: .whitespaces)
+                /// Records what the last item ends in once `text` is added: a
+                /// paragraph goes on through lines that cannot interrupt it; a
+                /// blank line, a code block, a heading, a rule, a quote or a
+                /// table ends it.
+                func track(_ text: String) {
+                    let last = seeds.count - 1
+                    if pendingBlankLines == 0, seeds[last].inTable, Self.tableCells(text) != nil {
+                        seeds[last].endsInParagraph = false
+                    } else if pendingBlankLines == 0, seeds[last].endsInParagraph, Self.tableSeparator(text) != nil {
+                        seeds[last].endsInParagraph = false
+                        seeds[last].inTable = true
+                    } else {
+                        seeds[last].inTable = false
+                        seeds[last].endsInParagraph = Self.startsParagraph(text)
+                    }
+                }
                 if Self.leadingIndent(line) >= seeds[seeds.count - 1].continuationIndent {
+                    track(text)
                     add(text)
                     seeds[seeds.count - 1].fence = Self.fenceOpening(text)
                 } else if let owner = owner(accepting: Self.leadingIndent(line)) {
-                    if pendingBlankLines == 0, Self.endsInParagraph(seeds[seeds.count - 1].content) {
+                    if pendingBlankLines == 0, seeds[seeds.count - 1].endsInParagraph {
                         // A lazy line continues the paragraph it follows.
+                        track(text)
                         add(text)
                     } else {
                         // After a blank line, a block of an item further out,
@@ -396,7 +421,8 @@ private extension ConversationMarkdownDocument {
                                 continuationIndent: seeds[owner].continuationIndent,
                                 content: text,
                                 continuation: true,
-                                fence: Self.fenceOpening(text)
+                                fence: Self.fenceOpening(text),
+                                endsInParagraph: Self.startsParagraph(text)
                             )
                         )
                         pendingBlankLines = 0
@@ -597,11 +623,12 @@ private extension ConversationMarkdownDocument {
             return compact.allSatisfy { $0 == marker }
         }
 
-        /// Whether `content` ends in a paragraph a lazy line can continue.
-        private static func endsInParagraph(_ content: String) -> Bool {
-            var parser = Parser(content)
-            if case .paragraph = parser.parse().last { return true }
-            return false
+        /// Whether a line, trimmed, is paragraph text: one that starts or
+        /// continues a paragraph rather than a code block, heading, rule,
+        /// quote or setext underline.
+        private static func startsParagraph(_ line: String) -> Bool {
+            !isBlank(line) && fenceOpening(line) == nil && heading(line) == nil && !isThematicBreak(line)
+                && !isQuote(line) && listMarker(line) == nil && !line.allSatisfy({ $0 == "=" })
         }
 
         /// `line` without up to `columns` of its leading spaces and tabs.
