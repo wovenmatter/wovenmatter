@@ -176,12 +176,10 @@ enum DebugNavigationSignal {
                 func unflipped(_ rect: NSRect) -> NSRect {
                     view.isFlipped ? NSRect(x: rect.minX, y: view.bounds.height - rect.maxY, width: rect.width, height: rect.height) : rect
                 }
-                // Web content sits in the transcript, under its faded edges.
-                let edges = ConversationEdgeSnapshot.current
-                if let edges, !pieces.isEmpty {
-                    context.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
-                }
+                // Web content sits in a transcript, under that transcript's faded edges.
                 for piece in pieces {
+                    let cg = context.cgContext
+                    cg.beginTransparencyLayer(auxiliaryInfo: nil)
                     NSGraphicsContext.saveGraphicsState()
                     if piece.framed {
                         // Only what the frame shows: inside its stroke, with its
@@ -193,44 +191,9 @@ enum DebugNavigationSignal {
                     }
                     piece.image.draw(in: unflipped(piece.frame))
                     NSGraphicsContext.restoreGraphicsState()
-                }
-                if let edges, !pieces.isEmpty {
-                    // Keep only what the transcript's mask shows: clear above and
-                    // below it, faded across its edge bands.
-                    let cg = context.cgContext
-                    let frame = edges.frame
-                    let stops: [(y: CGFloat, alpha: CGFloat)] = [
-                        (frame.minY, 0), (frame.minY + edges.topClearance, 0),
-                        (frame.minY + edges.topClearance + edges.topFade, 1),
-                        (frame.maxY - edges.bottomClearance - edges.bottomFade, 1),
-                        (frame.maxY - edges.bottomClearance, 0), (frame.maxY, 0),
-                    ]
-                    // Window coordinates run down from the top; the bitmap's run up.
-                    let height = view.bounds.height
-                    cg.saveGState()
-                    cg.setBlendMode(.destinationIn)
-                    for (index, stop) in stops.enumerated().dropLast() {
-                        let next = stops[index + 1]
-                        let top = height - next.y, bottom = height - stop.y
-                        let band = CGRect(x: 0, y: top, width: view.bounds.width, height: max(0, bottom - top))
-                        guard band.height > 0 else { continue }
-                        if stop.alpha == next.alpha {
-                            cg.setFillColor(CGColor(gray: 0, alpha: stop.alpha))
-                            cg.fill(band)
-                        } else if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceGray(),
-                                                            colors: [CGColor(gray: 0, alpha: stop.alpha), CGColor(gray: 0, alpha: next.alpha)] as CFArray,
-                                                            locations: [0, 1]) {
-                            cg.saveGState()
-                            cg.clip(to: band)
-                            cg.drawLinearGradient(gradient, start: CGPoint(x: 0, y: bottom), end: CGPoint(x: 0, y: top), options: [])
-                            cg.restoreGState()
-                        }
+                    if let edges = ConversationEdgeSnapshot.containing(piece.frame) {
+                        fade(cg, to: edges, height: view.bounds.height, width: view.bounds.width)
                     }
-                    // Above and below the transcript: nothing.
-                    cg.setFillColor(CGColor(gray: 0, alpha: 0))
-                    cg.fill(CGRect(x: 0, y: height - frame.minY, width: view.bounds.width, height: frame.minY))
-                    cg.fill(CGRect(x: 0, y: 0, width: view.bounds.width, height: max(0, height - frame.maxY)))
-                    cg.restoreGState()
                     cg.endTransparencyLayer()
                 }
                 NSGraphicsContext.restoreGraphicsState()
@@ -245,6 +208,45 @@ enum DebugNavigationSignal {
             }
             try? output.representation(using: .png, properties: [:])?.write(to: path, options: .atomic)
         }
+    }
+
+    /// Keeps only what a transcript's mask shows of what was just drawn:
+    /// nothing outside the transcript, faded across its edge bands.
+    private static func fade(_ cg: CGContext, to edges: ConversationEdgeSnapshot, height: CGFloat, width: CGFloat) {
+        let frame = edges.frame
+        let stops: [(y: CGFloat, alpha: CGFloat)] = [
+            (frame.minY, 0), (frame.minY + edges.topClearance, 0),
+            (frame.minY + edges.topClearance + edges.topFade, 1),
+            (frame.maxY - edges.bottomClearance - edges.bottomFade, 1),
+            (frame.maxY - edges.bottomClearance, 0), (frame.maxY, 0),
+        ]
+        // Window coordinates run down from the top; the bitmap's run up.
+        cg.saveGState()
+        cg.setBlendMode(.destinationIn)
+        for (index, stop) in stops.enumerated().dropLast() {
+            let next = stops[index + 1]
+            let top = height - next.y, bottom = height - stop.y
+            let band = CGRect(x: frame.minX, y: top, width: frame.width, height: max(0, bottom - top))
+            guard band.height > 0 else { continue }
+            if stop.alpha == next.alpha {
+                cg.setFillColor(CGColor(gray: 0, alpha: stop.alpha))
+                cg.fill(band)
+            } else if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceGray(),
+                                                colors: [CGColor(gray: 0, alpha: stop.alpha), CGColor(gray: 0, alpha: next.alpha)] as CFArray,
+                                                locations: [0, 1]) {
+                cg.saveGState()
+                cg.clip(to: band)
+                cg.drawLinearGradient(gradient, start: CGPoint(x: 0, y: bottom), end: CGPoint(x: 0, y: top), options: [])
+                cg.restoreGState()
+            }
+        }
+        // Outside the transcript: nothing.
+        cg.setFillColor(CGColor(gray: 0, alpha: 0))
+        cg.fill(CGRect(x: 0, y: height - frame.minY, width: width, height: frame.minY))
+        cg.fill(CGRect(x: 0, y: 0, width: width, height: max(0, height - frame.maxY)))
+        cg.fill(CGRect(x: 0, y: 0, width: max(0, frame.minX), height: height))
+        cg.fill(CGRect(x: frame.maxX, y: 0, width: max(0, width - frame.maxX), height: height))
+        cg.restoreGState()
     }
 
     /// Window captures draw web content blank, so `web-snapshot:PATH` writes
