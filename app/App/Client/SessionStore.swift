@@ -58,6 +58,9 @@ final class SessionStore {
     private var run: RunState = .idle
     @ObservationIgnored private var items: [SessionItem] = []
     @ObservationIgnored private var inProgress: [LiveItem] = []
+    /// The places each session's items first showed in, kept while the app
+    /// runs, so a chat opened again shows its rows where they were.
+    private static var places: [String: SessionItemPlaces] = [:]
     /// Where the drawn part of each streaming reply or thinking trace ends, in UTF-8 bytes.
     @ObservationIgnored private var readyEnds: [String: Int] = [:]
     /// Each text item in progress: the reply that shows it, and that reply's text before it.
@@ -613,9 +616,10 @@ final class SessionStore {
         var liveReplies: [String: (messageID: String, before: String)] = [:]
         var runs: [WorkspaceRunRecord] = []
         var activities: [WorkspaceRunActivityRecord] = []
-        let entries = items.sorted { $0.sequence < $1.sequence }.map {
-            (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author)
-        } + inProgress.map { (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none) }
+        let entries = Self.places[sessionID, default: SessionItemPlaces()].ordered(
+            saved: items.map { (id: $0.id, sequence: $0.sequence,
+                                value: (id: $0.id, date: $0.createdAt, content: $0.content, live: false, author: $0.author)) },
+            live: inProgress.map { (id: $0.id, value: (id: $0.id, date: Date(), content: $0.content, live: true, author: ItemAuthor?.none)) })
         var goneNotice: String?
 
         /// A turn that ended without a reply (it failed, or the person
@@ -746,5 +750,27 @@ final class SessionStore {
         let progress = run == .running ? runs.last.flatMap { ConversationTaskProgress.latest(in: activities, activeRunID: $0.id) } : nil
         if progress != taskProgress { taskProgress = progress }
         interactions = prompts.map(interaction)
+    }
+}
+
+/// Where each item a session showed in progress keeps its place: after the
+/// saved item that was last when it first showed, in the order items
+/// started. Items are saved in the order they finish, so a finished item
+/// would otherwise jump ahead of items still running that showed before it,
+/// out of the rows it followed and into a group it was never next to.
+/// Items never seen in progress follow their sequence.
+struct SessionItemPlaces {
+    private var places: [String: (after: Int, rank: Int)] = [:]
+
+    mutating func ordered<Value>(saved: [(id: String, sequence: Int, value: Value)], live: [(id: String, value: Value)]) -> [Value] {
+        let lastSaved = saved.map(\.sequence).max() ?? 0
+        for item in live where places[item.id] == nil {
+            places[item.id] = (lastSaved, places.count)
+        }
+        func place(_ id: String, _ sequence: Int) -> (Int, Int, Int) {
+            places[id].map { ($0.after, 1, $0.rank) } ?? (sequence, 0, 0)
+        }
+        return (saved.map { (place($0.id, $0.sequence), $0.value) } + live.map { (place($0.id, .max), $0.value) })
+            .sorted { $0.0 < $1.0 }.map(\.1)
     }
 }

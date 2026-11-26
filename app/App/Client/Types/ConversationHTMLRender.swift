@@ -24,6 +24,10 @@ public struct ConversationVisualReply: Equatable, Sendable {
 /// Authored content runs in an opaque sandboxed child frame. Only the
 /// app-owned outer document has a native handler; it verifies message sources.
 public enum ConversationHTMLDocument {
+  /// The page reports how tall its content is: the root's in-flow height,
+  /// and below it only positioned content that shows. Not the body's scroll
+  /// height, which also counts content clipped out of sight, such as a table
+  /// kept only for screen readers.
   /// The frame takes the height the page reports, and that height is the
   /// page's viewport, so nothing measured may follow the viewport: the root
   /// and body keep their content's height whatever the page asks (a
@@ -48,8 +52,14 @@ public enum ConversationHTMLDocument {
           const h=p.closest('h1,h2,h3,h4,h5,h6,caption');return h?h.innerText.trim().slice(0,200):'';}
         return '';};
       let last=0,lastLead='',queued=false;
+      const clipped=s=>(s.clip&&s.clip!=='auto')||(s.clipPath&&s.clipPath!=='none');
+      const placed=()=>{let m=0;for(const e of document.body.querySelectorAll('*')){const s=getComputedStyle(e);
+          if((s.position!=='absolute'&&s.position!=='fixed')||clipped(s)||!shown(e))continue;
+          const r=e.getBoundingClientRect();if(r.width>1&&r.height>1)m=Math.max(m,r.bottom+scrollY);}
+        return m;};
       const measure=()=>{queued=false;const b=document.body;if(!b)return;
-        const h=Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height,b.scrollHeight)),l=lead();
+        const flow=document.documentElement.getBoundingClientRect().height,abs=placed();
+        const h=Math.ceil(Math.max(flow,abs?abs+parseFloat(getComputedStyle(b).paddingBottom||'0'):0)),l=lead();
         if(h!==last||l!==lastLead){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
       const schedule=()=>{if(!queued){queued=true;requestAnimationFrame(measure);setTimeout(measure,0);}};
       addEventListener('DOMContentLoaded',()=>{const o=new ResizeObserver(schedule);o.observe(document.documentElement);o.observe(document.body);measure();});
