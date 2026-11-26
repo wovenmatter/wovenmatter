@@ -239,7 +239,8 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     let actions = Set(tools.map { ConversationToolAction($0) })
     action = actions.count == 1 ? actions.first : nil
     hasFailure = tools.contains(where: \.workTimelineIsFailure)
-    summary = Self.summary(activities: activities, tools: tools)
+    // Through the same redaction as the rows it sums up.
+    summary = Self.summary(activities: activities, tools: tools).workTimelineRedactingCredentials
     activeActivityIDs = Set(activities.enumerated().compactMap { index, activity in
       let live = activity.kind == .thought
         ? endsTimeline && index == activities.count - 1
@@ -273,7 +274,7 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   /// narrow for the sentence: "2 files changed · 3 previews · ToolSearch".
   public var compactSummary: String {
     Self.summaryParts(activities: activities, tools: activities.filter { $0.kind != .thought })
-      .map(\.compact).joined(separator: " · ")
+      .map(\.compact).joined(separator: " · ").workTimelineRedactingCredentials
   }
 
   /// One fact of a summary, as the sentence words it and in compact form.
@@ -838,7 +839,7 @@ public extension AgentRunActivity {
     guard let url = ((step?["url"] ?? input?["url"]) as? String)?.workTimelineSingleLine else { return nil }
     // Without its scheme, and without a user and password before the host.
     return url.replacingOccurrences(of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, with: "", options: .regularExpression)
-      .replacingOccurrences(of: #"^[^/\s@]+@"#, with: "…@", options: .regularExpression)
+      .replacingOccurrences(of: #"^[^/\s@?#]+@"#, with: "…@", options: .regularExpression)
   }
 
   /// The file or folder a tool's input names.
@@ -934,8 +935,10 @@ public extension AgentRunActivity {
     // middle, keeping its real end. Any other title keeps the program only.
     if action == .command, let command = workTimelineTitledCommand {
       if let script = command.workTimelineScript {
-        // Failed as a script run in code mode fails ("Code failed").
-        let done = failed ? script.language.prefix(1).uppercased() + script.language.dropFirst() + " script failed"
+        // Failed as a script run in code mode fails ("Code failed"); when
+        // more ran after the script, which step failed is not known, so the
+        // row says what ran and the failure stays the command's.
+        let done = failed && !script.more ? script.language.prefix(1).uppercased() + script.language.dropFirst() + " script failed"
           : (active ? "Running a " : "Ran a ") + script.language + " script"
         return done + (script.more ? " \u{2026}" : "")
       }
@@ -1080,21 +1083,35 @@ extension String {
   /// authorization and key headers, bearer tokens, `-u user:pass`, options
   /// and assignments named for a token, key, secret or password, and the
   /// user and password in a URL.
+  /// Only as much as a row or summary can show is looked at: past that the
+  /// text is cut, so no pattern ever reads a long command whole.
   var workTimelineRedactingCredentials: String {
-    var text = self
+    var text = count > Self.workTimelineShownLength ? String(prefix(Self.workTimelineShownLength)) + "\u{2026}" : self
     for (pattern, template) in Self.workTimelineCredentialPatterns {
       text = pattern.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: template)
     }
     return text
   }
 
+  /// More than a row or a summary ever shows at any width.
+  private static let workTimelineShownLength = 1_000
+
+  // A value: quoted whole, or up to the next space or quote.
+  private static let workTimelineCredentialValue = #"(?:'[^']*'|"[^"]*"|[^\s&'"“”‘’]+)"#
+  // A name that is a credential's whole name or ends in one (`GITHUB_TOKEN`,
+  // `api_key`, `password`), never a word that merely contains one (`key`,
+  // `max-tokens`).
+  private static let workTimelineCredentialName =
+    #"(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|token|secret|password|passwd|pwd|auth)"#
+
+  // Each pattern starts at a word or token boundary and inspects a name once.
   private static let workTimelineCredentialPatterns: [(NSRegularExpression, String)] = [
-    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)[^'"\n]+"#, "$1$2…"),
-    (#"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]{8,}"#, "$1$2…"),
-    (#"(?<=\s)(-u|--user)(\s+|=)(['"]?)[^\s'"]+:[^\s'"]+\3"#, "$1$2…"),
-    (#"(?i)(--?[a-z0-9-]*(?:token|password|passwd|secret|api-?key)[a-z0-9-]*)(\s+)(?!-)[^\s'"]+"#, "$1$2…"),
-    (#"(?i)\b([a-z0-9_.-]*(?:token|key|secret|password|passwd|pwd|auth)[a-z0-9_]*)=[^\s&'"]+"#, "$1=…"),
-    (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]+@"#, "$1…@"),
+    (#"(?i)\b(authorization|proxy-authorization|x-api-key|api-key|cookie)(\s*:\s*)[^'"“”\n]+"#, "$1$2…"),
+    (#"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=-]+"#, "$1$2…"),
+    (#"(?<!\S)(-u|--user)(\s+|=)(['"]?)[^\s'"]+:[^\s'"]+\3"#, "$1$2…"),
+    (#"(?i)(?<!\S)(--?(?:[a-z0-9]+-)*"# + workTimelineCredentialName + #")(\s+)(?!-)"# + workTimelineCredentialValue, "$1$2…"),
+    (#"(?i)(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9_.-]*[_.-])?"# + workTimelineCredentialName + ")=" + workTimelineCredentialValue, "$1=…"),
+    (#"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@"#, "$1…@"),
   ].map { (try! NSRegularExpression(pattern: $0.0), $0.1) }
 }
 
@@ -1195,9 +1212,13 @@ extension String {
     }
     let lines = command.components(separatedBy: .newlines)
     if let first = lines.first,
-       let parts = match(#"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<-? *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2$"#, first),
+       let parts = match(#"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<(-?) *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\3$"#, first),
        let language = languages[parts[1]],
-       let end = lines.indices.dropFirst().first(where: { lines[$0].trimmingCharacters(in: .whitespaces) == parts[3] }) {
+       // The terminator is the delimiter alone on its line, after leading
+       // tabs only with `<<-`, as the shell reads it.
+       let end = lines.indices.dropFirst().first(where: {
+         (parts[2] == "-" ? String(lines[$0].drop { $0 == "\t" }) : lines[$0]) == parts[4]
+       }) {
       // What runs after the here-document ends, if anything.
       let more = lines[(end + 1)...].contains { line in
         let text = line.trimmingCharacters(in: .whitespaces)
