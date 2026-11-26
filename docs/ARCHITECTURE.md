@@ -299,7 +299,10 @@ library and so shows every machine.
   event does not restate a `token_usage_record` or, as a file's first total,
   the usage of the thread it was forked, resumed or spawned from; it is
   known by a digest of its counts and the running total, which a forked
-  thread's copy keeps although the copy is stamped with the fork's time.
+  thread's copy keeps although the copy is stamped with the fork's time,
+  and, for a thread's first response, whose total is its own counts, of the
+  turn its rollout names too. A `token_count` restates a record only within
+  the record's turn.
 - The synced rows, `usage_hours`, are worked out from that table: one per
   machine, harness session, model, hour and whether the history says Woven
   Matter made it, holding the sums. Each row a save changes is written again
@@ -312,13 +315,15 @@ library and so shows every machine.
   place; a history whose first line or those bytes changed is read again
   from its start, which counts nothing twice. A file is read to its end a
   chunk at a time, each chunk saved with its place, and a compressed one is
-  decompressed as a stream. OpenCode's place is the last message read, which
-  must still be in the database.
-- A pass first reads on the histories that grew, then those not read yet,
-  newest first, for about twenty seconds, and while some are left the next
-  pass follows at once. A machine's first read so shows the last day first,
-  then the week, the month, three months and the rest, and the server logs
-  each of those as it is reached.
+  decompressed as a stream read a piece at a time. OpenCode's place is the
+  last message read, which must still be in the database; each read takes
+  in the hour before it again.
+- A pass of about twenty seconds first reads on the histories that grew,
+  for at most half of it while others wait, then those not yet read to
+  their end, newest first, for the rest; while some are left the next pass
+  follows at once, the unfinished first. A machine's first read so shows
+  the last day first, then the week, the month, three months and the rest,
+  and the server logs each of those once as it is reached.
 - Every history may have been written by anyone. A line that is not what its
   harness writes is skipped; a file that cannot be read (it fails to
   decompress, or the database is locked or corrupt) is passed over until it
@@ -329,7 +334,11 @@ library and so shows every machine.
   stop ends the read after the chunk, or OpenCode's page, in progress and
   counts nothing. Counts are held below a trillion per response, and a time
   outside the years 2000 to 2100 is no time.
-- The page asks for daily usage by the days of its own time zone.
+- Usage syncs as these per-hour sums, so a range that begins or ends inside
+  an hour takes or leaves that hour's sum by the time of its newest
+  response. The page asks for daily usage by the days of its own time zone;
+  those days are exact for zones whose offset from UTC is a whole number of
+  hours.
 
 ## Usage statistics
 
