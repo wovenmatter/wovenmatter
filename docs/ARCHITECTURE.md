@@ -323,8 +323,8 @@ A folder is a name plus a directory on one machine. It belongs to that machine.
 
 The sidebar shows this machine first, then one section for each other machine,
 online or offline, titled by the machine's name. Each section lists that
-machine's agents and folders. Starting a chat from a section runs it on that
-machine. A new folder is created by the machine that will own it.
+machine's folders. A chat started in a folder runs on that folder's machine.
+A new folder is created by the machine that will own it.
 
 ## Notes, pages, sheets and apps
 

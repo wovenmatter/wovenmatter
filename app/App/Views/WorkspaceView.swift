@@ -64,8 +64,6 @@ struct WorkspaceView: View {
     @AppStorage("wovenmatter.layout.single-rail") private var singleRailRequested = true
     @AppStorage("wovenmatter.layout.chat-width-percent") private var chatWidthPercent = 58.0
     @AppStorage("wovenmatter.layout.note-on-left") private var noteOnLeft = false
-    @AppStorage(PinnedAgentsStore.storageKey) private var pinnedAgentIDsRaw = "[]"
-    @AppStorage(AgentOrderStore.storageKey) private var agentOrderRaw = "{}"
     @AppStorage(AgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
     @State private var selectedAgentID: String?
     /// Chats being started, by the id their panel holds, with the agent each
@@ -483,23 +481,18 @@ struct WorkspaceView: View {
             conversations: overview?.conversations ?? [],
             notes: overview?.notes ?? [],
             runningConversationIDs: model.workspace.runningConversationIDs,
-            selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
             selectedNoteID: selectedNoteID,
             bots: model.bots,
             selectedBotTarget: chatPanels.activeBotTarget,
             destination: destination,
-            pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
-            agentOrderRaw: $agentOrderRaw,
             agentDisclosureRaw: $agentDisclosureRaw,
             actions: SidebarActions(
                 onCollapse: collapseRail,
                 onMoveSingleRail: moveSingleSidebar,
                 onShowNavigation: showSidebarNavigation,
                 onUtility: openUtility,
-                onSelectAgent: selectAgent,
-                onCreateAgentChat: createAgentChat,
                 onSelectFolder: selectFolder,
                 onSelectConversation: selectConversation,
                 onSelectNote: selectNote,
@@ -754,24 +747,6 @@ struct WorkspaceView: View {
         _ = chatPanels.replaceActiveConversation(
             with: conversationsForSelectedAgent.first?.id
         )
-    }
-
-    private func selectAgent(_ id: String) {
-        selectedAgentID = id
-        let latest = conversationsForSelectedAgent.max {
-            ($0.lastMessageAt ?? .distantPast, $0.id) < ($1.lastMessageAt ?? .distantPast, $1.id)
-        }
-        _ = chatPanels.replaceActiveConversation(with: latest?.id)
-        destination = .workspace
-        compactWorkspacePane = .chat
-    }
-
-    private func createAgentChat(_ id: String) {
-        if let agent = model.workspace.agent(id: id) {
-            startChat(with: agent)
-        }
-        destination = .workspace
-        compactWorkspacePane = .chat
     }
 
     private func selectBot(_ target: BotTarget) {

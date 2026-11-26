@@ -1,8 +1,9 @@
 # Conversations
 
-Choose **New chat** and select an agent. The sidebar lists each machine's
-agents under that machine; a chat started there runs on that machine. Select a
-model and thinking level where the harness offers them.
+Choose **New chat** and select an agent. This Mac's agents come first, then
+the agents of your other machines, each with its machine's name; a chat runs
+on its agent's machine. Select a model and thinking level where the harness
+offers them.
 
 Before the first message, the composer's folder selector lists **All
 Workspaces** and the folders of the agent's machine. **All Workspaces** gives
