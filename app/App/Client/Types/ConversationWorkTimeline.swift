@@ -224,7 +224,7 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   /// The single action shared by every tool call, for the summary icon.
   public let action: ConversationToolAction?
   public let isThoughtOnly: Bool
-  /// The latest tool call failed (T3 marks the group, not every member).
+  /// A tool call in it failed, as its own row said.
   public let hasFailure: Bool
   /// Members still pending or running. Providers never settle a thought
   /// without a status, so only such a thought that ends the timeline is live.
@@ -238,7 +238,7 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     isThoughtOnly = tools.isEmpty
     let actions = Set(tools.map(ConversationToolAction.init))
     action = actions.count == 1 ? actions.first : nil
-    hasFailure = tools.last?.workTimelineIsFailure ?? false
+    hasFailure = tools.contains(where: \.workTimelineIsFailure)
     summary = Self.summary(activities: activities, tools: tools)
     activeActivityIDs = Set(activities.enumerated().compactMap { index, activity in
       let live = activity.kind == .thought
@@ -264,7 +264,9 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
 
   static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
-    sentence(summaryParts(activities: activities, tools: tools).map(\.sentence))
+    sentence(summaryParts(activities: activities, tools: tools).enumerated().map { index, part in
+      index == 0 || part.startsWithName ? part.sentence : part.sentence.prefix(1).lowercased() + part.sentence.dropFirst()
+    })
   }
 
   /// The facts of `summary` as short count-first parts, for a column too
@@ -278,11 +280,17 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   struct SummaryPart: Equatable {
     let sentence: String
     let compact: String
+    /// It starts with a tool's name, which keeps its case mid-sentence.
+    var startsWithName = false
   }
 
   /// Every kind of step, in the order it first ran, in the rows' words.
-  /// Files are counted once however often they were touched; a step whose
-  /// outcome the verb would claim is counted apart when it failed.
+  /// Files are counted once however often they were touched. Failures stay
+  /// with the kind that failed: a verb that claims the outcome (read,
+  /// changed, fetched) counts only what succeeded, and the rest apart ("1
+  /// read failed"); any other verb counts every call and says how many
+  /// failed ("Ran 2 commands, 1 failed", or "ran 2 commands (1 failed)"
+  /// beside other kinds), or that all did ("2 commands failed").
   static func summaryParts(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> [SummaryPart] {
     if tools.isEmpty {
       let label = activities.count == 1 ? activities[0].workTimelineLabel(active: false) : "Thought (×\(activities.count))"
@@ -299,20 +307,42 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     // a repeat of the other.
     let searches: Set<ConversationToolAction> = [.webSearch, .codeSearch, .search]
     let namesSearches = Set(order).intersection(searches).count > 1
-    return order.flatMap { action -> [SummaryPart] in
+    // Each kind's facts, with how many of its calls failed where its verb
+    // counts them all; the note is worded once the number of kinds is known.
+    let kinds = order.map { action -> (parts: [SummaryPart], failed: Int) in
       let all = members[action] ?? []
       // One or two tools of their own are named, as their rows name them.
       let names = all.map(\.workTimelineToolIdentity).reduce(into: [String]()) { names, name in
         if !name.isEmpty, !names.contains(name) { names.append(name) }
       }
-      if action == .other, (1...2).contains(names.count), names.allSatisfy({ !$0.contains(" ") }) {
+      let failures = all.filter(\.workTimelineIsFailure).count
+      if action == .other, (1...2).contains(names.count), names.allSatisfy({ $0.count <= 40 }) {
         let several = names.count == 1 && all.count > 1
-        return [SummaryPart(
-          sentence: "Used " + names.joined(separator: " and ") + (several ? " \(all.count) times" : ""),
-          compact: several ? "\(all.count)× \(names[0])" : names.joined(separator: " · "))]
+        if failures == all.count {
+          let text = names.joined(separator: " and ") + " failed" + (several ? " \(all.count) times" : "")
+          return ([SummaryPart(sentence: text, compact: text, startsWithName: true)], 0)
+        }
+        // A tool's name is used; a step titled in words ("Load skill:
+        // dataviz") is its own fact, as its row says it.
+        let tools = names.filter { !$0.contains(" ") }
+        let times = several ? " \(all.count) times" : ""
+        let named = tools.isEmpty ? [] : [SummaryPart(sentence: "Used " + tools.joined(separator: " and ") + times,
+                                                      compact: several ? "\(all.count)× \(names[0])" : tools.joined(separator: " · "))]
+        let titled = names.filter { $0.contains(" ") }.map {
+          SummaryPart(sentence: $0 + times, compact: several ? "\(all.count)× \($0)" : $0, startsWithName: true)
+        }
+        return (named + titled, failures)
       }
-      let failed = action.claimsOutcome ? all.filter(\.workTimelineIsFailure) : []
-      let done = action.claimsOutcome ? all.filter { !$0.workTimelineIsFailure } : all
+      if !action.claimsOutcome {
+        if failures > 0, failures == all.count {
+          let text = "\(failures) \(action.failureNoun(count: failures)) failed"
+          return ([SummaryPart(sentence: text, compact: text)], 0)
+        }
+        let count = action.summaryCount(all)
+        return ([SummaryPart(sentence: action.summary(count: count, namingSearch: namesSearches),
+                             compact: action.compactSummary(count: count, namingSearch: namesSearches))], failures)
+      }
+      let done = all.filter { !$0.workTimelineIsFailure }
       var parts: [SummaryPart] = []
       if !done.isEmpty {
         let count = action.summaryCount(done)
@@ -320,19 +350,27 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
           sentence: action.summary(count: count, namingSearch: namesSearches),
           compact: action.compactSummary(count: count, namingSearch: namesSearches)))
       }
-      if !failed.isEmpty, let noun = action.failureNoun(count: failed.count) {
-        let text = "\(failed.count) \(noun) failed"
+      if failures > 0 {
+        let text = "\(failures) \(action.failureNoun(count: failures)) failed"
         parts.append(SummaryPart(sentence: text, compact: text))
       }
-      return parts
+      return (parts, 0)
+    }
+    let alone = kinds.count == 1
+    return kinds.flatMap { kind -> [SummaryPart] in
+      guard kind.failed > 0, let part = kind.parts.first else { return kind.parts }
+      let noted = alone && kind.parts.count == 1
+        ? SummaryPart(sentence: part.sentence + ", \(kind.failed) failed", compact: part.compact + " · \(kind.failed) failed",
+                      startsWithName: part.startsWithName)
+        : SummaryPart(sentence: part.sentence + " (\(kind.failed) failed)", compact: part.compact + " (\(kind.failed) failed)",
+                      startsWithName: part.startsWithName)
+      return [noted] + kind.parts.dropFirst()
     }
   }
 
-  /// Parts as one sentence: "Read 2 files, changed 1 file, and ran 3 commands".
-  static func sentence(_ labels: [String]) -> String {
-    let sentence = labels.enumerated().map { index, label in
-      index == 0 ? label : label.prefix(1).lowercased() + label.dropFirst()
-    }
+  /// Parts, each cased for its place, as one sentence: "Read 2 files,
+  /// changed 1 file, and ran 3 commands".
+  static func sentence(_ sentence: [String]) -> String {
     if sentence.count < 3 { return sentence.joined(separator: " and ") }
     return sentence.dropLast().joined(separator: ", ") + ", and " + (sentence.last ?? "")
   }
@@ -390,6 +428,11 @@ public enum ConversationToolAction: Hashable, Sendable {
               step["url"] != nil || (step["type"] as? String)?.lowercased().contains("search") == true {
       // A search tool that reports a web step: a query, or a page it opened.
       self = step["url"] != nil ? .webFetch : .webSearch
+    } else if (activity.workTimelineInput?["type"] as? String)?.lowercased() == "websearch"
+      || activity.title?.workTimelineSingleLine?.lowercased() == "web search" {
+      // A step its runtime calls a web search, without saying which (Codex's
+      // "Web search" rows), is one, as its row says.
+      self = .webSearch
     } else if name.contains("web") || name.contains("fetch") || name.contains("browse") {
       // A fetch tool given a query rather than a page searched the web.
       let input = activity.workTimelineInput
@@ -457,16 +500,24 @@ public enum ConversationToolAction: Hashable, Sendable {
   }
 
   /// What failed, as "2 edits failed" counts it.
-  func failureNoun(count: Int) -> String? {
+  func failureNoun(count: Int) -> String {
     let plural = count != 1
     return switch self {
+    case .command: plural ? "commands" : "command"
+    case .code: plural ? "scripts" : "script"
     case .read: plural ? "reads" : "read"
     case .edit: plural ? "edits" : "edit"
+    case .codeSearch, .search: plural ? "searches" : "search"
     case .list: plural ? "listings" : "listing"
     case .visual: plural ? "visual replies" : "visual reply"
     case .preview: plural ? "previews" : "preview"
+    case .webSearch: plural ? "web searches" : "web search"
     case .webFetch: plural ? "fetches" : "fetch"
-    default: nil
+    case .browser: plural ? "browser steps" : "browser step"
+    case .computer: plural ? "computer steps" : "computer step"
+    case .delegate: plural ? "tasks" : "task"
+    case .question: plural ? "questions" : "question"
+    case .other: plural ? "tools" : "tool"
     }
   }
 

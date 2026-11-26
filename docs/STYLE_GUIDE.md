@@ -476,8 +476,11 @@ when an intentional design change is accepted.
   Woven's visual tools have one label each, previewed or shown (shown only once
   the chat shows it), and a group
   names every kind of step in the rows' words ("Listed 1 folder and read 2
-  files"), each file once, failures apart ("1 edit failed"), two kinds of search
-  each by name, and one or two tools by name, never an unnamed action; a
+  files"), each file once, failures with the kind that failed ("1 edit failed",
+  "Ran 2 commands, 1 failed", "2 commands failed") and a warning on the group
+  when any row failed, two kinds of search each by name, a web search as one
+  whatever its row's detail, and one or two tools by name (a step titled in
+  words by its title), never an unnamed action; a
   narrow column takes the same facts in short ("1 folder listed · 2 files read"). Thinking looks the same everywhere.
   Live reasoning shows its last three lines, its cut top line fading out, under
   its title once it has one (the title is never prose in the trace); afterwards a
