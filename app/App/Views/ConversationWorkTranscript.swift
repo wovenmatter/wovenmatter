@@ -66,10 +66,6 @@ struct ConversationWorkTranscript: View {
     @Environment(\.conversationFolder) private var folder
     @State private var localWorkExpanded = false
     @State private var localRunningFolded = false
-    /// How long this view had shown the turn running when it saw it settle:
-    /// the settled time it shows is never less. A chat opened later shows
-    /// the saved time.
-    @State private var watchedDuration: TimeInterval?
 
     init(
         run: ConversationWorkRun,
@@ -172,9 +168,12 @@ struct ConversationWorkTranscript: View {
             // Failure belongs to the run, not to its optional work history.
             // Keep it visible even when no tool or thinking event was supplied.
             if let failureMessage = content.failureMessage {
+                // The provider's message is reading text, as a reply is; the
+                // header above keeps the compact red status.
                 Text(failureMessage)
-                    .font(.system(size: 13))
-                    .foregroundStyle(WovenPalette.danger)
+                    .font(.system(size: 15))
+                    .lineSpacing(ConversationMetrics.Prose.lineSpacing)
+                    .foregroundStyle(WovenPalette.foreground)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, ConversationMetrics.rowGap)
@@ -198,10 +197,10 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                     if showsThinking {
-                        // Next to a visual reply, a section, as everything beside one keeps.
-                        ConversationThinkingLabel(text: "Thinking")
+                        // Under a visual reply, a reply's distance, as every work row there keeps.
+                        ConversationThinkingLabel(text: "Thinking", isActive: true)
                             .padding(.top, entries.isEmpty ? 0
-                                : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
+                                : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.workEndGap
                                 : ConversationMetrics.rowGap)
                     }
                 }
@@ -236,12 +235,6 @@ struct ConversationWorkTranscript: View {
             : thoughtsCloseVisual ? ConversationMetrics.sectionGap
             : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
-        .onChange(of: run.status) { before, after in
-            guard before == .running, after != .running, let start = presentation?.startedAt else { return }
-            // The running label counts whole seconds, so this is the most it
-            // can have shown.
-            watchedDuration = Date().timeIntervalSince(start).rounded(.down)
-        }
         // Without a session folder, the folder of the turn's first path, so
         // its rows shorten paths the same way and never change once shown.
         .environment(\.conversationFolder, folder ?? AgentRunActivity.workTimelineAnchorFolder(
@@ -288,7 +281,11 @@ struct ConversationWorkTranscript: View {
                             next: ConversationWorkTimelineEntry?, settled: Bool) -> CGFloat {
         // The first row's gap is the section under the header.
         guard let previous else { return 0 }
-        if isVisualReply(entry) || isVisualReply(previous) { return ConversationMetrics.sectionGap }
+        // A visual reply inside the work is set apart on both sides by a
+        // reply's distance, so no row reads as its caption; two visual
+        // replies in a row sit a section apart.
+        if isVisualReply(entry) != isVisualReply(previous) { return ConversationMetrics.workEndGap }
+        if isVisualReply(entry) { return ConversationMetrics.sectionGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
         // Once settled, a thought after a tool starts the next step, as a
         // sentence does; while running it keeps the row gap of the "Thinking"
@@ -322,7 +319,7 @@ struct ConversationWorkTranscript: View {
         if entries.contains(where: { entry in
             // Running, unless it is a delegation with rows drawn after it.
             func shows(_ activity: AgentRunActivity) -> Bool {
-                activity.id == lastActivityID || activity.workTimelineDelegatedTask == nil
+                activity.id == lastActivityID || !activity.workTimelineIsDelegation
             }
             switch entry.content {
             case .group(let group): return group.activities.contains { group.showsProgress($0) && shows($0) }
@@ -390,7 +387,8 @@ struct ConversationWorkTranscript: View {
             )
         case .activity(let activity):
             if activity.kind == .thought, !activity.workTimelineThoughtHasText {
-                ConversationThinkingLabel(text: isRunning && activity.workTimelineShowsProgress ? "Thinking" : "Thought")
+                ConversationThinkingLabel(text: isRunning && activity.workTimelineShowsProgress ? "Thinking" : "Thought",
+                                          isActive: isRunning && activity.workTimelineShowsProgress)
             } else if activity.kind == .thought {
                 ConversationThinkingBlock(activity: activity, runID: run.id, runStatus: run.status,
                     isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
@@ -475,16 +473,9 @@ struct ConversationWorkTranscript: View {
         }
     }
 
-    /// The saved time; or, when the end reached this view a second or more
-    /// late (a slow link), the time it had already shown the turn running, so
-    /// the header does not step back. On the Mac that ran the turn the two
-    /// agree, live and reopened.
-    private var settledDuration: String? {
-        guard let watched = watchedDuration, let saved = presentation?.completedSeconds, watched >= saved + 1 else {
-            return presentation?.completedDuration
-        }
-        return formattedRunDuration(watched)
-    }
+    /// The turn's saved time, the same in the view that watched it end and
+    /// in every view opened later.
+    private var settledDuration: String? { presentation?.completedDuration }
 
     /// Whole seconds gone, never rounded up, for a once-per-second count;
     /// longer runs use the shared format.
@@ -560,6 +551,9 @@ struct ConversationThinkingLabel: View {
     /// A record reads as the tool row it stands for; thinking in reasoning's
     /// ink, the quietest in the lane, and regular weight.
     var isRecord = false
+    /// In progress (the waiting "Thinking" row, a live thought): the stronger
+    /// ink running rows take.
+    var isActive = false
 
     var body: some View {
         HStack(spacing: ConversationMetrics.iconGap) {
@@ -568,7 +562,8 @@ struct ConversationThinkingLabel: View {
                 .frame(width: ConversationMetrics.iconColumn)
             Text(text).font(.system(size: 13.5, weight: isRecord ? .medium : .regular))
         }
-        .foregroundStyle(isRecord ? WovenPalette.foreground.opacity(0.72)
+        .foregroundStyle(isActive ? WovenPalette.foreground.opacity(0.85)
+            : isRecord ? WovenPalette.foreground.opacity(0.72)
             : WovenPalette.foreground.opacity(ConversationResponse.Style.reasoning.inkOpacity))
         .accessibilityElement(children: .combine)
     }
@@ -599,7 +594,7 @@ private struct ConversationThinkingBlock: View {
                 // A title the reasoning has so far is the row's label, as it
                 // will be once settled; the viewport shows only what follows it.
                 VStack(alignment: .leading, spacing: 0) {
-                    ConversationThinkingLabel(text: liveTitle ?? "Thinking")
+                    ConversationThinkingLabel(text: liveTitle ?? "Thinking", isActive: true)
                     if hasShownText { trace(maximumHeight: Self.liveHeight) }
                 }
             } else {
@@ -864,7 +859,8 @@ private struct ConversationWorkGroupRow: View {
                             .accessibilityHidden(true)
                         Spacer(minLength: 0)
                     }
-                    .foregroundStyle(WovenPalette.foreground.opacity(0.72))
+                    // A step stronger while one of its calls runs.
+                    .foregroundStyle(WovenPalette.foreground.opacity(runStatus == .running && group.hasActiveActivity ? 0.85 : 0.72))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
@@ -1107,9 +1103,10 @@ private struct ConversationActivityRow: View {
                     // One line across the row, cut at its end, with the chevron
                     // right after it; the full text is in the details.
                     HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
+                        // A step stronger while its call runs; the same width either way.
                         Text(primaryLabel)
                             .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(WovenPalette.foreground.opacity(0.72))
+                            .foregroundStyle(WovenPalette.foreground.opacity(isLive && !isFailure ? 0.85 : 0.72))
                             .lineLimit(1)
                             .truncationMode(.tail)
                         if let expanded { chevron(expanded).layoutPriority(1) }

@@ -149,8 +149,8 @@ struct ConversationResponse: View {
             let press = ConversationVisualReplyText.press()
             Task { @MainActor in
                 let lead = await copyLead?()
-                // A Copy pressed meanwhile on another answer wins.
-                guard ConversationVisualReplyText.isLatest(press) else { return }
+                // A Copy pressed later on another answer that has already written wins.
+                guard ConversationVisualReplyText.claim(press) else { return }
                 NSPasteboard.general.clearContents()
                 copied = NSPasteboard.general.setString(lead.map { $0 + "\n\n" + content } ?? content, forType: .string)
             }

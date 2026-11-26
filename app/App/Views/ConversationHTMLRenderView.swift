@@ -300,16 +300,24 @@ extension EnvironmentValues {
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
-    /// The newest Copy press anywhere; only it may write the pasteboard.
-    private static var latestPress = 0
+    /// Copy presses in order, and the newest one that wrote the pasteboard: a
+    /// press writes unless a later one has already written (a later press
+    /// with nothing to write leaves an earlier one free to).
+    private static var lastPress = 0
+    private static var lastWritten = 0
 
-    /// Starts a Copy press; pass what it returns to `isLatest` before writing.
+    /// Starts a Copy press; pass what it returns to `claim` when ready to write.
     static func press() -> Int {
-        latestPress += 1
-        return latestPress
+        lastPress += 1
+        return lastPress
     }
 
-    static func isLatest(_ press: Int) -> Bool { press == latestPress }
+    /// Whether this press may write now; if so, it is the newest to have written.
+    static func claim(_ press: Int) -> Bool {
+        guard press > lastWritten else { return false }
+        lastWritten = press
+        return true
+    }
 
     /// What the page answered, tidied: trailing spaces off, at most one blank line in a row.
     static func tidy(_ text: String?) -> String? {

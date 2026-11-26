@@ -420,7 +420,10 @@ when an intentional design change is accepted.
   runs, thinking and assistant messages stream visibly in chronological order.
   The elapsed header (with a chevron) folds its thinking, commentary and tool
   calls at any time, and the turn folds them itself when it ends, leaving the
-  reply, an error, a proposed plan or an inline page in view. A turn in which the
+  reply, an error, a proposed plan or an inline page in view. A failed turn's
+  header keeps the compact red status; the error's own words under it are
+  reading text, in a reply's size and ink. A finished turn's header shows its
+  saved time, the same in every view. A turn in which the
   reader opened a row, group or thought while it ran stays open when it ends. Live tool calls append as
   separate rows in the conversation; never replace the preceding tool with the
   latest call. A new thinking, commentary,
@@ -450,9 +453,13 @@ when an intentional design change is accepted.
   still. Commentary sits close to the tools it introduces and further from the
   work before it. The work log is a secondary lane: everything in it is one
   size below the reply, commentary a step quieter than the reply's ink, tool
-  labels quieter, reasoning quietest; its text starts at one inset, with only
+  labels quieter, reasoning quietest; a row whose call is still running, and
+  the waiting Thinking row, take a step stronger ink until they finish, in
+  place; its text starts at one inset, with only
   icons left of it, and open work ends a section and a half above the reply. A
-  visual reply and the reply that explains it are one answer, a section apart.
+  visual reply and the reply that explains it are one answer, a section apart;
+  among work rows a visual reply keeps a reply's distance from the rows on
+  either side, so none reads as its caption.
   Under the header, work, a visual reply or a reply that opens with a box
   starts a section below it, and reply text an entry gap, in every state; the
   work divider is drawn in the middle of that gap over foldable work that is

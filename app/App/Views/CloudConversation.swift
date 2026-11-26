@@ -1251,7 +1251,7 @@ private struct ConversationVisualReplyCopyButton: View {
         let press = ConversationVisualReplyText.press()
         Task { @MainActor in
             guard let text = await ConversationVisualReplyText.text(of: keys),
-                  ConversationVisualReplyText.isLatest(press) else { return }
+                  ConversationVisualReplyText.claim(press) else { return }
             NSPasteboard.general.clearContents()
             copied = NSPasteboard.general.setString(text, forType: .string)
         }
