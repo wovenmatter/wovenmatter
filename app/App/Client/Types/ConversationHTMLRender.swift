@@ -59,7 +59,9 @@ public enum ConversationHTMLDocument {
   /// still, and watches: a page that keeps changing is followed; one that
   /// settles was answering the frame, and its height is held. Heights that
   /// come round again, however slowly the page answers, hold the tallest of
-  /// them until the page shows a height outside them. A change while
+  /// them until the page shows a height outside them; when the page stays at
+  /// a shorter one for a second, the frame tries it once, and holds again
+  /// for good only if the page answers by changing back. A change while
   /// the frame is still, a new width, or the reader pressing a pointer or key
   /// in the page lets a held height go. The first measurement is always
   /// reported.
@@ -160,8 +162,12 @@ public enum ConversationHTMLDocument {
       // three of them, twice over) are a cycle: the frame holds the tallest
       // and stops moving, and while it is still the page can only show those
       // same heights unless it changes on its own; any other height is
-      // followed. The first measurement is always reported.
-      const calm=350;
+      // followed. A cycle may also be the page's own and over, so once the
+      // page has shown one height for `rest` the frame takes that height,
+      // once; if the page answers with another height of the cycle, the
+      // frame holds the tallest again and stays. The first measurement is
+      // always reported.
+      const calm=350,rest=1000;
       let last=-1,lastLead='',queued=false,ran=-1e9,width=0,tall=0,resized=-1e9,run=[],quiet=null,held=null,sent=[];
       const near=(a,b)=>Math.abs(a-b)<=1;
       const cycle=h=>{const r=[...sent,h],n=r.length;
@@ -171,7 +177,13 @@ public enum ConversationHTMLDocument {
         if(innerHeight!==tall){if(tall)resized=t;tall=innerHeight;}
         const still=t-resized>=calm;
         if(last<0)return h;
-        if(held?.cycle){if(held.cycle.some(x=>near(x,h)))return held.h;held=null;run=[];sent=[];return h;}
+        if(held?.cycle){
+          if(!held.cycle.some(x=>near(x,h))){held=null;run=[];sent=[];return h;}
+          if(held.out){if(near(h,held.seen))return h;held.out=false;return held.h;}
+          if(!near(h,held.seen)){held.seen=h;held.at=t;}
+          if(held.probed||near(held.seen,held.h))return held.h;
+          if(t-held.at<rest){setTimeout(schedule,held.at+rest-t+5);return held.h;}
+          held.probed=held.out=true;return held.seen;}
         if(held){
           if(h!==held.seen){if(still){held=null;run=[];sent=[];return h;}held.seen=h;}
           if(h!==held.h&&held.spare){if(still){held.spare=false;return held.h=h;}setTimeout(schedule,resized+calm-t+5);}
@@ -183,7 +195,8 @@ public enum ConversationHTMLDocument {
           const q=quiet;quiet=null;run=[];
           held=q.turned?{h:Math.max(q.peak,last),seen:h,spare:false}:{h,seen:h,spare:true};return held.h;}
         if(h===last)return h;
-        const round=cycle(h);if(round){run=[];held={h:Math.max(...round),cycle:round};return held.h;}
+        const round=cycle(h);if(round){run=[];held={h:Math.max(...round),cycle:round,seen:h,at:t,probed:false,out:false};
+          if(!near(h,held.h))setTimeout(schedule,rest+5);return held.h;}
         if(still){run=[];return h;}
         if(!run.length)run=[last];run.push(h);
         if(run.length<4)return h;
@@ -198,7 +211,7 @@ public enum ConversationHTMLDocument {
         if(h!==null&&(h!==last||l!==lastLead)){last=h;lastLead=l;parent.postMessage({kind:'size',height:h,lead:l},'*');}};
       const schedule=()=>{if(queued)return;queued=true;const wait=ran+16-performance.now();
         if(wait>0)setTimeout(measure,wait);else{requestAnimationFrame(measure);setTimeout(measure,0);}};
-      for(const kind of ['pointerdown','keydown'])addEventListener(kind,()=>{if(held||quiet||run.length){release();schedule();}},true);
+      for(const kind of ['pointerdown','keydown'])addEventListener(kind,()=>{release();schedule();},true);
       new MutationObserver(schedule).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});
       document.addEventListener('load',schedule,true);
       document.fonts?.addEventListener?.('loadingdone',schedule);
