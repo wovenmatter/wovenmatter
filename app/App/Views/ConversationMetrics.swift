@@ -79,6 +79,8 @@ enum ConversationMetrics {
         static let quoteBar: CGFloat = 3
         static let quoteGap: CGFloat = 11
         static let cellLineSpacing: CGFloat = 3
+        /// The room under each table row for its rule, drawn one device pixel tall.
+        static let tableRule: CGFloat = 0.5
         static let cellPaddingVertical: CGFloat = 8
         static let cellPaddingHorizontal: CGFloat = 10
         /// Text narrower than this gives its tables' cells the narrow padding.

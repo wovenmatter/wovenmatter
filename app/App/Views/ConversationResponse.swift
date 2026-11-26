@@ -667,13 +667,30 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate, 
                         return layoutManager.boundsRect(for: cell, glyphRange: paragraph)
                     }
                     guard let first = cells.first, let last = cells.last else { continue }
-                    let path = NSBezierPath(roundedRect: first.union(last).insetBy(dx: 0.5, dy: 0.5),
+                    // On the pixel grid, so the 1pt border is crisp at any scale.
+                    let frame = backingAlignedRect(first.union(last), options: .alignAllEdgesNearest)
+                    let path = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5),
                                             xRadius: ConversationMetrics.blockRadius, yRadius: ConversationMetrics.blockRadius)
                     WovenColors.primary.withAlphaComponent(0.032).setFill()
                     path.fill()
                     WovenColors.foreground.withAlphaComponent(0.09).setStroke()
                     path.lineWidth = 1
                     path.stroke()
+                    // One rule under every row but the last, one device pixel
+                    // tall on the pixel grid, where the row's border is laid out.
+                    let pixel = 1 / (window?.backingScaleFactor ?? 1)
+                    WovenColors.foreground.withAlphaComponent(0.09).setFill()
+                    var rowBottoms: [Int: CGFloat] = [:]
+                    textStorage.enumerateAttribute(.paragraphStyle, in: decoration.range) { value, range, _ in
+                        guard let cell = (value as? NSParagraphStyle)?.textBlocks.last as? NSTextTableBlock,
+                              cell.width(for: .border, edge: .maxY) > 0 else { return }
+                        let bounds = layoutManager.boundsRect(for: cell, glyphRange: layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil))
+                        rowBottoms[cell.startingRow] = max(rowBottoms[cell.startingRow] ?? 0, bounds.maxY)
+                    }
+                    for bottom in rowBottoms.values {
+                        let rule = NSRect(x: frame.minX + 1, y: bottom - Prose.tableRule / 2 - pixel / 2, width: frame.width - 2, height: pixel)
+                        backingAlignedRect(rule, options: [.alignMinXNearest, .alignMaxXNearest, .alignMinYNearest, .alignHeightNearest]).fill()
+                    }
                 }
             }
         }
@@ -1192,7 +1209,9 @@ private enum ConversationResponseAttributedText {
                     // Top-level items stand further apart than a nested list's,
                     // and an item's later blocks take its level's gap.
                     let itemGap = level == 0 ? Prose.listGap : Prose.nestedListGap
-                    let gap = startsList ? Prose.paragraphGap : itemGap
+                    // A citation line after an item's nested list belongs to what it cites.
+                    let gap = startsList ? Prose.paragraphGap
+                        : item.continuation && isCitationLine(item.blocks.first) ? ConversationMetrics.labelGap : itemGap
                     let first = index == 0 ? before : max(0, gap + itemTopOverhang(item) - bottomSlack(previousItem))
                     let itemMarker = Marker(text: text, start: markerEnd - Prose.markerColumn, end: markerEnd)
                     if item.blocks.isEmpty {
@@ -1354,9 +1373,11 @@ private enum ConversationResponseAttributedText {
                             cell.setWidth(padY - Prose.cellLineSpacing, type: responseAbsolute,
                                           for: .padding, edge: .maxY)
                             if rowIndex < rows.count - 1 {
-                                cell.setWidth(0.5, type: responseAbsolute, for: .border, edge: .maxY)
+                                // Room for the rule under the row, which the view draws
+                                // on the pixel grid (TextKit's would land on half points).
+                                cell.setWidth(Prose.tableRule, type: responseAbsolute, for: .border, edge: .maxY)
                             }
-                            cell.setBorderColor(WovenColors.foreground.withAlphaComponent(0.09))
+                            cell.setBorderColor(.clear)
                             let cellStyle = paragraphStyle(indent: 0, before: 0, lineSpacing: Prose.cellLineSpacing)
                             cellStyle.textBlocks = [cell]
                             if table.alignments.indices.contains(column) {
@@ -1633,6 +1654,23 @@ private enum ConversationResponseAttributedText {
         if case .list = previous { return Prose.paragraphGap }
         if case .list = block { return itemGap == nil ? Prose.listGap : Prose.nestedListGap }
         return itemGap ?? Prose.paragraphGap
+    }
+
+    /// A paragraph of one line holding only links, perhaps in parentheses or
+    /// brackets, separated by commas, "·" or spaces: "([changes.html](…))".
+    private static func isCitationLine(_ block: Block?) -> Bool {
+        guard case .paragraph(let content) = block else { return false }
+        var links = 0
+        for run in content.rendered.runs {
+            let text = String(content.rendered[run.range].characters)
+            if run.link != nil {
+                if text.contains("\n") { return false }
+                links += 1
+            } else if !text.allSatisfy({ " \t()[],·".contains($0) }) {
+                return false
+            }
+        }
+        return links > 0
     }
 
     /// Whether a list item's marker needs a line of its own before this block.
