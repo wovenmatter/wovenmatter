@@ -73,6 +73,8 @@ enum ConversationMetrics {
         static let cellPaddingHorizontal: CGFloat = 10
         /// The least a table column takes, however long its longest word.
         static let tableColumnMinimumLimit: CGFloat = 200
+        /// A table at least this share of the text's width fills it.
+        static let tableFillShare: CGFloat = 0.75
         /// Inline code up to this many characters keeps together in a table cell.
         static let unbreakableCodeLength = 28
     }
@@ -116,6 +118,18 @@ extension View {
     }
 }
 
+/// Where the most recently laid out transcript's edges fade, in window
+/// coordinates from the top, for debug snapshots: they draw web content in
+/// after the window, past SwiftUI's mask.
+struct ConversationEdgeSnapshot: Equatable {
+    @MainActor static var current: ConversationEdgeSnapshot?
+    let frame: CGRect
+    let topClearance: CGFloat
+    let topFade: CGFloat
+    let bottomFade: CGFloat
+    let bottomClearance: CGFloat
+}
+
 private struct ConversationEdges: ViewModifier {
     static let jumpSize: CGFloat = 30
     let topClearance: CGFloat
@@ -128,18 +142,25 @@ private struct ConversationEdges: ViewModifier {
     func body(content: Content) -> some View {
         let stackTop = stackHeight + ConversationBottomOverlayLayout.bottomOffset
         let jumpBand = jumpLabel == nil ? 0 : ConversationMetrics.rowGap + Self.jumpSize
+        let topFade = reduceTransparency ? 0 : ConversationMetrics.entryGap
+        let bottomFade = reduceTransparency ? 0 : ConversationBottomOverlayLayout.breathingRoom
         content
             .mask {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: topClearance)
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: reduceTransparency ? 0 : ConversationMetrics.entryGap)
+                        .frame(height: topFade)
                     Color.black
                     LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: reduceTransparency ? 0 : ConversationBottomOverlayLayout.breathingRoom)
+                        .frame(height: bottomFade)
                     Color.clear.frame(height: stackTop + jumpBand)
                 }
             }
+            // Debug snapshots draw web content in afterwards; they fade it the same way.
+            .onGeometryChange(for: ConversationEdgeSnapshot.self) { geometry in
+                ConversationEdgeSnapshot(frame: geometry.frame(in: .global), topClearance: topClearance, topFade: topFade,
+                                         bottomFade: bottomFade, bottomClearance: stackTop + jumpBand)
+            } action: { ConversationEdgeSnapshot.current = $0 }
             .overlay(alignment: .bottom) {
                 if let jumpLabel {
                     Button(action: jump) {
