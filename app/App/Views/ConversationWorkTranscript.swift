@@ -127,6 +127,9 @@ struct ConversationWorkTranscript: View {
         // The rule sits over work the header folds; what stays outside the
         // fold (a visual reply, a plan) needs none.
         let showsRule = foldable && !folded
+        // Thought rows that are all that stands between a visual reply and the
+        // reply text sit close to both, so the chart and its words stay one answer.
+        let thoughtsCloseVisual = hasFollowingResponse && Self.thoughtsCloseVisual(entries)
         VStack(alignment: .leading, spacing: 0) {
             let headerStyle = content.failureMessage != nil ? WovenPalette.danger : WovenPalette.mutedForeground
             if foldable {
@@ -172,14 +175,15 @@ struct ConversationWorkTranscript: View {
                             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                                 self.entry(entry, tailID: tailID, isRunning: isRunning, reasoning: reasoning[entry.id])
                                     .padding(.top, Self.gap(before: entry, after: index > 0 ? entries[index - 1] : nil,
-                                                            next: index + 1 < entries.count ? entries[index + 1] : nil))
+                                                            next: index + 1 < entries.count ? entries[index + 1] : nil,
+                                                            thoughtsCloseVisual: thoughtsCloseVisual))
                             }
                         }
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                     if showsThinking {
                         ConversationThinkingLabel(text: "Thinking")
-                            .padding(.top, entries.isEmpty ? 0 : ConversationMetrics.entryGap)
+                            .padding(.top, entries.isEmpty ? 0 : ConversationMetrics.rowGap)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -205,6 +209,7 @@ struct ConversationWorkTranscript: View {
         .padding(.bottom, !hasFollowingResponse ? 0
             : !showsWork ? (replyStartsWithBox ? ConversationMetrics.sectionGap : ConversationMetrics.entryGap)
             : entries.last.map(Self.isVisualReply) == true ? ConversationMetrics.sectionGap
+            : thoughtsCloseVisual ? ConversationMetrics.entryGap
             : ConversationMetrics.workEndGap)
         .frame(maxWidth: ConversationMetrics.column, alignment: .leading)
         // Without a session folder, the folder of the turn's first path, so
@@ -245,15 +250,23 @@ struct ConversationWorkTranscript: View {
 
     /// A unit of work is [a titled thought,] a sentence of commentary, and the
     /// tools it introduces: a section above its first row, a label gap inside.
+    /// Icon rows (tools, groups, thoughts) sit a row gap apart.
     private static func gap(before entry: ConversationWorkTimelineEntry, after previous: ConversationWorkTimelineEntry?,
-                            next: ConversationWorkTimelineEntry?) -> CGFloat {
+                            next: ConversationWorkTimelineEntry?, thoughtsCloseVisual: Bool) -> CGFloat {
         // The first row's gap is the section under the header.
         guard let previous else { return 0 }
+        if thoughtsCloseVisual, isVisualReply(previous), isThought(entry) { return ConversationMetrics.rowGap }
         if isVisualReply(entry) || isVisualReply(previous) { return ConversationMetrics.sectionGap }
         if case .commentary = previous.content, isTool(entry) { return ConversationMetrics.labelGap }
         if case .commentary = entry.content { return isThought(previous) ? ConversationMetrics.labelGap : ConversationMetrics.sectionGap }
         if isThought(entry), case .commentary? = next?.content { return ConversationMetrics.sectionGap }
-        return ConversationMetrics.entryGap
+        return ConversationMetrics.rowGap
+    }
+
+    /// The entries end with thought rows right after a visual reply.
+    private static func thoughtsCloseVisual(_ entries: [ConversationWorkTimelineEntry]) -> Bool {
+        guard let visual = entries.lastIndex(where: { !isThought($0) }), visual < entries.count - 1 else { return false }
+        return isVisualReply(entries[visual])
     }
 
     private static func isThought(_ entry: ConversationWorkTimelineEntry) -> Bool {
@@ -306,7 +319,7 @@ struct ConversationWorkTranscript: View {
             } else if let reference = activity.htmlRender {
                 ConversationHTMLRenderView(reference: reference)
             } else if let children = activity.subagents, !children.isEmpty {
-                VStack(alignment: .leading, spacing: ConversationMetrics.entryGap) {
+                VStack(alignment: .leading, spacing: ConversationMetrics.rowGap) {
                     ForEach(children) { child in
                         ConversationSubagentRow(child: child)
                     }
@@ -364,7 +377,12 @@ struct ConversationWorkTranscript: View {
         switch run.status {
         case .running:
             if let startedAt = presentation?.startedAt {
-                RunningElapsedLabel(startedAt: startedAt)
+                // Each whole second since the start: the new text and its width
+                // reach the layout together, so the chevron after it never
+                // meets a label drawn wider than its frame.
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text("Working for \(Self.elapsed(context.date.timeIntervalSince(startedAt)))")
+                }
             } else {
                 Text("Working")
             }
@@ -960,16 +978,18 @@ private struct ConversationActivityRow: View {
             HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.iconGap) {
                 activityIcon
                 VStack(alignment: .leading, spacing: ConversationMetrics.hair) {
-                    // One line, keeping the command's start and the file name;
-                    // the full text is in the details.
+                    // One line, cut at its end, no wider than a label reads
+                    // well, so the chevron stays right after it; the full text
+                    // is in the details.
                     HStack(alignment: .firstTextBaseline, spacing: ConversationMetrics.labelGap) {
                         Text(primaryLabel)
                             .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(WovenPalette.foreground.opacity(0.72))
                             .lineLimit(1)
-                            .truncationMode(.middle)
+                            .truncationMode(.tail)
                         if let expanded { chevron(expanded) }
                     }
+                    .frame(maxWidth: Self.labelWidth + ConversationMetrics.labelGap + Self.chevronWidth, alignment: .leading)
                     if let secondaryLabel {
                         Text(secondaryLabel)
                             .font(.system(size: 12.5))
@@ -983,6 +1003,10 @@ private struct ConversationActivityRow: View {
             .contentShape(Rectangle())
         }
     }
+
+    /// The widest a work row's label grows before it is cut.
+    private static let labelWidth: CGFloat = 480
+    private static let chevronWidth: CGFloat = 10
 
     private func chevron(_ expanded: Bool) -> some View {
         Image(systemName: "chevron.right")
@@ -1522,7 +1546,10 @@ private struct ConversationReasoningText: View {
                 }
             }
             if !shown.isEmpty {
-                ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false, style: .reasoning)
+                // While it streams, the three-line window shows plain lines
+                // (no boxes to cut through); opened once finished, the full style.
+                ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false,
+                                     style: isLive ? .plainReasoning : .reasoning)
             }
         }
         .onAppear {
@@ -2157,83 +2184,4 @@ func formattedRunDuration(_ interval: TimeInterval) -> String {
     if seconds == 0 { return "\(minutes)m" }
     if seconds == 60 { return "\(minutes + 1)m" }
     return "\(minutes)m \(seconds)s"
-}
-
-/// "Working for …" while a run is under way. It ticks once a second from its
-/// own timer and only repaints itself. Its digits are monospaced, so it is as
-/// wide as its text and changes size only when the count gains a character;
-/// only those ticks lay the transcript out again.
-private struct RunningElapsedLabel: NSViewRepresentable {
-    let startedAt: Date
-
-    func makeNSView(context: Context) -> RunningElapsedView { RunningElapsedView() }
-
-    func updateNSView(_ view: RunningElapsedView, context: Context) { view.startedAt = startedAt }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: RunningElapsedView, context: Context) -> CGSize? {
-        nsView.size
-    }
-}
-
-private final class RunningElapsedView: NSView {
-    private static let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-
-    /// The current text's size; it changes only when the count gains a character.
-    var size: CGSize {
-        let measured = NSAttributedString(string: text, attributes: [.font: Self.font]).size()
-        return CGSize(width: ceil(measured.width), height: ceil(measured.height))
-    }
-    override var intrinsicContentSize: NSSize { size }
-    private var laidOutWidth: CGFloat?
-
-    var startedAt = Date.distantPast {
-        didSet { if startedAt != oldValue { tick(); schedule() } }
-    }
-    private var timer: Timer?
-
-    override var isFlipped: Bool { true }
-
-    private var text: String {
-        "Working for \(ConversationWorkTranscript.elapsed(Date().timeIntervalSince(startedAt)))"
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        schedule()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    /// Fires on each whole second since the start, as the count changes.
-    private func schedule() {
-        timer?.invalidate()
-        timer = nil
-        guard window != nil, startedAt != .distantPast else { return }
-        let next = startedAt.addingTimeInterval(Date().timeIntervalSince(startedAt).rounded(.down) + 1)
-        let timer = Timer(fire: next, interval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    private func tick() {
-        needsDisplay = true
-        let width = size.width
-        guard width != laidOutWidth else { return }
-        laidOutWidth = width
-        invalidateIntrinsicContentSize()
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSAttributedString(string: text, attributes: [.font: Self.font, .foregroundColor: WovenColors.mutedForeground])
-            .draw(at: .zero)
-    }
-
-    override func isAccessibilityElement() -> Bool { true }
-    override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
-    override func accessibilityValue() -> Any? { text }
 }

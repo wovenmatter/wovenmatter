@@ -20,6 +20,9 @@ struct ConversationHTMLRenderView: View {
     @State private var hovering = false
     /// The page's leading heading or caption, as it reports it.
     @State private var pageLead = ""
+    /// The page has reported its first measured height: until then the frame
+    /// shows the loading label at the reserved height, never a blank page.
+    @State private var measured = false
     @FocusState private var focusedControl: Control?
 
     private enum Control: Hashable { case zoomOut, resetZoom, zoomIn, expand }
@@ -27,10 +30,12 @@ struct ConversationHTMLRenderView: View {
     private var title: String { reference.title.isEmpty ? "Visual reply" : reference.title }
 
     /// The page starts with the frame's own title, so the frame does not
-    /// repeat it; its row and controls stay, so nothing changes height.
+    /// repeat it: the title row goes and its controls float over the page's
+    /// top corner. It is known when the page first reports, which is when the
+    /// page is revealed, so nothing changes height after that.
     private var titleRepeated: Bool {
         let own = reference.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !own.isEmpty && reply != nil
+        return !own.isEmpty && reply != nil && measured
             && pageLead.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(own) == .orderedSame
     }
 
@@ -42,33 +47,22 @@ struct ConversationHTMLRenderView: View {
     var body: some View {
         // One frame for loading, loaded and failed, with the title inside it.
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: ConversationMetrics.entryGap) {
-                Text(title).lineLimit(1)
-                    .opacity(titleRepeated ? 0 : 1)
-                    .accessibilityHidden(titleRepeated)
-                Spacer()
+            if !titleRepeated {
                 HStack(spacing: ConversationMetrics.entryGap) {
-                    controls
-                    Button { expanded = true } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .focused($focusedControl, equals: .expand)
-                    .help("Expand visual reply")
-                    .accessibilityLabel("Expand visual reply")
-                    .disabled(reply == nil)
+                    Text(title).lineLimit(1)
+                    Spacer()
+                    frameControls
                 }
-                // Shown on hover, while zoomed or while one has focus. Nearly
-                // invisible rather than hidden, so VoiceOver and the keyboard
-                // still reach them and nothing shifts.
-                .opacity(hovering || zoom != 1 || focusedControl != nil ? 1 : 0.001)
+                .modifier(TitleRowStyle())
             }
-            .font(.system(size: 11.5, weight: .medium))
-            .foregroundStyle(WovenPalette.mutedForeground)
-            .buttonStyle(.plain)
-            .padding(.horizontal, ConversationMetrics.entryGap)
-            .frame(height: 32)
             if let reply {
-                web(reply).frame(height: min(20_000, max(80, height * zoom)))
+                // The page lays out and measures hidden; it shows, at the height
+                // it reported, in the same update as its first report.
+                ZStack {
+                    web(reply).opacity(measured ? 1 : 0)
+                    if !measured { loadingLabel }
+                }
+                .frame(height: min(20_000, max(80, measured ? height * zoom : height)))
             } else if let failure {
                 VStack(spacing: ConversationMetrics.rowGap) {
                     Text(failure).font(.system(size: 13)).foregroundStyle(WovenPalette.mutedForeground)
@@ -78,14 +72,15 @@ struct ConversationHTMLRenderView: View {
                 .padding(.horizontal, ConversationMetrics.entryGap)
                 .frame(maxWidth: .infinity, minHeight: height)
             } else {
-                Text("Loading visual reply…")
-                    .font(.system(size: 13))
-                    .foregroundStyle(WovenPalette.mutedForeground)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: height)
+                loadingLabel.frame(height: height)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topTrailing) {
+            if titleRepeated {
+                frameControls.modifier(TitleRowStyle())
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: ConversationMetrics.blockRadius, style: .continuous)
@@ -122,6 +117,41 @@ struct ConversationHTMLRenderView: View {
         } message: { Text($0.absoluteString) }
     }
 
+    private var loadingLabel: some View {
+        Text("Loading visual reply…")
+            .font(.system(size: 13))
+            .foregroundStyle(WovenPalette.mutedForeground)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Zoom and expand: shown on hover, while zoomed or while one has focus.
+    /// Nearly invisible rather than hidden, so VoiceOver and the keyboard still
+    /// reach them and nothing shifts.
+    private var frameControls: some View {
+        HStack(spacing: ConversationMetrics.entryGap) {
+            controls
+            Button { expanded = true } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+            .focused($focusedControl, equals: .expand)
+            .help("Expand visual reply")
+            .accessibilityLabel("Expand visual reply")
+            .disabled(reply == nil)
+        }
+        .opacity(hovering || zoom != 1 || focusedControl != nil ? 1 : 0.001)
+    }
+
+    private struct TitleRowStyle: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(WovenPalette.mutedForeground)
+                .buttonStyle(.plain)
+                .padding(.horizontal, ConversationMetrics.entryGap)
+                .frame(height: 32)
+        }
+    }
+
     private var expandedMinimumWidth: CGFloat? {
         760
     }
@@ -142,12 +172,13 @@ struct ConversationHTMLRenderView: View {
 
     private func web(_ reply: ConversationVisualReply, fitsHeight: Bool = true) -> some View {
         ConversationHTMLWebView(html: reply.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
-            forwardsConversationScroll: fitsHeight,
+            forwardsConversationScroll: fitsHeight, startsFrame: fitsHeight && titleRepeated,
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
+                if !measured { measured = true }
             }, onLead: { pageLead = $0 }, onLink: { pendingLink = $0 }, onFailure: { error in
-                failure = error.localizedDescription; self.reply = nil
+                failure = error.localizedDescription; self.reply = nil; measured = false
             })
     }
 
@@ -217,6 +248,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let theme: [String: Any]
     let zoom: Double
     let forwardsConversationScroll: Bool
+    var startsFrame = false
     let onHeight: (CGFloat) -> Void
     let onLead: (String) -> Void
     let onLink: (URL) -> Void
@@ -231,6 +263,7 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
 
     private func update(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) {
         (view as? ConversationHTMLNativeWebView)?.forwardsConversationScroll = forwardsConversationScroll
+        (view as? ConversationHTMLNativeWebView)?.startsFrame = startsFrame
         coordinator.onHeight = onHeight; coordinator.onLead = onLead; coordinator.onLink = onLink; coordinator.onFailure = onFailure
         coordinator.apply(html: html, theme: theme, to: view)
         if view.pageZoom != zoom { view.pageZoom = zoom }
@@ -325,6 +358,9 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
 /// retain WebKit's normal handling; links, selection and magnification do too.
 final class ConversationHTMLNativeWebView: WKWebView {
     var forwardsConversationScroll = false
+    /// No title row above it: the page meets the frame's top edge (the debug
+    /// still clips it to the frame's rounded top too).
+    var startsFrame = false
     private var scrollGesture = ConversationHTMLScrollGesture()
 
     override func scrollWheel(with event: NSEvent) {
