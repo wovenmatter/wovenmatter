@@ -525,8 +525,12 @@ final class SessionStore {
         let questions = call.kind == .question
             ? (call.questions ?? []).enumerated().map { AgentRunQuestion(id: $0, title: $1.title, text: $1.text, answer: $1.answer) }
             : nil
+        // A call its runtime reports as thinking but that gives a subagent a
+        // prompt (Claude Code's Task tool) is a delegation, not a thought.
+        let input = (try? JSONSerialization.jsonObject(with: Data(call.input.utf8))) as? [String: Any]
+        let thought = call.kind == .thinking && !(input?["prompt"] is String)
         return AgentRunActivity(
-            id: id, kind: call.kind == .thinking ? .thought : call.kind == .plan ? .plan : .tool,
+            id: id, kind: thought ? .thought : call.kind == .plan ? .plan : .tool,
             title: script ? (live ? "Running code" : call.failed ? "Code failed" : "Ran code")
                 : questions.map { questionTitle($0, live: live, failed: call.failed) } ?? call.title ?? call.name,
             // The tools it called, each once; or what the questions were about.
@@ -540,7 +544,7 @@ final class SessionStore {
                 return names.isEmpty ? nil : names.joined(separator: ", ")
             },
             status: live ? "running" : call.failed ? "failed" : "completed",
-            toolName: call.name, content: call.kind == .thinking ? call.output : nil, position: position,
+            toolName: call.name, content: thought ? call.output : nil, position: position,
             planEntries: (call.plan ?? []).map { AgentRunPlanEntry(content: $0.text, status: $0.status.rawValue) },
             rawInputJSON: call.input, rawOutputJSON: call.output,
             subagents: call.kind == .task ? [child(call, id: id, live: live)] : nil,

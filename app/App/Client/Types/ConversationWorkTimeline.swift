@@ -420,6 +420,8 @@ public enum ConversationToolAction: Hashable, Sendable {
       self = .code
     } else if activity.questions != nil {
       self = .question
+    } else if activity.workTimelineDelegatedTask != nil {
+      self = .delegate
     } else if let operation = activity.workTimelineOperation {
       // A command or a titled step that does what a file tool does is that.
       switch operation {
@@ -585,6 +587,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .webSearch:
       guard let query = (input?["query"] as? String)?.workTimelineSingleLine, query.count <= 40 else { return nil }
       return "Searched the web for \u{201C}\(query)\u{201D}"
+    case .delegate:
+      return activity.workTimelineDelegatedTask.map { "Delegated \u{201C}\($0)\u{201D}" }
     default:
       return nil
     }
@@ -637,8 +641,21 @@ public enum ConversationToolAction: Hashable, Sendable {
 }
 
 public extension AgentRunActivity {
+  /// A checklist update while the checklist shows, and a subagent handing
+  /// its report back (Claude Code's `SubagentHandback`, which the
+  /// delegation's own row stands for), draw no row.
   func workTimelineHidesChecklistTool(hasChecklist: Bool) -> Bool {
-    hasChecklist && workTimelineIsChecklistTool && !workTimelineIsFailure
+    if kind == .tool, workTimelineToolIdentity == "SubagentHandback", !workTimelineIsFailure { return true }
+    return hasChecklist && workTimelineIsChecklistTool && !workTimelineIsFailure
+  }
+
+  /// The name of the task a call delegated to a subagent, when its input
+  /// gives one: Claude Code's Task tool sends a `prompt` and a short
+  /// `description` (its ACP adapter reports the call as thinking).
+  var workTimelineDelegatedTask: String? {
+    guard kind == .tool, let input = workTimelineInput, input["prompt"] is String,
+          let name = (input["description"] as? String)?.workTimelineSingleLine else { return nil }
+    return name
   }
 
   var workTimelineIsChecklistTool: Bool {
@@ -772,21 +789,14 @@ public extension AgentRunActivity {
       guard let command = workTimelineTitledCommand else { return nil }
       return ConversationShellOperation.recognize(command, folder: folder)
     }
-    // "Search for 'x' in docs", "List files in 'docs'", "List files".
+    // "List files in 'docs'", "List files". A runtime's own "Search for 'x'
+    // in y" is not taken as an operation: its parser can read an option's
+    // value as the pattern (`--color never`), and the command is not there
+    // to check it against (`workTimelineIsUncheckedSearch`).
     guard let title = title?.workTimelineSingleLine, input?["path"] == nil, input?["file_path"] == nil else { return nil }
     func unquoted(_ text: Substring) -> String {
       let trimmed = text.trimmingCharacters(in: .whitespaces)
       return trimmed.count > 1 && trimmed.first == "'" && trimmed.last == "'" ? String(trimmed.dropFirst().dropLast()) : trimmed
-    }
-    let searchPrefix = "Search for "
-    if title.hasPrefix(searchPrefix) {
-      // The place follows the last " in " after the prefix, never inside it.
-      let rest = title.dropFirst(searchPrefix.count)
-      guard let range = rest.range(of: " in ", options: .backwards) else { return nil }
-      let pattern = unquoted(rest[..<range.lowerBound])
-      let path = unquoted(rest[range.upperBound...])
-      guard !pattern.isEmpty, !path.isEmpty else { return nil }
-      return .search(pattern: pattern, path: folder.map { $0 + "/" + path } ?? path)
     }
     if title == "List files" { return .list(path: folder) }
     if title.hasPrefix("List files in ") {
@@ -794,6 +804,15 @@ public extension AgentRunActivity {
       return path.isEmpty ? nil : .list(path: folder.map { $0 + "/" + path } ?? path)
     }
     return nil
+  }
+
+  /// A search a runtime describes only in a title of its own making ("Search
+  /// for 'never' in library", Codex's reading of a command it does not
+  /// send): what it searched for and where is not certain, so the row says
+  /// only that it searched.
+  var workTimelineIsUncheckedSearch: Bool {
+    guard kind == .tool, rawInputJSON?.workTimelineNonempty == nil, let title = title?.workTimelineSingleLine else { return false }
+    return title == "Search" || title.hasPrefix("Search for ") || title.hasPrefix("Search in '")
   }
 
   /// The file or folder a tool's input names.
@@ -849,8 +868,9 @@ public extension AgentRunActivity {
       }
       return WorkTimelineHelper(kind: .toolLookup, object: query.count <= 40 ? "tools for \u{201C}\(query)\u{201D}" : nil)
     }
-    if let skill = (input?["skill"] as? String)?.workTimelineSingleLine,
-       toolName?.lowercased() == "skill" || title?.hasPrefix("Load skill") == true {
+    let skill = (input?["skill"] as? String)?.workTimelineSingleLine
+    if workTimelineToolIdentity == "Skill" && skill == nil
+      || skill != nil && (toolName?.lowercased() == "skill" || title?.hasPrefix("Load skill") == true) {
       return WorkTimelineHelper(kind: .skill, object: skill)
     }
     return nil
@@ -880,9 +900,14 @@ public extension AgentRunActivity {
     // title it: show the whole command, which the row truncates in the
     // middle, keeping its real end. Any other title keeps the program only.
     if action == .command, let command = workTimelineTitledCommand {
+      if let language = command.workTimelineScriptLanguage { return (active ? "Running a " : "Ran a ") + language + " script" }
       return command.workTimelineCommandLine(root: root)
     }
     if let helper = workTimelineHelper { return helper.label(active: active, failed: failed) }
+    if workTimelineIsUncheckedSearch { return failed ? "Failed to search files" : active ? "Searching files" : "Searched files" }
+    if let task = workTimelineDelegatedTask {
+      return (failed ? "Failed to delegate" : active ? "Delegating" : "Delegated") + " \u{201C}\(task)\u{201D}"
+    }
     if action == .visual || action == .preview {
       // One plain label in every harness: what it showed, or previewed.
       let arguments = (input?["arguments"] as? [String: Any]) ?? input
@@ -938,9 +963,10 @@ public extension AgentRunActivity {
       let name = program.flatMap { token in
         token.contains("=") || token.contains("$") ? nil : URL(fileURLWithPath: token).lastPathComponent
       }
-      let identity = workTimelineToolIdentity
-      let fallback = ["", "execute", "exec", "command", "tool"].contains(identity.lowercased()) ? "command" : identity
-      return "\(failed ? "Failed" : active ? "Running" : "Ran") \(name ?? fallback)"
+      // Until the command is known the row says only that one runs: the
+      // tool's own name ("Terminal", "Bash") says nothing about what runs.
+      guard let name else { return failed ? "Failed to run a command" : action.liveLabel(active: active) }
+      return "\(failed ? "Failed" : active ? "Running" : "Ran") \(name)"
     case .webSearch:
       let query = argument("query")
       return "\(failed ? "Failed web search" : active ? "Searching the web" : "Searched the web")"
@@ -1076,6 +1102,34 @@ extension String {
     guard let first = doing.first else { return workTimelineSingleLine ?? self }
     let shown = first.workTimelineDisplayCommand(root: root).workTimelineSingleLine ?? first
     return doing.count > 1 ? shown + " \u{2026}" : shown
+  }
+
+  /// The language of the script a command runs, when running it is all the
+  /// command does: an interpreter fed a here-document (`python3 - <<'EOF'`,
+  /// its body, `EOF`) or given the script inline in one pair of single
+  /// quotes (`python3 -c '…'`, `node -e '…'`). Anything else, or anything
+  /// after the script, is not certain and gives nil.
+  var workTimelineScriptLanguage: String? {
+    let command = workTimelineDisplayCommand().trimmingCharacters(in: .whitespacesAndNewlines)
+    let languages = ["python": "Python", "python3": "Python", "node": "Node.js", "ruby": "Ruby",
+                     "bash": "shell", "sh": "shell", "zsh": "shell"]
+    let inlineFlag = ["python": "-c", "python3": "-c", "bash": "-c", "sh": "-c", "zsh": "-c", "node": "-e", "ruby": "-e"]
+    func match(_ pattern: String, _ text: String) -> [String]? {
+      guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]),
+            let found = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+      return (0..<found.numberOfRanges).map { Range(found.range(at: $0), in: text).map { String(text[$0]) } ?? "" }
+    }
+    let lines = command.components(separatedBy: .newlines)
+    if let first = lines.first, lines.count >= 3,
+       let parts = match(#"^(python3?|node|ruby|bash|sh|zsh)(?: -)? *<<-? *(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2$"#, first),
+       lines.last?.trimmingCharacters(in: .whitespaces) == parts[3],
+       !lines.dropFirst().dropLast().contains(where: { $0.trimmingCharacters(in: .whitespaces) == parts[3] }) {
+      return languages[parts[1]]
+    }
+    if let parts = match(#"^(python3?|node|ruby|bash|sh|zsh) +(-[ce]) +'[^']*'$"#, command), inlineFlag[parts[1]] == parts[2] {
+      return languages[parts[1]]
+    }
+    return nil
   }
 
   /// A command as a row shows it: no leading `cd <folder> &&`, no

@@ -475,11 +475,16 @@ when an intentional design change is accepted.
   command shows as written only when its runtime titled the row with it;
   under a tool's name ("Bash") the row names only the program. A
   plain read-only shell search, listing or file read takes the same words as the
-  file tool, since a row never claims what its command did not do; any other
-  command shows its first line that does something (not a comment or `set`),
-  every part of it, with an ellipsis only for the lines after it. A harness's
-  own helper is named for what it does ("Looked up tools", "Loaded the dataviz
-  skill"); any other tool keeps its name. Verbs are past tense once done.
+  file tool, since a row never claims what its command did not do: an option
+  it does not know, or a search a runtime describes only in its own words,
+  names no pattern or place ("Searched files"). An interpreter fed only a
+  script reads as that ("Ran a Python script"); any other command shows its
+  first line that does something (not a comment or `set`), every part of it,
+  with an ellipsis only for the lines after it, and before the command is
+  known, "Running a command", never a tool's name. A harness's own helper is
+  named for what it does ("Looked up tools", "Loaded the dataviz skill"), a
+  delegated task is one row named by its task ("Delegated “Fetch release
+  notes”"); any other tool keeps its name. Verbs are past tense once done.
   Woven's visual tools have one label each, previewed or shown (shown only once
   the chat shows it), and a group
   names every kind of step in the rows' words ("Listed 1 folder and read 2

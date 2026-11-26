@@ -147,9 +147,9 @@ public enum ConversationShellOperation: Equatable, Sendable {
                   "no-filename", "hidden", "no-ignore", "follow", "no-heading", "heading", "vimgrep", "column",
                   "multiline", "unrestricted", "trim"],
       longValues: ["glob", "iglob", "type", "type-not", "max-count", "context", "after-context", "before-context",
-                   "regexp", "max-depth", "max-columns", "threads", "max-filesize"],
-      longCounts: ["max-count", "context", "after-context", "before-context", "max-depth", "max-columns", "threads"],
-      longAttached: ["color", "colour"])
+                   "regexp", "max-depth", "max-columns", "threads", "max-filesize", "color", "colour", "colors", "sort",
+                   "sortr"],
+      longCounts: ["max-count", "context", "after-context", "before-context", "max-depth", "max-columns", "threads"])
     static let ls = Options(
       flags: Set("aAlh1RtrSFpdGi"),
       longFlags: ["all", "almost-all", "human-readable", "recursive", "classify", "directory"],
@@ -195,7 +195,12 @@ public enum ConversationShellOperation: Equatable, Sendable {
         let body = argument.dropFirst(2)
         let name = String(body.prefix { $0 != "=" })
         let attached = body.firstIndex(of: "=").map { String(body[body.index(after: $0)...]) }
-        if options.longAttached.contains(name) { continue }
+        if options.longAttached.contains(name) {
+          // `--color never` passes `never` as an operand, which a reader
+          // would not expect: only the attached form is certain.
+          guard attached != nil else { return nil }
+          continue
+        }
         if options.longFlags.contains(name) {
           guard attached == nil else { return nil }
           continue
