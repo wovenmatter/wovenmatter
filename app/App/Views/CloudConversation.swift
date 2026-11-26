@@ -53,6 +53,8 @@ struct CloudConversation: View {
     @State private var scrollPositionOwner: TranscriptIdentity?
     @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
+    /// The transcript's visible height, the least its content takes.
+    @State private var viewportHeight: CGFloat = 0
     /// This transcript's own scope for Copy reading its visual replies.
     @State private var copyScope = UUID()
     /// Rows lie below what shows (measured; it never changes whether the transcript follows).
@@ -178,6 +180,11 @@ struct CloudConversation: View {
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, ConversationMetrics.sideInset)
                     .padding(.top, ConversationMetrics.topInset)
+                    // Never shorter than the viewport: the transcript first
+                    // growing past the window then keeps the bottom through
+                    // the size-change anchor in the same pass, as any later
+                    // growth does, instead of a scroll after the layout.
+                    .frame(minHeight: viewportHeight, alignment: .top)
                     .scrollTargetLayout()
                 }
                 // Each chat gets its own scroll view, which opens at the bottom
@@ -288,6 +295,9 @@ struct CloudConversation: View {
                     TranscriptEnd(geometry)
                 } action: { before, after in
                     endChanged(from: before, to: after)
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { _, height in
+                    viewportHeight = height
                 }
                 // Back from paging history, a library jump or a reader's
                 // scroll, still following: make up for anything missed meanwhile.
@@ -737,8 +747,7 @@ struct CloudConversation: View {
     /// selecting something decide it, never a layout pass. Growth and
     /// shrinking at the live edge keep the bottom through the size-change
     /// anchor in the same pass; when a resize leaves the end out of view
-    /// anyway (as when the transcript first grows past the window, where that
-    /// anchor does nothing), it is put back. Keyboard, wheel and accessibility
+    /// anyway, it is put back. Keyboard, wheel and accessibility
     /// scrolls report no scroll phase, so the view moving with nothing resized
     /// is the reader too when it leaves the end (the app only ever moves the
     /// view away from the end when the reader asked, which stops following
