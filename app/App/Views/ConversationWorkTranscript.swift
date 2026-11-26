@@ -434,7 +434,7 @@ struct ConversationWorkTranscript: View {
         case .failed:
             Text("Error\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
         case .cancelled:
-            Text("Idle (cancelled)\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
+            Text("Stopped\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
         }
     }
 

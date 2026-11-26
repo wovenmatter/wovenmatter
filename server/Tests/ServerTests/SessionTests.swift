@@ -128,6 +128,23 @@ func streamedSessionIsSavedOnceAndALateSubscriberSeesAConsistentView() async thr
 }
 
 @Test(.timeLimit(.minutes(1)))
+func aStoppedTurnIsSavedAsStopped() async throws {
+  let machine = try await TestServer.start(runtime: StandInRuntime(gate: StandInRuntime.Gate()))
+  defer { machine.server.stopLater() }
+  let client = try await machine.connect()
+  let session = try await client.call(CreateSession(runtime: StandInRuntime.kind, title: "Chat"))
+  let subscription = try await client.subscribe(SubscribeSession(sessionID: session.id))
+  var events = subscription.events.makeAsyncIterator()
+  _ = try await client.call(SendTurn(sessionID: session.id, text: "held"))
+  while let event = try await events.next() { if case .text = event { break } }
+  _ = try await client.call(InterruptTurn(sessionID: session.id))
+  while let event = try await events.next() { if event == .runState(.idle) { break } }
+
+  let items = try await client.call(SessionItems(sessionID: session.id))
+  #expect(items.last?.content == .notice(Notice(kind: .turnEnded, text: "stopped")))
+}
+
+@Test(.timeLimit(.minutes(1)))
 func aMessageSentDuringATurnSteersItAndIsSavedOnceInOrder() async throws {
   let gate = StandInRuntime.Gate()
   let machine = try await TestServer.start(runtime: StandInRuntime(gate: gate))

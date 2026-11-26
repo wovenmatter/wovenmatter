@@ -272,6 +272,8 @@ actor SessionHost {
   /// The turn running continues a goal, and whether it has said or done anything.
   private var goalTurn = false
   private var turnActed = false
+  /// Stop was asked while the running turn ran, so it ends as stopped.
+  private var stopAsked = false
   private var idleGoalTurns = 0
   /// The turn running is one the runtime started by itself; a goal neither
   /// counts it nor continues after it.
@@ -398,6 +400,7 @@ actor SessionHost {
     goalTurn = continuesGoal
     runtimeTurn = false
     turnActed = false
+    stopAsked = false
     let empty = (try? await library.hasItems(sessionID)) == false
     let first = author == nil && empty
     let live = try await openLive()
@@ -587,6 +590,7 @@ actor SessionHost {
     interrupted = true
     stops += 1
     clearPrompts()
+    if running { stopAsked = true }
     if running, let stopper { stoppedBy = stopper }
     try await live?.interrupt()
     return running
@@ -810,17 +814,19 @@ actor SessionHost {
     runtimeTurn = true
     goalTurn = false
     turnActed = false
+    stopAsked = false
     try? await library.setTurnRunning(sessionID, true)
     setRun(.running)
   }
 
   /// Whatever ends a turn ends its run state, marker and prompts, even when
   /// a write failed. When it ended is saved before views hear it ended, so a
-  /// view that watched it and one that opens the chat later time it the same.
+  /// view that watched it and one that opens the chat later time it the same,
+  /// with "stopped" when Stop was asked while it ran.
   private func endTurn() async {
     clearPrompts()
     if run == .running {
-      try? await finish(.notice(Notice(kind: .turnEnded, text: "")), id: UUID().uuidString.lowercased())
+      try? await finish(.notice(Notice(kind: .turnEnded, text: stopAsked ? "stopped" : "")), id: UUID().uuidString.lowercased())
       setRun(.idle)
       try? await library.setTurnRunning(sessionID, false)
     }

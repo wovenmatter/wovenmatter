@@ -370,7 +370,8 @@ public struct Notice: Codable, Sendable, Hashable {
     /// The server stopped while a turn was running; its reply may be cut short.
     public static let interrupted = Kind(rawValue: "interrupted")
     /// A turn ended, saved when it did, so every view times the turn the
-    /// same. It says nothing: views draw no row for it.
+    /// same. Its text is "stopped" when Stop was asked while the turn ran,
+    /// else empty. Views draw no row for it.
     public static let turnEnded = Kind(rawValue: "turnEnded")
   }
 

@@ -641,7 +641,8 @@ final class SessionStore {
         /// empty reply as a visual reply's turn does.
         func closeRun() {
             guard let last = runs.indices.last, runs[last].assistantMessageID == nil,
-                  runs[last].status == .failed || activities.last?.runID == runs[last].id else { return }
+                  runs[last].status == .failed || runs[last].status == .cancelled
+                    || activities.last?.runID == runs[last].id else { return }
             let id = Self.replyID(runs[last].id)
             messages.append(WorkspaceMessageRecord(id: id, conversationID: sessionID, role: .assistant, content: "",
                                                    status: .complete, createdAt: runs[last].completedAt ?? runs[last].startedAt ?? Date()))
@@ -729,7 +730,11 @@ final class SessionStore {
                 // When the turn ended, as its server saved it: it times the
                 // turn in every view, and draws nothing.
                 if notice.kind == .turnEnded {
-                    if !runs.isEmpty { extend(runs.count - 1, to: entry.date, live: false) }
+                    if let last = runs.indices.last {
+                        extend(last, to: entry.date, live: false)
+                        // A stopped turn says so, unless it failed.
+                        if notice.text == "stopped", runs[last].status != .failed { runs[last].status = .cancelled }
+                    }
                     continue
                 }
                 // A turn that failed or was stopped ended with that notice.
