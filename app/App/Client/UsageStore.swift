@@ -59,6 +59,13 @@ final class UsageStore {
         refreshes += 1
         let generation = refreshes
         flagsOwner = generation
+        // The limits read belongs to this call from the start, so an older
+        // call can neither apply its reply over this one's nor drop it.
+        var limitsOwner: Int?
+        if refreshLimits {
+            limitRequests += 1
+            limitsOwner = limitRequests
+        }
         isRefreshing = true
         isRefreshingLimits = refreshLimits
         defer {
@@ -72,17 +79,16 @@ final class UsageStore {
             return
         }
         await read(range: range, generation: generation, from: server)
-        guard refreshLimits else { return }
-        limitRequests += 1
-        let request = limitRequests
+        // Only the latest refresh the page asked for reads limits.
+        guard let limitsOwner, limitsOwner == limitRequests, flagsOwner == generation else { return }
         do {
             let read = try await server.call(ReadUsageLimits()).map(Self.account)
-            guard request == limitRequests else { return }
+            guard limitsOwner == limitRequests else { return }
             limits = read
             limitsRead = true
             if let current = snapshot { snapshot = UsageSnapshot(analytics: current.analytics, limits: read) }
         } catch {
-            guard request == limitRequests, generation == refreshes else { return }
+            guard limitsOwner == limitRequests else { return }
             self.error = error.localizedDescription
         }
     }
@@ -111,7 +117,10 @@ final class UsageStore {
         let now = Date()
         let interval = range.interval(relativeTo: now)
         do {
-            let report = try await server.call(ReadUsage(start: interval.start, end: interval.end.addingTimeInterval(1),
+            // A range up to now takes in this second; one that ends at a
+            // fixed time (Yesterday) ends there, as the server's end does.
+            let end = range == .yesterday ? interval.end : interval.end.addingTimeInterval(1)
+            let report = try await server.call(ReadUsage(start: interval.start, end: end,
                                                          periodSeconds: range.usesHourlyBuckets ? 3600 : 86_400,
                                                          timeZone: TimeZone.current.identifier))
             guard generation == refreshes else { return }
