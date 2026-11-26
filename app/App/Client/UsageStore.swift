@@ -21,8 +21,16 @@ final class UsageStore {
     @ObservationIgnored private weak var machineStore: MachinesStore?
     @ObservationIgnored private var limits: [UsageLimitAccount] = []
     @ObservationIgnored private var limitsRead = false
-    /// Refreshes started, so a reply can tell whether a later one began.
+    /// Usage reads started, so a reply can tell whether a later one began.
     @ObservationIgnored private var refreshes = 0
+    /// The refresh the refreshing flags belong to.
+    @ObservationIgnored private var flagsOwner = 0
+    /// Limit reads started, likewise.
+    @ObservationIgnored private var limitRequests = 0
+    /// The range the page last asked for; nil until it first did.
+    @ObservationIgnored private var lastRange: UsageTimeRange?
+    @ObservationIgnored private var automatic: Task<Void, Never>?
+    @ObservationIgnored private var lastAutomatic = Date.distantPast
 
     init() {}
 
@@ -42,41 +50,70 @@ final class UsageStore {
     }
 
     /// Re-reads usage for the range, and provider limits when asked. Only the
-    /// most recent call sets what it reads and the refreshing flags, so a
-    /// slow reply for a range no longer selected changes nothing.
+    /// most recent read sets the usage it reads and the error, so a slow reply
+    /// for a range no longer selected changes nothing; the refreshing flags
+    /// belong to the most recent refresh the page asked for, which clears
+    /// them however it ends. The usage is shown as soon as it arrives.
     func refresh(range: UsageTimeRange, refreshLimits: Bool = false) async {
+        lastRange = range
         refreshes += 1
         let generation = refreshes
-        guard let server, server.isConnected else {
-            error = ClientError.notConnected.localizedDescription
-            return
-        }
+        flagsOwner = generation
         isRefreshing = true
-        if refreshLimits { isRefreshingLimits = true }
+        isRefreshingLimits = refreshLimits
         defer {
-            if generation == refreshes {
+            if flagsOwner == generation {
                 isRefreshing = false
                 isRefreshingLimits = false
             }
         }
+        guard let server, server.isConnected else {
+            error = ClientError.notConnected.localizedDescription
+            return
+        }
+        await read(range: range, generation: generation, from: server)
+        guard refreshLimits else { return }
+        limitRequests += 1
+        let request = limitRequests
+        do {
+            let read = try await server.call(ReadUsageLimits()).map(Self.account)
+            guard request == limitRequests else { return }
+            limits = read
+            limitsRead = true
+            if let current = snapshot { snapshot = UsageSnapshot(analytics: current.analytics, limits: read) }
+        } catch {
+            guard request == limitRequests, generation == refreshes else { return }
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// The library's usage changed: the page re-reads the range it last
+    /// showed, at most once every few seconds and without its refreshing
+    /// spinner, once it has been read in this run.
+    func usageChanged() {
+        guard lastRange != nil, automatic == nil else { return }
+        let wait = max(0, Self.automaticInterval - Date().timeIntervalSince(lastAutomatic))
+        automatic = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self else { return }
+            self.automatic = nil
+            self.lastAutomatic = Date()
+            guard let range = self.lastRange, let server = self.server, server.isConnected else { return }
+            self.refreshes += 1
+            await self.read(range: range, generation: self.refreshes, from: server)
+        }
+    }
+
+    private static let automaticInterval: TimeInterval = 5
+
+    /// Reads usage for the range and shows it, unless a later read began.
+    private func read(range: UsageTimeRange, generation: Int, from server: ServerConnection) async {
         let now = Date()
         let interval = range.interval(relativeTo: now)
         do {
             let report = try await server.call(ReadUsage(start: interval.start, end: interval.end.addingTimeInterval(1),
                                                          periodSeconds: range.usesHourlyBuckets ? 3600 : 86_400,
                                                          timeZone: TimeZone.current.identifier))
-            var failure: String?
-            if refreshLimits {
-                do {
-                    let read = try await server.call(ReadUsageLimits()).map(Self.account)
-                    if generation == refreshes {
-                        limits = read
-                        limitsRead = true
-                    }
-                } catch {
-                    failure = error.localizedDescription
-                }
-            }
             guard generation == refreshes else { return }
             let names = Dictionary((machineStore?.machines ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
             let samples = report.groups.enumerated().map { Self.sample($1, index: $0) }
@@ -89,7 +126,7 @@ final class UsageStore {
                 analytics: UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources),
                 limits: limits)
             machines = summaries(report)
-            error = failure
+            error = nil
         } catch {
             guard generation == refreshes else { return }
             self.error = error.localizedDescription
